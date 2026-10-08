@@ -37,7 +37,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 # Imported here, at the top, on purpose: the web process refuses new
@@ -89,10 +89,19 @@ def _safe_episode_path(file_path: str) -> Path:
 
 
 # ─── Schemas ────────────────────────────────────────────────────────────
+# How many of a show's newest episodes the poller keeps downloaded (WEB-13).
+# Bounded because every one of them is a download of up to
+# MAX_ENCLOSURE_BYTES (512 MB) that enforce_keep_n never evicts: an
+# unbounded keep_n from one device-tier subscribe was "download the whole
+# back catalogue". 50 is far past what anybody listens through between
+# polls; the voice subscribe path stores the default (5).
+KEEP_N_MAX = 50
+
+
 class SubscribeRequest(BaseModel):
     feed_url: Optional[str] = None
     query: Optional[str] = None      # discover-by-name (network) if no feed_url
-    keep_n: int = 5
+    keep_n: int = Field(5, ge=1, le=KEEP_N_MAX)
 
 
 class PositionSave(BaseModel):
@@ -185,7 +194,7 @@ async def subscribe(req: SubscribeRequest) -> dict[str, Any]:
                     RETURNING id, feed_url, title, keep_n, artwork
                     """
                 ),
-                {"url": feed_url, "title": title, "keep": max(1, req.keep_n), "artwork": artwork},
+                {"url": feed_url, "title": title, "keep": req.keep_n, "artwork": artwork},
             )
         ).mappings().first()
         await s.execute(text("SELECT pg_notify('podcasts_changed', 'subscribe')"))

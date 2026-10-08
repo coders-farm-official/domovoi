@@ -1145,7 +1145,7 @@ workers; audio is served by this process.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/podcasts/subscriptions` | — | Subscribed feeds. Each row's `artwork` is a path on this server (`/api/podcasts/subscriptions/{id}/artwork?v=…`) or `null`, never the publisher's URL: the server downloads each show's artwork itself, so clients load nothing from outside the house. |
-| `POST /api/podcasts/subscriptions` | `SubscribeRequest` | **Device.** Subscribe to a feed URL, or by `query` (a directory search). `400` for a URL the server won't fetch. Under `never` subscribing by `query` is `409`; a feed URL is stored and fetched once the internet is allowed. |
+| `POST /api/podcasts/subscriptions` | `SubscribeRequest` (`feed_url` or `query`, `keep_n` 1–50, default 5) | **Device.** Subscribe to a feed URL, or by `query` (a directory search). `keep_n` is how many of the newest episodes stay downloaded; outside 1–50 is `422` (each episode is a download of up to 512 MB). `400` for a URL the server won't fetch. Under `never` subscribing by `query` is `409`; a feed URL is stored and fetched once the internet is allowed. |
 | `GET /api/podcasts/subscriptions/{sub_id}/artwork` | — | Open, like episode audio (an `<img>` can't send headers). The show's artwork as the server stored it (JPEG, PNG, WebP or GIF, at most 5 MB), `Cache-Control: max-age=86400`; `404` when it isn't downloaded. |
 | `GET /api/podcasts/discover/artwork/{key}` | — | Open. Artwork for a Discover result, by a key the server minted for that result; a key it didn't mint is `404` without any fetch, so a client can never make the server fetch a URL of its choosing. |
 | `DELETE /api/podcasts/subscriptions/{sub_id}` | — | Unsubscribe. |
