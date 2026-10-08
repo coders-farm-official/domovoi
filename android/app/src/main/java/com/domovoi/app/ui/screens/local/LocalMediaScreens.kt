@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -56,7 +57,9 @@ import com.domovoi.app.player.QueueWindow
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.fmtDur
-import com.domovoi.app.ui.screens.videos.VideoPlayerDialog
+import com.domovoi.app.ui.screens.videos.FeedVideo
+import com.domovoi.app.ui.screens.videos.VideoFeedPlayer
+import com.domovoi.app.ui.screens.videos.centerOn
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.Dispatchers
@@ -247,10 +250,19 @@ fun LocalVideosScreen() {
 private fun LocalVideosGrid() {
     val context = LocalContext.current
     var videos by remember { mutableStateOf<List<LocalVideo>?>(null) }
-    var playing by remember { mutableStateOf<LocalVideo?>(null) }
+    /** Index of the tapped video; the feed's order is the grid's. */
+    var feedStart by remember { mutableStateOf<Int?>(null) }
+    var centerKey by remember { mutableStateOf<String?>(null) }
+    val gridState = rememberLazyGridState()
 
     LaunchedEffect(Unit) {
         videos = withContext(Dispatchers.IO) { LocalMedia.queryVideos(context) }
+    }
+    // Back from the feed: put the video it ended on in the middle of the grid.
+    LaunchedEffect(centerKey) {
+        val key = centerKey ?: return@LaunchedEffect
+        gridState.centerOn(videos.orEmpty().indexOfFirst { localKey(it) == key })
+        centerKey = null
     }
 
     when {
@@ -263,6 +275,7 @@ private fun LocalVideosGrid() {
             "downloads from a domovoi land in Downloads/Domovoi and show up here",
         )
         else -> LazyVerticalGrid(
+            state = gridState,
             columns = GridCells.Adaptive(160.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -270,7 +283,7 @@ private fun LocalVideosGrid() {
         ) {
             items(videos.orEmpty(), key = { it.id }) { v ->
                 Column {
-                    LocalVideoTile(v) { playing = v }
+                    LocalVideoTile(v) { feedStart = videos.orEmpty().indexOf(v) }
                     Text(
                         v.name, style = MaterialTheme.typography.labelMedium,
                         color = Domovoi.colors.fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -286,14 +299,35 @@ private fun LocalVideosGrid() {
         }
     }
 
-    playing?.let { v ->
-        VideoPlayerDialog(
-            title = v.name,
-            mediaUri = v.uri,
-            onClose = { playing = null },
+    feedStart?.let { start ->
+        val list = videos.orEmpty()
+        val feedVideos = remember(list) {
+            list.map { v ->
+                FeedVideo(
+                    key = localKey(v),
+                    title = v.name,
+                    uri = v.uri,
+                    posterModel = ImageRequest.Builder(context)
+                        .data(v.uri)
+                        .decoderFactory(VideoFrameDecoder.Factory())
+                        .build(),
+                    sizeBytes = v.sizeBytes,
+                    shareable = true,
+                )
+            }
+        }
+        VideoFeedPlayer(
+            videos = feedVideos,
+            startIndex = start,
+            onClose = { key ->
+                feedStart = null
+                centerKey = key
+            },
         )
     }
 }
+
+private fun localKey(v: LocalVideo): String = "local:${v.id}"
 
 @Composable
 private fun LocalVideoTile(v: LocalVideo, onClick: () -> Unit) {
