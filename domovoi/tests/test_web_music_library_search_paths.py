@@ -36,12 +36,17 @@ RUN = uuid.uuid4().hex[:10]
 async def _insert(paths: list[str]) -> None:
     from web.backend.db import session_scope
 
+    # An explicit id past the table's highest, not the sequence: other
+    # tests insert library_tracks rows with fixed ids and leave the
+    # sequence behind them, so in a full run nextval() can collide. The
+    # rows are deleted afterwards, so nothing is left for a later default.
     async with session_scope() as s:
         for fp in paths:
             await s.execute(
                 text(
-                    "INSERT INTO library_tracks (file_path, title, added_via) "
-                    "VALUES (:fp, :title, 'manual')"
+                    "INSERT INTO library_tracks (id, file_path, title, added_via) "
+                    "VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM library_tracks), "
+                    ":fp, :title, 'manual')"
                 ),
                 {"fp": fp, "title": f"b2-search-{RUN}"},
             )
