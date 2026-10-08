@@ -91,7 +91,12 @@ fun AppShell() {
     val serverUrl by app.prefs.serverUrl.collectAsState()
     val connected by app.bus.connected.collectAsState()
     val pairingRequired by app.api.pairingRequired.collectAsState()
+    val preferLocal by app.prefs.preferLocal.collectAsState()
     val workspaceState = rememberSaveableStateHolder()
+    // The connection dialog lives here, above both shells: picking a side,
+    // or the server dropping out of reach, swaps the shell underneath it,
+    // and a dialog owned by a shell would vanish mid-use with it.
+    var showConnection by rememberSaveable { mutableStateOf(false) }
 
     // A saved server that has not answered for the grace period drops the
     // app back to local media (see shellMode); an answer brings the
@@ -132,13 +137,33 @@ fun AppShell() {
         }
     }
 
-    CompositionLocalProvider(LocalToast provides toast) {
+    // "Out of reach" has two faces: nothing answered, or something answered
+    // at the saved address that is NOT the Domovoi this phone paired with —
+    // its identity failed the proof, so no request with the token was sent
+    // to it (net/IdentityGate.kt, A6-03). The connection dialog and the
+    // local shell's banner both say which.
+    val identity by app.identity.status.collectAsState()
+    val notOurs = identity?.let { s ->
+        s.base == IdentityGate.pinKey(serverUrl) &&
+            (s.verdict is IdentityVerdict.Mismatch || s.verdict is IdentityVerdict.Unproven)
+    } == true
+    val choice = serverChoice(
+        serverUrl = serverUrl,
+        label = if (serverUrl.isBlank()) "" else app.prefs.serverLabel(),
+        unreachable = unreachable,
+        notOurs = notOurs,
+        pairingRequired = pairingRequired,
+    )
+
+    CompositionLocalProvider(
+        LocalToast provides toast,
+        LocalServerChoice provides choice,
+        LocalOpenConnection provides { showConnection = true },
+    ) {
+        if (showConnection) ConnectionDialog(onDismiss = { showConnection = false })
         Box(Modifier.fillMaxSize().background(Domovoi.colors.canvas)) {
-            when (shellMode(serverUrl, unreachable, pairingRequired)) {
-                ShellMode.Local -> OfflineShell(
-                    unreachableServer = if (serverUrl.isBlank()) null else app.prefs.serverLabel(),
-                    serverUrl = serverUrl,
-                )
+            when (shellMode(serverUrl, unreachable, pairingRequired, preferLocal)) {
+                ShellMode.Local -> OfflineShell(choice)
                 // Kept in a saveable slot so a trip through local media
                 // (server out of reach) returns to the same screen.
                 ShellMode.Workspace -> workspaceState.SaveableStateProvider(serverUrl) { ShellContent() }
@@ -327,7 +352,7 @@ private const val REASK_GAP_MS = 15 * 1000L
 // Not reachable from here, by construction: Dialog/AlertDialog are separate
 // windows that the platform still resizes for the IME (verified on the
 // emulator — they already work, and adding imePadding inside one would
-// double-count), and PairingScreen/StartupScreen render behind an early
+// double-count), and PairingScreen renders behind an early
 // return before any shell exists, so they carry their own imePadding().
 // ---------------------------------------------------------------------------
 
@@ -424,40 +449,15 @@ private fun TopChrome(content: @Composable () -> Unit) {
 // AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
-private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = "") {
-    val app = LocalApp.current
+private fun OfflineShell(choice: ServerChoice) {
     var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
-    var showConnect by rememberSaveable { mutableStateOf(false) }
-    // "Out of reach" has two faces: nothing answered, or something answered
-    // at the saved address that is NOT the Domovoi this phone paired with —
-    // its identity failed the proof, so no request with the token was sent
-    // to it (net/IdentityGate.kt, A6-03). Say which.
-    val identity by app.identity.status.collectAsState()
-    val notOurs = identity?.let { s ->
-        s.base == IdentityGate.pinKey(serverUrl) &&
-            (s.verdict is IdentityVerdict.Mismatch || s.verdict is IdentityVerdict.Unproven)
-    } == true
-    // Back from the server picker returns to local media, not out of the app.
-    BackHandler(enabled = showConnect) { showConnect = false }
-
-    if (showConnect) {
-        Box(Modifier.fillMaxSize()) {
-            StartupScreen()
-            Row(
-                Modifier.align(Alignment.TopStart).padding(12.dp)
-                    .background(Domovoi.colors.sunken, RoundedCornerShape(999.dp))
-                    .clickable { showConnect = false }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "← back to local media",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Domovoi.colors.fgMuted,
-                )
-            }
-        }
-        return
+    val openConnection = LocalOpenConnection.current
+    // The banner is for a server that can't be used. Choosing "this phone"
+    // with the server right there is not an outage, so it says nothing.
+    val outOfReach = (choice as? ServerChoice.Unreachable)?.label ?: (choice as? ServerChoice.NotOurs)?.label
+    val serverName = when (choice) {
+        ServerChoice.NoServer -> null
+        else -> choice.title()
     }
 
     Scaffold(
@@ -482,18 +482,18 @@ private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = 
                     Row(
                         Modifier
                             .background(Domovoi.colors.sunken, RoundedCornerShape(999.dp))
-                            .clickable { showConnect = true }
+                            .clickable { openConnection() }
                             .padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         Icon(
                             Icons.Filled.Dns,
-                            contentDescription = if (unreachableServer == null) "connect" else "switch server",
+                            contentDescription = if (serverName == null) "connect" else "switch server",
                             tint = Domovoi.colors.brand, modifier = Modifier.size(13.dp),
                         )
                         Text(
-                            unreachableServer ?: "connect",
+                            serverName ?: "connect",
                             style = MaterialTheme.typography.labelMedium,
                             color = Domovoi.colors.fgMuted,
                             maxLines = 1,
@@ -501,21 +501,23 @@ private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = 
                             modifier = Modifier.widthIn(max = 140.dp),
                         )
                     }
-                    if (unreachableServer != null) {
+                    if (serverName != null) {
+                        val available = choice.enabled
                         Box(Modifier.width(10.dp))
-                        StatusDot(Tone.Idle)
+                        StatusDot(if (available) Tone.Ok else Tone.Idle)
                         Text(
-                            "  offline",
+                            if (available) "  available" else "  offline",
                             style = MaterialTheme.typography.labelMedium,
                             color = Domovoi.colors.fgMuted,
                         )
                     }
                 }
             }
-            if (unreachableServer != null) {
+            if (outOfReach != null) {
+                val unreachableServer = outOfReach
                 Surface(color = Domovoi.colors.canvas) {
                     Text(
-                        if (notOurs) {
+                        if (choice is ServerChoice.NotOurs) {
                             "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
                                 "this phone paired with, so nothing was sent to it. Showing media on this " +
                                 "phone; the workspace comes back when your Domovoi does. If you replaced " +
@@ -754,7 +756,7 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
     val themeMode by app.prefs.themeMode.collectAsState()
     val serverUrl by app.prefs.serverUrl.collectAsState()
     val knownServers by app.prefs.knownServers.collectAsState()
-    var showSwitcher by remember { mutableStateOf(false) }
+    val openConnection = LocalOpenConnection.current
 
     val serverLabel = knownServers.firstOrNull { it.url == serverUrl }?.name
         ?: serverUrl.removePrefix("http://").removePrefix("https://")
@@ -790,7 +792,7 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
             Row(
                 Modifier
                     .background(Domovoi.colors.sunken, RoundedCornerShape(999.dp))
-                    .clickable { showSwitcher = true }
+                    .clickable { openConnection() }
                     .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -834,8 +836,5 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
                 )
             }
         }
-    }
-    if (showSwitcher) {
-        ServerSwitcherDialog(onDismiss = { showSwitcher = false })
     }
 }

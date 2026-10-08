@@ -212,17 +212,17 @@ class ImeInsetsTest {
 
     // ---- the screens the shells cannot reach ------------------------------
 
-    @Test fun theTwoScreensOutsideEveryShellCarryTheirOwnKeyboardInset() {
-        // Both render behind an early return in AppShell, before any Scaffold
-        // exists: PairingScreen from ShellContent, StartupScreen from
-        // OfflineShell. Without this they centre their content in a box that
-        // is still the full window height AND their verticalScroll has a range
-        // of zero, so scrolling to reveal the field is a genuine no-op.
-        for (rel in listOf("ui/screens/settings/PairingScreen.kt", "ui/shell/ServerPicker.kt")) {
-            val src = source(rel)
-            assertTrue(rel, src.contains("Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center)"))
-        }
-        assertTrue(appShell, appShell.contains("PairingScreen(") && appShell.contains("StartupScreen()"))
+    @Test fun theScreenOutsideEveryShellCarriesItsOwnKeyboardInset() {
+        // PairingScreen renders behind an early return in ShellContent, before
+        // any Scaffold exists. Without this it centres its content in a box
+        // that is still the full window height AND its verticalScroll has a
+        // range of zero, so scrolling to reveal the field is a genuine no-op.
+        // (The server picker used to be the second such screen; it now lives
+        // in ConnectionDialog, a dialog window the keyboard resizes itself.)
+        val src = source("ui/screens/settings/PairingScreen.kt")
+        assertTrue(src, src.contains("Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center)"))
+        assertTrue(appShell, appShell.contains("PairingScreen("))
+        assertFalse(appShell, appShell.contains("StartupScreen()"))
     }
 
     @Test fun chatRepinsItsListOnTheSettledViewportNotOnAKeyboardBoolean() {
