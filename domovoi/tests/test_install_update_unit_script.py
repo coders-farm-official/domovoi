@@ -48,7 +48,10 @@ def test_scripts_parse():
 
 @requires_bash
 def test_install_update_unit_harness():
-    proc = subprocess.run([BASH, str(HARNESS)], capture_output=True, text=True, timeout=600)
+    # 60 cases since the October security round: 219 s alone under Git
+    # Bash on the dev box, 8.5 min beside other work. The bound is for a
+    # hang, not a measure of speed.
+    proc = subprocess.run([BASH, str(HARNESS)], capture_output=True, text=True, timeout=1500)
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]
     assert " 0 failed" in proc.stdout
 

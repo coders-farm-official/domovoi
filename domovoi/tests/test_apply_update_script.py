@@ -69,8 +69,12 @@ def test_apply_update_harness():
         [BASH, str(HARNESS)],
         capture_output=True,
         text=True,
-        # About 450 s under Git Bash on the dev box, where every fork is slow.
-        timeout=900,
+        # Git Bash on the dev box, where every fork is slow: about 450 s
+        # for the 53 cases of 2026-09-30. The October security round took
+        # it to 75 (signed updates, the lock, image pins): 681 s alone and
+        # 23 min beside other work, past the old 900. The bound is for a
+        # hang, not a measure of speed.
+        timeout=2400,
         env={**os.environ, "HARNESS_PYTHON": sys.executable},
     )
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]
