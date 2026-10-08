@@ -6,8 +6,14 @@ requires-python = ">=3.11"
 # Floors are the lowest versions the code is known to work with AND, for
 # the packages that parse untrusted input (starlette, python-multipart,
 # requests, urllib3, pillow), the first release of the fixed line — do not lower
-# them. The exact versions a deployment runs come from `requirements.lock`
-# (pip-compile, hashed; regenerate with the command in that file's header).
+# them. Floors are all pip's resolver honours: a server installed by
+# docs/LINUX_HOST.md "Install" gets exact, hash-checked versions from
+# `requirements-linux-py314.lock`, but its update unit re-syncs from that lock
+# only once the owner opts in (DOMOVOI_USE_LOCK=1); otherwise, and on any
+# other Python, an update resolves within these floors from the index,
+# unchecked (docs/SECURITY_PRIVACY.md, "Uploads and dependencies").
+# `requirements.lock` is the test suite's set (Python 3.12, with `dev`), not a
+# deployment's; both locks are regenerated as docs/CONTRIBUTING.md says.
 dependencies = [
     "fastapi>=0.115",
     # Direct floor on the ASGI toolkit fastapi builds on (fastapi's own
