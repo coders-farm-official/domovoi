@@ -103,29 +103,81 @@ one credential the app has. The rules, all unit-tested under
   (`net/Discovery.kt` uses a copy of the client with no token interceptor),
   a URL another app pushes at the player: none of them see it.
 - **Identity before token** (`net/IdentityGate.kt`, `net/ServerIdentity.kt`):
-  the first time in a process — and again after every default-network
-  change (`net/NetworkWatch.kt`) — the app asks the saved server
-  `GET /api/health?challenge=<nonce>` without a token and checks the
-  signed answer against the Ed25519 key it pinned for that server. The
-  pin is made the first time a trusted server proves one (trust on first
-  use; pair at home). Not the pinned key, or no identity where one is
+  before the first token-bearing request to the saved server on a
+  network, the app asks it `GET /api/health?challenge=<nonce>` without a
+  token and checks the signed answer against the Ed25519 key it pinned
+  for that server. Not the pinned key, or no identity where one is
   pinned, and no token-bearing request leaves — the state socket, the
   background timer sync and a ringing alarm's confirm included — and the
   shell says the server did not prove it is the one this phone paired
-  with. A server that offers no identity at all (an older web backend, or
-  one whose core is down) is treated as before, with a log line. The pin
-  shows under Settings → Connection next to the server, with every other
-  trusted server and a forget button each; switching servers forgets trust
-  that is attached to no listed server. The Ed25519 verifier is a plain
-  Kotlin port of the core's vendored one, pinned to the RFC 8032 vectors.
+  with. The Ed25519 verifier is a plain Kotlin port of the core's vendored
+  one, pinned to the RFC 8032 vectors.
+  - **What a proof is good for** (`net/NetworkWatch.kt`): a verdict is
+    keyed to a fingerprint of every network the phone could reach the
+    server over — the default network and every Wi-Fi or Ethernet
+    network, registered for separately so a VPN that stays the default
+    cannot hide the Wi-Fi changing under it, with each one's transports,
+    interface, addresses, gateways, DNS and DHCP server, from all four
+    ConnectivityManager callbacks (a twin access point with the home
+    SSID that hands out a different lease is a change too). A proof
+    stands at most ten minutes on one network, is taken again whenever
+    the app comes back to the foreground after a spell away, and a proof
+    that straddled a network change is thrown away. The Wi-Fi SSID/BSSID
+    join the fingerprint only where the app may read them (it asks for
+    no location permission).
+  - **The pin is the trust decision:** the picker's dialog shows the key
+    the server advertises (compare it with the dashboard's Settings →
+    About) and pins it when you say yes, so the first proof has to match
+    that key, not whoever answers first on some network; Settings →
+    Connection probes a typed address the same way before saving it. A
+    server trusted by a build from before this is pinned the first time it
+    proves a key. A server trusted while it offered none is never pinned
+    behind your back: the token goes out as it always did for it, the
+    topbar says "unverified", and Settings → Connection shows the key it
+    proves now with a "pin this identity" button.
+  - **Core down is not an impostor:** a web backend that answers but
+    could not ask its core (`domovoi_reachable` false — a restart, an
+    update, a busy box) is "not fully up": the token is held, nothing is
+    cached, the next request asks again, and the local-media shell says
+    so. Only a different key, or a bad or missing proof where one is
+    pinned, is "did not prove it is your Domovoi".
+  - **Forgetting:** the pin shows under Settings → Connection next to the
+    server, with every other trusted server and a forget button each —
+    the server in use included, in Settings and in the server list, after
+    a confirmation that shows the pinned key beside the one the server
+    proves now. That is the way to re-pair after a reinstalled or replaced
+    server; it returns the app to the server list. Switching servers drops
+    trust (only the trust) that is attached to no listed server.
+- **Redirects** (`net/RedirectPolicy.kt`): OkHttp's own follower is off;
+  the app follows a `3xx` itself, through the same interceptors, so a
+  hop to another host loses the token, a plain-http hop to a public host
+  is refused before any connection, an https→http downgrade is never
+  followed, and a WebSocket upgrade is never redirected.
+- **Save-to-device downloads** (`net/DeviceDownloads.kt`): the system
+  `DownloadManager` is a separate HTTP stack that keeps every request
+  header in its own database and replays it on retries and resumes. It
+  is handed the household token only for the one save on the device tier
+  — the video stream — after a fresh identity proof, over unmetered
+  networks only, and an unfinished token-bearing download is cancelled
+  (partial file and all) when the network changes, or at the next start
+  if it was left waiting for a network. Music, podcast and audiobook saves
+  are open reads and carry no credential. **Residual:** a finished video
+  download's row keeps the header until the download is removed from the
+  system's list (removing it from the app would delete the file); the
+  database is private to the system and unreadable by other apps, but it
+  is outside the vault. Streaming downloads through the app's own client
+  (a foreground data-sync service into MediaStore) is the follow-up that
+  closes it.
 - **At rest** (`data/TokenVault.kt`): tokens are one AES-256-GCM blob in
   `shared_prefs/domovoi-vault.xml`, under a non-exportable key in the
   Android Keystore; a blob the key cannot open is "nothing paired" and the
   app asks to pair again. At every start a plain `device_tokens` value in
   the DataStore (an install from before the vault — or
   `functional-testing/at.py pair --via datastore`, which writes exactly
-  that) is swept into the vault and the plain key removed, so the harness
-  keeps working and nothing stays in the clear. **Debug-build caveat:** the
+  that) is swept into the vault and the plain key removed — only once the
+  vault's record is committed to disk, so a process killed between the
+  two writes leaves the token in one file or the other, never in neither
+  — so the harness keeps working and nothing stays in the clear. **Debug-build caveat:** the
   CI workflow publishes `assembleDebug`, which is `android:debuggable`;
   on a debuggable build `adb shell run-as com.domovoi.app` and an attached
   debugger run as the app's uid and can drive it to decrypt. The Keystore
