@@ -399,7 +399,8 @@ class ServerIdentity:
         return base.parent / MANIFEST_SERIALS_NAME
 
     def signed_manifest(
-        self, channel: str, manifest: Any, *, now: float | None = None
+        self, channel: str, manifest: Any, *, now: float | None = None,
+        serial_key: str | None = None,
     ) -> dict[str, Any]:
         """The ``manifest.sig`` envelope: the manifest, and signatures over
         it. Carrying the manifest inside the envelope is deliberate — a
@@ -417,8 +418,15 @@ class ServerIdentity:
           current code verifies this one and remembers the serial, so a
           genuine envelope recorded earlier and served again is refused as
           older rather than installed as new.
+
+        ``serial_key`` names the entry in the serial store when one channel
+        serves several lists side by side — the sounds channel serves one
+        per voice (:func:`sounds_serial_key`). Each list then keeps its own
+        stable serial, and a caller alternating between them mints nothing.
         """
-        issued_at, serial = _freshness_for(self.serials_path(), channel, manifest, now=now)
+        issued_at, serial = _freshness_for(
+            self.serials_path(), channel, manifest, now=now, key=serial_key
+        )
         doc: dict[str, Any] = self.public_document()
         doc["channel"] = channel
         doc["manifest"] = manifest
@@ -433,16 +441,32 @@ class ServerIdentity:
 
 # ─── manifest serials ─────────────────────────────────────────────────────
 #
-# One file beside the key: ``{channel: {serial, issued_at, digest}}``. The
-# serial is minted when a channel's list CHANGES (its digest differs from
-# the one recorded) and reused while it does not, so an unchanged list keeps
-# a stable envelope. A new serial is ``max(previous + 1, now)``: strictly
-# greater than anything issued before, and — should this file ever be lost
-# — still greater than any serial a satellite remembers, because every
-# earlier serial was at most the time it was minted. ``issued_at`` is when
-# the serial was minted. Satellites do not judge it against their own clock
-# (a Pi has none worth trusting before its first time sync); the serial is
-# the anti-replay mechanism, the time is for people reading the envelope.
+# One file beside the key: ``{key: {serial, issued_at, digest}}``, where a
+# key is a channel, or ``<channel>@<list>`` for a channel that serves several
+# lists side by side (the sounds channel: one per voice, see
+# :func:`sounds_serial_key`). The serial is minted when a key's list
+# CHANGES (its digest differs from the one recorded for that key) and reused
+# while it does not, so an unchanged list keeps a stable envelope. A new
+# serial is ``max(highest serial on the channel + 1, now)``: strictly
+# greater than anything the channel issued before, and — should this file
+# ever be lost — still greater than any serial a satellite remembers,
+# because every earlier serial was at most the time it was minted.
+#
+# That last promise holds only while lists change less than once a second,
+# which is why the sounds channel is keyed per voice (V-st-01). Its list is
+# chosen by an open ``?voice=``, and while every voice shared one entry, a
+# LAN host alternating two voices flipped the digest on every request and
+# minted serial + 1 each time, pushing the serial ahead of the clock by
+# roughly its request rate; a later lost or restored store would then mint
+# from the clock, below what pinned satellites remember, and they would
+# refuse the sounds lists until the clock caught up. Keyed per voice, an
+# alternation changes nothing, and a name with no rendered clips shares one
+# entry, so the number of entries is bounded by the voices on disk.
+#
+# ``issued_at`` is when the serial was minted. Satellites do not judge it
+# against their own clock (a Pi has none worth trusting before its first
+# time sync); the serial is the anti-replay mechanism, the time is for
+# people reading the envelope.
 
 _SERIALS_LOCK = threading.Lock()
 _SERIALS_WARNED: set[str] = set()
@@ -456,24 +480,48 @@ def _read_serials(path: Path) -> dict[str, Any]:
     return doc if isinstance(doc, dict) else {}
 
 
+def _int_or(value: Any, default: int) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+
+def _channel_high_water(state: dict[str, Any], channel: str) -> int:
+    """The highest serial any key of ``channel`` was given — the channel's
+    own entry and every ``<channel>@...`` beside it."""
+    high = 0
+    for key, entry in state.items():
+        if key != channel and not key.startswith(channel + "@"):
+            continue
+        if isinstance(entry, dict):
+            high = max(high, _int_or(entry.get("serial"), 0))
+    return high
+
+
+def sounds_serial_key(voice_key: str) -> str:
+    """The serial-store key for one voice's list on the sounds channel:
+    ``""`` for the default voice (a request with no ``?voice=``), the
+    voice's directory name for a voice with rendered clips, and one shared
+    name for every voice that has none."""
+    return f"{SOUNDS_CHANNEL}@{voice_key}"
+
+
 def _freshness_for(
-    path: Path, channel: str, manifest: Any, *, now: float | None = None
+    path: Path, channel: str, manifest: Any, *, now: float | None = None,
+    key: str | None = None,
 ) -> tuple[int, int]:
-    """``(issued_at, serial)`` for this channel's current list."""
+    """``(issued_at, serial)`` for the current list under ``key`` (the
+    channel itself unless the channel serves several lists)."""
+    key = key or channel
     digest = manifest_digest(manifest)
     stamp = int(time.time() if now is None else now)
     with _SERIALS_LOCK:
         state = _read_serials(path)
-        entry = state.get(channel)
+        entry = state.get(key)
         entry = entry if isinstance(entry, dict) else {}
-        previous = entry.get("serial")
-        previous = previous if isinstance(previous, int) and not isinstance(previous, bool) else 0
+        previous = _int_or(entry.get("serial"), 0)
         if entry.get("digest") == digest and previous > 0:
-            issued = entry.get("issued_at")
-            issued = issued if isinstance(issued, int) and not isinstance(issued, bool) else stamp
-            return issued, previous
-        serial = max(previous + 1, stamp)
-        state[channel] = {"serial": serial, "issued_at": stamp, "digest": digest}
+            return _int_or(entry.get("issued_at"), stamp), previous
+        serial = max(_channel_high_water(state, channel) + 1, stamp)
+        state[key] = {"serial": serial, "issued_at": stamp, "digest": digest}
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(path.name + ".tmp")

@@ -1103,10 +1103,25 @@ async def sounds_manifest_signed(voice: str | None = None) -> dict[str, Any]:
     asks for this and refuses a list its own server did not sign, so a host
     on the path cannot decide what a greeting sounds like. Declared before
     the ``{path:path}`` catch-all so the literal wins; the unsigned
-    ``manifest`` keeps serving older satellites."""
+    ``manifest`` keeps serving older satellites.
+
+    Each voice's list keeps its own serial (V-st-01): ``?voice=`` is the
+    caller's choice, and while every voice shared one serial, alternating
+    two of them minted a new one per request and ran it ahead of the clock.
+    The key is the default voice (no ``?voice=``), the voice's directory for
+    a voice with rendered clips, or one shared entry for any name without
+    them — so an unknown name cannot grow the store either."""
     manifest = await sounds_manifest(voice)
+    if not voice:
+        voice_key = ""
+    else:
+        root = await _resolve_voice_root(voice)
+        voice_key = root.name if root.is_dir() else "?"
     identity = server_identity.load_or_create()
-    return identity.signed_manifest(server_identity.SOUNDS_CHANNEL, manifest)
+    return identity.signed_manifest(
+        server_identity.SOUNDS_CHANNEL, manifest,
+        serial_key=server_identity.sounds_serial_key(voice_key),
+    )
 
 
 @app.get("/v1/sounds/{path:path}")

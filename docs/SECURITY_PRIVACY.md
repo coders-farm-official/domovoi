@@ -1387,7 +1387,20 @@ with it, and verifies `signature_v2` from then on. The core serves both
 until every room has taken the new code; a later release drops the old
 form. The core's own serials live beside its key in
 `~/.domovoi/manifest-serials.json` as `max(previous + 1, now)`, so losing
-that file still moves forward.
+that file still moves forward — which holds only while no serial runs
+ahead of the clock. The sounds channel serves one list per voice, chosen
+by an open `?voice=`, and while every voice shared one serial a LAN host
+alternating two voices minted a new serial per request and pushed it
+ahead of the clock by its request rate (V-st-01); a later lost or
+restored store would then mint below what pinned satellites remember, and
+they would refuse the sounds lists until the clock caught up. Since
+2026-10-08 each voice's list keeps its own serial (minted only when that
+list changes, from the channel's highest), a name with no rendered clips
+shares one entry, and a satellite remembers the sounds serial per voice
+too, so switching voice and back is not mistaken for a replay. What is
+still not signed is which voice a list belongs to: a host on the path can
+serve one genuine voice's signed list in place of another's (a greeting
+in the wrong voice, never a clip the server did not render).
 
 **Root checks the list itself.** `domovoi-apply-payload` used to run
 whatever the satellite account's mirror held under a slug the account's
