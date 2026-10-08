@@ -2,20 +2,27 @@
 caller-chosen URL goes through.
 
 All DB-free (and DNS-free: ``resolve_host`` is patched, so a name resolves
-to exactly what a test says it does). Covers the scheme allowlist, the
-address ranges the server must never reach, the shorthand IPv4 literals a
-resolver accepts, IPv6 forms that embed an IPv4, redirect chains that turn
-private mid-way, and the byte cap.
+to exactly what a test says it does — except in the rebinding section at
+the end, where ``socket.getaddrinfo`` itself is patched and two real
+loopback listeners stand for the two answers). Covers the scheme
+allowlist, the address ranges the server must never reach, the shorthand
+IPv4 literals a resolver accepts, IPv6 forms that embed an IPv4, redirect
+chains that turn private mid-way, the byte cap, and the contract that the
+connection is opened to the address the check judged.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from domovoi import net_safety
+from domovoi import egress, net_safety
 
 PUBLIC_V4 = ipaddress.ip_address("93.184.216.34")
 PUBLIC_V6 = ipaddress.ip_address("2606:2800:220:1:248:1893:25c8:1946")
@@ -396,9 +403,30 @@ def test_the_allowlist_is_not_an_editable_setting(dns) -> None:
 # ─── Redirects ────────────────────────────────────────────────────────────
 
 
+def _as_written(request: httpx.Request) -> str:
+    """The URL a request from the fetchers stands for — scheme, the
+    ``Host`` header (the name as written) and the path — which is what
+    the server sees. Asserts the pinning contract on the way: the URL's
+    host is the vetted address (an IP literal, never a name), and over
+    https the TLS server name is the Host name."""
+    host_header = request.headers["host"]
+    assert net_safety.parse_ip_literal(request.url.host) is not None, (
+        f"connected by name, not by a vetted address: {request.url}"
+    )
+    if request.url.scheme == "https":
+        expected = httpx.URL(f"https://{host_header}/").host
+        assert request.extensions.get("sni_hostname") == expected, request.extensions
+    else:
+        assert "sni_hostname" not in request.extensions
+    return f"{request.url.scheme}://{host_header}{request.url.raw_path.decode('ascii')}"
+
+
 def _transport(routes: dict[str, httpx.Response]) -> httpx.MockTransport:
+    """A transport keyed on the URL as written (see :func:`_as_written`):
+    every fetch through it is also a pinning assertion."""
+
     def handler(request: httpx.Request) -> httpx.Response:
-        key = str(request.url)
+        key = _as_written(request)
         assert key in routes, f"unexpected fetch of {key}"
         return routes[key]
 
@@ -565,3 +593,416 @@ def test_the_blocking_fetcher_checks_the_same_way(dns) -> None:
             net_safety.fetch_bytes_sync(
                 "http://127.0.0.1:11434/api/tags", max_bytes=1024, client=client
             )
+
+
+# ─── The connection goes where the check looked ───────────────────────────
+#
+# A verdict is not enough: an HTTP client handed the URL resolves the name
+# a second time when it connects. So the check returns the addresses it
+# judged (vet_outbound_url) and the fetchers open the socket to one of
+# them, keeping the name for the Host header and the TLS server name.
+
+PUBLIC_V4_B = ipaddress.ip_address("203.0.113.9")
+
+
+def test_vet_returns_the_addresses_the_check_judged(dns) -> None:
+    dns.set({"news.example.com": [str(PUBLIC_V4), str(PUBLIC_V6)]})
+    target = net_safety.vet_outbound_url("https://news.example.com:8443/rss ")
+    assert target.addresses == (PUBLIC_V4, PUBLIC_V6)
+    assert (target.scheme, target.host, target.port) == ("https", "news.example.com", 8443)
+    assert target.url == "https://news.example.com:8443/rss"
+    assert target.pinned
+    assert net_safety.vet_outbound_url("http://news.example.com/rss").port == 80
+    assert net_safety.vet_outbound_url("https://NEWS.Example.com./rss").host == "news.example.com"
+
+
+def test_vet_refuses_with_the_reason_check_reports(dns) -> None:
+    dns.set({"evil.example.com": ["10.0.0.1"]})
+    for url in (
+        "http://evil.example.com/x",
+        "http://localhost/x",
+        "file:///etc/passwd",
+        "http://nowhere.example.com/x",
+        "http://127.0.0.1:6370/v1/admin/snapshot",
+        "",
+    ):
+        with pytest.raises(net_safety.UnsafeOutboundURL) as exc:
+            net_safety.vet_outbound_url(url)
+        assert exc.value.reason == net_safety.check_outbound_url(url), url
+        assert exc.value.url == url
+
+
+def test_a_target_the_check_did_not_resolve_has_no_addresses(dns, allowlist) -> None:
+    """An allowlisted endpoint is matched by name and never resolved —
+    so there is nothing to pin, and it is connected by the name the
+    operator wrote. A store-only check of a name that does not resolve
+    has nothing either (and nothing fetches from it)."""
+    allowlist("fixtures.test:6391")
+    dns.set({})
+    target = net_safety.vet_outbound_url("http://fixtures.test:6391/rss")
+    assert target.addresses == () and not target.pinned
+    stored = net_safety.vet_outbound_url(
+        "http://nowhere.example.com/rss", require_resolution=False
+    )
+    assert stored.addresses == () and not stored.pinned
+
+
+@pytest.mark.asyncio
+async def test_the_async_vet_agrees_with_the_sync_one(dns) -> None:
+    dns.set({"news.example.com": [str(PUBLIC_V4)]})
+    url = "https://news.example.com/rss"
+    assert await net_safety.avet_outbound_url(url) == net_safety.vet_outbound_url(url)
+    with pytest.raises(net_safety.UnsafeOutboundURL):
+        await net_safety.avet_outbound_url("http://[::1]/x")
+
+
+def _recording_transport(seen: list[httpx.Request], body: bytes = b"<rss/>") -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=body)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_the_connection_is_opened_to_the_vetted_address_not_the_name(dns) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V4)]})
+    seen: list[httpx.Request] = []
+    async with httpx.AsyncClient(transport=_recording_transport(seen)) as client:
+        result = await net_safety.fetch_bytes(
+            "https://feeds.example.com:8443/show.rss?x=1", max_bytes=1024, client=client
+        )
+    assert result.content == b"<rss/>"
+    [request] = seen
+    # The socket opens to the literal the check judged...
+    assert request.url.host == str(PUBLIC_V4)
+    assert request.url.port == 8443
+    assert (request.url.path, request.url.query) == ("/show.rss", b"x=1")
+    # ...the site sees the request for the name, TLS included...
+    assert request.headers["host"] == "feeds.example.com:8443"
+    assert request.extensions["sni_hostname"] == "feeds.example.com"
+    # ...and the caller still sees the URL as written.
+    assert result.url == "https://feeds.example.com:8443/show.rss?x=1"
+
+
+@pytest.mark.asyncio
+async def test_a_plain_http_fetch_pins_without_a_tls_server_name(dns) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V4)]})
+    seen: list[httpx.Request] = []
+    async with httpx.AsyncClient(transport=_recording_transport(seen)) as client:
+        response = await net_safety.open_stream(client, "http://feeds.example.com/show.rss")
+        await response.aclose()
+    [request] = seen
+    assert request.url.host == str(PUBLIC_V4)
+    assert request.headers["host"] == "feeds.example.com"  # default port: none
+    assert "sni_hostname" not in request.extensions
+    assert str(response.url) == "http://feeds.example.com/show.rss"
+    assert net_safety.connected_address(response) == str(PUBLIC_V4)
+
+
+@pytest.mark.asyncio
+async def test_an_ipv6_vetted_address_is_pinned_bracketed(dns) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V6)]})
+    seen: list[httpx.Request] = []
+    async with httpx.AsyncClient(transport=_recording_transport(seen)) as client:
+        await net_safety.fetch_bytes(
+            "https://feeds.example.com/show.rss", max_bytes=1024, client=client
+        )
+    [request] = seen
+    assert request.url.host == str(PUBLIC_V6)
+    assert request.url.netloc == f"[{PUBLIC_V6}]".encode()
+    assert request.headers["host"] == "feeds.example.com"
+
+
+def test_the_blocking_fetcher_pins_the_same_way(dns) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V4)]})
+    seen: list[httpx.Request] = []
+    with httpx.Client(transport=_recording_transport(seen)) as client:
+        response = net_safety.open_stream_sync(
+            client, "https://feeds.example.com/show.rss", headers={"User-Agent": "t/1"}
+        )
+        response.close()
+        result = net_safety.fetch_bytes_sync(
+            "https://feeds.example.com/show.rss", max_bytes=1024, client=client
+        )
+    assert result.url == "https://feeds.example.com/show.rss"
+    assert net_safety.connected_address(response) == str(PUBLIC_V4)
+    assert len(seen) == 2
+    for request in seen:
+        assert request.url.host == str(PUBLIC_V4)
+        assert request.headers["host"] == "feeds.example.com"
+        assert request.extensions["sni_hostname"] == "feeds.example.com"
+    assert seen[0].headers["user-agent"] == "t/1"  # the caller's headers still travel
+
+
+@pytest.mark.asyncio
+async def test_each_redirect_hop_is_pinned_to_its_own_vetted_address(dns) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V4)], "cdn.example.com": [str(PUBLIC_V4_B)]})
+    hops: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hops.append((request.url.host, request.headers["host"]))
+        if request.headers["host"] == "feeds.example.com":
+            return httpx.Response(302, headers={"location": "https://cdn.example.com/show.rss"})
+        return httpx.Response(200, content=b"<rss/>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await net_safety.fetch_bytes(
+            "http://feeds.example.com/show.rss", max_bytes=1024, client=client
+        )
+    assert hops == [
+        (str(PUBLIC_V4), "feeds.example.com"),
+        (str(PUBLIC_V4_B), "cdn.example.com"),
+    ]
+    assert result.url == "https://cdn.example.com/show.rss"
+
+
+@pytest.mark.asyncio
+async def test_a_vetted_address_that_does_not_answer_falls_through_to_the_next(dns) -> None:
+    """A name with several addresses (A + AAAA) is reachable on any of
+    them; one that refuses the connection is not a reason to fail the
+    fetch — the next vetted address is tried. Never a name."""
+    dns.set({"feeds.example.com": [str(PUBLIC_V4), str(PUBLIC_V4_B)]})
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.host)
+        if request.url.host == str(PUBLIC_V4):
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, content=b"<rss/>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        response = await net_safety.open_stream(client, "http://feeds.example.com/x")
+        try:
+            assert net_safety.connected_address(response) == str(PUBLIC_V4_B)
+            assert str(response.url) == "http://feeds.example.com/x"
+        finally:
+            await response.aclose()
+    assert attempts == [str(PUBLIC_V4), str(PUBLIC_V4_B)]
+
+
+@pytest.mark.asyncio
+async def test_when_no_vetted_address_answers_the_last_connection_error_is_raised(dns) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V4), str(PUBLIC_V4_B)]})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout(f"timed out at {request.url.host}", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.ConnectTimeout, match=str(PUBLIC_V4_B)):
+            await net_safety.fetch_bytes(
+                "http://feeds.example.com/x", max_bytes=1024, client=client
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_by_the_internet_answer_is_not_retried_on_another_address(dns) -> None:
+    """Under ``never`` a name that looks local (``.lan``) but resolves to
+    the internet passes the address rules and is pinned — and the egress
+    hook on the client then sees the vetted literal, judges it as the
+    destination it is, and refuses. That refusal is an httpx ConnectError
+    by design; it must propagate, not move the fetch to the next
+    address."""
+    dns.set({"media.lan": [str(PUBLIC_V4), str(PUBLIC_V4_B)]})
+    seen: list[httpx.Request] = []
+    with egress.override_policy("never"):
+        async with egress.async_client(transport=_recording_transport(seen)) as client:
+            with pytest.raises(egress.InternetTurnedOff):
+                await net_safety.fetch_bytes(
+                    "http://media.lan/x", max_bytes=1024, client=client
+                )
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_the_egress_client_and_the_sdk_client_pin_too(dns) -> None:
+    """Pinning is the request's, not the client's: a plugin fetching
+    through ``sdk.net_safety`` with the client ``HttpFactory`` hands out
+    (an egress client underneath) gets the same connection."""
+    from domovoi.sdk.http import HttpFactory
+
+    dns.set({"feeds.example.com": [str(PUBLIC_V4)]})
+    seen: list[httpx.Request] = []
+    async with egress.async_client(transport=_recording_transport(seen)) as client:
+        await net_safety.fetch_bytes(
+            "https://feeds.example.com/a", max_bytes=1024, client=client
+        )
+    async with HttpFactory("9.9.9").client(transport=_recording_transport(seen)) as client:
+        response = await net_safety.open_stream(client, "https://feeds.example.com/b")
+        await response.aclose()
+    assert [r.url.host for r in seen] == [str(PUBLIC_V4), str(PUBLIC_V4)]
+    assert [r.headers["host"] for r in seen] == ["feeds.example.com"] * 2
+    assert seen[1].headers["user-agent"].startswith("domovoi/9.9.9")
+
+
+@pytest.mark.asyncio
+async def test_an_allowlisted_endpoint_is_connected_by_the_name_the_operator_wrote(
+    dns, allowlist
+) -> None:
+    allowlist("fixtures.test:6391")
+    dns.set({})
+    seen: list[httpx.Request] = []
+    async with httpx.AsyncClient(transport=_recording_transport(seen)) as client:
+        response = await net_safety.open_stream(client, "http://fixtures.test:6391/rss")
+        await response.aclose()
+    [request] = seen
+    assert request.url.host == "fixtures.test"
+    assert request.headers["host"] == "fixtures.test:6391"
+    assert "sni_hostname" not in request.extensions
+    assert net_safety.connected_address(response) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_final_target_reports_the_final_url_by_name_and_the_vetted_address(
+    dns,
+) -> None:
+    dns.set({"feeds.example.com": [str(PUBLIC_V4)], "cdn.example.com": [str(PUBLIC_V4_B)]})
+    transport = _transport(
+        {
+            "http://feeds.example.com/show.rss": httpx.Response(
+                301, headers={"location": "https://cdn.example.com/show.rss"}
+            ),
+            "https://cdn.example.com/show.rss": httpx.Response(200, content=b"<rss/>"),
+        }
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        final = await net_safety.resolve_final_target(
+            "http://feeds.example.com/show.rss", client=client
+        )
+        assert final == net_safety.FinalTarget(
+            url="https://cdn.example.com/show.rss", address=str(PUBLIC_V4_B)
+        )
+        assert final.literal_url == f"https://{PUBLIC_V4_B}/show.rss"
+        assert await net_safety.resolve_final_url(
+            "http://feeds.example.com/show.rss", client=client
+        ) == final.url
+    v6 = net_safety.FinalTarget(url="https://x.example/a?b=1", address=str(PUBLIC_V6))
+    assert v6.literal_url == f"https://[{PUBLIC_V6}]/a?b=1"
+    assert net_safety.FinalTarget(url="http://fixtures.test:6391/rss", address=None).literal_url == (
+        "http://fixtures.test:6391/rss"
+    )
+
+
+# ─── DNS rebinding, on real sockets ───────────────────────────────────────
+#
+# The gap this section guards against: the check resolved the name once
+# and judged the answer; the HTTP client then resolved it AGAIN to open
+# the socket. A name whose DNS answered a public address first and
+# 127.0.0.1 next passed the check and connected to the inside. Here the
+# resolver is ``socket.getaddrinfo`` itself, patched to behave exactly
+# like such a name, and two real listeners on one port stand for the two
+# answers: the one the check judged (on 127.0.0.2) and the one a second
+# lookup would have given (on 127.0.0.1). The classifier is told that
+# 127.0.0.2 is public for the duration — its own tests are above; the
+# subject here is which socket opens.
+
+PROBE = "rebind-probe.test"
+VETTED_ADDR = "127.0.0.2"
+INSIDE_ADDR = "127.0.0.1"
+
+
+def _listener(address: str, port: int, body: bytes, hits: list[dict]) -> ThreadingHTTPServer:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 — http.server's name
+            hits.append({"host": self.headers.get("Host"), "path": self.path})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args) -> None:  # quiet
+            pass
+
+    server = ThreadingHTTPServer((address, port), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+@pytest.fixture
+def rebinding(monkeypatch, allowlist):
+    inside_hits: list[dict] = []
+    vetted_hits: list[dict] = []
+    lookups: list[str] = []
+    inside = _listener(INSIDE_ADDR, 0, b"INSIDE: a service the LAN cannot reach", inside_hits)
+    port = inside.server_address[1]
+    try:
+        vetted = _listener(VETTED_ADDR, port, b"VETTED: the address the check judged", vetted_hits)
+    except OSError as exc:
+        inside.shutdown()
+        inside.server_close()
+        pytest.skip(f"cannot listen on {VETTED_ADDR} on this host: {exc}")
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def rebinding_getaddrinfo(host, port_, *args, **kwargs):
+        name = host.decode("ascii") if isinstance(host, bytes) else host
+        if isinstance(name, str) and name.rstrip(".").lower() == PROBE:
+            answer = VETTED_ADDR if not lookups else INSIDE_ADDR
+            lookups.append(answer)
+            sockport = port_ if isinstance(port_, int) else 0
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (answer, sockport))]
+        return real_getaddrinfo(host, port_, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", rebinding_getaddrinfo)
+    real_is_public = net_safety.is_public_address
+    monkeypatch.setattr(
+        net_safety,
+        "is_public_address",
+        lambda address: str(address) == VETTED_ADDR or real_is_public(address),
+    )
+    try:
+        yield SimpleNamespace(
+            port=port,
+            url=f"http://{PROBE}:{port}/marker",
+            inside_hits=inside_hits,
+            vetted_hits=vetted_hits,
+            lookups=lookups,
+        )
+    finally:
+        for server in (inside, vetted):
+            server.shutdown()
+            server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_a_name_that_changes_its_answer_is_fetched_from_the_address_the_check_judged(
+    rebinding,
+) -> None:
+    result = await net_safety.fetch_bytes(rebinding.url, max_bytes=4096, timeout=5.0)
+    assert result.status_code == 200
+    assert result.content.startswith(b"VETTED"), result.content
+    assert rebinding.inside_hits == []
+    assert rebinding.vetted_hits == [{"host": f"{PROBE}:{rebinding.port}", "path": "/marker"}]
+    # One lookup — the check's. The connection did not ask again.
+    assert rebinding.lookups == [VETTED_ADDR]
+    assert result.url == rebinding.url
+
+
+def test_the_blocking_fetcher_fetches_from_the_address_the_check_judged(rebinding) -> None:
+    result = net_safety.fetch_bytes_sync(rebinding.url, max_bytes=4096, timeout=5.0)
+    assert result.content.startswith(b"VETTED"), result.content
+    assert rebinding.inside_hits == []
+    assert rebinding.vetted_hits == [{"host": f"{PROBE}:{rebinding.port}", "path": "/marker"}]
+    assert rebinding.lookups == [VETTED_ADDR]
+
+
+@pytest.mark.asyncio
+async def test_a_relay_on_its_own_client_streams_from_the_address_the_check_judged(
+    rebinding,
+) -> None:
+    """The radio relay's and the podcast download's shape: a caller-owned
+    plain client, ``open_stream``, the body streamed through
+    ``iter_capped``."""
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await net_safety.open_stream(
+            client, rebinding.url, headers={"Icy-MetaData": "0"}
+        )
+        try:
+            body = b"".join([chunk async for chunk in net_safety.iter_capped(response, 4096)])
+        finally:
+            await response.aclose()
+    assert body.startswith(b"VETTED"), body
+    assert net_safety.connected_address(response) == VETTED_ADDR
+    assert rebinding.inside_hits == []
+    assert rebinding.lookups == [VETTED_ADDR]

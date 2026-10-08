@@ -561,9 +561,20 @@ sampler, the model pull):
   spellings resolvers accept (`127.1`, `0x7f000001`, `2130706433`) and the
   IPv6 forms that wrap an IPv4 (`::ffff:10.0.0.1`, 6to4, NAT64) are read as
   the address they denote, not as text.
+- The connection is then opened to one of the addresses that check judged,
+  **not to the name again**. Left to itself an HTTP client looks the name
+  up a second time when it connects, and a name whose DNS answers
+  differently on each query (rebinding: a public address for the check,
+  `127.0.0.1` or a LAN address for the connect) would pass the check and
+  reach a service on the box. The name still travels in the `Host` header
+  and as the TLS server name, so the site sees an ordinary request and its
+  certificate is checked against the name. The one endpoint fetched by the
+  name you wrote is an `OUTBOUND_ALLOW_HOSTS` entry (you named it, and the
+  check does not resolve it). A tool that opens its own connection (ffmpeg
+  in the radio sampler) is outside this guarantee.
 - Redirects are followed **one hop at a time** (five at most), each target
-  re-checked before it is opened — a public URL cannot bounce the server
-  into your LAN.
+  re-checked — and its connection pinned the same way — before it is
+  opened: a public URL cannot bounce the server into your LAN.
 - Every fetcher caps how many bytes it will read, so a "feed" that is really
   a firehose stops instead of filling the disk.
 

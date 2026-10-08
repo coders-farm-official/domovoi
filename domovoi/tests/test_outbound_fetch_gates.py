@@ -602,6 +602,51 @@ async def test_an_enclosure_under_the_cap_lands_on_disk(monkeypatch, dns, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_an_enclosure_download_connects_to_the_address_the_check_judged(
+    monkeypatch, dns, tmp_path
+) -> None:
+    """The poller's download opens its socket to the address the check
+    resolved — not to the name a second time — while the feed's server
+    still sees the request for its name (Host, TLS server name)."""
+    from domovoi.config import settings
+    from domovoi.workers import podcast_feed_poller as poller
+
+    monkeypatch.setattr(settings, "podcasts_dir", str(tmp_path))
+    monkeypatch.setattr(poller, "MAX_ENCLOSURE_BYTES", 4096)
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"\0" * 1000)
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+    session = _RecordingSession()
+    ok = await poller.download_episode(
+        session,
+        {
+            "id": 10,
+            "subscription_id": 1,
+            "guid": "ep-10",
+            "title": "Episode 10",
+            "sub_title": "Show",
+            "enclosure_url": "https://feeds.example.com/ep10.mp3",
+        },
+    )
+    assert ok is True
+    [request] = seen
+    assert request.url.host == PUBLIC_V4
+    assert request.headers["host"] == "feeds.example.com"
+    assert request.extensions["sni_hostname"] == "feeds.example.com"
+
+
+@pytest.mark.asyncio
 async def test_an_enclosure_pointing_into_the_house_is_never_fetched(
     monkeypatch, dns, tmp_path
 ) -> None:
