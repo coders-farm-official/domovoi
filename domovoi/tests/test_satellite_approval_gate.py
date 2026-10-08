@@ -373,13 +373,13 @@ def test_a_socket_with_no_peer_does_not_break_the_path() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "bad", ["zz", "nope", "12345", "1234567", "48 502", "\uff14\uff18\uff11\uff15\uff10\uff12", "\u00b2\u00b3\u00b9\u2074\u2075\u2076"]
+    "bad", ["zz", "nope", "123", "12345", "1234567", "12 34", "48 502", "\uff14\uff18\uff11\uff15\uff10\uff12", "\u00b2\u00b3\u00b9\u2074\u2075\u2076"]
 )
 async def test_a_code_no_operator_could_type_parks_nothing(fake_park, bad) -> None:
     """The audit's squat: park ``kitchen`` with a code the approve route
     can never match, and the real kitchen satellite is a conflict until
-    someone presses Reject. A code that is not exactly six ASCII digits is
-    refused before anything is written — and before the source's budget
+    someone presses Reject. A code that is not six ASCII digits (or the
+    four an older satellite carries) is refused before anything is written — and before the source's budget
     is spent, so a real device that mistyped nothing loses nothing."""
     sess = _session()
     accepted = await sess._park_for_approval(
@@ -389,6 +389,26 @@ async def test_a_code_no_operator_could_type_parks_nothing(fake_park, bad) -> No
     assert _last_frame(sess)["reason"] == "approval_code_invalid"
     assert "code" not in _last_frame(sess)
     assert fake_park.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", ["0042", "7310"])
+async def test_an_older_satellites_four_digit_code_still_parks(fake_park, legacy) -> None:
+    """The setup portal minted four digits until SAT-5 (2026-09-22), and a
+    satellite keeps its code for good. One onboarded then must still park
+    by it — after a pairing reset, say — and be approved by the four
+    digits it says, which the dashboard's card accepts."""
+    fake_park.parked_code = legacy
+    sess = _session()
+    await sess._park_for_approval(object(), {}, token_hash="o" * 64, code=legacy)
+    assert _last_frame(sess)["reason"] == "awaiting_approval"
+    assert _last_frame(sess)["code"] == legacy
+    assert [c["code"] for c in fake_park.calls] == [legacy]
+
+
+def test_the_legacy_shape_is_the_one_the_old_portal_minted() -> None:
+    assert streaming_mod.LEGACY_APPROVAL_CODE_DIGITS == 4
+    assert streaming_mod._is_approval_code(f"{7:04d}")
 
 
 @pytest.mark.asyncio

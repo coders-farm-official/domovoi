@@ -505,12 +505,23 @@ APPROVAL_HELLO_LIMITER = SlidingWindowLimiter(
 # retrying, gets its turn back quickly.
 APPROVAL_TAKEOVER_SEC = 180.0
 
+# The setup portal minted FOUR digits until SAT-5 (2026-09-22), and a
+# satellite keeps the code it was given in ~/.domovoi/approval_code for
+# good, sending it in every hello. A unit onboarded before then still
+# brings four, and must still be able to park and be approved by them
+# (the dashboard's approval card takes four or more digits for the same
+# reason) — after a pairing reset, say.
+LEGACY_APPROVAL_CODE_DIGITS = 4
+
+
 def _is_approval_code(code: str) -> bool:
-    """Exactly :data:`APPROVAL_CODE_DIGITS` ASCII digits — the only shape
-    the approve route can ever match (``str.isdigit`` alone would also
+    """:data:`APPROVAL_CODE_DIGITS` ASCII digits, or the
+    :data:`LEGACY_APPROVAL_CODE_DIGITS` an older satellite still carries:
+    the shapes a Domovoi satellite has ever been given, and that a person
+    can read off the device and type (``str.isdigit`` alone would also
     take superscripts and other scripts' digits)."""
     return (
-        len(code) == APPROVAL_CODE_DIGITS
+        len(code) in (APPROVAL_CODE_DIGITS, LEGACY_APPROVAL_CODE_DIGITS)
         and code.isascii()
         and code.isdigit()
     )
@@ -2442,7 +2453,8 @@ class StreamSession:
         * a per-source-IP budget, so one address cannot fill the approvals
           list with room names;
         * a code the device brings must be one the operator could ever
-          type — exactly six ASCII digits — or nothing is parked (CORE-22);
+          type — six ASCII digits, or the four an older satellite carries — or
+          nothing is parked (CORE-22);
         * :meth:`SatelliteApprovalRepository.request` refusing a device
           that is not the one already parked under this room name, for
           :data:`APPROVAL_TAKEOVER_SEC`; after that a different device's
@@ -2453,13 +2465,15 @@ class StreamSession:
         """
         if code is not None and not _is_approval_code(code):
             # Refused before the budget is spent and before anything is
-            # written: a row with this code could never be approved (the
-            # approve route takes digits only), so parking it would only
-            # take the room name away from the device that IS there.
+            # written: no satellite was ever given this code — one that is
+            # not all digits can never be approved (the approve route takes
+            # digits only), and no device says one of any other length — so
+            # parking it would only take the room name away from the device
+            # that IS there.
             log.warning(
                 "pairing: room=%s approval request refused — the code it "
-                "brought is not %d digits",
-                self.room_id, APPROVAL_CODE_DIGITS,
+                "brought is not %d digits (or the %d of an older satellite)",
+                self.room_id, APPROVAL_CODE_DIGITS, LEGACY_APPROVAL_CODE_DIGITS,
             )
             await self._safe_send_text({
                 "type": "error",
