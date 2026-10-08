@@ -1179,9 +1179,12 @@ is `auto`, which the core resolves to its current LAN address.
   `await net_safety.fetch_bytes(url, max_bytes=...)` /
   `open_stream(client, url)` do that check on every redirect hop and cap the
   body. Pass `require_resolution=False` when you are only *storing* a URL to
-  fetch later. Handing such a URL to an external tool instead? Constrain the
-  tool too — the bundled radio plugin passes
-  `-protocol_whitelist http,https,tcp,tls` to ffmpeg. The check reads the
+  fetch later. Need an external tool to read it? Do not hand the tool the
+  URL: a tool that opens a URL resolves the name itself, follows redirects
+  unchecked and opens whatever a playlist lists, all outside the check.
+  Open it yourself with `open_stream` and feed the tool the bytes — the
+  bundled radio plugin feeds ffmpeg on stdin under
+  `-protocol_whitelist pipe` and refuses playlists. The check reads the
   operator's `OUTBOUND_ALLOW_HOSTS` for you (empty by default), so a
   household that has deliberately allowlisted a LAN endpoint gets the same
   answer from your plugin as from core — never keep your own allowlist.

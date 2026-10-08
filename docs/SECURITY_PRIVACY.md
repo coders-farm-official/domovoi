@@ -553,8 +553,12 @@ fetcher — the podcast poller, the news fetcher, the radio stream proxy and
 sampler, the model pull):
 
 - `http` and `https` only. Not `file:`, not `concat:`, nothing else — the
-  radio sampler additionally passes `-protocol_whitelist http,https,tcp,tls`
-  to ffmpeg so the tool itself won't open anything else either.
+  radio sampler never hands ffmpeg the station URL at all: it opens the
+  stream through these same rules and feeds ffmpeg the bytes on stdin under
+  `-protocol_whitelist pipe`, so the tool cannot resolve a name, follow a
+  redirect or open a playlist's segment URLs on its own. It refuses a
+  playlist, and the browser relay serves only audio (as a download with
+  `nosniff` and a sandbox policy, never as a page of the dashboard).
 - Every hostname is resolved, and the URL is refused when **any** address it
   resolves to is loopback, link-local (including `169.254.169.254`), RFC
   1918, CGNAT, an IPv6 ULA, multicast or unspecified. The shorthand

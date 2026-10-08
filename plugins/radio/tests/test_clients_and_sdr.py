@@ -56,15 +56,97 @@ async def test_shazam_stub_encodes_input() -> None:
 # ─── ffmpeg grab failure paths ──────────────────────────────────────────
 
 
+class _Upstream:
+    """What the mocked station answers: a status, headers and a body,
+    plus a log of every URL the grab asked for (redirect hops included)."""
+
+    def __init__(self) -> None:
+        self.status = 200
+        self.headers: dict[str, str] = {"content-type": "audio/mpeg"}
+        self.body = b"\xff\xfb\x90\x00" * 4096
+        self.redirects: dict[str, str] = {}
+        self.opened: list[str] = []
+
+    def answer(self, request):
+        import httpx
+
+        url = str(request.url)
+        self.opened.append(url)
+        if url in self.redirects:
+            return httpx.Response(302, headers={"location": self.redirects[url]})
+        return httpx.Response(self.status, headers=self.headers, content=self.body)
+
+
 @pytest.fixture
-def public_stream_host(monkeypatch):
+def upstream(monkeypatch) -> _Upstream:
+    """Every httpx client the grab builds answers from ``_Upstream`` — no
+    test here reaches the network."""
+    import httpx
+
+    up = _Upstream()
+    real = httpx.AsyncClient
+
+    def factory(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(up.answer)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", factory)
+    return up
+
+
+@pytest.fixture
+def public_stream_host(monkeypatch, upstream):
     """``x`` resolves to a public address, so the grab's outbound-URL
-    check passes and the ffmpeg paths below are what is under test."""
+    check passes, and the station answers from the mock upstream, so the
+    ffmpeg paths below are what is under test."""
     monkeypatch.setattr(
         net_safety,
         "resolve_host",
         lambda host: [ipaddress.ip_address("93.184.216.34")],
     )
+    return upstream
+
+
+class _FakeStdin:
+    def __init__(self) -> None:
+        self.fed = bytearray()
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.fed.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeStderr:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    async def read(self) -> bytes:
+        return self.data
+
+
+class _FakeProc:
+    """An ffmpeg that reads its stdin to the end, then exits ``rc``."""
+
+    def __init__(self, rc: int, stderr: bytes = b"") -> None:
+        self._rc = rc
+        self.returncode: int | None = None
+        self.stdin = _FakeStdin()
+        self.stderr = _FakeStderr(stderr)
+
+    async def wait(self) -> int:
+        while not self.stdin.closed:
+            await asyncio.sleep(0)
+        self.returncode = self._rc
+        return self._rc
+
+    def kill(self) -> None:
+        self.returncode = -9
 
 
 async def test_grab_missing_ffmpeg_returns_none(
@@ -79,63 +161,152 @@ async def test_grab_missing_ffmpeg_returns_none(
 
 
 async def test_grab_nonzero_rc_returns_none(monkeypatch, public_stream_host) -> None:
-    class FakeProc:
-        returncode = 1
-
-        async def communicate(self):
-            return b"", b"err: no stream"
-
     async def fake_exec(*args, **kwargs):
-        return FakeProc()
+        return _FakeProc(1, b"err: no stream")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
 
 
 async def test_grab_tiny_output_rejected(monkeypatch, public_stream_host) -> None:
-    class FakeProc:
-        returncode = 0
-
-        async def communicate(self):
-            return b"", b""
-
     async def fake_exec(*args, **kwargs):
-        return FakeProc()
+        return _FakeProc(0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     # mkstemp creates a 0-byte file; the < 1 KB sanity check rejects it.
     assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
 
 
-# ─── What ffmpeg is allowed to open ─────────────────────────────────────
+# ─── What ffmpeg is allowed to open (A2-03) ─────────────────────────────
 
 
-async def test_the_grab_argv_lets_ffmpeg_open_only_http_streams(
+async def test_ffmpeg_reads_only_its_stdin_and_never_sees_the_url(
     monkeypatch, public_stream_host
 ) -> None:
-    """ffmpeg reads local files, pipes and concat lists by default; the
-    sampler hands it a URL from a station row, so the argv says which
-    protocols that URL may use — and says it before -i, where it governs
-    the input."""
+    """ffmpeg given a URL resolves the name itself, follows redirects
+    unchecked and opens an HLS playlist's segment URLs. So it is never
+    given one: the grab fetches the stream through the checked fetcher
+    and feeds the bytes on stdin, and the argv lets ffmpeg open nothing
+    but that pipe — said before -i, where it governs the input."""
     seen: list[list[str]] = []
-
-    class FakeProc:
-        returncode = 1
-
-        async def communicate(self):
-            return b"", b"err"
+    procs: list[_FakeProc] = []
 
     async def fake_exec(*args, **kwargs):
         seen.append(list(args))
-        return FakeProc()
+        assert kwargs.get("stdin") == asyncio.subprocess.PIPE
+        procs.append(_FakeProc(1, b"err"))
+        return procs[-1]
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     await shazam_stream.grab_to_tempfile("http://x/stream", 15)
 
     (argv,) = seen
-    assert "-protocol_whitelist" in argv
-    assert argv[argv.index("-protocol_whitelist") + 1] == "http,https,tcp,tls"
+    assert argv[argv.index("-protocol_whitelist") + 1] == "pipe"
+    assert argv[argv.index("-i") + 1] == "pipe:0"
     assert argv.index("-protocol_whitelist") < argv.index("-i")
+    assert not any("x/stream" in a or a.startswith("http") for a in argv)
+    # ...and what it was fed is the station's body, through the fetcher.
+    assert public_stream_host.opened == ["http://x/stream"]
+    assert bytes(procs[0].stdin.fed) == public_stream_host.body
+    assert procs[0].stdin.closed
+
+
+async def test_a_redirect_into_the_house_is_refused_before_ffmpeg(
+    monkeypatch, public_stream_host
+) -> None:
+    """The phase-2 reproduction: a public URL that 302s to the core on
+    loopback. The first URL passes the check; the hop does not, and
+    nothing is fetched from it or handed to ffmpeg."""
+    public_stream_host.redirects["http://x/stream"] = "http://127.0.0.1:6370/v1/health"
+
+    async def never(*args, **kwargs):  # pragma: no cover — spawning IS the failure
+        raise AssertionError("spawned ffmpeg after a refused redirect")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never)
+    assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
+    assert public_stream_host.opened == ["http://x/stream"]
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        ("application/vnd.apple.mpegurl", b"#EXTM3U\nhttp://127.0.0.1:6370/seg.ts\n"),
+        ("audio/x-mpegurl", b"#EXTM3U\nhttp://127.0.0.1:6370/seg.ts\n"),
+        ("audio/x-scpls", b"[playlist]\nFile1=http://127.0.0.1:6370/\n"),
+        # A playlist under an audio type is still a playlist.
+        ("audio/mpeg", b"#EXTM3U\n#EXTINF:10,\nhttp://127.0.0.1:6370/seg.ts\n"),
+        ("application/octet-stream", b"\xef\xbb\xbf[playlist]\nFile1=http://10.0.0.5/\n"),
+        ("text/html", b"<html>not a stream</html>"),
+        ("application/json", b"{}"),
+    ],
+)
+async def test_a_playlist_or_a_page_is_never_handed_to_ffmpeg(
+    monkeypatch, public_stream_host, content_type, body
+) -> None:
+    public_stream_host.headers = {"content-type": content_type}
+    public_stream_host.body = body
+
+    async def never(*args, **kwargs):  # pragma: no cover — spawning IS the failure
+        raise AssertionError(f"spawned ffmpeg for a {content_type} body")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", never)
+    assert await shazam_stream.grab_to_tempfile("http://x/stream", 15) is None
+
+
+async def test_the_feed_stops_at_the_byte_budget(monkeypatch, public_stream_host) -> None:
+    """A station that never stops (and an ffmpeg that never exits) costs
+    at most the budget, not the whole timeout's worth of bandwidth."""
+    monkeypatch.setattr(shazam_stream, "_FEED_BYTES_PER_SEC", 1024)
+    monkeypatch.setattr(shazam_stream, "_FEED_PROBE_SEC", 0)
+    monkeypatch.setattr(shazam_stream, "_FEED_CHUNK", 512)
+    public_stream_host.body = b"\x00" * (64 * 1024)
+    procs: list[_FakeProc] = []
+
+    async def fake_exec(*args, **kwargs):
+        procs.append(_FakeProc(1))
+        return procs[-1]
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    await shazam_stream.grab_to_tempfile("http://x/stream", 2)
+    assert 2048 <= len(procs[0].stdin.fed) < 2048 + 512 + 1
+    assert procs[0].stdin.closed
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("ffmpeg") is None, reason="ffmpeg not on PATH"
+)
+async def test_a_real_ffmpeg_records_from_the_pipe(
+    monkeypatch, tmp_path, public_stream_host
+) -> None:
+    """End to end with the real binary: three seconds of MP3 fed on
+    stdin come out as a 16 kHz mono WAV, so the pipe really works on
+    this platform."""
+    import subprocess
+
+    mp3 = tmp_path / "tone.mp3"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+            "-ac", "1", "-b:a", "64k", str(mp3),
+        ],
+        check=True,
+        timeout=60,
+    )
+    public_stream_host.body = mp3.read_bytes()
+    path = await shazam_stream.grab_to_tempfile("http://x/stream", 2, timeout_sec=30.0)
+    assert path is not None
+    try:
+        import wave
+
+        with wave.open(path, "rb") as w:
+            assert w.getnchannels() == 1
+            assert w.getframerate() == 16000
+            assert 1.5 <= w.getnframes() / 16000 <= 2.1
+    finally:
+        import os
+
+        os.unlink(path)
 
 
 @pytest.mark.parametrize(
