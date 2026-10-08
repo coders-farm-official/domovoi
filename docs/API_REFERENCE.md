@@ -369,6 +369,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
 | `POST /v1/admin/sounds/regenerate` | **Admin (Bearer)** | — | Kick a background re-render of all voices' greeting/canned clips, then notify satellites to re-sync. Returns `{"started": true}` immediately. |
+| `POST /v1/admin/sounds/setup-clips` | **Admin (Bearer)** | — | Render the satellite's setup phrase set in the household's default voice, synchronously (sixteen short lines, seconds), for media prep to copy onto a prepared card. The web process cannot import the TTS clients, so its prepare job calls this with the operator's credentials forwarded. Returns `{written, problems}`. |
 | `POST /v1/admin/voices/sample` | **Device (`X-Device-Token` or Bearer)** | `{"name": "<voice>"}` | Live-synthesize a sample line in a registered voice; returns `audio/wav` with the text in `X-Sample-Text`. `404` for an unknown voice. |
 | `POST /v1/admin/wake/record/start` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Tell a connected satellite to record positive training clips (fresh take: clip dir + count reset). `404` room/word unknown, `409` mid drop-in or wrong status, `502` send failure. |
 | `POST /v1/admin/wake/record/stop` | **Admin (Bearer)** | `{room_id}` | Stop an in-progress recording; the Pi resumes its wake loop. |
@@ -1217,7 +1218,13 @@ images were attached, `override` when the request named a model).
 
 ### 3.19 Models (LLM management)
 
-All **Open**. Talks to the local Ollama instance; hardware facts proxy to the
+The reads of the catalog, the installed models, the hardware and the pull
+jobs are **Open**. The role slots go through the core's config:
+`GET /api/models/active` is an **Admin read** there and `POST
+/api/models/active` a config write on the **security tier** (`501` before
+setup), the core deciding both on the credentials this process forwards.
+Pulling, cancelling a pull and deleting a model are **Admin (Bearer)** on
+this process. Talks to the local Ollama instance; hardware facts proxy to the
 core (which owns the CUDA context). Domovoi runs **two** models — the
 conversational one and the tool-routing one — switchable independently.
 
@@ -1228,10 +1235,10 @@ conversational one and the tool-routing one — switchable independently.
 | `GET /api/models/active` | — | Which models are active for each role. The `stt` row also carries `device` and `compute_type` (the Whisper pair). |
 | `POST /api/models/active` | `SetActiveBody` | Switch the active model for a role. For `stt`, an optional `compute_type` is written as `whisper_compute_type` in the same config write (checked against the device; `400` on any other role). |
 | `GET /api/models/hardware` | — | Proxy → core `GET /v1/admin/hardware` (GPU/CPU/RAM/disk fit badges). |
-| `DELETE /api/models/{name}` | — | **Admin.** Remove an installed model. |
+| `DELETE /api/models/{name}` | — | **Admin (Bearer).** Remove an installed model. |
 | `GET /api/models/jobs` | — | Running/finished pull jobs with progress. |
-| `POST /api/models/pull` | `PullBody` | **Admin.** Start downloading a model (background job). A reference that names its own registry host (`host/ns/model:tag`) is `400` when that host fails the outbound-URL rules. Under `never` it is `409` before any `model_jobs` row is written and before Ollama is asked, unless the reference names a registry on the house network. |
-| `POST /api/models/pull/{job_id}/cancel` | — | **Admin.** Cancel a pull. |
+| `POST /api/models/pull` | `PullBody` | **Admin (Bearer).** Start downloading a model (background job). A reference that names its own registry host (`host/ns/model:tag`) is `400` when that host fails the outbound-URL rules. Under `never` it is `409` before any `model_jobs` row is written and before Ollama is asked, unless the reference names a registry on the house network. |
+| `POST /api/models/pull/{job_id}/cancel` | — | **Admin (Bearer).** Cancel a pull. |
 
 ### 3.20 News
 
