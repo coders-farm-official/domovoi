@@ -40,6 +40,19 @@ CASES = {
     "body_onload": {"html": '<body onload=alert(1)>hi</body>'},
     "unquoted_handler": {"html": "<div onmouseover=alert(1)>hover</div>"},
     "svg_data_image": {"html": '<img src="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=">'},
+    # FE-4: the author's rel used to be kept and the forced one appended
+    # after it, and the parser keeps the FIRST of two — so rel="opener"
+    # won and the linked page got a live window.opener.
+    "rel_opener": {
+        "html": '<a href="https://example.test/" target="_blank" rel="opener">read more</a>'
+    },
+    "rel_opener_markdown": {
+        "markdown": 'See <a href="https://example.test/" rel="opener" target="_blank">this</a>.\n'
+    },
+    "target_named": {"html": '<a href="https://example.test/" target="dashboard">x</a>'},
+    "duplicate_href": {
+        "html": '<a href="javascript:alert(1)" href="https://example.test/">x</a>'
+    },
     # And the ordinary note, which must still render as a note.
     "ordinary": {
         "markdown": (
@@ -129,3 +142,43 @@ def test_a_script_takes_its_contents_with_it(previews) -> None:
     the page as text — and one nested quote away from running."""
     assert "fetch(" not in previews["script"]["sanitized"]
     assert "<h1" in previews["script"]["sanitized"]  # the rest of the note survives
+
+
+REL_ATTR = re.compile(r"\srel\s*=", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("case", ["rel_opener", "rel_opener_markdown", "ordinary"])
+def test_a_link_carries_exactly_one_rel_and_it_is_the_forced_one(previews, case) -> None:
+    """FE-4: whatever the author wrote, a link's only ``rel`` is
+    ``noopener noreferrer nofollow`` — and it comes first in the tag, so
+    the parser's first-wins rule could never let a later one out-rank it."""
+    html = previews[case]["sanitized"]
+    for tag in re.findall(r"<a\b[^>]*>", html):
+        assert len(REL_ATTR.findall(tag)) == 1, tag
+        assert tag.startswith('<a rel="noopener noreferrer nofollow"'), tag
+    assert 'rel="opener"' not in html
+
+
+def test_the_harness_sees_the_authors_rel_before_sanitising(previews) -> None:
+    """Guard against a vacuous pass: the raw markdown output does carry it."""
+    assert 'rel="opener"' in previews["rel_opener_markdown"]["raw"]
+
+
+def test_a_new_tab_link_keeps_its_target(previews) -> None:
+    html = previews["rel_opener"]["sanitized"]
+    assert 'target="_blank"' in html and 'href="https://example.test/"' in html
+
+
+def test_a_named_target_is_dropped(previews) -> None:
+    html = previews["target_named"]["sanitized"]
+    assert "target=" not in html
+    assert 'href="https://example.test/"' in html
+
+
+def test_a_second_href_cannot_stand_in_for_a_refused_first(previews) -> None:
+    """The browser keeps the first of two attributes; so does the
+    sanitiser, which then refuses it — the link is left with no href
+    rather than with the one the browser would never have used."""
+    html = previews["duplicate_href"]["sanitized"]
+    assert "javascript:" not in html.lower()
+    assert html.count("href=") <= 1

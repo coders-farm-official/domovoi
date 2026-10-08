@@ -50,8 +50,11 @@ const SanitizeHtml = (() => {
   const VOID = new Set(['br', 'hr', 'img', 'input', 'wbr']);
 
   const GLOBAL_ATTRS = new Set(['class', 'title', 'dir', 'lang', 'id']);
+  // A link's `rel` is never the author's: the sanitiser writes its own
+  // (renderTag), and an author's `rel="opener"` would otherwise hand the
+  // linked page a live window.opener on a target=_blank link (FE-4).
   const PER_ELEMENT_ATTRS = {
-    a: new Set(['href', 'target', 'rel']),
+    a: new Set(['href', 'target']),
     img: new Set(['src', 'alt', 'width', 'height', 'loading']),
     td: new Set(['colspan', 'rowspan', 'align']),
     th: new Set(['colspan', 'rowspan', 'align', 'scope']),
@@ -153,14 +156,28 @@ const SanitizeHtml = (() => {
     return null;
   };
 
+  // What every link carries, written FIRST: when an attribute appears
+  // twice the HTML parser keeps the first, so nothing later in the tag —
+  // an author's `rel`, should one ever get past the allowlist again — can
+  // out-rank it (FE-4).
+  const LINK_REL = 'rel="noopener noreferrer nofollow"';
+
   const renderTag = (name, attrs) => {
     const allowed = PER_ELEMENT_ATTRS[name];
     const parts = [name];
+    if (name === 'a') parts.push(LINK_REL);
+    const seen = new Set();
     for (const [attr, value] of attrs) {
       // Every event handler is spelled on*, and nothing else here needs a
       // name that starts that way.
       if (attr.startsWith('on')) continue;
       if (!GLOBAL_ATTRS.has(attr) && !(allowed && allowed.has(attr))) continue;
+      // One of each, the first as written — what the browser would keep.
+      if (seen.has(attr)) continue;
+      seen.add(attr);
+      // A link opens here or in a new tab; a named target could steer an
+      // existing window.
+      if (name === 'a' && attr === 'target' && value.trim().toLowerCase() !== '_blank') continue;
       if (URL_ATTRS.has(attr)) {
         const url = safeUrl(value, attr);
         if (url === null) continue;
@@ -169,7 +186,6 @@ const SanitizeHtml = (() => {
       }
       parts.push(value === '' ? attr : `${attr}="${escapeAttr(value)}"`);
     }
-    if (name === 'a') parts.push('rel="noopener noreferrer nofollow"');
     const open = parts.join(' ');
     return VOID.has(name) ? `<${open}/>` : `<${open}>`;
   };
