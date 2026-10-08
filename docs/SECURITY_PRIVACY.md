@@ -1356,9 +1356,11 @@ a **boot-time** gate and the edges matter:
 new hardware gives that room a new token that won't match — so the device is
 refused until you clear the old pairing. **Reset pairing** from the dashboard
 (Satellites → room → Overview → Reset pairing) deletes the room's pairing row
-so the next connect re-pairs. That reset is **admin-gated** (Bearer-only,
-`require_admin_mutation`) — it's a security operation, since it lets the next
-device claim the room.
+so the next connect re-pairs: under strict pairing it parks for approval by
+the new device's code like any first pairing. That reset is on the
+**security tier** (Bearer-only, `require_admin_security`, `501` before
+setup) — it's a security operation, since it lets the next device ask for
+the room (and, with strict pairing off, claim it outright).
 
 **Pre-seeded pairing (USB adoption).** The plug-in-and-adopt flow removes
 the first-connect race entirely for adopted rooms: at adopt time the core

@@ -597,7 +597,7 @@ Each satellite authenticates its WebSocket to the Domovoi server with a **pairin
 ~/.domovoi/pairing_token       # 64 hex chars, mode 0600, one per device
 ```
 
-It's sent in every `hello` frame's `pairing_token` field. The server stores only the token's **sha256** (never the raw token) in the `satellite_pairings` table and binds the room to it **trust-on-first-use**: the first satellite to present a token for a room *claims* it, and from then on that room's connection must present the matching token or the server refuses it (logs a warning, sends `{"type":"error","reason":"pairing_rejected"}`, and closes the socket).
+It's sent in every `hello` frame's `pairing_token` field. The server stores only the token's **sha256** (never the raw token) in the `satellite_pairings` table and binds the room to it: the first token a room presents is parked for an admin to approve (strict pairing, the default) or claims the room on the spot (only where strict pairing is turned off), and from then on that room's connection must present the matching token or the server refuses it (logs a warning, sends `{"type":"error","reason":"pairing_rejected"}`, and closes the socket).
 
 The server requires a token for **every** room by default (`SATELLITE_PAIRING_STRICT=true`), and a room's first pairing waits for an admin to approve it by the code the satellite says. Only a server that turned strict pairing off still accepts a tokenless connection for a room that has never paired (backward-compatible with older satellites), and such a room can never drop in on, or announce into, another room.
 
@@ -608,7 +608,7 @@ The server requires a token for **every** room by default (`SATELLITE_PAIRING_ST
 If you **re-flash the SD card**, **replace the Pi**, or **move a room to a new device**, the new device generates a *fresh* token that won't match the one the server has on file for that room — so its `hello` is refused (case: token mismatch) and it can't connect. Clear the old pairing so the new device can re-pair:
 
 - **From the dashboard:** Satellites page → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
-- **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room re-pairs trust-on-first-use with the new device's token.
+- **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room is a first pairing again: it waits on the dashboard for you to approve it by the six-digit code the new device says (or, where strict pairing is turned off, claims the room with the new device's token).
 
 You do **not** need to reset pairing for a normal `restart`, `upgrade`, or `reboot` — the token sidecar survives those (it lives in `~/.domovoi/`, outside the code tree). Only a wiped config dir / new device needs a reset.
 
