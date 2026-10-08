@@ -172,3 +172,15 @@ def test_linux_install_docs_install_from_the_lock() -> None:
 def test_install_paths_drop_the_dev_extra(doc: str) -> None:
     text = (REPO_ROOT / doc).read_text(encoding="utf-8")
     assert not re.search(r"pip install -e \"\.\[dev,", text), f"{doc} still installs the dev extra"
+
+
+def test_pyproject_says_where_a_deployments_versions_come_from() -> None:
+    """2026-10 review: the pyproject comment still said a deployment's exact
+    versions come from requirements.lock, the false assurance the finding
+    named in SECURITY_PRIVACY (that lock is the suite's set; a server runs
+    the Linux lock, and its updates only once opted in)."""
+    head = PYPROJECT.read_text(encoding="utf-8").split("dependencies = [", 1)[0]
+    assert "deployment runs come from `requirements.lock`" not in head
+    assert "requirements-linux-py314.lock" in head
+    assert "DOMOVOI_USE_LOCK=1" in head
+    assert "unchecked" in head

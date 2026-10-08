@@ -258,3 +258,7 @@ satellite/config.toml
 id_rsa*
 id_ed25519*
 allowed_signers
+# Copies of a .env (domovoi/.env.bak, .env.old, .env.2026-10-08): each holds
+# POSTGRES_PASSWORD, LETTA_TOKEN and the rest. Only the example is tracked.
+.env.*
+!.env.example

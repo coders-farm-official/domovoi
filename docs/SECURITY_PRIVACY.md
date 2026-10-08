@@ -801,16 +801,24 @@ said plainly:
   so the first locked re-sync can be seeded from what the box runs.
 - **Another Python or platform.** With no lock for the venv's Python (an
   older Ubuntu, a `uv`-installed 3.13, Windows), pip's resolver installs
-  whatever the index serves within the floors; the update unit says
-  `WARNING` in its step when it does that.
+  whatever the index serves within the floors. On a box that opted in,
+  the update unit records that re-sync as a `warn` step and Settings →
+  Version shows **lock not applied: <reason>**, so the opt-in never turns
+  itself off silently.
 - **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`,
   `signing`) go through the resolver too, when you add them.
 - **The `dev` lock** (`requirements.lock`, core + `dev`, Python 3.12) is
   the suite's set, not a server's.
 - **A plugin's own lock** is hash-checked by the plugin installer
   ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)); the satellite card's
-  Python wheels are not yet (its wake-word models and the XVF3800 tool
-  are pinned by SHA-256).
+  Python wheels are not yet, the `openwakeword` package among them. The
+  XVF3800 tool is pinned by commit and SHA-256. The wake-word base models
+  are pinned by SHA-256 and size on the server, which fetches every one
+  and refuses to prepare an offline card unless the cache holds all of
+  them verified; stage 2 on the satellite checks them again against the
+  same pins, and runs openWakeWord's own download only for a card that
+  carries no models (prepared with offline off), deleting anything that
+  download brings that the pins don't vouch for.
 
 ## What the admin password actually gates
 
@@ -1196,7 +1204,7 @@ outbound traffic, each with its own off switch:
 | **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
-| **Wake-word base models** — one-time openWakeWord model download during satellite provisioning | Provisioning a Pi | One-time, on the Pi, at build time. |
+| **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), and **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub) | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |

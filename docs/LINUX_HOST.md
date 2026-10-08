@@ -599,21 +599,40 @@ Domovoi does; it bounds what a process gone wrong can reach directly:
   caches and the default `~/Music`, `~/Pictures` and `~/Documents`.
   `domovoi-db` sees homes read-only and writes only its own.
 - **Private `/tmp`** per unit, files the services create are not readable
-  by other accounts (`UMask=0027`), and the kernel's tunables, modules,
-  logs, control groups and hostname are off limits.
-- **No set-uid files, no realtime scheduling, no new namespaces, native
-  system calls only,** and sockets limited to local, IPv4, IPv6 and
-  netlink.
-- **`domovoi-web` and `domovoi-db`** also run with `NoNewPrivileges=yes`
-  and no capabilities at all; `domovoi-db`, which only drives the `docker`
-  CLI, gives up devices, the clock and writable-executable memory too.
+  by other accounts (`UMask=0027`), and the control groups are read-only.
+- **`domovoi-web` and `domovoi-db`** also have the kernel's tunables,
+  modules, logs and hostname off limits; no set-uid files, no realtime
+  scheduling, no new namespaces, native system calls only, and sockets
+  limited to local, IPv4, IPv6 and netlink. They run with
+  `NoNewPrivileges=yes` and no capabilities at all; `domovoi-db`, which
+  only drives the `docker` CLI, gives up devices, the clock and
+  writable-executable memory too.
 
 What is deliberately left out, and why:
 
-- **`NoNewPrivileges` on the core.** The version panel's restart runs
-  `sudo -n systemctl ...` from the core ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)),
-  and `NoNewPrivileges` stops sudo working. The web never runs sudo (its
-  Restart button asks the core), so it keeps the setting.
+- **Everything that implies `NoNewPrivileges` on the core.** The version
+  panel's Restart runs `sudo -n systemctl ...` from the core
+  ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)), and on a
+  box with the [update unit](#updates-from-the-dashboard) that is
+  `sudo -n systemctl start domovoi-update.service`, the box's only update
+  path. sudo works only while its set-uid bit is honoured, and the kernel's
+  no-new-privileges flag turns that off ("The no new privileges flag is
+  set"). systemd sets that flag for `NoNewPrivileges=yes`, and it also
+  implies it, for a unit that runs as a non-root `User=`, for every option
+  it enforces with seccomp: `LockPersonality`, `MemoryDenyWriteExecute`,
+  `PrivateDevices`, `ProtectClock`, `ProtectHostname`, `ProtectKernelLogs`,
+  `ProtectKernelModules`, `ProtectKernelTunables`,
+  `RestrictAddressFamilies`, `RestrictNamespaces`, `RestrictRealtime`,
+  `RestrictSUIDSGID`, `SystemCallArchitectures`, `SystemCallFilter`,
+  `SystemCallLog` and `DynamicUser` (`man systemd.exec`, under
+  `NoNewPrivileges=`). So the core unit keeps only the file-system part
+  above (read-only system, private `/tmp`, hidden homes, read-only control
+  groups, the umask), and its comment lists what it leaves out. Adding any
+  of those options to the core, in the unit or a drop-in, silently breaks
+  the Restart button: the panel then reports no sudoers grant. The web
+  never runs sudo (its Restart button asks the core), so it keeps
+  `NoNewPrivileges` and every one of those the hardware allows (all but the
+  device, clock and W+X ones below).
 - **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
   They hide device nodes: a GPU, an SDR stick for the radio, the block
   devices the dashboard reads a satellite card's label from.
@@ -635,18 +654,24 @@ ReadWritePaths=/data/music
 
 **Check it** after `daemon-reload` and a restart: `systemd-analyze security
 domovoi-core` scores the exposure (the units this page listed before
-scored 9.0 "UNSAFE" each; the shipped ones score about 5.9 for the core,
-3.5 for the web and 1.8 for `domovoi-db`), Settings → Version still offers
+scored 9.0 "UNSAFE" each; the shipped ones score about 3.5 for the web and
+1.8 for `domovoi-db`, and the core, which keeps only the file-system part,
+scores higher than both), Settings → Version still offers
 **Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
 satellite turn answers, and a room's music starts (the core runs
-`docker`).
+`docker`). The quick check for the sudo path on its own, as root:
+`systemd-run -p User=domovoi -p ProtectSystem=strict -p PrivateTmp=yes --wait --pipe sudo -n -l`
+lists the grant; add `-p RestrictSUIDSGID=yes` and it fails, which is the
+trap described above.
 
 **Already running units from an older copy of this page?** If they match
 this page's layout, install the shipped files over them as above, then
 `sudo systemctl daemon-reload` and restart the three. If you changed
 paths or the user, copy the sandboxing block from the shipped file into a
 drop-in instead (`sudo systemctl edit domovoi-core`, and the same for the
-other two), with your paths in `ReadWritePaths=` and `BindPaths=`.
+other two), with your paths in `ReadWritePaths=` and `BindPaths=`. Copy
+each unit's own block: the web's or the database's block in the core's
+drop-in stops its sudo.
 
 `domovoi-update.service` is not sandboxed: it runs as root to stop and
 start the other units, back up the database, rebuild the room image and
@@ -768,7 +793,9 @@ run does this:
    whose download doesn't match its hash fails the step, so the update
    rolls back; extras beyond the lock's own (`cuda`, `fastlane`) then go
    through the resolver, and the step's detail says so. Opted in without
-   a usable lock, the step says `WARNING` and uses the resolver.
+   a usable lock, it uses the resolver and the step is a `warn`: the
+   version panel shows **lock not applied: <reason>** under the last
+   update.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
@@ -1016,9 +1043,27 @@ the newest that resolved). Re-seed it from the box first:
 
 From then on an update that changes `pyproject.toml` or a lock installs
 from the lock, every package hash-checked ([step 5](#updates-from-the-dashboard)).
-A lock change is a dependency change, so under the **No** internet answer
-that update is refused like any other. Remove the line (or set it to `0`)
-to go back to the resolver.
+A package that does not match its hash fails the update, and it rolls
+back. If a later update can't use the lock at all (the venv moved to a
+newer Python, the lock was renamed, `DOMOVOI_DEPS_LOCK` was emptied), it
+does not stop: it resolves from the index as before, but its `sync-deps`
+step is a `warn`, the journal says WARNING, and Settings → Version shows
+**lock not applied: <reason>** under the last update until the next run.
+Re-seed and commit a lock for the new Python to go back to hash-checked
+installs. A lock change is a dependency change, so under the **No**
+internet answer that update is refused like any other. Remove the line
+(or set it to `0`) to go back to the resolver.
+
+Turning `dev` out of the default extras stops a re-sync adding the test
+runner; it does not remove what an older install already has. Of the
+`dev` extra (`pyproject.toml`, `[project.optional-dependencies]`) only
+pytest and pytest-asyncio are not also production dependencies. On a box
+that does not run the test suite, take them out once while you re-seed
+(after step 1's freeze, so the freeze still names what the box ran):
+
+```bash
+sudo -u domovoi /opt/domovoi/.venv/bin/python -m pip uninstall -y pytest pytest-asyncio
+```
 
 ### Signed updates
 
@@ -1067,6 +1112,9 @@ check git offers:
 ```bash
 sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers pull --ff-only --verify-signatures
 ```
+
+(After a pull by hand, run `env_bootstrap --repair` before you restart
+anything yourself; see [Helper-container secrets](#two-more-linux-notes).)
 
 The service user is in the `docker` group and so root-equivalent already;
 signing bounds *upstream*, not the service user.
@@ -1380,27 +1428,43 @@ alone.
 **Helper-container secrets.** `docker-compose.yml` takes the Letta server
 password from `LETTA_TOKEN` and SearXNG's signing key from `SEARXNG_SECRET`
 in `domovoi/.env`. `LETTA_TOKEN` is also what the core signs in to Letta
-with, so the two always match. A fresh `.env` gets random values from
-`python -m domovoi.env_bootstrap`; an older `.env` without them falls back
-to the historical values, which were the same on every install. Both
-containers listen on `127.0.0.1` only, so on a dedicated box only the box's
-own processes reach them, but give them their own values anyway:
+with, so the two always match. There is no fallback: until October 2026
+an `.env` without them got values that were the same on every install,
+so compose now refuses every command (`domovoi-db`'s `compose up postgres`
+included) while either is missing, and says how to add them. A fresh
+`.env` gets random values from `python -m domovoi.env_bootstrap`. An older
+one gets them from
+
+```bash
+cd /opt/domovoi
+sudo -u domovoi .venv/bin/python -m domovoi.env_bootstrap --repair
+```
+
+which appends a generated value for each one the file lacks (or leaves
+empty, or sets to the old shared value) and changes nothing else; run
+again, it writes nothing. You rarely type it: the
+[update unit](#updates-from-the-dashboard) runs it as the service user
+before anything uses compose, on every update and every Restart (a value
+it adds is an `env-secrets` step in **last update**), and `dev.sh` /
+`dev.ps1` run it too. **Updating by hand** (`git pull`, then restarting the
+units yourself)? Run it once after the pull and before the restart, or
+`domovoi-db` refuses to start and takes the core with it.
+
+The search helper takes its new value the next time it is started (the
+update unit starts it under Yes or Sometimes). Letta, if chat mode runs it,
+keeps its old password until it is recreated, while the core signs in
+with the new one after its restart: recreate it (the update unit records
+this as a `warn` with the same line):
 
 ```bash
 cd /opt/domovoi/domovoi
-gen() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
-printf 'LETTA_TOKEN=%s
-SEARXNG_SECRET=%s
-' "$(gen)" "$(gen)" >>.env
-# Recreate whichever of the two runs, so it starts with the new value:
-docker compose up -d --no-deps searxng            # if the search helper runs
 docker compose --profile chat up -d letta         # if chat mode is on
 sudo systemctl restart domovoi-core domovoi-web   # the core reads LETTA_TOKEN at start
 ```
 
 Letta reads its password from the environment when it starts, so that is
-the whole rotation. Skip the `searxng` line on a box answered No: the
-helper stays stopped there.
+the whole rotation. To rotate later, delete the line from `.env`, run the
+repair, and do the same two steps.
 
 **Don't suspend.** Desktop-oriented installs sometimes ship with sleep
 targets enabled, which is fatal for a machine satellites reconnect to:

@@ -27,6 +27,12 @@
 # allowed-signers file while that file exists (check_signature; "Signed
 # updates" below). Without the file the run warns and goes on.
 #
+# On either path, before anything uses docker compose (after the real
+# update's pre-flight): a domovoi/.env without LETTA_TOKEN or SEARXNG_SECRET
+# gets values generated for this install appended, as the service user
+# (repair_env_secrets); compose refuses to run without them. A repair that
+# fails aborts the run with nothing changed.
+#
 # Something new: a real update.
 #   1. Refuse, touching nothing, if tracked files have uncommitted changes:
 #      the rollback below could not restore that tree.
@@ -41,7 +47,8 @@
 #      requirements lock changed: through pip's resolver, as before the
 #      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
 #      requirements-linux-py314.lock when the checkout has one for the
-#      venv's Python, otherwise (with a WARNING) through the resolver.
+#      venv's Python, otherwise through the resolver as a `warn` step
+#      ("lock not applied: <why>", shown on the Version card).
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
@@ -230,6 +237,11 @@ DEPS_FROM_LOCK=0
 STEPS=()
 # A step function may leave a note here for its step's detail on success.
 STEP_DETAIL=""
+# A step function that succeeded but fell short of what was asked of it
+# (the opted-in lock could not be used) sets this to `warn`: the step is
+# recorded as warn, the run goes on, and the core serves that step's detail
+# on the Version card (git_version._WARN_DETAIL_STEPS).
+STEP_STATUS=""
 LAST_ERROR=""
 RESULT_READY=0
 FINAL_WRITTEN=0
@@ -408,14 +420,15 @@ run_step() {
   out=$(mktemp)
   log "step $name"
   STEP_DETAIL=""
+  STEP_STATUS=""
   set +e
   "$@" >"$out" 2>&1
   rc=$?
   set -e
   sed 's/^/    /' "$out"
   if [ "$rc" -eq 0 ]; then
-    add_step "$name" ok "$t0" "$STEP_DETAIL"
-    if [ -n "$STEP_DETAIL" ]; then log "step $name: $STEP_DETAIL"; fi
+    add_step "$name" "${STEP_STATUS:-ok}" "$t0" "$STEP_DETAIL"
+    if [ -n "$STEP_DETAIL" ]; then log "step $name${STEP_STATUS:+ ($STEP_STATUS)}: $STEP_DETAIL"; fi
   else
     add_step "$name" failed "$t0" "$(tail_lines "$out" 15 300)"
     LAST_ERROR="$name failed (exit $rc): $(trunc "$(tail -n 3 "$out" | tr '\n' ' ')" 400 | sed 's/[[:space:]]*$//')"
@@ -1176,13 +1189,63 @@ venv_writable() {
   done
 }
 
+# ─── The helper-container secrets (2026-10 review REV-16) ────────────────
+
+# docker-compose.yml takes LETTA_TOKEN and SEARXNG_SECRET from domovoi/.env
+# and refuses every command (domovoi-db's compose up included) without
+# them: there is no longer a fallback to the values every install shared.
+# A .env written before they were generated gets its own, appended by the
+# checkout's `python -m domovoi.env_bootstrap --repair` as the service user
+# (the file is that user's; root never edits it), before anything here uses
+# compose. Nothing else in the file changes, and with both set it writes
+# nothing. No step is recorded then: the result only says something when a
+# value was added (ok; a `warn` when a running Letta still has the old
+# password) or when the repair failed (the run then aborts, nothing changed).
+repair_env_secrets() {
+  local t0 out rc=0 added
+  if [ ! -x "$VENV_DIR/bin/python" ]; then
+    log "no venv interpreter at $VENV_DIR/bin/python: domovoi/.env's helper secrets not checked"
+    return 0
+  fi
+  t0=$(now_ms)
+  set +e
+  out=$(as_user "$VENV_DIR/bin/python" -m domovoi.env_bootstrap --repair 2>&1)
+  rc=$?
+  set -e
+  if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
+  if [ "$rc" -ne 0 ]; then
+    add_step env-secrets failed "$t0" "$(trunc "$out" 300)"
+    LAST_ERROR="env-secrets failed (exit $rc): $(trunc "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')" 400 | sed 's/[[:space:]]*$//')"
+    log "could not give domovoi/.env its helper secrets (exit $rc)"
+    return 1
+  fi
+  added=$(printf '%s\n' "$out" | sed -n 's/^.*: added \([A-Z_][A-Z_, ]*\) (.*$/\1/p' | head -n 1)
+  [ -n "$added" ] || return 0
+  if [[ $added == *LETTA_TOKEN* ]] && letta_running; then
+    add_step env-secrets warn "$t0" "added $added to domovoi/.env; domovoi-letta still runs with the old shared password, so chat mode fails until it is recreated: docker compose --profile chat up -d letta (docs/LINUX_HOST.md)"
+    log "WARNING: LETTA_TOKEN added while domovoi-letta runs with the old password; recreate it: docker compose --profile chat up -d letta"
+  else
+    add_step env-secrets ok "$t0" "added $added to domovoi/.env"
+  fi
+  log "domovoi/.env: added $added (generated for this install)"
+}
+
+letta_running() {
+  [ "$(docker inspect -f '{{.State.Running}}' domovoi-letta 2>/dev/null)" = true ]
+}
+
 # ─── Dependency sync: the hash-pinned lock (OPS-9) ───────────────────────
 
 # The venv the way docs/LINUX_HOST.md builds it. Without DOMOVOI_USE_LOCK=1,
 # with pip's resolver as before the lock existed (sync_deps_resolved), and
 # the step says the lock is there to opt into. With it, from the checkout's
 # hash-pinned lock whenever it has one for the venv's Python
-# (sync_deps_locked); otherwise, loudly, with the resolver.
+# (sync_deps_locked); otherwise, loudly, with the resolver: the step is a
+# `warn` whose detail ("lock not applied: <why>") the core keeps for the
+# Version card, so an owner who opted in sees the day the lock stops being
+# used (the venv moved to another Python, the lock was renamed). A package
+# that does not match its hash is not "unusable": pip refuses it, the step
+# fails and the update rolls back.
 sync_deps() {
   local why
   DEPS_FROM_LOCK=0
@@ -1201,17 +1264,20 @@ sync_deps() {
   else
     log "WARNING: not installing from a hash-pinned lock ($why): pip resolves the dependencies from the index and checks no hashes"
     sync_deps_resolved || return 1
-    STEP_DETAIL="WARNING: resolved from the index without hash checks ($why)"
+    STEP_STATUS=warn
+    STEP_DETAIL="lock not applied: $why; resolved from the index without hash checks"
   fi
 }
 
 # lock_usable: whether sync_deps installs from DEPS_LOCK. When it can't,
-# the reason is on stdout and the status is 1.
+# the reason is on stdout and the status is 1. The lock is in the service
+# user's checkout, so it is looked at as that user, the way the installer's
+# pre-flight reads it: root never opens a path that user can point anywhere.
 lock_usable() {
   local lock=$REPO_DIR/$DEPS_LOCK want have
   if [ -z "$DEPS_LOCK" ]; then echo "DOMOVOI_DEPS_LOCK is empty"; return 1; fi
-  if [ ! -f "$lock" ]; then echo "the checkout has no $DEPS_LOCK"; return 1; fi
-  want=$(sed -n 's/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$lock" | head -n 1)
+  if ! as_user test -f "$lock"; then echo "the checkout has no $DEPS_LOCK"; return 1; fi
+  want=$(as_user sed -n 's/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$lock" | head -n 1)
   if [ -z "$want" ]; then echo "$DEPS_LOCK does not say which Python it was compiled for"; return 1; fi
   have=$(as_user "$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) || have=""
   if [ "$have" != "$want" ]; then
@@ -1428,6 +1494,10 @@ plain_restart() {
   MODE=restart
   write_result running
   log "nothing new since ${PREV_SHA:0:12} ($PREV_SOURCE): plain restart"
+  if ! repair_env_secrets; then
+    finish aborted "domovoi/.env lacks LETTA_TOKEN or SEARXNG_SECRET and could not be given them, so nothing was restarted (docker compose refuses to run without them; docs/LINUX_HOST.md, Helper-container secrets): $LAST_ERROR"
+    return
+  fi
   MIGRATIONS_BEFORE=$(migration_count || true)
   DB_REASON=$(plain_db_reason)
   SERVICES_STOPPED=1
@@ -1501,6 +1571,12 @@ full_update() {
   fi
   add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED"
   write_result running
+  # Before the backup and the stop: domovoi-db's compose up (step 7) and the
+  # search helper refuse to run without these.
+  if ! repair_env_secrets; then
+    finish aborted "domovoi/.env lacks LETTA_TOKEN or SEARXNG_SECRET and could not be given them, so nothing was changed (docker compose refuses to run without them; docs/LINUX_HOST.md, Helper-container secrets): $LAST_ERROR"
+    return
+  fi
   resolve_test_db
 
   if ! run_step backup backup_db; then

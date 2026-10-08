@@ -39,8 +39,15 @@ the `domovoi-debug-apk` artifact) is **debug-signed** with a key the
 runner makes up for that run, and its SHA-256 is in the run summary. It is
 a test build: each CI run carries a different key, Android won't install
 one over another (uninstalling to upgrade loses the saved servers and the
-household token), and nothing ties it to this project. For a phone that
-keeps the app, build a release APK signed with a key you keep:
+household token), and nothing ties it to this project. What the build
+itself trusts: the workflow's actions are pinned by commit SHA and run with
+a read-only token, and `gradle/actions/setup-gradle` validates the wrapper
+jar; the Gradle distribution the wrapper then downloads
+(`gradle-8.14.3-bin.zip` from services.gradle.org, over HTTPS) is not yet
+checked against a digest, because `gradle/wrapper/gradle-wrapper.properties`
+has no `distributionSha256Sum` (Gradle publishes the value beside the zip,
+as `gradle-8.14.3-bin.zip.sha256`). For a phone that keeps the app, build a
+release APK signed with a key you keep:
 
 ```bash
 # Once: a release key, kept outside the checkout (.gitignore refuses

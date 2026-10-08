@@ -7,10 +7,11 @@ cache), so it runs as a background job in the web process (the
 ``satellite_media_jobs`` table + realtime channel own progress reporting;
 this module only calls back).
 
-Cache misses NEVER hard-fail a build: the affected piece degrades to the
+Cache misses do not hard-fail a build: the affected piece degrades to the
 device's online stage-2 with a warning, and ``offline`` flips to False in
 build-info.json so nobody is lied to about what the card can do without
-internet.
+internet. The one exception is the wake-word models: an offline card is
+built only with every pinned model in the cache, verified (SAT-11).
 """
 
 from __future__ import annotations
@@ -99,11 +100,28 @@ async def build(
             ok, msg = fetchers.fetch_debs(board.os_release, tuple(extra))
             if not ok:
                 warnings.append(msg)
+        oww_problem = ""
         if oww_verified < len(fetchers.OWW_MODEL_FILES):
             await progress("fetch", 40, "caching wake-word base models")
             ok, msg = fetchers.fetch_oww_models()
             if not ok:
-                warnings.append(msg)
+                oww_problem = msg
+        # Unlike a missing wheel, a missing wake-word model does not degrade
+        # to "the device fetches it": the only fallback on the device was
+        # openWakeWord's own download, from the same release this pin
+        # protects against. An offline card ships every pinned model,
+        # verified, or is not built (SAT-11, 2026-10 review REV-17).
+        missing = fetchers.missing_oww_models()
+        if missing:
+            raise ValueError(
+                f"the wake-word model cache is incomplete: {len(missing)} of "
+                f"{len(fetchers.OWW_MODEL_FILES)} pinned models are missing or "
+                f"failed their SHA-256 check ({', '.join(missing)})"
+                + (f" - {oww_problem}" if oww_problem else "")
+                + ". Retry when the download works, or prepare the card with "
+                "offline off: the satellite then downloads them and keeps "
+                "only files that match the same pins."
+            )
         if not st["xvf_host"]["ok"]:
             await progress("fetch", 45, "fetching the XVF3800 LED tool")
             ok, msg = fetchers.fetch_xvf_host()

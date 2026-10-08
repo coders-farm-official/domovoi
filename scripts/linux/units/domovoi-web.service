@@ -13,9 +13,10 @@ ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
-# Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"): the core's set,
-# plus NoNewPrivileges and no capabilities, since the dashboard process
-# never runs sudo (the Restart button goes through the core).
+# Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"): the full set,
+# NoNewPrivileges and no capabilities included, since the dashboard
+# process never runs sudo (the Restart button goes through the core, whose
+# unit is looser for exactly that reason).
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=

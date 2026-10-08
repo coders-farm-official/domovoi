@@ -13,7 +13,9 @@
 # /var/lib/domovoi/bootstrap-steps/, done-flag at
 # /var/lib/domovoi/bootstrap-done.
 #
-# Placeholders: @SAT_USER@, @CODE_EXT_ALLOW@
+# Placeholders: @SAT_USER@, @CODE_EXT_ALLOW@ (and SDIST_ONLY, APT_PACKAGES
+# and OWW_PINS where they are assigned below; a multi-line value must never
+# be named in a comment, where its second line would run as a command).
 
 set -u
 SAT_USER="@SAT_USER@"
@@ -167,24 +169,64 @@ fi
 #     that shipped without them. openWakeWord loads a named model from
 #     inside its own package, so that - not ~/.domovoi - is the only place
 #     that counts. Its own auto-download needs the network AND the deps
-#     `--no-deps` skips, so we place the files ourselves and only fall back
-#     to the download when there is nothing to place.
+#     `--no-deps` skips, so we place the files ourselves.
+#
+#     Every model is held to the server's pins (OWW_MODEL_FILES in
+#     domovoi/satellite_media/fetchers.py, rendered below), wherever it came
+#     from: the card's cache (the server verified it already; checked again)
+#     or openWakeWord's own download from its release, which runs ONLY when
+#     the card carries no cached models at all (a card prepared with offline
+#     off). A file the pins do not vouch for is deleted, never loaded.
+OWW_PINS="@OWW_PINS@"
+
+# oww_verify DIR: delete every model file in DIR that is not a pinned model
+# at its pinned size and SHA-256, then succeed only when every pinned model
+# is there.
+oww_verify() {
+  local dir=$1 f name want missing=0 sha size
+  for f in "$dir"/*.onnx "$dir"/*.tflite; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    name=${f##*/}
+    want=$(printf '%s\n' "$OWW_PINS" | awk -v n="$name" '$3 == n { print $1 " " $2; exit }')
+    if [ -z "$want" ]; then
+      echo "WARN: removing wake-word model $name: not one of the pinned models"
+      rm -f -- "$f"
+    elif [ -L "$f" ] || [ ! -f "$f" ] \
+        || [ "$(stat -c %s -- "$f")" != "${want#* }" ] \
+        || [ "$(sha256sum -- "$f" | cut -d' ' -f1)" != "${want%% *}" ]; then
+      echo "WARN: removing wake-word model $name: it does not match its pinned SHA-256"
+      rm -f -- "$f"
+    fi
+  done
+  while read -r sha size name; do
+    [ -n "$name" ] || continue
+    if [ ! -f "$dir/$name" ]; then
+      echo "WARN: wake-word model $name is missing"
+      missing=1
+    fi
+  done <<<"$OWW_PINS"
+  return "$missing"
+}
+
 if [ ! -f "$STEPS/wake-models" ]; then
   OWW_DIR="$(as_user "$VENVPY" -c 'import openwakeword, os; print(os.path.join(os.path.dirname(openwakeword.__file__), "resources", "models"))' 2>/dev/null || true)"
   if [ -n "$OWW_DIR" ]; then
     mkdir -p "$OWW_DIR"
-    if [ -d "$HOME_DIR/.domovoi/oww_models" ]; then
-      cp -r "$HOME_DIR/.domovoi/oww_models"/. "$OWW_DIR"/ 2>/dev/null || true
-    fi
-    if ! ls "$OWW_DIR"/*.onnx >/dev/null 2>&1; then
+    OWW_CACHE="$HOME_DIR/.domovoi/oww_models"
+    if ls "$OWW_CACHE"/*.onnx >/dev/null 2>&1; then
+      cp -r "$OWW_CACHE"/. "$OWW_DIR"/ 2>/dev/null || true
+    else
+      echo "no wake-word models on the card: downloading openWakeWord's, then checking them against the pins"
       as_user "$VENVPY" -c 'import openwakeword.utils as u; u.download_models()' || true
     fi
     chown -R "$SAT_USER:$SAT_USER" "$OWW_DIR" 2>/dev/null || true
-    if ls "$OWW_DIR"/*.onnx >/dev/null 2>&1; then
+    if oww_verify "$OWW_DIR"; then
       touch "$STEPS/wake-models"
-      echo "wake-word models present"
+      echo "wake-word models present and verified"
+    elif ls "$OWW_DIR"/*.onnx >/dev/null 2>&1; then
+      echo "WARN: some wake-word models are missing or were refused - retrying next boot"
     else
-      echo "WARN: no wake-word models - the satellite will hear nothing"
+      echo "WARN: no wake-word models - the satellite will hear nothing; retrying next boot"
     fi
   fi
 fi

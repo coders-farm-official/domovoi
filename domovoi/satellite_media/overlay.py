@@ -291,14 +291,19 @@ def render_stage2(sat_user: str) -> str:
     # got missed: the payload and the server both learned to carry
     # config.toml.example while stage 2 went on refusing to sync it, so a
     # satellite that ever lost that file could never get it back.
+    from domovoi.satellite_media.fetchers import oww_pins_text
     from domovoi.satellite_media.payload import _CODE_EXT_ALLOW
 
     allow = "{" + ", ".join(repr(e) for e in sorted(_CODE_EXT_ALLOW)) + "}"
+    # The wake-word pins travel too: stage 2 holds the models it places, and
+    # anything openWakeWord downloads on the device, to the same digests the
+    # server checked (SAT-11).
     return render_template(
         "stage2.sh.tmpl",
         {"SAT_USER": sat_user, "CODE_EXT_ALLOW": allow,
             "SDIST_ONLY": sdist_only_packages(),
-            "APT_PACKAGES": apt_packages()},
+            "APT_PACKAGES": apt_packages(),
+            "OWW_PINS": oww_pins_text()},
     )
 
 

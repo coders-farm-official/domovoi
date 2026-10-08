@@ -56,6 +56,12 @@ MUST_IGNORE = [
     "id_rsa.pub",
     "id_ed25519",
     "allowed_signers",
+    # Copies of a .env, which holds the database password and the helper
+    # secrets (2026-10 review).
+    "domovoi/.env.bak",
+    "domovoi/.env.old",
+    ".env.bak",
+    "domovoi/.env.2026-10-08",
 ]
 
 # Tracked files the new rules must leave alone.

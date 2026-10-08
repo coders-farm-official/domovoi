@@ -6,10 +6,13 @@ no DB, never skips.
 * Every image ``docker-compose.yml`` names, and the base of
   ``Dockerfile.mpd``, is pinned by digest, so a retagged upstream can't
   slip in on the next ``docker compose up`` or MPD rebuild.
-* The Letta server password and the SearXNG secret come from ``.env``
-  (with the historical values only as the fallback for an older ``.env``),
-  and a fresh ``.env`` carries random ones. Letta's password is the same
-  variable the core reads (``LETTA_TOKEN``), so the two can't drift.
+* The Letta server password and the SearXNG secret come from ``.env``,
+  with no fallback (2026-10 review REV-16: the shared literal behind an
+  interpolation was still the same password on every upgraded install):
+  compose refuses to run without them and says how to add them
+  (``env_bootstrap --repair``), and a fresh ``.env`` carries random ones.
+  Letta's password is the same variable the core reads (``LETTA_TOKEN``),
+  so the two can't drift.
 """
 
 from __future__ import annotations
@@ -78,11 +81,19 @@ def test_mpd_image_base_is_pinned_by_digest() -> None:
 )
 def test_compose_takes_the_helper_secrets_from_env(service: str, key: str, variable: str) -> None:
     value = str(_services()[service]["environment"][key])
-    m = re.fullmatch(r"\$\{(?P<var>[A-Z_]+):-(?P<fallback>[^}]*)\}", value)
-    assert m, f"{service}.{key} is the literal {value!r}, not a ${{...}} from .env"
+    m = re.fullmatch(r"\$\{(?P<var>[A-Z_]+):\?(?P<message>[^}]*)\}", value)
+    assert m, f"{service}.{key} is {value!r}, not a required ${{VAR:?...}} from .env"
     assert m.group("var") == variable
-    # The fallback only keeps an older .env working; it is never the fresh value.
-    assert m.group("fallback") in HISTORICAL
+    # The refusal names the variable and the one command that adds it.
+    assert variable in m.group("message")
+    assert "python -m domovoi.env_bootstrap --repair" in m.group("message")
+
+
+def test_no_shared_helper_secret_is_left_in_compose() -> None:
+    text = COMPOSE.read_text(encoding="utf-8")
+    for value in HISTORICAL:
+        assert f":-{value}" not in text, f"compose still falls back to the shared {value!r}"
+    assert not re.search(r"\$\{(LETTA_TOKEN|SEARXNG_SECRET):?-", text)
 
 
 def _fresh_env(tmp_path: Path) -> dict[str, str]:

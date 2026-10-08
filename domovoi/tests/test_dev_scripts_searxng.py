@@ -208,3 +208,40 @@ def test_dev_ps1_a_failed_start_is_only_a_warning(tmp_path) -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "could not start the search helper" in (proc.stdout + proc.stderr)
     assert calls[-1] == "python -m domovoi.main"
+
+
+# ─── the helper-container secrets (2026-10 review REV-16) ──────────────────
+#
+# docker-compose.yml requires LETTA_TOKEN and SEARXNG_SECRET from .env and
+# no longer falls back to the values every install shared, so a .env from
+# before they were generated must get them before the first compose call:
+# `env_bootstrap --repair`, right after the create-only bootstrap.
+
+REPAIR = "python -m domovoi.env_bootstrap --repair"
+
+
+def _first_compose(calls: list[str]) -> int:
+    return next(i for i, c in enumerate(calls) if c.startswith("docker compose"))
+
+
+@pytest.mark.parametrize("path", [DEV_SH, DEV_PS1])
+def test_the_repair_comes_before_any_compose_call(path: Path) -> None:
+    src = path.read_text(encoding="utf-8")
+    assert REPAIR in src
+    assert src.index("python -m domovoi.env_bootstrap") < src.index(REPAIR) < src.index("docker compose")
+
+
+@pytest.mark.skipif(BASH is None, reason="no usable bash")
+def test_dev_sh_repairs_the_helper_secrets_before_compose(tmp_path) -> None:
+    proc, calls = _run_dev_sh(tmp_path, "")
+    assert proc.returncode == 0, proc.stderr
+    assert calls[:2] == ["python -m domovoi.env_bootstrap", REPAIR]
+    assert calls.index(REPAIR) < _first_compose(calls)
+
+
+@needs_powershell
+def test_dev_ps1_repairs_the_helper_secrets_before_compose(tmp_path) -> None:
+    proc, calls = _run_dev_ps1(tmp_path, "")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert calls[:2] == ["python -m domovoi.env_bootstrap", REPAIR]
+    assert calls.index(REPAIR) < _first_compose(calls)
