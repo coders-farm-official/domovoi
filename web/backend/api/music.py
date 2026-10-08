@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_device
+from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
@@ -791,8 +791,18 @@ async def cancel_acquisition(acq_id: int) -> None:
 # ─── Now playing ───────────────────────────────────────────────────────────
 
 
+# Who may read WHOSE device queued what each room plays (``added_by``, a
+# registered device's name — "Kamron's Pixel"): the tiers ``/ws/state``
+# admits — the household token, an admin Bearer or cookie session, the
+# pre-setup grace. The rest of the now-playing card stays open (the kiosk
+# display reads it unpaired); for anyone else ``added_by`` is null, the
+# same answer a song queued from outside Domovoi gets (REV-11, rule M1's
+# pattern for a reminder's words).
+_READS_QUEUE_PROVENANCE = ("ok", "admin", "pre-setup", "cookie-only")
+
+
 @router.get("/now-playing", response_model=list[NowPlaying])
-async def now_playing() -> list[NowPlaying]:
+async def now_playing(request: Request) -> list[NowPlaying]:
     """Per-room playback state.
 
     Reads the mpd_rooms table for control-port assignments, then opens
@@ -800,10 +810,20 @@ async def now_playing() -> list[NowPlaying]:
     ``currentsong``. Rooms that aren't reachable (container down, port
     blocked) surface as state ``"stop"`` with no song — same as a real
     idle MPD.
+
+    Open, but ``added_by`` (the device that queued the song) is named only
+    to a caller holding a household credential
+    (``_READS_QUEUE_PROVENANCE``). The caller is classified only when an
+    answer names a device, so the 1.5 s poll of a room nobody queued into
+    charges no token backoff and costs no extra query.
     """
     rooms = await _list_provisioned_rooms()
     cards = [await _now_playing_for(r) for r in rooms]
     await _attach_queue_provenance(cards)
+    if any(c.added_by is not None for c in cards):
+        if await check_device_request(request) not in _READS_QUEUE_PROVENANCE:
+            for card in cards:
+                card.added_by = None
     return cards
 
 

@@ -56,6 +56,12 @@ READS: dict[str, tuple[str, str, str]] = {
     "calendar": ("/api/calendar/events?start=2026-10-01T00:00:00Z", "web.backend.api.calendar",
                  "session_scope"),
     "event": ("/api/calendar/events/1", "web.backend.api.calendar", "session_scope"),
+    # REV-11 (2026-10-08): each of these still said when a room was in use.
+    "room-recently-played": ("/api/satellites/kitchen/recently-played",
+                             "web.backend.api.satellites", "session_scope"),
+    "room-satellite-config": ("/api/satellites/kitchen/config",
+                              "web.backend.api.satellites", "get_admin"),
+    "speech-latency": ("/api/stats/latency?room=kitchen", "web.backend.api.stats", "get_admin"),
 }
 _IDS = sorted(READS)
 

@@ -40,7 +40,7 @@ tier is what keeps it from going further.
 flowchart TB
     subgraph daily["Daily tier — any LAN host, no auth"]
         d1["Reads: health, time, handlers,<br/>capabilities, the file-sync channels"]
-        d2["Dashboard reads of household STATE:<br/>now-playing, library, timers —<br/>never what anybody said, never who is home"]
+        d2["Dashboard reads of household STATE:<br/>now-playing, library, timers —<br/>never what anybody said, who is home<br/>or whose device queued what"]
     end
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
@@ -56,7 +56,7 @@ flowchart TB
         v7["Satellite room label, timer cancel,<br/>announce, volume, and<br/>'Only reminders for this device'"]
         v8["Plugin routes marked @device_endpoint —<br/>radio: play, favorite, edit, forget,<br/>simulcast lookup"]
         v9["READING what the household said:<br/>conversations, voice notes, chat,<br/>wake-word recordings — and a person's<br/>memories, favorites, preferences"]
-        v10["READING who is home: the people<br/>roster, rooms, session lists,<br/>the calendar"]
+        v10["READING who is home: the people<br/>roster, rooms, session lists,<br/>play history, the calendar,<br/>the speech latency summary"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -300,7 +300,21 @@ and the same pre-setup grace:
   who it is in a call with (`GET /api/satellites`, `/api/satellites/{room}`)
   — and a satellite being adopted, with its MAC, board and model
   (`GET /api/satellites/pending`);
-* the calendar (`GET /api/calendar/events`, `/api/calendar/events/{id}`).
+* the calendar (`GET /api/calendar/events`, `/api/calendar/events/{id}`);
+* and, closing the siblings that first pass left open (REV-11), what still
+  said when a room was in use: a room's play history, each play with its
+  `started_at` (`GET /api/satellites/{room}/recently-played`); a room's
+  satellite config, whose 200 or 404 says whether that satellite is
+  connected and whose body is the mic, Wi-Fi and audio hardware it
+  reported (`GET /api/satellites/{room}/config`, and the core's
+  `GET /v1/admin/satellite/{room}/config` behind it); and the speech
+  latency summary (below).
+
+`GET /api/music/now-playing` stays open — the kiosk reads it unpaired —
+but its `added_by`, the registered name of the device that queued what a
+room is playing ("Kamron's Pixel"), is named only to a household
+credential (the tiers `/ws/state` admits) and is `null` for anyone else,
+so the open poll says what plays, not whose phone is driving which room.
 
 The dashboard and the Android app already send the household token on
 every read, so a paired client sees what it saw before. An unpaired
@@ -543,7 +557,7 @@ the screen needs, named rather than implied:
 | Kiosk call | Tier | What it gives away, or does |
 |---|---|---|
 | `GET /display.html?room=<room_id>` | Open | The kiosk page itself. It is a page, not data — everything on it comes from the calls below. |
-| `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
+| `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. Not whose device queued it: `added_by` is `null` without a household credential. |
 | `GET /api/satellites/{room_id}` | Device read (2026-10-08) | The room's label and its idle mode. Unpaired, the kiosk shows the room id and the clock instead. |
 | `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Open at the web hop; **device tier at the core hop** | Pauses, resumes, stops or skips that room's playback — the kiosk's transport row. The web route asks for nothing, but it forwards to `/v1/admin/music/{action}/{room_id}`, which takes the household token, so the buttons work only on a paired kiosk and a bare LAN request is `401`. |
 | `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk polls instead. |
@@ -558,35 +572,34 @@ household token in the satellite's config file and in the kiosk browser's
 profile — treat the satellite's `~/.domovoi` like any other paired
 device's storage.
 
-**The speech latency summary is open too, and carries only numbers.**
-`GET /v1/stats/latency` (and its dashboard proxy `GET /api/stats/latency`,
-the "recent speech timings" line on the Models page) reports how long
-recent voice turns took, per stage: per-stage counts and p50 / p95 / max
-milliseconds, how many turns took each route (`fast`, `qa`, ...), and the
-Whisper settings (model, device, compute type, CPU threads). It reads one
-column, `intents_log.timings`, which the core fills with integers and the
-Whisper settings, plus the row's route and time. The one text that column
-can hold is opt-in: while the streaming fast lane runs in shadow mode
-(`fastlane_mode`, off by default), a turn it would have acted on also
-records `fastlane_text`, the closed command it heard ("pause the music"),
-and the fast path it matched: its own hearing of the words whose Whisper
-transcript the row's `transcript` column already holds, kept so a
-disagreement with Whisper can be read later. Its log line on the Domovoi
-server (`journalctl -u domovoi-core | grep fastlane`) names both the
-lane's text and Whisper's transcript for those turns. The summary reads
-the lane's counts and milliseconds and never those two keys. No
-transcript, no reply, no person, no session and no presence tier is read,
-so none can be returned; the `room` filter is an input, echoed back, and
-never a list of rooms. What it does reveal is that turns happened, when
-(by narrowing `since`) and in which room (by naming it) — counts and
-timings, never who. The reads that used to make that redundant, a room's
-session list and the people roster, are household reads since 2026-10-08
-(above), so this summary is now the one open read that says a room was
-spoken to at all; it stays open by the 2026-09-28 decision because it is
-what a person tuning Whisper needs without holding a
-credential, the same reasoning that keeps `/v1/health`'s `stt` state open.
-The route-walk pins both routes open, so gating them is a recorded
-decision.
+**The speech latency summary carries only numbers, and still takes a paired
+device.** `GET /v1/stats/latency` (and its dashboard proxy
+`GET /api/stats/latency`, the "recent speech timings" line on the Models
+page) reports how long recent voice turns took, per stage: per-stage
+counts and p50 / p95 / max milliseconds, how many turns took each route
+(`fast`, `qa`, ...), and the Whisper settings (model, device, compute type,
+CPU threads). It reads one column, `intents_log.timings`, which the core
+fills with integers and the Whisper settings, plus the row's route and
+time. The one text that column can hold is opt-in: while the streaming
+fast lane runs in shadow mode (`fastlane_mode`, off by default), a turn it
+would have acted on also records `fastlane_text`, the closed command it
+heard ("pause the music"), and the fast path it matched: its own hearing
+of the words whose Whisper transcript the row's `transcript` column
+already holds, kept so a disagreement with Whisper can be read later. Its
+log line on the Domovoi server (`journalctl -u domovoi-core | grep
+fastlane`) names both the lane's text and Whisper's transcript for those
+turns. The summary reads the lane's counts and milliseconds and never
+those two keys. No transcript, no reply, no person and no session is
+read, so none can be returned. What it does reveal is that turns
+happened, when (by narrowing `since`) and in which room (by naming it):
+`?room=kitchen&since=<thirty seconds ago>` says whether somebody just
+spoke in the kitchen. Since 2026-10-08 that makes it a household read,
+like the room's session list it used to duplicate: `require_device_read`
+at both hops (the household token, an admin session or the dashboard
+cookie; `401` otherwise; the pre-setup grace kept). It was open by the
+2026-09-28 decision, so a person tuning Whisper could read it without a
+credential; a paired dashboard still can, and the route-walk pins both
+routes to the household tier.
 
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
@@ -1071,7 +1084,7 @@ All of it on hardware you own. Locations, verified against the code:
 
 | Where | What |
 |---|---|
-| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). A spoken turn's `intents_log` row also carries its stage timings (`timings`: milliseconds and the Whisper settings, no text), which the open latency summary reads. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas, and `command_capture_rooms` (which rooms an admin opted in to command recording, and since when — no audio). |
+| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). A spoken turn's `intents_log` row also carries its stage timings (`timings`: milliseconds and the Whisper settings, no text), which the latency summary (a paired device's read) reads. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas, and `command_capture_rooms` (which rooms an admin opted in to command recording, and since when — no audio). |
 | **Postgres: timer history** (V018 `timer_fires`, `timer_fire_deliveries`, `timer_own_only_rooms`) | Every timer and reminder that went off: when it was set, due and fired, the room it was set in, its label and message, the line the origin room spoke (`base_text`) and, per room, whether and when it was announced there and the exact line spoken (`spoken_text`). Kept `timer_fire_retention_days` (default 7), pruned hourly by the core. No web route or push serializes `base_text` or `spoken_text`; the same words are spoken, and logged, on every satellite that announces them (the Pi rows below). Plus which rooms have "Only reminders for this device" on, and since when. See [Timers and reminders](#timers-and-reminders-house-wide). |
 | **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word; played back to paired devices only), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models), and `captures/` (**recordings of commands spoken in a room an admin opted in**, with their transcripts; at most 14 days, admin-only — see the next section). |
 | **Postgres: rolled-back databases** (Linux update unit only) | When a rollback restores the pre-update dump, the database it replaced is renamed `domovoi_failed_<UTC time>` (and `domovoi_test_failed_<UTC time>`) and kept for inspection: a full copy of everything the row above lists. Only the newest one of each is kept (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1); older ones are dropped at the next restore. Same credential as the live database. |

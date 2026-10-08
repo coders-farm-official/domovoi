@@ -931,7 +931,12 @@ async def server_time() -> dict[str, Any]:
     return server_time_document()
 
 
-@app.get("/v1/stats/latency")
+@app.get(
+    "/v1/stats/latency",
+    # Device READ tier (2026-10-08, REV-11): counts per room and window say
+    # whether somebody just spoke in a room.
+    dependencies=[Depends(require_device_read)],
+)
 async def stats_latency(
     since: datetime | None = Query(
         None,
@@ -952,11 +957,13 @@ async def stats_latency(
     turns ran on (``whisper_seen``), and what is transcribing now
     (``whisper``). See domovoi/turn_timings.py.
 
-    Open, like ``/v1/health``: it reads ``intents_log.timings`` (V015),
-    which holds no text and no identity, and returns counts and
-    milliseconds — no transcript, no person, no session. How often a room
-    speaks is already an open read (a room's session list); this adds how
-    long the machine took. docs/SECURITY_PRIVACY.md says so.
+    It reads ``intents_log.timings`` (V015), which holds no text and no
+    identity, and returns counts and milliseconds — no transcript, no
+    person, no session. It takes a paired device all the same (the
+    household token, an admin session or the dashboard cookie, with the
+    pre-setup grace): a turn count for one room over the last 30 seconds
+    says whether somebody just spoke there, and who is in which room is a
+    household read since 2026-10-08. docs/SECURITY_PRIVACY.md says so.
 
     ``503`` when the database is unreachable or V015 hasn't been applied.
     """
@@ -2242,7 +2249,13 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e)) from e
 
 
-@app.get("/v1/admin/satellite/{room_id}/config")
+@app.get(
+    "/v1/admin/satellite/{room_id}/config",
+    # Device READ tier (2026-10-08, REV-11), like the dashboard's proxy:
+    # a 200 or 404 says whether the room's satellite is connected, and the
+    # body is the hardware it reported (mic, Wi-Fi, audio devices).
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     """Editable satellite config (the schema joined with the values the Pi
     reported via config_status) for the per-satellite Settings tab. 404 when

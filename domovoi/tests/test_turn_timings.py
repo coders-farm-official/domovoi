@@ -579,8 +579,32 @@ def no_v015(monkeypatch):
     monkeypatch.setattr(turn_timings, "_column_checked_at", time.monotonic())
 
 
+_LATENCY_TOKEN = "latency-household-token"
+_LATENCY_ADMIN = "latency-admin-session"
+
+
+@pytest.fixture
+def fresh_install(monkeypatch):
+    """The auth primitives faked to a box nobody has set up yet, so the
+    route's device-read gate passes on its pre-setup grace without a
+    database."""
+    from domovoi.tests.auth_testkit import install_fake_db
+
+    return install_fake_db(monkeypatch, admin=False)
+
+
+@pytest.fixture
+def claimed_household(monkeypatch):
+    """Admin set up, one household token, one admin session — faked."""
+    from domovoi.tests.auth_testkit import install_fake_db
+
+    return install_fake_db(
+        monkeypatch, admin=True, sessions={_LATENCY_ADMIN}, device_token=_LATENCY_TOKEN
+    )
+
+
 @pytest.mark.asyncio
-async def test_the_summary_says_when_v015_is_missing(no_v015) -> None:
+async def test_the_summary_says_when_v015_is_missing(fresh_install, no_v015) -> None:
     r = await _core_get("/v1/stats/latency")
     assert r.status_code == 503
     assert "V015" in r.json()["detail"]
@@ -596,18 +620,70 @@ async def test_a_missing_column_is_not_asked_about_on_every_turn(no_v015) -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query", ["since=yesterday", "since=2026-13-40", f"room={'x' * 121}"])
-async def test_bad_query_is_422(query) -> None:
+async def test_bad_query_is_422(query, fresh_install) -> None:
     r = await _core_get(f"/v1/stats/latency?{query}")
     assert r.status_code == 422
+
+
+# ─── who may read it (REV-11, 2026-10-08) ─────────────────────────────────
+#
+# Numbers only, but a turn count for one room over the last 30 seconds says
+# somebody just spoke there, and who is in which room is a household read:
+# a paired device's, at both hops.
+
+
+@pytest.mark.asyncio
+async def test_the_core_summary_refuses_a_lan_host_with_no_credential(
+    claimed_household, no_v015
+) -> None:
+    r = await _core_get("/v1/stats/latency?room=kitchen")
+    assert r.status_code == 401, r.text
+
+
+@pytest.mark.asyncio
+async def test_the_core_summary_refuses_a_stale_token(claimed_household, no_v015) -> None:
+    from domovoi.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/v1/stats/latency", headers={"X-Device-Token": "stale"})
+    assert r.status_code == 401, r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential", ["household-token", "admin-bearer", "dashboard-cookie"])
+async def test_a_paired_device_reads_the_core_summary(
+    claimed_household, no_v015, credential
+) -> None:
+    from domovoi.admin_auth import COOKIE_NAME
+    from domovoi.main import app
+
+    headers: dict[str, str] = {}
+    cookies: dict[str, str] = {}
+    if credential == "household-token":
+        headers = {"X-Device-Token": _LATENCY_TOKEN}
+    elif credential == "admin-bearer":
+        headers = {"Authorization": f"Bearer {_LATENCY_ADMIN}"}
+    else:
+        cookies = {COOKIE_NAME: _LATENCY_ADMIN}
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", cookies=cookies
+    ) as c:
+        r = await c.get("/v1/stats/latency", headers=headers)
+    # Past the gate: the handler's own answer (V015 missing), not a refusal.
+    assert r.status_code == 503, r.text
+    assert "V015" in r.json()["detail"]
 
 
 # ─── the dashboard proxy ─────────────────────────────────────────────────
 
 
 async def _web_get(monkeypatch, path: str, answer=(200, {"turns": 0})):
+    from domovoi.tests.auth_testkit import install_fake_db
     from web.backend.api import stats as stats_api
     from web.backend.main import app as web_app
 
+    # The caller below is a signed-in admin: the proxy is a device read.
+    install_fake_db(monkeypatch, admin=True, sessions={"caller-token"})
     seen: list[tuple[str, object]] = []
 
     async def _get_admin(p, timeout=10.0, headers=None):
@@ -628,23 +704,36 @@ async def test_the_proxy_forwards_the_query_and_the_callers_headers(monkeypatch)
     assert r.status_code == 200 and r.json() == {"turns": 0}
     (path, headers), = seen
     assert path == "/v1/stats/latency?since=2026-09-28T18%3A00%3A00%2B00%3A00&room=living+room"
-    # Like every web→core hop (test_web_proxy_credentials), though the core
-    # route needs none.
+    # Like every web→core hop (test_web_proxy_credentials): the core route
+    # takes the same tier and sees the same credential.
     assert headers["Authorization"] == "Bearer caller-token"
 
 
 @pytest.mark.asyncio
-async def test_the_proxy_needs_no_credential(monkeypatch) -> None:
+async def test_the_proxy_refuses_a_lan_host_with_no_credential(
+    monkeypatch, claimed_household
+) -> None:
+    """REV-11: the proxy used to answer anyone; ``?room=<id>&since=<now-30s>``
+    then said whether somebody had just spoken in that room."""
     from web.backend.api import stats as stats_api
     from web.backend.main import app as web_app
 
+    seen: list[str] = []
+
     async def _get_admin(p, timeout=10.0, headers=None):
-        return 200, {"turns": 0}
+        seen.append(p)
+        return 200, {"turns": 1}
 
     monkeypatch.setattr(stats_api, "get_admin", _get_admin)
     async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test") as c:
-        r = await c.get("/api/stats/latency")
-    assert r.status_code == 200
+        r = await c.get("/api/stats/latency?room=kitchen")
+        assert r.status_code == 401, r.text
+        assert seen == []
+        ok = await c.get(
+            "/api/stats/latency?room=kitchen", headers={"X-Device-Token": _LATENCY_TOKEN}
+        )
+    assert ok.status_code == 200, ok.text
+    assert seen == ["/v1/stats/latency?room=kitchen"]
 
 
 @pytest.mark.asyncio
