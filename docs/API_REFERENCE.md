@@ -496,13 +496,13 @@ household device token instead of a caller's credential.
 | `DELETE /api/music/acquisitions/{acq_id}` | **Device** | — | Cancel a pending acquisition. `204`. |
 | `GET /api/music/now-playing` | Open | — | Per-room now-playing (from the cached core snapshot + MPD), with source attribution. |
 | `POST /api/music/now-playing/{room_id}/favorite` | **Device** | — | Heart whatever the room is playing (re-searches by title into the library/queue). |
-| `POST /api/music/play` | **Device** | `{room_id, query}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). |
-| `POST /api/music/play-track` | **Device** | `{room_id, track_id}` | Proxy → core direct-play (no conversation log, no external fallback). |
-| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids, start_sec?, start_paused?}` | Proxy → core queue cast (`start_sec` forwarded only when > 0, `start_paused` only when true). |
-| `POST /api/music/play-playlist` | **Device** | `{room_id, playlist_id, shuffle?}` | Proxy → core playlist start. |
+| `POST /api/music/play` | **Device** | `{room_id, query, device_id?}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). `403` when the calling device is blocked from this room's queue (§3.5a). |
+| `POST /api/music/play-track` | **Device** | `{room_id, track_id, device_id?}` | Proxy → core direct-play (no conversation log, no external fallback). `403` when the calling device is blocked from this room's queue (§3.5a). |
+| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids, start_sec?, start_paused?, device_id?}` | Proxy → core queue cast (`start_sec` forwarded only when > 0, `start_paused` only when true). `403` when the calling device is blocked from this room's queue (§3.5a). |
+| `POST /api/music/play-playlist` | **Device** | `{room_id, playlist_id, shuffle?, device_id?}` | Proxy → core playlist start. `403` when the calling device is blocked from this room's queue (§3.5a). |
 | `POST /api/music/add-by-query` | **Device** | `{room_id, query, artist?, attach_to_playlist_id?}` | Proxy → core acquisition enqueue. |
 | `POST /api/music/add-by-url` | **Outbound-fetch (core decides)** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Proxy with credentials + source address forwarded; the core's verdict passes back verbatim. |
-| `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open (FE-3) | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`; its status passes through (a control that didn't happen is `502`/`409`/`503`, not 200). These four stay open by decision: they are the video satellite's kiosk transport row, and that screen renders unattended with nobody to hold a credential. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md). |
+| `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open at this hop (FE-3); the core route is **Device** | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`; its status passes through (a control that didn't happen is `502`/`409`/`503`, not 200). This hop asks for nothing (they are the video satellite's kiosk transport row), but the core route behind them takes the device tier, so a call needs the household token or an admin Bearer either way — `401` without — and the kiosk has to be paired for its buttons to work (§3.7, [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md)). Not covered by queue blocks (§3.5a). |
 | `POST /api/music/previous/{room_id}` | **Device** | — | Proxy → core `/v1/admin/music/previous/{room_id}`: back one song in the room's queue (the app's and the dashboard's previous while casting). Not a kiosk verb, so not open. |
 | `POST /api/music/library/reindex` | **Admin (Bearer)** | — | Proxy → core background reindex. |
 | `POST /api/music/library/enrich` | **Admin (Bearer)** | — | Proxy → core background enrichment. |
@@ -542,6 +542,20 @@ because it proves anything — it is self-asserted — but because a blocklist
 anyone evades by omitting the field is no control at all, and leaving it out is
 far easier than claiming someone else's id. A missing `device_id` on an edit is
 a `422`.
+
+**The block also covers the routes that replace a queue** (WEB-11):
+`POST /api/music/play`, `/play-track`, `/play-tracks` (the browser player's
+cast) and `/play-playlist` answer `403` with the block's message for a blocked
+device, before the core is asked. There `device_id` is optional — no client
+sends it on those routes yet — and the caller is identified as the Files and
+Documents doors identify it: the body's `device_id`, then `X-Device-Id`,
+`?device_id=`, then the `domovoi-device-id` cookie every browser carries from
+`POST /api/devices/register`. A caller that names itself nowhere (today's
+Android app, which keeps no cookie jar and sends no `X-Device-Id`) is not
+identified, so no block matches it. **Not covered, by decision:** the transport
+verbs — pause, resume, stop, skip, previous. They move the playhead through
+what is queued rather than changing it, they are the kiosk's buttons, and a
+block on them would hold only for a caller that volunteered its id.
 
 A block matches on device **id** OR device **name**. Both matter: the id
 survives a rename (the obvious way to slip a block), the name survives a

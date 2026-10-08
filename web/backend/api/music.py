@@ -73,9 +73,11 @@ router = APIRouter(prefix="/api/music", tags=["music"])
 # not DEPEND on an admin-tier hop either — the upload below indexes the
 # files it wrote itself rather than calling the admin sweep.
 #
-# ``pause`` / ``resume`` / ``stop`` / ``skip`` stay open on purpose: they
-# are the video satellite's kiosk transport row (FE-3), and that screen
-# renders unattended with nobody there to hold a credential. See
+# ``pause`` / ``resume`` / ``stop`` / ``skip`` wear no gate at THIS hop:
+# they are the video satellite's kiosk transport row (FE-3). The core
+# route they proxy to takes the device tier, so a call still needs the
+# household token (the kiosk is paired by its URL — display.jsx), and a
+# queue block does not cover them (``_assert_may_replace_queue``). See
 # ``domovoi/tests/test_kiosk_surface_is_documented.py``.
 DEVICE = [Depends(require_device)]
 ADMIN = [Depends(require_admin_mutation)]
@@ -901,8 +903,40 @@ async def favorite_now_playing(
 # pipes status + body back. 502 when the Domovoi server can't be reached.
 
 
+async def _assert_may_replace_queue(
+    request: Request, body_device_id: str | None, room_id: str
+) -> None:
+    """``403`` when the calling device is blocked from this room's queue
+    (WEB-11).
+
+    ``/play``, ``/play-track``, ``/play-tracks`` and ``/play-playlist`` do
+    not edit a room's queue, they REPLACE it — so a device an admin took
+    queue editing away from used to "cast" past the block the
+    ``/queue/{room}/add`` route enforced. The same check now runs here,
+    with the caller identified as the Files and Documents doors identify
+    it (the body's ``device_id``, ``X-Device-Id``, ``?device_id=``, the
+    registration cookie). A caller that names itself nowhere is not
+    identified and so not blocked; the queue routes, which REQUIRE the
+    id, are the stricter door, and the block was always household policy
+    rather than a boundary (``music_queue``'s docstring).
+
+    The transport verbs — pause, resume, stop, skip, previous — are not
+    checked: they move the playhead through what is queued, they are the
+    kiosk's buttons, and a block on them would hold only for a caller that
+    volunteered its own id.
+    """
+    # Inside the call: ``files`` imports this module at import time.
+    from web.backend.api import files as files_api
+    from web.backend.api import music_queue
+
+    caller = files_api.caller_device_id(request, body_device_id)
+    if caller:
+        await music_queue._assert_can_edit(caller, room_id)
+
+
 @router.post("/play", dependencies=DEVICE)
 async def play(body: PlayRequest, request: Request):
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     status, payload = await post_admin(
         "/v1/admin/music/play",
         {"room_id": body.room_id, "query": body.query},
@@ -919,6 +953,7 @@ async def play_playlist(body: PlayPlaylistRequest, request: Request):
     hands the first/picked track to MPD, and stamps
     ``app.state.current_playlist`` so subsequent ``next`` calls
     stay inside the playlist."""
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     status, payload = await post_admin(
         "/v1/admin/music/play-playlist",
         {
@@ -984,6 +1019,7 @@ async def play_track(body: PlayTrackRequest, request: Request):
     click doesn't write to ``conversation_log`` and never falls
     through to an external streaming provider the way the fuzzy
     ``/play`` text-query path can."""
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     status, payload = await post_admin(
         "/v1/admin/music/play-track",
         {"room_id": body.room_id, "track_id": body.track_id},
@@ -1548,6 +1584,7 @@ async def play_tracks(body: CastTracksRequest, request: Request):
     as it always has. A cast the core couldn't make passes through as it
     answered: ``failed`` names the part (``music_player`` on the server, or
     ``satellite``) beside the ``detail`` in words."""
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     payload_out: dict = {"room_id": body.room_id, "track_ids": body.track_ids}
     if body.start_sec > 0:
         payload_out["start_sec"] = body.start_sec

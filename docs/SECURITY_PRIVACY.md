@@ -516,7 +516,16 @@ table below) are
 reliably keep a known device out of a room's queue, and someone determined
 can claim a different id. What changed is that the core's own queue routes
 now want the household token too, so a blocked device can no longer simply
-call port 6370 and skip the surface that asked. Binding a device id to a
+call port 6370 and skip the surface that asked. And the queue block covers
+the routes that REPLACE a room's queue as well as those that edit it
+(2026-10-08, WEB-11): play, play-track, the browser player's cast
+(play-tracks) and play-playlist refuse a blocked device with the block's
+message, identifying it from the body, `X-Device-Id`, `?device_id=` or the
+registration cookie, as the files door does; before, a blocked tablet had
+its "add to queue" refused and simply cast over the whole queue instead.
+The transport verbs (pause, resume, stop, skip, previous) are not covered,
+by decision: they move the playhead, not what is queued, and they are the
+kiosk's buttons. Binding a device id to a
 per-device token belongs with the kiosk read tokens in the hardening
 backlog. The same goes for the chat's message details: "sent from" names the
 device id the sending client put on the message (kept only when it is a
