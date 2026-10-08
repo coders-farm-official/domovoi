@@ -55,7 +55,9 @@ def _request() -> Request:
     can forward the caller's credential to the core (CORE-4,
     ``auth_forward_headers``); the caps run long before that, so an empty
     one is enough and keeps this file DB-free."""
-    return Request({"type": "http", "headers": [], "client": ("192.168.1.50", 12345)})
+    return Request(
+        {"type": "http", "headers": [], "query_string": b"", "client": ("192.168.1.50", 12345)}
+    )
 
 
 @pytest.fixture

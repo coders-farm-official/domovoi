@@ -17,6 +17,7 @@ Pure file checks, no DB, no `requires_db` — this must never skip.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from domovoi.config import Settings
@@ -59,13 +60,15 @@ def test_env_example_does_not_default_to_a_cloud_engine() -> None:
     assert _example_values().get("TTS_ENGINE") != "edge"
 
 
-# ─── Where the example deliberately DISAGREES with Settings (CORE-9) ──────
+# ─── Strict satellite pairing (CORE-9, CORE-11) ───────────────────────────
 #
-# Strict satellite pairing is the one setting where "what a fresh box
-# runs" and "what the code defaults to" are meant to differ. A fresh box
-# has nothing paired, so it can start closed. A box that upgrades into
-# this code has satellites in the house already, and a field default that
-# flipped under it would park the whole fleet on the next restart.
+# Until CORE-11 this was the one setting where "what a fresh box runs" and
+# "what the code defaults to" differed: the example wrote strict, the field
+# stayed lenient so an upgrade would not park a fleet. That left every
+# install whose .env lacked the line open to a tokenless LAN client that
+# names itself a new room (and, from there, a live drop-in into any room).
+# Now both say strict. The example still writes the line, so the posture
+# is visible in the file a household actually edits.
 
 SCRIPTS = REPO_ROOT / "domovoi" / "scripts"
 
@@ -77,8 +80,38 @@ def test_a_fresh_install_starts_with_strict_satellite_pairing() -> None:
     )
 
 
-def test_the_field_default_stays_lenient_for_installs_that_upgrade() -> None:
-    assert Settings.model_fields["satellite_pairing_strict"].default is False
+def test_the_field_default_is_strict_for_installs_without_the_line() -> None:
+    """CORE-11: an .env that predates the example's line (or has none at
+    all) must not leave pairing lenient. Lenient is something a household
+    writes down, never something it gets by omission."""
+    assert Settings.model_fields["satellite_pairing_strict"].default is True
+
+
+def test_settings_without_any_env_are_strict(monkeypatch) -> None:
+    """The composition the field default is for: nothing in the
+    environment and no .env file at all still comes up strict."""
+    for key in [k for k in os.environ if k.upper() == "SATELLITE_PAIRING_STRICT"]:
+        monkeypatch.delenv(key, raising=False)
+    assert Settings(_env_file=None).satellite_pairing_strict is True
+
+
+def test_a_lenient_boot_says_what_it_leaves_open(monkeypatch, caplog) -> None:
+    """Lenient is honoured, and every boot puts its cost in the journal."""
+    import logging
+
+    from domovoi import main as core_main
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "satellite_pairing_strict", False)
+    with caplog.at_level(logging.WARNING, logger=core_main.log.name):
+        assert core_main._warn_if_pairing_lenient() is True
+    assert "LENIENT" in caplog.text and "SATELLITE_PAIRING_STRICT=true" in caplog.text
+
+    caplog.clear()
+    monkeypatch.setattr(settings, "satellite_pairing_strict", True)
+    with caplog.at_level(logging.WARNING, logger=core_main.log.name):
+        assert core_main._warn_if_pairing_lenient() is False
+    assert "LENIENT" not in caplog.text
 
 
 def test_the_dev_scripts_create_an_env_only_when_there_is_none() -> None:

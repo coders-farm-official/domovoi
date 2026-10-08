@@ -57,16 +57,20 @@ trap cleanup EXIT
 export GIT_CONFIG_GLOBAL=$WORK/gitconfig GIT_CONFIG_NOSYSTEM=1
 SHIM_REAL_GIT=$(command -v git)
 SHIM_REAL_DATE=$(command -v date)
-export SHIM_REAL_GIT SHIM_REAL_DATE
+SHIM_REAL_STAT=$(command -v stat)
+export SHIM_REAL_GIT SHIM_REAL_DATE SHIM_REAL_STAT
 export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
 export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 CASE_FAILED=0
 
 fail() { echo "    FAIL: $*"; CASE_FAILED=1; }
 check() { local what=$1; shift; if ! "$@"; then fail "$what"; fi; }
+# skip_case WHY: this case cannot run on this box; counted, never failed.
+skip_case() { SKIPPED=$((SKIPPED + 1)); echo "skip $CASE_NAME ($1)"; }
 
 # ─── fixtures ────────────────────────────────────────────────────────────
 
@@ -205,6 +209,11 @@ case "${1-}" in
     exit 0
     ;;
   inspect)
+    # The chat helper (Letta) runs while letta-running exists.
+    if [ "${!#}" = domovoi-letta ]; then
+      if [ -f "$SHIM_STATE/letta-running" ]; then echo true; exit 0; fi
+      echo "Error: No such object: domovoi-letta" >&2; exit 1
+    fi
     if [ -f "$SHIM_STATE/searxng-running" ]; then cat "$SHIM_STATE/searxng-running"; exit 0; fi
     echo "Error: No such object: ${!#}" >&2; exit 1
     ;;
@@ -301,6 +310,11 @@ case "$sql" in
     mv "$(dbfile "$from")" "$(dbfile "$to")"
     if [ -f "$(ledgers "$from")" ]; then mv "$(ledgers "$from")" "$(ledgers "$to")"; fi
     if [ -f "$(registry "$from")" ]; then mv "$(registry "$from")" "$(registry "$to")"; fi ;;
+  "SELECT datname FROM pg_database WHERE datname ~ '^"*"_failed_[0-9]{14}\$' ORDER BY datname DESC")
+    base=${sql#*\'^}; base=${base%%_failed_*}
+    for f in "$SHIM_STATE"/db-"$base"_failed_*; do
+      [ -f "$f" ] && basename "$f" | sed 's/^db-//'
+    done | grep -E "^${base}_failed_[0-9]{14}\$" | sort -r ;;
   SELECT\ pg_terminate_backend*) ;;
   *) echo "psql: unexpected SQL: $sql" >&2; exit 1 ;;
 esac
@@ -374,6 +388,22 @@ if [ "${1-}" = -m ] && [ "${2-}" = domovoi.egress ]; then
   echo
   exit 0
 fi
+# `python -m domovoi.env_bootstrap --repair`: what env-repair-output says
+# (default: both secrets already set), or a failure while env-repair-fails.
+if [ "${1-}" = -m ] && [ "${2-}" = domovoi.env_bootstrap ]; then
+  if [ -f "$SHIM_STATE/env-repair-fails" ]; then
+    echo "could not repair $SHIM_REPO/domovoi/.env: [Errno 13] Permission denied" >&2; exit 1
+  fi
+  cat "$SHIM_STATE/env-repair-output" 2>/dev/null \
+    || echo "$SHIM_REPO/domovoi/.env: LETTA_TOKEN and SEARXNG_SECRET already set; left untouched"
+  exit 0
+fi
+# The venv's Python version (sync_deps asks before using the lock):
+# py-version, else 3.14.
+if [ "${1-}" = -c ] && [[ ${2-} == *version_info* ]]; then
+  cat "$SHIM_STATE/py-version" 2>/dev/null || echo 3.14
+  exit 0
+fi
 if [ "${1-}" = -c ]; then
   d=$(cd "$(dirname "$0")/.." && pwd)/lib/site-packages; mkdir -p "$d"; printf '%s\n' "$d"
 fi
@@ -426,21 +456,31 @@ new_case() {
 
 # run_update [extra PATH dir]: run the script against the current case.
 # NO_BASH_CLOCK=1 runs it without $EPOCHREALTIME, the way a bash older than
-# 5 would, so its clock is date(1) and a shim can play that.
+# 5 would, so its clock is date(1) and a shim can play that. SIGNERS names
+# the allowed-signers file (default: a path that does not exist, so the
+# host's own file never gets a say); UPSTREAM_URL and UPSTREAM_BRANCH set
+# the upstream pins.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=()
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=()
   local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
   if [ -n "${MANAGE_SEARXNG:-}" ]; then manage_env=(DOMOVOI_MANAGE_SEARXNG="$MANAGE_SEARXNG"); fi
+  if [ -n "${UPSTREAM_URL:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_URL="$UPSTREAM_URL"); fi
+  if [ -n "${UPSTREAM_BRANCH:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_BRANCH="$UPSTREAM_BRANCH"); fi
+  if [ -n "${USE_LOCK:-}" ]; then lock_env=(DOMOVOI_USE_LOCK="$USE_LOCK"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
-  env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG PATH="$path" \
+  env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
+    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     ${venv_env[@]+"${venv_env[@]}"} \
     ${manage_env[@]+"${manage_env[@]}"} \
+    ${pin_env[@]+"${pin_env[@]}"} \
+    ${lock_env[@]+"${lock_env[@]}"} \
+    DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
@@ -459,6 +499,7 @@ run_update() {
 field() { sed -n "s/^  \"$1\": \(.*\)$/\1/p" "$RESULT" | sed 's/,$//'; }
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
+not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
 line_of() { grep -nF -- "$1" "$STATE/calls.log" | head -n 1 | cut -d: -f1; }
 before() {  # before A B: the first call matching A precedes the first matching B
@@ -545,7 +586,8 @@ case_noop_restart() {
   # with the checkout's one migration applied, so no Flyway run either.
   check "asks Flyway's history what is applied" called "WHERE success AND type = 'SQL' AND version IS NOT NULL"
   check "no migrations on a plain restart" not_called "systemctl restart domovoi-db.service"
-  check "nothing but the restart's own steps" eq "$(step_names)" "stop-services start-services health searxng"
+  check "nothing but the restart's own steps, after the signature check" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "the helper secrets are checked, before the stop" before "python -m domovoi.env_bootstrap --repair" "systemctl stop"
   check "migration count recorded" eq "$(field migrations_before)" 1
   check "and left as it was" eq "$(field migrations_after)" 1
   check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
@@ -640,7 +682,11 @@ case_deps_changed_as_root() {
   check "stops before syncing" before "systemctl stop" "install torch"
   check "snapshots the venv" called "pip --disable-pip-version-check --no-input freeze --exclude-editable"
   check "CPU torch first" called "pip --disable-pip-version-check --no-input install torch --index-url https://download.pytorch.org/whl/cpu"
-  check "then the extras" called "pip --disable-pip-version-check --no-input install -e .[dev,real-clients,voice-profile]"
+  check "then the production extras" called "pip --disable-pip-version-check --no-input install -e .[real-clients,voice-profile]"
+  check "no dev extra on a server" not_called "dev,"
+  check "the lock is opt-in: the step has no detail, as before it existed" \
+    grep -qE '\{"name": "sync-deps", "status": "ok", "duration_sec": [0-9.]+, "detail": null\}' "$RESULT"
+  check "nothing asks which Python the venv runs" not_called "python -c import sys; print"
   check "torch before extras" before "install torch" "install -e"
   check "syncs before migrating" before "install -e" "systemctl restart domovoi-db.service"
   check "migrates before starting" before "systemctl restart domovoi-db.service" "systemctl start domovoi-core.service"
@@ -1105,12 +1151,13 @@ case_clock_stepped_back_keeps_the_result_valid() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
-  # A wall clock that NTP steps back 90 s after the run's second reading
-  # (START_MS, then the preflight's t0): the preflight and the whole run
-  # both end "before" they started. The script reads bash's clock, which
-  # no shim can move, so this run goes without it and reads date(1): 13
-  # digits of milliseconds, taken from the shim's own bash clock (the real
-  # date may be uutils, whose +%s%3N is no use).
+  # A wall clock that NTP steps back 90 s after the run's fourth reading
+  # (START_MS, the signature step's t0 and end, then the preflight's
+  # t0): the preflight and the whole run both end "before" they started.
+  # The script reads bash's clock, which no shim can move, so this run
+  # goes without it and reads date(1): 13 digits of milliseconds, taken
+  # from the shim's own bash clock (the real date may be uutils, whose
+  # +%s%3N is no use).
   mkdir -p "$CASE/clockbin"
   cat >"$CASE/clockbin/date" <<'SH'
 #!/usr/bin/env bash
@@ -1119,7 +1166,7 @@ if [ "${1-}" = +%s%3N ]; then
   echo $((n + 1)) >"$SHIM_STATE/date-readings"
   t=$EPOCHREALTIME
   t=$(( ${t%[.,]*}${t#*[.,]} / 1000 ))
-  if [ "$n" -ge 2 ]; then t=$((t - 90000)); fi
+  if [ "$n" -ge 4 ]; then t=$((t - 90000)); fi
   echo "$t"
   exit 0
 fi
@@ -1127,7 +1174,7 @@ exec "$SHIM_REAL_DATE" "$@"
 SH
   chmod +x "$CASE/clockbin/date"
   NO_BASH_CLOCK=1 run_update "$CASE/clockbin"
-  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 2 ))" 1
+  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 4 ))" 1
   check "status ok" eq "$(field status)" '"ok"'
   check "no negative duration" eq "$(grep -c '"duration_sec": -' "$RESULT")" 0
   check "no half-negative duration" eq "$(grep -c '[0-9]\.-' "$RESULT")" 0
@@ -1574,6 +1621,121 @@ case_never_mpd_conf_only_keeps_the_image() {
   end_case
 }
 
+case_rollback_keeps_only_the_newest_failed_database() {
+  new_case rollback_keeps_only_the_newest_failed_database
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # Left by an earlier rolled-back update: a full copy of the database.
+  echo 1 >"$STATE/db-domovoi_failed_20260101000000"
+  : >"$STATE/ledgers-domovoi_failed_20260101000000"
+  # Another database's copies, and a name that only looks like one, stay.
+  echo 1 >"$STATE/db-domovoi_test_failed_20260101000000"
+  echo 1 >"$STATE/db-domovoi_failed_keepme"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: migration + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "db restored" eq "$(field db_restored)" true
+  check "the older copy is dropped" called 'DROP DATABASE IF EXISTS "domovoi_failed_20260101000000"'
+  check "one replaced copy of domovoi left" eq "$(ls "$STATE" | grep -cE '^db-domovoi_failed_[0-9]{14}$')" 1
+  check "and it is this run's" test ! -f "$STATE/db-domovoi_failed_20260101000000"
+  check "the test twin's copy is not this series" test -f "$STATE/db-domovoi_test_failed_20260101000000"
+  check "a name outside the pattern is left alone" test -f "$STATE/db-domovoi_failed_keepme"
+  end_case
+}
+
+case_result_file_is_for_the_service_users_group() {
+  new_case result_file_is_for_the_service_users_group
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_root_shims "$CASE/rootbin"
+  # The service user's group is the tester's own, so chgrp works unprivileged.
+  cat >"$CASE/rootbin/id" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -u ] && [ $# -eq 1 ]; then echo 0; exit 0; fi
+if [ "${1-}" = -gn ]; then /usr/bin/id -g; exit 0; fi   # a gid chgrp takes
+exec /usr/bin/id "$@"
+SH
+  cat >"$CASE/rootbin/chgrp" <<'SH'
+#!/usr/bin/env bash
+echo "chgrp $1 $2 $(basename "${3-}")" >>"$SHIM_STATE/calls.log"
+exec /usr/bin/chgrp "$@"
+SH
+  chmod +x "$CASE/rootbin/id" "$CASE/rootbin/chgrp"
+  run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the result goes to the service user's group" called "chgrp -- $(/usr/bin/id -g) .last-result.json."
+  check "the SHA files are not regrouped" not_called ".applied_sha."
+  # Only where the filesystem keeps POSIX modes and groups (not Git for
+  # Windows' NTFS view).
+  local probe=$CASE/mode-probe
+  : >"$probe" && chmod 0640 "$probe"
+  if [ "$(stat -c %a "$probe")" = 640 ]; then
+    check "not world-readable" eq "$(stat -c %a "$RESULT")" 640
+    check "group is the service user's" eq "$(stat -c %g "$RESULT")" "$(/usr/bin/id -g)"
+    check "applied_sha still world-readable" eq "$(stat -c %a "$UPD/applied_sha")" 644
+  fi
+  end_case
+}
+
+# A compose file with digest-pinned images, committed on top of A and
+# recorded as applied; echoes the new SHA. Used by the image-pin cases.
+compose_base() {
+  printf 'services:
+  postgres:
+    # postgres 16
+    image: postgres:16@sha256:%s
+' "$(printf 'a%.0s' {1..64})"     >"$REPO/domovoi/docker-compose.yml"
+  local sha; sha=$(commit_all "A2: compose")
+  mkdir -p "$UPD" && echo "$sha" >"$UPD/applied_sha"
+  printf '%s' "$sha"
+}
+
+case_never_refuses_a_container_image_change() {
+  new_case never_refuses_a_container_image_change
+  local base; base=$(compose_base)
+  echo never >"$STATE/internet-policy"
+  sed -i "s/@sha256:a*/@sha256:$(printf 'b%.0s' {1..64})/" "$REPO/domovoi/docker-compose.yml"
+  local sha_b; sha_b=$(commit_all "B: new postgres digest")
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "names the images" eq "$(field error | grep -c 'container images (docker compose would pull them)')" 1
+  check "says the internet is off" eq "$(field error | grep -c 'internet access is turned off for this box')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  check "no migrate (compose would pull)" not_called "systemctl restart domovoi-db.service"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$base"
+  end_case
+}
+
+case_compose_comment_change_is_not_an_image_change() {
+  new_case compose_comment_change_is_not_an_image_change
+  compose_base >/dev/null
+  echo never >"$STATE/internet-policy"
+  sed -i 's/# postgres 16/# postgres 16, the database/' "$REPO/domovoi/docker-compose.yml"
+  local sha_b; sha_b=$(commit_all "B: compose comment")
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "migrates as usual" called "systemctl restart domovoi-db.service"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_image_change_online_updates() {
+  new_case image_change_online_updates
+  compose_base >/dev/null
+  echo sometimes >"$STATE/internet-policy"
+  sed -i "s/@sha256:a*/@sha256:$(printf 'c%.0s' {1..64})/" "$REPO/domovoi/docker-compose.yml"
+  local sha_b; sha_b=$(commit_all "B: new postgres digest")
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the answer was read before stopping anything" before "domovoi.egress --print-policy" "systemctl stop"
+  check "domovoi-db brings the new image up" called "systemctl restart domovoi-db.service"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
 case_unanswered_dependency_update_reads_the_answer_once() {
   new_case unanswered_dependency_update_reads_the_answer_once
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -1586,59 +1748,646 @@ case_unanswered_dependency_update_reads_the_answer_once() {
   end_case
 }
 
-case_noop_restart
-case_noop_without_any_history
-case_noop_restart_migrates_a_database_behind_the_checkout
-case_noop_restart_brings_postgres_back
-case_noop_restart_a_baseline_row_is_not_a_migration
-case_deps_changed_as_root
-case_mpd_changed
-case_mpd_conf_only
-case_migration_health_failure_rolls_back
-case_flyway_failure_without_growth
-case_plugin_migration_health_failure_restores
-case_plugin_migration_kept_when_healthy
-case_test_twin_restored_on_its_own
-case_no_test_twin
-case_test_twin_backup_failure_aborts
-case_plugin_switched_off_by_load_error_rolls_back
-case_enabled_plugin_at_load_error_rolls_back
-case_plugin_broken_before_does_not_block
-case_rollback_cannot_bring_a_plugin_back
-case_dirty_tree_refused
-case_untracked_files_do_not_block
-case_backup_failure_aborts
-case_prev_from_core_pull_record
-case_prev_from_orig_head
-case_garbage_prev_record_ignored
-case_backups_pruned
-case_noop_health_failure_reports
-case_rollback_that_cannot_get_healthy
-case_sync_failure_output_stays_valid_utf8
-case_clock_stepped_back_keeps_the_result_valid
-case_uutils_date_leaves_the_durations_alone
-case_uutils_date_without_bash_clock_falls_back_to_seconds
-case_timing_helpers
-case_venv_from_the_core_unit
-case_venv_ignores_a_non_venv_interpreter
-case_venv_not_writable_aborts
-case_stop_detail_says_how_each_unit_stopped
-case_a_unit_already_down_is_said_to_be
-case_a_hung_stop_is_killed_and_the_restart_goes_on
-case_a_hung_stop_during_an_update_still_updates
-case_a_unit_that_survives_sigkill_fails_the_stop
-case_searxng_started_after_a_healthy_restart
-case_searxng_failure_never_fails_an_update
-case_searxng_stopped_for_never
-case_searxng_not_running_for_never_is_left_alone
-case_searxng_left_alone_when_unanswered
-case_searxng_opt_out_and_an_older_checkout
-case_searxng_hung_start_is_bounded_and_the_update_stays_ok
-case_searxng_start_detached_under_systemd
-case_never_refuses_a_dependency_update
-case_never_refuses_a_music_image_change
-case_never_mpd_conf_only_keeps_the_image
-case_unanswered_dependency_update_reads_the_answer_once
+# ─── the hash-pinned lock (OPS-9) ────────────────────────────────────────
 
-echo "apply-update harness: $PASSED passed, $FAILED failed"
+# write_linux_lock [PIN...]: the checkout's requirements-linux-py314.lock,
+# with pip-compile's header (which names the Python it was compiled for)
+# and one hash line per pin.
+write_linux_lock() {
+  local p
+  {
+    printf '#\n# This file is autogenerated by pip-compile with Python 3.14\n'
+    printf '# by the following command:\n#\n#    bash scripts/linux/compile-linux-lock.sh\n#\n'
+    printf -- '--extra-index-url https://download.pytorch.org/whl/cpu\n\n'
+    for p in "${@:-numpy==2.4.6}"; do
+      printf '%s \\\n    --hash=sha256:%064d\n' "$p" 0
+    done
+  } >"$REPO/requirements-linux-py314.lock"
+}
+
+PIP_RUN="pip --disable-pip-version-check --no-input install"
+
+case_deps_from_the_hash_pinned_lock() {
+  new_case deps_from_the_hash_pinned_lock
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b; sha_b=$(commit_all "B: a new lock")
+  write_root_shims "$CASE/rootbin"
+  USE_LOCK=1 run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a lock change is a dependency change" eq "$(field deps_changed)" true
+  check "asks the venv which Python it runs" called "python -c import sys; print"
+  check "build tools first, hash-checked against the lock" \
+    called "$PIP_RUN --require-hashes -c $REPO/requirements-linux-py314.lock setuptools wheel"
+  check "then every pin, hash-checked, no isolated build env" \
+    called "$PIP_RUN --require-hashes --no-build-isolation -r $REPO/requirements-linux-py314.lock"
+  check "then the checkout, adding nothing" called "$PIP_RUN --no-deps --no-build-isolation -e ."
+  check "tools before pins" before "setuptools wheel" "--no-build-isolation -r"
+  check "pins before the checkout" before "--no-build-isolation -r" "--no-deps --no-build-isolation -e ."
+  check "pip still runs as the service user" called "runuser -u tester -- $CASE/venv/bin/python -m pip"
+  check "the lock names its own torch index" not_called "install torch"
+  check "no resolver install" not_called "install -e .["
+  check "no dev extra" not_called "dev,"
+  check "the step says so" grep -qF '"detail": "installed from requirements-linux-py314.lock, every package hash-checked"' "$RESULT"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# A pin whose download doesn't match its hash (a tampered or substituted
+# package): pip refuses, the update rolls back, and the rollback's re-sync
+# of A goes through A's lock, hash-checked, with no unchecked pin restore.
+case_lock_hash_mismatch_rolls_back() {
+  new_case lock_hash_mismatch_rolls_back
+  write_linux_lock numpy==2.4.6 setuptools==81.0.0 wheel==0.48.0
+  SHA_A=$(commit_all "A: lock")
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  local sha_b; sha_b=$(commit_all "B: a pin that does not match its hash")
+  echo "$sha_b" >"$STATE/pip-fail-when-head"
+  printf '%s\n' \
+    'ERROR: THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE.' \
+    '    numpy==2.4.7 from https://files.pythonhosted.org/packages/numpy-2.4.7.whl:' \
+    '        Expected sha256 0000000000000000000000000000000000000000000000000000000000000000' \
+    '             Got        1111111111111111111111111111111111111111111111111111111111111111' \
+    >"$STATE/pip-fail-output"
+  USE_LOCK=1 run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "failed at sync-deps" eq "$(field error | grep -c 'failed at sync-deps')" 1
+  check "pip's refusal is in the result" grep -qF 'DO NOT MATCH THE HASHES' "$RESULT"
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "bad_sha recorded" file_is "$UPD/bad_sha" "$sha_b"
+  check "applied_sha stays A" file_is "$UPD/applied_sha" "$SHA_A"
+  check "A's lock re-installed, hash-checked" again_after "reset --keep" \
+    "--require-hashes --no-build-isolation -r $REPO/requirements-linux-py314.lock"
+  check "no unchecked pin restore after a locked re-sync" not_called "pip-r-file: requests==2.31.0"
+  check "the pin step says why" grep -qF 'skipped: requirements-linux-py314.lock put back the exact versions' "$RESULT"
+  end_case
+}
+
+# The owner opted in and the lock can't be used (here: the venv moved to
+# another Python). The run goes on through the resolver, but never as a
+# clean `ok` step: sync-deps is a `warn` whose detail says the lock was not
+# applied and why, which the core keeps for the Version card (REV-15). The
+# lock is looked at as the service user, never by root.
+case_lock_for_another_python_falls_back_loudly() {
+  new_case lock_for_another_python_falls_back_loudly
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo 3.13 >"$STATE/py-version"
+  write_linux_lock
+  commit_all "B: lock" >/dev/null
+  write_root_shims "$CASE/rootbin"
+  USE_LOCK=1 run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no hash-checked install" not_called "--require-hashes"
+  check "resolver, CPU torch first" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
+  check "the production extras" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "warns in the journal" grep -qF \
+    "WARNING: not installing from a hash-pinned lock (requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13)" \
+    "$CASE/output.log"
+  check "sync-deps is a warn step, not ok" step_is sync-deps warn
+  check "its detail says the lock was not applied, and why" grep -qF \
+    '"detail": "lock not applied: requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13; resolved from the index without hash checks"' \
+    "$RESULT"
+  check "the lock is looked for as the service user" called "runuser -u tester -- test -f $REPO/requirements-linux-py314.lock"
+  check "and its header read as the service user" called "runuser -u tester -- sed -n"
+  end_case
+}
+
+# Opted in, and the checkout has no lock at all (renamed, or a checkout from
+# before it): the same loud warn, with that reason.
+case_lock_missing_when_opted_in_is_a_warn() {
+  new_case lock_missing_when_opted_in_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps, no lock")
+  USE_LOCK=1 run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "sync-deps is a warn step" step_is sync-deps warn
+  check "its detail names the missing lock" grep -qF \
+    '"detail": "lock not applied: the checkout has no requirements-linux-py314.lock; resolved from the index without hash checks"' \
+    "$RESULT"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_extras_beyond_the_lock_are_resolved_and_said_to_be() {
+  new_case extras_beyond_the_lock_are_resolved_and_said_to_be
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock
+  commit_all "B: lock" >/dev/null
+  USE_LOCK=1 DOMOVOI_PIP_EXTRAS="real-clients, voice-profile,fastlane,cuda" run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the lock first" called "--require-hashes --no-build-isolation -r"
+  check "then only the extras outside it" called "$PIP_RUN -e .[fastlane,cuda]"
+  check "after the lock" before "--no-deps --no-build-isolation -e ." "-e .[fastlane,cuda]"
+  check "the lock's own extras are not resolved again" not_called "-e .[real-clients"
+  check "the step says which were unchecked" grep -qF \
+    'extras outside it (fastlane,cuda) resolved from the index without hash checks' "$RESULT"
+  end_case
+}
+
+case_empty_deps_lock_opts_out() {
+  new_case empty_deps_lock_opts_out
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock
+  commit_all "B: lock" >/dev/null
+  USE_LOCK=1 DOMOVOI_DEPS_LOCK= run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "a warn step: opted in, yet no lock" step_is sync-deps warn
+  check "the step says why" grep -qF '"detail": "lock not applied: DOMOVOI_DEPS_LOCK is empty;' "$RESULT"
+  end_case
+}
+
+# The lock is opt-in (DOMOVOI_USE_LOCK=1): a box that has not opted in
+# re-syncs exactly as it did before the lock existed, and the step says the
+# lock is there. A live install's first update after the lock lands must
+# not move every package to the lock's versions.
+case_lock_is_opt_in_and_off_by_default() {
+  new_case lock_is_opt_in_and_off_by_default
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps and a new lock")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a dependency change, as before" eq "$(field deps_changed)" true
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the lock is not read for its Python" not_called "python -c import sys; print"
+  check "CPU torch first, as before" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
+  check "then the production extras, as before" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "torch before extras" before "install torch" "install -e"
+  check "no fallback warning: nothing was asked of the lock" not_said "WARNING: not installing from a hash-pinned lock"
+  check "an ok step, not a warn: the owner did not opt in" step_is sync-deps ok
+  check "the step says the lock is there to opt into" grep -qF \
+    '"detail": "resolved from the index, as before; requirements-linux-py314.lock is in the checkout and opt-in (DOMOVOI_USE_LOCK=1, docs/LINUX_HOST.md)"' \
+    "$RESULT"
+  check "said once in the journal" eq "$(grep -c 'is in the checkout and opt-in' "$CASE/output.log")" 1
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Only 1 opts in: any other value (yes, true, 0) leaves the resolver path.
+case_use_lock_other_than_1_stays_off() {
+  new_case use_lock_other_than_1_stays_off
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock
+  commit_all "B: lock" >/dev/null
+  USE_LOCK=yes run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "the step says the lock is opt-in" grep -qF 'is in the checkout and opt-in (DOMOVOI_USE_LOCK=1' "$RESULT"
+  end_case
+}
+
+# ─── the helper-container secrets (2026-10 review REV-16) ────────────────
+#
+# docker-compose.yml requires LETTA_TOKEN and SEARXNG_SECRET from .env (no
+# shared fallback any more), so an upgraded box's .env gets them, appended
+# by the checkout's own `env_bootstrap --repair` run as the service user,
+# before anything uses compose: domovoi-db's restart, the search helper.
+
+ENV_ADDED_BOTH="domovoi/.env: added LETTA_TOKEN, SEARXNG_SECRET (appended values generated for this install)"
+
+case_env_secrets_added_before_compose_on_an_update() {
+  new_case env_secrets_added_before_compose_on_an_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  local sha_b; sha_b=$(commit_all "B: migration")
+  echo "$REPO/$ENV_ADDED_BOTH" >"$STATE/env-repair-output"
+  write_root_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the repair ran as the service user" \
+    called "runuser -u tester -- $CASE/venv/bin/python -m domovoi.env_bootstrap --repair"
+  check "after the pre-flight" before "status --porcelain" "domovoi.env_bootstrap --repair"
+  check "before the backup" before "domovoi.env_bootstrap --repair" "pg_dump"
+  check "before the stop" before "domovoi.env_bootstrap --repair" "systemctl stop"
+  check "before domovoi-db's compose up" before "domovoi.env_bootstrap --repair" "systemctl restart domovoi-db.service"
+  check "an ok step that says what was added" grep -qF \
+    '{"name": "env-secrets", "status": "ok"' "$RESULT"
+  check "its detail names the keys, never a value" grep -qF \
+    '"detail": "added LETTA_TOKEN, SEARXNG_SECRET to domovoi/.env"' "$RESULT"
+  check "the step sits after the pre-flight" eq "$(step_names | cut -d' ' -f1-3)" "signature preflight env-secrets"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_env_secrets_added_on_a_plain_restart() {
+  new_case env_secrets_added_on_a_plain_restart
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "$REPO/domovoi/.env: added SEARXNG_SECRET (appended values generated for this install)" >"$STATE/env-repair-output"
+  echo sometimes >"$STATE/internet-policy"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the step, then the restart's own" eq "$(step_names)" "signature env-secrets stop-services start-services health searxng"
+  check "names the one it added" grep -qF '"detail": "added SEARXNG_SECRET to domovoi/.env"' "$RESULT"
+  check "the search helper is started after it" before "domovoi.env_bootstrap --repair" "docker compose"
+  end_case
+}
+
+# LETTA_TOKEN is the core's Letta password too: a running Letta keeps the
+# old shared one until it is recreated, so chat mode would fail. Said as a
+# warn the Version card shows, not silently.
+case_env_secrets_with_a_running_letta_is_a_warn() {
+  new_case env_secrets_with_a_running_letta_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "$REPO/$ENV_ADDED_BOTH" >"$STATE/env-repair-output"
+  : >"$STATE/letta-running"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is env-secrets warn
+  check "that says how to recreate Letta" grep -qF \
+    'domovoi-letta still runs with the old shared password, so chat mode fails until it is recreated: docker compose --profile chat up -d letta' \
+    "$RESULT"
+  check "and in the journal" grep -qF "WARNING: LETTA_TOKEN added while domovoi-letta runs" "$CASE/output.log"
+  check "Letta itself is left alone" not_called "--profile chat"
+  end_case
+}
+
+case_env_secrets_repair_failure_aborts_before_anything() {
+  new_case env_secrets_repair_failure_aborts_before_anything
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  commit_all "B: migration" >/dev/null
+  : >"$STATE/env-repair-fails"
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "the error says what and why" eq "$(field error | grep -c 'domovoi/.env lacks LETTA_TOKEN or SEARXNG_SECRET and could not be given them, so nothing was changed')" 1
+  check "and carries the repair's own words" eq "$(field error | grep -c 'Permission denied')" 1
+  check "a failed env-secrets step" step_is env-secrets failed
+  check "no backup taken" not_called "pg_dump"
+  check "nothing stopped" not_called "systemctl stop"
+  check "no compose" not_called "docker compose"
+  check "no bad_sha" eq "$(field bad_sha)" null
+  check "applied_sha stays A" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_env_secrets_failure_on_a_plain_restart_restarts_nothing() {
+  new_case env_secrets_failure_on_a_plain_restart_restarts_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$STATE/env-repair-fails"
+  run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "nothing restarted" eq "$(field error | grep -c 'so nothing was restarted')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+# ─── signed updates (2026-10 audit, A8-01: root ran whatever upstream main
+# held; now HEAD must verify against the root-owned signers file) ─────────
+
+# Does this box's ssh-keygen sign and verify (OpenSSH 8.0+)? Without it
+# the cases that need real signatures are skipped, not failed. (Not a
+# pipeline: under pipefail ssh-keygen's usage exit would be the answer.)
+have_ssh_signing() { local out; out=$(ssh-keygen -Y 2>&1); [[ $out == *"requires an argument"* ]]; }
+
+# Two ed25519 keys in dir $1, owner (listed in allowed_signers) and
+# stranger (not), and the allowed_signers file. The principal is what git
+# reports as the signer (%GS).
+write_signing_keys() {
+  mkdir -p "$1"
+  ssh-keygen -q -t ed25519 -N '' -C owner -f "$1/owner" >/dev/null
+  ssh-keygen -q -t ed25519 -N '' -C stranger -f "$1/stranger" >/dev/null
+  printf 'owner@example.invalid namespaces="git" %s\n' "$(cut -d' ' -f1,2 "$1/owner.pub")" >"$1/allowed_signers"
+}
+
+# commit_signed KEY MSG: commit everything, SSH-signed with private key KEY.
+commit_signed() {
+  g add -A >/dev/null && g -c gpg.format=ssh -c user.signingkey="$1" commit -q -S -m "$2" && g rev-parse HEAD
+}
+
+# For the root cases: a stat that answers for the signers file alone with
+# what signers-stat holds ("0 644" unless a case says otherwise), so the
+# ownership check can be judged without being root; everything else real.
+write_stat_shim() {
+  mkdir -p "$1"
+  cat >"$1/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -c ] && [ "${2-}" = '%u %a' ] && [ "${3-}" = "$(cat "$SHIM_STATE/signers-path" 2>/dev/null)" ]; then
+  echo "stat $*" >>"$SHIM_STATE/calls.log"
+  cat "$SHIM_STATE/signers-stat" 2>/dev/null || echo "0 644"
+  exit 0
+fi
+exec "$SHIM_REAL_STAT" "$@"
+SH
+  chmod +x "$1/stat"
+}
+
+# A bare upstream for the case's repo, origin set and main tracking it.
+# Prints the URL as git stores it (under Git Bash that is the Windows
+# spelling of the path, not the /tmp one this harness uses).
+add_upstream() {
+  local bare=$CASE/upstream.git
+  git init -q --bare -b main "$bare"
+  g remote add origin "$bare"
+  g push -q origin main 2>/dev/null
+  g branch -q --set-upstream-to=origin/main main
+  g remote get-url origin
+}
+
+# The result's signature object, one field.
+sig_field() { field signature | sed -n "s/.*\"$1\": \([^,}]*\).*/\1/p"; }
+
+case_unsigned_head_warns_when_signing_is_not_enforced() {
+  new_case unsigned_head_warns_when_signing_is_not_enforced
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok: the box keeps working" eq "$(field status)" '"ok"'
+  check "a signature step, as a warning" step_is signature warn
+  check "the step says why" grep -qF '"detail": "not enforced: HEAD is not signed, and there is no ' "$RESULT"
+  check "the journal says so, loudly" grep -qF 'WARNING: signed updates are not enforced on this box' "$CASE/output.log"
+  check "and points at the doc" grep -qF 'Signed updates' "$CASE/output.log"
+  check "the result carries the state" eq "$(sig_field status)" '"unsigned"'
+  check "and that it is not enforced" eq "$(sig_field enforced)" false
+  check "the signers path it looked for" eq "$(sig_field allowed_signers)" "\"$CASE/no-allowed-signers\""
+  check "no verification without a file to verify against" not_called "verify-commit"
+  check "no git as root" not_called "safe.directory"
+  end_case
+}
+
+case_signed_head_without_a_signers_file_is_unverified() {
+  new_case signed_head_without_a_signers_file_is_unverified
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_signed "$CASE/keys/owner" "B: signed" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a signature step, as a warning" step_is signature warn
+  check "says it is signed but unchecked" grep -qF 'HEAD is signed, but there is no ' "$RESULT"
+  check "the result says unverified" eq "$(sig_field status)" '"unverified"'
+  check "read the commit as the service user" called "cat-file commit"
+  end_case
+}
+
+case_signed_head_verifies_as_root_before_anything_runs() {
+  new_case signed_head_verifies_as_root_before_anything_runs
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_signed "$CASE/keys/owner" "B: deps, signed")
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "a signature step, ok" step_is signature ok
+  check "names the signer" grep -qF '"detail": "HEAD is signed by owner@example.invalid (SHA256:' "$RESULT"
+  check "the result says verified" eq "$(sig_field status)" '"verified"'
+  check "and who" eq "$(sig_field signer)" '"owner@example.invalid"'
+  check "and that it is enforced" eq "$(sig_field enforced)" true
+  check "root verified HEAD itself" called "git -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
+  check "with the programs pinned" called "-c gpg.ssh.program=ssh-keygen -c gpg.program=gpg"
+  check "and verify-commit on the exact HEAD" called "verify-commit $sha_b"
+  check "not through runuser" not_called "runuser -u tester -- git -c safe.directory"
+  check "the signers file was judged" called "stat -c %u %a $CASE/keys/allowed_signers"
+  check "verified before the backup" before "verify-commit" "pg_dump"
+  check "verified before anything stopped" before "verify-commit" "systemctl stop"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_unsigned_head_refused_when_enforced() {
+  new_case unsigned_head_refused_when_enforced
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: unsigned")
+  SIGNERS=$CASE/keys/allowed_signers run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status refused" eq "$(field status)" '"refused"'
+  check "the signature step refused" step_is signature refused
+  check "error says it is not signed" eq "$(field error | grep -c 'HEAD is not signed; signed updates are enforced by')" 1
+  check "and what to do" eq "$(field error | grep -c 'Pull a commit signed by a listed key, or remove that file')" 1
+  check "the result says unsigned" eq "$(sig_field status)" '"unsigned"'
+  check "and enforced" eq "$(sig_field enforced)" true
+  check "nothing stopped" not_called "systemctl stop"
+  check "nothing started" not_called "systemctl start"
+  check "no backup taken" not_called "pg_dump"
+  check "no pip" not_called "pip "
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
+  check "no bad_sha: nothing was tried" eq "$(field bad_sha)" null
+  end_case
+}
+
+case_plain_restart_is_refused_too_when_head_does_not_verify() {
+  new_case plain_restart_is_refused_too_when_head_does_not_verify
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  SIGNERS=$CASE/keys/allowed_signers run_update
+  check "status refused" eq "$(field status)" '"refused"'
+  check "mode never decided" eq "$(field mode)" null
+  check "nothing stopped" not_called "systemctl stop"
+  check "the signature step is the only step" eq "$(step_names)" "signature"
+  end_case
+}
+
+case_head_signed_by_a_stranger_is_refused() {
+  new_case head_signed_by_a_stranger_is_refused
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_signed "$CASE/keys/stranger" "B: signed by a stranger")
+  SIGNERS=$CASE/keys/allowed_signers run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status refused" eq "$(field status)" '"refused"'
+  check "error names the file the key is not in" eq "$(field error | grep -c "the signature on HEAD is not by a key in $CASE/keys/allowed_signers")" 1
+  check "and keeps ssh-keygen's reason" eq "$(field error | grep -c 'No principal matched')" 1
+  check "the result says unverified" eq "$(sig_field status)" '"unverified"'
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup taken" not_called "pg_dump"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  end_case
+}
+
+case_a_signers_file_others_can_write_is_refused() {
+  new_case a_signers_file_others_can_write_is_refused
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_signed "$CASE/keys/owner" "B: signed" >/dev/null
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+  echo "0 664" >"$STATE/signers-stat"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "status refused" eq "$(field status)" '"refused"'
+  check "says the file cannot be trusted" eq "$(field error | grep -c 'can be written by a user other than root (mode 664)')" 1
+  check "never verified against it" not_called "verify-commit"
+  check "nothing stopped" not_called "systemctl stop"
+  echo "1001 644" >"$STATE/signers-stat"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "not root's: refused" eq "$(field status)" '"refused"'
+  check "says whose it is not" eq "$(field error | grep -c 'is not owned by root')" 1
+  end_case
+}
+
+case_upstream_pin_mismatch_is_refused() {
+  new_case upstream_pin_mismatch_is_refused
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  UPSTREAM_URL=https://github.com/coders-farm-official/domovoi.git run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status refused" eq "$(field status)" '"refused"'
+  check "an upstream step, refused" step_is upstream refused
+  check "error names both" eq "$(field error | grep -c "origin is not set, not the pinned https://github.com/coders-farm-official/domovoi.git")" 1
+  check "and where the pin lives" eq "$(field error | grep -c 'DOMOVOI_UPSTREAM_URL in /etc/default/domovoi-update')" 1
+  check "refused before the signature check" eq "$(step_names)" "upstream"
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup taken" not_called "pg_dump"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  # The same with another remote in place.
+  g remote add origin https://example.invalid/someone-else/domovoi.git
+  UPSTREAM_URL=https://github.com/coders-farm-official/domovoi run_update
+  check "another origin: refused" eq "$(field status)" '"refused"'
+  check "names it" eq "$(field error | grep -c 'origin is https://example.invalid/someone-else/domovoi.git, not the pinned')" 1
+  end_case
+}
+
+case_upstream_branch_pin_mismatch_is_refused() {
+  new_case upstream_branch_pin_mismatch_is_refused
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code" >/dev/null
+  local bare; bare=$(add_upstream)
+  UPSTREAM_URL=$bare UPSTREAM_BRANCH=release run_update
+  check "status refused" eq "$(field status)" '"refused"'
+  check "the URL matched, the branch did not" eq "$(field error | grep -c 'tracks refs/remotes/origin/main, not the pinned origin/release')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+case_upstream_pin_that_matches_goes_on() {
+  new_case upstream_pin_that_matches_goes_on
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  local bare; bare=$(add_upstream)
+  # The pin without the .git and with a trailing slash is the same remote.
+  UPSTREAM_URL=${bare%.git}/ UPSTREAM_BRANCH=main run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "an upstream step, ok" step_is upstream ok
+  check "then the signature step" eq "$(step_names | cut -d' ' -f1,2)" "upstream signature"
+  check "asked git for the remote (as the service user: git_as)" called "git -C $REPO remote get-url origin"
+  check "and for the tracking branch" called "git -C $REPO rev-parse --symbolic-full-name @{u}"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+CASES=(
+  case_noop_restart
+  case_noop_without_any_history
+  case_noop_restart_migrates_a_database_behind_the_checkout
+  case_noop_restart_brings_postgres_back
+  case_noop_restart_a_baseline_row_is_not_a_migration
+  case_deps_changed_as_root
+  case_mpd_changed
+  case_mpd_conf_only
+  case_migration_health_failure_rolls_back
+  case_flyway_failure_without_growth
+  case_plugin_migration_health_failure_restores
+  case_plugin_migration_kept_when_healthy
+  case_test_twin_restored_on_its_own
+  case_no_test_twin
+  case_test_twin_backup_failure_aborts
+  case_plugin_switched_off_by_load_error_rolls_back
+  case_enabled_plugin_at_load_error_rolls_back
+  case_plugin_broken_before_does_not_block
+  case_rollback_cannot_bring_a_plugin_back
+  case_dirty_tree_refused
+  case_untracked_files_do_not_block
+  case_backup_failure_aborts
+  case_prev_from_core_pull_record
+  case_prev_from_orig_head
+  case_garbage_prev_record_ignored
+  case_backups_pruned
+  case_noop_health_failure_reports
+  case_rollback_that_cannot_get_healthy
+  case_sync_failure_output_stays_valid_utf8
+  case_clock_stepped_back_keeps_the_result_valid
+  case_uutils_date_leaves_the_durations_alone
+  case_uutils_date_without_bash_clock_falls_back_to_seconds
+  case_timing_helpers
+  case_venv_from_the_core_unit
+  case_venv_ignores_a_non_venv_interpreter
+  case_venv_not_writable_aborts
+  case_stop_detail_says_how_each_unit_stopped
+  case_a_unit_already_down_is_said_to_be
+  case_a_hung_stop_is_killed_and_the_restart_goes_on
+  case_a_hung_stop_during_an_update_still_updates
+  case_a_unit_that_survives_sigkill_fails_the_stop
+  case_searxng_started_after_a_healthy_restart
+  case_searxng_failure_never_fails_an_update
+  case_searxng_stopped_for_never
+  case_searxng_not_running_for_never_is_left_alone
+  case_searxng_left_alone_when_unanswered
+  case_searxng_opt_out_and_an_older_checkout
+  case_searxng_hung_start_is_bounded_and_the_update_stays_ok
+  case_searxng_start_detached_under_systemd
+  case_never_refuses_a_dependency_update
+  case_never_refuses_a_music_image_change
+  case_never_mpd_conf_only_keeps_the_image
+  case_never_refuses_a_container_image_change
+  case_rollback_keeps_only_the_newest_failed_database
+  case_result_file_is_for_the_service_users_group
+  case_compose_comment_change_is_not_an_image_change
+  case_image_change_online_updates
+  case_unanswered_dependency_update_reads_the_answer_once
+  case_deps_from_the_hash_pinned_lock
+  case_lock_hash_mismatch_rolls_back
+  case_lock_for_another_python_falls_back_loudly
+  case_lock_missing_when_opted_in_is_a_warn
+  case_extras_beyond_the_lock_are_resolved_and_said_to_be
+  case_empty_deps_lock_opts_out
+  case_lock_is_opt_in_and_off_by_default
+  case_use_lock_other_than_1_stays_off
+  case_env_secrets_added_before_compose_on_an_update
+  case_env_secrets_added_on_a_plain_restart
+  case_env_secrets_with_a_running_letta_is_a_warn
+  case_env_secrets_repair_failure_aborts_before_anything
+  case_env_secrets_failure_on_a_plain_restart_restarts_nothing
+  case_unsigned_head_warns_when_signing_is_not_enforced
+  case_signed_head_without_a_signers_file_is_unverified
+  case_signed_head_verifies_as_root_before_anything_runs
+  case_unsigned_head_refused_when_enforced
+  case_plain_restart_is_refused_too_when_head_does_not_verify
+  case_head_signed_by_a_stranger_is_refused
+  case_a_signers_file_others_can_write_is_refused
+  case_upstream_pin_mismatch_is_refused
+  case_upstream_branch_pin_mismatch_is_refused
+  case_upstream_pin_that_matches_goes_on
+)
+
+# ONLY=<regex> runs the cases whose names match it (a quick look while
+# working on one); the suite runs them all.
+for c in "${CASES[@]}"; do
+  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+  "$c"
+done
+
+echo "apply-update harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
 [ "$FAILED" -eq 0 ]

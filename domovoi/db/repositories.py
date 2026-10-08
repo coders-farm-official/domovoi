@@ -2043,6 +2043,7 @@ class SatelliteApprovalRepository:
         mac: str | None = None,
         board: str | None = None,
         sat_type: str = "voice",
+        takeover_after_sec: float | None = None,
     ) -> tuple[str, str | None]:
         """Record (or refresh) a pending approval.
 
@@ -2056,11 +2057,24 @@ class SatelliteApprovalRepository:
         clears it with *reject* on the dashboard, which is the one place a
         person is looking at both the request and the room it claims.
 
+        ``takeover_after_sec`` (CORE-22) bounds how long "first" lasts:
+        once the parked request is that old (from when its device FIRST
+        parked, so retrying does not extend it), a different device's
+        request replaces it — token hash, code, metadata and attempts
+        together, and the window starts again for the newcomer. The code
+        is never kept across a takeover: the operator approves by the code
+        the device in the room is saying, so an old code with a new hash
+        would bind the wrong device (CORE-3). ``None`` keeps the first
+        device for as long as nobody rejects it.
+
         The device retries on its own, so a repeat connect from the SAME
         device bumps ``attempts`` and refreshes the metadata rather than
         piling up rows, and it keeps the code the customer was already
         shown: whatever they are holding must stay the thing that works.
         """
+        # Every SET expression reads the row as it was before this
+        # statement, so "same device" below is the parked device's hash.
+        same = "satellite_approvals.token_hash = EXCLUDED.token_hash"
         row = (
             await self.s.execute(
                 text(
@@ -2068,16 +2082,29 @@ class SatelliteApprovalRepository:
                     "(room_id, token_hash, code, mac, board, sat_type) "
                     "VALUES (:r, :h, :c, :m, :b, :t) "
                     "ON CONFLICT (room_id) DO UPDATE SET "
-                    "code = COALESCE(satellite_approvals.code, EXCLUDED.code), "
+                    f"code = CASE WHEN {same} "
+                    "THEN COALESCE(satellite_approvals.code, EXCLUDED.code) "
+                    "ELSE EXCLUDED.code END, "
+                    f"first_seen_at = CASE WHEN {same} "
+                    "THEN satellite_approvals.first_seen_at ELSE now() END, "
+                    f"attempts = CASE WHEN {same} "
+                    "THEN satellite_approvals.attempts + 1 ELSE 1 END, "
+                    "token_hash = EXCLUDED.token_hash, "
                     "mac = EXCLUDED.mac, board = EXCLUDED.board, "
-                    "sat_type = EXCLUDED.sat_type, last_seen_at = now(), "
-                    "attempts = satellite_approvals.attempts + 1 "
-                    "WHERE satellite_approvals.token_hash = EXCLUDED.token_hash "
+                    "sat_type = EXCLUDED.sat_type, last_seen_at = now() "
+                    f"WHERE {same} "
+                    "OR (CAST(:takeover AS double precision) IS NOT NULL "
+                    "AND satellite_approvals.first_seen_at <= now() - "
+                    "make_interval(secs => CAST(:takeover AS double precision))) "
                     "RETURNING code"
                 ),
                 {
                     "r": room_id, "h": token_hash, "c": code,
                     "m": mac, "b": board, "t": sat_type,
+                    "takeover": (
+                        None if takeover_after_sec is None
+                        else float(takeover_after_sec)
+                    ),
                 },
             )
         ).first()
@@ -2323,6 +2350,25 @@ class SatellitesRepository:
         row = (
             await self.s.execute(
                 text("DELETE FROM satellites WHERE room_id = :r RETURNING 1"),
+                {"r": room_id},
+            )
+        ).first()
+        return row is not None
+
+    async def room_is_known(self, room_id: str) -> bool:
+        """Whether ``room_id`` is a room this house already has: an MPD row
+        (a satellite's hello provisioned it), a pairing, or an inventory
+        row (adopted, or labelled). An HTTP route that is about to start a
+        room's music player asks this first, so a name somebody merely
+        typed into a URL never provisions a new one (CORE-13)."""
+        row = (
+            await self.s.execute(
+                text(
+                    "SELECT 1 FROM mpd_rooms WHERE room_id = :r "
+                    "UNION ALL SELECT 1 FROM satellite_pairings WHERE room_id = :r "
+                    "UNION ALL SELECT 1 FROM satellites WHERE room_id = :r "
+                    "LIMIT 1"
+                ),
                 {"r": room_id},
             )
         ).first()

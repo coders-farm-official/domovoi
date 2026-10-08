@@ -245,6 +245,272 @@ def test_both_trees_canonicalize_a_document_the_same_way():
     assert server_identity.canonical_json(doc) == sat_identity.canonical_json(doc)
     assert server_identity.health_message("n") == sat_identity.health_message("n")
     assert (
+        server_identity.health_message("n", "192.168.0.117:6370")
+        == sat_identity.health_message("n", "192.168.0.117:6370")
+    )
+    assert (
         server_identity.manifest_message("c", doc)
         == sat_identity.manifest_message("c", doc)
     )
+    assert (
+        server_identity.manifest_message_v2("c", doc, 1_760_000_000, 7)
+        == sat_identity.manifest_message_v2("c", doc, 1_760_000_000, 7)
+    )
+    assert server_identity.manifest_digest(doc) == sat_identity.manifest_digest(doc)
+
+
+# ─── freshness: a signed list says when, not only who ─────────────────────
+
+def test_a_signed_manifest_carries_its_serial_and_issue_time_under_the_signature(tmp_path):
+    identity = _identity(tmp_path)
+    envelope = identity.signed_manifest(
+        server_identity.CODE_CHANNEL, {"client.py": "a" * 64}, now=1_760_000_000
+    )
+    assert envelope["issued_at"] == 1_760_000_000
+    assert isinstance(envelope["serial"], int) and envelope["serial"] > 0
+    assert set(envelope) >= {"signature", "signature_v2", "issued_at", "serial"}
+    # The satellite tree accepts it, and a tampered serial breaks it.
+    assert sat_identity.verify_manifest_envelope(
+        envelope, channel=sat_identity.CODE_CHANNEL,
+        expected_fingerprint=identity.fingerprint,
+    ) == {"client.py": "a" * 64}
+    envelope["serial"] += 1
+    with pytest.raises(sat_identity.IdentityError):
+        sat_identity.verify_manifest_envelope(
+            envelope, channel=sat_identity.CODE_CHANNEL,
+            expected_fingerprint=identity.fingerprint,
+        )
+
+
+def test_the_original_signature_is_still_there_for_satellites_in_the_field(tmp_path):
+    """A satellite on earlier code verifies ``signature`` over the channel
+    and the list — exactly as before. That is how it takes the code that
+    teaches it the second signature."""
+    identity = _identity(tmp_path)
+    manifest = {"client.py": "a" * 64}
+    envelope = identity.signed_manifest(server_identity.CODE_CHANNEL, manifest)
+    assert _ed25519.verify(
+        identity.public,
+        server_identity.manifest_message(server_identity.CODE_CHANNEL, manifest),
+        server_identity.unb64(envelope["signature"]),
+    )
+
+
+def test_an_unchanged_list_keeps_its_serial_and_a_changed_one_gets_a_greater_one(tmp_path):
+    identity = _identity(tmp_path)
+    channel = server_identity.CODE_CHANNEL
+    first = identity.signed_manifest(channel, {"a.py": "1" * 64}, now=1_760_000_000)
+    again = identity.signed_manifest(channel, {"a.py": "1" * 64}, now=1_760_000_900)
+    assert (again["serial"], again["issued_at"]) == (first["serial"], first["issued_at"]), \
+        "an unchanged list is the same publication"
+    changed = identity.signed_manifest(channel, {"a.py": "2" * 64}, now=1_760_000_900)
+    assert changed["serial"] > first["serial"]
+    assert changed["issued_at"] == 1_760_000_900
+
+
+def test_serials_are_kept_per_channel(tmp_path):
+    identity = _identity(tmp_path)
+    code = identity.signed_manifest(server_identity.CODE_CHANNEL, {"a.py": "1" * 64},
+                                    now=1_760_000_000)
+    plugins = identity.signed_manifest(server_identity.PLUGIN_CHANNEL,
+                                       {"files": {}, "meta": {}}, now=1_760_000_000)
+    sounds = identity.signed_manifest(server_identity.SOUNDS_CHANNEL, {}, now=1_760_000_000)
+    store = json.loads(identity.serials_path().read_text(encoding="utf-8"))
+    assert set(store) == {server_identity.CODE_CHANNEL, server_identity.PLUGIN_CHANNEL,
+                          server_identity.SOUNDS_CHANNEL}
+    assert code["channel"] != plugins["channel"] != sounds["channel"]
+
+
+def test_a_new_serial_is_strictly_greater_even_within_one_second(tmp_path):
+    identity = _identity(tmp_path)
+    channel = server_identity.CODE_CHANNEL
+    serials = [
+        identity.signed_manifest(channel, {"a.py": str(i) * 64}, now=1_760_000_000)["serial"]
+        for i in range(3)
+    ]
+    assert serials == sorted(serials) and len(set(serials)) == 3
+
+
+def test_a_lost_serial_store_still_moves_forward(tmp_path):
+    """The store is ``max(previous + 1, now)``: should the file be lost, the
+    clock alone still yields something greater than any serial a satellite
+    remembers, because every earlier one was at most its own minting time."""
+    identity = _identity(tmp_path)
+    channel = server_identity.CODE_CHANNEL
+    before = identity.signed_manifest(channel, {"a.py": "1" * 64}, now=1_760_000_000)["serial"]
+    identity.serials_path().unlink()
+    after = identity.signed_manifest(channel, {"a.py": "1" * 64}, now=1_760_000_500)["serial"]
+    assert after > before
+
+
+def test_the_serial_store_sits_beside_the_key_not_in_the_developers_home(tmp_path):
+    identity = _identity(tmp_path)
+    identity.signed_manifest(server_identity.CODE_CHANNEL, {}, now=1_760_000_000)
+    assert identity.serials_path().parent == tmp_path
+    assert identity.serials_path().is_file()
+
+
+# ─── the health proof names the address dialed ────────────────────────────
+
+def test_a_bound_health_answer_proves_the_server_for_that_address(tmp_path):
+    identity = _identity(tmp_path)
+    challenge = server_identity.new_challenge()
+    doc = {"status": "ok", "identity": identity.health_answer(challenge, addr="192.168.0.117:6370")}
+    assert doc["identity"]["addr"] == "192.168.0.117:6370"
+    assert sat_identity.verify_health_document(
+        doc, challenge=challenge, expected_fingerprint=identity.fingerprint,
+        addr="192.168.0.117:6370",
+    ) == identity.fingerprint
+
+
+def test_a_relayed_answer_signed_for_the_cores_address_is_not_proof_of_the_relay(tmp_path):
+    identity = _identity(tmp_path)
+    challenge = server_identity.new_challenge()
+    doc = {"identity": identity.health_answer(challenge, addr="192.168.0.2:6370")}
+    with pytest.raises(sat_identity.IdentityError) as e:
+        sat_identity.verify_health_document(
+            doc, challenge=challenge, expected_fingerprint=identity.fingerprint,
+            addr="192.168.0.141:6370",
+        )
+    assert "not the one dialed" in str(e.value)
+
+
+def test_a_bound_signature_is_not_an_unbound_one_and_vice_versa(tmp_path):
+    identity = _identity(tmp_path)
+    challenge = server_identity.new_challenge()
+    bound = identity.health_answer(challenge, addr="192.168.0.2:6370")
+    unbound = identity.health_answer(challenge)
+    assert bound["signature"] != unbound["signature"]
+    assert server_identity.health_message(challenge) != \
+        server_identity.health_message(challenge, "192.168.0.2:6370")
+
+
+@pytest.mark.parametrize("challenge", ["abc\ndef", "abc def", "", "a" * 129, "nonce\n192.168.0.2:6370"])
+def test_a_challenge_that_could_smuggle_an_address_is_not_signable(challenge):
+    """``<ctx>\\n<nonce>\\n<addr>`` vs ``<ctx>\\n<nonce>``: a nonce with a
+    newline in it would let an UNBOUND signature over ``C\\nA`` pass as a
+    BOUND one for nonce ``C`` and address ``A``. So no newline, no
+    whitespace, ever."""
+    assert server_identity.valid_challenge(challenge) is False
+
+
+def test_an_ordinary_hex_nonce_and_a_host_port_are_fine():
+    assert server_identity.valid_challenge(server_identity.new_challenge())
+    assert server_identity.valid_addr("192.168.0.117:6370")
+    assert server_identity.valid_addr("[fd00::1]:6370")
+    assert server_identity.valid_addr("host.docker.internal:6394")
+    assert not server_identity.valid_addr("a b:6370")
+    assert not server_identity.valid_addr("a\nb:6370")
+
+
+def test_which_addresses_this_server_will_sign_for(monkeypatch):
+    """Loopback and our own interfaces, yes; a name, only when the
+    operator listed it; never anything resolved."""
+    from domovoi.config import settings
+
+    ours = server_identity.dialed_address_is_ours
+    own = lambda ip: str(ip) == "192.168.0.117"  # noqa: E731 — the box's one interface
+    monkeypatch.setattr(settings, "trusted_hosts", "")
+    assert ours("127.0.0.1:6370", can_bind=own) is True
+    assert ours("[::1]:6370", can_bind=own) is True
+    assert ours("localhost:6370", can_bind=own) is True
+    assert ours("192.168.0.117:6370", can_bind=own) is True
+    assert ours("192.168.0.141:6370", can_bind=own) is False       # the relay
+    assert ours("host.docker.internal:6394", can_bind=own) is False  # a name, unlisted
+    assert ours("domovoi-st-rogue:6370", can_bind=own) is False
+    assert ours("0.0.0.0:6370", can_bind=own) is False
+    assert ours("", can_bind=own) is False
+
+    monkeypatch.setattr(
+        settings, "trusted_hosts",
+        "host.docker.internal, *.ts.net, beelink.ts.net, 203.0.113.9:6370",
+    )
+    assert ours("host.docker.internal:6394", can_bind=own) is True
+    assert ours("HOST.DOCKER.INTERNAL:6394", can_bind=own) is True
+    assert ours("beelink.ts.net:6370", can_bind=own) is True, "listed exactly"
+    assert ours("203.0.113.9:6370", can_bind=own) is True
+    assert ours("203.0.113.9:6371", can_bind=own) is False, "an entry with a port means that port"
+
+
+@pytest.mark.parametrize("entry", ["*.local", "*.lan", "*.ts.net", "*"])
+def test_a_wildcard_entry_signs_for_no_name_under_it(monkeypatch, caplog, entry):
+    """REV-08: with ``*.local`` listed the core used to sign the bound proof
+    for ``evil.local`` — a name any LAN host can claim over mDNS — so a
+    relay registered under it passed a pinned satellite's check. The
+    Host-header guard keeps the wildcard; the proof binds exact names only."""
+    from domovoi.config import settings
+
+    ours = server_identity.dialed_address_is_ours
+    own = lambda ip: False  # noqa: E731 — none of these is an interface address
+    monkeypatch.setattr(settings, "trusted_hosts", entry)
+    monkeypatch.setattr(server_identity, "_WILDCARD_WARNED", set())
+    suffix = entry.lstrip("*.") or "local"
+    for name in (f"evil.{suffix}:6370", f"domovoi.{suffix}:6370", f"{suffix}:6370",
+                 f"a.b.{suffix}:6370"):
+        assert ours(name, can_bind=own) is False, (entry, name)
+    assert any("wildcard" in r.getMessage() for r in caplog.records)
+
+
+def test_the_host_guard_still_honours_the_wildcard(monkeypatch):
+    """Only the signing decision drops it: requests addressed to a name
+    under a listed wildcard are still served."""
+    from domovoi import transport_guard
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "trusted_hosts", "*.local")
+    assert transport_guard._matches_configured(
+        "domovoi.local", transport_guard.configured_hosts()
+    ) is True
+
+
+def test_the_real_bind_check_knows_loopback_from_test_net():
+    """The kernel's answer, not a resolver's: binding a datagram socket to
+    an address only works for one this host owns."""
+    assert server_identity.dialed_address_is_ours("127.0.0.1:6370") is True
+    assert server_identity.dialed_address_is_ours("192.0.2.5:6370") is False
+
+
+# ─── rotation ─────────────────────────────────────────────────────────────
+
+def test_rotation_without_confirmation_changes_nothing(tmp_path):
+    path = tmp_path / "server-identity.json"
+    before = _identity(tmp_path).fingerprint
+    result = server_identity.rotate_identity(path)
+    assert result["rotated"] is False
+    assert result["old_fingerprint"] == before
+    assert any("re-prepared" in line for line in result["consequences"])
+    server_identity.reset_cache()
+    assert server_identity.load_or_create(path).fingerprint == before
+    assert list(tmp_path.glob("server-identity.json.retired-*")) == []
+
+
+def test_rotation_retires_the_old_key_and_mints_a_new_one(tmp_path):
+    path = tmp_path / "server-identity.json"
+    before = _identity(tmp_path).fingerprint
+    result = server_identity.rotate_identity(path, confirm=True, now=1_760_000_000)
+    assert result["rotated"] is True
+    assert result["old_fingerprint"] == before
+    assert result["new_fingerprint"] != before
+    retired = tmp_path / result["retired_path"].rsplit(os.sep, 1)[-1].rsplit("/", 1)[-1]
+    assert retired.name.startswith("server-identity.json.retired-")
+    assert json.loads(retired.read_text(encoding="utf-8"))["fingerprint"] == before, \
+        "the old key is kept, for a successor statement later"
+    if os.name != "nt":
+        assert stat.S_IMODE(retired.stat().st_mode) == 0o600
+    server_identity.reset_cache()
+    assert server_identity.load_or_create(path).fingerprint == result["new_fingerprint"]
+
+
+def test_the_cli_refuses_to_rotate_without_the_confirmation_flag(tmp_path, capsys):
+    path = tmp_path / "server-identity.json"
+    before = _identity(tmp_path).fingerprint
+    assert server_identity.main(["--rotate-identity", "--path", str(path)]) == 2
+    out = capsys.readouterr().out
+    assert before in out and "Nothing was changed" in out
+    assert server_identity.main(
+        ["--rotate-identity", "--confirm-reprovision", "--path", str(path)]
+    ) == 0
+    out = capsys.readouterr().out
+    assert "re-prepare and re-flash every satellite card" in out
+    server_identity.reset_cache()
+    assert server_identity.load_or_create(path).fingerprint != before

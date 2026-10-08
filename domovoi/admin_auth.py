@@ -50,9 +50,12 @@ Three gates, from weakest to strongest:
   **admin tier**: Bearer (or cookie for reads). Keeps the pre-setup grace.
 * :func:`require_admin_security` — the **security tier** (config write,
   service restart, satellite code push, pairing preseed/reset, satellite
-  delete, device-token rotation): Bearer-only and **fails closed** with
-  501 until an admin password exists, exactly like plugin management.
-  ``--reset-admin`` therefore reopens only the daily surface.
+  delete, device-token rotation, an HTTP-opened drop-in): Bearer-only and
+  **fails closed** with 501 until an admin password exists, exactly like
+  plugin management. ``--reset-admin`` therefore reopens only the daily
+  surface — and not the live microphone: the phone drop-in socket takes
+  :func:`check_live_mic_websocket`, the device tier with no pre-setup
+  grace (CORE-14).
 
 Beside them sits one narrow machine-to-machine gate:
 :func:`require_chat_callback`, which guards the endpoint the chat agent's
@@ -1152,6 +1155,30 @@ async def websocket_device_ok(ws: Any) -> bool:
     throttled source is refused like any other bad credential — a socket
     has no status code to carry the 429 into."""
     return await check_device_websocket(ws) in ("ok", "admin", "pre-setup")
+
+
+async def check_live_mic_websocket(
+    ws: Any,
+) -> Literal["ok", "setup_required", "unauthorized"]:
+    """The gate for a WS upgrade that carries a room's LIVE MICROPHONE —
+    the phone drop-in socket (CORE-14).
+
+    After setup it is the device tier: the household token (header or
+    ``?token=``) or an admin Bearer. BEFORE setup it is closed, whatever is
+    presented — the security tier's posture, not the daily surface's LAN
+    grace. Nothing needed to finish setting a box up listens to a room,
+    and ``--reset-admin`` (password recovery) must not quietly turn every
+    room into an open microphone until someone signs in again. The
+    household token exists before setup, but no client can have been
+    given it (its read is security tier) and setup rotates it.
+
+    ``setup_required`` before setup, ``unauthorized`` for anything short of
+    the device tier after it, ``ok`` otherwise."""
+    if await check_admin_request(ws) == "pre-setup":
+        return "setup_required"
+    if await check_device_websocket(ws) in ("ok", "admin"):
+        return "ok"
+    return "unauthorized"
 
 
 async def require_device(request: Request) -> None:

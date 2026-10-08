@@ -2,8 +2,10 @@
 
 ``domovoi/searxng_service.py`` starts the compose service for always /
 sometimes, stops the container for never, and leaves it alone while the
-question is unanswered. It is the ``internet_access`` reapply hook, and is
-never run at core boot. Every docker call is faked here (``_run``); DB-free.
+question is unanswered. It is the ``internet_access`` reapply hook; at core
+boot it only stops the container under never (an answer set by hand in
+``.env`` is never saved through the API). Every docker call is faked here
+(``_run``); DB-free.
 """
 
 from __future__ import annotations
@@ -210,14 +212,68 @@ async def test_saving_the_answer_runs_the_hook(monkeypatch) -> None:
     assert not svc._PENDING        # the finished task was released
 
 
-def test_never_run_at_boot() -> None:
-    """D11: no docker call may slow or break a start. The lifespan only
-    registers the hook; nothing at boot calls reconcile."""
+def test_boot_only_schedules_the_stop() -> None:
+    """D11: no docker call may slow or break a start. The lifespan
+    registers the hook and schedules the background stop under never
+    (CORE-17); nothing at boot reconciles, so nothing at boot can start
+    the container and pull its image."""
     from domovoi import main
 
     lifespan_src = inspect.getsource(main.lifespan)
     assert "reconcile" not in lifespan_src
-    assert "searxng" not in lifespan_src.lower()
+    assert "searxng_service.schedule_boot_stop()" in lifespan_src
+    mentions = [l.strip() for l in lifespan_src.splitlines() if "searxng" in l.lower()]
+    assert all(
+        l.startswith("#") or l in ("from domovoi import searxng_service",
+                                   "searxng_service.schedule_boot_stop()")
+        for l in mentions
+    ), mentions
     hooks_src = inspect.getsource(main._register_core_reapply_hooks)
     assert "schedule_reconcile, key=\"searxng\"" in hooks_src.replace("\n", " ").replace("  ", " ") \
         or 'searxng_service.schedule_reconcile, key="searxng"' in hooks_src
+
+
+# ─── Boot under never (CORE-17): the answer set by hand in .env ──────────
+
+
+@pytest.mark.asyncio
+async def test_boot_under_never_stops_a_running_container(docker, monkeypatch) -> None:
+    monkeypatch.setattr(egress, "policy", lambda: "never")
+    docker.running = "true"
+    task = svc.schedule_boot_stop()
+    assert task is not None
+    result = await task
+    assert result.action == "stop" and result.ok
+    assert docker.verbs() == ["inspect", "stop"]
+    assert not svc._PENDING
+
+
+@pytest.mark.asyncio
+async def test_boot_under_never_leaves_a_stopped_container(docker, monkeypatch) -> None:
+    monkeypatch.setattr(egress, "policy", lambda: "never")
+    docker.running = "false"
+    result = await svc.schedule_boot_stop()
+    assert result.ok and docker.verbs() == ["inspect"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", ["always", "sometimes", ""])
+async def test_boot_never_starts_or_touches_it_for_another_answer(docker, monkeypatch, answer) -> None:
+    monkeypatch.setattr(egress, "policy", lambda: answer)
+    assert svc.schedule_boot_stop() is None
+    await asyncio.sleep(0)
+    assert docker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_boot_stop_honours_the_opt_out(docker, monkeypatch) -> None:
+    monkeypatch.setattr(egress, "policy", lambda: "never")
+    monkeypatch.setenv(svc.MANAGE_ENV, "0")
+    assert svc.schedule_boot_stop() is None
+    assert docker.calls == []
+
+
+def test_boot_stop_without_a_loop_is_a_no_op(docker, monkeypatch) -> None:
+    monkeypatch.setattr(egress, "policy", lambda: "never")
+    assert svc.schedule_boot_stop() is None
+    assert docker.calls == []

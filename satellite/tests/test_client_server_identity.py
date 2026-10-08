@@ -235,15 +235,46 @@ def test_the_identity_is_proved_before_the_socket_is_opened():
     assert verify < connect
 
 
-def test_the_upgrade_path_carries_the_fingerprint_into_both_syncs():
+def test_the_upgrade_and_media_paths_carry_the_fingerprint_into_all_four_syncs():
+    """Code, plugin payloads, sounds and wake models: every file channel
+    the client mirrors is held to the same server."""
     src = inspect.getsource(client.Satellite)
-    assert src.count("expected_fingerprint=_pinned_fingerprint(self.cfg)[0]") == 2
+    assert src.count("expected_fingerprint=_pinned_fingerprint(self.cfg)[0]") == 4
 
 
-def test_the_pin_is_read_from_the_config_first():
+def test_the_pin_is_read_from_the_root_owned_image_first():
+    """config.toml is this account's file. A value there must not be able
+    to replace the server root-owned first boot installed from the card."""
+    server_identity.ROOT_PIN.write_text(
+        '{"fingerprint": "SHA256:image"}', encoding="utf-8"
+    )
+    cfg = _cfg("ws://x:6370", "SHA256:from-config")
+    server_identity.record_fingerprint("SHA256:recorded")
+    assert client._pinned_fingerprint(cfg) == ("SHA256:image", "image")
+
+
+def test_without_a_root_pin_the_config_is_the_pin():
     cfg = _cfg("ws://x:6370", "SHA256:from-config")
     server_identity.record_fingerprint("SHA256:recorded")
     assert client._pinned_fingerprint(cfg) == ("SHA256:from-config", "config")
+
+
+def test_a_config_fingerprint_cannot_point_the_client_at_another_core(caplog):
+    """The A5-01 shape end to end: the root pin names our core, config.toml
+    names a rogue's key, the rogue signs with that key. The client holds the
+    connection to the root pin and refuses."""
+    _seed_a, _public_a, ours = _server(1)
+    seed_b, public_b, rogue = _server(2)
+    server_identity.ROOT_PIN.write_text(
+        '{"fingerprint": "%s"}' % ours, encoding="utf-8"
+    )
+    cfg = _cfg("ws://192.168.0.9:6370", rogue)
+    with caplog.at_level("ERROR"):
+        assert client._verify_server_identity(
+            cfg, opener=_health_opener(seed_b, public_b)
+        ) is False
+    assert "refusing to connect" in caplog.text
+    assert "pinned from image" in caplog.text
 
 
 def test_a_config_without_the_key_at_all_still_works():

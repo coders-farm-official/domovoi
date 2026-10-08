@@ -103,6 +103,28 @@ class CastAwarePlayerTest {
         )) assertFalse("command $c offered while casting", session.isCommandAvailable(c))
     }
 
+    @Test fun noSessionControllerMayChooseWhatPlaysInEitherMode() {
+        // The rig's player offers every command; the session's player hides
+        // the two that would let a controller hand it a media item — and so
+        // a URL for the authenticated data source to open (A6-01) — on the
+        // phone and while casting alike. Transport stays.
+        rig.player.playItems(libraryQueue("Stone Floor", "Old Barrels"), 0)
+        for (c in SessionAccess.MEDIA_ITEM_COMMANDS) {
+            assertFalse("command $c offered on the phone", session.isCommandAvailable(c))
+        }
+        assertTrue(session.isCommandAvailable(Player.COMMAND_PLAY_PAUSE))
+
+        casting()
+        for (c in SessionAccess.MEDIA_ITEM_COMMANDS) {
+            assertFalse("command $c offered while casting", session.isCommandAvailable(c))
+        }
+        assertTrue(session.isCommandAvailable(Player.COMMAND_PLAY_PAUSE))
+        assertEquals(
+            setOf(Player.COMMAND_SET_MEDIA_ITEM, Player.COMMAND_CHANGE_MEDIA_ITEMS),
+            CastAwarePlayer.NEVER_FROM_THE_SESSION,
+        )
+    }
+
     @Test fun whileCastingPreviousIsOfferedAndGoesToTheRoom() {
         // Since 2026-10-01 the core's previous follows the room's queue, so
         // the lock screen's previous is the room's (it was withheld).

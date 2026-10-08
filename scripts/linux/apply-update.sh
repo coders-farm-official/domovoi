@@ -21,6 +21,18 @@
 # checkout ships a migration its Flyway history doesn't hold as applied
 # (plain_db_reason).
 #
+# Before either path, touching nothing: the checkout must be the pinned
+# upstream (DOMOVOI_UPSTREAM_URL / DOMOVOI_UPSTREAM_BRANCH, when set), and
+# HEAD must carry an SSH signature by a key in the root-owned
+# allowed-signers file while that file exists (check_signature; "Signed
+# updates" below). Without the file the run warns and goes on.
+#
+# On either path, before anything uses docker compose (after the real
+# update's pre-flight): a domovoi/.env without LETTA_TOKEN or SEARXNG_SECRET
+# gets values generated for this install appended, as the service user
+# (repair_env_secrets); compose refuses to run without them. A repair that
+# fails aborts the run with nothing changed.
+#
 # Something new: a real update.
 #   1. Refuse, touching nothing, if tracked files have uncommitted changes:
 #      the rollback below could not restore that tree.
@@ -32,7 +44,11 @@
 #   3. Stop domovoi-web and domovoi-core: at most DOMOVOI_UPDATE_STOP_TIMEOUT
 #      seconds, then SIGKILL whatever is still stopping (stop_services).
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
-#      requirements lock changed.
+#      requirements lock changed: through pip's resolver, as before the
+#      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
+#      requirements-linux-py314.lock when the checkout has one for the
+#      venv's Python, otherwise through the resolver as a `warn` step
+#      ("lock not applied: <why>", shown on the Version card).
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
@@ -86,12 +102,27 @@ REPO_DIR=${DOMOVOI_REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}
 # Without DOMOVOI_VENV, resolve_venv may move this to the core unit's venv.
 VENV_DIR=${DOMOVOI_VENV:-$REPO_DIR/.venv}
 # `-` rather than `:-`: an explicitly empty value is honoured (no extras; no
-# CPU-torch step).
-PIP_EXTRAS=${DOMOVOI_PIP_EXTRAS-dev,real-clients,voice-profile}
+# CPU-torch step). No `dev`: a server does not run the test suite.
+PIP_EXTRAS=${DOMOVOI_PIP_EXTRAS-real-clients,voice-profile}
 TORCH_INDEX_URL=${DOMOVOI_TORCH_INDEX_URL-https://download.pytorch.org/whl/cpu}
+# Install from the hash-pinned lock only when this is 1. Off by default, so
+# a box re-syncs the way it always has until its owner has re-seeded the
+# lock from the box's own `pip freeze` and opted in (docs/LINUX_HOST.md,
+# "The hash-pinned lock"): the first locked re-sync moves every package to
+# the lock's version.
+USE_LOCK=${DOMOVOI_USE_LOCK:-0}
+# The hash-pinned production lock, relative to the checkout
+# (sync_deps_locked). Empty: never use one, always the resolver.
+DEPS_LOCK=${DOMOVOI_DEPS_LOCK-requirements-linux-py314.lock}
+# The extras that lock was compiled with (scripts/linux/compile-linux-lock.sh).
+LOCK_EXTRAS=real-clients,voice-profile
 UPDATE_DIR=${DOMOVOI_UPDATE_DIR:-/var/lib/domovoi-update}
 BACKUP_DIR=${DOMOVOI_UPDATE_BACKUP_DIR:-$UPDATE_DIR/backups}
 KEEP_BACKUPS=${DOMOVOI_UPDATE_KEEP_BACKUPS:-5}
+# How many of each database's replaced copies (<db>_failed_<ts>, left by a
+# rollback's restore) stay in Postgres for inspection; older ones are
+# dropped after the next restore. At least 1.
+KEEP_FAILED_DBS=${DOMOVOI_UPDATE_KEEP_FAILED_DBS:-1}
 REQUIRE_BACKUP=${DOMOVOI_UPDATE_REQUIRE_BACKUP:-1}
 HEALTH_TIMEOUT=${DOMOVOI_UPDATE_HEALTH_TIMEOUT:-120}
 HEALTH_INTERVAL=${DOMOVOI_UPDATE_HEALTH_INTERVAL:-2}
@@ -135,6 +166,18 @@ SEARXNG_DETACH=${DOMOVOI_UPDATE_SEARXNG_DETACH:-auto}
 SEARXNG_TIMEOUT=${DOMOVOI_UPDATE_SEARXNG_TIMEOUT:-300}
 SEARXNG_START_UNIT=domovoi-searxng-start
 
+# Signed updates (docs/LINUX_HOST.md, "Signed updates"). While the
+# allowed-signers file exists, HEAD must carry an SSH signature by one of
+# the keys in it or the run refuses before it touches anything; without
+# the file the run warns and goes on. An optional revocation file
+# (ssh-keygen -Y verify -r) retires a key. The upstream pins, when set,
+# refuse a checkout whose origin URL or tracking branch is not the one
+# named, before anything else.
+ALLOWED_SIGNERS=${DOMOVOI_ALLOWED_SIGNERS:-/etc/domovoi/allowed_signers}
+REVOKED_SIGNERS=${DOMOVOI_REVOKED_SIGNERS:-}
+UPSTREAM_URL=${DOMOVOI_UPSTREAM_URL:-}
+UPSTREAM_BRANCH=${DOMOVOI_UPSTREAM_BRANCH:-}
+
 RESULT_FILE=$UPDATE_DIR/last-result.json
 APPLIED_FILE=$UPDATE_DIR/applied_sha
 BAD_FILE=$UPDATE_DIR/bad_sha
@@ -144,9 +187,15 @@ FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
 # Git pathspecs, relative to the repo root.
 DEPS_PATHS=(pyproject.toml 'requirements*.lock' 'plugins/*/requirements*.lock')
 MPD_PATHS=(domovoi/Dockerfile.mpd domovoi/mpd.conf)
+# The compose file whose `image:` pins decide what domovoi-db (and the
+# search helper) pull: a moved digest is a download.
+COMPOSE_PATH=domovoi/docker-compose.yml
 
 # Run state, filled in as the run goes.
 SERVICE_USER=""
+# The service user's group: last-result.json is readable by it (the core
+# reads the file as that user) and by no other account.
+RESULT_GROUP=""
 CORE_STATE_DIR=""
 MPD_TAG=""
 MPD_PREFIX=""
@@ -161,6 +210,8 @@ START_MS=0
 DEPS_CHANGED=0
 MPD_CHANGED=0
 MPD_IMAGE_CHANGED=0
+# An `image:` line in the compose file changed: the next compose up pulls.
+IMAGES_CHANGED=0
 # The internet answer as this run found it at the start ("" when
 # unanswered, or when the checkout can't say).
 POLICY_AT_START=""
@@ -180,14 +231,29 @@ BACKUP_FILE=""
 TEST_BACKUP_FILE=""
 DB_RESTORED=0
 TEST_DB_RESTORED=0
+# The last sync_deps installed from DEPS_LOCK (so restore_pins has nothing
+# left to put back).
+DEPS_FROM_LOCK=0
 STEPS=()
 # A step function may leave a note here for its step's detail on success.
 STEP_DETAIL=""
+# A step function that succeeded but fell short of what was asked of it
+# (the opted-in lock could not be used) sets this to `warn`: the step is
+# recorded as warn, the run goes on, and the core serves that step's detail
+# on the Version card (git_version._WARN_DETAIL_STEPS).
+STEP_STATUS=""
 LAST_ERROR=""
 RESULT_READY=0
 FINAL_WRITTEN=0
 FINAL_STATUS=""
 SERVICES_STOPPED=0
+# HEAD's signature state (signature_state): verified, unsigned or
+# unverified; who signed it; whether the signers file is there.
+SIG_STATUS=""
+SIG_SIGNER=""
+SIG_KEY=""
+SIG_ENFORCED=0
+SIG_DETAIL=""
 
 log() { printf 'apply-update: %s\n' "$*"; }
 
@@ -248,6 +314,14 @@ json_bool() {
   if [ "$1" = 1 ]; then printf 'true'; else printf 'false'; fi
 }
 
+# HEAD's signature state as the result carries it, null before it is known.
+json_signature() {
+  if [ -z "$SIG_STATUS" ]; then printf 'null'; return; fi
+  printf '{"status": %s, "signer": %s, "key": %s, "enforced": %s, "allowed_signers": %s}' \
+    "$(json_str "$SIG_STATUS")" "$(json_str_or_null "$SIG_SIGNER")" "$(json_str_or_null "$SIG_KEY")" \
+    "$(json_bool "$SIG_ENFORCED")" "$(json_str "$ALLOWED_SIGNERS")"
+}
+
 # The first $2 characters of $1. Characters, not bytes: cut(1) on
 # Debian/Ubuntu counts bytes and can split pip's "╰─>" mid-character, which
 # leaves invalid UTF-8 in the result JSON. Bash counts by the locale, so
@@ -267,12 +341,19 @@ tail_lines() {
 }
 
 # Write "$2" to "$1" by rename, so a reader never sees half a file and a
-# symlink planted at the target is replaced rather than followed.
+# symlink planted at the target is replaced rather than followed. Mode 0644,
+# or with a group in $3: that group and mode 0640, set before the rename so
+# the file is never briefly readable by everyone (0644 when the chgrp
+# fails, so the core can still read it).
 write_atomic() {
-  local target=$1 content=$2 tmp
+  local target=$1 content=$2 group=${3-} tmp
   tmp=$(mktemp "$(dirname "$target")/.$(basename "$target").XXXXXX")
   printf '%s' "$content" >"$tmp"
-  chmod 0644 "$tmp"
+  if [ -n "$group" ] && chgrp -- "$group" "$tmp" 2>/dev/null; then
+    chmod 0640 "$tmp"
+  else
+    chmod 0644 "$tmp"
+  fi
   mv -f "$tmp" "$target"
 }
 
@@ -282,6 +363,8 @@ write_result() {
   if [ "${#STEPS[@]}" -gt 0 ]; then
     steps=$(IFS=,; printf '%s' "${STEPS[*]}")
   fi
+  # The steps carry the tail of each failed command's output (pip, docker,
+  # git, pg_dump), so the file is for the core's user, not every account.
   write_atomic "$RESULT_FILE" "$(
     printf '{\n'
     printf '  "status": %s,\n' "$(json_str "$status")"
@@ -300,6 +383,7 @@ write_result() {
     fi
     printf '  "deps_changed": %s,\n' "$(json_bool "$DEPS_CHANGED")"
     printf '  "mpd_changed": %s,\n' "$(json_bool "$MPD_CHANGED")"
+    printf '  "signature": %s,\n' "$(json_signature)"
     printf '  "migrations_before": %s,\n' "$(json_int_or_null "$MIGRATIONS_BEFORE")"
     printf '  "migrations_after": %s,\n' "$(json_int_or_null "$MIGRATIONS_AFTER")"
     printf '  "plugin_migrations_before": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_BEFORE")")"
@@ -311,7 +395,7 @@ write_result() {
     printf '  "error": %s,\n' "$(json_str_or_null "$err")"
     printf '  "steps": [%s]\n' "$steps"
     printf '}'
-  )"$'\n'
+  )"$'\n' "$RESULT_GROUP"
 }
 
 finish() {
@@ -336,14 +420,15 @@ run_step() {
   out=$(mktemp)
   log "step $name"
   STEP_DETAIL=""
+  STEP_STATUS=""
   set +e
   "$@" >"$out" 2>&1
   rc=$?
   set -e
   sed 's/^/    /' "$out"
   if [ "$rc" -eq 0 ]; then
-    add_step "$name" ok "$t0" "$STEP_DETAIL"
-    if [ -n "$STEP_DETAIL" ]; then log "step $name: $STEP_DETAIL"; fi
+    add_step "$name" "${STEP_STATUS:-ok}" "$t0" "$STEP_DETAIL"
+    if [ -n "$STEP_DETAIL" ]; then log "step $name${STEP_STATUS:+ ($STEP_STATUS)}: $STEP_DETAIL"; fi
   else
     add_step "$name" failed "$t0" "$(tail_lines "$out" 15 300)"
     LAST_ERROR="$name failed (exit $rc): $(trunc "$(tail -n 3 "$out" | tr '\n' ' ')" 400 | sed 's/[[:space:]]*$//')"
@@ -423,6 +508,7 @@ resolve_service_user() {
       LAST_ERROR="cannot tell which user owns $REPO_DIR; set DOMOVOI_USER in /etc/default/domovoi-update"
       return 1
     fi
+    RESULT_GROUP=$(id -gn "$SERVICE_USER" 2>/dev/null) || RESULT_GROUP=""
   fi
 }
 
@@ -511,6 +597,177 @@ paths_changed() {
   local rc=0
   git_as diff --quiet "$PREV_SHA" "$HEAD_SHA" -- "$@" || rc=$?
   [ "$rc" -ne 0 ]
+}
+
+# Did an `image:` line of the compose file change between PREV_SHA and
+# HEAD_SHA? Every image there is pinned by digest, so a changed line is a
+# pull on the next `docker compose up` (domovoi-db pulls Postgres and
+# Flyway). Comments and other keys don't count. A diff that errors counts
+# as changed, the same rule as paths_changed.
+images_changed() {
+  local diff
+  diff=$(git_as diff --no-color -U0 "$PREV_SHA" "$HEAD_SHA" -- "$COMPOSE_PATH") || return 0
+  printf '%s\n' "$diff" | grep -Eq '^[+-][[:space:]]*image:'
+}
+
+# ─── Signed updates ──────────────────────────────────────────────────────
+#
+# Root is about to run what the checkout holds: this script, then the
+# services, the MPD image build and pip. While ALLOWED_SIGNERS exists, HEAD
+# has to carry an SSH signature by one of the keys in it (git
+# verify-commit), or the run refuses before it touches anything. Without
+# the file the run warns and goes on, so a box that has not set signing up
+# keeps updating.
+#
+# The verdict is root's own. The core verified the tip before it pulled,
+# but the core runs as the service user and root does not take its word
+# for it: git runs as root here, not through runuser, with every program
+# git could be told to run pinned on the command line, because the
+# checkout's .git/config belongs to the service user and a gpg.ssh.program
+# in it would otherwise choose what root executes. safe.directory is pinned
+# the same way (git refuses another user's checkout without it). Only a
+# file root owns and only root can write counts as the signers file.
+#
+# What this cannot do: a tree already moved to an unverified commit by a
+# pull that skipped the core (a by-hand `git pull` as the service user)
+# has already replaced this script. The core's own check before the
+# fast-forward is the gate for the dashboard path; this one catches the
+# rest (a signers file installed after the pull, a tool's unsigned merge)
+# and keeps the two halves from disagreeing.
+
+# git as root, for the signature verdict alone. Nothing here writes.
+git_root() {
+  local -a cfg=(-c "safe.directory=$REPO_DIR" -c "gpg.ssh.allowedSignersFile=$ALLOWED_SIGNERS"
+                -c gpg.ssh.program=ssh-keygen -c gpg.program=gpg
+                -c gpg.openpgp.program=gpg -c gpg.x509.program=gpgsm)
+  if [ -n "$REVOKED_SIGNERS" ]; then cfg+=(-c "gpg.ssh.revocationFile=$REVOKED_SIGNERS"); fi
+  git "${cfg[@]}" -C "$REPO_DIR" "$@"
+}
+
+# Why ALLOWED_SIGNERS cannot be trusted, printed; nothing when it can. A
+# file another user can change would let them choose the keys. Ownership
+# is judged only when this runs as root (a by-hand run as another user
+# cannot own files as root, and the unit never runs that way).
+signers_file_problem() {
+  local st
+  if [ -L "$ALLOWED_SIGNERS" ]; then printf '%s is a symlink' "$ALLOWED_SIGNERS"; return 0; fi
+  if [ ! -f "$ALLOWED_SIGNERS" ]; then printf '%s is not a regular file' "$ALLOWED_SIGNERS"; return 0; fi
+  [ "$RUN_AS_ROOT" = 1 ] || return 0
+  st=$(stat -c '%u %a' "$ALLOWED_SIGNERS" 2>/dev/null) || st=""
+  if [ -z "$st" ]; then printf 'stat cannot read %s' "$ALLOWED_SIGNERS"; return 0; fi
+  if ! [[ $st =~ ^0\ ([0-7]{3,4})$ ]]; then printf '%s is not owned by root' "$ALLOWED_SIGNERS"; return 0; fi
+  if (( 8#${BASH_REMATCH[1]} & 8#022 )); then
+    printf '%s can be written by a user other than root (mode %s)' "$ALLOWED_SIGNERS" "${BASH_REMATCH[1]}"
+  fi
+}
+
+# HEAD's signature state into SIG_*: verified (signed by a key in the
+# signers file), unsigned, or unverified (signed, but not by a listed key,
+# or nothing to check it against). SIG_ENFORCED says whether the signers
+# file is there. Returns 0 when a run under enforcement may go on.
+signature_state() {
+  local problem mark info err
+  SIG_STATUS="" SIG_SIGNER="" SIG_KEY="" SIG_DETAIL="" SIG_ENFORCED=0
+  if [ ! -e "$ALLOWED_SIGNERS" ] && [ ! -L "$ALLOWED_SIGNERS" ]; then
+    # Nothing to check against. Say whether HEAD is signed at all: a read
+    # of the commit object, as the service user like every other look at
+    # the tree. A signature shows as a gpgsig header.
+    if git_as cat-file commit "$HEAD_SHA" 2>/dev/null | grep -q '^gpgsig'; then
+      SIG_STATUS=unverified
+      SIG_DETAIL="HEAD is signed, but there is no $ALLOWED_SIGNERS to check it against"
+    else
+      SIG_STATUS=unsigned
+      SIG_DETAIL="HEAD is not signed, and there is no $ALLOWED_SIGNERS"
+    fi
+    return 0
+  fi
+  SIG_ENFORCED=1
+  problem=$(signers_file_problem)
+  if [ -n "$problem" ]; then
+    SIG_STATUS=unverified
+    SIG_DETAIL="the allowed-signers file cannot be trusted: $problem"
+    return 1
+  fi
+  err=$(mktemp)
+  if git_root verify-commit "$HEAD_SHA" >/dev/null 2>"$err"; then
+    info=$(git_root log -1 --format='%GS%n%GK' "$HEAD_SHA" 2>/dev/null) || info=""
+    SIG_SIGNER=$(printf '%s\n' "$info" | sed -n 1p)
+    SIG_KEY=$(printf '%s\n' "$info" | sed -n 2p)
+    SIG_STATUS=verified
+    SIG_DETAIL="HEAD is signed by ${SIG_SIGNER:-an allowed key}${SIG_KEY:+ ($SIG_KEY)}, listed in $ALLOWED_SIGNERS"
+    rm -f "$err"
+    return 0
+  fi
+  # N: no signature at all. Anything else is a signature that did not
+  # verify (a key not in the file, a revoked key, a format with no keyring).
+  mark=$(git_root log -1 --format='%G?' "$HEAD_SHA" 2>/dev/null) || mark=""
+  if [ "$mark" = N ]; then
+    SIG_STATUS=unsigned
+    SIG_DETAIL="HEAD is not signed"
+  else
+    SIG_STATUS=unverified
+    SIG_DETAIL="the signature on HEAD is not by a key in $ALLOWED_SIGNERS: $(tail_lines "$err" 2 200 | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  fi
+  rm -f "$err"
+  return 1
+}
+
+# The signature step, before anything is touched, on both paths. The
+# verdict goes into the result as a step and as `signature`. Under
+# enforcement a HEAD that does not verify refuses the run; without it the
+# run goes on and says so, loudly, every time.
+check_signature() {
+  local t0 rc=0
+  t0=$(now_ms)
+  signature_state || rc=$?
+  if [ "$SIG_ENFORCED" = 1 ] && [ "$rc" -eq 0 ]; then
+    add_step signature ok "$t0" "$SIG_DETAIL"
+    log "signature: $SIG_DETAIL"
+    return 0
+  fi
+  if [ "$SIG_ENFORCED" = 1 ]; then
+    add_step signature refused "$t0" "$SIG_DETAIL"
+    finish refused "$SIG_DETAIL; signed updates are enforced by $ALLOWED_SIGNERS, so nothing was changed. Pull a commit signed by a listed key, or remove that file to turn enforcement off (docs/LINUX_HOST.md, Signed updates)."
+    return 1
+  fi
+  add_step signature warn "$t0" "not enforced: $SIG_DETAIL"
+  log "WARNING: signed updates are not enforced on this box: $SIG_DETAIL. Root runs whatever the checkout holds. To bound that to commits you signed, install the allowed-signers file (docs/LINUX_HOST.md, Signed updates)."
+  return 0
+}
+
+# A remote URL for comparing: no trailing slash or .git.
+norm_url() {
+  local u=$1
+  u=${u%/}; u=${u%.git}; u=${u%/}
+  printf '%s' "$u"
+}
+
+# The checkout's origin and tracking branch against the pins in the root
+# env file (DOMOVOI_UPSTREAM_URL, DOMOVOI_UPSTREAM_BRANCH). Nothing is
+# checked without a pin. Refuses before anything is touched: a checkout
+# that follows another remote or branch is not the one the owner signs.
+check_upstream() {
+  local t0 url up want
+  [ -n "$UPSTREAM_URL" ] || [ -n "$UPSTREAM_BRANCH" ] || return 0
+  t0=$(now_ms)
+  if [ -n "$UPSTREAM_URL" ]; then
+    url=$(git_as remote get-url origin 2>/dev/null) || url=""
+    if [ "$(norm_url "$url")" != "$(norm_url "$UPSTREAM_URL")" ]; then
+      add_step upstream refused "$t0" "origin is ${url:-not set}; the pin is $UPSTREAM_URL"
+      finish refused "the checkout's origin is ${url:-not set}, not the pinned $UPSTREAM_URL (DOMOVOI_UPSTREAM_URL in /etc/default/domovoi-update), so nothing was changed"
+      return 1
+    fi
+  fi
+  if [ -n "$UPSTREAM_BRANCH" ]; then
+    want=refs/remotes/origin/$UPSTREAM_BRANCH
+    up=$(git_as rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
+    if [ "$up" != "$want" ]; then
+      add_step upstream refused "$t0" "HEAD tracks ${up:-no upstream branch}; the pin is $want"
+      finish refused "the checkout tracks ${up:-no upstream branch}, not the pinned origin/$UPSTREAM_BRANCH (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
+      return 1
+    fi
+  fi
+  add_step upstream ok "$t0" "origin ${UPSTREAM_URL:-unpinned}, branch ${UPSTREAM_BRANCH:-unpinned}"
 }
 
 # ─── The steps ───────────────────────────────────────────────────────────
@@ -848,12 +1105,39 @@ prune_series() {
   done
 }
 
+# The replaced copies of database $1 (<db>_failed_<14-digit UTC time>),
+# newest first.
+failed_dbs() {
+  psql_admin "SELECT datname FROM pg_database WHERE datname ~ '^${1}_failed_[0-9]{14}\$' ORDER BY datname DESC"
+}
+
+# Keep the newest KEEP_FAILED_DBS replaced copies of database $1 and drop
+# the rest. Each holds everything the database held (transcripts, voice
+# embeddings, credential hashes, the household token), so they don't pile
+# up. Best effort: a copy that can't be listed or dropped stays, and says so.
+prune_failed_dbs() {
+  local db=$1 names name n=0
+  [[ $KEEP_FAILED_DBS =~ ^[0-9]+$ ]] && [ "$KEEP_FAILED_DBS" -ge 1 ] || KEEP_FAILED_DBS=1
+  if ! names=$(failed_dbs "$db" 2>/dev/null); then
+    echo "could not list the ${db}_failed_* databases; none dropped"
+    return 0
+  fi
+  while IFS= read -r name; do
+    [[ $name =~ ^${db}_failed_[0-9]{14}$ ]] || continue
+    n=$((n + 1))
+    [ "$n" -gt "$KEEP_FAILED_DBS" ] || continue
+    echo "dropping $name (the newest $KEEP_FAILED_DBS replaced copies of $db are kept)"
+    psql_admin "DROP DATABASE IF EXISTS \"$name\"" || echo "could not drop $name"
+  done <<<"$names"
+  return 0
+}
+
 # Restore dump $2 into a fresh database, then swap it in for database $1 by
 # rename. `pg_restore --clean` into the live database would leave behind
 # every object a failed migration CREATED (it only drops what the dump
 # contains), and the re-run of that migration after a fix would then fail on
 # "already exists". The replaced database is kept as <db>_failed_<ts> for
-# inspection; drop it by hand once it's no longer interesting.
+# inspection; only the newest KEEP_FAILED_DBS of those stay (prune_failed_dbs).
 restore_into() {
   local db=$1 dump=$2 ts tmpdb olddb
   [ -n "$dump" ] && [ -s "$dump" ] || { echo "no backup of $db to restore"; return 1; }
@@ -876,6 +1160,7 @@ restore_into() {
     return 1
   fi
   echo "restored $dump; the replaced database is kept as $olddb"
+  prune_failed_dbs "$db"
 }
 
 restore_db() { restore_into "$PG_DB" "$BACKUP_FILE" && DB_RESTORED=1; }
@@ -904,21 +1189,151 @@ venv_writable() {
   done
 }
 
-# The venv the way docs/LINUX_HOST.md builds it: CPU torch first when the
-# extras pull torch in (so pip never fetches the CUDA build), then the
-# editable install with the extras. resemblyzer is not re-run: pyproject
-# doesn't declare it, so no pyproject change can require it.
+# ─── The helper-container secrets (2026-10 review REV-16) ────────────────
+
+# docker-compose.yml takes LETTA_TOKEN and SEARXNG_SECRET from domovoi/.env
+# and refuses every command (domovoi-db's compose up included) without
+# them: there is no longer a fallback to the values every install shared.
+# A .env written before they were generated gets its own, appended by the
+# checkout's `python -m domovoi.env_bootstrap --repair` as the service user
+# (the file is that user's; root never edits it), before anything here uses
+# compose. Nothing else in the file changes, and with both set it writes
+# nothing. No step is recorded then: the result only says something when a
+# value was added (ok; a `warn` when a running Letta still has the old
+# password) or when the repair failed (the run then aborts, nothing changed).
+repair_env_secrets() {
+  local t0 out rc=0 added
+  if [ ! -x "$VENV_DIR/bin/python" ]; then
+    log "no venv interpreter at $VENV_DIR/bin/python: domovoi/.env's helper secrets not checked"
+    return 0
+  fi
+  t0=$(now_ms)
+  set +e
+  out=$(as_user "$VENV_DIR/bin/python" -m domovoi.env_bootstrap --repair 2>&1)
+  rc=$?
+  set -e
+  if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
+  if [ "$rc" -ne 0 ]; then
+    add_step env-secrets failed "$t0" "$(trunc "$out" 300)"
+    LAST_ERROR="env-secrets failed (exit $rc): $(trunc "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')" 400 | sed 's/[[:space:]]*$//')"
+    log "could not give domovoi/.env its helper secrets (exit $rc)"
+    return 1
+  fi
+  added=$(printf '%s\n' "$out" | sed -n 's/^.*: added \([A-Z_][A-Z_, ]*\) (.*$/\1/p' | head -n 1)
+  [ -n "$added" ] || return 0
+  if [[ $added == *LETTA_TOKEN* ]] && letta_running; then
+    add_step env-secrets warn "$t0" "added $added to domovoi/.env; domovoi-letta still runs with the old shared password, so chat mode fails until it is recreated: docker compose --profile chat up -d letta (docs/LINUX_HOST.md)"
+    log "WARNING: LETTA_TOKEN added while domovoi-letta runs with the old password; recreate it: docker compose --profile chat up -d letta"
+  else
+    add_step env-secrets ok "$t0" "added $added to domovoi/.env"
+  fi
+  log "domovoi/.env: added $added (generated for this install)"
+}
+
+letta_running() {
+  [ "$(docker inspect -f '{{.State.Running}}' domovoi-letta 2>/dev/null)" = true ]
+}
+
+# ─── Dependency sync: the hash-pinned lock (OPS-9) ───────────────────────
+
+# The venv the way docs/LINUX_HOST.md builds it. Without DOMOVOI_USE_LOCK=1,
+# with pip's resolver as before the lock existed (sync_deps_resolved), and
+# the step says the lock is there to opt into. With it, from the checkout's
+# hash-pinned lock whenever it has one for the venv's Python
+# (sync_deps_locked); otherwise, loudly, with the resolver: the step is a
+# `warn` whose detail ("lock not applied: <why>") the core keeps for the
+# Version card, so an owner who opted in sees the day the lock stops being
+# used (the venv moved to another Python, the lock was renamed). A package
+# that does not match its hash is not "unusable": pip refuses it, the step
+# fails and the update rolls back.
 sync_deps() {
-  local target=.
+  local why
+  DEPS_FROM_LOCK=0
   if [ ! -x "$VENV_DIR/bin/python" ]; then
     echo "no venv interpreter at $VENV_DIR/bin/python (set DOMOVOI_VENV)"; return 1
   fi
+  if [ "$USE_LOCK" != 1 ]; then
+    sync_deps_resolved || return 1
+    if [ -n "$DEPS_LOCK" ] && [ -f "$REPO_DIR/$DEPS_LOCK" ]; then
+      STEP_DETAIL="resolved from the index, as before; $DEPS_LOCK is in the checkout and opt-in (DOMOVOI_USE_LOCK=1, docs/LINUX_HOST.md)"
+    fi
+    return 0
+  fi
+  if why=$(lock_usable); then
+    sync_deps_locked
+  else
+    log "WARNING: not installing from a hash-pinned lock ($why): pip resolves the dependencies from the index and checks no hashes"
+    sync_deps_resolved || return 1
+    STEP_STATUS=warn
+    STEP_DETAIL="lock not applied: $why; resolved from the index without hash checks"
+  fi
+}
+
+# lock_usable: whether sync_deps installs from DEPS_LOCK. When it can't,
+# the reason is on stdout and the status is 1. The lock is in the service
+# user's checkout, so it is looked at as that user, the way the installer's
+# pre-flight reads it: root never opens a path that user can point anywhere.
+lock_usable() {
+  local lock=$REPO_DIR/$DEPS_LOCK want have
+  if [ -z "$DEPS_LOCK" ]; then echo "DOMOVOI_DEPS_LOCK is empty"; return 1; fi
+  if ! as_user test -f "$lock"; then echo "the checkout has no $DEPS_LOCK"; return 1; fi
+  want=$(as_user sed -n 's/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$lock" | head -n 1)
+  if [ -z "$want" ]; then echo "$DEPS_LOCK does not say which Python it was compiled for"; return 1; fi
+  have=$(as_user "$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) || have=""
+  if [ "$have" != "$want" ]; then
+    echo "$DEPS_LOCK is for Python $want and the venv runs Python ${have:-unknown}"; return 1
+  fi
+}
+
+# extras_beyond_lock: the PIP_EXTRAS the lock does not cover, comma-joined.
+extras_beyond_lock() {
+  local e IFS=,
+  local -a out=()
+  for e in $PIP_EXTRAS; do
+    e=${e//[[:space:]]/}
+    [ -n "$e" ] || continue
+    case ",$LOCK_EXTRAS," in *,"$e",*) ;; *) out+=("$e") ;; esac
+  done
+  printf '%s' "${out[*]}"
+}
+
+# From the lock, as docs/LINUX_HOST.md "Install" does it by hand: the build
+# tools first, hash-checked against the lock (a constraints file's hashes
+# bind); then every pin with --require-hashes, the sdist-only ones built
+# against those tools rather than in an isolated build env that would fetch
+# an unchecked setuptools; then the checkout itself, adding nothing. The
+# lock names its own CPU torch index, so there is no torch step. Extras the
+# lock does not cover (DOMOVOI_PIP_EXTRAS beyond LOCK_EXTRAS: cuda,
+# fastlane, ...) go through the resolver afterwards, and the step says so.
+sync_deps_locked() {
+  local lock=$REPO_DIR/$DEPS_LOCK beyond
+  (cd "$REPO_DIR" && pip_as install --require-hashes -c "$lock" setuptools wheel) || return 1
+  (cd "$REPO_DIR" && pip_as install --require-hashes --no-build-isolation -r "$lock") || return 1
+  (cd "$REPO_DIR" && pip_as install --no-deps --no-build-isolation -e .) || return 1
+  DEPS_FROM_LOCK=1
+  STEP_DETAIL="installed from $DEPS_LOCK, every package hash-checked"
+  beyond=$(extras_beyond_lock)
+  if [ -n "$beyond" ]; then
+    log "WARNING: extras outside $DEPS_LOCK ($beyond) come from pip's resolver, without hash checks"
+    (cd "$REPO_DIR" && pip_as install -e ".[$beyond]") || return 1
+    STEP_DETAIL="$STEP_DETAIL; extras outside it ($beyond) resolved from the index without hash checks"
+  fi
+}
+
+# Without a usable lock: CPU torch first when the extras pull torch in (so
+# pip never fetches the CUDA build), then the editable install with the
+# extras. resemblyzer is not re-run: pyproject doesn't declare it, so no
+# pyproject change can require it (the lock does carry it).
+sync_deps_resolved() {
+  local target=.
   if [ -n "$TORCH_INDEX_URL" ] && [[ ",$PIP_EXTRAS," == *,voice-profile,* ]]; then
     (cd "$REPO_DIR" && pip_as install torch --index-url "$TORCH_INDEX_URL") || return 1
   fi
   if [ -n "$PIP_EXTRAS" ]; then target=".[$PIP_EXTRAS]"; fi
   (cd "$REPO_DIR" && pip_as install -e "$target")
 }
+
+# ─────────────────────────────────────────────────────────────────────────
 
 snapshot_venv() {
   pip_as freeze --exclude-editable >"$FREEZE_FILE.tmp" && chmod 0644 "$FREEZE_FILE.tmp" \
@@ -930,6 +1345,12 @@ snapshot_venv() {
 # keeps any newer version that still satisfies it; the snapshot doesn't.
 restore_pins() {
   local pins=$UPDATE_DIR/pip-restore.txt extra=()
+  if [ "$DEPS_FROM_LOCK" = 1 ]; then
+    # The rolled-back checkout's lock already put back exact, hash-checked
+    # versions; the snapshot would only reinstall them unchecked.
+    STEP_DETAIL="skipped: $DEPS_LOCK put back the exact versions"
+    return 0
+  fi
   [ -s "$FREEZE_FILE" ] || { echo "no pre-update snapshot"; return 0; }
   # Direct references (name @ url) may point at files long gone.
   grep -v -e ' @ ' -e '^-e ' -e '^#' "$FREEZE_FILE" >"$pins" || true
@@ -1073,6 +1494,10 @@ plain_restart() {
   MODE=restart
   write_result running
   log "nothing new since ${PREV_SHA:0:12} ($PREV_SOURCE): plain restart"
+  if ! repair_env_secrets; then
+    finish aborted "domovoi/.env lacks LETTA_TOKEN or SEARXNG_SECRET and could not be given them, so nothing was restarted (docker compose refuses to run without them; docs/LINUX_HOST.md, Helper-container secrets): $LAST_ERROR"
+    return
+  fi
   MIGRATIONS_BEFORE=$(migration_count || true)
   DB_REASON=$(plain_db_reason)
   SERVICES_STOPPED=1
@@ -1121,16 +1546,20 @@ full_update() {
   if paths_changed "${DEPS_PATHS[@]}"; then DEPS_CHANGED=1; fi
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
   if paths_changed domovoi/Dockerfile.mpd; then MPD_IMAGE_CHANGED=1; fi
-  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ]; then
+  if images_changed; then IMAGES_CHANGED=1; fi
+  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; then
     # Read once, before anything is touched: what this run may download
     # depends on it (the rollback's re-sync and rebuild use it too).
     POLICY_AT_START=$(internet_policy 2>/dev/null || true)
   fi
-  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ]; }; then
-    why="this update changes"
-    if [ "$DEPS_CHANGED" = 1 ]; then why="$why the Python dependencies (pip would download them)"; fi
-    if [ "$DEPS_CHANGED" = 1 ] && [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why and"; fi
-    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why the music player image (docker build downloads it)"; fi
+  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; }; then
+    local -a what=()
+    if [ "$DEPS_CHANGED" = 1 ]; then what+=("the Python dependencies (pip would download them)"); fi
+    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then what+=("the music player image (docker build downloads it)"); fi
+    if [ "$IMAGES_CHANGED" = 1 ]; then what+=("the container images (docker compose would pull them)"); fi
+    why="this update changes ${what[0]}"
+    if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
+    if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
     add_step preflight refused "$t0" "$why; internet access is turned off for this box"
     finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No (docs/INTERNET.md)."
     return
@@ -1142,6 +1571,12 @@ full_update() {
   fi
   add_step preflight ok "$t0" "deps_changed=$DEPS_CHANGED mpd_changed=$MPD_CHANGED"
   write_result running
+  # Before the backup and the stop: domovoi-db's compose up (step 7) and the
+  # search helper refuse to run without these.
+  if ! repair_env_secrets; then
+    finish aborted "domovoi/.env lacks LETTA_TOKEN or SEARXNG_SECRET and could not be given them, so nothing was changed (docker compose refuses to run without them; docs/LINUX_HOST.md, Helper-container secrets): $LAST_ERROR"
+    return
+  fi
   resolve_test_db
 
   if ! run_step backup backup_db; then
@@ -1301,6 +1736,11 @@ main() {
   fi
   resolve_prev
   BAD_SHA=$(read_sha_file "$BAD_FILE" || true)
+
+  # Before either path, touching nothing: the pinned upstream, then HEAD's
+  # signature ("Signed updates" above).
+  if ! check_upstream; then exit 1; fi
+  if ! check_signature; then exit 1; fi
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
     plain_restart

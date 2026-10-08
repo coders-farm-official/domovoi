@@ -22,6 +22,15 @@ On a Linux host with the update unit installed (docs/LINUX_HOST.md,
 "Updates from the dashboard") this module is also the core's half of that
 pipeline: :func:`pull` records the SHA to roll back to, and
 :func:`version_state` reports the unit's last result.
+
+Signed updates (docs/LINUX_HOST.md, "Signed updates"): :func:`pull`
+verifies the fetched tip's SSH signature against the root-owned
+allowed-signers file BEFORE fast-forwarding, and refuses the pull while that
+file exists and the tip does not verify. Without the file it warns, loudly,
+and goes on, so an install that has not set signing up keeps updating.
+:func:`version_state` reports the checkout's state as ``signature``. The
+update unit re-verifies HEAD as root (apply-update.sh): this process runs as
+the service user, and root does not take its word for it.
 """
 
 from __future__ import annotations
@@ -187,6 +196,7 @@ async def version_state() -> dict:
     if problem == "missing" and mode != "update":
         # A host without the unit has no result, and that is no problem.
         problem = None
+    signature = await asyncio.to_thread(signature_state, checkout)
     return {
         # `sha` stays for backwards compatibility with existing callers —
         # and now means the RUNNING code, which is what they meant to ask.
@@ -218,12 +228,218 @@ async def version_state() -> dict:
         # A commit that failed to apply and was rolled back. The panel stops
         # offering a pull while the upstream still points at it.
         "bad_sha": _bad_sha(last),
+        # The checkout's signature state (see "Signed updates" below):
+        # {status, signer, key, enforced, allowed_signers, detail}.
+        "signature": signature,
     }
 
 
 def _bad_sha(last: dict | None) -> str | None:
     bad = (last or {}).get("bad_sha")
     return bad if isinstance(bad, str) and _FULL_SHA_RE.match(bad) else None
+
+
+# ─── Signed updates ──────────────────────────────────────────────────────
+#
+# A compromise of upstream `main` (a stolen token, a merged pull request)
+# used to yield root on every Linux install at its next update: the update
+# unit runs the pulled checkout's own script as root. The bound is a
+# signature. Every commit the owner makes is SSH-signed, the allowed keys
+# live in a root-owned file on the box, and nothing from an unverified
+# checkout runs as root while that file exists.
+#
+# Enforcement is the file's presence: no file, no enforcement, and a loud
+# warning instead, so the live install keeps working until the owner sets
+# signing up. The file's path is the one the update unit reads
+# (DOMOVOI_ALLOWED_SIGNERS in /etc/default/domovoi-update), so the two
+# halves of the pipeline agree without a second setting.
+#
+# `git verify-commit` is the verdict, with the signers file and the
+# programs git may run pinned on the command line: the checkout's own
+# config must not get a say in what verifies it. Only SSH signatures are
+# expected; an OpenPGP one has no keyring here and reads as unverified.
+
+ALLOWED_SIGNERS_DEFAULT = "/etc/domovoi/allowed_signers"
+UPDATE_DEFAULTS_FILE = "/etc/default/domovoi-update"
+_SIGNATURE_STATUSES = ("verified", "unverified", "unsigned", "unknown")
+_SIGNER_MAX_CHARS = 200
+
+# The last verdict, keyed by (sha, signers file, its mtime): the panel
+# polls, and ssh-keygen per poll is wasted work.
+_SIG_CACHE: tuple[tuple, dict] | None = None
+
+
+def _defaults_get(key: str) -> str:
+    """The last ``KEY=value`` for KEY in the update unit's root-owned env
+    file (quotes stripped), or "". The same reading apply-update.sh's
+    ``dotenv_get`` gives domovoi/.env. Never raises."""
+    path = os.environ.get("DOMOVOI_UPDATE_DEFAULTS_FILE") or UPDATE_DEFAULTS_FILE
+    value = ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip() == key:
+                    v = v.strip()
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                        v = v[1:-1]
+                    value = v
+    except OSError:
+        return ""
+    return value
+
+
+def allowed_signers_path() -> str:
+    """Where the allowed-signers file is expected: ``DOMOVOI_ALLOWED_SIGNERS``
+    from this process's environment, else from the update unit's env file,
+    else /etc/domovoi/allowed_signers."""
+    return (
+        os.environ.get("DOMOVOI_ALLOWED_SIGNERS")
+        or _defaults_get("DOMOVOI_ALLOWED_SIGNERS")
+        or ALLOWED_SIGNERS_DEFAULT
+    )
+
+
+def signing_enforced() -> bool:
+    """Whether the allowed-signers file exists, which is what turns
+    enforcement on (for this process and for the update unit alike)."""
+    return os.path.isfile(allowed_signers_path())
+
+
+def _verify_config(signers: str) -> list[str]:
+    """The ``-c`` pins every verifying git call carries. The signers file
+    overrides whatever the checkout's config names; the program pins keep
+    a ``gpg.ssh.program`` in that config from choosing what runs."""
+    return [
+        "-c", f"gpg.ssh.allowedSignersFile={signers}",
+        "-c", "gpg.ssh.program=ssh-keygen",
+        "-c", "gpg.program=gpg",
+        "-c", "gpg.openpgp.program=gpg",
+        "-c", "gpg.x509.program=gpgsm",
+    ]
+
+
+def _last_line(text: str) -> str | None:
+    """The last line of ``text`` that says something: ssh-keygen's reason
+    ("No principal matched.") comes after its description of the key."""
+    for line in reversed((text or "").splitlines()):
+        line = line.strip()
+        if line:
+            return line[:_SIGNER_MAX_CHARS]
+    return None
+
+
+def verify_commit(sha: str) -> dict:
+    """Blocking. The signature state of commit ``sha``:
+
+    ``status``: ``verified`` (signed by a key in the allowed-signers file),
+    ``unsigned``, ``unverified`` (signed, but not by a listed key, or no
+    file to check against) or ``unknown`` (git could not say).
+    ``signer`` and ``key`` are the principal and key fingerprint of a
+    verified signature. ``enforced`` says whether the file exists, and
+    ``allowed_signers`` where it is expected. ``detail`` is one line for a
+    human. Never raises."""
+    signers = allowed_signers_path()
+    enforced = os.path.isfile(signers)
+    out: dict = {
+        "status": "unknown", "signer": None, "key": None,
+        "enforced": enforced, "allowed_signers": signers, "detail": None,
+    }
+    if not _SHORT_SHA_RE.match(sha or ""):
+        out["detail"] = "no commit to verify"
+        return out
+    try:
+        if enforced:
+            cfg = _verify_config(signers)
+            verdict = _run(*cfg, "verify-commit", sha)
+            info = _run(*cfg, "log", "-1", "--format=%G?%n%GS%n%GK", sha)
+            if info.returncode != 0:
+                out["detail"] = _last_line(info.stderr) or "git could not read the commit"
+                return out
+            lines = info.stdout.split("\n") + ["", "", ""]
+            mark, signer, key = lines[0].strip(), lines[1].strip(), lines[2].strip()
+            if verdict.returncode == 0 and mark == "G":
+                out.update(
+                    status="verified",
+                    signer=signer[:_SIGNER_MAX_CHARS] or None,
+                    key=key[:_SIGNER_MAX_CHARS] or None,
+                    detail=f"signed by {signer or 'an allowed key'}, listed in {signers}",
+                )
+            elif mark == "N":
+                out.update(status="unsigned", detail="not signed")
+            else:
+                reason = _last_line(verdict.stderr) or "the signature did not verify"
+                out.update(
+                    status="unverified",
+                    detail=f"signed, but not by a key in {signers} ({reason})",
+                )
+            return out
+        # Nothing to check against: say whether it is signed at all.
+        body = _run("cat-file", "commit", sha)
+        if body.returncode != 0:
+            out["detail"] = _last_line(body.stderr) or "git could not read the commit"
+            return out
+        signed = any(line.startswith("gpgsig") for line in body.stdout.splitlines())
+        if signed:
+            out.update(
+                status="unverified",
+                detail=f"signed, but there is no {signers} to check it against",
+            )
+        else:
+            out.update(status="unsigned", detail=f"not signed, and there is no {signers}")
+        return out
+    except Exception as e:  # noqa: BLE001 — no git / timeout → unknown, never raise
+        out["detail"] = f"{type(e).__name__}: {e}"[:_SIGNER_MAX_CHARS]
+        return out
+
+
+def signature_state(checkout_sha: str) -> dict:
+    """Blocking. :func:`verify_commit` for the checkout's HEAD (``-dirty``
+    stripped), memoised until HEAD or the signers file changes. ``unknown``
+    without a git call when the SHA itself is unknown."""
+    global _SIG_CACHE
+    sha = (checkout_sha or "").removesuffix("-dirty")
+    if sha == "unknown" or not _SHORT_SHA_RE.match(sha):
+        return {
+            "status": "unknown", "signer": None, "key": None,
+            "enforced": signing_enforced(), "allowed_signers": allowed_signers_path(),
+            "detail": "no commit to verify",
+        }
+    signers = allowed_signers_path()
+    try:
+        stamp: int | None = os.stat(signers).st_mtime_ns
+    except OSError:
+        stamp = None
+    key = (sha, signers, stamp)
+    if _SIG_CACHE is not None and _SIG_CACHE[0] == key:
+        return dict(_SIG_CACHE[1])
+    result = verify_commit(sha)
+    _SIG_CACHE = (key, result)
+    return dict(result)
+
+
+def invalidate_signature_cache() -> None:
+    global _SIG_CACHE
+    _SIG_CACHE = None
+
+
+def _clean_signature(value: object) -> dict | None:
+    """The update unit's ``signature`` object, trimmed to what the panel
+    uses, or None when it is not one."""
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    if not isinstance(status, str) or status not in _SIGNATURE_STATUSES:
+        return None
+    signer = value.get("signer")
+    return {
+        "status": status,
+        "signer": signer[:_SIGNER_MAX_CHARS] if isinstance(signer, str) else None,
+        "enforced": value.get("enforced") is True,
+    }
 
 
 # ─── The update unit's side of the story ─────────────────────────────────
@@ -292,15 +508,23 @@ def _write_prev_sha(sha: str) -> None:
 
 # The result file is small; anything bigger is not ours.
 _LAST_UPDATE_MAX_BYTES = 256 * 1024
-# What GET /v1/admin/version passes through. It's an open endpoint, so the
-# script's full record (backup paths, raw step output) stays on the box.
+# What GET /v1/admin/version passes through. Every paired device can read
+# that endpoint (device tier since CORE-21), so the script's full record
+# (backup paths, raw step output) stays on the box.
 _LAST_UPDATE_FIELDS = (
     "status", "mode", "from_sha", "to_sha", "prev_source", "bad_sha",
     "started_at", "finished_at", "duration_sec", "deps_changed",
     "mpd_changed", "migrations_before", "migrations_after", "db_restored",
-    "error",
+    "error", "signature",
 )
 _STEP_FIELDS = ("name", "status", "duration_sec")
+# A `warn` step of these keeps its detail, trimmed the way the signature
+# object is: the script writes these details itself ("lock not applied:
+# <why>; ...", what env-secrets added), never a tool's raw output, and they
+# are what an owner must see. Every other detail (failed steps' output
+# tails, the search helper's docker output) stays on the box.
+_WARN_DETAIL_STEPS = frozenset({"sync-deps", "rollback-deps", "env-secrets"})
+_WARN_DETAIL_MAX_CHARS = 300
 _ERROR_MAX_CHARS = 500
 # apply-update.sh before 2026-09-30 printed a negative duration as
 # "-89.-412", which no JSON parser takes: a wall clock stepped back during
@@ -408,6 +632,8 @@ def load_last_update() -> tuple[dict | None, str | None]:
             out[k] = None
     if isinstance(out.get("error"), str):
         out["error"] = out["error"][:_ERROR_MAX_CHARS]
+    if "signature" in out:
+        out["signature"] = _clean_signature(out["signature"])
     bound = _duration_bound(doc)
     if "duration_sec" in out:
         out["duration_sec"] = _duration(out["duration_sec"], bound)
@@ -417,8 +643,23 @@ def load_last_update() -> tuple[dict | None, str | None]:
         if isinstance(s, dict):
             step = {k: s.get(k) for k in _STEP_FIELDS}
             step["duration_sec"] = _duration(step["duration_sec"], bound)
+            detail = _warn_detail(s)
+            if detail is not None:
+                step["detail"] = detail
             out["steps"].append(step)
     return out, None
+
+
+def _warn_detail(step: dict) -> str | None:
+    """The detail a `warn` step of :data:`_WARN_DETAIL_STEPS` carries, one
+    line, at most :data:`_WARN_DETAIL_MAX_CHARS`; None for any other step."""
+    if step.get("status") != "warn" or step.get("name") not in _WARN_DETAIL_STEPS:
+        return None
+    detail = step.get("detail")
+    if not isinstance(detail, str):
+        return None
+    line = detail.strip().splitlines()[0].strip() if detail.strip() else ""
+    return line[:_WARN_DETAIL_MAX_CHARS] or None
 
 
 async def fetch() -> dict:
@@ -499,12 +740,25 @@ async def commits_behind() -> dict:
                 "upstream_sha": None, "error": str(e)}
 
 
+def _not_pulled(error: str, signature: dict | None = None) -> dict:
+    return {"pulled": False, "new_sha": None, "error": error,
+            "prev_sha": None, "signature": signature}
+
+
 async def pull() -> dict:
-    """`git pull --ff-only` — a deliberate, separate admin action (never run
-    by a check). Returns ``{"pulled": bool, "new_sha": str|None, "error":
-    str|None, "prev_sha": str|None}``. A dirty or diverged tree fails the
+    """A fast-forward pull, in three steps: ``git fetch``, verify the
+    fetched tip's signature, ``git merge --ff-only <that tip>``. A
+    deliberate, separate admin action (never run by a check). Returns
+    ``{"pulled": bool, "new_sha": str|None, "error": str|None, "prev_sha":
+    str|None, "signature": dict|None}``. A dirty or diverged tree fails the
     fast-forward and comes back ``pulled=False`` with the git stderr as
     ``error`` — we never force a merge or reset. Never raises.
+
+    Signed updates: while the allowed-signers file exists, a tip that does
+    not verify against it is refused BEFORE the tree moves (``pulled=False``,
+    ``signature`` says why). Without the file the pull goes ahead and a
+    warning is logged. The tip is verified by its SHA and that same SHA is
+    what is merged, so nothing fetched in between can slip through.
 
     A successful pull also records ``prev_sha``, the full SHA an update
     should roll back to, for the Linux update unit (see
@@ -513,28 +767,58 @@ async def pull() -> dict:
     Under ``INTERNET_ACCESS=never`` it reports ``pulled=False`` with the
     turned-off reason and runs no git at all."""
     if egress.internet_turned_off():
-        return {"pulled": False, "new_sha": None,
-                "error": egress.TURNED_OFF_REASON, "prev_sha": None}
+        return _not_pulled(egress.TURNED_OFF_REASON)
     try:
         baseline = await asyncio.to_thread(_rollback_baseline)
     except Exception:  # noqa: BLE001 — the pull matters more than the record
         baseline = None
     try:
-        proc = await asyncio.to_thread(_run, "pull", "--ff-only")
+        fetched = await asyncio.to_thread(_run, "fetch")
+        if fetched.returncode != 0:
+            return _not_pulled((fetched.stderr or "git fetch failed").strip())
+        target = await asyncio.to_thread(_full_sha, "@{u}")
+        if target is None:
+            return _not_pulled(
+                "no upstream branch is configured for the current branch, "
+                "so there is nothing to pull (git branch --set-upstream-to)"
+            )
+        signature = await asyncio.to_thread(verify_commit, target)
     except FileNotFoundError:
-        return {"pulled": False, "new_sha": None, "error": "git not installed"}
+        return _not_pulled("git not installed")
     except subprocess.TimeoutExpired:
-        return {"pulled": False, "new_sha": None, "error": "git pull timed out"}
+        return _not_pulled("git pull timed out")
     except Exception as e:  # noqa: BLE001
-        return {"pulled": False, "new_sha": None, "error": str(e)}
+        return _not_pulled(str(e))
+
+    if signature["status"] != "verified":
+        if signature["enforced"]:
+            error = (
+                f"refused: the fetched commit {target[:12]} is {signature['detail']}; "
+                f"signed updates are enforced by {signature['allowed_signers']}, so the "
+                "checkout was not moved. Pull a commit signed by a listed key, or remove "
+                "that file to turn enforcement off (docs/LINUX_HOST.md, Signed updates)."
+            )
+            log.error("pull refused: %s", error)
+            return _not_pulled(error, signature)
+        log.warning(
+            "UNSIGNED UPDATE: pulling %s, which is %s. Signed updates are not enforced "
+            "on this box (no %s), so whatever upstream holds will run as root at the "
+            "next update. docs/LINUX_HOST.md, Signed updates, says how to turn them on.",
+            target[:12], signature["detail"], signature["allowed_signers"],
+        )
+    try:
+        proc = await asyncio.to_thread(_run, "merge", "--ff-only", target)
+    except FileNotFoundError:
+        return _not_pulled("git not installed", signature)
+    except subprocess.TimeoutExpired:
+        return _not_pulled("git pull timed out", signature)
+    except Exception as e:  # noqa: BLE001
+        return _not_pulled(str(e), signature)
 
     if proc.returncode != 0:
-        return {
-            "pulled": False,
-            "new_sha": None,
-            "error": (proc.stderr or "git pull failed").strip(),
-        }
+        return _not_pulled((proc.stderr or "git pull failed").strip(), signature)
     invalidate_sha_cache()
+    invalidate_signature_cache()
     if baseline is not None:
         await asyncio.to_thread(_write_prev_sha, baseline)
     return {
@@ -542,4 +826,5 @@ async def pull() -> dict:
         "new_sha": await current_sha(),
         "error": None,
         "prev_sha": baseline,
+        "signature": signature,
     }

@@ -200,14 +200,47 @@ async def test_dropin_upgrade_with_a_household_credential_proceeds(
     assert up.error_code() == "target_offline", label
 
 
-async def test_dropin_upgrade_keeps_the_pre_setup_lan_grace(monkeypatch):
-    """A fresh install (and a throwaway test instance) has no admin
-    credential yet — the household is still trusted on the LAN."""
-    install_fake_db(monkeypatch, admin=False)
-    up = Upgrade()
+@pytest.mark.parametrize(
+    ("label", "headers", "query"),
+    [
+        ("nothing at all", {}, ""),
+        ("device-token header", device(), ""),
+        ("token query param", {}, f"token={DEVICE_TOKEN}"),
+    ],
+)
+async def test_dropin_upgrade_is_closed_before_setup(monkeypatch, label, headers, query):
+    """CORE-14: the pre-setup grace keeps the daily surface working on a
+    fresh box (and after --reset-admin), but a room's live microphone is
+    not part of it. Closed 1008 with ``setup_required`` — the socket form
+    of the security tier's 501 — whatever is presented, and nothing is
+    registered: the target room is online and full duplex here, and never
+    hears of it."""
+    install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
+    app = make_app_state()
+    pi = SimpleNamespace(room_id="kitchen", dropin_peer=None, sent=[])
+    app.state.active_sessions["kitchen"] = pi
+    app.state.satellite_full_duplex["kitchen"] = True
+
+    up = Upgrade(headers=headers, query=query, app=app)
     await _dropin(up)
-    assert up.accepted
-    assert up.error_code() == "target_offline"
+
+    assert up.close_code == 1008, label
+    assert up.error_code() == "setup_required", label
+    assert app.state.active_dropins == {} and app.state.pending_dropins == {}
+    assert pi.dropin_peer is None
+
+
+async def test_dropin_upgrade_opens_once_setup_is_done(monkeypatch):
+    """The same household token is accepted the moment an admin exists."""
+    state = install_fake_db(monkeypatch, admin=False, sessions={ADMIN_TOKEN},
+                            device_token=DEVICE_TOKEN)
+    up = Upgrade(headers=device())
+    await _dropin(up)
+    assert up.error_code() == "setup_required"
+    state.admin = True
+    up = Upgrade(headers=device())
+    await _dropin(up)
+    assert up.accepted and up.error_code() == "target_offline"
 
 
 async def test_the_query_param_token_is_validated_not_just_present(monkeypatch):

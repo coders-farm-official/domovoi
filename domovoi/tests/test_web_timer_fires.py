@@ -955,7 +955,8 @@ def roster(monkeypatch, seam):
 
 @pytest.mark.asyncio
 async def test_every_roster_row_carries_the_flag(claimed, roster) -> None:
-    async with _anon() as c:
+    # The roster is a household read since WEB-15 (2026-10-08).
+    async with _token() as c:
         rows = {r["room_id"]: r for r in (await c.get("/api/satellites")).json()}
         one = (await c.get("/api/satellites/kitchen")).json()
     assert rows["garage"]["timers_own_only"] is True

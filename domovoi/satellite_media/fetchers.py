@@ -1,8 +1,9 @@
 """Cache-refresh fetchers for satellite media builds.
 
-Three sources, each degrading independently (a build NEVER hard-fails on a
-missing cache — it flips to `offline: false` with a loud warning and lets
-the device's stage-2 bootstrap pull that piece online):
+Three sources, each degrading independently (a missing wheel or deb cache
+never hard-fails a build — it flips to `offline: false` with a loud warning
+and lets the device's stage-2 bootstrap pull that piece online; the
+wake-word models are the exception, see below):
 
 * **Wheels** — native ``pip download --platform manylinux_*_aarch64``; no
   Docker involved. This is the bulk of the offline payload.
@@ -10,9 +11,16 @@ the device's stage-2 bootstrap pull that piece online):
   + plugin apt packages) fetched arm64 via an UNPRIVILEGED
   ``debian:<release>-slim`` container. Docker Desktop absent/wedged →
   skipped.
-* **openWakeWord base models** — via the openwakeword package when it's
-  importable server-side; else skipped (a voice satellite's stage 2
-  downloads them online after Wi-Fi).
+* **openWakeWord base models** — the release assets
+  ``openwakeword.utils.download_models()`` fetches, downloaded here from
+  pinned URLs and checked against pinned SHA-256 digests and sizes
+  (:data:`OWW_MODEL_FILES`). Nothing that fails the check reaches the
+  bucket, and :func:`verify_oww_models` drops anything in it that the pins
+  don't vouch for before a payload is assembled. Every pin is tried and
+  every failure named; an offline build with a short bucket is refused
+  (builder.py), and stage 2 holds what it places on the device, and
+  anything openWakeWord downloads there, to the same pins
+  (:func:`oww_pins_text`).
 
 Prebuilt mic-board .dtbo overlays are cache-passthrough only: stage 1
 installs whatever ``cache/dtbo/`` holds; when empty, stage 2 falls back to
@@ -26,14 +34,16 @@ working and nothing leaves the house.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from domovoi import egress
+from domovoi import egress, net_safety
 from domovoi.satellite_media import cache
 
 log = logging.getLogger(__name__)
@@ -295,8 +305,7 @@ XVF_HOST_SHA256 = {
 
 
 def _sha256_file(path: Path) -> str:
-    import hashlib
-
+    """One helper for every pinned file here (xvf_host, the wake-word models)."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 16), b""):
@@ -395,25 +404,157 @@ def fetch_xvf_host(run=subprocess.run) -> tuple[bool, str]:
     )
 
 
+# The openWakeWord base models every voice satellite runs: exactly the files
+# openwakeword.utils.download_models() fetches (openwakeword 0.6.0 reads
+# them from its v0.5.1 release), pinned here by SHA-256 and size so a
+# replaced release asset can't become every satellite's wake-word detector
+# (SAT-11). The digests were taken from copies whose sizes match the
+# release's asset list (GitHub API, 2026-10-07); silero_vad.onnx is the
+# widely published Silero VAD v4 digest. A new openWakeWord release means
+# new rows here, not a looser check.
+OWW_RELEASE_URL = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/"
+OWW_MODEL_FILES: dict[str, tuple[str, int]] = {
+    "alexa_v0.1.onnx": ("6ff566a01d12670e8d9e3c59da32651db1575d17272a601b7f8a39283dfbae3e", 854246),
+    "alexa_v0.1.tflite": ("7333a317a790070a7f3432b81d9439c779481cc4ebd67c73da7174ea3cf48397", 855312),
+    "embedding_model.onnx": ("70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f", 1326578),
+    "embedding_model.tflite": ("c0aea21eb84a4ce90a08c870da41b7a7173b45269e6a3207c71d67c40f3a59d8", 1330312),
+    "hey_jarvis_v0.1.onnx": ("94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb", 1271370),
+    "hey_jarvis_v0.1.tflite": ("14bff778604985e1b5c19f0f7bbe477a69cf281d8db34b232b3b972411f710e2", 1278912),
+    "hey_mycroft_v0.1.onnx": ("c2a311e8fa1338de89c31b3b46dc4dffd4af2f9a8d6ddead48893c2d301b1f18", 857691),
+    "hey_mycroft_v0.1.tflite": ("bf9e43136afd3ca323698820a6e32a47f885ef4c30a3b8b577ec71688a9d64d8", 860300),
+    "hey_rhasspy_v0.1.onnx": ("5a9b3ed3be2910e35780e097905aa9f35a9c10038df47914cf2b3ec4d670f6ea", 204081),
+    "hey_rhasspy_v0.1.tflite": ("01d2526b45068f565aa3849d6ec2b7abae099154fc1b496f9ef20de9ef241fe9", 416140),
+    "melspectrogram.onnx": ("ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f", 1087958),
+    "melspectrogram.tflite": ("96fa0adccb6e8cf95cb14465409a1a2898ee4a96a85bb9ed3c7eb0e68bf163e8", 1092516),
+    "silero_vad.onnx": ("a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28", 1807522),
+    "timer_v0.1.onnx": ("371e44535470a29248b3b8f1bbbbaf2525c86417fd8f75c67fcf02ae0b9626df", 1742475),
+    "timer_v0.1.tflite": ("21d5b0267e97df64870b7aca312e2043ebed248d365698926a115a3694ff9626", 1743316),
+    "weather_v0.1.onnx": ("8441da8e746899e8d969528d5bad5651cdd563079c05962788f77753041f60e7", 1149158),
+    "weather_v0.1.tflite": ("4178991c7aeb76670f5a56559eb4129a6f3ae6207886db8bd8094fea7d362c3f", 1150224),
+}
+_OWW_CHUNK = 1 << 16
+
+
+def oww_pins_text() -> str:
+    """The pins as ``<sha256> <size> <name>`` lines, for stage 2 on the
+    device (``@OWW_PINS@`` in templates/stage2.sh.tmpl), which checks what
+    it places, and anything openWakeWord downloads there, against them."""
+    return "\n".join(
+        f"{sha256} {size} {name}" for name, (sha256, size) in sorted(OWW_MODEL_FILES.items())
+    )
+
+
+def _oww_http_client():
+    """The client the model downloads use: egress-hooked, so each request
+    (redirects included) is refused under ``never``. Tests replace it."""
+    import httpx
+
+    return egress.sync_client(timeout=httpx.Timeout(30.0, read=120.0))
+
+
+def _fetch_pinned(url: str, dest: Path, *, sha256: str, size: int) -> None:
+    """Download ``url`` to ``dest`` through net_safety (every hop to a
+    public address), reading at most ``size`` bytes, and move it into
+    place only when it is exactly ``size`` bytes with digest ``sha256``.
+    Raises ValueError otherwise; nothing partial is left behind."""
+    part = dest.with_name(f".{dest.name}.part")
+    h = hashlib.sha256()
+    written = 0
+    try:
+        with _oww_http_client() as client:
+            response = net_safety.open_stream_sync(client, url)
+            try:
+                if response.status_code != 200:
+                    raise ValueError(f"HTTP {response.status_code}")
+                with open(part, "wb") as f:
+                    for chunk in response.iter_bytes(_OWW_CHUNK):
+                        written += len(chunk)
+                        if written > size:
+                            raise ValueError(f"larger than the pinned {size} bytes")
+                        h.update(chunk)
+                        f.write(chunk)
+            finally:
+                response.close()
+        if written != size:
+            raise ValueError(f"{written} bytes, pinned {size}")
+        if h.hexdigest() != sha256:
+            raise ValueError(f"checksum mismatch: pinned {sha256}, got {h.hexdigest()}")
+        os.replace(part, dest)
+    finally:
+        part.unlink(missing_ok=True)
+
+
+def verify_oww_models(dest: Path | None = None) -> tuple[int, list[str]]:
+    """Hold the ``oww_models`` bucket to the pins: every file that isn't a
+    pinned model with its pinned size and digest is removed (an older
+    refresh stored whatever the release served). (verified, removed)."""
+    dest = dest or cache.bucket("oww_models")
+    verified, removed = 0, []
+    for p in sorted(dest.iterdir()) if dest.is_dir() else []:
+        pin = OWW_MODEL_FILES.get(p.name)
+        ok = (
+            pin is not None and p.is_file() and not p.is_symlink()
+            and p.stat().st_size == pin[1] and _sha256_file(p) == pin[0]
+        )
+        if ok:
+            verified += 1
+            continue
+        try:
+            if p.is_dir() and not p.is_symlink():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            removed.append(p.name)
+        except OSError as e:
+            log.warning("satellite media: could not remove unverified %s: %s", p, e)
+    if removed:
+        log.warning(
+            "satellite media: removed %d unverified file(s) from the wake-word model cache: %s",
+            len(removed), ", ".join(removed),
+        )
+    return verified, removed
+
+
+def missing_oww_models(dest: Path | None = None) -> list[str]:
+    """The pinned model names the bucket does not hold. Call after
+    :func:`verify_oww_models`, which leaves only verified files there."""
+    dest = dest or cache.bucket("oww_models")
+    return [name for name in OWW_MODEL_FILES if not (dest / name).is_file()]
+
+
 def fetch_oww_models() -> tuple[bool, str]:
-    """openWakeWord base models into the cache, when the package is
-    importable server-side. (ok, message)."""
+    """openWakeWord base models into the cache, each checked against its
+    pinned digest; what is already there and verified is kept. Every pin is
+    tried: one asset that fails (a replaced release file, a network error)
+    does not stop the rest, and the message names every one that failed
+    and why. ok only when the bucket then holds every pinned model.
+    (ok, message)."""
     refused = _turned_off("oww_models")
     if refused:
         return refused
     dest = cache.bucket("oww_models")
-    try:
-        from openwakeword import utils as oww_utils  # type: ignore
-
-        oww_utils.download_models(target_directory=str(dest))
-    except ImportError:
+    verify_oww_models(dest)
+    fetched = 0
+    failed: list[str] = []
+    for name, (sha256, size) in OWW_MODEL_FILES.items():
+        target = dest / name
+        if target.is_file():
+            continue            # verified just above
+        try:
+            _fetch_pinned(OWW_RELEASE_URL + name, target, sha256=sha256, size=size)
+        except Exception as e:  # noqa: BLE001 — network/hub errors degrade
+            log.warning("satellite media: wake-word model %s refused: %s", name, e)
+            failed.append(f"{name}: {e}")
+            continue
+        fetched += 1
+    if failed:
         return False, (
-            "openwakeword not installed on this server, so the wake-word "
-            "models can't be cached and the payload is not fully offline "
-            "(stage 2 fetches them over the internet instead). Fix with: "
-            "pip install --no-deps openwakeword, then refresh again"
+            f"{len(failed)} of {len(OWW_MODEL_FILES)} wake-word models failed their "
+            f"download or pinned check ({fetched} downloaded, nothing unverified kept): "
+            + "; ".join(failed)
         )
-    except Exception as e:  # noqa: BLE001 — network/hub errors degrade
-        return False, f"model download failed: {e}"
     cache.stamp("oww_models")
-    return True, f"models cached in {dest}"
+    return True, (
+        f"{len(OWW_MODEL_FILES)} wake-word models verified in {dest} "
+        f"({fetched} downloaded)"
+    )

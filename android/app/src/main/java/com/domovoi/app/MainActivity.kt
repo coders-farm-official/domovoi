@@ -58,14 +58,20 @@ class MainActivity : ComponentActivity() {
         routeFrom(intent)
     }
 
-    // The freeze watchdog runs only while the app is on screen.
+    // The freeze watchdog runs only while the app is on screen — and the
+    // saved server proves its identity again after any spell off it: the
+    // phone may have moved to a network the watch could not see change
+    // (net/IdentityGate.kt). A rotation recreates the activity and is not
+    // a spell in the background.
     override fun onStart() {
         super.onStart()
         Diagnostics.watchdog.start()
+        (application as DomovoiApplication).container.identity.appForegrounded()
     }
 
     override fun onStop() {
         Diagnostics.watchdog.stop()
+        if (!isChangingConfigurations) (application as DomovoiApplication).container.identity.appBackgrounded()
         super.onStop()
     }
 

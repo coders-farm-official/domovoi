@@ -22,15 +22,16 @@ import logging
 import os
 import stat
 import zipfile
-from pathlib import Path
-from typing import Any, Literal
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_admin_mutation, require_device
+from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
+from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -72,9 +73,11 @@ router = APIRouter(prefix="/api/music", tags=["music"])
 # not DEPEND on an admin-tier hop either — the upload below indexes the
 # files it wrote itself rather than calling the admin sweep.
 #
-# ``pause`` / ``resume`` / ``stop`` / ``skip`` stay open on purpose: they
-# are the video satellite's kiosk transport row (FE-3), and that screen
-# renders unattended with nobody there to hold a credential. See
+# ``pause`` / ``resume`` / ``stop`` / ``skip`` wear no gate at THIS hop:
+# they are the video satellite's kiosk transport row (FE-3). The core
+# route they proxy to takes the device tier, so a call still needs the
+# household token (the kiosk is paired by its URL — display.jsx), and a
+# queue block does not cover them (``_assert_may_replace_queue``). See
 # ``domovoi/tests/test_kiosk_surface_is_documented.py``.
 DEVICE = [Depends(require_device)]
 ADMIN = [Depends(require_admin_mutation)]
@@ -101,7 +104,11 @@ _SORT_CLAUSES: dict[str, str] = {
 
 @router.get("/library", response_model=LibraryPage)
 async def list_library(
-    q: str | None = Query(default=None, description="Substring filter against title/artist/album/file_path"),
+    q: str | None = Query(
+        default=None,
+        description="Substring filter against title/artist/album and the library-relative "
+                    "file_path (the path a client is shown, never the server's absolute one)",
+    ),
     source: str | None = Query(
         default=None,
         description="Filter by source column. Use 'manual' for rows with NULL source; "
@@ -127,8 +134,12 @@ async def list_library(
     where_parts: list[str] = []
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     if q:
+        # The path half of the search sees what a client is SHOWN (WEB-16):
+        # matching the stored absolute path let an open caller recover the
+        # operator's username a character at a time (``q=/home/k`` ...).
         where_parts.append(
-            "(title ILIKE :q OR artist ILIKE :q OR album ILIKE :q OR file_path ILIKE :q)"
+            "(title ILIKE :q OR artist ILIKE :q OR album ILIKE :q"
+            f" OR {_shown_path_sql(params)} ILIKE :q)"
         )
         params["q"] = f"%{q}%"
     if source:
@@ -563,6 +574,7 @@ def _unique_path(dirpath: Path, name: str) -> Path:
 async def upload_to_library(
     request: Request,
     files: list[UploadFile] = File(...),
+    device_id: Annotated[str | None, Form(max_length=64)] = None,
 ) -> LibraryUploadResult:
     """Upload audio into the library from the browser.
 
@@ -581,8 +593,19 @@ async def upload_to_library(
     If the index cannot run the files are still saved
     (``reindex_triggered=false``) and get picked up by the indexer on
     its next startup sweep.
+
+    A third door into a library (WEB-12): the Files write block ("block a
+    device from uploading, moving or importing anywhere") applies here
+    too, before anything is written. The caller is identified as the
+    Files and Documents doors identify it — an optional ``device_id``
+    form field, ``X-Device-Id``, ``?device_id=`` or the registration
+    cookie every browser carries — and a blocked device gets ``403``.
     """
     from domovoi.config import settings as core_settings
+    # Inside the call: ``files`` imports this module at import time.
+    from web.backend.api import files as files_api
+
+    await files_api.assert_caller_may_write(request, device_id)
 
     music_dir = Path(core_settings.music_dir).expanduser()
     dest = music_dir / _UPLOAD_SUBDIR
@@ -601,6 +624,19 @@ async def upload_to_library(
         base = _safe_basename(raw_name)
         if not base:
             skipped.append(f"{raw_name!r}: bad filename")
+            return
+        # Judged as it will be STORED, like every Files and Documents write
+        # (WEB-17): on NTFS "song:x.mp3" is an alternate data stream hanging
+        # off a file "song" — invisible to every listing, zip and the
+        # indexer's walk, yet indexed and served by its stored path — and a
+        # trailing dot or space is trimmed into a different name. A control
+        # character is refused on every platform.
+        reason = unstorable_reason(base)
+        if reason is not None:
+            skipped.append(f"{base!r}: {reason}")
+            return
+        if is_sensitive_name(base):
+            skipped.append(f"{base}: that name is reserved")
             return
         if Path(base).suffix.lower() not in _UPLOAD_AUDIO_EXTENSIONS:
             skipped.append(f"{base}: unsupported type")
@@ -755,8 +791,18 @@ async def cancel_acquisition(acq_id: int) -> None:
 # ─── Now playing ───────────────────────────────────────────────────────────
 
 
+# Who may read WHOSE device queued what each room plays (``added_by``, a
+# registered device's name — "Kamron's Pixel"): the tiers ``/ws/state``
+# admits — the household token, an admin Bearer or cookie session, the
+# pre-setup grace. The rest of the now-playing card stays open (the kiosk
+# display reads it unpaired); for anyone else ``added_by`` is null, the
+# same answer a song queued from outside Domovoi gets (REV-11, rule M1's
+# pattern for a reminder's words).
+_READS_QUEUE_PROVENANCE = ("ok", "admin", "pre-setup", "cookie-only")
+
+
 @router.get("/now-playing", response_model=list[NowPlaying])
-async def now_playing() -> list[NowPlaying]:
+async def now_playing(request: Request) -> list[NowPlaying]:
     """Per-room playback state.
 
     Reads the mpd_rooms table for control-port assignments, then opens
@@ -764,10 +810,20 @@ async def now_playing() -> list[NowPlaying]:
     ``currentsong``. Rooms that aren't reachable (container down, port
     blocked) surface as state ``"stop"`` with no song — same as a real
     idle MPD.
+
+    Open, but ``added_by`` (the device that queued the song) is named only
+    to a caller holding a household credential
+    (``_READS_QUEUE_PROVENANCE``). The caller is classified only when an
+    answer names a device, so the 1.5 s poll of a room nobody queued into
+    charges no token backoff and costs no extra query.
     """
     rooms = await _list_provisioned_rooms()
     cards = [await _now_playing_for(r) for r in rooms]
     await _attach_queue_provenance(cards)
+    if any(c.added_by is not None for c in cards):
+        if await check_device_request(request) not in _READS_QUEUE_PROVENANCE:
+            for card in cards:
+                card.added_by = None
     return cards
 
 
@@ -875,8 +931,40 @@ async def favorite_now_playing(
 # pipes status + body back. 502 when the Domovoi server can't be reached.
 
 
+async def _assert_may_replace_queue(
+    request: Request, body_device_id: str | None, room_id: str
+) -> None:
+    """``403`` when the calling device is blocked from this room's queue
+    (WEB-11).
+
+    ``/play``, ``/play-track``, ``/play-tracks`` and ``/play-playlist`` do
+    not edit a room's queue, they REPLACE it — so a device an admin took
+    queue editing away from used to "cast" past the block the
+    ``/queue/{room}/add`` route enforced. The same check now runs here,
+    with the caller identified as the Files and Documents doors identify
+    it (the body's ``device_id``, ``X-Device-Id``, ``?device_id=``, the
+    registration cookie). A caller that names itself nowhere is not
+    identified and so not blocked; the queue routes, which REQUIRE the
+    id, are the stricter door, and the block was always household policy
+    rather than a boundary (``music_queue``'s docstring).
+
+    The transport verbs — pause, resume, stop, skip, previous — are not
+    checked: they move the playhead through what is queued, they are the
+    kiosk's buttons, and a block on them would hold only for a caller that
+    volunteered its own id.
+    """
+    # Inside the call: ``files`` imports this module at import time.
+    from web.backend.api import files as files_api
+    from web.backend.api import music_queue
+
+    caller = files_api.caller_device_id(request, body_device_id)
+    if caller:
+        await music_queue._assert_can_edit(caller, room_id)
+
+
 @router.post("/play", dependencies=DEVICE)
 async def play(body: PlayRequest, request: Request):
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     status, payload = await post_admin(
         "/v1/admin/music/play",
         {"room_id": body.room_id, "query": body.query},
@@ -893,6 +981,7 @@ async def play_playlist(body: PlayPlaylistRequest, request: Request):
     hands the first/picked track to MPD, and stamps
     ``app.state.current_playlist`` so subsequent ``next`` calls
     stay inside the playlist."""
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     status, payload = await post_admin(
         "/v1/admin/music/play-playlist",
         {
@@ -958,6 +1047,7 @@ async def play_track(body: PlayTrackRequest, request: Request):
     click doesn't write to ``conversation_log`` and never falls
     through to an external streaming provider the way the fuzzy
     ``/play`` text-query path can."""
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     status, payload = await post_admin(
         "/v1/admin/music/play-track",
         {"room_id": body.room_id, "track_id": body.track_id},
@@ -1086,17 +1176,20 @@ async def _library_file_path(track_id: int) -> Path:
     try:
         target.relative_to(music_dir)
     except ValueError:
+        # Open routes answer with this (``/audio``, ``/cover``): name the
+        # track, never the server path or MUSIC_DIR (WEB-16). The log has both.
+        log.warning(
+            "refusing to serve track %s: %r is not inside MUSIC_DIR (%r)",
+            track_id, file_path_str, core_settings.music_dir,
+        )
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"refusing to serve {file_path_str!r}: not inside MUSIC_DIR "
-                f"({core_settings.music_dir!r})"
-            ),
+            detail=f"refusing to serve track {track_id}: its file is not inside MUSIC_DIR",
         )
     if not target.is_file():
         raise HTTPException(
             status_code=404,
-            detail=f"track {track_id} file missing on disk: {target}",
+            detail=f"track {track_id} file missing on disk",
         )
     return target
 
@@ -1522,6 +1615,7 @@ async def play_tracks(body: CastTracksRequest, request: Request):
     as it always has. A cast the core couldn't make passes through as it
     answered: ``failed`` names the part (``music_player`` on the server, or
     ``satellite``) beside the ``detail`` in words."""
+    await _assert_may_replace_queue(request, body.device_id, body.room_id)
     payload_out: dict = {"room_id": body.room_id, "track_ids": body.track_ids}
     if body.start_sec > 0:
         payload_out["start_sec"] = body.start_sec
@@ -1538,10 +1632,99 @@ async def play_tracks(body: CastTracksRequest, request: Request):
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
 
+def public_track_path(file_path: str | None) -> str:
+    """The path a client is shown for a library track: relative to the
+    music library, never the absolute server path (WEB-16).
+
+    ``library_tracks.file_path`` is the absolute path on the host —
+    ``/home/<user>/Music/...`` or ``C:\\Users\\<user>\\Music\\...`` — and the
+    library reads are open, so serialising it told any LAN caller the
+    operator's username and directory layout. The podcasts and audiobooks
+    routers already return only an extension; the Files registry never
+    serialises a root. What the clients actually use the field for is a
+    display line and a filename (the last segment, for a title fallback
+    and the Android save-to-device name), so a library-relative path keeps
+    every one of them working — ``Artist/Album/01 Song.mp3``,
+    ``uploads/song.mp3``. A row outside the library (a stale import from an
+    older ``MUSIC_DIR``) is shown by its file name alone.
+
+    Pure path arithmetic, no filesystem calls: a page lists up to 200 rows.
+    """
+    if not file_path:
+        return ""
+    from domovoi.config import settings as core_settings
+
+    flavour = PureWindowsPath if ("\\" in file_path or ":" in file_path[:3]) else PurePosixPath
+    track = flavour(file_path)
+    for root in _music_roots(core_settings.music_dir):
+        try:
+            return flavour(*track.relative_to(flavour(root)).parts).as_posix()
+        except ValueError:
+            continue
+    return track.name
+
+
+def _shown_path_sql(params: dict[str, Any]) -> str:
+    """SQL for :func:`public_track_path` — the library-relative path, with
+    ``/`` separators, or the file name for a row outside the library — so
+    the library search matches what a client is shown and nothing above
+    ``MUSIC_DIR`` (WEB-16). Adds its bind parameters to ``params``.
+
+    Each spelling of the root is compared as an exact prefix (``left()``,
+    not ``LIKE``, so a ``_`` or ``%`` in a path is not a wildcard), case-
+    and separator-blind for a Windows-shaped root as
+    :class:`~pathlib.PureWindowsPath` is; the longest spelling wins.
+    """
+    from domovoi.config import settings as core_settings
+
+    prefixes: list[tuple[str, bool]] = []
+    for root in _music_roots(core_settings.music_dir):
+        windows = "\\" in root or ":" in root[:3]
+        if windows:
+            prefix = PureWindowsPath(root).as_posix().rstrip("/").lower() + "/"
+        else:
+            prefix = PurePosixPath(root).as_posix().rstrip("/") + "/"
+        if (prefix, windows) not in prefixes:
+            prefixes.append((prefix, windows))
+    prefixes.sort(key=lambda pw: len(pw[0]), reverse=True)
+
+    whens: list[str] = []
+    for i, (prefix, windows) in enumerate(prefixes):
+        params[f"music_root_{i}"] = prefix
+        params[f"music_root_len_{i}"] = len(prefix)
+        params[f"music_rel_from_{i}"] = len(prefix) + 1
+        head = f"left(file_path, :music_root_len_{i})"
+        rest = f"substr(file_path, :music_rel_from_{i})"
+        if windows:
+            head = f"lower(replace({head}, chr(92), '/'))"
+            rest = f"replace({rest}, chr(92), '/')"
+        whens.append(f"WHEN {head} = :music_root_{i} THEN {rest}")
+    name_only = "regexp_replace(replace(file_path, chr(92), '/'), '^.*/', '')"
+    if not whens:
+        return name_only
+    return f"(CASE {' '.join(whens)} ELSE {name_only} END)"
+
+
+def _music_roots(music_dir: str) -> list[str]:
+    """``MUSIC_DIR`` as configured, expanded, and resolved — the spellings a
+    stored ``file_path`` may start with."""
+    roots: list[str] = []
+    for cand in (music_dir, os.path.expanduser(music_dir)):
+        if cand and cand not in roots:
+            roots.append(cand)
+    try:
+        resolved = str(Path(music_dir).expanduser().resolve(strict=False))
+        if resolved not in roots:
+            roots.append(resolved)
+    except (OSError, RuntimeError):  # pragma: no cover — an unresolvable setting
+        pass
+    return roots
+
+
 def _row_to_track(r: Any) -> Track:
     return Track(
         id=int(r[0]),
-        file_path=r[1],
+        file_path=public_track_path(r[1]),
         title=r[2],
         artist=r[3],
         album=r[4],

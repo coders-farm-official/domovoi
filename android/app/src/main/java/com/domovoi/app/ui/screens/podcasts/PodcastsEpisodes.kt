@@ -81,9 +81,9 @@ internal fun EpisodeOverlay(
             (ep.file_ext ?: ".mp3")
         val err = DeviceDownloads.enqueue(
             context,
-            app.api.absolute("/api/podcasts/episodes/${ep.id}/audio?download=1"),
+            app.api,
+            "/api/podcasts/episodes/${ep.id}/audio?download=1",
             name,
-            deviceToken = app.prefs.deviceToken.value,
         )
         toast(err ?: "saving \"$name\" to Downloads/Domovoi")
     }

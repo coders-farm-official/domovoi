@@ -4,6 +4,295 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-08 — Security round 3
+
+The fixes from the October security review, in one update. Several
+household reads now need a paired device, satellites pair strictly by
+default, updates can be bound to signed commits, satellites check that the
+server they reach is the one they were prepared for, and the Android app
+sends its token only to a server that has proved who it is. No Flyway
+step. In this order:
+
+### Upgrading
+
+1. **Expect the first update to take longer, and under "No internet" to
+   be refused.** Pull the update and press **Restart to apply changes** as
+   usual. It counts as a dependency change (`pyproject.toml` and the locks
+   moved), so the update re-syncs the venv the way it always has, through
+   pip's resolver, which brings `urllib3` 2.8.0. The `dev` extra is no
+   longer installed on a server; pytest and friends already in the venv
+   stay until you remove them. The same update moves the database image
+   from `postgres:16` to a pinned `postgres:16.15-trixie` digest, so
+   `domovoi-db` recreates the Postgres container on the same data volume
+   (nothing is lost; a few seconds' pause), and it rebuilds the music
+   image, whose base is now pinned too, so music stops for a moment. Under
+   **No** the update is refused as a dependency and image change: switch
+   Settings → Internet to **Sometimes**, update, then switch back.
+2. **Expect an amber "unsigned" badge** beside the version in Settings →
+   Configuration → Version, and one warning per pull in the core's log.
+   That is how an install without signed updates looks now; nothing is
+   refused until you set them up (step 10).
+3. **Approve any satellite that never paired.** Strict satellite pairing
+   is now the default in the code, not only in a freshly written `.env`. An
+   install whose `domovoi/.env` has no `SATELLITE_PAIRING_STRICT` line
+   becomes strict at this restart. Satellites the dashboard shows as
+   paired are not affected. One that has a pairing token but never paired,
+   or whose pairing is reset later, waits on the Satellites page under
+   "waiting for approval": type the six-digit code it shows and says (a
+   satellite set up before 2026-09-22 says four digits, and those still
+   work). A satellite with no pairing token at all (very old satellite
+   code) is refused until it runs current code. The live install already
+   runs strict, so nothing changes there. To keep the old behaviour, set
+   `SATELLITE_PAIRING_STRICT=false`; the core then warns at every boot, and
+   a room it lets in without a token cannot drop in on, or announce into,
+   another room.
+4. **Upgrade every satellite** (Satellites → the satellite → Overview →
+   Upgrade satellite), after the core is restarted. Satellites now ask the
+   server to prove its identity for the exact address they dialed, and
+   check the signed file lists they download, including sounds and wake
+   models. The core keeps answering satellites on the old code, so the
+   order does not break anything; while any room is still on it, the core
+   logs one line per start saying so. **If a satellite reaches the core by
+   a name, or through NAT, a port-forward or a VM (the Windows installer's
+   WSL2 design), list that address in `TRUSTED_HOSTS` in `domovoi/.env`
+   before upgrading that satellite**, or it will refuse to connect once it
+   has the new code; the core logs each refusal with this advice. The
+   Beelink's rooms dial it by IP and need nothing. The satellite's root
+   helpers (`domovoi-apply-payload`, `domovoi-sync-time`) are installed
+   when a card is prepared and are not replaced by a code upgrade: a unit
+   gets the new ones only when its card is re-prepared and re-flashed.
+5. **Put the household token in each video satellite's kiosk URL.** The
+   kiosk page reads its room's row, which is now a household read. In the
+   satellite's `config.toml`:
+   `[display] kiosk_url = "http://<server>:6369/display.html?room=<room_id>&device_token=<household token>"`
+   (Settings → Devices → Household token; percent-encode it if it holds a
+   space or `&`). The page keeps the token in the kiosk browser and removes
+   it from the address bar. Without it the kiosk shows what is playing,
+   with no live updates and buttons that do nothing. Rotating the token
+   means updating this line on every kiosk.
+6. **Send the household token from any script or automation that reads
+   the house.** These now answer `401` to a caller with no credential:
+   the people roster and a person's row and sessions, every room's row and
+   the pending-adoption list (`/api/satellites...`), the calendar, a room's
+   music queue (`/v1/admin/music/queue/<room>`), the version read
+   (`/v1/admin/version`, `/api/config/version`) and podcast directory
+   search. Send `X-Device-Token: <token>` (the core mirrors it in
+   `~/.domovoi/device-token.txt`). The dashboard and the Android app
+   already send it. An unpaired browser's Home shows no rooms and no week.
+7. **Upgrade the sibling plugins you have installed** (Plugins → upgrade,
+   with the zip from each repository's `dist/`): Sleep Sounds **1.2.3**,
+   yt-dlp **1.2.2**, Kiwix **1.0.2**, RomM **1.0.2**, Jellyfin **1.0.3**.
+   Their everyday actions (sleep play and stop, yt-dlp search and play, the
+   Kiwix search box and Library tab, the status refreshes) then take the
+   household token, so a paired phone or browser can use them without the
+   admin password, and a caller with no credential gets `401`. yt-dlp's
+   also carries `urllib3` 2.8.0. Until a plugin is upgraded its routes keep
+   their old tiers. The bundled radio plugin updates with the core.
+8. **Install the new Android app**, then open it once at home. Its
+   household token is moved into a store sealed by the Android Keystore on
+   the first start, silently: the phone stays paired. On that first
+   contact at home it records the server's identity, and from then on, on
+   every network, the server must prove that identity before the phone
+   sends it the token. Away from home, whatever answers at the saved
+   address gets a token-less check and nothing else. If the core is ever
+   reinstalled or its identity rotated, forget the server under Settings →
+   Connection → Trusted servers and pair again. If the phone's Keystore
+   key is gone (a reset that restored files but not keys), the app asks
+   for the token once.
+9. **Press Refresh caches once, while online**, in satellite media
+   preparation. Wake-word models now download from pinned addresses and
+   are checked by SHA-256; anything in the cache the pins don't vouch for
+   is removed before a card is built.
+10. **Recommended: set up signed updates.** Until
+    `/etc/domovoi/allowed_signers` exists on the box, every pull and update
+    only warns. Once it does, **Pull the latest** verifies the fetched
+    commit's SSH signature before the checkout moves, and the update unit
+    verifies HEAD again as root before it runs anything; a commit that
+    doesn't verify is refused and nothing changes. To set it up
+    ([LINUX_HOST.md, Signed updates](LINUX_HOST.md#signed-updates)): make
+    an SSH signing key on the machine you commit from and sign every
+    commit, merges included; put the allowed-signers file on the box,
+    owned by root and writable by root alone; turn on GitHub's **Require
+    signed commits** on `main`; then run
+    `sudo bash <checkout>/scripts/linux/install-update-unit.sh --dry-run`,
+    which says `signed updates enforced` or stops if every run would be
+    refused. The commits in this release are not signed: pull a signed
+    commit before the file goes in, or the next update is refused. Merges
+    made by tools must be signed too, or every box refuses them.
+11. **Optional: opt into the hash-pinned lock.** `requirements-linux-py314.lock`
+    pins every package a Linux server runs, each with its SHA-256s. The
+    update unit uses it only when `/etc/default/domovoi-update` sets
+    `DOMOVOI_USE_LOCK=1`; without that, updates re-sync exactly as before
+    and the step says the lock is there. Re-seed the lock from the box's
+    own `pip freeze` first, so the first locked re-sync moves only what the
+    floors require ([LINUX_HOST.md, The hash-pinned lock](LINUX_HOST.md#the-hash-pinned-lock));
+    the installer's `--dry-run` reports which way a re-sync goes. Fresh
+    installs by hand now use the three install commands in
+    [LINUX_HOST.md, Install](LINUX_HOST.md#install).
+12. **Optional: give Letta and SearXNG their own secrets.** A fresh
+    install now writes per-install `LETTA_TOKEN` and `SEARXNG_SECRET`; an
+    existing `domovoi/.env` keeps the old shared values until you add them
+    (the one-liner is in [LINUX_HOST.md](LINUX_HOST.md), "Helper-container
+    secrets"), then recreate the two containers and restart the core.
+13. **Optional: remove rooms that were never real.** Before this release a
+    queue read for any room name could create that room. Those stray rooms
+    are not removed by the update: delete each from the Satellites page,
+    or with `DELETE /v1/admin/satellites/<room>?purge=true` (admin).
+14. **Optional: adopt the sandboxed systemd units** in
+    `scripts/linux/units/`. Nothing is installed for you. They match the
+    layout in [LINUX_HOST.md](LINUX_HOST.md) (`/opt/domovoi`, user
+    `domovoi`); a box with another user or checkout path (a checkout in a
+    home directory, say) must change `User=`, the paths and the
+    `ReadWritePaths=`/`BindPaths=` lines first. Afterwards check that
+    Settings → Version still offers Restart Domovoi.
+
+**For the owner's own machine** (not part of any install): remove the
+`Bash(python -c ' *)` and `Bash(git add *)` entries from
+`domovoi-project/.claude/settings.local.json` and allow the specific
+scripts you use instead (A8-16); delete `COLLABORA_JWT_SECRET` and
+`ONLYOFFICE_JWT_SECRET` from the dev box's `domovoi/.env`, whose engines
+are retired (A8-18).
+
+### What changes
+
+* **Music routes never create a room.** Every route that names a room
+  answers `404` for one the house has no satellite, pairing or music row
+  for. A room appears when its satellite is accepted or adopted.
+* **No live microphone before setup.** Before first-run admin setup, and
+  again after `--reset-admin`, starting a drop-in answers `501` and the
+  phone drop-in socket closes with `setup_required`, until an admin signs
+  in. Nothing else loses its pre-setup grace.
+* **Satellite approvals.** A request whose code is not six digits (or the
+  four of an older satellite) is refused and nothing is parked. The first
+  device to ask for a room name holds it for three minutes; after that a
+  different device's request replaces it.
+* **Add by URL** refuses a URL that points into the house or at this box,
+  admin or not (`400`), and answers `409` under "No internet". A media
+  server on your own network goes in `OUTBOUND_ALLOW_HOSTS`.
+* **Server-side fetches connect to the address the safety check
+  approved**, not to a second lookup of the same name. Under "No
+  internet", a local-looking name that resolves to an internet address is
+  now refused: "No" means the address, not the spelling. Running the core
+  behind an HTTP proxy is not supported.
+* **The radio relay serves only audio**, and a stream opened directly in a
+  tab downloads instead of rendering. Song recognition no longer samples
+  playlist-only (HLS) stations. Directory stations that point into the
+  house are skipped unless their host is in `OUTBOUND_ALLOW_HOSTS`. The
+  radio plugin's own lock is gone (it runs in the core's environment).
+* **Plugin installer:** a zip whose source files exceed 2 MiB each or
+  32 MiB together is refused before the trust screen; staging no longer
+  freezes the core; uninstalling a `domovoi plugin dev` registration leaves
+  the developer's files alone.
+* **Dashboard files:** Documents "Open raw" and Images raw open in the tab
+  only for pictures, audio, video, PDF and plain text; everything else
+  (HTML, SVG, XML, Markdown, JSON, CSV ...) downloads. Secret-shaped files
+  in `~/Documents` (`.env`, keys, setup codes) are no longer listed or
+  served. A Files device block also stops that device's music upload, and
+  a room-queue block stops a blocked device replacing the queue. Music
+  uploads with names Windows can't store are skipped with a reason.
+  Podcast `keep_n` is limited to 1–50. Library reads show a track's path
+  relative to the music folder.
+* **Piper voices** must be named like the catalogue's (`en_US-lessac-medium`)
+  and are checked against pinned or published digests; a download that
+  doesn't match is not kept.
+* **Under "No", the core stops the search helper at start**, also when the
+  answer was set by hand in `.env`.
+* **The update unit's result file** (`last-result.json`) is now readable
+  by the service user's group only, and a rollback keeps only the newest
+  replaced database (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1). The
+  checkout can be pinned to its upstream (`DOMOVOI_UPSTREAM_URL`,
+  `DOMOVOI_UPSTREAM_BRANCH`). `refused` now also means "HEAD did not
+  verify" or "not the pinned upstream". The version read gains a
+  `signature` object.
+* **New files on the core:** `~/.domovoi/manifest-serials.json` beside the
+  server identity (include it in backups; losing it is safe). Rotating the
+  identity is `python -m domovoi.server_identity --rotate-identity`, which
+  explains the cost first; every prepared card must then be re-prepared.
+* **The `docker` group is root-equivalent**, and the docs now say so where
+  they grant it.
+* **domo-mass-flash:** setup network names carry six characters, the card
+  no longer holds the console password in plain text, keys and passwords
+  print only with `--show-secrets`, the labels file is private and its
+  first line says it holds credentials, and `sanitize` removes a set-up
+  master's approval record and receipts.
+* **Android:** the token goes only to the server it was issued by; the
+  media session admits only this app and the system; Settings → Connection
+  applies the same address rule as the picker and lists trusted servers
+  with a forget button; save-to-device downloads obey the plain-http rule.
+* **Not fixed in this release:** one host on the network can fill the
+  core's connection limit (128) and make it refuse everyone until it lets
+  go; a per-source limit in the host firewall on ports 6369 and 6370 is
+  the mitigation. Several upload handlers still hold a whole upload in
+  memory, and a note's preview loads images from any address its author
+  chose. All three are described in
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+### Added by the review pass (same update)
+
+The security review of these fixes asked for a few more changes before the
+merge. They ship in the same update; nothing above changes.
+
+* **More reads need a paired device:** a room's play history
+  (`/api/satellites/{room}/recently-played`), a room's satellite config read
+  (both hops) and the speech latency summary (`/api/stats/latency`,
+  `/v1/stats/latency`). `GET /api/music/now-playing` stays open, but the name
+  of the device that queued the song is `null` for a caller with no household
+  credential. Scripts that polled these without a credential now get `401`.
+* **Documents and Files withhold more secret-shaped names** (SSH keys under
+  their default names, the `.ssh`, `.gnupg`, `.aws` and `.kube` folders, every
+  `.env.*`, `.netrc`, `.pgpass`, `*.kdbx`, `*.gpg`, `*.ovpn` and a few more),
+  and anything inside a withheld folder. Such files are not deleted; they are
+  absent from both listings and answer `404`.
+* **Kiosk:** `display.html` replaces a stored household token with a different
+  `?device_token=` only after the server has accepted the new one. A kiosk with
+  no token shows what was playing when the page loaded and then does not
+  update; put the token in `[display] kiosk_url` as described in step 4.
+* **Satellite approval before first-run setup** answers `501` at both hops.
+  Finish setup and sign in, then approve the satellites waiting in the card.
+* **Plugin installs run one at a time.** A second click while an install is
+  still running answers `409`. **Sleep Sounds 1.2.4** is the version to
+  install now (its overview and `/v1/plugins/sleep/state` need a paired
+  device, since they say who is asleep where).
+* **Radio relay** refuses a station whose content type is not plain ASCII and
+  every playlist spelling; the room's own player still plays such stations.
+* **Satellite identity:** sounds-channel serials are kept per voice (a
+  satellite on older code that switches voice and back may refuse the earlier
+  voice's list until its next code sync; it keeps playing cached clips), and
+  the identity proof is signed only for names listed exactly in
+  `TRUSTED_HOSTS`, never for a wildcard entry.
+* **The shipped core unit** under `scripts/linux/units/` no longer sets the
+  sandbox options that make systemd imply `NoNewPrivileges` for a non-root
+  service, which would have broken the Restart button and the update unit.
+  If you installed that unit from an earlier build of this branch, install it
+  again, `sudo systemctl daemon-reload`, restart the core and check that
+  Settings → Version still offers **Restart Domovoi**. The web and database
+  units keep the full sandbox.
+* **Compose now requires per-install `LETTA_TOKEN` and `SEARXNG_SECRET`.**
+  The update unit, `dev.sh` and `dev.ps1` run
+  `python -m domovoi.env_bootstrap --repair` first, which appends generated
+  values for the two keys and changes nothing else. **If you update by hand**
+  (`git pull`, then restart the units yourself), run it once after the pull
+  and before the restart:
+  `sudo -u domovoi /opt/domovoi/.venv/bin/python -m domovoi.env_bootstrap --repair`
+  (adjust the user and path to your layout); without it `domovoi-db` refuses
+  to start. Chat-mode users: recreate the Letta container once
+  (`docker compose --profile chat up -d letta`) so it learns the new password;
+  the Version card shows a warning until then.
+* **Opt-in lock:** with `DOMOVOI_USE_LOCK=1` and a lock the update cannot
+  use, the step is a `warn` and Settings → Version shows
+  **lock not applied: <reason>**. A package that fails its hash check still
+  rolls the update back.
+* **Wake-word models on a prepared card** are verified against pinned
+  hashes on the server and again on the satellite; a card with a model
+  missing is refused at build time instead of fetching it unverified later.
+* **Android (new build):** the phone re-proves the server identity on any
+  network change, including ones a VPN hides, at most every ten minutes and
+  after every return from the background; redirects never carry the token
+  to another host; only video saves carry a credential, and only right after
+  a fresh proof; the key shown in the trust dialog is the one pinned; a core
+  that is down reads as "core not answering", never as an impostor; and the
+  active server can be forgotten from Settings (the app returns to the
+  picker) when its key legitimately changes.
+
 ## 2026-10-06 — Lyrics: see the words, and find a song by them
 
 ### Upgrading

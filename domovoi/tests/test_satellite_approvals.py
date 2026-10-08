@@ -233,3 +233,55 @@ def test_rejecting_nothing_reports_false():
             return await SatelliteApprovalRepository(s).reject("nosuchroom")
 
     assert _run(_reject()) is False
+
+
+# ─── CORE-22: the first device holds the name for a bounded time ──────────
+
+
+def test_inside_the_window_a_different_device_is_still_a_conflict():
+    _run(_request(token_hash=HASH_A, code=CODE, takeover_after_sec=3600))
+    assert _run(
+        _request(token_hash=HASH_B, code=OTHER_CODE, takeover_after_sec=3600)
+    ) == ("conflict", None)
+    row = _run(_get())
+    assert row["token_hash"] == HASH_A and row["code"] == CODE
+
+
+def test_after_the_window_a_different_device_takes_the_request_over():
+    """A squatter that parked first cannot hold the room name for good:
+    once its request is older than the window, the next device asking
+    replaces it — hash and code TOGETHER, attempts back to one — and only
+    the newcomer's code approves, binding the newcomer's token."""
+    _run(_request(token_hash=HASH_A, code=CODE, takeover_after_sec=0))
+    _run(_request(token_hash=HASH_A, code=CODE, takeover_after_sec=0))
+    assert _run(
+        _request(token_hash=HASH_B, code=OTHER_CODE, takeover_after_sec=0)
+    ) == ("parked", OTHER_CODE)
+
+    row = _run(_get())
+    assert row["token_hash"] == HASH_B and row["code"] == OTHER_CODE
+    assert _run(_pending())[0]["attempts"] == 1
+    # The squatter's code is gone with its request.
+    assert _run(_approve(code=CODE)) == "mismatch"
+    assert _run(_approve(code=OTHER_CODE)) == "approved"
+    assert _run(_pairing())[0] == HASH_B
+
+
+def test_a_takeover_never_keeps_the_old_code_for_a_device_that_brought_none():
+    """A newcomer with no code of its own parks with none (the core mints
+    one for it before it gets here); it never inherits the code the
+    operator was told by a different device (CORE-3)."""
+    _run(_request(token_hash=HASH_A, code=CODE, takeover_after_sec=0))
+    outcome, code = _run(_request(token_hash=HASH_B, code=None, takeover_after_sec=0))
+    assert outcome == "parked" and code is None
+    assert _run(_get())["code"] is None
+
+
+def test_retrying_never_extends_the_window_or_swaps_the_code():
+    _run(_request(token_hash=HASH_A, code=CODE, takeover_after_sec=3600))
+    first = _run(_pending())[0]["first_seen_at"]
+    assert _run(
+        _request(token_hash=HASH_A, code=OTHER_CODE, takeover_after_sec=3600)
+    ) == ("parked", CODE)
+    again = _run(_pending())[0]
+    assert again["first_seen_at"] == first and again["attempts"] == 2

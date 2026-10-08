@@ -413,7 +413,9 @@ def test_version_reports_the_last_update_and_its_bad_sha(stub_version_probes):
 
 
 def test_version_keeps_the_scripts_private_details_on_the_box(stub_version_probes):
-    """The endpoint is open: backup paths and raw step output stay local."""
+    """Backup paths and raw step output stay on the box. The endpoint is a
+    household read since CORE-21, and every household device is not the
+    operator."""
     _write_result(ROLLED_BACK)
 
     last = asyncio.run(git_version.version_state())["last_update"]
@@ -423,6 +425,66 @@ def test_version_keeps_the_scripts_private_details_on_the_box(stub_version_probe
         {"name": "backup", "status": "ok", "duration_sec": 1.2},
         {"name": "health", "status": "failed", "duration_sec": 120.0},
     ]
+
+
+LOCK_NOT_APPLIED = (
+    "lock not applied: requirements-linux-py314.lock is for Python 3.14 and the venv "
+    "runs Python 3.15; resolved from the index without hash checks"
+)
+
+
+def _ok_run_with(steps: list[dict]) -> dict:
+    return {**ROLLED_BACK, "status": "ok", "bad_sha": None, "error": None, "steps": steps}
+
+
+def test_an_unused_opted_in_lock_reaches_the_version_card(stub_version_probes):
+    """REV-15: with DOMOVOI_USE_LOCK=1 and a lock the update can't use, the
+    run still ends ok, so the only witness is the sync-deps step. It is a
+    `warn` and its reason must survive into the endpoint, or an owner who
+    opted in is told nothing the day the lock stops being used."""
+    _write_result(_ok_run_with([
+        {"name": "preflight", "status": "ok", "duration_sec": 0.1, "detail": "deps_changed=1 mpd_changed=0"},
+        {"name": "sync-deps", "status": "warn", "duration_sec": 40.0, "detail": LOCK_NOT_APPLIED},
+        {"name": "health", "status": "ok", "duration_sec": 3.0, "detail": None},
+    ]))
+
+    last = asyncio.run(git_version.version_state())["last_update"]
+
+    assert last["status"] == "ok"
+    assert last["steps"] == [
+        {"name": "preflight", "status": "ok", "duration_sec": 0.1},
+        {"name": "sync-deps", "status": "warn", "duration_sec": 40.0, "detail": LOCK_NOT_APPLIED},
+        {"name": "health", "status": "ok", "duration_sec": 3.0},
+    ]
+
+
+@pytest.mark.parametrize("step", [
+    # Raw output tails stay on the box, whatever the status.
+    {"name": "searxng", "status": "warn", "duration_sec": 1.0,
+     "detail": "Error response from daemon: /home/domovoi/secret path"},
+    {"name": "sync-deps", "status": "failed", "duration_sec": 1.0,
+     "detail": "ERROR: pip output from /opt/domovoi/.venv"},
+    # An ok step's note is not a warning.
+    {"name": "sync-deps", "status": "ok", "duration_sec": 1.0,
+     "detail": "installed from requirements-linux-py314.lock, every package hash-checked"},
+    # The signature has its own object.
+    {"name": "signature", "status": "warn", "duration_sec": 0.0, "detail": "not enforced: not signed"},
+])
+def test_only_the_scripts_own_warnings_keep_their_detail(stub_version_probes, step):
+    _write_result(_ok_run_with([step]))
+    last = asyncio.run(git_version.version_state())["last_update"]
+    assert last["steps"] == [{k: step[k] for k in ("name", "status", "duration_sec")}]
+
+
+def test_a_kept_warning_is_one_short_line(stub_version_probes):
+    long = "lock not applied: " + "x" * 1000 + "\nsecond line"
+    _write_result(_ok_run_with([
+        {"name": "rollback-deps", "status": "warn", "duration_sec": 1.0, "detail": long},
+        {"name": "sync-deps", "status": "warn", "duration_sec": 1.0, "detail": 42},
+    ]))
+    steps = asyncio.run(git_version.version_state())["last_update"]["steps"]
+    assert steps[0]["detail"] == long.splitlines()[0][: git_version._WARN_DETAIL_MAX_CHARS]
+    assert "detail" not in steps[1]
 
 
 def test_no_unit_no_result(stub_version_probes):

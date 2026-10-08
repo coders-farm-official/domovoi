@@ -217,6 +217,21 @@ async def test_admin_satellite_upgrade_requests_and_logs() -> None:
 # ─── hello-frame synced_sha caching ──────────────────────────────────────
 
 
+@pytest.fixture
+def _paired_hello(monkeypatch: pytest.MonkeyPatch):
+    """These tests are about what a hello CACHES, not about pairing. Their
+    bare hello carries no pairing token, which only lenient pairing (no
+    longer the default, CORE-11) would accept; stand in for a paired
+    satellite's hello instead. Pairing is covered in test_satellite_pairing
+    and test_tokenless_rooms_stay_home."""
+
+    async def _accept(self, ctrl):
+        self.token_authenticated = True
+        return True
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)
+
+
 class _FakeAppState:
     def __init__(self) -> None:
         self.satellite_full_duplex: dict[str, bool] = {}
@@ -239,6 +254,7 @@ class _FakeWS:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
 async def test_hello_caches_synced_sha() -> None:
     ws = _FakeWS()
     session = StreamSession(ws, "kitchen")
@@ -250,6 +266,7 @@ async def test_hello_caches_synced_sha() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
 async def test_hello_caches_none_when_never_synced() -> None:
     ws = _FakeWS()
     session = StreamSession(ws, "garage")

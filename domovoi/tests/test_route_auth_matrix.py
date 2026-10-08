@@ -41,9 +41,10 @@ One class of READ is walked too: household speech and personal content
 wake-word recordings) is for paired devices only (owner decision
 2026-09-26), so every such GET must wear ``require_device_read`` — and the
 reads beside them that were deliberately left open are pinned open, so
-moving one is a decision rather than a drive-by. So are the numbers-only
-reads about the machine itself (the speech latency summary), which are
-open by design. The opt-in command recordings (2026-09-28) sit higher than
+moving one is a decision rather than a drive-by. The speech latency
+summary, open by design until 2026-10-08, is a household read now (a
+turn count for one room says somebody just spoke there). The opt-in
+command recordings (2026-09-28) sit higher than
 the rest of the household's speech: ``require_admin_security_read``, never
 the device tier. Two open timer reads are tiered INSIDE the handler rather
 than at the gate (``TIERED_INSIDE``, rule F1): the timer fire ledger is
@@ -117,7 +118,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # CORE-2: the core routes behind these are gated now (start takes an
     # admin Bearer, end the household token) and this hop forwards the
     # caller's credentials, so an ungated proxy cannot open a call.
-    ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_mutation gates it (auth forwarded)",
+    ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_security gates it (auth forwarded; 501 before setup, CORE-14)",
     ("web", "POST", "/api/satellites/{room_id}/dropin/end"): "proxy — core require_device gates it (auth forwarded)",
     ("web", "POST", "/api/models/active"): (
         "proxy — the core's security tier gates the config write it forwards to"
@@ -209,8 +210,19 @@ SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/satellites/{room_id}/pairing/preseed"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}/pairing"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}"),
+    # CORE-14: an HTTP-opened drop-in is a live microphone; no pre-setup
+    # grace for it (the phone socket's twin is in test_ws_gates).
+    ("core", "POST", "/v1/admin/dropin/start"),
     ("core", "POST", "/v1/admin/device-token"),
     ("core", "POST", "/v1/admin/device-token/rotate"),
+    # REV-32 (2026-10-08): approving a parked satellite binds a room to a
+    # device for good — with strict pairing the default, no pre-setup grace,
+    # or any LAN host could park its own device on an unclaimed core and
+    # approve it. Reject takes the same tier.
+    ("core", "POST", "/v1/admin/satellites/approvals/{room_id}/approve"),
+    ("core", "POST", "/v1/admin/satellites/approvals/{room_id}/reject"),
+    ("web", "POST", "/api/satellites/approvals/{room_id}/approve"),
+    ("web", "POST", "/api/satellites/approvals/{room_id}/reject"),
     ("web", "PATCH", "/api/config/editable"),
     ("web", "POST", "/api/config/version/restart"),
     ("web", "POST", "/api/satellites/{room_id}/upgrade"),
@@ -318,10 +330,6 @@ SPEECH_READS_SECURITY: list[tuple[str, str]] = [
 # decision. Pinned open so that gating one is a recorded decision (here,
 # in docs/SECURITY_PRIVACY.md and docs/API_REFERENCE.md), not a drive-by.
 SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
-    ("web", "/api/people"): "the roster: names, last seen, the people.notes column",
-    ("web", "/api/people/{person_id}"): "one roster row",
-    ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke — no words",
-    ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions — times and counts, no words",
     ("web", "/api/people/{person_id}/profiles"): "voice-profile enrolment metadata, never an embedding",
     ("web", "/api/satellites/{room_id}/timers"): (
         "household state: a room's countdowns; rule M1 — every reminder answers without its "
@@ -343,8 +351,6 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
         "a room's \"Only reminders for this device\" flag — anyone in the house may see how a "
         "room behaves (the write is device tier)"
     ),
-    ("web", "/api/calendar/events"): "household state; titles and descriptions",
-    ("web", "/api/calendar/events/{event_id}"): "household state",
     ("web", "/api/news/people/{person_id}/topics"): "a person's followed topics — the nearest cousin of favorites",
     ("web", "/api/news/people/{person_id}/items"): "public stories fetched for a person's topics",
     ("web", "/api/news/people/{person_id}/briefing"): "a summary of those stories",
@@ -352,6 +358,55 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
     ("web", "/api/denylist"): "opt-out rows: a date and an admin's note, never the embedding",
     ("web", "/api/acquisitions"): "the media request queue — search text or a URL",
 }
+
+# Household PRESENCE and the calendar: paired devices only too (owner
+# decision 2026-10-08, WEB-15). The ``/ws/state`` handshake already needed
+# a household credential because it pushes ``people.last_seen``, calendar
+# titles and satellite details; these are the HTTP reads of the same state,
+# which a LAN host could otherwise poll for the feed the socket withholds.
+# The read half of the device tier, ``require_device_read``, exactly as the
+# speech reads above take it.
+HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
+    ("web", "/api/people"): "the roster: names, last_seen_at (presence), the people.notes column",
+    ("web", "/api/people/{person_id}"): "one roster row, with last_seen_at",
+    ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke",
+    ("web", "/api/satellites"): "every room: presence, Wi-Fi SSID, hardware, code SHA, in_call_with",
+    ("web", "/api/satellites/{room_id}"): "one room's row (the kiosk's label and idle mode)",
+    ("web", "/api/satellites/pending"): "a satellite being adopted: MAC, board, model",
+    ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions, with the person who spoke",
+    ("web", "/api/calendar/events"): "the household's appointments: titles, places, descriptions",
+    ("web", "/api/calendar/events/{event_id}"): "one appointment",
+    # REV-11 (2026-10-08): the siblings the first pass left open, each of
+    # which still told a LAN poller when a room was in use.
+    ("web", "/api/satellites/{room_id}/recently-played"): (
+        "a room's play history, every play's started_at — when the room was in use"
+    ),
+    ("web", "/api/satellites/{room_id}/config"): (
+        "whether the room's satellite is connected (200/404) and the mic, Wi-Fi and "
+        "audio settings it reported; proxies the core read below"
+    ),
+    ("core", "/v1/admin/satellite/{room_id}/config"): "the core half of the read above",
+    ("core", "/v1/stats/latency"): (
+        "per-stage voice-turn timings — numbers only, but a turn count for one room "
+        "over a short window says somebody just spoke there"
+    ),
+    ("web", "/api/stats/latency"): "proxy of the core read above (credential forwarded)",
+}
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), sorted(HOUSEHOLD_STATE_READS),
+    ids=[f"{a} GET {p}" for a, p in sorted(HOUSEHOLD_STATE_READS)],
+)
+def test_presence_and_calendar_reads_need_a_paired_device(label, path) -> None:
+    assert HOUSEHOLD_STATE_READS[(label, path)].strip()
+    assert (label, path) not in SPEECH_ADJACENT_LEFT_OPEN
+    calls = _get_gates((label, path))
+    assert admin_auth.require_device_read in calls, (
+        f"{label} GET {path} publishes household presence or the calendar — it "
+        f"must depend on require_device_read (paired devices only)"
+    )
+
 
 # The response models that ARE household speech or personal content. Any
 # GET on either app answering with one of them must be on SPEECH_READS (or
@@ -522,36 +577,6 @@ def test_the_fire_ledger_tier_is_the_state_socket_s(monkeypatch) -> None:
 
     socket = {r: asyncio.run(admitted(r)) for r in _FIRE_LEDGER_BY_RESULT}
     assert socket == _FIRE_LEDGER_BY_RESULT
-
-
-# Numbers about the machine itself, open BY DESIGN rather than pending a
-# decision: counts and milliseconds, no text, no identity (owner decision
-# 2026-09-28, early-endpointing phase 1; docs/SECURITY_PRIVACY.md, daily
-# tier). Pinned so that gating one — or widening what it returns into
-# something that would need a gate — is a recorded change.
-OPEN_NUMBERS_ONLY_READS: dict[tuple[str, str], str] = {
-    ("core", "/v1/stats/latency"): (
-        "per-stage voice-turn timings from intents_log.timings — counts and "
-        "milliseconds, the route mix and the Whisper settings; no transcript, "
-        "person or session"
-    ),
-    ("web", "/api/stats/latency"): "proxy of the core read above; needs no credential",
-}
-
-
-@pytest.mark.parametrize(
-    ("label", "path"), sorted(OPEN_NUMBERS_ONLY_READS),
-    ids=[f"{a} GET {p}" for a, p in sorted(OPEN_NUMBERS_ONLY_READS)],
-)
-def test_the_numbers_only_reads_are_open(label, path) -> None:
-    assert OPEN_NUMBERS_ONLY_READS[(label, path)].strip()
-    calls = _get_gates((label, path))
-    gates = {
-        admin_auth.require_device_read, admin_auth.require_device,
-        admin_auth.require_admin_read, admin_auth.require_admin_mutation,
-        admin_auth.require_admin_security_read,
-    }
-    assert not gates.intersection(calls), f"{label} GET {path} is gated now"
 
 
 def _answers_with(rc: Any, models: tuple[type, ...]) -> bool:

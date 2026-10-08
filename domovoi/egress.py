@@ -371,6 +371,13 @@ def __getattr__(name: str) -> Any:
 
 
 def _refuse_request(request: Any) -> None:
+    # This hook judges; it never connects — the connection is httpx's,
+    # and for a request :func:`net_safety.open_stream` pinned, the URL
+    # host IS the vetted literal address (the name rides in the Host
+    # header). So under ``never`` the hook judges the address the socket
+    # opens to: a name that merely looks local (``media.lan``) but
+    # resolves to the internet is refused here, which is what "never"
+    # means. Nothing in this module resolves a name or connects by one.
     url = str(request.url)
     if check_destination(url) is not None:
         try:

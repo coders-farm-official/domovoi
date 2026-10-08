@@ -35,16 +35,27 @@ from pathlib import Path
 
 import requests
 
-from satellite.sound_sync import _safe_rel, _sha256, http_base_from_ws  # noqa: F401
+from satellite.sound_sync import _safe_rel, _sha256, fetch_manifest, http_base_from_ws  # noqa: F401
 
 log = logging.getLogger("satellite.wake_model_sync")
 
 
-def sync(http_base: str, cache_dir: Path, timeout: float = 10.0) -> int:
+def sync(
+    http_base: str,
+    cache_dir: Path,
+    timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
+) -> int:
     """Fetch the wake-model manifest, download missing/changed ``.onnx``
     (and optional ``.onnx.json``) files into ``cache_dir``, verifying each
     body's sha256 against the manifest. Returns the number of files
     downloaded. Raises on a network/HTTP error (the caller catches).
+
+    ``expected_fingerprint`` is the server this device belongs to. With
+    one, the list must come signed by that server (``manifest.sig``) — the
+    model is what the room LISTENS for, and its body is parsed by
+    onnxruntime in this process, so a host on the path does not get to
+    pick it. Without one, the unsigned list, as before.
 
     Prune is deliberately skipped here: ``sound_sync._prune`` is hard-wired
     to ``*.mp3`` and there is no previous-manifest tracking in this channel,
@@ -54,9 +65,10 @@ def sync(http_base: str, cache_dir: Path, timeout: float = 10.0) -> int:
     ever deleting a model the Pi is actively running mid-switch.
     """
     base = http_base.rstrip("/")
-    r = requests.get(f"{base}/v1/wake-models/manifest", timeout=timeout)
-    r.raise_for_status()
-    manifest: dict[str, str] = r.json()
+    manifest = fetch_manifest(
+        base, "/v1/wake-models", "satellite-wake-models", timeout=timeout,
+        expected_fingerprint=expected_fingerprint, what="wake-model sync",
+    )
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     downloaded = 0

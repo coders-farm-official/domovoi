@@ -44,13 +44,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.domovoi.app.LocalApp
-import com.domovoi.app.net.CleartextPolicy
+import com.domovoi.app.LocalToast
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.FoundDomovoi
+import com.domovoi.app.net.ServerAddress
+import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.DomovoiGlyph
@@ -59,12 +63,16 @@ import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Shared domovoi picker: wifi check, /24 auto-scan, saved servers,
  * and manual ip:port entry. Used by the first-run StartupScreen and by
  * the topbar server-switcher dialog. Mirrors the web ServerSwitcher.
+ *
+ * Every probe here — the sweep's and the typed address's — is made on a
+ * client with no household token on it (Discovery.client): the hosts
+ * probed are not the server, and the trust dialog has not been answered
+ * yet (A6-02).
  */
 @Composable
 fun ServerPickerPanel(onSelected: () -> Unit) {
@@ -72,8 +80,10 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val toast = LocalToast.current
     val currentUrl by app.prefs.serverUrl.collectAsState()
     val known by app.prefs.knownServers.collectAsState()
+    var confirmForgetActive by remember { mutableStateOf(false) }
 
     var onLan by remember { mutableStateOf(Discovery.onLan(context)) }
     var scanning by remember { mutableStateOf(false) }
@@ -91,7 +101,8 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     val gate = remember {
         ServerConnectGate(
             isTrusted = { app.prefs.isTrusted(it) },
-            onTrust = { app.prefs.trustServer(it) },
+            // What the dialog showed is what gets pinned (A6-03 review).
+            onTrust = { url, identity -> app.prefs.trustServer(url, identity) },
             onConnect = { url, name ->
                 app.prefs.upsertKnownServer(url, name)
                 app.prefs.setServerUrl(url)
@@ -100,8 +111,8 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     }
     val pendingTrust by gate.pending.collectAsState()
 
-    fun select(url: String, name: String?) {
-        if (gate.select(url, name)) onSelected()
+    fun select(url: String, name: String?, identity: ServerIdentity.Pin? = null) {
+        if (gate.select(url, name, identity)) onSelected()
     }
 
     fun rescan() {
@@ -120,25 +131,21 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     }
 
     fun addManual() {
-        var url = manual.trim().trimEnd('/')
-        if (url.isBlank()) return
-        if (!url.contains("://")) url = "http://$url"
-        if (!Regex(":\\d+$").containsMatchIn(url.substringAfter("://"))) {
-            url = "$url:${Discovery.DEFAULT_PORT}"
-        }
-        // Say why up front rather than reporting "couldn't reach" after the
-        // policy refuses a plain-http address outside the home network.
-        val parsed = url.toHttpUrlOrNull()
-        if (parsed != null && !CleartextPolicy.permits(parsed)) {
-            manualError = CleartextPolicy.refusalMessage(parsed.host)
-            return
+        // One rule with Settings → Connection (net/ServerAddress.kt): default
+        // scheme and port, and a plain-http address outside the home network
+        // is refused up front with the reason, rather than "couldn't reach"
+        // after the policy refuses it.
+        val url = when (val typed = ServerAddress.fromTyped(manual)) {
+            null -> return
+            is ServerAddress.Result.Refused -> { manualError = typed.message; return }
+            is ServerAddress.Result.Ok -> typed.url
         }
         manualBusy = true
         manualError = null
         scope.launch {
             val hit = Discovery.probe(app.api.http, url, timeoutMs = 3000)
             manualBusy = false
-            if (hit != null) select(hit.url, hit.name)
+            if (hit != null) select(hit.url, hit.name, hit.identity)
             else manualError = "couldn't reach a dashboard at $url"
         }
     }
@@ -194,6 +201,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
 
         // ── Known + found servers ─────────────────────────────────────
         val foundUrls = found.map { it.url }.toSet()
+        val identities = found.associate { it.url to it.identity }
         val rows = known.map { Triple(it.url, it.name, true) } +
             found.filter { f -> known.none { it.url == f.url } }
                 .map { Triple(it.url, it.name, false) }
@@ -216,7 +224,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                         if (active) Domovoi.colors.brandSoft else Domovoi.colors.sunken,
                         RoundedCornerShape(8.dp),
                     )
-                    .clickable(enabled = !active) { select(url, name) }
+                    .clickable(enabled = !active) { select(url, name, identities[url]) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -250,6 +258,13 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                 }
                 if (saved && !active) {
                     IconButton(onClick = { app.prefs.removeKnownServer(url) }, modifier = Modifier.size(26.dp)) {
+                        Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+                    }
+                }
+                // The server in use can be forgotten too (confirmed first):
+                // the way to re-pair after it was reinstalled or replaced.
+                if (active) {
+                    IconButton(onClick = { confirmForgetActive = true }, modifier = Modifier.size(26.dp)) {
                         Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
                     }
                 }
@@ -289,12 +304,27 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
             onConfirm = { if (gate.confirm()) onSelected() },
         )
     }
+
+    if (confirmForgetActive && currentUrl.isNotBlank()) {
+        val identityStatus by app.identity.status.collectAsState()
+        ForgetActiveServerDialog(
+            address = ServerCredentials.address(currentUrl),
+            pinned = app.prefs.pinForServer(currentUrl)?.fingerprint,
+            proven = provenFingerprint(identityStatus, currentUrl),
+            onDismiss = { confirmForgetActive = false },
+            onConfirm = {
+                confirmForgetActive = false
+                forgetActiveServer(app, toast)
+            },
+        )
+    }
 }
 
 /**
  * "Is this your Domovoi?" — the address first, because that is what a person
- * can check against the box. Nothing has been saved at this point; cancelling
- * leaves the app connected to whatever it was connected to.
+ * can check against the box, and the identity it advertises, which is what
+ * the dashboard's Settings → About shows. Nothing has been saved at this
+ * point; cancelling leaves the app connected to whatever it was connected to.
  */
 @Composable
 private fun TrustServerDialog(
@@ -322,6 +352,13 @@ private fun TrustServerDialog(
                     style = MaterialTheme.typography.titleLarge,
                     color = Domovoi.colors.fg,
                 )
+                server.fingerprint?.let { fingerprint ->
+                    Text(
+                        fingerprint,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = Domovoi.colors.fgMuted,
+                    )
+                }
                 Text(
                     buildString {
                         server.name?.takeIf { it.isNotBlank() }?.let { append("It calls itself \"$it\". ") }
@@ -330,6 +367,19 @@ private fun TrustServerDialog(
                                 "will load the screens this server advertises and send it your " +
                                 "requests. Nothing is saved until you confirm.",
                         )
+                        if (server.fingerprint != null) {
+                            append(
+                                " The identity above should match Settings → About on the dashboard; " +
+                                    "trusting pins it, and the household token goes out only after the " +
+                                    "server proves it holds that key.",
+                            )
+                        } else {
+                            append(
+                                " This server offers no identity (an older web backend), so nothing " +
+                                    "can be pinned: the app will not be able to tell it from another " +
+                                    "server at the same address.",
+                            )
+                        }
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgMuted,

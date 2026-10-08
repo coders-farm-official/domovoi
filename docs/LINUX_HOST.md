@@ -269,11 +269,62 @@ run each room's MPD container. Without group membership it would need
 sudo, which it won't do. Log out and back in, then confirm with `docker ps`
 that you get output rather than a permission error.
 
-Ollama:
+> **The `docker` group is root.** Anyone in it can start a container that
+> mounts the host's `/` and change anything on the box as root; Docker's
+> own documentation says the same. So the account the services run as is,
+> in effect, root: a bug that lets someone run code inside the core is a
+> root compromise of the server, whatever the [unit
+> sandboxing](#sandboxing-the-units) below holds back. Make that account
+> one that does nothing else: the `domovoi` service user under [Make it an
+> appliance](#make-it-an-appliance) (`sudo usermod -aG docker domovoi`),
+> not a login you also browse or read mail with, and add no one else to
+> the group.
+
+Ollama, from a pinned release checked against its SHA-256. (Ollama's
+`curl -fsSL https://ollama.com/install.sh | sh` fetches whatever is newest
+and checks no hash; the steps below are what that script does on a
+CPU-only x86_64 box, with the check added.)
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+OLLAMA_VERSION=0.34.4
+# ollama-linux-amd64.tar.zst of that release (on arm64: ollama-linux-arm64.tar.zst,
+# 96f50a1192133028cf4e010d8c333f8af14b1505db6be7b2034c11487e7fd7e6)
+OLLAMA_SHA256=c238986e61d40c0cc5f4a9b9e40b9eea104350b77efa34741fc134e105cb9533
+sudo apt install -y zstd
+curl -fL -o /tmp/ollama.tar.zst   "https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+echo "$OLLAMA_SHA256  /tmp/ollama.tar.zst" | sha256sum -c -   # must say OK; stop if not
+sudo rm -rf /usr/local/lib/ollama
+sudo tar --zstd -xf /tmp/ollama.tar.zst -C /usr/local       # bin/ollama and lib/ollama
+rm /tmp/ollama.tar.zst
+sudo useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 ```
+
+**`/etc/systemd/system/ollama.service`** (the unit `install.sh` writes):
+
+```ini
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now ollama
+```
+
+To move to another release, take its digest from that release's
+`sha256sum.txt` (or `gh release view v<version> -R ollama/ollama --json
+assets`) and repeat the steps with both values changed. The Windows
+installer pins the same release.
 
 Then clone and install. A virtualenv is worth it here — it keeps Domovoi's
 dependency tree away from the system Python that apt manages:
@@ -286,43 +337,71 @@ git clone https://github.com/coders-farm-official/domovoi && cd domovoi
 python3 -m venv .venv && source .venv/bin/activate
 ```
 
-**Install CPU-only torch first.** This step is not optional on a machine
-without an NVIDIA GPU:
+**Install from the hash-pinned lock.** `requirements-linux-py314.lock` at
+the repo root is the whole production set (the core, the dashboard, the
+`real-clients` and `voice-profile` extras, `resemblyzer`, and CPU-only
+`torch` from PyTorch's CPU index), every package at an exact version with
+its SHA-256s, so a substituted or tampered download fails the install
+instead of running. It was compiled for CPython 3.14 on x86_64, which is
+what Ubuntu 26.04's `python3` is (`python3 --version`). Three commands, in
+this order:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel
+pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock
+pip install --no-deps --no-build-isolation -e .
 ```
+
+The first installs the build tools, checked against the lock's hashes.
+The second installs everything else; `metaphone` and `webrtcvad` publish
+no wheels and are built here, with those checked tools rather than a
+fresh, unchecked `setuptools` that pip would otherwise download for each
+build (that is what `--no-build-isolation` is for, and why the
+`python3-dev` and `build-essential` prerequisites are there). The third
+installs Domovoi itself and nothing else. No `dev` extra: a server doesn't
+run the test suite.
 
 PyPI's default Linux `torch` build bundles its own CUDA runtime — cuBLAS,
-cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it —
-and `torch` arrives via the `voice-profile` extra. That is entirely
-separate from the `cuda` extra below, which only covers the wheels
-`ctranslate2` wants. Installing the `+cpu` build first means the next
-command sees `torch>=2.0` already satisfied and never pulls the CUDA one.
+cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it.
+The lock pins the `+cpu` build from PyTorch's CPU index (it names that
+index itself), so none of that arrives. That is entirely separate from the
+`cuda` extra below, which only covers the wheels `ctranslate2` wants.
 
-```bash
-pip install -e ".[dev,real-clients,voice-profile]"
-```
-
-Then try `resemblyzer` the normal way — the `--no-deps` dance in the
-README is a Windows workaround:
-
-```bash
-pip install resemblyzer
-```
+Check the voice encoder loads:
 
 ```bash
 python -c "from resemblyzer import VoiceEncoder; VoiceEncoder()"
 ```
 
 That should print `Loaded the voice encoder model on cpu in <N> seconds`.
-If the install fails building `webrtcvad`, fall back to `pip install
---no-deps resemblyzer` — Domovoi doesn't use the code path that calls it.
+
+**No lock for your Python?** On anything but CPython 3.14 (the
+[`uv venv --python 3.13`](#if-the-wheels-arent-there-yet) route, an arm64
+box the lock wasn't checked on), fall back to pip's resolver, which checks
+no hashes and installs whatever the index serves that day within the
+floors in `pyproject.toml`:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[real-clients,voice-profile]"
+pip install resemblyzer      # if webrtcvad fails to build: pip install --no-deps resemblyzer
+```
+
+The [update unit](#updates-from-the-dashboard) re-syncs this way too
+until you opt it into the lock ([The hash-pinned lock](#the-hash-pinned-lock));
+once opted in, it falls back to this, with a warning in its step,
+whenever the venv's Python isn't the lock's.
+Maintainers regenerate the lock with `DOMOVOI_LOCK_SEED=requirements.lock
+bash scripts/linux/compile-linux-lock.sh` (pip-compile in a pinned
+`python:3.14-slim` container, so it resolves for this platform from any
+machine with Docker, starting from the suite's tested versions) after any
+change to `pyproject.toml`, and commit both.
 
 > **CUDA wheels are opt-in.** They used to ride along with `real-clients`;
-> they now live in a separate `cuda` extra, so the command above pulls
-> nothing NVIDIA. On a machine that *does* have an NVIDIA GPU, add
-> `pip install -e ".[cuda]"`.
+> they now live in a separate `cuda` extra, so the lock pulls nothing
+> NVIDIA. On a machine that *does* have an NVIDIA GPU, add
+> `pip install -e ".[cuda]"` (resolved from the index, not hash-checked:
+> the lock is the CPU set).
 
 > **The streaming fast lane is opt-in as well.** It is a small second
 > recognizer that follows each command while it is spoken; today it only
@@ -341,7 +420,9 @@ If the install fails building `webrtcvad`, fall back to `pip install
 > **shadow** under Settings → Speech-to-text → *Fast lane*, which applies
 > without a restart. If the [update unit](#updates-from-the-dashboard)
 > manages this box, add `fastlane` to `DOMOVOI_PIP_EXTRAS` so a venv
-> re-sync keeps it installed.
+> re-sync keeps it installed. Like `cuda`, it is outside the lock: pip
+> resolves it from the index and checks no hashes, and the update unit's
+> step says so.
 
 Bring it up — `dev.sh` is the bash twin of `dev.ps1`:
 
@@ -407,79 +488,28 @@ This is where Linux earns its keep. The runbook warns that `dev.ps1` is a
 foreground development script that dies with its terminal — on Linux you
 replace it properly with three systemd units.
 
-Assumes the repo at `/opt/domovoi`, a venv at `/opt/domovoi/.venv`, and a
-service user named `domovoi` who is in the `docker` group. Adjust to taste.
+The three units ship with the checkout, in
+[`scripts/linux/units/`](../scripts/linux/units/). They assume the repo at
+`/opt/domovoi`, a venv at `/opt/domovoi/.venv`, and a service user named
+`domovoi` with its home at `/home/domovoi`, in the `docker` group (which
+[makes it root](#install), in effect). Install them as they are:
 
-**`/etc/systemd/system/domovoi-db.service`** — brings up Postgres and runs
-migrations before anything connects. Exactly what `dev.sh` does first:
-
-```ini
-[Unit]
-Description=Domovoi database (Postgres + migrations)
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-User=domovoi
-WorkingDirectory=/opt/domovoi/domovoi
-ExecStart=/usr/bin/docker compose up -d postgres
-ExecStart=/usr/bin/docker compose run --rm flyway
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo install -m 0644 /opt/domovoi/scripts/linux/units/domovoi-db.service   /opt/domovoi/scripts/linux/units/domovoi-core.service   /opt/domovoi/scripts/linux/units/domovoi-web.service /etc/systemd/system/
 ```
 
-**`/etc/systemd/system/domovoi-core.service`** — the voice service on
-:6370:
+A different user, checkout or home? Change `User=`, `WorkingDirectory=`,
+`ExecStart=`, `Environment=HOME=` and the `ReadWritePaths=` / `BindPaths=`
+lines of the copies in `/etc/systemd/system/` to match; [Sandboxing the
+units](#sandboxing-the-units) says what each of those lines must cover.
 
-```ini
-[Unit]
-Description=Domovoi core voice service
-After=domovoi-db.service ollama.service
-Requires=domovoi-db.service
-Wants=ollama.service
-
-[Service]
-Type=simple
-User=domovoi
-WorkingDirectory=/opt/domovoi
-Environment=PYTHONUNBUFFERED=1
-Environment=HOME=/home/domovoi
-ExecStart=/opt/domovoi/.venv/bin/python -m domovoi.main
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-KillMode=control-group
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**`/etc/systemd/system/domovoi-web.service`** — the dashboard on :6369:
-
-```ini
-[Unit]
-Description=Domovoi web dashboard
-After=domovoi-core.service
-Wants=domovoi-core.service
-
-[Service]
-Type=simple
-User=domovoi
-WorkingDirectory=/opt/domovoi
-Environment=PYTHONUNBUFFERED=1
-Environment=HOME=/home/domovoi
-ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
+- **`domovoi-db.service`** brings up Postgres and runs the migrations
+  before anything connects, exactly what `dev.sh` does first
+  (`docker compose up -d postgres`, then `docker compose run --rm flyway`).
+- **`domovoi-core.service`** is the voice service on :6370
+  (`/opt/domovoi/.venv/bin/python -m domovoi.main`).
+- **`domovoi-web.service`** is the dashboard on :6369
+  (`/opt/domovoi/.venv/bin/python -m web.backend.main`).
 
 Note `WorkingDirectory` differs: the two Python services run from the
 **repo root** so `python -m` resolves the packages, while the database
@@ -554,6 +584,99 @@ whole house returns — Docker, Postgres, both services, every satellite —
 without you logging in. That's the difference between a demo and an
 appliance, and it's the thing Linux makes genuinely easy.
 
+### Sandboxing the units
+
+The shipped units carry systemd's sandboxing. None of it changes what
+Domovoi does; it bounds what a process gone wrong can reach directly:
+
+- **Read-only system.** `ProtectSystem=strict` mounts everything read-only
+  except what `ReadWritePaths=` names: the checkout and its venv
+  (`/opt/domovoi`: pulls, plugin installs, `domovoi/.env`), the usual
+  mount points for media disks and cards (`/mnt`, `/media`, `/run/media`,
+  `/srv`; a missing one is skipped), and the service user's home, the only
+  home the core and web can see at all (`ProtectHome=tmpfs` with
+  `BindPaths=/home/domovoi`). The home holds `~/.domovoi/`, the model
+  caches and the default `~/Music`, `~/Pictures` and `~/Documents`.
+  `domovoi-db` sees homes read-only and writes only its own.
+- **Private `/tmp`** per unit, files the services create are not readable
+  by other accounts (`UMask=0027`), and the control groups are read-only.
+- **`domovoi-web` and `domovoi-db`** also have the kernel's tunables,
+  modules, logs and hostname off limits; no set-uid files, no realtime
+  scheduling, no new namespaces, native system calls only, and sockets
+  limited to local, IPv4, IPv6 and netlink. They run with
+  `NoNewPrivileges=yes` and no capabilities at all; `domovoi-db`, which
+  only drives the `docker` CLI, gives up devices, the clock and
+  writable-executable memory too.
+
+What is deliberately left out, and why:
+
+- **Everything that implies `NoNewPrivileges` on the core.** The version
+  panel's Restart runs `sudo -n systemctl ...` from the core
+  ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)), and on a
+  box with the [update unit](#updates-from-the-dashboard) that is
+  `sudo -n systemctl start domovoi-update.service`, the box's only update
+  path. sudo works only while its set-uid bit is honoured, and the kernel's
+  no-new-privileges flag turns that off ("The no new privileges flag is
+  set"). systemd sets that flag for `NoNewPrivileges=yes`, and it also
+  implies it, for a unit that runs as a non-root `User=`, for every option
+  it enforces with seccomp: `LockPersonality`, `MemoryDenyWriteExecute`,
+  `PrivateDevices`, `ProtectClock`, `ProtectHostname`, `ProtectKernelLogs`,
+  `ProtectKernelModules`, `ProtectKernelTunables`,
+  `RestrictAddressFamilies`, `RestrictNamespaces`, `RestrictRealtime`,
+  `RestrictSUIDSGID`, `SystemCallArchitectures`, `SystemCallFilter`,
+  `SystemCallLog` and `DynamicUser` (`man systemd.exec`, under
+  `NoNewPrivileges=`). So the core unit keeps only the file-system part
+  above (read-only system, private `/tmp`, hidden homes, read-only control
+  groups, the umask), and its comment lists what it leaves out. Adding any
+  of those options to the core, in the unit or a drop-in, silently breaks
+  the Restart button: the panel then reports no sudoers grant. The web
+  never runs sudo (its Restart button asks the core), so it keeps
+  `NoNewPrivileges` and every one of those the hardware allows (all but the
+  device, clock and W+X ones below).
+- **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
+  They hide device nodes: a GPU, an SDR stick for the radio, the block
+  devices the dashboard reads a satellite card's label from.
+- **`MemoryDenyWriteExecute` on core and web.** The speech and audio stack
+  (numba, torch, onnxruntime) compiles code at run time.
+- **The Docker socket.** No unit setting can narrow it: the core needs it
+  for the room players, and through it the service user can still do
+  anything as root ([Install](#install)). The sandbox narrows the direct
+  paths only.
+
+**Media somewhere else**, say `/data/music`? Add it with a drop-in for the
+core and the web (`sudo systemctl edit domovoi-core`, then the same for
+`domovoi-web`):
+
+```ini
+[Service]
+ReadWritePaths=/data/music
+```
+
+**Check it** after `daemon-reload` and a restart: `systemd-analyze security
+domovoi-core` scores the exposure (the units this page listed before
+scored 9.0 "UNSAFE" each; the shipped ones score about 3.5 for the web and
+1.8 for `domovoi-db`, and the core, which keeps only the file-system part,
+scores higher than both), Settings → Version still offers
+**Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
+satellite turn answers, and a room's music starts (the core runs
+`docker`). The quick check for the sudo path on its own, as root:
+`systemd-run -p User=domovoi -p ProtectSystem=strict -p PrivateTmp=yes --wait --pipe sudo -n -l`
+lists the grant; add `-p RestrictSUIDSGID=yes` and it fails, which is the
+trap described above.
+
+**Already running units from an older copy of this page?** If they match
+this page's layout, install the shipped files over them as above, then
+`sudo systemctl daemon-reload` and restart the three. If you changed
+paths or the user, copy the sandboxing block from the shipped file into a
+drop-in instead (`sudo systemctl edit domovoi-core`, and the same for the
+other two), with your paths in `ReadWritePaths=` and `BindPaths=`. Copy
+each unit's own block: the web's or the database's block in the core's
+drop-in stops its sudo.
+
+`domovoi-update.service` is not sandboxed: it runs as root to stop and
+start the other units, back up the database, rebuild the room image and
+roll everything back ([Updates from the dashboard](#updates-from-the-dashboard)).
+
 ### Internet or not
 
 The internet answer needs nothing from the units. Saving it in Settings →
@@ -607,11 +730,13 @@ anyone searches ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-netw
 
 ## Updates from the dashboard
 
-The version panel pulls with `git pull --ff-only`. A pull can bring new
-Python dependencies, a new Flyway migration or a new MPD image, and a bare
-restart of core and web applies none of them: `domovoi-db` runs Flyway only
-when *it* starts. A migration that never ran looks like a broken release
-(the V013 device-token table was the first time this bit).
+The version panel's **Pull the latest** fetches, verifies the fetched tip's
+signature (see [Signed updates](#signed-updates)), and fast-forwards to
+it. A pull can bring new Python dependencies, a new Flyway migration or a
+new MPD image, and a bare restart of core and web applies none of them:
+`domovoi-db` runs Flyway only when *it* starts. A migration that never ran
+looks like a broken release (the V013 device-token table was the first
+time this bit).
 
 A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
 that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
@@ -636,10 +761,15 @@ run does this:
    so before anything happens: its confirm asks for the full update (a
    second confirm, when only the read taken at the press shows it), and
    the card says **Updating…** and waits up to 15 minutes, not seconds.
-2. Refuse, touching nothing, if tracked files have uncommitted changes. A
-   rollback could not restore that tree. Untracked files are fine. Stop,
-   touching nothing, if the dependencies changed but the service user
-   can't write the venv (step 5 would fail, and so would its rollback).
+2. Refuse, touching nothing, if the checkout's `origin` or tracking branch
+   is not the pinned upstream, or if signed updates are enforced and HEAD
+   does not verify against the root-owned allowed-signers file (both in
+   [Signed updates](#signed-updates); the first check runs before step 1,
+   on the plain restart too). Refuse, touching nothing, if tracked files
+   have uncommitted changes. A rollback could not restore that tree.
+   Untracked files are fine. Stop, touching nothing, if the dependencies
+   changed but the service user can't write the venv (step 5 would fail,
+   and so would its rollback).
 3. `pg_dump -Fc` the database through the `domovoi-postgres` container into
    `/var/lib/domovoi-update/backups/`, and `domovoi_test` next to it
    (`pre-<sha>-<time>.test.dump`) when that database exists: plugin
@@ -652,8 +782,20 @@ run does this:
    needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
    in the version panel instead of hiding in a slow step.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
-   changed: re-sync the venv the way [Install](#install) builds it (CPU
-   torch first, then `pip install -e ".[dev,real-clients,voice-profile]"`).
+   changed: re-sync the venv. By default that is pip's resolver, as it
+   was before the lock existed: CPU torch first, then
+   `pip install -e ".[real-clients,voice-profile]"` from the index; when
+   the checkout has `requirements-linux-py314.lock`, the step's detail
+   says it is there to opt into. With `DOMOVOI_USE_LOCK=1`
+   ([The hash-pinned lock](#the-hash-pinned-lock)), and when the venv runs
+   the Python the lock was compiled for, it is the three hash-checked
+   installs from the lock that [Install](#install) gives, and a package
+   whose download doesn't match its hash fails the step, so the update
+   rolls back; extras beyond the lock's own (`cuda`, `fastlane`) then go
+   through the resolver, and the step's detail says so. Opted in without
+   a usable lock, it uses the resolver and the step is a `warn`: the
+   version panel shows **lock not applied: <reason>** under the last
+   update.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
@@ -692,8 +834,10 @@ run does this:
 
 Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
 update that would download is refused with status `aborted`, nothing
-stopped or changed: one whose Python dependencies changed (pip) or whose
-`Dockerfile.mpd` changed (docker build pulls the base image and runs apt).
+stopped or changed: one whose Python dependencies changed (pip), whose
+`Dockerfile.mpd` changed (docker build pulls the base image and runs apt),
+or whose `domovoi/docker-compose.yml` moves an `image:` pin (every image
+there is pinned by digest, so `domovoi-db` would pull the new one).
 An `mpd.conf`-only change keeps the image and just recreates the rooms.
 To take such an update, follow
 [INTERNET.md → Updating a box answered No](INTERNET.md#updating-a-box-answered-no).
@@ -712,8 +856,11 @@ file. `domovoi_test` gets the same treatment on its own evidence: its dump
 is restored if a plugin ledger in it grew. The restore goes into a fresh
 database that is then renamed to `domovoi` (or `domovoi_test`); the
 replaced one is kept as `domovoi_failed_<timestamp>` (or
-`domovoi_test_failed_<timestamp>`) for inspection, and you drop it by hand
-when you're done with it. The loader switches off a plugin whose import,
+`domovoi_test_failed_<timestamp>`) for inspection. It is a full copy of
+the database, so only the newest one of each is kept: the next restore
+drops older ones (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1). Drop the
+last one by hand (`docker exec domovoi-postgres dropdb -U domovoi
+domovoi_failed_<timestamp>`) once it's no longer interesting. The loader switches off a plugin whose import,
 `register()` or contract check fails, and a boot skips switched-off
 plugins, so every plugin that loaded before the update and that the new
 code's load errors switched off is switched back on before the previous SHA
@@ -724,7 +871,12 @@ the result is `rollback_failed` and names it. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,
-from/to SHA, each step with its timing, the error). The version panel shows
+from/to SHA, each step with its timing, the signature verdict, the error).
+It carries the tail of each failed command's output, so it is mode 0640,
+group the service user's: the core reads it, other local accounts don't. The dumps in
+`backups/` hold everything the database holds, the household token
+included; that directory is 0700 and each dump 0600, root only
+([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)). The version panel shows
 it as **last update**, and `GET /v1/admin/version` serves it as
 `last_update`. When the core can't use the file, `last_update` is `null`
 and `last_update_problem` says why (`unreadable`, `invalid`, ...); the
@@ -761,6 +913,13 @@ away from the tree: git and pip run as the service user through
 `runuser`, and root's own files live in `/var/lib/domovoi-update`, which the
 service user can read but not write.
 
+What that does not bound is upstream. The script root runs is whatever
+the pull brought, so a compromise of the repository's `main` (a stolen
+token, a merged pull request) would be root on this box at its next
+**Restart to apply changes**, with no LAN access or credential needed.
+The bound is a signature: see [Signed updates](#signed-updates). Until
+you set it up, every pull and every update says so.
+
 **`/etc/default/domovoi-update`** is optional. Every setting defaults to the
 layout on this page, so you only need the file to change one:
 
@@ -771,12 +930,20 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_REPO_DIR=/opt/domovoi
 # Default: the venv domovoi-core.service's ExecStart runs from, else <checkout>/.venv.
 # DOMOVOI_VENV=/opt/domovoi/.venv
-# Extras for the venv re-sync. An NVIDIA host adds cuda: dev,real-clients,voice-profile,cuda
-# DOMOVOI_PIP_EXTRAS=dev,real-clients,voice-profile
-# CPU torch index, used first when the extras include voice-profile. Empty: skip that step.
+# Extras for the venv re-sync. The lock covers real-clients and voice-profile; any other
+# (an NVIDIA host's cuda, fastlane) is resolved from the index after it, without hash checks.
+# DOMOVOI_PIP_EXTRAS=real-clients,voice-profile
+# 1: the re-sync installs from the hash-pinned lock. Default: off, pip's resolver as before.
+# Re-seed the lock from this box's pip freeze first (The hash-pinned lock, below).
+# DOMOVOI_USE_LOCK=1
+# The hash-pinned lock the re-sync installs from, relative to the checkout. Empty: never use one.
+# DOMOVOI_DEPS_LOCK=requirements-linux-py314.lock
+# CPU torch index, for the resolver path only (the lock names its own). Empty: skip that step.
 # DOMOVOI_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 # DOMOVOI_UPDATE_DIR=/var/lib/domovoi-update
 # DOMOVOI_UPDATE_KEEP_BACKUPS=5
+# Replaced databases (<db>_failed_<time>) a rollback keeps for inspection, newest first.
+# DOMOVOI_UPDATE_KEEP_FAILED_DBS=1
 # 0 lets an update go ahead when the pre-update backup fails (then no restore is possible).
 # DOMOVOI_UPDATE_REQUIRE_BACKUP=1
 # DOMOVOI_UPDATE_HEALTH_TIMEOUT=120
@@ -793,6 +960,13 @@ layout on this page, so you only need the file to change one:
 # Default: MPD_IMAGE_TAG / MPD_CONTAINER_PREFIX from domovoi/.env, else these.
 # DOMOVOI_MPD_IMAGE_TAG=domovoi-mpd:latest
 # DOMOVOI_MPD_CONTAINER_PREFIX=domovoi-mpd-
+# Signed updates (below). Enforcement is this file's presence; the core reads the path from here too.
+# DOMOVOI_ALLOWED_SIGNERS=/etc/domovoi/allowed_signers
+# A retired key's revocation file (ssh-keygen -Y verify -r). Default: none.
+# DOMOVOI_REVOKED_SIGNERS=/etc/domovoi/revoked_signers
+# The upstream the checkout must follow; a checkout on another remote or branch is refused. Default: not pinned.
+# DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
+# DOMOVOI_UPSTREAM_BRANCH=main
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,
@@ -819,6 +993,215 @@ above exists. Without that rule the panel says so and shows the manual
 command; it does not fall back to a plain bounce, which would skip the
 migrations. Not found, the button bounces core and web exactly as before.
 `systemctl mask domovoi-update.service` switches back to the plain bounce.
+
+### The hash-pinned lock
+
+The update unit can re-sync the venv from `requirements-linux-py314.lock`
+instead of pip's resolver, so that a substituted or tampered download
+fails the update and it rolls back. That is opt-in: until
+`/etc/default/domovoi-update` sets `DOMOVOI_USE_LOCK=1`, the re-sync
+resolves from the index exactly as it did before the lock existed, and
+its step says the lock is there. The reason is the first locked re-sync:
+it moves every package to the lock's version, and the lock in the
+repository is seeded from the test suite's set, not from what your box
+runs (torch, librosa, faster-whisper and the rest of the speech stack are
+the newest that resolved). Re-seed it from the box first:
+
+1. On the box, write down what its venv runs:
+
+   ```bash
+   sudo -u domovoi /opt/domovoi/.venv/bin/python -m pip freeze --exclude-editable >domovoi-freeze.txt
+   ```
+
+2. On a machine with Docker, in a checkout of the same commit, compile
+   the lock from that freeze, check it, and commit it. Every version that
+   still satisfies `pyproject.toml` is kept, so the first locked re-sync
+   moves only what the floors require:
+
+   ```bash
+   DOMOVOI_LOCK_SEED=domovoi-freeze.txt bash scripts/linux/compile-linux-lock.sh
+   USE_STUBS=true PYTHONPATH=. python -m pytest domovoi/tests/test_ops_linux_lock.py
+   ```
+
+   Where the freeze and `requirements.lock` disagree on a package both
+   carry, decide which wins (the suite's tested version is the safer
+   default); the seed is one file, so merge the two first if you want
+   some of each.
+
+3. Pull that commit to the box, opt in, and let the installer's
+   pre-flight say what an update will do:
+
+   ```bash
+   echo 'DOMOVOI_USE_LOCK=1' | sudo tee -a /etc/default/domovoi-update
+   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+   ```
+
+   It reports `dependency lock: on` when an update would install from
+   the lock, and warns when it could not (no lock in the checkout, or a
+   lock for another Python than the venv's). Without the setting it
+   reports `dependency lock: off`.
+
+From then on an update that changes `pyproject.toml` or a lock installs
+from the lock, every package hash-checked ([step 5](#updates-from-the-dashboard)).
+A package that does not match its hash fails the update, and it rolls
+back. If a later update can't use the lock at all (the venv moved to a
+newer Python, the lock was renamed, `DOMOVOI_DEPS_LOCK` was emptied), it
+does not stop: it resolves from the index as before, but its `sync-deps`
+step is a `warn`, the journal says WARNING, and Settings → Version shows
+**lock not applied: <reason>** under the last update until the next run.
+Re-seed and commit a lock for the new Python to go back to hash-checked
+installs. A lock change is a dependency change, so under the **No**
+internet answer that update is refused like any other. Remove the line
+(or set it to `0`) to go back to the resolver.
+
+Turning `dev` out of the default extras stops a re-sync adding the test
+runner; it does not remove what an older install already has. Of the
+`dev` extra (`pyproject.toml`, `[project.optional-dependencies]`) only
+pytest and pytest-asyncio are not also production dependencies. On a box
+that does not run the test suite, take them out once while you re-seed
+(after step 1's freeze, so the freeze still names what the box ran):
+
+```bash
+sudo -u domovoi /opt/domovoi/.venv/bin/python -m pip uninstall -y pytest pytest-asyncio
+```
+
+### Signed updates
+
+What bounds an update is a signature. Without one, a compromise of the
+repository's `main` on GitHub (a stolen token, a compromised laptop, a
+merged pull request that edits `scripts/linux/apply-update.sh`,
+`domovoi/Dockerfile.mpd` or `pyproject.toml`) is root on every Linux
+install at its next **Restart to apply changes**: the update unit runs the
+pulled checkout's own script as root, and the attacker needs no LAN access
+and no credential to get there. Signing closes that. Every commit on
+`main` carries an SSH signature by one of your keys, the box holds the
+list of those keys in a file only root can write, and nothing from a
+checkout that does not verify runs as root.
+
+**Enforcement is the file.** While `/etc/domovoi/allowed_signers` exists,
+both halves of the pipeline check against it and refuse otherwise. While it
+doesn't, both go on and say so, loudly: the core's log on every pull, the
+update's journal and a `warn` step in **last update** on every run, and an
+**unsigned** badge beside the version in Settings. So an install that
+hasn't set signing up keeps updating, and removing the file turns
+enforcement off again. Two checks, in this order:
+
+- **Before the pull** (`POST /v1/admin/version/pull`; the core, as the
+  service user): `git fetch`, then `git verify-commit` on the fetched tip,
+  then `git merge --ff-only` to that exact SHA. A tip that does not verify
+  is refused with `pulled: false` and the tree never moves. This is the
+  gate for the dashboard path: the code doing the checking is the code
+  already loaded, which the pull cannot change.
+- **Before anything runs as root** (`apply-update.sh`, every run, the
+  plain restart as much as the full update): root runs `git verify-commit
+  HEAD` itself, not through `runuser` and not taking the core's word for
+  it, with the signers file and every program git could be told to run
+  pinned on the command line (the checkout's `.git/config` belongs to the
+  service user, and a `gpg.ssh.program` in it would otherwise choose what
+  root executes). A HEAD that does not verify is `refused`, nothing
+  stopped or changed, and the result says what to do. The signers file
+  must be a plain file owned by root that no one else can write, or it is
+  refused as well.
+
+What this does not cover: a tree already moved to an unverified commit by
+a pull that skipped the core (`git pull` by hand as the service user) has
+already replaced the script root runs, and a check inside that script is
+no check at all. Pull through the dashboard, or by hand with the same
+check git offers:
+
+```bash
+sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers pull --ff-only --verify-signatures
+```
+
+(After a pull by hand, run `env_bootstrap --repair` before you restart
+anything yourself; see [Helper-container secrets](#two-more-linux-notes).)
+
+The service user is in the `docker` group and so root-equivalent already;
+signing bounds *upstream*, not the service user.
+
+**Set it up.** On the machine you commit from (once per machine):
+
+```bash
+ssh-keygen -t ed25519 -C "domovoi commit signing" -f ~/.ssh/domovoi_signing
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/domovoi_signing.pub
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+```
+
+Every commit you make from then on is signed, merges included. **Merges
+made by tools must be signed too.** A merge an agent, a script or GitHub's
+merge button makes with an identity that doesn't sign is unsigned, and the
+box refuses it (the signature is on the tip; a signed tip vouches for
+everything under it, so signed merge commits of unsigned work are fine).
+Merge locally with the configuration above in force, or sign a merge after
+the fact with `git commit --amend -S --no-edit`, and turn on GitHub's
+**Require signed commits** branch protection on `main` so an unsigned
+commit can't land there in the first place. `git log --show-signature -1`
+checks any commit. Only SSH signatures are checked on the box: an
+OpenPGP-signed commit reads as unverified there (no keyring).
+
+On the box, install the allowed-signers file: one line per key, a
+principal (any name; it's what the version panel shows as the signer),
+the `git` namespace, then the public key as its `.pub` file has it. The
+first command, on the machine you commit from, prints the line; the rest,
+as your admin user on the box, put it in place owned by root:
+
+```bash
+printf 'kamron namespaces="git" %s\n' "$(cut -d' ' -f1,2 ~/.ssh/domovoi_signing.pub)"
+
+sudo install -d -m 0755 -o root -g root /etc/domovoi
+echo 'kamron namespaces="git" ssh-ed25519 AAAA...' | sudo tee /etc/domovoi/allowed_signers >/dev/null
+sudo chmod 0644 /etc/domovoi/allowed_signers
+```
+
+Then check that HEAD verifies the way the unit will, before the next
+update has to:
+
+```bash
+sudo git -C /opt/domovoi -c safe.directory=/opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers verify-commit HEAD
+sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+```
+
+The first prints `Good "git" signature for kamron with ED25519 key ...`.
+The second reports `signed updates enforced: HEAD ... is signed by kamron`,
+or stops, changing nothing, if HEAD would be refused. If the checkout is
+still on a commit from before you started signing, pull a signed one first
+(**Pull the latest** verifies it), then restart. Several people can sign:
+one line each. A key is retired by removing its line; to retire it while
+its old commits stay verifiable, list it in a revocation file instead
+(`ssh-keygen -Y verify -r`) and set `DOMOVOI_REVOKED_SIGNERS`.
+
+**Pin the upstream** as well, so a checkout pointed at another remote or
+branch is refused before it is even verified. In
+`/etc/default/domovoi-update`:
+
+```bash
+DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
+DOMOVOI_UPSTREAM_BRANCH=main
+```
+
+`origin` must have that URL (a trailing `.git` or `/` doesn't matter) and
+HEAD must track `origin/main`, or the run is `refused` with an `upstream`
+step saying which. All four settings are optional and read from that
+root-owned file: `DOMOVOI_ALLOWED_SIGNERS` (default
+`/etc/domovoi/allowed_signers`; the core reads the path from the same file,
+so the two halves always look at one file), `DOMOVOI_REVOKED_SIGNERS`,
+`DOMOVOI_UPSTREAM_URL`, `DOMOVOI_UPSTREAM_BRANCH`.
+
+**What you see.** `GET /v1/admin/version` carries `signature: {status,
+signer, key, enforced, allowed_signers, detail}`: `status` is `verified`,
+`unsigned`, `unverified` (signed, but not by a listed key, or no file to
+check against) or `unknown`; `signer` and `key` name a verified
+signature's principal and fingerprint. The Settings → Version card shows
+it as a badge beside the version: **signed**, **unsigned** or **signature
+not verified**, red when enforcement would refuse an update and amber when
+signing just isn't set up. `POST /v1/admin/version/pull` answers with the
+same `signature` object, and a refusal as `pulled: false` with the reason
+in `error`. Every update result carries it as `signature` too, plus a
+`signature` step (`ok`, `warn` while not enforced, `refused`) and, when
+pinned, an `upstream` step; a refused run has status `refused`, like a
+dirty tree.
 
 ### One-time upgrade for existing installs
 
@@ -853,15 +1236,25 @@ take them:
   in the checkout as the service user; `docker compose` works for that
   user; only root can write `/var/lib/domovoi-update` (or whatever
   `DOMOVOI_UPDATE_DIR` names), the directories above it and
-  `/etc/default/domovoi-update`. If one of these fails it stops and says
-  why. Two things only warn: a venv the service user doesn't wholly own (it
-  prints the `chown` that fixes it, and `--fix-ownership` runs it, last,
-  and only on a directory with a `pyvenv.cfg`), and `piper-tts` older than
-  1.3 in the venv.
+  `/etc/default/domovoi-update`. With the allowed-signers file in place,
+  HEAD verifies against it as root the way every update run will, and the
+  pinned upstream (if any) is the checkout's; otherwise it stops rather
+  than leave a unit that refuses every run ([Signed updates](#signed-updates)).
+  If one of these fails it stops and says why. Three things only warn: a
+  venv the service user doesn't wholly own (it prints the `chown` that
+  fixes it, and `--fix-ownership` runs it, last, and only on a directory
+  with a `pyvenv.cfg`), `piper-tts` older than 1.3 in the venv, and signed
+  updates not set up yet. It also says whether an update re-syncs the venv
+  from the hash-pinned lock (`dependency lock: on`) or through pip's
+  resolver (`off`, the default; [The hash-pinned lock](#the-hash-pinned-lock)),
+  and warns when the lock is opted into but an update could not use it.
 - **Records the rollback baseline** in `/var/lib/domovoi-update/applied_sha`
   when that file doesn't exist yet: the `running_sha` the core reports on
   `/v1/admin/version`, `-dirty` stripped, checked as a commit of the
-  checkout by the service user. If the core isn't answering, or the SHA
+  checkout by the service user. That read takes the household token, which
+  the installer reads as the service user from its
+  `~/.domovoi/device-token.txt` and hands curl on stdin. If the core isn't
+  answering or refuses the read, or the SHA
   isn't in the checkout, it stops instead of guessing. HEAD is no stand-in,
   because a pull moves it past the running code.
 - **Installs the grant** in `/etc/sudoers.d/domovoi-update` (mode 0440),
@@ -911,12 +1304,16 @@ The same, without the installer. Run these over SSH, as your admin user,
 in this order.
 
 1. Record the SHA the box is **running** now as the last known-good one.
-   Do this first, before you pull. The `/v1/admin/version` endpoint is
-   open, so no login is needed:
+   Do this first, before you pull. The `/v1/admin/version` endpoint takes
+   the household token, which the core keeps in the service user's
+   `~/.domovoi/device-token.txt`, so no admin login is needed. The token
+   goes to curl on stdin (`-H @-`) rather than on its command line:
 
    ```bash
    sudo install -d -m 0755 /var/lib/domovoi-update
-   RUNNING=$(curl -s http://127.0.0.1:6370/v1/admin/version | python3 -c 'import json,sys; print(json.load(sys.stdin)["running_sha"].removesuffix("-dirty"))')
+   RUNNING=$(sudo -u domovoi sed 's/^/X-Device-Token: /' ~domovoi/.domovoi/device-token.txt \
+     | curl -s -H @- http://127.0.0.1:6370/v1/admin/version \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["running_sha"].removesuffix("-dirty"))')
    sudo -u domovoi git -C /opt/domovoi rev-parse --verify "$RUNNING^{commit}" | sudo tee /var/lib/domovoi-update/applied_sha
    ```
 
@@ -967,8 +1364,12 @@ in this order.
    `journalctl -u domovoi-update -n 200` has the detail. That old SHA
    predates the script, so its Restart button is still the plain bounce:
    once the cause is fixed, pull again (step 2) and repeat this step by
-   hand. `refused` means tracked files in `/opt/domovoi` have local
-   changes; commit or stash them as `domovoi` and repeat this step.
+   hand. `refused` means nothing was changed because the tree is not one
+   the unit will apply: tracked files in `/opt/domovoi` have local changes
+   (commit or stash them as `domovoi`), or HEAD does not verify against
+   the allowed-signers file, or the checkout is not the pinned upstream
+   ([Signed updates](#signed-updates)); the `error` says which, and you
+   repeat this step once it's fixed.
    `aborted` means nothing was changed: the backup failed, or the
    dependencies changed and `domovoi` can't write the venv (`sudo chown -R
    domovoi: /opt/domovoi/.venv` fixes that one). This first run also
@@ -1023,6 +1424,47 @@ file interpolates it). Rotate right away if your install predates the
 random-password bootstrap — its `.env` carries the template default, and
 `python -m domovoi.env_bootstrap` deliberately leaves an existing `.env`
 alone.
+
+**Helper-container secrets.** `docker-compose.yml` takes the Letta server
+password from `LETTA_TOKEN` and SearXNG's signing key from `SEARXNG_SECRET`
+in `domovoi/.env`. `LETTA_TOKEN` is also what the core signs in to Letta
+with, so the two always match. There is no fallback: until October 2026
+an `.env` without them got values that were the same on every install,
+so compose now refuses every command (`domovoi-db`'s `compose up postgres`
+included) while either is missing, and says how to add them. A fresh
+`.env` gets random values from `python -m domovoi.env_bootstrap`. An older
+one gets them from
+
+```bash
+cd /opt/domovoi
+sudo -u domovoi .venv/bin/python -m domovoi.env_bootstrap --repair
+```
+
+which appends a generated value for each one the file lacks (or leaves
+empty, or sets to the old shared value) and changes nothing else; run
+again, it writes nothing. You rarely type it: the
+[update unit](#updates-from-the-dashboard) runs it as the service user
+before anything uses compose, on every update and every Restart (a value
+it adds is an `env-secrets` step in **last update**), and `dev.sh` /
+`dev.ps1` run it too. **Updating by hand** (`git pull`, then restarting the
+units yourself)? Run it once after the pull and before the restart, or
+`domovoi-db` refuses to start and takes the core with it.
+
+The search helper takes its new value the next time it is started (the
+update unit starts it under Yes or Sometimes). Letta, if chat mode runs it,
+keeps its old password until it is recreated, while the core signs in
+with the new one after its restart: recreate it (the update unit records
+this as a `warn` with the same line):
+
+```bash
+cd /opt/domovoi/domovoi
+docker compose --profile chat up -d letta         # if chat mode is on
+sudo systemctl restart domovoi-core domovoi-web   # the core reads LETTA_TOKEN at start
+```
+
+Letta reads its password from the environment when it starts, so that is
+the whole rotation. To rotate later, delete the line from `.env`, run the
+repair, and do the same two steps.
 
 **Don't suspend.** Desktop-oriented installs sometimes ship with sleep
 targets enabled, which is fatal for a machine satellites reconnect to:

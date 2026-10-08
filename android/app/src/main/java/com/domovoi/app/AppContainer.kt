@@ -1,10 +1,15 @@
 package com.domovoi.app
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.DeviceDownloads
+import com.domovoi.app.net.Discovery
+import com.domovoi.app.net.IdentityGate
+import com.domovoi.app.net.NetworkWatch
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
@@ -16,7 +21,33 @@ import kotlinx.coroutines.flow.MutableStateFlow
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
 class AppContainer(context: Context) {
     val prefs = Prefs(context)
-    val api = ApiClient(prefs)
+
+    /** The networks the phone is on, as one fingerprint every identity
+     *  verdict is keyed to (net/NetworkWatch.kt). Registered with
+     *  ConnectivityManager by DomovoiApplication. A change also cancels
+     *  any save-to-device download still carrying the household token
+     *  (net/DeviceDownloads.kt). */
+    val network = NetworkWatch(
+        onChange = {
+            identity.networkChanged()
+            DeviceDownloads.networkChanged(context)
+        },
+        log = { Log.i("NetworkWatch", it) },
+    )
+
+    /** The saved server proves its identity on each network before the
+     *  household token goes to it (net/IdentityGate.kt, A6-03). Its probe
+     *  runs on a token-less copy of the app's client; the pins live in
+     *  Prefs. */
+    val identity: IdentityGate = IdentityGate(
+        probe = { base, challenge ->
+            IdentityGate.httpProbe(Discovery.client(api.http, IdentityGate.PROBE_TIMEOUT_MS), base, challenge)
+        },
+        pins = prefs,
+        network = { network.fingerprint },
+        log = { Log.i("IdentityGate", it) },
+    )
+    val api: ApiClient = ApiClient(prefs, identity)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
 

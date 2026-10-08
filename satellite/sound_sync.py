@@ -51,11 +51,76 @@ def _safe_rel(rel: str) -> bool:
     return all(part and part != ".." for part in rel.split("/"))
 
 
+# Said once per process, not on every connect: an unpinned device syncs
+# its clips on trust, as it always did, and the journal says so once.
+_UNSIGNED_WARNED = False
+
+
+def fetch_manifest(
+    base: str,
+    channel_path: str,
+    channel: str,
+    *,
+    params: dict | None = None,
+    timeout: float,
+    expected_fingerprint: str | None,
+    what: str,
+    record: str | None = None,
+) -> dict[str, str]:
+    """A file channel's ``{rel: sha256}`` list — the signed envelope when
+    this device knows which server to expect, the plain manifest when it
+    does not. Shared by the sounds and wake-model channels, which fetch
+    their lists the same way; the code and payload channels have their
+    own, stricter wrappers.
+
+    Pinned: ``manifest.sig`` is required, verified against the pin, and
+    refused when older than the last list accepted on this channel (or,
+    with ``record``, under that record — the sounds channel keeps one per
+    voice); a server that serves none needs upgrading and is said so.
+    Unpinned: the unsigned list, with one warning per process."""
+    global _UNSIGNED_WARNED
+    from satellite import server_identity
+
+    if not expected_fingerprint:
+        if not _UNSIGNED_WARNED:
+            _UNSIGNED_WARNED = True
+            log.warning(
+                "%s: this device has no server fingerprint, so file lists "
+                "are taken on trust (see satellite/PROVISIONING.md)", what,
+            )
+        r = requests.get(f"{base}{channel_path}/manifest", params=params, timeout=timeout)
+        r.raise_for_status()
+        manifest = r.json()
+    else:
+        r = requests.get(
+            f"{base}{channel_path}/manifest.sig", params=params, timeout=timeout
+        )
+        if r.status_code == 404:
+            raise RuntimeError(
+                f"{what}: this device expects a signed manifest and the "
+                "server serves none; upgrade the Domovoi server first"
+            )
+        r.raise_for_status()
+        try:
+            manifest = server_identity.accept_manifest_envelope(
+                r.json(), channel=channel, expected_fingerprint=expected_fingerprint,
+                record=record,
+            )
+        except server_identity.IdentityError as e:
+            raise RuntimeError(f"{what}: {e}; nothing was written") from e
+    if not isinstance(manifest, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in manifest.items()
+    ):
+        raise RuntimeError(f"{what}: the manifest is not a path -> sha256 map")
+    return manifest
+
+
 def sync(
     http_base: str,
     cache_dir: Path,
     voice: str | None = None,
     timeout: float = 5.0,
+    expected_fingerprint: str | None = None,
 ) -> int:
     """Fetch the manifest, download missing/changed clips into ``cache_dir``,
     and prune cached MP3s no longer in the manifest. Returns the number of
@@ -65,12 +130,26 @@ def sync(
     server (``?voice=``); the manifest keys stay voice-relative, so
     the cache always holds *this* satellite's voice at canonical paths
     (greetings/…, network_issues.mp3). None → the server's default
-    voice."""
+    voice.
+
+    ``expected_fingerprint`` is the server this device belongs to. With
+    one, the list has to come signed by that server (``manifest.sig``),
+    and every body has to hash to what the signed list says before it is
+    written — these are the clips the room SAYS, and a host on the path
+    does not get to choose them. Without one, the unsigned list, as
+    before; the body check still runs against it."""
     base = http_base.rstrip("/")
     params = {"voice": voice} if voice else None
-    r = requests.get(f"{base}/v1/sounds/manifest", params=params, timeout=timeout)
-    r.raise_for_status()
-    manifest: dict[str, str] = r.json()
+    from satellite import server_identity
+
+    manifest = fetch_manifest(
+        base, "/v1/sounds", "satellite-sounds", params=params, timeout=timeout,
+        expected_fingerprint=expected_fingerprint, what="sound sync",
+        # One record per voice, as the server keeps one serial per voice:
+        # a device that switches voice and back must not judge one voice's
+        # list against another's newer serial.
+        record=server_identity.sounds_record(voice),
+    )
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     downloaded = 0
@@ -83,8 +162,15 @@ def sync(
             continue
         data = requests.get(f"{base}/v1/sounds/{rel}", params=params, timeout=timeout)
         data.raise_for_status()
+        body = data.content
+        if hashlib.sha256(body).hexdigest() != sha:
+            log.warning(
+                "sound sync: sha256 mismatch for %r; skipping (the body is "
+                "not the one the manifest lists)", rel,
+            )
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data.content)
+        dest.write_bytes(body)
         downloaded += 1
 
     _prune(cache_dir, set(manifest.keys()))

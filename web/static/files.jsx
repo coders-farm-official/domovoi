@@ -52,8 +52,14 @@ const officeLoadScript = (url) => {
 window.OfficeSuite = { officeLoadScript, fmtBytes };
 
 /* ---- raw / text / download helpers ------------------------ */
-const docRawUrl = (rel) => `/api/documents/raw/${encodeURIComponent(rel)}`;
-const docTextUrl = (rel) => `/api/documents/text/${encodeURIComponent(rel)}`;
+/* Built on API_BASE, the server the switcher selected (FE-6). These URLs
+ * carry THAT server's household token (withDeviceToken reads it per
+ * server), so an origin-relative path sent one box's token to another:
+ * the request went to whichever box served the page, and its access log
+ * kept the selected box's credential. Both helpers are absolute when a
+ * server is selected; apiFetch and fetch leave an absolute URL alone. */
+const docRawUrl = (rel) => `${API_BASE}/api/documents/raw/${encodeURIComponent(rel)}`;
+const docTextUrl = (rel) => `${API_BASE}/api/documents/text/${encodeURIComponent(rel)}`;
 /* Opened/downloaded by the BROWSER, which can't set a header — the daily
  * read tier takes the household token in the query for exactly this. */
 const openDocInNewTab = (rel) => window.open(withDeviceToken(docRawUrl(rel)), '_blank', 'noopener');
@@ -129,7 +135,7 @@ const TextEditorOverlay = ({ rel_path, onClose, fire, blockedReason = null }) =>
         // no-store: always read the file fresh. Without this a browser can
         // serve a cached (often empty, just-created) copy on reopen, making a
         // successful save look like it was lost.
-        const r = await fetch(`${API_BASE}${docTextUrl(rel_path)}`, {
+        const r = await fetch(docTextUrl(rel_path), {
           cache: 'no-store', credentials: 'include', headers: apiHeaders(),
         });
         if (r.status === 415) {

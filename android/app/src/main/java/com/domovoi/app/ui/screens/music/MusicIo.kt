@@ -30,9 +30,9 @@ internal fun saveTrackToDevice(
     )
     val err = DeviceDownloads.enqueue(
         context,
-        app.api.absolute("/api/music/library/${track.id}/audio?download=1"),
+        app.api,
+        "/api/music/library/${track.id}/audio?download=1",
         name,
-        deviceToken = app.prefs.deviceToken.value,
     )
     toast(err ?: "saving \"$name\" to Downloads/Domovoi")
 }

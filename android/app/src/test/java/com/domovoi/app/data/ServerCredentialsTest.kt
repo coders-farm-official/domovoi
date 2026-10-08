@@ -50,6 +50,22 @@ class ServerCredentialsTest {
         assertEquals(emptyMap<String, String>(), ServerCredentials.decodeTokens(null))
     }
 
+    @Test fun forgettingAnotherSpellingOfTheActiveServerKeepsItsPin() {
+        // Pins are keyed scheme://host:port; the other books by the spelling
+        // saved. "HTTP://h:6390/" and "http://h:6390" share a pin.
+        val active = "http://h:6390"
+        assertFalse(ServerCredentials.clearsPinOf("HTTP://h:6390/", active))
+        assertFalse(ServerCredentials.clearsPinOf("http://H:6390", active))
+        assertFalse(ServerCredentials.clearsPinOf("http://h", "http://h:80"))
+        // Forgetting the active server itself, or any other server, does.
+        assertTrue(ServerCredentials.clearsPinOf("http://h:6390", active))
+        assertTrue(ServerCredentials.clearsPinOf("http://h:6390/", active))
+        assertTrue(ServerCredentials.clearsPinOf("http://other:6390", active))
+        assertTrue(ServerCredentials.clearsPinOf("http://h:6397", active))
+        assertTrue("no active server: nothing to protect", ServerCredentials.clearsPinOf("http://h:6390", ""))
+        assertFalse("nothing to clear for an address that does not parse", ServerCredentials.clearsPinOf("nonsense", active))
+    }
+
     @Test fun trustedListSurvivesARoundTripAndACorruptBlobIsNotFatal() {
         val trusted = setOf("http://a:6369", "http://b:6369")
         assertEquals(trusted, ServerCredentials.decodeTrusted(ServerCredentials.encodeTrusted(trusted)))

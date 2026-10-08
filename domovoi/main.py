@@ -41,6 +41,7 @@ from domovoi.admin_auth import (  # noqa: E402
     require_admin_security_read,
     require_chat_callback,
     require_device,
+    require_device_read,
     token_sha256,
 )
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
@@ -215,8 +216,8 @@ def _register_core_reapply_hooks() -> None:
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
-    # (domovoi/searxng_service.py). Never run at boot: no docker call can
-    # slow or break a start.
+    # (domovoi/searxng_service.py). At boot only the stop under never runs
+    # (schedule_boot_stop, below): a start pulls the image.
     from domovoi import searxng_service
 
     reapply.on_reapply(
@@ -236,6 +237,27 @@ def _register_core_reapply_hooks() -> None:
 # At shutdown, how long a worker owner's (a plugin's, the core's) running
 # ticks get to finish once told to stop, before they are cancelled.
 _STOP_WORKERS_SEC = 3.0
+
+
+def _warn_if_pairing_lenient() -> bool:
+    """Log, at WARNING, what lenient satellite pairing leaves open (CORE-11).
+
+    Strict is the field default; lenient only happens because the
+    household's .env says ``SATELLITE_PAIRING_STRICT=false``. That is a
+    legitimate choice for a hand-provisioned fleet that predates pairing,
+    but whoever reads the journal should not have to remember what it
+    costs. True when the warning was logged."""
+    if settings.satellite_pairing_strict:
+        return False
+    log.warning(
+        "satellite pairing is LENIENT (SATELLITE_PAIRING_STRICT=false): a "
+        "LAN device can connect without a pairing token under any room name "
+        "nobody has paired, and use it as that room (timers, music, voice "
+        "commands; never a drop-in or an announcement to another room). "
+        "Set SATELLITE_PAIRING_STRICT=true in domovoi/.env and approve each "
+        "satellite once to close it."
+    )
+    return True
 
 
 @asynccontextmanager
@@ -273,6 +295,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await admin_auth_mod.ensure_device_token()
     except Exception as e:
         log.warning("device-token boot hook raised: %s", e)
+
+    # CORE-11: lenient pairing is a choice the household makes in .env,
+    # never a default, and every boot says what it leaves open.
+    _warn_if_pairing_lenient()
 
     # The connectivity probe starts here — before the voice seed and the
     # boot clip render, which ask it whether Microsoft voices are usable
@@ -391,6 +417,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import mpd_internet
 
         mpd_internet.schedule_boot_purge()
+        # The same answer, by hand in .env: stop the search helper that
+        # `restart: unless-stopped` brought back (background, cheap).
+        from domovoi import searxng_service
+
+        searxng_service.schedule_boot_stop()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")
@@ -787,8 +818,16 @@ async def post_intent(intent: Intent):
     )
 
 
+# Said once per process: an unbound challenge means a satellite still on
+# code from before the address binding. It takes the new code on its next
+# upgrade; the line is how an operator sees the transition is not over.
+_UNBOUND_CHALLENGE_SEEN = False
+
+
 @app.get("/v1/health")
-async def health(challenge: str | None = None) -> dict[str, Any]:
+async def health(
+    challenge: str | None = None, addr: str | None = None
+) -> dict[str, Any]:
     """Liveness, plus this install's cryptographic identity.
 
     ``identity`` carries the Ed25519 public key and its fingerprint — the
@@ -797,6 +836,18 @@ async def health(challenge: str | None = None) -> dict[str, Any]:
     signature over that nonce, which is what lets a satellite tell this
     household's server from anything else listening on 6370: a replayed
     answer signs somebody else's nonce and fails.
+
+    Pass ``&addr=<host:port>`` — the address the caller dialed — and the
+    signature covers that too, and is only given when the address is one
+    of this box's own (an interface address, loopback, or a name listed in
+    ``TRUSTED_HOSTS``). That is what stops a LAN host that merely forwards
+    this request to the real core from passing the answer off as its own:
+    the core will not sign for the relay's address, and an answer signed
+    for the core's own address does not match what the satellite dialed.
+    A refused address comes back as ``addr_refused`` with no signature.
+    The bare ``challenge`` form is still answered, for satellites running
+    code from before the binding; they take the new code on their next
+    upgrade.
 
     The pre-identity fields are untouched, so a satellite that predates
     this (and any other caller) reads exactly what it always read.
@@ -821,14 +872,44 @@ async def health(challenge: str | None = None) -> dict[str, Any]:
         "use_stubs": "true" if settings.use_stubs else "false",
         "stt": stt_status()["state"],
     }
+    global _UNBOUND_CHALLENGE_SEEN
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
         raise HTTPException(status_code=400, detail="challenge is too long")
+    # Only URL-safe characters are ever signed: a nonce or an address with
+    # a newline in it would let an unbound signature double as a bound
+    # one (see server_identity._CHALLENGE_RE).
+    if challenge is not None and not server_identity.valid_challenge(challenge):
+        raise HTTPException(status_code=400, detail="challenge has characters that cannot be signed")
+    if addr is not None and not server_identity.valid_addr(addr):
+        raise HTTPException(status_code=400, detail="addr is not a host:port")
     try:
         identity = server_identity.load_or_create()
-        doc["identity"] = (
-            identity.health_answer(challenge) if challenge
-            else identity.public_document()
-        )
+        if not challenge:
+            doc["identity"] = identity.public_document()
+        elif addr is None:
+            if not _UNBOUND_CHALLENGE_SEEN:
+                _UNBOUND_CHALLENGE_SEEN = True
+                log.info(
+                    "a satellite asked for the identity proof without naming "
+                    "the address it dialed: it is running code from before "
+                    "the address binding and takes the new code on its next "
+                    "upgrade (this is logged once per start)"
+                )
+            doc["identity"] = identity.health_answer(challenge)
+        elif server_identity.dialed_address_is_ours(addr):
+            doc["identity"] = identity.health_answer(challenge, addr=addr)
+        else:
+            log.warning(
+                "refused to sign the identity proof for %s: it is not an "
+                "address of this server. If satellites reach this server "
+                "through that address (a name, a NAT or a port-forward), list "
+                "it in TRUSTED_HOSTS; otherwise something between a "
+                "satellite and this server is relaying its questions.", addr,
+            )
+            block: dict[str, Any] = identity.public_document()
+            block["challenge"] = challenge
+            block["addr_refused"] = addr
+            doc["identity"] = block
     except OSError as e:      # pragma: no cover — read-only config dir
         log.warning("could not load the server identity: %s", e)
     return doc
@@ -850,7 +931,12 @@ async def server_time() -> dict[str, Any]:
     return server_time_document()
 
 
-@app.get("/v1/stats/latency")
+@app.get(
+    "/v1/stats/latency",
+    # Device READ tier (2026-10-08, REV-11): counts per room and window say
+    # whether somebody just spoke in a room.
+    dependencies=[Depends(require_device_read)],
+)
 async def stats_latency(
     since: datetime | None = Query(
         None,
@@ -871,11 +957,13 @@ async def stats_latency(
     turns ran on (``whisper_seen``), and what is transcribing now
     (``whisper``). See domovoi/turn_timings.py.
 
-    Open, like ``/v1/health``: it reads ``intents_log.timings`` (V015),
-    which holds no text and no identity, and returns counts and
-    milliseconds — no transcript, no person, no session. How often a room
-    speaks is already an open read (a room's session list); this adds how
-    long the machine took. docs/SECURITY_PRIVACY.md says so.
+    It reads ``intents_log.timings`` (V015), which holds no text and no
+    identity, and returns counts and milliseconds — no transcript, no
+    person, no session. It takes a paired device all the same (the
+    household token, an admin session or the dashboard cookie, with the
+    pre-setup grace): a turn count for one room over the last 30 seconds
+    says whether somebody just spoke there, and who is in which room is a
+    household read since 2026-10-08. docs/SECURITY_PRIVACY.md says so.
 
     ``503`` when the database is unreachable or V015 hasn't been applied.
     """
@@ -1005,6 +1093,35 @@ async def sounds_manifest(voice: str | None = None) -> dict[str, str]:
             rel = p.relative_to(root).as_posix()
             manifest[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
     return manifest
+
+
+@app.get("/v1/sounds/manifest.sig")
+async def sounds_manifest_signed(voice: str | None = None) -> dict[str, Any]:
+    """The same clip list inside an envelope this server signed — the
+    shape the code and payload channels already have. Nothing here is
+    executed, but these are the clips the room SAYS: a pinned satellite
+    asks for this and refuses a list its own server did not sign, so a host
+    on the path cannot decide what a greeting sounds like. Declared before
+    the ``{path:path}`` catch-all so the literal wins; the unsigned
+    ``manifest`` keeps serving older satellites.
+
+    Each voice's list keeps its own serial (V-st-01): ``?voice=`` is the
+    caller's choice, and while every voice shared one serial, alternating
+    two of them minted a new one per request and ran it ahead of the clock.
+    The key is the default voice (no ``?voice=``), the voice's directory for
+    a voice with rendered clips, or one shared entry for any name without
+    them — so an unknown name cannot grow the store either."""
+    manifest = await sounds_manifest(voice)
+    if not voice:
+        voice_key = ""
+    else:
+        root = await _resolve_voice_root(voice)
+        voice_key = root.name if root.is_dir() else "?"
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(
+        server_identity.SOUNDS_CHANNEL, manifest,
+        serial_key=server_identity.sounds_serial_key(voice_key),
+    )
 
 
 @app.get("/v1/sounds/{path:path}")
@@ -1197,6 +1314,19 @@ async def wake_models_manifest() -> dict[str, str]:
     return manifest
 
 
+@app.get("/v1/wake-models/manifest.sig")
+async def wake_models_manifest_signed() -> dict[str, Any]:
+    """The wake-model list inside a signed envelope. The model is what the
+    room LISTENS for — a swapped one is a deaf room, or one that wakes on
+    a stranger's phrase — and an ONNX body is parsed in the client, so a
+    pinned satellite takes only a list its own server signed. Declared
+    before the ``{path:path}`` catch-all; the unsigned ``manifest`` keeps
+    serving older satellites."""
+    manifest = await wake_models_manifest()
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(server_identity.WAKE_MODELS_CHANNEL, manifest)
+
+
 @app.get("/v1/wake-models/{path:path}")
 async def wake_models_file(path: str) -> FileResponse:
     """Serve one wake-model file (.onnx / .onnx.json). Guarded against
@@ -1376,8 +1506,11 @@ class _AdminDropInEndBody(BaseModel):
     # Admin tier: this opens a live two-way microphone bridge between two
     # rooms from an HTTP call, with no one in either room asked first.
     # That is a physical-effect action on the household, so it takes an
-    # admin Bearer rather than the household device token.
-    dependencies=[Depends(require_admin_mutation)],
+    # admin Bearer rather than the household device token. The SECURITY
+    # tier's Bearer gate (CORE-14): no pre-setup grace, 501 until an admin
+    # exists, so a fresh box or one just put through --reset-admin is not
+    # a live microphone for the whole LAN.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     """Open a live two-way drop-in between two connected satellite rooms
@@ -1614,7 +1747,17 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
 # satellite-code channel above and domovoi/git_version.py).
 
 
-@app.get("/v1/admin/version")
+@app.get(
+    "/v1/admin/version",
+    # CORE-21: the device tier's READ half. Beside the running commit it
+    # carries the update unit's last run (its error text and step log),
+    # whether this host can restart itself, and the rolled-back SHA: what
+    # an operator needs, not something to answer every LAN host. The
+    # dashboard sends the household token (the web hop forwards it with
+    # the cookie), and the update installer reads the token file as the
+    # service user.
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_version() -> dict[str, Any]:
     """What this process is RUNNING, and what's checked out on disk.
 
@@ -2121,7 +2264,13 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e)) from e
 
 
-@app.get("/v1/admin/satellite/{room_id}/config")
+@app.get(
+    "/v1/admin/satellite/{room_id}/config",
+    # Device READ tier (2026-10-08, REV-11), like the dashboard's proxy:
+    # a 200 or 404 says whether the room's satellite is connected, and the
+    # body is the hardware it reported (mic, Wi-Fi, audio devices).
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     """Editable satellite config (the schema joined with the values the Pi
     reported via config_status) for the per-satellite Settings tab. 404 when
@@ -2368,9 +2517,13 @@ def approval_throttled_detail() -> str:
 
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/approve",
-    # Admin-tier: this is the decision that turns trust-on-first-use into a
-    # decision someone actually made, and it binds a room to a device.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: this is the decision that turns trust-on-first-use into
+    # a decision someone actually made, and it binds a room to a device for
+    # good. Bearer-only and 501 before first-run setup (REV-32): with strict
+    # pairing the default, the pre-setup grace let any LAN host that parked
+    # its own satellite on an unclaimed core approve it — the one pre-setup
+    # write that minted a lasting trust relationship.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_approve(
     room_id: str, body: _ApproveSatelliteBody
@@ -2440,7 +2593,9 @@ async def admin_satellite_approve(
 
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/reject",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier like approve: the two decisions on a parked device take
+    # the same credential, and neither has a pre-setup grace.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     """Drop a pending request.
@@ -3086,15 +3241,48 @@ async def _ensure_room_mpd(room_id: str) -> None:
     a stopped container fails with a bare connection-refused (WinError 1225 →
     502). ``ensure_room`` is idempotent and fast when the container is already
     running, so calling it here makes a cast self-healing rather than dead.
+
+    It never provisions a NEW room (CORE-13): a room is created by a
+    satellite's accepted hello, never by a name in a URL. A room the house
+    does not have — no ``mpd_rooms`` row, no pairing, no inventory row —
+    answers 404 here, before a port is allocated or a container started.
     """
     if settings.use_stubs:
         return
+    if not await _room_is_known(room_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"there is no room named {room_id!r} — a room appears once its "
+                "satellite has connected (or been adopted)"
+            ),
+        )
     try:
         from domovoi.mpd_provisioner import ensure_room
 
         await ensure_room(room_id)
     except Exception as e:  # noqa: BLE001 — non-fatal; the play call surfaces 502
         log.warning("admin music: ensure_room(%s) failed: %s", room_id, e)
+
+
+async def _room_is_known(room_id: str) -> bool:
+    """A room this house already has (see ``_ensure_room_mpd``). The live
+    port map answers for every room provisioned this boot without a query;
+    anything else is looked up. A lookup that fails is a 503, never a
+    silent yes."""
+    from domovoi.clients import mpd as mpd_module
+    from domovoi.db.repositories import SatellitesRepository
+
+    if room_id in mpd_module._room_ports:
+        return True
+    try:
+        async with session_scope() as s:
+            return await SatellitesRepository(s).room_is_known(room_id)
+    except Exception as e:  # noqa: BLE001 — fail closed, and say why
+        log.warning("admin music: could not look up room %s: %s", room_id, e)
+        raise HTTPException(
+            status_code=503, detail="could not check that room right now"
+        ) from e
 
 
 class _AdminPlayTracksBody(BaseModel):
@@ -3331,9 +3519,19 @@ async def _log_queue_edit(room_id: str, what: str) -> None:
         )
 
 
-@app.get("/v1/admin/music/queue/{room_id}")
+@app.get(
+    "/v1/admin/music/queue/{room_id}",
+    # CORE-13: the device tier's READ half, like the four queue edits beside
+    # it are on the device tier. It was the one music route with no gate,
+    # and it starts a room's player first. The web hop forwards the
+    # caller's token and cookie.
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_music_queue(room_id: str) -> dict[str, Any]:
-    """The room's live MPD queue, in order, plus which entry is playing."""
+    """The room's live MPD queue, in order, plus which entry is playing.
+
+    404 for a room the house does not have (``_ensure_room_mpd``): reading
+    a queue never creates one."""
     from domovoi.clients.mpd import get_mpd_client_for
 
     await _ensure_room_mpd(room_id)
@@ -3614,7 +3812,20 @@ async def admin_music_add_by_url(
     extractor surface), so this endpoint requires an admin session OR a
     URL a registered fulfiller's ``url_matcher`` allowlist recognizes,
     plus a per-source rate limit for the unauthenticated path.
+
+    That decides WHO may ask. WHERE the URL may point is decided the way
+    it is for every other URL the server will fetch (CORE-16), and an
+    admin session passes neither of these:
+
+    * under the "No internet" answer it is refused now (409, the
+      internet-off refusal), rather than queued to start fetching the
+      moment the answer changes;
+    * ``net_safety.check_outbound_url`` in store mode (the fulfiller
+      fetches later, so a name that does not resolve right now may still
+      be saved): a non-http(s) scheme, ``localhost``, or a host that is or
+      resolves to a loopback / private / link-local address is a 400.
     """
+    from domovoi import egress, net_safety
     from domovoi.db.repositories import IntentLogRepository
 
     decision = await check_outbound_fetch(
@@ -3623,6 +3834,13 @@ async def admin_music_add_by_url(
     )
     if not decision.allowed:
         raise HTTPException(status_code=decision.status, detail=decision.detail)
+    if egress.internet_turned_off():
+        raise egress.http_exception("add by URL")
+    reason = await net_safety.acheck_outbound_url(body.url, require_resolution=False)
+    if reason is not None:
+        raise HTTPException(
+            status_code=400, detail=f"refusing this URL — {reason}"
+        )
 
     async with session_scope() as s:
         result = await ACQUISITIONS.enqueue(
@@ -4769,6 +4987,10 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     Anything else is closed 1008 here, before a ``PhoneDropinSession``
     exists, so the refusal leaves ``active_dropins`` untouched and the
     target room never learns a call was attempted.
+
+    No pre-setup grace (CORE-14): before an admin exists the upgrade is
+    closed 1008 with ``code: setup_required`` whatever it presents — the
+    WebSocket form of the security tier's 501.
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
@@ -4778,7 +5000,15 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
         return
-    if not await admin_auth_mod.websocket_device_ok(ws):
+    verdict = await admin_auth_mod.check_live_mic_websocket(ws)
+    if verdict == "setup_required":
+        await _refuse_ws(
+            ws, "setup_required",
+            f"/v1/dropin/{room_id} before first-run admin setup — a room's "
+            "live microphone is not part of the pre-setup grace",
+        )
+        return
+    if verdict != "ok":
         await _refuse_ws(
             ws, "unauthorized",
             f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "

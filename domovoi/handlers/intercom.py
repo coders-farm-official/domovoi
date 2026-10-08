@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # leaving a stale reference here. See test_intercom_handler for the
 # pattern.
 from domovoi.clients import mpd as _mpd
+from domovoi.dropin_common import room_may_reach_other_rooms
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
 
@@ -222,6 +223,22 @@ class IntercomHandler(Handler):
         if not message:
             return Response(
                 text="I didn't catch what to announce.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        if not room_may_reach_other_rooms(ctx.app, ctx.room_id):
+            # CORE-11: a satellite accepted WITHOUT a pairing token (strict
+            # pairing off) is whatever LAN device named itself this room;
+            # it does not get to speak in the others.
+            log.warning(
+                "intercom: refused for room=%s — connected without a pairing "
+                "token", ctx.room_id,
+            )
+            return Response(
+                text=(
+                    "This speaker isn't paired with the house, so it can't "
+                    "make announcements in other rooms."
+                ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )

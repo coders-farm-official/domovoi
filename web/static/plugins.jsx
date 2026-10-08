@@ -124,12 +124,19 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
         </div>
         <div className="cal-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-          {/* The standing trust statement — always shown, unskippable. */}
+          {/* The standing trust statement — always shown, unskippable. The
+            * browser half (FE-7): a plugin's web.scripts are evaluated in the
+            * dashboard's own origin (index.html), so they run with the
+            * in-memory admin bearer, the stored household token and the
+            * session cookie of whoever has the dashboard open. */}
           <div style={{ border: '1px solid var(--warn)', background: 'var(--err-soft)',
                         borderRadius: 'var(--r-sm)', padding: '10px 12px', fontSize: 13, lineHeight: 1.5 }}>
             <strong>This plugin runs with full access to your Domovoi server.</strong>{' '}
             It can read and modify your library, database, configuration, and anything
-            else this machine can reach. Only install plugins from publishers you trust.
+            else this machine can reach. Its dashboard pages run as part of the dashboard
+            in every household browser that opens it, with the same access as whoever is
+            using it — a signed-in admin session and the household token included. Only
+            install plugins from publishers you trust.
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 6, fontSize: 12 }}>

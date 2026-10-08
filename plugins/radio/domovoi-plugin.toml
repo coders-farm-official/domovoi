@@ -19,8 +19,12 @@ consumes = ["media-acquisition-queue"]     # a core service — always satisfied
 consumes_optional = []                     # detection→download degrades if no fulfiller enabled
 
 [requirements]
-python = ["shazamio==0.7.0", "numpy==2.4.6", "scipy==1.15.2", "librosa==0.11.0", "httpx==0.28.1"]
-lockfile = "requirements.lock"    # pip-compile --generate-hashes output (full transitive tree)
+# No `python` pins and no lockfile: the bundled radio plugin runs in the
+# core's own interpreter and is loaded from the checkout, never through pip.
+# Its heavy dependencies are imported lazily and degrade when absent; they
+# come from the core's extras (`fingerprint` for numpy/scipy/librosa,
+# `shazam` for shazamio) and the core's requirements.lock. httpx is a core
+# dependency. See docs/PLUGIN_DEVELOPMENT.md §5.1.
 system = [
   { tool = "ffmpeg", required = true,  help = "Stream sampling and SDR audio bridging." },
   { tool = "rtl_fm", required = false, help = "FM tuning needs an RTL-SDR dongle (Zadig/WinUSB on Windows)." },

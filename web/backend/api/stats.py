@@ -11,11 +11,13 @@ web process could read itself, but "what is transcribing right now" is the
 core's in-process state (the web process holds its own stale ``settings``
 copy), and one answer should come from one place.
 
-Open, like ``/api/health``: counts and milliseconds only, no transcript,
-no person, no session (docs/SECURITY_PRIVACY.md). The hop forwards the
+Counts and milliseconds only, no transcript, no person, no session — and
+still a paired device's read (``require_device_read`` at both hops, since
+2026-10-08): a turn count for one room over a short window says whether
+somebody just spoke there (docs/SECURITY_PRIVACY.md). The hop forwards the
 caller's headers like every web→core hop does
-(domovoi/tests/test_web_proxy_credentials.py), though the core route
-needs none today.
+(domovoi/tests/test_web_proxy_credentials.py), so the core sees the same
+credential.
 """
 
 from __future__ import annotations
@@ -23,15 +25,16 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
+from domovoi.admin_auth import require_device_read
 from domovoi.models import MAX_ROOM_ID_CHARS
 from web.backend.domovoi_client import auth_forward_headers, bridge_response, get_admin
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
 
 
-@router.get("/latency")
+@router.get("/latency", dependencies=[Depends(require_device_read)])
 async def get_latency(
     request: Request,
     since: datetime | None = Query(

@@ -761,6 +761,11 @@ class DropInStartRequest(BaseModel):
 class PlayRequest(BaseModel):
     room_id: str
     query: str
+    # Who is asking, for the room-queue block (WEB-11): these routes
+    # REPLACE the room's queue, so a device blocked from editing it is
+    # refused here too. Optional — the server also reads X-Device-Id,
+    # ?device_id= and the registration cookie (files.caller_device_id).
+    device_id: str | None = Field(default=None, max_length=64)
 
 
 class PlayTrackRequest(BaseModel):
@@ -770,6 +775,11 @@ class PlayTrackRequest(BaseModel):
     to round-trip through fuzzy text-matching in the router."""
     room_id: str
     track_id: int = Field(..., ge=1)
+    # Who is asking, for the room-queue block (WEB-11): these routes
+    # REPLACE the room's queue, so a device blocked from editing it is
+    # refused here too. Optional — the server also reads X-Device-Id,
+    # ?device_id= and the registration cookie (files.caller_device_id).
+    device_id: str | None = Field(default=None, max_length=64)
 
 
 class CastTracksRequest(BaseModel):
@@ -789,6 +799,11 @@ class CastTracksRequest(BaseModel):
     track_ids: list[int] = Field(..., min_length=1, max_length=500)
     start_sec: float = Field(0.0, ge=0, le=86400)
     start_paused: bool = False
+    # Who is asking, for the room-queue block (WEB-11): these routes
+    # REPLACE the room's queue, so a device blocked from editing it is
+    # refused here too. Optional — the server also reads X-Device-Id,
+    # ?device_id= and the registration cookie (files.caller_device_id).
+    device_id: str | None = Field(default=None, max_length=64)
 
 
 class PlayPlaylistRequest(BaseModel):
@@ -799,6 +814,11 @@ class PlayPlaylistRequest(BaseModel):
     room_id: str
     playlist_id: int = Field(..., ge=0)
     shuffle: bool = False
+    # Who is asking, for the room-queue block (WEB-11): these routes
+    # REPLACE the room's queue, so a device blocked from editing it is
+    # refused here too. Optional — the server also reads X-Device-Id,
+    # ?device_id= and the registration cookie (files.caller_device_id).
+    device_id: str | None = Field(default=None, max_length=64)
 
 
 class AddByQueryRequest(BaseModel):
@@ -838,6 +858,13 @@ class HealthResponse(BaseModel):
     # one), "unavailable" (nothing loaded), "stub" (tests) or "not_loaded".
     # None when the core did not answer. Never makes `status` degraded.
     stt: str | None = None
+    # The core's identity block from the same /v1/health ping, verbatim:
+    # `algorithm`, `public_key`, `fingerprint` and — when the request carried
+    # `?challenge=` — `challenge` and `signature` over it. Public by
+    # construction (domovoi/server_identity.py); None when the core did not
+    # answer or predates identity. The Android app pins the key and checks
+    # the signature after every network change (A6-03).
+    identity: dict[str, str] | None = None
 
 
 class ConfigResponse(BaseModel):

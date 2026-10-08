@@ -1,3 +1,12 @@
+# Every image is pinned by digest (the multi-arch index), so every box runs
+# exactly what was reviewed and a retagged upstream can't slip in on the
+# next `docker compose up`. The tag beside each digest is the release that
+# digest was when it was captured, for humans; Docker goes by the digest.
+# To move one: look up the new index digest (`docker buildx imagetools
+# inspect <image>:<tag>`, or the registry's tag page) and replace both. A
+# new digest means a pull, which a box answered "No internet" can't make:
+# the update unit refuses such an update the way it refuses a dependency
+# change (docs/LINUX_HOST.md, "Updates from the dashboard").
 services:
   # Host port 6432 (NOT the Postgres-default 5432) so Domovoi can coexist
   # with any other Postgres already bound to 5432 on the same machine.
@@ -16,7 +25,8 @@ services:
   # initdb — rotating an existing database is a one-liner, see
   # docs/LINUX_HOST.md "Rotating the Postgres password".
   postgres:
-    image: postgres:16
+    # postgres:16 as of 2026-10-07 (16.15 on Debian trixie).
+    image: postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
     container_name: domovoi-postgres
     environment:
       POSTGRES_DB: domovoi
@@ -41,7 +51,8 @@ services:
     restart: unless-stopped
 
   flyway:
-    image: flyway/flyway:10
+    # flyway/flyway:10 (10.22.0; unchanged since 2024-11).
+    image: flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949
     container_name: domovoi-flyway
     depends_on:
       postgres:
@@ -61,7 +72,7 @@ services:
   # ...whenever a new V###__*.sql migration lands. Doesn't run as part
   # of `docker compose up` — the container exits after migrating.
   flyway-test:
-    image: flyway/flyway:10
+    image: flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949
     container_name: domovoi-flyway-test
     depends_on:
       postgres:
@@ -101,10 +112,14 @@ services:
     volumes:
       - ./searxng:/etc/searxng
     environment:
-      # Required by SearxNG; arbitrary string, not load-bearing for
-      # local-only use. Override in .env for production deployments.
       SEARXNG_BASE_URL: http://localhost:6888/
-      SEARXNG_SECRET: domovoi-local-not-load-bearing
+      # SearXNG's signing key (image proxy, preferences), from .env: a
+      # fresh install's carries a random one (python -m
+      # domovoi.env_bootstrap), and `--repair` adds one to an older .env
+      # (dev.sh/dev.ps1 and the update unit run it before compose). There is
+      # no fallback: the value every install used to share is what made it
+      # worthless, so compose refuses to run without one.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET is missing from domovoi/.env - run python -m domovoi.env_bootstrap --repair in the checkout (docs/LINUX_HOST.md)}
     restart: unless-stopped
 
   # ─── Letta — conversational chat mode (#8), OPT-IN ────────────────────
@@ -118,7 +133,7 @@ services:
   # It is deliberately NOT in any depends_on of the core — a
   # deployment that never flips chat_mode_enabled never needs this running.
   #
-  # SELF-MANAGED DATABASE: the letta/letta:latest image BUNDLES its own
+  # SELF-MANAGED DATABASE: the letta/letta image BUNDLES its own
   # Postgres+pgvector and self-manages its own schema inside the named
   # `letta-pgdata` volume. Do NOT point this at the core's Postgres
   # (the `postgres` service above) — Letta auto-creates/migrates its own
@@ -131,7 +146,8 @@ services:
   # Requires `docker pull` of qwen2.5:14b + nomic-embed-text on the host
   # Ollama first — see domovoi/README.md "Conversational chat mode".
   letta:
-    image: letta/letta:latest
+    # letta/letta:latest as of 2026-10-07 (0.34.4).
+    image: letta/letta:0.34.4@sha256:8ee7fb697e7f08b121a487b48315d45c64b195c12418264b091371c9e8ab3a5c
     container_name: domovoi-letta
     # Compose profile so a bare `docker compose up` (postgres + flyway) NEVER
     # starts Letta — it only comes up with `docker compose --profile chat up -d
@@ -157,11 +173,16 @@ services:
       # container. Windows/Mac use host.docker.internal; on Linux this
       # would instead be --network host + localhost:11434/v1.
       OLLAMA_BASE_URL: "http://host.docker.internal:11434/v1"
-      # Password-protect the server; this value becomes the SDK token
-      # (settings.letta_token). If LETTA_SERVER_PASSWORD is unset Letta
-      # autogenerates one, which the client wouldn't know — so pin it.
+      # Password-protect the server. The value is LETTA_TOKEN from .env,
+      # the same variable the core reads as settings.letta_token, so the
+      # two can't drift. A fresh install's .env carries a random one
+      # (python -m domovoi.env_bootstrap), and `--repair` adds one to an
+      # older .env (dev.sh/dev.ps1 and the update unit run it before
+      # compose). No fallback: the old shared value was the same password
+      # on every install. Compose interpolates the whole file, so without
+      # it every compose command here refuses, with the line to run.
       SECURE: "true"
-      LETTA_SERVER_PASSWORD: "domovoi-local"
+      LETTA_SERVER_PASSWORD: ${LETTA_TOKEN:?LETTA_TOKEN is missing from domovoi/.env - run python -m domovoi.env_bootstrap --repair in the checkout (docs/LINUX_HOST.md)}
     restart: unless-stopped
 
   # ─── Office engines: RETIRED ──────────────────────────────────────────

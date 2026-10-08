@@ -28,8 +28,10 @@ written (device tier) here.
 A room's conversations and voice notes are what the household SAID, so
 reading them takes a paired device (``require_device_read``, owner
 decision 2026-09-26) — like the log pull, which carries the same speech
-and sits one tier higher. The other per-room reads are household state
-and stay open.
+and sits one tier higher. So, since 2026-10-08, is everything that says
+who is in which room or when a room is in use: the room list and a room's
+row, its sessions, its play history (``/recently-played``) and its
+satellite's reported config. The timer reads stay open, with rule M1.
 """
 
 from __future__ import annotations
@@ -104,9 +106,22 @@ timers_router = APIRouter(prefix="/api/timers", tags=["timers"])
 
 
 # ─── List + detail ─────────────────────────────────────────────────────────
+#
+# Household state, read by a paired device (owner decision 2026-10-08,
+# WEB-15): each row carries the room's presence, its Wi-Fi SSID, hardware,
+# the code SHA it synced, who it is in a call with; a pending adoption
+# carries the device's MAC, board and model; a room's session list says
+# when (and, by ``person_id``, who) spoke there. The ``/ws/state`` push of
+# the same state already needed a household credential. The READ half of
+# the device tier — the household token or an admin Bearer, the dashboard
+# cookie, or ``?device_token=`` — with the pre-setup grace. The video
+# satellite's kiosk (``display.html``) reads ``/{room_id}`` for its label
+# and idle mode, so it is paired by its URL (``&device_token=``) and falls
+# back to its defaults until it is.
+READ = [Depends(require_device_read)]
 
 
-@router.get("", response_model=list[Satellite])
+@router.get("", response_model=list[Satellite], dependencies=READ)
 async def list_satellites() -> list[Satellite]:
     rooms = await _list_rooms()
     snapshot = get_cached_snapshot() or {}
@@ -124,7 +139,7 @@ async def list_satellites() -> list[Satellite]:
 #     captured as a room id) ────────────────────────────────────────────────
 
 
-@router.get("/pending", response_model=list[PendingSatellite])
+@router.get("/pending", response_model=list[PendingSatellite], dependencies=READ)
 async def list_pending() -> list[PendingSatellite]:
     """Unprovisioned satellites currently presenting a USB adoption volume
     on the Domovoi server. Empty when the feature is off. MACs are matched
@@ -288,7 +303,9 @@ async def list_approvals(request: Request):
 
 @router.post(
     "/approvals/{room_id}/approve",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier at both hops (REV-32): Bearer-only, 501 before setup —
+    # approving binds a room to a device for good.
+    dependencies=[Depends(require_admin_security)],
 )
 async def approve_satellite(
     room_id: str, request: Request, body: SatelliteApproveRequest
@@ -308,7 +325,7 @@ async def approve_satellite(
 
 @router.post(
     "/approvals/{room_id}/reject",
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_security)],
 )
 async def reject_satellite(room_id: str, request: Request):
     """Drop a pending request. The device keeps retrying until it is
@@ -362,7 +379,7 @@ async def update_satellite(room_id: str, body: RoomLabelRequest, request: Reques
     return bridge_response(status, payload)
 
 
-@router.get("/{room_id}", response_model=Satellite)
+@router.get("/{room_id}", response_model=Satellite, dependencies=READ)
 async def get_satellite(room_id: str) -> Satellite:
     rooms = await _list_rooms()
     match = next((r for r in rooms if r["room_id"] == room_id), None)
@@ -379,7 +396,7 @@ async def get_satellite(room_id: str) -> Satellite:
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
 
 
-@router.get("/{room_id}/sessions", response_model=list[Session])
+@router.get("/{room_id}/sessions", response_model=list[Session], dependencies=READ)
 async def list_sessions(
     room_id: str, limit: int = Query(default=20, ge=1, le=200)
 ) -> list[Session]:
@@ -487,7 +504,13 @@ async def list_notes(room_id: str) -> list[VoiceNote]:
         ]
 
 
-@router.get("/{room_id}/recently-played", response_model=list[RecentlyPlayed])
+@router.get(
+    "/{room_id}/recently-played", response_model=list[RecentlyPlayed],
+    # Device READ tier (2026-10-08, REV-11): a room's play history with
+    # each play's started_at is a log of when that room was in use —
+    # voice plays included — the presence the room list above withholds.
+    dependencies=READ,
+)
 async def list_recently_played(
     room_id: str, limit: int = Query(default=100, ge=1, le=500)
 ) -> list[RecentlyPlayed]:
@@ -1030,7 +1053,15 @@ async def upgrade(room_id: str, request: Request):
     return bridge_response(status, payload)
 
 
-@router.get("/{room_id}/config")
+@router.get(
+    "/{room_id}/config",
+    # Device READ tier at both hops (2026-10-08, REV-11): the answer says
+    # whether the room's satellite is connected (200 or 404) and carries
+    # the mic, Wi-Fi and audio settings it reported — the hardware detail
+    # the room list above is gated for. The caller's credential is
+    # forwarded; the core route takes the same tier.
+    dependencies=READ,
+)
 async def get_satellite_config(room_id: str, request: Request):
     """Editable config for this satellite (schema + the values the Pi
     reported). Passes through to the Domovoi server, which holds the live

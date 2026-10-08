@@ -116,6 +116,7 @@ from web.backend.api.files_security import (
     MediaLibrary,
     build_libraries,
     core_library,
+    has_sensitive_segment,
     is_sensitive_name,
     private_path_check,
     safe_join,
@@ -456,6 +457,27 @@ def caller_device_id(request: Request, body_device_id: Optional[str] = None) -> 
     return None
 
 
+async def assert_caller_may_write(
+    request: Request, device_id: Optional[str] = None
+) -> None:
+    """The per-device write block for a caller arriving through a door
+    other than ``/api/files``: identify it the way :func:`caller_device_id`
+    does (body, ``X-Device-Id``, ``?device_id=``, the registration cookie)
+    and ``403`` when that device is blocked. A caller that names itself
+    nowhere is not identified, and so not blocked — the limit
+    :func:`caller_device_id` states.
+
+    The ``files_device_blocks`` row reads "block a device from uploading,
+    moving or importing ANYWHERE", so every route that writes into a
+    library calls this — the documents saves (via
+    :func:`assert_documents_write_allowed`) and the music library upload
+    (WEB-12), which writes into ``core:music`` without passing here.
+    """
+    caller = caller_device_id(request, device_id)
+    if caller:
+        await _assert_can_write(caller)
+
+
 async def assert_documents_write_allowed(
     request: Request, device_id: Optional[str] = None
 ) -> None:
@@ -492,9 +514,7 @@ async def assert_documents_write_allowed(
     that closes and what it leaves open (the Android app, which keeps no
     cookie jar).
     """
-    caller = caller_device_id(request, device_id)
-    if caller:
-        await _assert_can_write(caller)
+    await assert_caller_may_write(request, device_id)
     # The admin-write test is applied to the library ID, BEFORE the record
     # is resolved. ``core_library`` answers None whenever ``root_rejection``
     # turns documents_dir down — most often "does not exist" on a headless
@@ -548,6 +568,10 @@ async def browse(
     root = lib.root_path
     target = safe_join(root, path)
     if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+    # A secret-shaped folder (``.ssh``, ``.gnupg``, ``tls``) is left out of
+    # its parent's listing below; typing its path must not list it either.
+    if has_sensitive_segment(path, target, root):
         raise HTTPException(status_code=404, detail="directory not found")
 
     rel = target.relative_to(root).as_posix()
@@ -621,7 +645,9 @@ async def download(
     target = safe_join(root, path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="not found")
-    if is_sensitive_name(target.name):
+    # Every segment, as sent and as resolved: ``.ssh/config`` is inside a
+    # withheld folder even though ``config`` is an ordinary name (REV-12).
+    if is_sensitive_name(target.name) or has_sensitive_segment(path, target, root):
         raise HTTPException(status_code=404, detail="not found")
 
     if target.is_dir():

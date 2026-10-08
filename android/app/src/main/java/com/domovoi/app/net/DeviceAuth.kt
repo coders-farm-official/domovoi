@@ -1,8 +1,10 @@
 package com.domovoi.app.net
 
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
+import java.io.IOException
 
 /**
  * The household device token on the wire.
@@ -10,13 +12,20 @@ import okhttp3.Response
  * Domovoi asks a household device to prove it belongs before it may change
  * anything (`X-Device-Token`, see docs/SECURITY_PRIVACY.md). One phone-wide
  * OkHttp interceptor is what makes that true of EVERY request this app
- * makes — the JSON client, media3's audio/video data source and Coil's
- * image loads all run on the same [okhttp3.OkHttpClient] — rather than of
- * the handful of call sites somebody remembered.
+ * makes to its server — the JSON client, media3's audio/video data source
+ * and Coil's image loads all run on the same [okhttp3.OkHttpClient] —
+ * rather than of the handful of call sites somebody remembered.
  *
- * WebSockets go through the same client, and the header is also set
- * explicitly on those upgrade requests ([ApiClient.wsRequest]) so a reader
- * of StateBus or DropinCallClient can see what is sent.
+ * And ONLY to its server. The interceptor is authoritative about where the
+ * token goes ([TokenScope]): a request to any other scheme, host or port
+ * leaves without it, whatever header a caller put on it. Before 2026-10-08
+ * the token rode on everything the client sent — a radio stream's host, the
+ * LAN sweep's probes, a URL another app pushed into the media session.
+ *
+ * WebSockets go through the same client and the same interceptor; the
+ * upgrade requests the app builds ([ApiClient.wsRequest]) also set the
+ * header themselves so a reader of StateBus or DropinCallClient can see
+ * what is sent, and the interceptor still decides.
  */
 const val DEVICE_TOKEN_HEADER = "X-Device-Token"
 
@@ -47,32 +56,62 @@ fun isStorableDeviceToken(token: String): Boolean =
     token.length in DEVICE_TOKEN_MIN_LEN..DEVICE_TOKEN_MAX_LEN &&
         token.all { it.code in 0x20..0x7E }
 
-class DeviceAuthInterceptor(private val tokenProvider: () -> String?) : Interceptor {
+/** The token as it may appear in a header, or null: blank is "not paired",
+ *  and a value OkHttp would refuse is dropped rather than thrown (an
+ *  IllegalArgumentException here would escape through every call in the
+ *  app AND carry the token in its message). */
+internal fun headerSafeToken(token: String?): String? =
+    token?.trim()?.takeIf { it.isNotEmpty() && it.all { c -> c.code in 0x20..0x7E } }
+
+/**
+ * Something the active server has to prove before the token goes to it
+ * (security round 3, A6-03: its identity, after every network change).
+ * [requireAdmitted] returns normally when a token-bearing request to
+ * [base] may go out now and throws an [IOException] — the request never
+ * leaves — otherwise. Consulted only when there is a token to protect:
+ * by the interceptor for every request, and by [ApiClient.tokenForDownload]
+ * for the one save-to-device route the system DownloadManager makes with
+ * the token.
+ */
+fun interface TokenGate {
+    @Throws(IOException::class)
+    fun requireAdmitted(base: HttpUrl)
+
+    /** Whether a refusal from [base] may raise the pairing screen (a server
+     *  that has not proved itself must not invite a paste of the token). */
+    fun admitsPairingPrompt(base: HttpUrl?): Boolean = base != null
+}
+
+class DeviceAuthInterceptor(
+    /** The token for the server at a saved address. Looked up by the base
+     *  the request is scoped to — never read as "the active token" on its
+     *  own — so a request intercepted between a server switch's two
+     *  writes (address first, token second) cannot pair the new address
+     *  with the old household's token (A6-01 review). */
+    private val tokenFor: (base: String) -> String?,
+    /** The active server; the token goes to it and nowhere else. */
+    private val baseUrlProvider: () -> String?,
+    private val gate: TokenGate? = null,
+) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        val token = tokenProvider()?.trim().orEmpty()
-        // An explicit header on the request wins; a blank token (not paired
-        // yet, or a server that never asked for one) sends nothing. A token
-        // OkHttp would refuse is dropped rather than thrown: an
-        // IllegalArgumentException here would escape through every call in
-        // the app AND carry the token in its message.
-        if (token.isEmpty() || !token.all { it.code in 0x20..0x7E } ||
-            request.header(DEVICE_TOKEN_HEADER) != null
-        ) {
-            return chain.proceed(request)
-        }
-        return chain.proceed(request.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
+        // Whatever a caller set, the decision is made here.
+        val bare = request.newBuilder().removeHeader(DEVICE_TOKEN_HEADER).build()
+        val raw = baseUrlProvider()
+        val base = TokenScope.baseOf(raw)
+        val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null
+        if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(bare)
+        val token = headerSafeToken(raw?.let(tokenFor)) ?: return chain.proceed(bare)
+        gate?.requireAdmitted(base!!)
+        return chain.proceed(bare.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
     }
 }
 
 /** Put the token on a request this app builds itself (the WS upgrades).
- *  Same drop-rather-than-throw rule as the interceptor. */
+ *  Same drop-rather-than-throw rule as the interceptor, which still has the
+ *  last word on whether it stays. */
 fun Request.Builder.withDeviceToken(token: String?): Request.Builder =
-    also { b ->
-        token?.trim()
-            ?.takeIf { it.isNotEmpty() && it.all { c -> c.code in 0x20..0x7E } }
-            ?.let { b.header(DEVICE_TOKEN_HEADER, it) }
-    }
+    also { b -> headerSafeToken(token)?.let { b.header(DEVICE_TOKEN_HEADER, it) } }
 
 /**
  * True when a refusal is the server asking to be paired rather than asking

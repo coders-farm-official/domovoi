@@ -17,7 +17,7 @@ administration is the deliberate exception — see *Settings* below.
 | Playback | Media3 ExoPlayer behind a `MediaSessionService` (background audio + media notification); one queue for library / radio / podcasts / audiobooks; casting to satellite rooms via the admin music endpoints |
 | Images | Coil |
 | Alerts | A notification when a timer or reminder goes off anywhere in the house: live over `/ws/state`, plus a local `AlarmManager` mirror for when the socket is down — `alerts/` |
-| Settings | Preferences DataStore (server URL, theme, device id, "listening as" person) — device-local only; server administration hands off to the dashboard |
+| Settings | Preferences DataStore (server URL, theme, device id, "listening as" person, trusted servers and their pinned identities) — device-local only; server administration hands off to the dashboard. The household token is NOT in it: `data/TokenVault.kt` seals it under an Android Keystore key (see *Security*) |
 
 ## Building
 
@@ -31,6 +31,45 @@ cd android
 ./gradlew :app:assembleDebug
 # APK lands in app/build/outputs/apk/debug/
 ```
+
+## Release-signed builds
+
+The APK the CI workflow publishes (`.github/workflows/android-apk.yml`,
+the `domovoi-debug-apk` artifact) is **debug-signed** with a key the
+runner makes up for that run, and its SHA-256 is in the run summary. It is
+a test build: each CI run carries a different key, Android won't install
+one over another (uninstalling to upgrade loses the saved servers and the
+household token), and nothing ties it to this project. What the build
+itself trusts: the workflow's actions are pinned by commit SHA and run with
+a read-only token, and `gradle/actions/setup-gradle` validates the wrapper
+jar; the Gradle distribution the wrapper then downloads
+(`gradle-8.14.3-bin.zip` from services.gradle.org, over HTTPS) is not yet
+checked against a digest, because `gradle/wrapper/gradle-wrapper.properties`
+has no `distributionSha256Sum` (Gradle publishes the value beside the zip,
+as `gradle-8.14.3-bin.zip.sha256`). For a phone that keeps the app, build a
+release APK signed with a key you keep:
+
+```bash
+# Once: a release key, kept outside the checkout (.gitignore refuses
+# *.jks and *.keystore in it anyway).
+keytool -genkeypair -v -keystore ~/domovoi-release.jks -alias domovoi \
+  -keyalg RSA -keysize 4096 -validity 10000
+
+# Every release:
+cd android
+./gradlew :app:assembleRelease   # app/build/outputs/apk/release/app-release-unsigned.apk
+BT=$ANDROID_HOME/build-tools/35.0.0
+"$BT/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk /tmp/app-release-aligned.apk
+"$BT/apksigner" sign --ks ~/domovoi-release.jks --ks-key-alias domovoi \
+  --out app-release.apk /tmp/app-release-aligned.apk
+"$BT/apksigner" verify --print-certs app-release.apk
+sha256sum app-release.apk        # publish this next to the APK
+```
+
+Keep the key and its password safe and backed up: every later release has
+to be signed with the same key, or phones refuse the upgrade. A phone with
+a debug build installed uninstalls it once before the first release build
+goes on.
 
 ## First run / offline-local mode
 
@@ -49,9 +88,117 @@ half of that rule is `res/xml/network_security_config.xml` (referenced
 from the manifest, system trust store only); because Android cannot
 express an IP range there, `net/CleartextPolicy.kt` enforces the whole
 rule on the app's single `OkHttpClient`, which the API, both WebSockets,
-media3 and Coil share. Backups are off (`allowBackup="false"`), so the
-server address, device id and — once it lands — the pairing token never
-leave the device in a cloud or `adb` backup.
+media3 and Coil share; the same rule is applied in Settings → Connection
+and, by hand, to every save-to-device download (`DownloadManager` is its
+own HTTP stack). Backups are off (`allowBackup="false"`,
+`dataExtractionRules`), so the server address, device id, pinned server
+identities and the sealed pairing token never leave the device in a cloud
+or `adb` backup or a device-to-device transfer.
+
+## Security: what the phone holds and where it sends it
+
+The household token (`X-Device-Token`, docs/SECURITY_PRIVACY.md) is the
+one credential the app has. The rules, all unit-tested under
+`app/src/test/java/com/domovoi/app/net/`:
+
+- **Scope** (`net/TokenScope.kt`, `DeviceAuthInterceptor`): the token goes
+  only to the active server — same scheme, host and port, like a browser
+  origin — and the interceptor strips it from anything else, whatever a
+  caller put on the request. The one exception is the app's own WebSocket
+  upgrades, which may reach another port on the same host (the drop-in
+  socket to the core). A radio stream's host, a LAN sweep's 254 probes
+  (`net/Discovery.kt` uses a copy of the client with no token interceptor),
+  a URL another app pushes at the player: none of them see it.
+- **Identity before token** (`net/IdentityGate.kt`, `net/ServerIdentity.kt`):
+  before the first token-bearing request to the saved server on a
+  network, the app asks it `GET /api/health?challenge=<nonce>` without a
+  token and checks the signed answer against the Ed25519 key it pinned
+  for that server. Not the pinned key, or no identity where one is
+  pinned, and no token-bearing request leaves — the state socket, the
+  background timer sync and a ringing alarm's confirm included — and the
+  shell says the server did not prove it is the one this phone paired
+  with. The Ed25519 verifier is a plain Kotlin port of the core's vendored
+  one, pinned to the RFC 8032 vectors.
+  - **What a proof is good for** (`net/NetworkWatch.kt`): a verdict is
+    keyed to a fingerprint of every network the phone could reach the
+    server over — the default network and every Wi-Fi or Ethernet
+    network, registered for separately so a VPN that stays the default
+    cannot hide the Wi-Fi changing under it, with each one's transports,
+    interface, addresses, gateways, DNS and DHCP server, from all four
+    ConnectivityManager callbacks (a twin access point with the home
+    SSID that hands out a different lease is a change too). A proof
+    stands at most ten minutes on one network, is taken again whenever
+    the app comes back to the foreground after a spell away, and a proof
+    that straddled a network change is thrown away. The Wi-Fi SSID/BSSID
+    join the fingerprint only where the app may read them (it asks for
+    no location permission).
+  - **The pin is the trust decision:** the picker's dialog shows the key
+    the server advertises (compare it with the dashboard's Settings →
+    About) and pins it when you say yes, so the first proof has to match
+    that key, not whoever answers first on some network; Settings →
+    Connection probes a typed address the same way before saving it. A
+    server trusted by a build from before this is pinned the first time it
+    proves a key. A server trusted while it offered none is never pinned
+    behind your back: the token goes out as it always did for it, the
+    topbar says "unverified", and Settings → Connection shows the key it
+    proves now with a "pin this identity" button.
+  - **Core down is not an impostor:** a web backend that answers but
+    could not ask its core (`domovoi_reachable` false — a restart, an
+    update, a busy box) is "not fully up": the token is held, nothing is
+    cached, the next request asks again, and the local-media shell says
+    so. Only a different key, or a bad or missing proof where one is
+    pinned, is "did not prove it is your Domovoi".
+  - **Forgetting:** the pin shows under Settings → Connection next to the
+    server, with every other trusted server and a forget button each —
+    the server in use included, in Settings and in the server list, after
+    a confirmation that shows the pinned key beside the one the server
+    proves now. That is the way to re-pair after a reinstalled or replaced
+    server; it returns the app to the server list. Switching servers drops
+    trust (only the trust) that is attached to no listed server.
+- **Redirects** (`net/RedirectPolicy.kt`): OkHttp's own follower is off;
+  the app follows a `3xx` itself, through the same interceptors, so a
+  hop to another host loses the token, a plain-http hop to a public host
+  is refused before any connection, an https→http downgrade is never
+  followed, and a WebSocket upgrade is never redirected.
+- **Save-to-device downloads** (`net/DeviceDownloads.kt`): the system
+  `DownloadManager` is a separate HTTP stack that keeps every request
+  header in its own database and replays it on retries and resumes. It
+  is handed the household token only for the one save on the device tier
+  — the video stream — after a fresh identity proof, over unmetered
+  networks only, and an unfinished token-bearing download is cancelled
+  (partial file and all) when the network changes, or at the next start
+  if it was left waiting for a network. Music, podcast and audiobook saves
+  are open reads and carry no credential. **Residual:** a finished video
+  download's row keeps the header until the download is removed from the
+  system's list (removing it from the app would delete the file); the
+  database is private to the system and unreadable by other apps, but it
+  is outside the vault. Streaming downloads through the app's own client
+  (a foreground data-sync service into MediaStore) is the follow-up that
+  closes it.
+- **At rest** (`data/TokenVault.kt`): tokens are one AES-256-GCM blob in
+  `shared_prefs/domovoi-vault.xml`, under a non-exportable key in the
+  Android Keystore; a blob the key cannot open is "nothing paired" and the
+  app asks to pair again. At every start a plain `device_tokens` value in
+  the DataStore (an install from before the vault — or
+  `functional-testing/at.py pair --via datastore`, which writes exactly
+  that) is swept into the vault and the plain key removed — only once the
+  vault's record is committed to disk, so a process killed between the
+  two writes leaves the token in one file or the other, never in neither
+  — so the harness keeps working and nothing stays in the clear. **Debug-build caveat:** the
+  CI workflow publishes `assembleDebug`, which is `android:debuggable`;
+  on a debuggable build `adb shell run-as com.domovoi.app` and an attached
+  debugger run as the app's uid and can drive it to decrypt. The Keystore
+  protects the file, not a debugger; a release build (not debuggable,
+  minified) is what closes that, and at.py's DataStore pairing depends on
+  the debug build's `run-as`.
+- **The media session** (`player/SessionAccess.kt`, `PlaybackService`):
+  the session is exported, as every `MediaSessionService` must be, so any
+  app on the phone can bind to it. Its callback admits only this app, the
+  service's own notification controller, Android Auto / Automotive and
+  controllers the system vouches for (lock screen, Bluetooth, a watch),
+  grants none of them `COMMAND_SET_MEDIA_ITEM` / `COMMAND_CHANGE_MEDIA_ITEMS`,
+  and fails `onAddMediaItems` / `onSetMediaItems` for everyone. The UI
+  drives the ExoPlayer directly, so nothing legitimate needed either.
 
 ## Settings: device-local only
 

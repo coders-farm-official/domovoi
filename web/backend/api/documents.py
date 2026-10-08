@@ -157,7 +157,7 @@ _TEXT_EXTS = frozenset(
     {
         ".txt", ".md", ".markdown", ".rst",
         ".json", ".csv", ".tsv", ".log",
-        ".yaml", ".yml", ".ini", ".toml", ".conf", ".cfg", ".env",
+        ".yaml", ".yml", ".ini", ".toml", ".conf", ".cfg",
         ".xml", ".html", ".htm", ".css",
         ".js", ".jsx", ".ts", ".tsx", ".py", ".sh", ".bash", ".ps1",
         ".sql", ".c", ".h", ".cpp", ".java", ".go", ".rs",
@@ -276,6 +276,37 @@ def _rel_of(target: Path) -> str:
     """The POSIX-style rel_path (documents_dir-relative) for a resolved
     target."""
     return target.relative_to(_documents_dir()).as_posix()
+
+
+def _withheld(rel_path: str, target: Path) -> bool:
+    """True when a READ must pretend this file does not exist (WEB-14).
+
+    ``/api/files`` hides secret-shaped names (``.env``, ``*.pem``,
+    ``*.key``, ``*.p12``, ``pairing_token``, ``setup-code.txt``, …) from
+    every listing, download and zip; this router used to apply the filter
+    only when SAVING, so the same ``~/Documents/id_rsa.pem`` the Files
+    page withholds was listed here and served by ``/raw``. Every segment
+    is asked about — the path as sent and as it resolved — so neither a
+    folder called ``tls`` nor a harmless-looking link to a key gets one
+    through.
+    """
+    segments = [seg for seg in rel_path.replace("\\", "/").split("/") if seg]
+    try:
+        segments += list(target.relative_to(_documents_dir()).parts)
+    except ValueError:  # pragma: no cover — _safe_target guarantees containment
+        return True
+    return any(is_sensitive_name(seg) for seg in segments)
+
+
+def _readable_target(rel_path: str) -> Path:
+    """:func:`_safe_target` for a READ: the same containment, plus a
+    ``404`` for a secret-shaped name — the answer ``/api/files`` gives for
+    the same file, so the two doors into this folder agree on reads as
+    they already did on writes."""
+    target = _safe_target(rel_path)
+    if _withheld(rel_path, target):
+        raise HTTPException(status_code=404, detail=f"{rel_path} not found")
+    return target
 
 
 def _unique_path(dirpath: Path, name: str) -> Path:
@@ -567,6 +598,10 @@ async def list_documents(
     for entry in sorted(base.iterdir(), key=lambda p: p.name.lower()):
         if not entry.is_file():
             continue
+        # The Files door's read filter (WEB-14): a secret-shaped name is
+        # never listed — not by this door, not by that one.
+        if is_sensitive_name(entry.name):
+            continue
         ext = entry.suffix.lower()
         if kind == "all":
             pass
@@ -699,7 +734,7 @@ async def download_zip(req: ZipRequest) -> Response:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for rp in req.rel_paths:
             try:
-                target = _safe_target(rp)
+                target = _readable_target(rp)
             except HTTPException:
                 continue
             if target.exists() and target.is_file():
@@ -725,7 +760,7 @@ async def read_text_file(rel_path: str) -> Any:
     Falls back gracefully instead of choking on non-text input: a file
     over ``_TEXT_MAX_BYTES`` or that isn't valid UTF-8 returns 415 with
     ``{editable:false, reason:"too_large"|"binary"}``."""
-    target = _safe_target(rel_path)
+    target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     st = target.stat()
@@ -876,7 +911,7 @@ def _write_sheet_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> No
 async def read_sheet(rel_path: str) -> dict[str, Any]:
     """The grid model for the homegrown sheet editor. 415 for sheet types
     it can't round-trip (.xls/.ods → the UI offers download instead)."""
-    target = _safe_target(rel_path)
+    target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     return {
@@ -985,7 +1020,7 @@ async def export_doc(rel_path: str, fmt: Literal["docx"] = Query("docx")) -> Res
     """Export a markdown/text document as .docx (attachment). ``.doc`` is
     a legacy binary format nothing open writes reliably — Word opens
     .docx everywhere the user asked for .doc."""
-    target = _safe_target(rel_path)
+    target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     if target.suffix.lower() not in (_MARKDOWN_EXTS | {".txt"}):
@@ -1010,7 +1045,7 @@ async def export_sheet(
 ) -> Response:
     """Export a sheet as .csv or .xlsx (attachment), converting through
     the same grid model the editor uses."""
-    target = _safe_target(rel_path)
+    target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     grid = _read_sheet_grid(target)  # 415s for non-editable types
@@ -1140,7 +1175,7 @@ async def serve_raw(rel_path: str) -> FileResponse:
     dashboard, and must never run on the dashboard's origin.
 
     Read scope is bounded entirely by the containment check."""
-    target = _safe_target(rel_path)
+    target = _readable_target(rel_path)
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail=f"{rel_path} not found")
     mime, _ = mimetypes.guess_type(target.name)
@@ -1158,7 +1193,7 @@ async def serve_raw(rel_path: str) -> FileResponse:
 @router.post("/drawings/read", dependencies=[Depends(require_device)])
 async def read_drawing(req: DrawingReadRequest) -> dict[str, str]:
     """Load an Excalidraw scene (.excalidraw JSON) or .svg for editing."""
-    target = _safe_target(req.rel_path)
+    target = _readable_target(req.rel_path)
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"{req.rel_path} not found")
     if target.suffix.lower() not in _DRAWING_EXTS:

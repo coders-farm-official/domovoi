@@ -105,6 +105,30 @@ The kiosk URL is derived automatically (`python -m satellite.kiosk
 --print-url` → `http://<server>:6369/display.html?room=<room_id>`); set
 `[display] kiosk_url` to override.
 
+**Pair the kiosk through its URL.** Since 2026-10-08 the room's label and
+idle mode, the live push and the transport buttons answer only a paired
+device (the household token; see `docs/SECURITY_PRIVACY.md`, "The video
+satellite's kiosk page"). Nobody is in front of the kiosk to type it, so put
+it in the URL — the page stores it in the kiosk browser's own profile and
+takes it back out of the address:
+
+```toml
+[display]
+kiosk_url = "http://<server>:6369/display.html?room=<room_id>&device_token=<household token>"
+```
+
+The household token is under Settings → Devices → Household token on an
+admin's dashboard; percent-encode it if an admin chose one with spaces or
+`&`. Without it the screen shows what was playing when the page loaded and
+then stops updating — the live push refuses an unpaired screen, so no
+change reaches it — with the room id for a name, the clock for idle and
+buttons that do nothing. `python -m satellite.kiosk --print-url` builds the
+URL without the token, so a kiosk left on the derived URL is in exactly
+that state after an upgrade: set `kiosk_url` as above. Rotating the
+household token means updating this line too; the page stores a NEW token
+from its address only after the server has accepted it, so a link carrying
+a wrong token cannot unpair a browser that is already paired.
+
 ## 5. What you get
 
 - The dashboard's Satellites page shows a `video` chip on the card; the
@@ -136,4 +160,6 @@ The kiosk URL is derived automatically (`python -m satellite.kiosk
 - **No audio:** `speaker-test -D <device>`; HDMI audio may need
   `hdmi_force_hotplug`-style overlay settings depending on the image.
 - **Verify the page itself** from any desktop browser:
-  `http://<server>:6369/display.html?room=<room_id>`.
+  `http://<server>:6369/display.html?room=<room_id>&device_token=<household token>`.
+- **Room name missing, buttons dead, "reconnecting" pill:** the kiosk is
+  not paired — add `&device_token=` to `[display] kiosk_url` (section 4).

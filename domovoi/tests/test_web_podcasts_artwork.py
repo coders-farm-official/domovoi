@@ -56,21 +56,26 @@ def isolated(monkeypatch, tmp_path):
 @pytest.fixture
 def internet(monkeypatch):
     """A mock internet: iTunes search + an image host. ``hits`` records
-    every request URL."""
+    every request URL as written. A fetch through ``net_safety`` opens
+    its connection to the address the check judged, so the request's URL
+    host is that literal and the name travels in the ``Host`` header —
+    the mock dispatches on the name the way a server does."""
 
     class _Net:
         hits: list[str] = []
 
         def handler(self, request: httpx.Request) -> httpx.Response:
-            self.hits.append(str(request.url))
-            if request.url.host == "itunes.apple.com":
+            name = request.headers.get("host", request.url.host)
+            as_written = f"{request.url.scheme}://{name}{request.url.raw_path.decode('ascii')}"
+            self.hits.append(as_written)
+            if name == "itunes.apple.com":
                 return httpx.Response(200, json={"results": [{
                     "collectionName": "The Show", "artistName": "Someone",
                     "feedUrl": FEED,
                     "artworkUrl100": "https://art.example.com/100.jpg",
                     "artworkUrl600": "https://art.example.com/600.jpg",
                 }]})
-            if request.url.host == "art.example.com":
+            if name == "art.example.com":
                 return httpx.Response(200, content=JPEG)
             return httpx.Response(404)
 

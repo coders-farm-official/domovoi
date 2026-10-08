@@ -542,6 +542,37 @@ const fmtUptime = (sec) => {
 // components.jsx beside restartDomovoiServer, which reads it too.
 const shortCommit = (s) => (s ? String(s).slice(0, 7) : '');
 
+// The update unit's own warnings: steps that went ahead, but not the way the
+// owner set them up. The core passes a `warn` step's detail only for the
+// steps whose detail the script writes itself (git_version._WARN_DETAIL_STEPS).
+// The one that matters most is a dependency lock the owner opted into
+// (DOMOVOI_USE_LOCK=1) that the update could not use: the run still ends ok,
+// so without this line the card would show a clean, hash-checked update.
+const lastUpdateWarnings = (lastUpdate) => {
+  const steps = lastUpdate && Array.isArray(lastUpdate.steps) ? lastUpdate.steps : [];
+  const out = [];
+  for (const s of steps) {
+    if (!s || s.status !== 'warn' || typeof s.detail !== 'string' || !s.detail) continue;
+    if (s.name === 'sync-deps' || s.name === 'rollback-deps') {
+      out.push(s.detail.startsWith('lock not applied') ? s.detail : `lock not applied: ${s.detail}`);
+    } else {
+      out.push(s.detail);
+    }
+  }
+  return out;
+};
+
+const LastUpdateWarnings = ({ lastUpdate }) => {
+  const lines = lastUpdateWarnings(lastUpdate);
+  if (!lines.length) return null;
+  return (
+    <div className="version-update-warnings mono"
+         style={{ padding: '0 16px 12px', fontSize: 11, color: 'var(--warn)', overflowWrap: 'anywhere' }}>
+      {lines.map((line, i) => <div key={i}>{line}</div>)}
+    </div>
+  );
+};
+
 const VersionSection = () => {
   const { data: cfg } = useApiObject('/api/config');
   // Checking and pulling talk to the git remote: greyed under "No"
@@ -657,6 +688,21 @@ const VersionSection = () => {
   // restart itself, the command to run instead.
   const plainRestart = admin && !!core && mode !== 'restart';
   const plainRunning = restarting === 'plain';
+  // Signed updates (docs/LINUX_HOST.md): whether the checked-out commit
+  // carries a signature by a key in the server's root-owned allowed-signers
+  // file. One badge: signed (verified); else what it is, and whether that
+  // stops an update (enforced) or only means signing isn't set up yet.
+  const sig = core && core.signature;
+  const sigBadge = sig && sig.status && sig.status !== 'unknown' ? (
+    sig.status === 'verified'
+      ? { tone: 'ok', label: 'signed',
+          title: `the checked-out commit is signed by ${sig.signer || 'an allowed key'} (${sig.allowed_signers})` }
+      : { tone: sig.enforced ? 'err' : 'warn',
+          label: sig.status === 'unsigned' ? 'unsigned' : 'signature not verified',
+          title: sig.enforced
+            ? `the checked-out commit ${sig.detail || sig.status}; signed updates are enforced on this server, so an update would refuse it`
+            : `the checked-out commit is ${sig.detail || sig.status}; signed updates are not enforced on this server (no ${sig.allowed_signers})` }
+  ) : null;
 
   return (
     <Card title="Version"
@@ -670,6 +716,7 @@ const VersionSection = () => {
           <span style={{ userSelect: 'all' }}>{coreSha || '—'}</span>
           {coreSha && coreSha.endsWith('-dirty') &&
             <Pill tone="warn">uncommitted changes</Pill>}
+          {sigBadge && <span className="version-signature" title={sigBadge.title}><Pill tone={sigBadge.tone}>{sigBadge.label}</Pill></span>}
           {core && core.uptime_sec != null && (
             <span style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
               running {fmtUptime(core.uptime_sec)}
@@ -710,6 +757,7 @@ const VersionSection = () => {
           {lastUpdate.error}
         </div>
       )}
+      {lastUpdate && <LastUpdateWarnings lastUpdate={lastUpdate}/>}
       {codePending && (
         <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
           New code is on disk but this process is still running the old

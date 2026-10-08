@@ -62,6 +62,7 @@ from domovoi.sdk import (
     PluginSDK,
     Response,
     egress,
+    net_safety,
 )
 
 from domovoi_plugin_radio import SCHEMA
@@ -416,6 +417,28 @@ class RadioHandler(Handler):
                     ctx,
                     f"{egress.spoken_offline_phrase()}, so I can't stream "
                     f"{station['name']}. FM stations still work.",
+                )
+            # The room's music player fetches this URL, so it gets the
+            # same outbound-URL check as every other fetch of a station
+            # row: rows that predate the write-side check, or that a
+            # directory filled, must not point the player into the house
+            # (A7-06). The FM branch below plays the tuner's own
+            # host-local URL and is not a station row's. A name that does
+            # not resolve right now is let through: the player resolves
+            # it itself and simply fails, and a DNS blip should not read
+            # as "not allowed".
+            reason = await net_safety.acheck_outbound_url(
+                str(url_to_play), require_resolution=False
+            )
+            if reason is not None:
+                log.warning(
+                    "radio: refusing to stream %s (%s) — %s",
+                    station.get("name"), url_to_play, reason,
+                )
+                return self._reply(
+                    ctx,
+                    f"I can't stream {station['name']}: its stream address "
+                    "isn't one I'm allowed to fetch.",
                 )
 
         elif source == "fm":

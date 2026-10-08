@@ -61,12 +61,27 @@ log = logging.getLogger(__name__)
 CONFIG_DIR = Path.home() / ".domovoi"
 
 # Entry-level denylist — belt-and-suspenders on top of per-root containment.
-# Even inside an allowed root, a listing/serve never surfaces these.
+# Even inside an allowed root, a listing/serve never surfaces these, through
+# either door into ~/Documents (/api/files and /api/documents both ask
+# :func:`is_sensitive_name`). Compared lower-cased. Beyond Domovoi's own
+# secrets, the ones an operator most often keeps in a home folder (REV-12,
+# 2026-10-08): SSH and GnuPG key folders, credential stores, password
+# databases, VPN profiles.
 DENY_NAMES: frozenset[str] = frozenset(
-    {"setup-code.txt", "pairing_token", ".env", "tls", ".domovoi"}
+    {
+        "setup-code.txt", "pairing_token", ".env", "tls", ".domovoi",
+        ".ssh", ".gnupg", ".netrc", ".git-credentials", ".pgpass", ".aws",
+        ".kube", "credentials.json", "secrets.json",
+    }
+)
+# Names that START like a secret: SSH private keys under their default
+# names (``id_rsa``, ``id_ed25519_sk``, and their ``.pub`` halves with
+# them) and every dotenv variant (``.env.local``, ``.env.production``).
+DENY_PREFIXES: tuple[str, ...] = (
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env.",
 )
 DENY_SUFFIXES: frozenset[str] = frozenset(
-    {".env", ".key", ".pem", ".crt", ".p12", ".pfx"}
+    {".env", ".key", ".pem", ".crt", ".p12", ".pfx", ".kdbx", ".gpg", ".ovpn"}
 )
 
 
@@ -121,9 +136,29 @@ def is_sensitive_name(name: str) -> bool:
         lower = candidate.lower()
         if candidate in DENY_NAMES or lower in DENY_NAMES:
             return True
+        if lower.startswith(DENY_PREFIXES):
+            return True
         if Path(candidate).suffix.lower() in DENY_SUFFIXES:
             return True
     return False
+
+
+def has_sensitive_segment(rel_path: str, target: Path | None = None, root: Path | None = None) -> bool:
+    """True when any segment of ``rel_path`` — as sent, and as it resolved
+    (``target`` under ``root``) — is a secret-shaped name.
+
+    A name filter that asks only about the LAST segment lets a folder on
+    the list be read through: ``.ssh`` is hidden from the listing, but
+    ``.ssh/config`` would still download. Asking about every segment of
+    both spellings also covers a harmless-looking link that resolves into
+    such a folder, or onto such a file."""
+    segments = [seg for seg in rel_path.replace("\\", "/").split("/") if seg]
+    if target is not None and root is not None:
+        try:
+            segments += list(target.relative_to(root).parts)
+        except ValueError:
+            return True
+    return any(is_sensitive_name(seg) for seg in segments)
 
 
 def unstorable_reason(rel_path: str) -> str | None:
