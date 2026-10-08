@@ -297,7 +297,12 @@ async def _speak(room: str) -> None:
 
 
 async def _satellite(c: AsyncClient, room: str) -> dict:
-    r = await c.get("/api/satellites")
+    # The room list is a household read since WEB-15 (2026-10-08): the
+    # marker is shown to every PAIRED device, so read it as one whatever
+    # credential the caller's client holds (none, after --reset-admin, is
+    # the pre-setup grace and passes too).
+    token = await db_device_token()
+    r = await c.get("/api/satellites", headers={HEADER: token} if token else {})
     assert r.status_code == 200, r.text
     return next(s for s in r.json() if s["room_id"] == room)
 

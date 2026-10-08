@@ -192,3 +192,21 @@ def test_a_preview_without_the_device_key_still_renders(rendered) -> None:
     texts = _texts(rendered["no_device_key"])
     assert any("full access to your Domovoi server" in t for t in texts), texts
     assert not any("any paired household device" in t for t in texts), texts
+
+
+# ─── FE-7: the trust statement names the browser half ─────────────────────
+
+
+def test_the_trust_statement_says_the_pages_run_in_every_household_browser(rendered) -> None:
+    """A plugin's ``web.scripts`` run in the dashboard's own origin, beside
+    the admin bearer, the household token and the session cookie of
+    whoever has the dashboard open. "Full access to your Domovoi server"
+    did not say so; the standing statement now does, on every preview."""
+    for scenario in ("origins", "no_satellite", "no_device_key"):
+        statement = " ".join(
+            t for t in _texts(rendered[scenario]) if "full access to your Domovoi server" in t
+            or "dashboard pages" in t
+        )
+        assert "dashboard pages run as part of the dashboard" in statement, statement
+        assert "every household browser" in statement, statement
+        assert "signed-in admin session and the household token" in statement, statement

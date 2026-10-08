@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
-from domovoi.admin_auth import require_device
+from domovoi.admin_auth import require_device, require_device_read
 from web.backend.db import session_scope
 from web.backend.schemas import CalendarEvent, CalendarEventCreate, CalendarEventPatch
 
@@ -25,8 +25,16 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 # pre-setup LAN grace kept so a fresh install still works.
 DEVICE = [Depends(require_device)]
 
+# READING it is household data as well (owner decision 2026-10-08, WEB-15):
+# titles, places and descriptions of the household's appointments. The
+# READ half of the device tier — the household token or an admin Bearer,
+# the dashboard cookie, or ``?device_token=`` — with the pre-setup grace;
+# a bare LAN request is 401. The ``/ws/state`` push of the same entries was
+# gated first; this closes the HTTP poll beside it.
+READ = [Depends(require_device_read)]
 
-@router.get("/events", response_model=list[CalendarEvent])
+
+@router.get("/events", response_model=list[CalendarEvent], dependencies=READ)
 async def list_events(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
@@ -65,7 +73,7 @@ async def list_events(
         return [_row_to_event(r) for r in rows.all()]
 
 
-@router.get("/events/{event_id}", response_model=CalendarEvent)
+@router.get("/events/{event_id}", response_model=CalendarEvent, dependencies=READ)
 async def get_event(event_id: int) -> CalendarEvent:
     async with session_scope() as s:
         row = await s.execute(

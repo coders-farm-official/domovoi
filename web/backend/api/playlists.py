@@ -526,9 +526,13 @@ async def remove_track_from_playlist(playlist_id: int, track_id: int) -> None:
 
 
 def _row_to_track(r: Any) -> Track:
+    # Library-relative, never the absolute server path (WEB-16) — the
+    # same helper the library reads use.
+    from web.backend.api.music import public_track_path
+
     return Track(
         id=int(r[0]),
-        file_path=r[1],
+        file_path=public_track_path(r[1]),
         title=r[2],
         artist=r[3],
         album=r[4],

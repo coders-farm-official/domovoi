@@ -219,7 +219,9 @@ const ChapterList = ({ p }) => {
 /* ── "Listening as [person]" selector — browser has no voice ID ───────── */
 const ListeningAsSelector = () => {
   const p = usePlayback();
-  const { items: people } = useApiList('/api/people', { eventTypes: ['people.last_seen.changed'] });
+  // Quiet: the roster is a household read (WEB-15), and a selector nobody
+  // has touched must not pop the pair prompt; unpaired, it offers only "me".
+  const { items: people } = useApiList('/api/people', { eventTypes: ['people.last_seen.changed'], quiet: true });
   if (!p.available) return null;
   return (
     <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--fg-muted)' }}>

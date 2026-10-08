@@ -1230,9 +1230,13 @@ const useSidebarCounts = () => {
         // Library endpoint returns {total, items}; ask for 1 item so the
         // network payload stays tiny — we only want the count.
         apiGet('/api/music/library?limit=1').catch(() => null),
-        apiGet('/api/people').catch(() => null),
-        apiGet('/api/satellites').catch(() => null),
-        apiGet('/api/calendar/events').catch(() => null),
+        // People, rooms and the calendar are household reads (WEB-15):
+        // quiet, because a count badge nobody asked for must not pop the
+        // pair prompt on an unpaired browser — it just shows no count, and
+        // a credential arriving re-reads (below).
+        apiGet('/api/people', { quiet: true }).catch(() => null),
+        apiGet('/api/satellites', { quiet: true }).catch(() => null),
+        apiGet('/api/calendar/events', { quiet: true }).catch(() => null),
         // Plugin pages declare their own sidebar badges in the plugin
         // manifest (usePluginBadges in components.jsx) — nothing
         // plugin-specific is fetched here.
@@ -1262,7 +1266,21 @@ const useSidebarCounts = () => {
         || ev.type === 'calendar.events.changed'
       ) refresh();
     });
-    return () => { cancelled = true; off(); };
+    // Pairing or signing in (or out) changes which of the counts this
+    // browser may read; re-read once per credential change.
+    let seenCredential = _credentialVersion();
+    let offAuth = () => {};
+    try {
+      if (typeof Auth !== 'undefined' && Auth.subscribe) {
+        offAuth = Auth.subscribe(() => {
+          const now = _credentialVersion();
+          if (now === seenCredential) return;
+          seenCredential = now;
+          refresh();
+        });
+      }
+    } catch { /* auth.js absent — counts stay as read */ }
+    return () => { cancelled = true; off(); offAuth(); };
   }, []);
 
   return counts;

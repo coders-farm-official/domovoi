@@ -40,7 +40,7 @@ tier is what keeps it from going further.
 flowchart TB
     subgraph daily["Daily tier — any LAN host, no auth"]
         d1["Reads: health, time, handlers,<br/>capabilities, the file-sync channels"]
-        d2["Dashboard reads of household STATE:<br/>rooms, now-playing, library, calendar,<br/>timers — never what anybody said"]
+        d2["Dashboard reads of household STATE:<br/>now-playing, library, timers —<br/>never what anybody said, never who is home"]
     end
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
@@ -56,6 +56,7 @@ flowchart TB
         v7["Satellite room label, timer cancel,<br/>announce, volume, and<br/>'Only reminders for this device'"]
         v8["Plugin routes marked @device_endpoint —<br/>radio: play, favorite, edit, forget,<br/>simulcast lookup"]
         v9["READING what the household said:<br/>conversations, voice notes, chat,<br/>wake-word recordings — and a person's<br/>memories, favorites, preferences"]
+        v10["READING who is home: the people<br/>roster, rooms, session lists,<br/>the calendar"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
@@ -171,7 +172,9 @@ file it actually opens so that a save can never quietly replace a PDF, a
 photo or a spreadsheet with text — and browsing / downloading /
 uploading / moving / importing across Files, Images and Videos. So do the
 routes that make the server go and fetch something a caller chose —
-podcast subscribe and poll, news feed attach and re-test.
+podcast subscribe, poll and directory search (since 2026-10-08, WEB-18: a
+search is a request to Apple carrying the caller's words), news feed attach
+and re-test.
 
 The **dashboard's** ordinary mutations are on it too, which is what closed
 the last of them: playing, queueing, tagging and uploading music; the
@@ -275,11 +278,34 @@ unpaired browser to pair when one of these is refused and shows the
 history once it has; the Android app sends the token on every request
 anyway.
 
-**Left open, on purpose, pending a decision.** Next to that list sit reads
-that carry no words anybody said, or that are household state, and they
-still answer the LAN: the people roster (names, when each was last heard,
-the free-text note on the row), a person's or a room's session list (times,
-rooms and turn counts), voice-profile enrolment metadata (never an
+**So is who is home, and the calendar (2026-10-08).** The `/ws/state`
+push needed a household credential because it carries presence, calendar
+titles and satellite details — but the same state answered any LAN host
+over plain HTTP, so polling `GET /api/people` every few seconds was the
+presence feed the socket gate withheld (WEB-15). These reads take the
+same `require_device_read` now, with the same credentials, the same `401`
+and the same pre-setup grace:
+
+* the people roster and one person's row — names, `last_seen_at`, the
+  free-text note (`GET /api/people`, `/api/people/{id}`) — and a
+  person's or a room's session list, which says when and where somebody
+  spoke (`/api/people/{id}/sessions`, `/api/satellites/{room}/sessions`);
+* every room's row — presence, Wi-Fi SSID, hardware, the code it synced,
+  who it is in a call with (`GET /api/satellites`, `/api/satellites/{room}`)
+  — and a satellite being adopted, with its MAC, board and model
+  (`GET /api/satellites/pending`);
+* the calendar (`GET /api/calendar/events`, `/api/calendar/events/{id}`).
+
+The dashboard and the Android app already send the household token on
+every read, so a paired client sees what it saw before. An unpaired
+browser's Home renders without its rooms and its week, and the sidebar
+shows no counts for them; nothing prompts until somebody opens one of
+those pages. The video satellite's kiosk reads its room's row too, which
+is why it is now paired by its URL (see *Daily tier*).
+
+**Left open, on purpose, pending a decision.** Next to those lists sit
+reads that carry no words anybody said and no presence, and they still
+answer the LAN: voice-profile enrolment metadata (never an
 embedding), timers and reminders (their countdowns, rooms and kinds, and
 where a fired one was heard, for the last 10 minutes — but no longer a
 reminder's WORDS: since 2026-09-30 every open timer read holds those back
@@ -287,14 +313,14 @@ from a caller without a household credential, rule M1, and the fire history
 beyond Home's 10 minutes (and who stopped a timer where) likewise, rule F1, in
 [Timers and reminders](#timers-and-reminders-house-wide); cancelling one is
 device tier),
-the calendar, a person's followed news topics and the stories
+a person's followed news topics and the stories
 fetched for them, the wake-word clip list (names and quality numbers, no
 audio), the voice denylist and the media request queue. Each is pinned in
 `domovoi/tests/test_route_auth_matrix.py`, so moving one is a recorded
 decision rather than a side effect. The dashboard's Home page, now the page
 every browser lands on, renders several of them to an unpaired browser as
-it stands: calendar titles and locations (a reminder shows only as
-"reminder").
+it stands: the house's countdowns and where a fired one was heard (a
+reminder shows only as "reminder"), and the media request queue.
 
 **What a device id means now.** Files writes still name a `device_id`, and
 the admin block list (`files_device_blocks`) still matches on it or on the
@@ -311,7 +337,14 @@ The block covers the Documents folder through **both** doors into it.
 device tier — so a rule only one of them kept would be a rule neither
 kept, because a caller picks the door. The documents saves therefore call
 the files module's own check rather than carrying a copy of it, and they
-apply the same secret-shaped-name filter. One difference remains, and it
+apply the same secret-shaped-name filter — on reads as well as saves since
+2026-10-08: a `.env`, a `*.pem` / `*.key` / `*.p12` or a `pairing_token`
+sitting in `~/Documents` is not listed, zipped or served by either door
+(WEB-14; before, the documents door listed and served what the Files door
+withheld). The music library has a door of its own, the dashboard's music
+upload (`POST /api/music/library/upload`), and since 2026-10-08 it asks the
+same block before writing a byte (WEB-12), identifying the caller the same
+way. One difference remains, and it
 is a client limitation rather than a decision: `device_id` is **required**
 on an `/api/files` write and **optional** on a documents save, because the
 in-app editors and the Android Documents screen do not name a device on
@@ -436,7 +469,15 @@ body sent without one is counted as it streams and cut off the moment it
 crosses. The upload routes — a music zip, a Piper voice, satellite media,
 documents and files, a plugin zip — keep their own much larger ceilings
 (`domovoi/transport_guard.py`), on top of the domain limits they already
-enforced. `MAX_REQUEST_BYTES` moves the default.
+enforced. Within those ceilings several upload handlers still hold the
+whole upload in the dashboard process's memory before writing it (WEB-19,
+not yet fixed): `POST /api/files/upload` and `POST /api/music/library/upload`
+up to 8 GiB each, every member a music zip extracts up to 1 GiB, a
+documents upload up to 512 MiB and a chat image up to 64 MiB before its
+20 MB check — so one paired device can make that process allocate that
+much in a single request. The Piper voice upload already streams to disk
+under a running budget; doing the same for these is the fix.
+`MAX_REQUEST_BYTES` moves the default.
 
 Two smaller bounds go with it. `Intent.transcript` and `room_id` are
 length-bounded, so a body that is not a spoken turn is refused by the
@@ -463,38 +504,44 @@ ask for a song or add a calendar entry, but the ask should come from a
 device the household enrolled. So is reading back anything the household
 SAID — conversations, notes, chat, wake-word recordings — or what the house
 keeps about a person (above). What is left on this tier is reads of
-household state, the pre-setup grace and the kiosk below. The accepted risk is now narrower and
+household state, the pre-setup grace and the kiosk below — and none of
+those reads names a place on the server's disk: a library track's
+`file_path` is relative to the music library (since 2026-10-08, WEB-16;
+it used to be the absolute path, which named the operator's account, and
+the library search matched that stored path, so it could be recovered a
+character at a time — it matches the relative one now), as
+podcasts, audiobooks and the Files registry already were. The accepted risk is now narrower and
 still real — one shared household secret, no per-device identity, and
 anything holding it can do everything on that tier. Keep your Wi-Fi password good; use a
 guest VLAN for devices you don't trust.
 
-The video satellite's kiosk page rides this same tier **by design** — the
-device renders it unattended, with no interactive login, so there is nobody
-to hold a credential. Exactly what that leaves open, named rather than
-implied:
+The video satellite's kiosk page renders unattended, with no interactive
+login, so there is nobody in front of it to pair it — which is why it
+**pairs itself from its own URL**: open it as
+`/display.html?room=<room_id>&device_token=<household token>` (on the
+satellite, set `[display] kiosk_url` to that; see
+`satellite/VIDEO_SATELLITE.md`). The page stores the token the way the
+pair prompt stores a pasted one (per server, in the kiosk browser's own
+profile) and takes it back out of the address. Exactly what each call on
+the screen needs, named rather than implied:
 
-| Open to any LAN client | What it gives away, or does |
-|---|---|
-| `GET /display.html?room=<room_id>` | The kiosk page itself. It is a page, not data — everything on it comes from the calls below. |
-| `GET /api/music/now-playing` | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
-| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Pauses, resumes, stops or skips that room's playback. The kiosk's transport row (play/pause, skip, stop), usable by anything on the network. |
+| Kiosk call | Tier | What it gives away, or does |
+|---|---|---|
+| `GET /display.html?room=<room_id>` | Open | The kiosk page itself. It is a page, not data — everything on it comes from the calls below. |
+| `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
+| `GET /api/satellites/{room_id}` | Device read (2026-10-08) | The room's label and its idle mode. Unpaired, the kiosk shows the room id and the clock instead. |
+| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Open at the web hop; **device tier at the core hop** | Pauses, resumes, stops or skips that room's playback — the kiosk's transport row. The web route asks for nothing, but it forwards to `/v1/admin/music/{action}/{room_id}`, which takes the household token, so the buttons work only on a paired kiosk and a bare LAN request is `401`. |
+| `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk polls instead. |
 
-That is the whole kiosk surface, and it is the accepted risk of the daily
-tier: someone on your Wi-Fi can see what is playing and work the transport
-controls. It is not a path to anything else — no write touches a file, a row
-or a setting, and the four verbs only move the playhead in a room. Every
-other dashboard mutation moved to the device tier; these stayed because the
-screen they belong to has nobody in front of it to pair.
-
-Two things narrow it even so. All four are writes, so they need the
-`X-Requested-With` header like every other write, which keeps a page on
-another site from triggering them from a browser you happen to have open.
-And the kiosk's **live push** is not on this tier: `/ws/state` carries the
-household's presence and calendar, so its handshake needs the device token
-(below). A kiosk that has never been paired still renders and still polls
-its reads; what it no longer gets is the push. Pair it once, from the
-dashboard's Settings → Connection, and the socket connects like any other
-household client.
+That is the whole kiosk surface. What an unpaired client on your Wi-Fi can
+do with it is see what every room is playing; every pause, resume, stop
+and skip needs the household token. All four verbs are writes, so they
+also need the `X-Requested-With` header like every other write, which
+keeps a page on another site from triggering them from a browser you
+happen to have open. A kiosk URL that carries the token puts the
+household token in the satellite's config file and in the kiosk browser's
+profile — treat the satellite's `~/.domovoi` like any other paired
+device's storage.
 
 **The speech latency summary is open too, and carries only numbers.**
 `GET /v1/stats/latency` (and its dashboard proxy `GET /api/stats/latency`,
@@ -516,12 +563,12 @@ the lane's counts and milliseconds and never those two keys. No
 transcript, no reply, no person, no session and no presence tier is read,
 so none can be returned; the `room` filter is an input, echoed back, and
 never a list of rooms. What it does reveal is that turns happened, when
-(by narrowing `since`) and in which room (by naming it). That is already
-an open read: a room's session list (`GET /api/satellites/{room_id}/sessions`)
-gives times and turn counts, and the people roster gives when each person
-was last heard (both above, pinned open in
-`domovoi/tests/test_route_auth_matrix.py`). This adds how long the machine
-took, which is what a person tuning Whisper needs without holding a
+(by narrowing `since`) and in which room (by naming it) — counts and
+timings, never who. The reads that used to make that redundant, a room's
+session list and the people roster, are household reads since 2026-10-08
+(above), so this summary is now the one open read that says a room was
+spoken to at all; it stays open by the 2026-09-28 decision because it is
+what a person tuning Whisper needs without holding a
 credential, the same reasoning that keeps `/v1/health`'s `stt` state open.
 The route-walk pins both routes open, so gating them is a recorded
 decision.
@@ -536,7 +583,16 @@ table below) are
 reliably keep a known device out of a room's queue, and someone determined
 can claim a different id. What changed is that the core's own queue routes
 now want the household token too, so a blocked device can no longer simply
-call port 6370 and skip the surface that asked. Binding a device id to a
+call port 6370 and skip the surface that asked. And the queue block covers
+the routes that REPLACE a room's queue as well as those that edit it
+(2026-10-08, WEB-11): play, play-track, the browser player's cast
+(play-tracks) and play-playlist refuse a blocked device with the block's
+message, identifying it from the body, `X-Device-Id`, `?device_id=` or the
+registration cookie, as the files door does; before, a blocked tablet had
+its "add to queue" refused and simply cast over the whole queue instead.
+The transport verbs (pause, resume, stop, skip, previous) are not covered,
+by decision: they move the playhead, not what is queued, and they are the
+kiosk's buttons. Binding a device id to a
 per-device token belongs with the kiosk read tokens in the hardening
 backlog. The same goes for the chat's message details: "sent from" names the
 device id the sending client put on the message (kept only when it is a
@@ -713,7 +769,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Setting and rotating are Bearer-only; the cookie renders the read and nothing else. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Writes are Bearer-only; the cookie renders the list and the audio. The household token never reads these, unlike the rest of the household's speech. |
-| **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But most of what Home hides that way is an **open read** that anyone on the network can fetch with no credential at all (`GET /api/calendar/events`, `/api/health`, `/api/satellites`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
+| **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But the tablet is paired, so it can read everything Home hides that way — the calendar and the rooms are household reads (since 2026-10-08) it holds the credential for — and the rest is an **open read** that anyone on the network can fetch with no credential at all (`/api/health`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
 | **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
@@ -817,7 +873,16 @@ statement verbatim, and it means every word:
 
 > "This plugin runs with full access to your Domovoi server. It can read
 > and modify your library, database, configuration, and anything else this
-> machine can reach. Only install plugins from publishers you trust."
+> machine can reach. Its dashboard pages run as part of the dashboard in
+> every household browser that opens it, with the same access as whoever is
+> using it — a signed-in admin session and the household token included.
+> Only install plugins from publishers you trust."
+
+The browser half is not a figure of speech (FE-7): the dashboard fetches
+every script a plugin's manifest names and runs it in the dashboard's own
+origin, so in an admin's signed-in tab it can act as that admin (the
+bearer lives in the page's memory), and on a kiosk or tablet it can read
+the household token the browser stores.
 
 What the install flow *does* do (verified in
 `domovoi/plugins_runtime/installer.py`):
@@ -916,23 +981,41 @@ dashboard is served from the same origin as the routes that hand it back,
 with the operator's session alongside. Two rules keep one from becoming
 the other:
 
-- **A document the browser would execute is downloaded, not rendered.**
-  `GET /api/documents/raw/{path}` and `GET /api/images/raw` serve HTML,
-  XHTML and SVG as `Content-Disposition: attachment` with
+- **Only what a browser shows inertly is rendered; everything else is a
+  download.** `GET /api/documents/raw/{path}` and `GET /api/images/raw`
+  open a file in the tab only when it is on a short allowlist: raster
+  pictures (PNG, JPEG, GIF, WebP, BMP, AVIF, ICO, TIFF, HEIC), `audio/*`,
+  `video/*`, PDF and plain text. Anything else — HTML, XHTML, SVG, the
+  whole `+xml` family (`.rss`, `.atom`, `.xsl`, `.rdf`, `.kml`, `.xaml`
+  …, which a browser parses as an XML document that can carry a script),
+  Markdown, JSON, CSV, a type the host's registry could not name — comes
+  back as `Content-Disposition: attachment` with
   `X-Content-Type-Options: nosniff` (believe the declared type, don't
   guess from the bytes) and `Content-Security-Policy: sandbox` (if it is
-  rendered anyway, render it in an opaque origin). PDFs, pictures and
-  everything else still open inline — that's what "open in a new tab" is
-  for. The classifier is `web/backend/api/inline_serve.py`, and it looks
-  at the extension as well as the media type, because a host with a thin
-  mimetypes registry reports `application/octet-stream` for a `.html`.
+  rendered anyway, render it in an opaque origin). It used to be the other
+  way round, a list of types to download, and the list missed the generic
+  XML family (WEB-10): which names map to which `+xml` type depends on the
+  host's mimetypes registry, so a denylist can never be complete. The
+  classifier is `web/backend/api/inline_serve.py`, and it looks at the
+  extension as well as the media type: a name that is a document's
+  (`.html`, `.svg`, `.rss`, `.xsl`, …) is a download even under a type
+  that would otherwise be allowed.
 - **Rendered markdown is sanitised before it reaches the page.** The
   document editor's preview runs `marked` output through
   `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps
   markdown's own elements, drops every `on*` attribute, drops
   `<script>`/`<style>`/`<iframe>` with their contents, and accepts only
   relative, `http(s)`, `mailto` and inline raster-image URLs in `href` /
-  `src` (entity-decoded first, so `java&#115;cript:` is refused too).
+  `src` (entity-decoded first, so `java&#115;cript:` is refused too). A
+  link's `rel` is the sanitiser's own (`noopener noreferrer nofollow`,
+  written first), never the author's. One thing it still lets through, and
+  it is a privacy leak rather than a script (FE-5, not yet fixed): an image
+  with an absolute `http(s)` address — `![](https://…)` or a raw `<img>` —
+  loads when a note is previewed, so whoever wrote the note learns when,
+  and from which address, a household member opened it, and can make the
+  viewer's browser send a blind GET to another host on your network.
+  Previewing a note somebody else wrote is visiting a page they chose the
+  images for; limiting preview images to the server's own URLs is the fix.
   Without the sanitiser loaded there is no preview at all.
   `domovoi/tests/test_markdown_preview_sanitised.py` renders the real
   pipeline and asserts on what the preview would put in the page.
@@ -1592,7 +1675,11 @@ of the surface.
 The choice here was to gate the socket rather than trim what it carries: a
 client that belongs to the household sees exactly what it saw before, and
 one that does not sees nothing, instead of everyone getting a redacted
-stream that is still a presence feed.
+stream that is still a presence feed. Until 2026-10-08 that held for the
+socket only — the HTTP reads of the same presence, calendar and satellite
+state still answered the LAN, so polling them was the feed this gate
+denied. They take the household tier now (see *Device tier*, "So is who is
+home"), so the socket and the reads beside it answer the same callers.
 
 ## Response headers and cross-origin rules
 

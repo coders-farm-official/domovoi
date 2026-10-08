@@ -99,7 +99,7 @@ Every endpoint below is labeled with one of these tiers:
 |---|---|
 | **Open** | No auth. Daily-use surface, LAN trust. |
 | **Device (`X-Device-Token` or Bearer)** | `require_device`: a valid `X-Device-Token` header **or** an admin Bearer. `401` with neither or with a stale token; `403` with only the dashboard cookie. Keeps the pre-setup grace so a fresh install works. This is the tier for ordinary household actions on BOTH hops: a turn, an announcement, playback and the room queue, and on the dashboard also the calendar, playlists, chat, news, podcasts, audiobooks, a person's memories and favorites, device registration, and the satellite verbs the core puts on the same tier (label, timers, announce, volume). |
-| **Device read** | `require_device_read`, the READ half of the device tier: everything **Device** accepts, plus the dashboard's session cookie and the household token as a `?device_token=` query (for what a browser fetches by URL — an `<img>`, a `<video>`, an `<audio>`, `window.open`). `401` with none of them, with a stale token or a wrong query token; nothing that writes reads the query. Same pre-setup grace. The tier for the Documents / Files / Images / Videos reads and — because household speech and personal content are for paired devices only (2026-09-26) — for reading back conversations, voice notes, chat, wake-word recordings and a person's memories, favorites and preferences. |
+| **Device read** | `require_device_read`, the READ half of the device tier: everything **Device** accepts, plus the dashboard's session cookie and the household token as a `?device_token=` query (for what a browser fetches by URL — an `<img>`, a `<video>`, an `<audio>`, `window.open`). `401` with none of them, with a stale token or a wrong query token; nothing that writes reads the query. Same pre-setup grace. The tier for the Documents / Files / Images / Videos reads and — because household speech and personal content are for paired devices only (2026-09-26) — for reading back conversations, voice notes, chat, wake-word recordings and a person's memories, favorites and preferences; and, since 2026-10-08, for who is home and the calendar (the people roster, the rooms and their session lists, the pending-adoption list, the calendar reads: WEB-15). |
 | **Chat callback** | `require_chat_callback`: the per-boot secret the chat agent's generated proxy tools carry in `X-Chat-Callback`. One endpoint (`POST /v1/admin/chat-tool`) wears it, because Letta's sandbox holds no admin session. A core restart mints a new secret, so the tools must be regenerated (`POST /v1/admin/chat/resync`). |
 | **Admin (Bearer)** | `require_admin_mutation`: requires `Authorization: Bearer <token>`. The dashboard cookie is *never* enough for a mutation (CSRF stance). Before first-run setup completes, these endpoints allow requests (pre-setup grace) so a fresh install works. |
 | **Admin read (Bearer or cookie)** | `require_admin_read`: a GET that carries secrets. Either a Bearer token or the `domovoi_admin` cookie (set at login, `HttpOnly`, `SameSite=Strict`) renders it. Same pre-setup grace. |
@@ -431,7 +431,10 @@ stay Open unless the row says otherwise. The exception is anything that reads
 back what the household SAID or what the house keeps about a person — a room's
 or a person's conversations and voice notes, a person's memories, favorites
 and preferences, the chat threads, messages and images, a wake-word clip's
-audio — which is **Device read** (§1.1): paired devices only. Each of those is
+audio — which is **Device read** (§1.1): paired devices only. So, since
+2026-10-08, is who is home and the calendar: the people roster and a
+person's row, a person's or a room's session list, every room's row and the
+pending-adoption list, and the calendar reads (WEB-15). Each of those is
 the web process's own read, not a proxy, so there is no core hop behind it.
 
 An **Open** label here describes this hop only. Every web route that forwards
@@ -489,25 +492,25 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. |
+| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. `q` matches title, artist, album and that same relative path, so nothing above the music library is searchable either. |
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
 | `PATCH /api/music/library/{track_id}` | **Device** | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
 | `DELETE /api/music/library/{track_id}` | **Admin (Bearer)** | `?also_file=false` | Remove a track row (optionally the file too). `204`. `401` without an admin session, `403` for the dashboard cookie alone — the row and the file are left alone either way. |
 | `GET /api/music/library/{track_id}/playlists` | Open | — | Playlists containing this track. |
-| `POST /api/music/library/upload` | **Device** | multipart audio file(s) and/or `.zip` | Upload straight into the library. The files just written are indexed **in-process** (`library_indexer.index_paths`, bounded to this request's own files) and then the core is asked for an MPD rescan — deliberately *not* the admin-gated library-wide sweep, which a device-tier caller cannot reach. `reindex_triggered` reports whether that index ran. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. `400` when nothing supported was found. |
-| `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. |
+| `POST /api/music/library/upload` | **Device** | multipart audio file(s) and/or `.zip`, optional `device_id` field | Upload straight into the library. `403` when the calling device is under a Files block (§3.13), checked before anything is written; the caller is identified as on the Documents door — the `device_id` field, `X-Device-Id`, `?device_id=` or the `domovoi-device-id` cookie. The files just written are indexed **in-process** (`library_indexer.index_paths`, bounded to this request's own files) and then the core is asked for an MPD rescan — deliberately *not* the admin-gated library-wide sweep, which a device-tier caller cannot reach. `reindex_triggered` reports whether that index ran. A zip is checked before anything is inflated: `413` when it has more than 5000 members, any member declares more than 1 GiB, or the members declare more than 4 GiB in total. Each name is judged as it will be stored, as on the Files and Documents doors: a control character anywhere, and on a Windows host a `:` (an NTFS stream) or a trailing dot or space, lands in `skipped` with the reason. `400` when nothing supported was found. |
+| `GET /api/music/library/{track_id}/audio` | Open | `?download=` | Stream the file to the browser player (range requests). `?download=1` serves it as an attachment (save to device) named from the on-disk basename. `404` "file missing on disk" and the `400` for a row outside `MUSIC_DIR` name the track id, never its path. |
 | `GET /api/music/library/{track_id}/cover` | Open | `If-None-Match` | Cover art, read from the file on every request the client's cache doesn't answer — nothing is stored. The picture built into the file (ID3 `APIC`, front cover preferred; MP4 `covr`; FLAC pictures; Vorbis/Opus `METADATA_BLOCK_PICTURE` / `COVERART`; WMA `WM/Picture`), else the first image in the track's own folder named `cover` / `folder` / `front` / `album` (`.jpg` `.jpeg` `.png` `.webp`, any case). Served as-is with the content type its bytes show, a strong `ETag` (the audio file's path, mtime and size, plus the folder image's) and `Cache-Control: public, max-age=86400`; `304` when `If-None-Match` matches; `404` when there is none or it is over 8 MiB (cacheable for 5 minutes); `400` for a row outside `MUSIC_DIR`, as `/audio`. Open because `<img>` tags and the phone's lock screen fetch it by URL. |
 | `DELETE /api/music/acquisitions/{acq_id}` | **Device** | — | Cancel a pending acquisition. `204`. |
 | `GET /api/music/now-playing` | Open | — | Per-room now-playing (from the cached core snapshot + MPD), with source attribution. |
 | `POST /api/music/now-playing/{room_id}/favorite` | **Device** | — | Heart whatever the room is playing (re-searches by title into the library/queue). |
-| `POST /api/music/play` | **Device** | `{room_id, query}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). |
-| `POST /api/music/play-track` | **Device** | `{room_id, track_id}` | Proxy → core direct-play (no conversation log, no external fallback). |
-| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids, start_sec?, start_paused?}` | Proxy → core queue cast (`start_sec` forwarded only when > 0, `start_paused` only when true). |
-| `POST /api/music/play-playlist` | **Device** | `{room_id, playlist_id, shuffle?}` | Proxy → core playlist start. |
+| `POST /api/music/play` | **Device** | `{room_id, query, device_id?}` | Proxy → core `/v1/admin/music/play` (full voice pipeline). `403` when the calling device is blocked from this room's queue (§3.5a). |
+| `POST /api/music/play-track` | **Device** | `{room_id, track_id, device_id?}` | Proxy → core direct-play (no conversation log, no external fallback). `403` when the calling device is blocked from this room's queue (§3.5a). |
+| `POST /api/music/play-tracks` | **Device** | `{room_id, track_ids, start_sec?, start_paused?, device_id?}` | Proxy → core queue cast (`start_sec` forwarded only when > 0, `start_paused` only when true). `403` when the calling device is blocked from this room's queue (§3.5a). |
+| `POST /api/music/play-playlist` | **Device** | `{room_id, playlist_id, shuffle?, device_id?}` | Proxy → core playlist start. `403` when the calling device is blocked from this room's queue (§3.5a). |
 | `POST /api/music/add-by-query` | **Device** | `{room_id, query, artist?, attach_to_playlist_id?}` | Proxy → core acquisition enqueue. |
 | `POST /api/music/add-by-url` | **Outbound-fetch (core decides)** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Proxy with credentials + source address forwarded; the core's verdict passes back verbatim. |
-| `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open (FE-3) | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`; its status passes through (a control that didn't happen is `502`/`409`/`503`, not 200). These four stay open by decision: they are the video satellite's kiosk transport row, and that screen renders unattended with nobody to hold a credential. See [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md). |
+| `POST /api/music/{pause\|resume\|stop\|skip}/{room_id}` | Open at this hop (FE-3); the core route is **Device** | — | Transport proxies → core `/v1/admin/music/{action}/{room_id}`; its status passes through (a control that didn't happen is `502`/`409`/`503`, not 200). This hop asks for nothing (they are the video satellite's kiosk transport row), but the core route behind them takes the device tier, so a call needs the household token or an admin Bearer either way — `401` without — and the kiosk has to be paired for its buttons to work (§3.7, [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md)). Not covered by queue blocks (§3.5a). |
 | `POST /api/music/previous/{room_id}` | **Device** | — | Proxy → core `/v1/admin/music/previous/{room_id}`: back one song in the room's queue (the app's and the dashboard's previous while casting). Not a kiosk verb, so not open. |
 | `POST /api/music/library/reindex` | **Admin (Bearer)** | — | Proxy → core background reindex. |
 | `POST /api/music/library/enrich` | **Admin (Bearer)** | — | Proxy → core background enrichment. |
@@ -539,7 +542,7 @@ rather than guessing. `GET /api/music/now-playing` carries the same
 | `DELETE /api/music/queue-blocks/{id}` | **Admin (mutation)** | — | Unblock. `204`; `404` unknown id. |
 | `POST /api/devices/register` | **Device** | `{device_id, name?, platform?, user_agent?}` | Upsert this client's row and bump `last_seen_at`. Idempotent — clients call it every boot (the dashboard only once it can pass this tier, again whenever a credential arrives, when the tab comes back, and every 2 minutes while it is visible; a refusal never prompts). `name` seeds the row only when it is NEW, so a client that always sends its platform default can't overwrite a chosen name. Answers the device's own row, `{device_id, name, platform, user_agent, first_seen_at, last_seen_at, shared_screen}` — `shared_screen` is how the dashboard (and the Android app, which registers once it is paired or its live connection is up, again when either changes, and every 2 minutes while it is on screen) learns an admin marked it a shared screen. `400` malformed id. |
 | `PATCH /api/devices/{device_id}` | **Device** | `{name}` | Rename. Whitespace is collapsed so two names can't look identical yet block differently. `404` if the device has never registered. |
-| `PATCH /api/devices/{device_id}/shared-screen` | **Admin (mutation)** | `{shared_screen: bool}` | Mark a device as a shared screen (the kitchen tablet), or back to a personal one; answers the device row. Admin tier on purpose — the device's own household token is refused (`401`/`403`), so a device cannot un-share itself through this route. Presentational only: what the dashboard's Home hides on a shared screen (calendar titles and locations, a reminder's text, problem rows) is readable with no credential at all, an unpaired browser (a private window on the tablet included) is never masked, and the flag belongs to a self-asserted device id kept in the browser's storage — clearing it, or registering under a new id, gives an unmarked device. The device learns a change on its next register (at most about two minutes while the page is open). Leaves `last_seen_at` alone. `404` unregistered, `400` malformed id, `503` on a database without V014. |
+| `PATCH /api/devices/{device_id}/shared-screen` | **Admin (mutation)** | `{shared_screen: bool}` | Mark a device as a shared screen (the kitchen tablet), or back to a personal one; answers the device row. Admin tier on purpose — the device's own household token is refused (`401`/`403`), so a device cannot un-share itself through this route. Presentational only: what the dashboard's Home hides on a shared screen (calendar titles and locations, a reminder's text, problem rows) is readable by the tablet itself, which is paired — and the problem rows (`/api/health`) are readable with no credential at all — an unpaired browser (a private window on the tablet included) is never masked, and the flag belongs to a self-asserted device id kept in the browser's storage — clearing it, or registering under a new id, gives an unmarked device. The device learns a change on its next register (at most about two minutes while the page is open). Leaves `last_seen_at` alone. `404` unregistered, `400` malformed id, `503` on a database without V014. |
 | `GET /api/devices` | **Admin (read)** | `?limit=200` | The device roster, most-recently-seen first, each row with its `shared_screen` flag. Admin-gated: it's an inventory of what's on the network. Feeds the blocklist editor and the shared-screen toggle, so an admin picks a device from a list instead of typing an id. |
 
 `device_id` is **required** on every edit and optional only on the read. Not
@@ -547,6 +550,20 @@ because it proves anything — it is self-asserted — but because a blocklist
 anyone evades by omitting the field is no control at all, and leaving it out is
 far easier than claiming someone else's id. A missing `device_id` on an edit is
 a `422`.
+
+**The block also covers the routes that replace a queue** (WEB-11):
+`POST /api/music/play`, `/play-track`, `/play-tracks` (the browser player's
+cast) and `/play-playlist` answer `403` with the block's message for a blocked
+device, before the core is asked. There `device_id` is optional — no client
+sends it on those routes yet — and the caller is identified as the Files and
+Documents doors identify it: the body's `device_id`, then `X-Device-Id`,
+`?device_id=`, then the `domovoi-device-id` cookie every browser carries from
+`POST /api/devices/register`. A caller that names itself nowhere (today's
+Android app, which keeps no cookie jar and sends no `X-Device-Id`) is not
+identified, so no block matches it. **Not covered, by decision:** the transport
+verbs — pause, resume, stop, skip, previous. They move the playhead through
+what is queued rather than changing it, they are the kiosk's buttons, and a
+block on them would hold only for a caller that volunteered its id.
 
 A block matches on device **id** OR device **name**. Both matter: the id
 survives a rename (the obvious way to slip a block), the name survives a
@@ -681,9 +698,12 @@ title and never a lyric: it tells the Jobs card, and a player that is still
 What a person said and what the house keeps about them — their conversation
 turns, the notes that name them, their memories, favorites and preferences —
 is read on the **Device read** tier (§1.1): a paired device only, `401` for
-anything else on the LAN. The roster, the session list and the voice-profile
-rows stay **Open** (no words anybody said; left open pending an owner
-decision). The memory / favorite / preference edits are **Device**
+anything else on the LAN. So are the roster, one person's row and their
+session list (2026-10-08, WEB-15): `last_seen_at` and "when and in which
+room they spoke" are presence, which `/ws/state` already withheld from an
+unpaired client. The voice-profile rows stay **Open** (enrolment metadata,
+no words anybody said; left open pending an owner decision). The memory /
+favorite / preference edits are **Device**
 tier — a person's own content, written by whichever household client they are
 using. The two deletes that lose identification data — forgetting a person and
 dropping a voice profile — are **Admin (Bearer)**: `401` without an admin
@@ -693,10 +713,10 @@ Person-centric views over the voice-profile / memory tables.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/people` | — | Everyone Domovoi has voice-identified. |
-| `GET /api/people/{person_id}` | — | One person. |
+| `GET /api/people` | **Device read** | Everyone Domovoi has voice-identified, with `last_seen_at`. |
+| `GET /api/people/{person_id}` | **Device read** | One person. |
 | `DELETE /api/people/{person_id}` | **Admin** | Forget a person (profiles, memories, links). |
-| `GET /api/people/{person_id}/sessions` | `?limit=20` | Recent conversation sessions. |
+| `GET /api/people/{person_id}/sessions` | **Device read** · `?limit=20` | Recent conversation sessions. |
 | `GET /api/people/{person_id}/conversations` | **Device read** · `?limit=50` | Recent conversation turns. |
 | `GET /api/people/{person_id}/notes` | **Device read** | Notes mentioning them. |
 | `GET /api/people/{person_id}/profiles` | — | Their voice profiles (embeddings metadata). |
@@ -720,6 +740,13 @@ puts someone back in front of the matcher, so it answers to the operator).
 Reads are **Open**, except a room's conversations and voice notes — what was
 said there — which are **Device read** (paired devices only), and the log pull,
 which carries the same speech raw and is an **Admin read** at both hops. The
+room list, one room's row, a room's session list and the pending-adoption
+list are **Device read** too since 2026-10-08 (WEB-15): presence, Wi-Fi SSIDs,
+hardware, synced code, call partners, who spoke when, and the MAC of a device
+being adopted are household state the `/ws/state` handshake already gated. The
+kiosk display reads its own room's row, so it is paired by its URL
+(`/display.html?room=<room_id>&device_token=<household token>`); unpaired, it
+falls back to the room id and the clock. The
 action endpoints carry the tier the core route behind
 each one carries, so the two hops agree: room label, timer cancel, announce,
 announce-all and volume are **Device**; restart, display and the config push
@@ -773,9 +800,9 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
-| `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Open on purpose — anyone in the house can see that a room records; what it recorded is admin-only. Each row also carries `timers_own_only`: the room's "Only reminders for this device" setting (`false` without V018). |
-| `GET /api/satellites/{room_id}` | Open | — | One room. |
-| `GET /api/satellites/{room_id}/sessions` | Open | `?limit=20` | Recent sessions in this room. |
+| `GET /api/satellites` | **Device read** | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Every paired device can see that a room records; what it recorded is admin-only. Each row also carries `timers_own_only`: the room's "Only reminders for this device" setting (`false` without V018). |
+| `GET /api/satellites/{room_id}` | **Device read** | — | One room (the kiosk's label and idle mode). |
+| `GET /api/satellites/{room_id}/sessions` | **Device read** | `?limit=20` | Recent sessions in this room, each with the `person_id` who spoke. |
 | `GET /api/satellites/{room_id}/conversations` | **Device read** | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
 | `GET /api/satellites/{room_id}/logs` | **Admin (read)** | `?max_bytes=` (1 KB–10 MB, default 1 MB) | Satellite's recent log output, live over its WS. Gated: the satellite logs every transcript, so this returns room conversation content. `404` when the room isn't connected — the buffer lives in the Pi's process. |
 | `GET /api/satellites/{room_id}/notes` | **Device read** | — | Notes taken in this room. |
@@ -803,7 +830,7 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 | `GET /api/satellites/media/jobs/{id}/download` | **Admin (read)** | — | The overlay zip for a `kind=zip` build. Since WEB-1 it carries no plaintext passwords: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard (`/jobs/{id}/credentials`, memory only). A card written straight to a **drive** still gets `domovoi/ap.json` + `domovoi/console.json`, which stage 1 needs. |
 | `GET /api/satellites/media/jobs/{id}/credentials` | **Admin (read)** | — | `{ap: {ssid, psk} \| null, console: {username, password}}` (`ap` is null for a USB-adoption card) for a finished build, from the web process's memory (`404` once the dashboard restarts). The dashboard's "show setup details" reads it, for drive and zip builds alike; for a zip it is the only place the passwords appear. |
 | `POST /api/satellites/media/cache/refresh` | **Admin (Bearer)** | — | Refresh the wheel/deb/model caches (slow on a cold cache). Returns `{bucket: {ok, message}}` per bucket. `409` under `never` (§1.6); preparing a card still works from what is cached. |
-| `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off, and inside WSL, which sees no USB drives). |
+| `GET /api/satellites/pending` | **Device read** | — | Unprovisioned satellites presenting a USB adoption volume on the server, with MAC, board and model (empty when adoption is off, and inside WSL, which sees no USB drives). |
 | `POST /api/satellites/pending/{pending_id}/adopt` | **Admin, security tier** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
 | `DELETE /api/satellites/{room_id}` | **Admin, security tier** | — | Proxy → core delete (remove a `waiting` room). |
 | `PATCH /api/satellites/{room_id}` | **Device** | `{room_label}` | Proxy → core room-label update. |
@@ -817,13 +844,15 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 
 ### 3.8 Calendar
 
-Reads are **Open**; every write is **Device** tier.
+Reads are **Device read** (since 2026-10-08, WEB-15: titles, places and
+descriptions of the household's appointments, which `/ws/state` already
+withheld from an unpaired client); every write is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/calendar/events` | `?start=&end=&limit=500` | Events in a window (ISO datetimes). |
+| `GET /api/calendar/events` | **Device read** · `?start=&end=&limit=500` | Events in a window (ISO datetimes). |
 | `POST /api/calendar/events` | `CalendarEventCreate` | Create an event. |
-| `GET /api/calendar/events/{event_id}` | — | One event. |
+| `GET /api/calendar/events/{event_id}` | **Device read** | One event. |
 | `PATCH /api/calendar/events/{event_id}` | `CalendarEventPatch` | Edit an event. |
 | `DELETE /api/calendar/events/{event_id}` | — | Delete an event. |
 
@@ -1001,7 +1030,7 @@ directory zip and an import copy, even from a library rooted above it.
 | `POST /api/files/move` | `{ source_library_id, paths:[…], target_library_id, target_path, device_id }` | Move files/folders into another folder — the drag-and-drop verb. Within one library or between two, as long as **both are editable** (a move deletes from the source, so a read-only root can only ever be a destination; removables stay copy-only via `/import`). Per-path outcome: `200 {moved, skipped, failed, reindex_triggered}` — `skipped` holds harmless no-ops (dropped into the folder it was already in) so they don't read as errors. Refuses a library root, a folder into itself or a descendant, a name that already exists at the destination (never overwrites), and secret-shaped names. `403` either side read-only **or device blocked** · `404` missing target dir · `422` no `device_id`. Reindexes **both** sides when either is an indexed library. |
 | `POST /api/files/import` | `{ source_library_id, source_path, target_library_id, target_path, device_id }` | Copy a file/dir from a **removable** source into an **importable** library (server-side, member+byte capped). `200 {copied, skipped, reindex_triggered}`. `403` device blocked · `409` source not removable / target not importable · `410` ejected source · `404` missing · `422` no `device_id`. |
 | `GET /api/files/device-blocks` | **Admin (read)** | Every files block: `[{id, device_id, device_name, note, created_at}]`. |
-| `POST /api/files/device-blocks` | **Admin (mutation)** · `{device_id?, device_name?, note?}` | Block a device from uploading, moving or importing anywhere (it can still browse and download). Matches id **or** name, like the queue blocks. Needs at least one of id/name (`400` otherwise); `409` when that device is already blocked. |
+| `POST /api/files/device-blocks` | **Admin (mutation)** · `{device_id?, device_name?, note?}` | Block a device from uploading, moving or importing anywhere (it can still browse and download) — every door into a library: `/api/files`, the `/api/documents` saves and `POST /api/music/library/upload`. Matches id **or** name, like the queue blocks. Needs at least one of id/name (`400` otherwise); `409` when that device is already blocked. |
 | `DELETE /api/files/device-blocks/{id}` | **Admin (mutation)** | Unblock. `204`; `404` unknown id. |
 
 After a successful write to an indexed library (`reindex_kind == "music"`) the
@@ -1048,7 +1077,12 @@ the tier alone is not the whole rule:
   `editable` flag, and the secret-shaped-name filter that skips `.env`,
   `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `pairing_token` and
   `setup-code.txt`. A name one door refuses is refused by the other
-  (`400`, or `skipped` on an upload).
+  (`400`, or `skipped` on an upload). The filter covers **reads** too
+  (WEB-14): such a file already in `~/Documents` is left out of
+  `GET /api/documents`, out of `/download-zip`, and every read route
+  (`/raw`, `/text`, `/sheet`, both `/export`s, `/drawings/read`) answers
+  `404` for it — and for anything under a folder with such a name (`tls`) —
+  exactly as `/api/files` does.
 * **Who the caller is does not depend on the caller mentioning it.**
   `device_id` in the body is still required on `/api/files` writes and
   optional on `/api/documents` saves — no client sends it there, and
@@ -1087,7 +1121,7 @@ row's `category` tells the UI how to open it
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
+| `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). Secret-shaped names are not listed. |
 | `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name (including one wearing a trailing dot or space), for a stream separator or a control character; `409` if it already exists. |
 | `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. |
 | `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |
@@ -1098,27 +1132,30 @@ row's `category` tells the UI how to open it
 | `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` (optional `device_id`) | Write the grid back (.xlsx keeps formulas as formulas). `415` for anything outside .xlsx/.csv, raised before anything is created. |
 | `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
 | `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
-| `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
+| `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline only for the allowlist a browser renders inertly — raster images, `audio/*`, `video/*`, PDF, plain text; everything else (HTML, SVG, XHTML, every `+xml` type such as `.rss` / `.xsl` / `.xaml`, Markdown, JSON, an unknown type) comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` (`web/backend/api/inline_serve.py`). |
 | `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
 | `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` (optional `device_id`) | Save a drawing. `400` for anything outside .excalidraw/.svg. |
 
 ### 3.15 Podcasts and audiobooks
 
-Reads are **Open**; every write is **Device** tier — subscribing, unsubscribing,
-polling, saving a resume position and re-walking the audiobooks folder.
-Subscribing and polling also make the server fetch a URL, so the feed URL must
-pass the outbound-URL rules (§1.1). Feeds are polled by core background
+Reads are **Open**, except the directory search; every write is **Device**
+tier — subscribing, unsubscribing, polling, saving a resume position and
+re-walking the audiobooks folder. Subscribing and polling also make the server
+fetch a URL, so the feed URL must pass the outbound-URL rules (§1.1). So does
+the directory search (`GET /api/podcasts/discover`: the server queries Apple
+with the caller's term), which is why it is **Device** too (WEB-18); the
+artwork a search result points at stays open, for the `<img>`. Feeds are polled by core background
 workers; audio is served by this process.
 
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/podcasts/subscriptions` | — | Subscribed feeds. Each row's `artwork` is a path on this server (`/api/podcasts/subscriptions/{id}/artwork?v=…`) or `null`, never the publisher's URL: the server downloads each show's artwork itself, so clients load nothing from outside the house. |
-| `POST /api/podcasts/subscriptions` | `SubscribeRequest` | **Device.** Subscribe to a feed URL, or by `query` (a directory search). `400` for a URL the server won't fetch. Under `never` subscribing by `query` is `409`; a feed URL is stored and fetched once the internet is allowed. |
+| `POST /api/podcasts/subscriptions` | `SubscribeRequest` (`feed_url` or `query`, `keep_n` 1–50, default 5) | **Device.** Subscribe to a feed URL, or by `query` (a directory search). `keep_n` is how many of the newest episodes stay downloaded; outside 1–50 is `422` (each episode is a download of up to 512 MB). `400` for a URL the server won't fetch. Under `never` subscribing by `query` is `409`; a feed URL is stored and fetched once the internet is allowed. |
 | `GET /api/podcasts/subscriptions/{sub_id}/artwork` | — | Open, like episode audio (an `<img>` can't send headers). The show's artwork as the server stored it (JPEG, PNG, WebP or GIF, at most 5 MB), `Cache-Control: max-age=86400`; `404` when it isn't downloaded. |
 | `GET /api/podcasts/discover/artwork/{key}` | — | Open. Artwork for a Discover result, by a key the server minted for that result; a key it didn't mint is `404` without any fetch, so a client can never make the server fetch a URL of its choosing. |
 | `DELETE /api/podcasts/subscriptions/{sub_id}` | — | Unsubscribe. |
 | `GET /api/podcasts/subscriptions/{sub_id}/episodes` | — | Episodes for one subscription. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
-| `GET /api/podcasts/discover` | `?q=` (required) | Search a podcast directory. Hits whose feed URL would be refused are left out. A hit's `artwork` is a server path (`/api/podcasts/discover/artwork/{key}`) or `null`. `409` under `never`. |
+| `GET /api/podcasts/discover` | `?q=` (required) | **Device.** Search a podcast directory (the server fetches Apple's search, so a caller without the household token or an admin Bearer is `401` before anything leaves the house). Hits whose feed URL would be refused are left out. A hit's `artwork` is a server path (`/api/podcasts/discover/artwork/{key}`) or `null`. `409` under `never`. |
 | `POST /api/podcasts/poll` | — | **Device.** Poll feeds now (instead of waiting for the worker). `409` under `never`. |
 | `GET /api/podcasts/episodes/{episode_id}/audio` | `?download=` | Stream a downloaded episode. `?download=1` serves it as an attachment named from the episode title plus its on-disk extension. |
 | `GET /api/podcasts/positions/{episode_id}` | `?device_id=&person_id=` | Resume position. |
@@ -1177,7 +1214,7 @@ Images screen.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/images/thumb` | `?library_id=&path=&size=s\|m\|l\|xl` | Pillow-resized WebP thumbnail from the size-bucketed cache; `204` for undecodable files. |
-| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). An **SVG** is a document a browser executes, so it comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` instead of rendering on the dashboard's origin. |
+| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target) when it is a raster picture. An **SVG** is a document a browser executes, so it comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` instead of rendering on the dashboard's origin — as does anything else off the inline allowlist (§3.14 raw). |
 
 ### 3.18 Chat
 
