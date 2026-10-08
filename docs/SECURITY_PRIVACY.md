@@ -1130,17 +1130,81 @@ records the fingerprint in `build-info.json`. First boot installs it
 root-owned at `/etc/domovoi/server-identity.json`, and adoption copies the
 fingerprint into `[satellite] server_fingerprint` in the device's
 `config.toml`. The satellite user can read all of that and cannot forge the
-root-owned copy.
+root-owned copy — and the root-owned copy is the one the device trusts.
+`config.toml` belongs to the satellite account, so a `server_fingerprint`
+there that disagrees with `/etc/domovoi/server-identity.json` is logged at
+ERROR and ignored; it is consulted only on a unit that has no root-owned
+pin (hand-built, or a card from before server identities). Otherwise a
+shell as that account could point every trust decision below at a core of
+its own by editing one line.
 
 **What the fingerprint then buys, on every boot and every reconnect:**
 
 | Moment | Check |
 |---|---|
-| discovery sweep | a host is only a candidate if it signs a nonce this probe just invented, with the key that hashes to the pinned fingerprint |
+| discovery sweep | a host is only a candidate if it signs a nonce this probe just invented — and the `host:port` the probe dialed — with the key that hashes to the pinned fingerprint |
 | before each connect | the same challenge, again — an address written down months ago can be answered by something else today |
-| code upgrade | `/v1/satellite-code/manifest.sig`, verified before a single body is fetched; a bad signature writes nothing |
-| plugin payloads | `/v1/satellite-plugins/manifest.sig`, same rule — these are the files whose `post_install` runs as root |
-| clock and zone | the root helper takes its time source from the root-owned pin, not from an argument the satellite user chose |
+| code upgrade | `/v1/satellite-code/manifest.sig`, verified before a single body is fetched; a bad signature writes nothing, and so does a list whose serial is behind the last one this device accepted |
+| plugin payloads | `/v1/satellite-plugins/manifest.sig`, same rule — these are the files whose `post_install` runs as root. The verified envelope is saved beside the mirror, and the root helper verifies it again itself (see below) before it stages or runs anything |
+| sounds and wake models | `/v1/sounds/manifest.sig` and `/v1/wake-models/manifest.sig`, same envelope; every clip and model body is checked against the signed list before it is written. Nothing here is executed, but these are what the room says and what it listens for |
+| clock and zone | the root helper takes its time source from the root-owned pin, not from an argument the satellite user chose, and makes the server sign for the pinned address before copying its clock |
+
+**The proof names the address.** A signature over a nonce alone proved
+that *some* holder of the key had seen the nonce — so a LAN host that
+forwarded `/v1/health` to the real core and handed back its answer passed
+every check above, and, being probed before the core in a nearest-address
+sweep, could be written down as "the server" and sit between the room and
+the core for good. The satellite now sends `?challenge=<nonce>&addr=<host:port
+it dialed>`; the core signs `domovoi-health-v1\n<nonce>\n<addr>` **only
+when that address is one of its own** (an interface address, loopback, or a
+name or address the operator listed in `TRUSTED_HOSTS` — names are never
+resolved to decide, because on a LAN a name is answered by whoever is
+quickest), and the satellite accepts only an answer that names the address
+it dialed. A relay's address is refused by the core; an answer signed for
+the core's own address is not the one the satellite dialed; a stripped
+question gets the unbound answer, which a pinned device refuses. A
+household whose satellites reach the core by a name, or through a NAT or a
+port-forward whose outside address the core does not own, lists that
+address in `TRUSTED_HOSTS`; the core logs every refusal with that advice.
+The nonce and the address are restricted to URL-safe characters on the
+core, because a nonce that could carry a newline would let an unbound
+signature over `nonce\naddr` pass as a bound one.
+
+**A signed list says when, not only who.** Every `manifest.sig` envelope
+carries `issued_at` and a per-channel `serial` that only grows when the
+list changes, under a second signature (`signature_v2`), and a satellite
+remembers the last serial it accepted on each channel
+(`~/.domovoi/manifest-serials.json`; the root helper keeps its own record
+for the payload channel in `/var/lib/domovoi/plugin_payload_serial.json`).
+A genuine envelope recorded earlier and served again is refused as older
+rather than installed as new, which is what closes replaying a
+superseded tree or re-running a superseded root `post_install`. The core
+keeps the original `signature` over the list for the transition: a
+satellite still on earlier code verifies that one, takes the new code
+with it, and verifies `signature_v2` from then on. The core serves both
+until every room has taken the new code; a later release drops the old
+form. The core's own serials live beside its key in
+`~/.domovoi/manifest-serials.json` as `max(previous + 1, now)`, so losing
+that file still moves forward.
+
+**Root checks the list itself.** `domovoi-apply-payload` used to run
+whatever the satellite account's mirror held under a slug the account's
+request named, trusting that account's process to have verified where the
+mirror came from. On a device with the root-owned pin it now reads the
+saved envelope, verifies it with the root-owned verifier
+(`/usr/local/lib/domovoi/domovoi_ed25519.py`) against
+`/etc/domovoi/server-identity.json`, takes each slug's packages and
+script from the *signed* `meta` (the request only names slugs; a request
+asking for other packages is logged and ignored), stages only files the
+signed list names and only when their bytes hash to what it says, and
+refuses an envelope whose serial is behind the last it applied. Without a
+root pin there is nothing to check against and the helper behaves as it
+did, and says so in its log. Root helpers under `/usr/local/sbin` are
+installed at prepare time and are **not** refreshed by a code upgrade, so
+a card prepared before this change keeps its earlier helper until it is
+re-prepared; on such a unit the account is still kept from choosing the
+server by the client code it receives on its next upgrade (the root pin
+wins over `config.toml`), but the helper itself re-checks nothing.
 
 **A discovered address is not configuration.** It waits in
 `~/.domovoi/pending-server.json` and is written into `config.toml` only once
@@ -1157,6 +1221,30 @@ manifest for exactly this reason. Baking the fingerprint in at prepare time
 is what turns trust-on-first-use into real authentication from boot one —
 so a satellite that matters should be prepared from the dashboard rather
 than built by hand.
+
+**Rotation, and what a disclosed key costs.** The private key at
+`~/.domovoi/server-identity.json` is the whole identity: every card
+prepared from this install trusts exactly that key, root-owned on the card,
+and nothing the core can say over the wire changes a card's pin. So if the
+key file is ever copied off the box — a backup of `~/.domovoi` carries it,
+as does a developer checkout's config dir and the Windows installer's WSL
+image — whoever holds the copy can answer the health challenge and sign
+code and payload lists as your core to every card ever prepared from it,
+for as long as those cards exist. The remedy today is to rotate and
+re-provision: `python -m domovoi.server_identity --rotate-identity` prints
+what that means and does nothing; add `--confirm-reprovision` and it
+retires the current key file beside itself (`server-identity.json.retired-
+<stamp>`, mode 0600, kept so a later release can publish a successor
+statement signed by it), mints a new key, and tells you to restart the
+core and re-prepare and re-flash every satellite card (a hand-built unit:
+replace `/etc/domovoi/server-identity.json` and
+`~/.domovoi/server-fingerprint.json` by hand). Until it is re-prepared, a
+card refuses the rotated core as "a different server". An in-band
+successor path — the core publishing a new key under a statement signed
+by the old one, which a satellite accepts once and re-pins through a root
+helper — is designed and not built; this release has the explicit path and
+the honest sentence. Keep backups of `~/.domovoi` where you would keep a
+private key.
 
 **What this is not.** Without TLS the channel is still plain HTTP on the
 LAN: the identity proves *who* answered and that the code manifest is the
@@ -1403,15 +1491,24 @@ the home directory writable.
 What that does **not** buy, stated plainly: a plugin with `satellite_root`
 still runs root code, because that is what the permission means — the
 account is prevented from *choosing* what root runs, not from *receiving*
-it from the server it trusts. And `domovoi-provisioning.service` (root,
-every boot until the unit is adopted, a no-op afterwards) still starts
-`python -m satellite.provisioning_mode` from the account's own venv and
-code tree; moving that onto a root-owned copy is the remaining item. The
-console login media prep prints on the label is this same account: it
-gives an operator a shell and the logs, not root. Root on a shipped unit
-means the card in another machine, or a re-flash — and these guarantees
-hold only for cards prepared after this change (an earlier Pi keeps its
-`sudo` membership until it is re-prepped and re-flashed).
+it from the server it trusts. Which server that is comes from the
+root-owned pin the account cannot edit (a `server_fingerprint` it writes
+into `config.toml` is ignored when the pin exists), and the payload helper
+verifies the signed list against that pin itself before it stages or runs
+anything, so the account cannot route root code to itself by choosing the
+server either — see *Root checks the list itself* under Server identity.
+And `domovoi-provisioning.service` (root, every boot until the unit is
+adopted, a no-op afterwards) still starts `python -m
+satellite.provisioning_mode` from the account's own venv and code tree;
+moving that onto a root-owned copy is the remaining item. The console
+login media prep prints on the label is this same account: it gives an
+operator a shell and the logs, not root. Root on a shipped unit means the
+card in another machine, or a re-flash — and these guarantees hold only
+for cards prepared after the change that made them (an earlier Pi keeps
+its `sudo` membership until it is re-prepped and re-flashed, and a card
+prepared before the helper learned to verify the payload list keeps the
+earlier helper until it is re-prepared, because root helpers are not
+refreshed by a code upgrade).
 
 **This does not add encryption.** Pairing authenticates *which device is this
 room*; it does not encrypt the audio. Combined with the deferred TLS item

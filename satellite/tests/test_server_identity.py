@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import urllib.parse
 
 import pytest
 
@@ -39,12 +40,31 @@ def _server(seed_byte: int = 1):
     return seed, public, server_identity.fingerprint_for(public)
 
 
+def _query(url: str) -> dict[str, str]:
+    parsed = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    return {k: v[0] for k, v in parsed.items() if v}
+
+
 def _health_opener(seed, public, *, fingerprint=None, sign_challenge=True,
-                   identity=True, bot_name="Domovoi"):
+                   identity=True, bot_name="Domovoi", bind="echo", asked=None):
     """An opener that answers /v1/health the way a core does, signing
-    whatever challenge the caller actually sent."""
+    whatever challenge the caller actually sent.
+
+    ``bind`` is what the core does with the address the caller says it
+    dialed: ``"echo"`` signs for it (a current core asked for one of its
+    own addresses); ``None`` answers like a core from before the binding
+    existed (no address, unbound signature); ``"refuse"`` answers like a
+    core asked to sign for an address that is not its own; any other
+    string is signed as the address — what a relay hands back after the
+    real core signed for the address the RELAY dialed it on.
+
+    ``asked`` (a list) records every query the opener saw."""
     def opener(url, timeout=None):
-        challenge = url.split("challenge=", 1)[1] if "challenge=" in url else ""
+        query = _query(url)
+        if asked is not None:
+            asked.append(query)
+        challenge = query.get("challenge", "")
+        dialed = query.get("addr")
         doc = {"status": "ok", "bot_name": bot_name, "use_stubs": "false"}
         if identity:
             block = {
@@ -53,9 +73,20 @@ def _health_opener(seed, public, *, fingerprint=None, sign_challenge=True,
                 "public_key": base64.b64encode(public).decode("ascii"),
                 "challenge": challenge,
             }
-            if sign_challenge:
+            if dialed is not None and bind == "refuse":
+                block["addr_refused"] = dialed
+            elif sign_challenge:
+                signed_addr = None
+                if dialed is not None and bind == "echo":
+                    signed_addr = dialed
+                elif dialed is not None and bind is not None:
+                    signed_addr = bind
+                if signed_addr is not None:
+                    block["addr"] = signed_addr
                 block["signature"] = base64.b64encode(
-                    _ed25519.sign(seed, server_identity.health_message(challenge))
+                    _ed25519.sign(
+                        seed, server_identity.health_message(challenge, signed_addr)
+                    )
                 ).decode("ascii")
             doc["identity"] = block
         return _Resp(json.dumps(doc).encode("utf-8"))
@@ -160,12 +191,146 @@ def test_with_nothing_pinned_the_identity_that_answers_is_reported():
     ) == fingerprint
 
 
-# ─── what we compare against, and where it comes from ─────────────────────
+# ─── the proof is bound to the address we dialed ──────────────────────────
+#
+# A host on the LAN that forwards our /v1/health question to the real core
+# and hands back its answer used to pass every check: nothing in the
+# signed message said WHICH host had been asked. Now the question names the
+# address we dialed, the core signs for it only if it is one of its own,
+# and the answer has to name that same address back.
 
-def test_config_wins_over_the_image_pin_and_the_recorded_one(tmp_path):
+def test_the_question_names_the_address_dialed_and_the_answer_must_match_it():
+    seed, public, fingerprint = _server()
+    asked: list[dict[str, str]] = []
+    assert server_identity.verify_server(
+        "http://192.168.0.117:6370", expected_fingerprint=fingerprint,
+        opener=_health_opener(seed, public, asked=asked),
+    ) == fingerprint
+    assert asked[0]["addr"] == "192.168.0.117:6370"
+
+
+def test_an_answer_the_core_signed_for_a_different_address_is_refused():
+    """What a relay hands back: the real core signed, for the address the
+    RELAY dialed it on. Not the one we dialed, so not proof of this host."""
+    seed, public, fingerprint = _server()
+    with pytest.raises(server_identity.IdentityError) as e:
+        server_identity.verify_server(
+            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            opener=_health_opener(seed, public, bind="192.168.0.117:6370"),
+        )
+    assert "not the one dialed" in str(e.value)
+
+
+def test_an_answer_bound_to_no_address_is_refused_when_pinned():
+    """An older core, or a relay that stripped our question. Either way
+    the pinned device cannot tell this host from one in between."""
+    seed, public, fingerprint = _server()
+    with pytest.raises(server_identity.IdentityError) as e:
+        server_identity.verify_server(
+            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            opener=_health_opener(seed, public, bind=None),
+        )
+    assert "not bound to the address dialed" in str(e.value)
+
+
+def test_a_core_that_would_not_sign_for_the_address_is_refused_with_the_reason():
+    """The core's own refusal, forwarded: it was asked to sign for an
+    address that is not its own — the relay's."""
+    seed, public, fingerprint = _server()
+    with pytest.raises(server_identity.IdentityError) as e:
+        server_identity.verify_server(
+            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            opener=_health_opener(seed, public, bind="refuse"),
+        )
+    assert "would not sign" in str(e.value)
+    assert "not the one dialed" in str(e.value)
+
+
+def test_a_bound_answer_still_has_to_be_signed_with_the_pinned_key():
+    _seed_a, _public_a, ours = _server(1)
+    seed_b, public_b, _theirs = _server(2)
+    with pytest.raises(server_identity.IdentityError) as e:
+        server_identity.verify_server(
+            "http://192.168.0.9:6370", expected_fingerprint=ours,
+            opener=_health_opener(seed_b, public_b),
+        )
+    assert "a different server" in str(e.value)
+
+
+def test_an_unpinned_device_still_takes_an_older_cores_unbound_answer():
+    """Nothing to compare against: a device with no pin cannot tell a relay
+    from a core by any means, and refusing would only strand it against a
+    core from before the binding. It records what it meets, as before."""
+    seed, public, fingerprint = _server()
+    assert server_identity.verify_server(
+        "http://192.168.0.117:6370", expected_fingerprint=None,
+        opener=_health_opener(seed, public, bind=None),
+    ) == fingerprint
+
+
+def test_an_unpinned_device_refuses_an_answer_bound_to_somebody_elses_address():
+    """When the answer DOES name an address, it has to be ours — pinned or
+    not. A current core never signs for an address it was not asked about."""
+    seed, public, _fingerprint = _server()
+    with pytest.raises(server_identity.IdentityError):
+        server_identity.verify_server(
+            "http://192.168.0.9:6370", expected_fingerprint=None,
+            opener=_health_opener(seed, public, bind="192.168.0.117:6370"),
+        )
+
+
+@pytest.mark.parametrize("url,addr", [
+    ("http://192.168.0.117:6370", "192.168.0.117:6370"),
+    ("http://core.lan:6370/", "core.lan:6370"),
+    ("http://core.lan", "core.lan:80"),
+    ("https://core.lan", "core.lan:443"),
+    ("http://[fd00::1]:6370", "[fd00::1]:6370"),
+    ("http://Host.Docker.Internal:6394", "host.docker.internal:6394"),
+])
+def test_the_dialed_address_is_spelled_one_way(url, addr):
+    """The core signs the string as sent and we compare the string as
+    sent, so the spelling only has to be consistent on this side — but it
+    must be unambiguous, hence the port always present."""
+    assert server_identity.dialed_address(url) == addr
+
+
+# ─── what we compare against, and where it comes from ─────────────────────
+#
+# config.toml is the satellite account's file. If a fingerprint written
+# there could override the root-owned pin, a shell as that account could
+# point every trust decision — connect, code, root post_install — at a core
+# of its own by editing one line. So the root-owned copy wins, and a config
+# value that disagrees is said out loud.
+
+def test_the_image_pin_wins_over_config_and_the_recorded_one(caplog):
     server_identity.ROOT_PIN.write_text(
         json.dumps({"fingerprint": "SHA256:image"}), encoding="utf-8"
     )
+    server_identity.record_fingerprint("SHA256:recorded")
+    with caplog.at_level("ERROR", logger="satellite.server_identity"):
+        assert server_identity.pinned_fingerprint("SHA256:config") == (
+            "SHA256:image", "image",
+        )
+    assert any(
+        "SHA256:config" in r.getMessage() and "root-owned" in r.getMessage()
+        for r in caplog.records
+    ), "a config value that disagrees with the root pin is an ERROR, not a choice"
+
+
+def test_a_config_that_agrees_with_the_image_pin_is_not_an_error(caplog):
+    server_identity.ROOT_PIN.write_text(
+        json.dumps({"fingerprint": "SHA256:image"}), encoding="utf-8"
+    )
+    with caplog.at_level("ERROR", logger="satellite.server_identity"):
+        assert server_identity.pinned_fingerprint("SHA256:image") == (
+            "SHA256:image", "image",
+        )
+    assert not caplog.records
+
+
+def test_config_is_consulted_only_when_there_is_no_image_pin():
+    """A hand-built unit has no root pin; its config.toml is then the pin,
+    ahead of anything recorded on first contact."""
     server_identity.record_fingerprint("SHA256:recorded")
     assert server_identity.pinned_fingerprint("SHA256:config") == (
         "SHA256:config", "config",

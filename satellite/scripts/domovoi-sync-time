@@ -23,10 +23,13 @@ adoption exist, they decide:
   * /etc/domovoi/server.url - the address. An argument naming a different
     host is refused (exit 2) and nothing is applied.
   * /etc/domovoi/server-identity.json - the server's Ed25519 fingerprint.
-    The host has to sign a nonce this run invents before its clock is
-    copied, checked with the root-owned verifier installed beside this
-    script at /usr/local/lib/domovoi. A host that cannot is refused and
-    nothing is applied.
+    The host has to sign a nonce this run invents - and the address this
+    run dialed - before its clock is copied, checked with the root-owned
+    verifier installed beside this script at /usr/local/lib/domovoi. A
+    host that cannot is refused and nothing is applied. Binding the
+    address is what stops a host that merely forwards the question to
+    the real server from handing its answer back as its own: the server
+    will not sign for an address that is not its own.
 
 Neither pin exists on a unit built by hand or flashed before server
 identities: those keep the old behaviour, because breaking a satellite in
@@ -59,6 +62,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -96,6 +100,24 @@ def http_base(url: str) -> str:
         scheme, base = base.split("://", 1)
     host = base.split("/", 1)[0]
     return f"{scheme}://{host}"
+
+
+def dialed_address(url: str) -> str:
+    """The ``host:port`` a URL dials, spelled the way the server is asked
+    to sign it: the port always present (the scheme's default when the
+    URL has none), an IPv6 literal in brackets. The satellite client
+    builds the same string (satellite/server_identity.py)."""
+    parts = urllib.parse.urlsplit(http_base(url))
+    host = parts.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = 443 if parts.scheme == "https" else 80
+    return f"{host}:{port}"
 
 
 def read_url_pin(path: str | None = None) -> str | None:
@@ -172,8 +194,9 @@ def verify_identity(server_url: str, pin: dict, *, opener=None,
     """Empty string when the host at ``server_url`` proved it is the server
     this device was prepared for; otherwise the reason it did not.
 
-    The proof is a signature over a nonce invented here, so an answer
-    recorded from an earlier run is not one."""
+    The proof is a signature over a nonce invented here AND the address
+    this run dialed, so neither an answer recorded from an earlier run nor
+    one fetched from the real server by a host in between is one."""
     verifier = _verifier() if verifier is None else verifier
     if verifier is None:
         # Nothing to check with. The satellite client has already proved
@@ -182,7 +205,9 @@ def verify_identity(server_url: str, pin: dict, *, opener=None,
         return ""
     opener = opener or urllib.request.urlopen
     challenge = secrets.token_hex(16)
-    url = http_base(server_url) + "/v1/health?challenge=" + challenge
+    addr = dialed_address(server_url)
+    url = (http_base(server_url) + "/v1/health?challenge=" + challenge
+           + "&addr=" + urllib.parse.quote(addr, safe=""))
     try:
         with opener(url, timeout=HTTP_TIMEOUT_SEC) as r:
             doc = json.loads(r.read().decode("utf-8", "replace"))
@@ -191,6 +216,12 @@ def verify_identity(server_url: str, pin: dict, *, opener=None,
     identity = doc.get("identity") if isinstance(doc, dict) else None
     if not isinstance(identity, dict):
         return "the server offered no identity to check"
+    if identity.get("addr_refused") == addr:
+        return (
+            f"the server would not sign for {addr}: the signed address is "
+            "not the one dialed (not the server's own address - something "
+            "is relaying its answers, or it needs listing in TRUSTED_HOSTS)"
+        )
     try:
         public = base64.b64decode(identity.get("public_key") or "", validate=True)
         signature = base64.b64decode(identity.get("signature") or "", validate=True)
@@ -198,8 +229,19 @@ def verify_identity(server_url: str, pin: dict, *, opener=None,
         return "the server's identity is malformed"
     if identity.get("challenge") != challenge:
         return "the server answered a different challenge"
-    if not verifier.verify(public, HEALTH_CONTEXT + b"\n" + challenge.encode(),
-                           signature):
+    signed_addr = identity.get("addr")
+    if signed_addr is None:
+        return (
+            "the signed address is missing: the proof is not bound to the "
+            f"address dialed ({addr}) - an older Domovoi server, or "
+            "something relaying one"
+        )
+    if signed_addr != addr:
+        return (
+            f"the signed address {signed_addr} is not the one dialed ({addr})"
+        )
+    message = HEALTH_CONTEXT + b"\n" + challenge.encode() + b"\n" + addr.encode()
+    if not verifier.verify(public, message, signature):
         return "the server's signature did not verify"
     digest = hashlib.sha256(public).digest()
     actual = FINGERPRINT_PREFIX + base64.b64encode(digest).decode("ascii").rstrip("=")

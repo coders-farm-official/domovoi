@@ -787,8 +787,16 @@ async def post_intent(intent: Intent):
     )
 
 
+# Said once per process: an unbound challenge means a satellite still on
+# code from before the address binding. It takes the new code on its next
+# upgrade; the line is how an operator sees the transition is not over.
+_UNBOUND_CHALLENGE_SEEN = False
+
+
 @app.get("/v1/health")
-async def health(challenge: str | None = None) -> dict[str, Any]:
+async def health(
+    challenge: str | None = None, addr: str | None = None
+) -> dict[str, Any]:
     """Liveness, plus this install's cryptographic identity.
 
     ``identity`` carries the Ed25519 public key and its fingerprint — the
@@ -797,6 +805,18 @@ async def health(challenge: str | None = None) -> dict[str, Any]:
     signature over that nonce, which is what lets a satellite tell this
     household's server from anything else listening on 6370: a replayed
     answer signs somebody else's nonce and fails.
+
+    Pass ``&addr=<host:port>`` — the address the caller dialed — and the
+    signature covers that too, and is only given when the address is one
+    of this box's own (an interface address, loopback, or a name listed in
+    ``TRUSTED_HOSTS``). That is what stops a LAN host that merely forwards
+    this request to the real core from passing the answer off as its own:
+    the core will not sign for the relay's address, and an answer signed
+    for the core's own address does not match what the satellite dialed.
+    A refused address comes back as ``addr_refused`` with no signature.
+    The bare ``challenge`` form is still answered, for satellites running
+    code from before the binding; they take the new code on their next
+    upgrade.
 
     The pre-identity fields are untouched, so a satellite that predates
     this (and any other caller) reads exactly what it always read.
@@ -821,14 +841,44 @@ async def health(challenge: str | None = None) -> dict[str, Any]:
         "use_stubs": "true" if settings.use_stubs else "false",
         "stt": stt_status()["state"],
     }
+    global _UNBOUND_CHALLENGE_SEEN
     if challenge is not None and len(challenge) > server_identity.CHALLENGE_MAX_LEN:
         raise HTTPException(status_code=400, detail="challenge is too long")
+    # Only URL-safe characters are ever signed: a nonce or an address with
+    # a newline in it would let an unbound signature double as a bound
+    # one (see server_identity._CHALLENGE_RE).
+    if challenge is not None and not server_identity.valid_challenge(challenge):
+        raise HTTPException(status_code=400, detail="challenge has characters that cannot be signed")
+    if addr is not None and not server_identity.valid_addr(addr):
+        raise HTTPException(status_code=400, detail="addr is not a host:port")
     try:
         identity = server_identity.load_or_create()
-        doc["identity"] = (
-            identity.health_answer(challenge) if challenge
-            else identity.public_document()
-        )
+        if not challenge:
+            doc["identity"] = identity.public_document()
+        elif addr is None:
+            if not _UNBOUND_CHALLENGE_SEEN:
+                _UNBOUND_CHALLENGE_SEEN = True
+                log.info(
+                    "a satellite asked for the identity proof without naming "
+                    "the address it dialed: it is running code from before "
+                    "the address binding and takes the new code on its next "
+                    "upgrade (this is logged once per start)"
+                )
+            doc["identity"] = identity.health_answer(challenge)
+        elif server_identity.dialed_address_is_ours(addr):
+            doc["identity"] = identity.health_answer(challenge, addr=addr)
+        else:
+            log.warning(
+                "refused to sign the identity proof for %s: it is not an "
+                "address of this server. If satellites reach this server "
+                "through that address (a name, a NAT or a port-forward), list "
+                "it in TRUSTED_HOSTS; otherwise something between a "
+                "satellite and this server is relaying its questions.", addr,
+            )
+            block: dict[str, Any] = identity.public_document()
+            block["challenge"] = challenge
+            block["addr_refused"] = addr
+            doc["identity"] = block
     except OSError as e:      # pragma: no cover — read-only config dir
         log.warning("could not load the server identity: %s", e)
     return doc
@@ -1005,6 +1055,20 @@ async def sounds_manifest(voice: str | None = None) -> dict[str, str]:
             rel = p.relative_to(root).as_posix()
             manifest[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
     return manifest
+
+
+@app.get("/v1/sounds/manifest.sig")
+async def sounds_manifest_signed(voice: str | None = None) -> dict[str, Any]:
+    """The same clip list inside an envelope this server signed — the
+    shape the code and payload channels already have. Nothing here is
+    executed, but these are the clips the room SAYS: a pinned satellite
+    asks for this and refuses a list its own server did not sign, so a host
+    on the path cannot decide what a greeting sounds like. Declared before
+    the ``{path:path}`` catch-all so the literal wins; the unsigned
+    ``manifest`` keeps serving older satellites."""
+    manifest = await sounds_manifest(voice)
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(server_identity.SOUNDS_CHANNEL, manifest)
 
 
 @app.get("/v1/sounds/{path:path}")
@@ -1195,6 +1259,19 @@ async def wake_models_manifest() -> dict[str, str]:
             rel = p.relative_to(root).as_posix()
             manifest[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
     return manifest
+
+
+@app.get("/v1/wake-models/manifest.sig")
+async def wake_models_manifest_signed() -> dict[str, Any]:
+    """The wake-model list inside a signed envelope. The model is what the
+    room LISTENS for — a swapped one is a deaf room, or one that wakes on
+    a stranger's phrase — and an ONNX body is parsed in the client, so a
+    pinned satellite takes only a list its own server signed. Declared
+    before the ``{path:path}`` catch-all; the unsigned ``manifest`` keeps
+    serving older satellites."""
+    manifest = await wake_models_manifest()
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(server_identity.WAKE_MODELS_CHANNEL, manifest)
 
 
 @app.get("/v1/wake-models/{path:path}")

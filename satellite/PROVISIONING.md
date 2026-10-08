@@ -341,7 +341,20 @@ baked in and is better. See
 A prepared card carries the public half at
 `domovoi/server-identity.json` on the boot partition; first boot installs
 it root-owned at `/etc/domovoi/server-identity.json` and adoption copies
-the fingerprint into `config.toml`. Nothing secret rides the card.
+the fingerprint into `config.toml`. Nothing secret rides the card. On such
+a card the root-owned copy is the one the device trusts: a
+`server_fingerprint` in `config.toml` that disagrees with it is logged at
+ERROR and ignored, because `config.toml` is the satellite account's file
+and the pin must not be. The `config.toml` value counts only on a unit
+with no `/etc/domovoi/server-identity.json` — this hand-built one.
+
+The proof the server gives is bound to the address the satellite dialed:
+the satellite asks `/v1/health?challenge=<nonce>&addr=<host:port>` and the
+server signs for that address only when it is one of its own. If your
+satellites reach the server by a **name** rather than its IP (or through a
+NAT or port-forward), list that name or address in `TRUSTED_HOSTS` in the
+server's `.env`; otherwise the server refuses to sign for it (its log says
+so, naming the address) and a pinned satellite will not connect.
 
 Checking the signatures needs the `cryptography` package, which
 `requirements.txt` lists. 64-bit Pi OS (the supported build) gets an
@@ -524,8 +537,13 @@ With that file present the helper refuses an argument naming a different
 host, exits 2, and leaves the clock and the zone alone. Add
 `/etc/domovoi/server-identity.json` (the `{fingerprint, public_key}` your
 dashboard shows under Settings > About) and the root-owned verifier, and
-the helper also makes the server sign a fresh nonce before copying its
-clock:
+the helper also makes the server sign a fresh nonce — and the address the
+helper dialed, so a host merely relaying the server's answers cannot pass
+— before copying its clock (see §6.4 for the `TRUSTED_HOSTS` note if your
+server is reached by a name). The same two files make
+`domovoi-apply-payload` verify the signed plugin-payload list against the
+pin before it runs any plugin's `post_install` as root, and refuse one it
+cannot verify:
 
 ```bash
 sudo mkdir -p /usr/local/lib/domovoi
