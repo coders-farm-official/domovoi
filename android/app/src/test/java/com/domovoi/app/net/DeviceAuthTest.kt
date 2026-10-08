@@ -123,6 +123,39 @@ class DeviceAuthTest {
         assertEquals("paired-now", server.next().getHeader(DEVICE_TOKEN_HEADER))
     }
 
+    @Test fun theTokenIsLookedUpByTheServerTheRequestIsScopedTo() = runBlocking {
+        // A server switch writes the address, then the token. A request
+        // intercepted between the two would pair the NEW address with the
+        // OLD household's token if the token were read on its own; it is
+        // looked up by the base the request is scoped to instead.
+        val other = MockWebServer().also { it.start() }
+        try {
+            val first = server.url("/").toString().trimEnd('/')
+            val second = "http://127.0.0.1:${other.port}"
+            var active = first
+            val book = mapOf(first to "household-abc", second to "other-house")
+            val api = ApiClient({ active }, { "stale-active-token" }, tokenForServer = { book[it] })
+
+            server.enqueue(MockResponse().setBody("{}"))
+            api.get("/api/x")
+            assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
+
+            active = second
+            other.enqueue(MockResponse().setBody("{}"))
+            api.get("/api/x")
+            assertEquals("other-house", other.next().getHeader(DEVICE_TOKEN_HEADER))
+            assertEquals("other-house", api.wsRequest("ws://127.0.0.1:${other.port}/ws/state").header(DEVICE_TOKEN_HEADER))
+            assertEquals("other-house", api.deviceToken)
+
+            // A server with no token of its own: nothing, not the stale one.
+            active = "http://127.0.0.1:1"
+            assertNull(api.deviceToken)
+            assertNull(api.wsRequest("ws://127.0.0.1:1/ws/state").header(DEVICE_TOKEN_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
     // ---- the token goes to the active server and nowhere else (A6-01/02) ----
 
     /** A second listener reached by a DIFFERENT host name: MockWebServer

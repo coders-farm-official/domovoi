@@ -83,7 +83,12 @@ fun interface TokenGate {
 }
 
 class DeviceAuthInterceptor(
-    private val tokenProvider: () -> String?,
+    /** The token for the server at a saved address. Looked up by the base
+     *  the request is scoped to — never read as "the active token" on its
+     *  own — so a request intercepted between a server switch's two
+     *  writes (address first, token second) cannot pair the new address
+     *  with the old household's token (A6-01 review). */
+    private val tokenFor: (base: String) -> String?,
     /** The active server; the token goes to it and nowhere else. */
     private val baseUrlProvider: () -> String?,
     private val gate: TokenGate? = null,
@@ -92,10 +97,11 @@ class DeviceAuthInterceptor(
         val request = chain.request()
         // Whatever a caller set, the decision is made here.
         val bare = request.newBuilder().removeHeader(DEVICE_TOKEN_HEADER).build()
-        val base = TokenScope.baseOf(baseUrlProvider())
+        val raw = baseUrlProvider()
+        val base = TokenScope.baseOf(raw)
         val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null
         if (!TokenScope.admits(base, request.url, wsUpgrade)) return chain.proceed(bare)
-        val token = headerSafeToken(tokenProvider()) ?: return chain.proceed(bare)
+        val token = headerSafeToken(raw?.let(tokenFor)) ?: return chain.proceed(bare)
         gate?.requireAdmitted(base!!)
         return chain.proceed(bare.newBuilder().header(DEVICE_TOKEN_HEADER, token).build())
     }

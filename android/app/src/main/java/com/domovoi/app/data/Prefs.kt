@@ -177,11 +177,14 @@ class Prefs(
      * (nothing written, `false` returned) — the picker shows the address and
      * asks first, then calls [trustServer].
      *
-     * Switching also forgets trust that belongs to nothing any more: an
+     * Switching also drops trust that belongs to nothing any more: an
      * address trusted but never listed as a known server (the Connection
      * panel used to do that) has no row and no forget button, and would
      * otherwise be reused silently the next time a sweep found something at
-     * it (P2-at-01). The one being switched to is never pruned.
+     * it (P2-at-01). Only the TRUST goes — not the token or the pin: a
+     * harness-paired or older install whose server was never listed would
+     * otherwise be unpaired from it by the next switch (P2-at-01 review).
+     * The one being switched to is never pruned.
      */
     fun setServerUrl(url: String): Boolean {
         val clean = ServerCredentials.normalize(url)
@@ -190,7 +193,7 @@ class Prefs(
         _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
         scope.launch { context.dataStore.edit { it[kServer] = clean } }
         ServerCredentials.orphanTrust(_trustedServers.value, _knownServers.value.map { it.url }, clean)
-            .forEach { forgetServer(it) }
+            .forEach { untrustServer(it) }
         return true
     }
 
@@ -235,6 +238,12 @@ class Prefs(
         _deviceToken.value = ServerCredentials.tokenFor(next, _serverUrl.value)
         scope.launch { vault.write(next) }
     }
+
+    /** The token issued by the server at [url] (by its saved spelling), or
+     *  null. What the interceptor asks, with the base it scoped the
+     *  request to, so a request intercepted between a switch's two writes
+     *  can never pair the new address with the old household's token. */
+    fun tokenForServer(url: String): String? = ServerCredentials.tokenFor(deviceTokens, url)
 
     fun isPaired(): Boolean = !_deviceToken.value.isNullOrBlank()
 
@@ -303,12 +312,16 @@ class Prefs(
         return url
     }
 
-    /** Everything remembered ABOUT [url] (not its known-server row). */
+    /** Everything remembered ABOUT [url] (not its known-server row). The
+     *  pin is shared by every spelling of one server, so another spelling
+     *  of the ACTIVE server keeps it ([ServerCredentials.clearsPinOf]). */
     private fun forgetServer(url: String) {
         untrustServer(url)
         setDeviceTokenFor(url, null)
-        clearPinFor(url)
-        IdentityGate.pinKey(url)?.let { key -> if (key in trustDecided) setTrustDecided(trustDecided - key) }
+        if (ServerCredentials.clearsPinOf(url, _serverUrl.value)) {
+            clearPinFor(url)
+            IdentityGate.pinKey(url)?.let { key -> if (key in trustDecided) setTrustDecided(trustDecided - key) }
+        }
         setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
     }
 

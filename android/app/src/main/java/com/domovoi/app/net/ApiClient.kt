@@ -90,11 +90,18 @@ class ApiClient(
     /** What the active server must prove before the token goes to it
      *  (A6-03); null = nothing beyond being the active server. */
     private val gate: TokenGate? = null,
+    /** The token by server address (Prefs.tokenForServer), so the one
+     *  that goes out is the one issued by the server a request is scoped
+     *  to; absent, [deviceTokenProvider] answers for every base (the
+     *  tests' shape). */
+    private val tokenForServer: ((String) -> String?)? = null,
 ) {
     /** Production wiring: the base URL and the household device token both
      *  follow the saved preferences for the active server. */
     constructor(prefs: Prefs, gate: TokenGate? = null) :
-        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate)
+        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate, { prefs.tokenForServer(it) })
+
+    private val tokenFor: (String) -> String? = tokenForServer ?: { deviceTokenProvider() }
 
     /** The ONE http client the app uses — JSON calls, media3 playback,
      *  Coil images and both WebSockets (discovery takes a copy WITHOUT the
@@ -112,7 +119,7 @@ class ApiClient(
         .followSslRedirects(false)
         .addInterceptor(RedirectPolicy.interceptor)
         .addInterceptor(CleartextPolicy.interceptor)
-        .addInterceptor(DeviceAuthInterceptor(deviceTokenProvider, baseUrlProvider, gate))
+        .addInterceptor(DeviceAuthInterceptor(tokenFor, baseUrlProvider, gate))
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
@@ -147,7 +154,8 @@ class ApiClient(
 
     private fun baseUrl(): String = baseUrlProvider()
 
-    val deviceToken: String? get() = deviceTokenProvider()
+    /** The token for the active server (by its address). */
+    val deviceToken: String? get() = tokenFor(baseUrl)
 
     /**
      * The token a request to [url] made OUTSIDE this client (the system
@@ -161,9 +169,10 @@ class ApiClient(
      * rather than queue a request that would carry the token and fail.
      */
     suspend fun tokenForDownload(url: HttpUrl): String? = withContext(Dispatchers.IO) {
-        val base = TokenScope.baseOf(baseUrl) ?: return@withContext null
+        val raw = baseUrl
+        val base = TokenScope.baseOf(raw) ?: return@withContext null
         if (!TokenScope.sameServer(base, url)) return@withContext null
-        val token = headerSafeToken(deviceTokenProvider()) ?: return@withContext null
+        val token = headerSafeToken(tokenFor(raw)) ?: return@withContext null
         gate?.requireAdmitted(base)
         token
     }
@@ -206,7 +215,7 @@ class ApiClient(
     fun wsRequest(url: String): Request =
         Request.Builder().url(url)
             .tag(TokenScope.WsUpgrade::class.java, TokenScope.WsUpgrade.MARK)
-            .withDeviceToken(deviceTokenProvider())
+            .withDeviceToken(tokenFor(baseUrl))
             .build()
 
     private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
