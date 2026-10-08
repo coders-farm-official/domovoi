@@ -508,8 +508,9 @@ def _write_prev_sha(sha: str) -> None:
 
 # The result file is small; anything bigger is not ours.
 _LAST_UPDATE_MAX_BYTES = 256 * 1024
-# What GET /v1/admin/version passes through. It's an open endpoint, so the
-# script's full record (backup paths, raw step output) stays on the box.
+# What GET /v1/admin/version passes through. Every paired device can read
+# that endpoint (device tier since CORE-21), so the script's full record
+# (backup paths, raw step output) stays on the box.
 _LAST_UPDATE_FIELDS = (
     "status", "mode", "from_sha", "to_sha", "prev_source", "bad_sha",
     "started_at", "finished_at", "duration_sec", "deps_changed",
