@@ -123,6 +123,37 @@ def _in_checkout(path: Path) -> bool:
         return False
 
 
+def _owns_install_dir(row: Any) -> bool:
+    """Whether ``row.install_dir`` is a directory the installer itself
+    created, and so one an uninstall or upgrade may move or delete:
+    exactly ``installed/<slug>`` under the runtime's own root (A7-05).
+
+    Never a bundled plugin's checkout dir, never a ``dev`` registration
+    (the developer's working copy, registered in place by
+    ``domovoi plugin dev`` — its source, tests and ``.git``), and never
+    any other path a row could name. Both sides are resolved, so a
+    symlink out of ``installed/`` does not count as inside it."""
+    if row.bundled or row.install_source == "dev":
+        return False
+    try:
+        path = Path(row.install_dir).resolve()
+        owned = (installed_root() / row.slug).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+    return path == owned
+
+
+def _dev_registration_refusal(slug: str, install_dir: str) -> InstallError:
+    return InstallError(
+        "dev_registration",
+        f"plugin {slug!r} is registered in place from {install_dir} "
+        f"(domovoi plugin dev) — those are the developer's files, which an "
+        f"upgrade would move away; update them there and restart, or "
+        f"uninstall the registration before installing a release",
+        details={"slug": slug},
+    )
+
+
 def _bundled_refusal(slug: str) -> InstallError:
     return InstallError(
         "bundled_plugin",
@@ -1190,19 +1221,29 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
                 others.add(req.split("==")[0].split("[")[0].lower())
         pip_uninstall(sorted(newly - others))
 
-    # 4/5. Bundled → tombstone (never delete dir or row); else remove both
-    #      — but never files in the checkout (a dev registration of a dir
-    #      under plugins/, say): those belong to git.
+    # 4/5. Bundled → tombstone (never delete dir or row); else remove the
+    #      row, and the files only when the installer put them there
+    #      (installed/<slug>). A dev registration is the developer's
+    #      working copy, a dir under plugins/ belongs to git, and anything
+    #      else a row names is not ours to delete either.
     if row.bundled:
         await reg.tombstone_plugin(slug)
     else:
-        if _in_checkout(Path(row.install_dir)):
+        if _owns_install_dir(row):
+            shutil.rmtree(Path(row.install_dir), ignore_errors=True)
+        elif _in_checkout(Path(row.install_dir)):
             log.warning(
                 "uninstall %s: %s is in the Domovoi checkout — row removed, "
                 "files left for git", slug, row.install_dir,
             )
         else:
-            shutil.rmtree(Path(row.install_dir), ignore_errors=True)
+            log.warning(
+                "uninstall %s: %s was not created by the installer (%s) — "
+                "row removed, files left in place", slug, row.install_dir,
+                "registered in place with `domovoi plugin dev`"
+                if row.install_source == "dev"
+                else "outside the installed-plugins directory",
+            )
         await reg.delete_plugin(slug)
 
     await _best_effort_resync()
@@ -1241,6 +1282,12 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
         # bundled plugin that dir is <repo>/plugins/<slug>.
         _drop_staged(staged)
         raise _bundled_refusal(slug)
+    if not _owns_install_dir(row):
+        # Same move-then-delete, so the same rule as uninstall: a dev
+        # registration (or any dir the installer did not create) is never
+        # moved into .previous and deleted.
+        _drop_staged(staged)
+        raise _dev_registration_refusal(slug, row.install_dir)
     prev_dir = previous_root() / f"{slug}-{row.version}"
     prev_dir.parent.mkdir(parents=True, exist_ok=True)
     manifest = staged.manifest
