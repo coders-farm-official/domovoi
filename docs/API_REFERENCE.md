@@ -1043,7 +1043,12 @@ the tier alone is not the whole rule:
   `editable` flag, and the secret-shaped-name filter that skips `.env`,
   `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `pairing_token` and
   `setup-code.txt`. A name one door refuses is refused by the other
-  (`400`, or `skipped` on an upload).
+  (`400`, or `skipped` on an upload). The filter covers **reads** too
+  (WEB-14): such a file already in `~/Documents` is left out of
+  `GET /api/documents`, out of `/download-zip`, and every read route
+  (`/raw`, `/text`, `/sheet`, both `/export`s, `/drawings/read`) answers
+  `404` for it — and for anything under a folder with such a name (`tls`) —
+  exactly as `/api/files` does.
 * **Who the caller is does not depend on the caller mentioning it.**
   `device_id` in the body is still required on `/api/files` writes and
   optional on `/api/documents` saves — no client sends it there, and
@@ -1082,7 +1087,7 @@ row's `category` tells the UI how to open it
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). |
+| `GET /api/documents` | **Device** · `?kind=all` | List documents with `category` routing (also `/api/documents/`). Secret-shaped names are not listed. |
 | `POST /api/documents/create` | **Device** · `CreateRequest` (optional `device_id`) | Create a blank file (`doc` → .md, `sheet` → .xlsx, `drawing` → .excalidraw, `text` → verbatim name). `400` for a secret-shaped name (including one wearing a trailing dot or space), for a stream separator or a control character; `409` if it already exists. |
 | `POST /api/documents/upload` | **Device** · multipart (optional `device_id` field) · `X-Requested-With` | Upload documents. `403` without the preflight-forcing header. Secret-shaped names land in `skipped`, exactly as on `POST /api/files/upload`. |
 | `POST /api/documents/delete` | **Admin (mutation)** · `DeleteRequest` | Delete documents. |

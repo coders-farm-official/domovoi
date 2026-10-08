@@ -311,7 +311,11 @@ The block covers the Documents folder through **both** doors into it.
 device tier — so a rule only one of them kept would be a rule neither
 kept, because a caller picks the door. The documents saves therefore call
 the files module's own check rather than carrying a copy of it, and they
-apply the same secret-shaped-name filter. One difference remains, and it
+apply the same secret-shaped-name filter — on reads as well as saves since
+2026-10-08: a `.env`, a `*.pem` / `*.key` / `*.p12` or a `pairing_token`
+sitting in `~/Documents` is not listed, zipped or served by either door
+(WEB-14; before, the documents door listed and served what the Files door
+withheld). One difference remains, and it
 is a client limitation rather than a decision: `device_id` is **required**
 on an `/api/files` write and **optional** on a documents save, because the
 in-app editors and the Android Documents screen do not name a device on
