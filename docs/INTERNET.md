@@ -57,7 +57,8 @@ Any one of these; they all set the same thing, `INTERNET_ACCESS`:
   you.
 - **By hand.** `INTERNET_ACCESS=always` (or `sometimes`, `never`) in
   `domovoi/.env` (where the dashboard and `env_bootstrap` write it too),
-  then restart the core. `yes` / `no` / `online` /
+  then restart the core (under `never` the core stops the search helper
+  as it starts; it never starts it). `yes` / `no` / `online` /
   `offline` work too. Anything else counts as not answered, with one
   warning in the core's log.
 - **The server's environment** (a systemd `Environment=` line, say). It
