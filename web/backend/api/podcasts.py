@@ -259,7 +259,14 @@ async def list_episodes(sub_id: int) -> list[dict[str, Any]]:
 
 
 # ─── Discovery (network) ────────────────────────────────────────────────
-@router.get("/discover")
+@router.get(
+    "/discover",
+    # Device tier (WEB-18): every call makes the server fetch Apple's
+    # search with the caller's term and mints artwork keys into the bounded
+    # discovered-feed map — the same "the server goes and fetches" class as
+    # subscribe and poll. The artwork route below stays open for the <img>.
+    dependencies=[Depends(require_device)],
+)
 async def discover(q: str = Query(..., min_length=1)) -> list[dict[str, Any]]:
     """iTunes Search podcast discovery (keyless, rate-limited). Each
     result's ``artwork`` is a server path for a thumbnail the server

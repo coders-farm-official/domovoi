@@ -1133,10 +1133,13 @@ row's `category` tells the UI how to open it
 
 ### 3.15 Podcasts and audiobooks
 
-Reads are **Open**; every write is **Device** tier — subscribing, unsubscribing,
-polling, saving a resume position and re-walking the audiobooks folder.
-Subscribing and polling also make the server fetch a URL, so the feed URL must
-pass the outbound-URL rules (§1.1). Feeds are polled by core background
+Reads are **Open**, except the directory search; every write is **Device**
+tier — subscribing, unsubscribing, polling, saving a resume position and
+re-walking the audiobooks folder. Subscribing and polling also make the server
+fetch a URL, so the feed URL must pass the outbound-URL rules (§1.1). So does
+the directory search (`GET /api/podcasts/discover`: the server queries Apple
+with the caller's term), which is why it is **Device** too (WEB-18); the
+artwork a search result points at stays open, for the `<img>`. Feeds are polled by core background
 workers; audio is served by this process.
 
 | Method & path | Request | Purpose |
@@ -1147,7 +1150,7 @@ workers; audio is served by this process.
 | `GET /api/podcasts/discover/artwork/{key}` | — | Open. Artwork for a Discover result, by a key the server minted for that result; a key it didn't mint is `404` without any fetch, so a client can never make the server fetch a URL of its choosing. |
 | `DELETE /api/podcasts/subscriptions/{sub_id}` | — | Unsubscribe. |
 | `GET /api/podcasts/subscriptions/{sub_id}/episodes` | — | Episodes for one subscription. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
-| `GET /api/podcasts/discover` | `?q=` (required) | Search a podcast directory. Hits whose feed URL would be refused are left out. A hit's `artwork` is a server path (`/api/podcasts/discover/artwork/{key}`) or `null`. `409` under `never`. |
+| `GET /api/podcasts/discover` | `?q=` (required) | **Device.** Search a podcast directory (the server fetches Apple's search, so a caller without the household token or an admin Bearer is `401` before anything leaves the house). Hits whose feed URL would be refused are left out. A hit's `artwork` is a server path (`/api/podcasts/discover/artwork/{key}`) or `null`. `409` under `never`. |
 | `POST /api/podcasts/poll` | — | **Device.** Poll feeds now (instead of waiting for the worker). `409` under `never`. |
 | `GET /api/podcasts/episodes/{episode_id}/audio` | `?download=` | Stream a downloaded episode. `?download=1` serves it as an attachment named from the episode title plus its on-disk extension. |
 | `GET /api/podcasts/positions/{episode_id}` | `?device_id=&person_id=` | Resume position. |

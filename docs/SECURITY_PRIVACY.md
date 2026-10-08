@@ -172,7 +172,9 @@ file it actually opens so that a save can never quietly replace a PDF, a
 photo or a spreadsheet with text — and browsing / downloading /
 uploading / moving / importing across Files, Images and Videos. So do the
 routes that make the server go and fetch something a caller chose —
-podcast subscribe and poll, news feed attach and re-test.
+podcast subscribe, poll and directory search (since 2026-10-08, WEB-18: a
+search is a request to Apple carrying the caller's words), news feed attach
+and re-test.
 
 The **dashboard's** ordinary mutations are on it too, which is what closed
 the last of them: playing, queueing, tagging and uploading music; the
