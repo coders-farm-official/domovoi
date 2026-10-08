@@ -61,17 +61,22 @@ DEVICE = [Depends(require_device)]
 # or an admin Bearer, the dashboard cookie, or ``?device_token=`` — with
 # the same pre-setup grace. Nothing, or a stale token, is 401.
 #
-# Left open on purpose, pending an owner decision: the roster itself
-# (names, last seen, the ``notes`` column), a person's session list (when
-# and in which room, no words) and their voice-profile rows (enrolment
-# metadata, never an embedding or a recording).
+# PRESENCE is household data too (owner decision 2026-10-08, WEB-15): the
+# roster (names, ``last_seen_at``, the ``notes`` column), one person's row
+# and their session list (when and in which room they spoke) take the same
+# read tier. The ``/ws/state`` handshake already needed a household
+# credential because it pushes ``people.last_seen``; leaving these HTTP
+# reads open handed the same presence feed to any LAN host that polled.
+#
+# Left open on purpose, pending an owner decision: a person's voice-profile
+# rows (enrolment metadata, never an embedding or a recording).
 READ = [Depends(require_device_read)]
 
 
 # ─── List + detail ─────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=list[Person])
+@router.get("", response_model=list[Person], dependencies=READ)
 async def list_people() -> list[Person]:
     """All known speakers, sorted by most-recently-seen.
 
@@ -98,7 +103,7 @@ async def list_people() -> list[Person]:
         return [_row_to_person(r) for r in rows.all()]
 
 
-@router.get("/{person_id}", response_model=Person)
+@router.get("/{person_id}", response_model=Person, dependencies=READ)
 async def get_person(person_id: int) -> Person:
     async with session_scope() as s:
         row = await s.execute(
@@ -146,7 +151,7 @@ PERSON_SESSIONS_SQL = text(
 )
 
 
-@router.get("/{person_id}/sessions", response_model=list[Session])
+@router.get("/{person_id}/sessions", response_model=list[Session], dependencies=READ)
 async def list_sessions(
     person_id: int, limit: int = Query(default=20, ge=1, le=200)
 ) -> list[Session]:

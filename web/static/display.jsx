@@ -13,16 +13,35 @@
  *   * `_status` events from the shared stateBus drive a reconnect
  *     overlay (the bus already reconnects with backoff).
  *
- * Everything rides the daily-tier LAN surface — no auth, same posture as
- * every dashboard read (docs/SECURITY_PRIVACY.md).
+ * The now-playing read is open; the room's own row (label, idle mode), the
+ * live push and the transport buttons need the household token (WEB-15,
+ * docs/SECURITY_PRIVACY.md "The video satellite's kiosk page"). Nobody is
+ * in front of a kiosk to pair it, so it pairs itself from its URL: a
+ * `device_token` parameter is stored exactly as the pair modal stores a
+ * pasted token (Auth.pair, per server, in localStorage — the kiosk browser
+ * keeps its own profile) and then taken back out of the address. An
+ * unpaired kiosk still shows what is playing, with the room id for a name
+ * and the clock for idle.
  *
- * URL: /display.html?room=<room_id>[&theme=light]
+ * URL: /display.html?room=<room_id>[&device_token=<household token>][&theme=light]
  */
 
 const dpParams = new URLSearchParams(window.location.search);
 const DP_ROOM = (dpParams.get('room') || '').trim();
 if (dpParams.get('theme') === 'light') {
   document.documentElement.dataset.theme = 'light';
+}
+// Before anything renders, so the first read and the /ws/state handshake
+// already carry the token (the state bus connects on first subscribe).
+if (dpParams.has('device_token')) {
+  const dpToken = (dpParams.get('device_token') || '').trim();
+  try { if (dpToken && typeof Auth !== 'undefined' && Auth.pair) Auth.pair(dpToken); } catch {}
+  dpParams.delete('device_token');
+  try {
+    const rest = dpParams.toString();
+    window.history.replaceState(null, '',
+      `${window.location.pathname}${rest ? `?${rest}` : ''}${window.location.hash}`);
+  } catch {}
 }
 
 const dpFmtDur = (s) => {
@@ -205,9 +224,11 @@ const DisplayApp = () => {
                       borderRadius: 'var(--r-md)', padding: 28 }}>
           <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 10 }}>no room set</div>
           <div style={{ fontSize: 14, color: 'var(--fg-muted)', lineHeight: 1.6 }}>
-            open this page as <span className="mono">/display.html?room=&lt;room_id&gt;</span> —
+            open this page as <span className="mono">/display.html?room=&lt;room_id&gt;&amp;device_token=&lt;household token&gt;</span> —
             the video satellite's kiosk launcher builds this URL from its config
-            (see <span className="mono">satellite/VIDEO_SATELLITE.md</span>).
+            (see <span className="mono">satellite/VIDEO_SATELLITE.md</span>). Without the
+            token the screen still shows what is playing, but not the room's name,
+            its idle mode, live updates or working buttons.
           </div>
         </div>
       </div>

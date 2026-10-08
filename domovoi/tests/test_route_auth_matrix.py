@@ -318,10 +318,6 @@ SPEECH_READS_SECURITY: list[tuple[str, str]] = [
 # decision. Pinned open so that gating one is a recorded decision (here,
 # in docs/SECURITY_PRIVACY.md and docs/API_REFERENCE.md), not a drive-by.
 SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
-    ("web", "/api/people"): "the roster: names, last seen, the people.notes column",
-    ("web", "/api/people/{person_id}"): "one roster row",
-    ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke — no words",
-    ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions — times and counts, no words",
     ("web", "/api/people/{person_id}/profiles"): "voice-profile enrolment metadata, never an embedding",
     ("web", "/api/satellites/{room_id}/timers"): (
         "household state: a room's countdowns; rule M1 — every reminder answers without its "
@@ -343,8 +339,6 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
         "a room's \"Only reminders for this device\" flag — anyone in the house may see how a "
         "room behaves (the write is device tier)"
     ),
-    ("web", "/api/calendar/events"): "household state; titles and descriptions",
-    ("web", "/api/calendar/events/{event_id}"): "household state",
     ("web", "/api/news/people/{person_id}/topics"): "a person's followed topics — the nearest cousin of favorites",
     ("web", "/api/news/people/{person_id}/items"): "public stories fetched for a person's topics",
     ("web", "/api/news/people/{person_id}/briefing"): "a summary of those stories",
@@ -352,6 +346,40 @@ SPEECH_ADJACENT_LEFT_OPEN: dict[tuple[str, str], str] = {
     ("web", "/api/denylist"): "opt-out rows: a date and an admin's note, never the embedding",
     ("web", "/api/acquisitions"): "the media request queue — search text or a URL",
 }
+
+# Household PRESENCE and the calendar: paired devices only too (owner
+# decision 2026-10-08, WEB-15). The ``/ws/state`` handshake already needed
+# a household credential because it pushes ``people.last_seen``, calendar
+# titles and satellite details; these are the HTTP reads of the same state,
+# which a LAN host could otherwise poll for the feed the socket withholds.
+# The read half of the device tier, ``require_device_read``, exactly as the
+# speech reads above take it.
+HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
+    ("web", "/api/people"): "the roster: names, last_seen_at (presence), the people.notes column",
+    ("web", "/api/people/{person_id}"): "one roster row, with last_seen_at",
+    ("web", "/api/people/{person_id}/sessions"): "when and in which room a person spoke",
+    ("web", "/api/satellites"): "every room: presence, Wi-Fi SSID, hardware, code SHA, in_call_with",
+    ("web", "/api/satellites/{room_id}"): "one room's row (the kiosk's label and idle mode)",
+    ("web", "/api/satellites/pending"): "a satellite being adopted: MAC, board, model",
+    ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions, with the person who spoke",
+    ("web", "/api/calendar/events"): "the household's appointments: titles, places, descriptions",
+    ("web", "/api/calendar/events/{event_id}"): "one appointment",
+}
+
+
+@pytest.mark.parametrize(
+    ("label", "path"), sorted(HOUSEHOLD_STATE_READS),
+    ids=[f"{a} GET {p}" for a, p in sorted(HOUSEHOLD_STATE_READS)],
+)
+def test_presence_and_calendar_reads_need_a_paired_device(label, path) -> None:
+    assert HOUSEHOLD_STATE_READS[(label, path)].strip()
+    assert (label, path) not in SPEECH_ADJACENT_LEFT_OPEN
+    calls = _get_gates((label, path))
+    assert admin_auth.require_device_read in calls, (
+        f"{label} GET {path} publishes household presence or the calendar — it "
+        f"must depend on require_device_read (paired devices only)"
+    )
+
 
 # The response models that ARE household speech or personal content. Any
 # GET on either app answering with one of them must be on SPEECH_READS (or

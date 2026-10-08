@@ -426,7 +426,10 @@ stay Open unless the row says otherwise. The exception is anything that reads
 back what the household SAID or what the house keeps about a person — a room's
 or a person's conversations and voice notes, a person's memories, favorites
 and preferences, the chat threads, messages and images, a wake-word clip's
-audio — which is **Device read** (§1.1): paired devices only. Each of those is
+audio — which is **Device read** (§1.1): paired devices only. So, since
+2026-10-08, is who is home and the calendar: the people roster and a
+person's row, a person's or a room's session list, every room's row and the
+pending-adoption list, and the calendar reads (WEB-15). Each of those is
 the web process's own read, not a proxy, so there is no core hop behind it.
 
 An **Open** label here describes this hop only. Every web route that forwards
@@ -534,7 +537,7 @@ rather than guessing. `GET /api/music/now-playing` carries the same
 | `DELETE /api/music/queue-blocks/{id}` | **Admin (mutation)** | — | Unblock. `204`; `404` unknown id. |
 | `POST /api/devices/register` | **Device** | `{device_id, name?, platform?, user_agent?}` | Upsert this client's row and bump `last_seen_at`. Idempotent — clients call it every boot (the dashboard only once it can pass this tier, again whenever a credential arrives, when the tab comes back, and every 2 minutes while it is visible; a refusal never prompts). `name` seeds the row only when it is NEW, so a client that always sends its platform default can't overwrite a chosen name. Answers the device's own row, `{device_id, name, platform, user_agent, first_seen_at, last_seen_at, shared_screen}` — `shared_screen` is how the dashboard (and the Android app, which registers once it is paired or its live connection is up, again when either changes, and every 2 minutes while it is on screen) learns an admin marked it a shared screen. `400` malformed id. |
 | `PATCH /api/devices/{device_id}` | **Device** | `{name}` | Rename. Whitespace is collapsed so two names can't look identical yet block differently. `404` if the device has never registered. |
-| `PATCH /api/devices/{device_id}/shared-screen` | **Admin (mutation)** | `{shared_screen: bool}` | Mark a device as a shared screen (the kitchen tablet), or back to a personal one; answers the device row. Admin tier on purpose — the device's own household token is refused (`401`/`403`), so a device cannot un-share itself through this route. Presentational only: what the dashboard's Home hides on a shared screen (calendar titles and locations, a reminder's text, problem rows) is readable with no credential at all, an unpaired browser (a private window on the tablet included) is never masked, and the flag belongs to a self-asserted device id kept in the browser's storage — clearing it, or registering under a new id, gives an unmarked device. The device learns a change on its next register (at most about two minutes while the page is open). Leaves `last_seen_at` alone. `404` unregistered, `400` malformed id, `503` on a database without V014. |
+| `PATCH /api/devices/{device_id}/shared-screen` | **Admin (mutation)** | `{shared_screen: bool}` | Mark a device as a shared screen (the kitchen tablet), or back to a personal one; answers the device row. Admin tier on purpose — the device's own household token is refused (`401`/`403`), so a device cannot un-share itself through this route. Presentational only: what the dashboard's Home hides on a shared screen (calendar titles and locations, a reminder's text, problem rows) is readable by the tablet itself, which is paired — and the problem rows (`/api/health`) are readable with no credential at all — an unpaired browser (a private window on the tablet included) is never masked, and the flag belongs to a self-asserted device id kept in the browser's storage — clearing it, or registering under a new id, gives an unmarked device. The device learns a change on its next register (at most about two minutes while the page is open). Leaves `last_seen_at` alone. `404` unregistered, `400` malformed id, `503` on a database without V014. |
 | `GET /api/devices` | **Admin (read)** | `?limit=200` | The device roster, most-recently-seen first, each row with its `shared_screen` flag. Admin-gated: it's an inventory of what's on the network. Feeds the blocklist editor and the shared-screen toggle, so an admin picks a device from a list instead of typing an id. |
 
 `device_id` is **required** on every edit and optional only on the read. Not
@@ -690,9 +693,12 @@ title and never a lyric: it tells the Jobs card, and a player that is still
 What a person said and what the house keeps about them — their conversation
 turns, the notes that name them, their memories, favorites and preferences —
 is read on the **Device read** tier (§1.1): a paired device only, `401` for
-anything else on the LAN. The roster, the session list and the voice-profile
-rows stay **Open** (no words anybody said; left open pending an owner
-decision). The memory / favorite / preference edits are **Device**
+anything else on the LAN. So are the roster, one person's row and their
+session list (2026-10-08, WEB-15): `last_seen_at` and "when and in which
+room they spoke" are presence, which `/ws/state` already withheld from an
+unpaired client. The voice-profile rows stay **Open** (enrolment metadata,
+no words anybody said; left open pending an owner decision). The memory /
+favorite / preference edits are **Device**
 tier — a person's own content, written by whichever household client they are
 using. The two deletes that lose identification data — forgetting a person and
 dropping a voice profile — are **Admin (Bearer)**: `401` without an admin
@@ -702,10 +708,10 @@ Person-centric views over the voice-profile / memory tables.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/people` | — | Everyone Domovoi has voice-identified. |
-| `GET /api/people/{person_id}` | — | One person. |
+| `GET /api/people` | **Device read** | Everyone Domovoi has voice-identified, with `last_seen_at`. |
+| `GET /api/people/{person_id}` | **Device read** | One person. |
 | `DELETE /api/people/{person_id}` | **Admin** | Forget a person (profiles, memories, links). |
-| `GET /api/people/{person_id}/sessions` | `?limit=20` | Recent conversation sessions. |
+| `GET /api/people/{person_id}/sessions` | **Device read** · `?limit=20` | Recent conversation sessions. |
 | `GET /api/people/{person_id}/conversations` | **Device read** · `?limit=50` | Recent conversation turns. |
 | `GET /api/people/{person_id}/notes` | **Device read** | Notes mentioning them. |
 | `GET /api/people/{person_id}/profiles` | — | Their voice profiles (embeddings metadata). |
@@ -729,6 +735,13 @@ puts someone back in front of the matcher, so it answers to the operator).
 Reads are **Open**, except a room's conversations and voice notes — what was
 said there — which are **Device read** (paired devices only), and the log pull,
 which carries the same speech raw and is an **Admin read** at both hops. The
+room list, one room's row, a room's session list and the pending-adoption
+list are **Device read** too since 2026-10-08 (WEB-15): presence, Wi-Fi SSIDs,
+hardware, synced code, call partners, who spoke when, and the MAC of a device
+being adopted are household state the `/ws/state` handshake already gated. The
+kiosk display reads its own room's row, so it is paired by its URL
+(`/display.html?room=<room_id>&device_token=<household token>`); unpaired, it
+falls back to the room id and the clock. The
 action endpoints carry the tier the core route behind
 each one carries, so the two hops agree: room label, timer cancel, announce,
 announce-all and volume are **Device**; restart, display and the config push
@@ -782,9 +795,9 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
-| `GET /api/satellites` | Open | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Open on purpose — anyone in the house can see that a room records; what it recorded is admin-only. Each row also carries `timers_own_only`: the room's "Only reminders for this device" setting (`false` without V018). |
-| `GET /api/satellites/{room_id}` | Open | — | One room. |
-| `GET /api/satellites/{room_id}/sessions` | Open | `?limit=20` | Recent sessions in this room. |
+| `GET /api/satellites` | **Device read** | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Every paired device can see that a room records; what it recorded is admin-only. Each row also carries `timers_own_only`: the room's "Only reminders for this device" setting (`false` without V018). |
+| `GET /api/satellites/{room_id}` | **Device read** | — | One room (the kiosk's label and idle mode). |
+| `GET /api/satellites/{room_id}/sessions` | **Device read** | `?limit=20` | Recent sessions in this room, each with the `person_id` who spoke. |
 | `GET /api/satellites/{room_id}/conversations` | **Device read** | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
 | `GET /api/satellites/{room_id}/logs` | **Admin (read)** | `?max_bytes=` (1 KB–10 MB, default 1 MB) | Satellite's recent log output, live over its WS. Gated: the satellite logs every transcript, so this returns room conversation content. `404` when the room isn't connected — the buffer lives in the Pi's process. |
 | `GET /api/satellites/{room_id}/notes` | **Device read** | — | Notes taken in this room. |
@@ -812,7 +825,7 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 | `GET /api/satellites/media/jobs/{id}/download` | **Admin (read)** | — | The overlay zip for a `kind=zip` build. Since WEB-1 it carries no plaintext passwords: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard (`/jobs/{id}/credentials`, memory only). A card written straight to a **drive** still gets `domovoi/ap.json` + `domovoi/console.json`, which stage 1 needs. |
 | `GET /api/satellites/media/jobs/{id}/credentials` | **Admin (read)** | — | `{ap: {ssid, psk} \| null, console: {username, password}}` (`ap` is null for a USB-adoption card) for a finished build, from the web process's memory (`404` once the dashboard restarts). The dashboard's "show setup details" reads it, for drive and zip builds alike; for a zip it is the only place the passwords appear. |
 | `POST /api/satellites/media/cache/refresh` | **Admin (Bearer)** | — | Refresh the wheel/deb/model caches (slow on a cold cache). Returns `{bucket: {ok, message}}` per bucket. `409` under `never` (§1.6); preparing a card still works from what is cached. |
-| `GET /api/satellites/pending` | Open | — | Unprovisioned satellites presenting a USB adoption volume on the server (empty when adoption is off, and inside WSL, which sees no USB drives). |
+| `GET /api/satellites/pending` | **Device read** | — | Unprovisioned satellites presenting a USB adoption volume on the server, with MAC, board and model (empty when adoption is off, and inside WSL, which sees no USB drives). |
 | `POST /api/satellites/pending/{pending_id}/adopt` | **Admin, security tier** | `{room_id, room_label?, wifi_ssid, wifi_psk, wifi_country?, wifi_hidden?, device_profile?, initial_volume?, force?}` | Adopt: preseed pairing on the core and write the provision file to the device. `409` room exists / device re-nonced, `410` device unplugged. |
 | `DELETE /api/satellites/{room_id}` | **Admin, security tier** | — | Proxy → core delete (remove a `waiting` room). |
 | `PATCH /api/satellites/{room_id}` | **Device** | `{room_label}` | Proxy → core room-label update. |
@@ -826,13 +839,15 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 
 ### 3.8 Calendar
 
-Reads are **Open**; every write is **Device** tier.
+Reads are **Device read** (since 2026-10-08, WEB-15: titles, places and
+descriptions of the household's appointments, which `/ws/state` already
+withheld from an unpaired client); every write is **Device** tier.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/calendar/events` | `?start=&end=&limit=500` | Events in a window (ISO datetimes). |
+| `GET /api/calendar/events` | **Device read** · `?start=&end=&limit=500` | Events in a window (ISO datetimes). |
 | `POST /api/calendar/events` | `CalendarEventCreate` | Create an event. |
-| `GET /api/calendar/events/{event_id}` | — | One event. |
+| `GET /api/calendar/events/{event_id}` | **Device read** | One event. |
 | `PATCH /api/calendar/events/{event_id}` | `CalendarEventPatch` | Edit an event. |
 | `DELETE /api/calendar/events/{event_id}` | — | Delete an event. |
 
