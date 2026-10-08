@@ -817,16 +817,27 @@ What the install flow *does* do (verified in
 - **Downgrades require `force`** — installing an older version than what's
   present is refused by default, because it may reintroduce fixed
   vulnerabilities.
-- **Database containment:** each plugin gets its own Postgres schema, and
-  its migration files run **as a per-plugin `NOLOGIN` role** with the
-  search path pinned to that schema — a migration cannot read or write
-  core tables (an unqualified name never falls through to `public`, and
-  the role holds no privilege there), cannot `COPY` to a file or program,
-  alter the server, or create roles, whatever it says; a lint refuses the
-  obvious attempts before Postgres has to. That confinement covers the
-  install/upgrade step. The plugin's *runtime* code is still in-process,
-  unsandboxed Python running as the application's database user — the
-  boundary against malice remains the publisher you trust.
+- **Database containment — a guard against mistakes, not a wall:** each
+  plugin gets its own Postgres schema, and its migration files run **as a
+  per-plugin `NOLOGIN` role** with the search path pinned to that schema.
+  An honest migration therefore stays inside its schema: an unqualified
+  name never falls through to `public`, the role holds no privilege on
+  core tables, a lint refuses `COPY`, server and role changes and
+  transaction control before Postgres sees the file, and the runner
+  refuses to record a file that did not finish as the plugin role on the
+  pinned path. **None of that stops a hostile migration.** The lint reads
+  SQL the way Postgres does, so it cannot see inside a function body, and
+  the role is entered on the application's own connection, which can
+  switch back to its own user: SQL run from inside a PL/pgSQL function
+  can return to the application's database user (the bootstrap superuser
+  in the shipped `docker-compose.yml`, which can also run programs on the
+  database host), do anything that user can, and switch back before the
+  runner checks. That matches [PLUGIN_DEVELOPMENT.md
+  §6.3](PLUGIN_DEVELOPMENT.md#63-per-schema-db-only): the containment
+  covers mistakes in the install/upgrade step, and the plugin's *runtime*
+  code is in-process, unsandboxed Python running as the application's
+  database user anyway. The boundary against malice is the publisher you
+  trust.
 - **Plugin HTTP routes are admin-gated by default in both processes.** A
   plugin's routers on the core (`/v1/plugins/<slug>/…`) and on the web
   dashboard (`/api/plugins/<slug>/…`) sit behind the same rule
