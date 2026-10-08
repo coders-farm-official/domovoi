@@ -226,6 +226,72 @@ are retired (A8-18).
   memory, and a note's preview loads images from any address its author
   chose. All three are described in
   [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+### Added by the review pass (same update)
+
+The security review of these fixes asked for a few more changes before the
+merge. They ship in the same update; nothing above changes.
+
+* **More reads need a paired device:** a room's play history
+  (`/api/satellites/{room}/recently-played`), a room's satellite config read
+  (both hops) and the speech latency summary (`/api/stats/latency`,
+  `/v1/stats/latency`). `GET /api/music/now-playing` stays open, but the name
+  of the device that queued the song is `null` for a caller with no household
+  credential. Scripts that polled these without a credential now get `401`.
+* **Documents and Files withhold more secret-shaped names** (SSH keys under
+  their default names, the `.ssh`, `.gnupg`, `.aws` and `.kube` folders, every
+  `.env.*`, `.netrc`, `.pgpass`, `*.kdbx`, `*.gpg`, `*.ovpn` and a few more),
+  and anything inside a withheld folder. Such files are not deleted; they are
+  absent from both listings and answer `404`.
+* **Kiosk:** `display.html` replaces a stored household token with a different
+  `?device_token=` only after the server has accepted the new one. A kiosk with
+  no token shows what was playing when the page loaded and then does not
+  update; put the token in `[display] kiosk_url` as described in step 4.
+* **Satellite approval before first-run setup** answers `501` at both hops.
+  Finish setup and sign in, then approve the satellites waiting in the card.
+* **Plugin installs run one at a time.** A second click while an install is
+  still running answers `409`. **Sleep Sounds 1.2.4** is the version to
+  install now (its overview and `/v1/plugins/sleep/state` need a paired
+  device, since they say who is asleep where).
+* **Radio relay** refuses a station whose content type is not plain ASCII and
+  every playlist spelling; the room's own player still plays such stations.
+* **Satellite identity:** sounds-channel serials are kept per voice (a
+  satellite on older code that switches voice and back may refuse the earlier
+  voice's list until its next code sync; it keeps playing cached clips), and
+  the identity proof is signed only for names listed exactly in
+  `TRUSTED_HOSTS`, never for a wildcard entry.
+* **The shipped core unit** under `scripts/linux/units/` no longer sets the
+  sandbox options that make systemd imply `NoNewPrivileges` for a non-root
+  service, which would have broken the Restart button and the update unit.
+  If you installed that unit from an earlier build of this branch, install it
+  again, `sudo systemctl daemon-reload`, restart the core and check that
+  Settings → Version still offers **Restart Domovoi**. The web and database
+  units keep the full sandbox.
+* **Compose now requires per-install `LETTA_TOKEN` and `SEARXNG_SECRET`.**
+  The update unit, `dev.sh` and `dev.ps1` run
+  `python -m domovoi.env_bootstrap --repair` first, which appends generated
+  values for the two keys and changes nothing else. **If you update by hand**
+  (`git pull`, then restart the units yourself), run it once after the pull
+  and before the restart:
+  `sudo -u domovoi /opt/domovoi/.venv/bin/python -m domovoi.env_bootstrap --repair`
+  (adjust the user and path to your layout); without it `domovoi-db` refuses
+  to start. Chat-mode users: recreate the Letta container once
+  (`docker compose --profile chat up -d letta`) so it learns the new password;
+  the Version card shows a warning until then.
+* **Opt-in lock:** with `DOMOVOI_USE_LOCK=1` and a lock the update cannot
+  use, the step is a `warn` and Settings → Version shows
+  **lock not applied: <reason>**. A package that fails its hash check still
+  rolls the update back.
+* **Wake-word models on a prepared card** are verified against pinned
+  hashes on the server and again on the satellite; a card with a model
+  missing is refused at build time instead of fetching it unverified later.
+* **Android (new build):** the phone re-proves the server identity on any
+  network change, including ones a VPN hides, at most every ten minutes and
+  after every return from the background; redirects never carry the token
+  to another host; only video saves carry a credential, and only right after
+  a fresh proof; the key shown in the trust dialog is the one pinned; a core
+  that is down reads as "core not answering", never as an impostor; and the
+  active server can be forgotten from Settings (the app returns to the
+  picker) when its key legitimately changes.
 
 ## 2026-10-06 — Lyrics: see the words, and find a song by them
 
