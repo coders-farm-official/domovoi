@@ -28,6 +28,13 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Before 2026-10-01 the session held the ExoPlayer itself, so a lock-screen
  * "play" or "next" while casting started the phone under the room.
  *
+ * In both modes the commands that would let a controller choose WHAT
+ * plays ([SessionAccess.MEDIA_ITEM_COMMANDS]) are not offered: the UI sets
+ * the queue on the ExoPlayer directly, and a session controller — any app
+ * on the phone can be one — must not be able to hand the authenticated
+ * player a URL (security round 3, A6-01). The session's callback refuses
+ * them too; this keeps the session's advertised state honest.
+ *
  * A room's state changes without the ExoPlayer knowing, and the session
  * reads these getters only when a listener is told something changed, so
  * [refresh] tells the session's listeners; the controller calls it whenever
@@ -120,15 +127,19 @@ class CastAwarePlayer(
     // ---- what the session shows ----------------------------------------------
     override fun getAvailableCommands(): Player.Commands {
         val own = super.getAvailableCommands()
-        if (room == null) return own
+        if (room == null) {
+            return Player.Commands.Builder().addAll(own).removeAll(*NEVER_FROM_THE_SESSION.toIntArray()).build()
+        }
         return Player.Commands.Builder()
             .addAll(own)
             .removeAll(*NOT_IN_A_ROOM.toIntArray())
+            .removeAll(*NEVER_FROM_THE_SESSION.toIntArray())
             .addAll(*IN_A_ROOM.toIntArray())
             .build()
     }
 
     override fun isCommandAvailable(command: Int): Boolean = when {
+        command in NEVER_FROM_THE_SESSION -> false
         room == null -> super.isCommandAvailable(command)
         command in NOT_IN_A_ROOM -> false
         command in IN_A_ROOM -> true
@@ -228,5 +239,9 @@ class CastAwarePlayer(
             Player.COMMAND_SEEK_FORWARD,
             Player.COMMAND_SET_SPEED_AND_PITCH,
         )
+
+        /** What no session controller may do, in either mode: choose the
+         *  media items (A6-01). The same set the session's callback withholds. */
+        val NEVER_FROM_THE_SESSION: Set<Int> = SessionAccess.MEDIA_ITEM_COMMANDS
     }
 }
