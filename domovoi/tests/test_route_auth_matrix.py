@@ -215,6 +215,14 @@ SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/dropin/start"),
     ("core", "POST", "/v1/admin/device-token"),
     ("core", "POST", "/v1/admin/device-token/rotate"),
+    # REV-32 (2026-10-08): approving a parked satellite binds a room to a
+    # device for good — with strict pairing the default, no pre-setup grace,
+    # or any LAN host could park its own device on an unclaimed core and
+    # approve it. Reject takes the same tier.
+    ("core", "POST", "/v1/admin/satellites/approvals/{room_id}/approve"),
+    ("core", "POST", "/v1/admin/satellites/approvals/{room_id}/reject"),
+    ("web", "POST", "/api/satellites/approvals/{room_id}/approve"),
+    ("web", "POST", "/api/satellites/approvals/{room_id}/reject"),
     ("web", "PATCH", "/api/config/editable"),
     ("web", "POST", "/api/config/version/restart"),
     ("web", "POST", "/api/satellites/{room_id}/upgrade"),

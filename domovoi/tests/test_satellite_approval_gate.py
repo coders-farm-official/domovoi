@@ -83,9 +83,12 @@ def test_the_web_pending_list_is_an_admin_read() -> None:
 
 
 def test_approving_stays_on_the_admin_tier() -> None:
-    """Gating the list must not have quietly relaxed the decision itself."""
+    """Gating the list must not have quietly relaxed the decision itself.
+    Since 2026-10-08 (REV-32) the decision is one tier HIGHER: the security
+    tier, with no pre-setup grace (test_satellite_approval_setup_gate)."""
     gates = _gates_for(core_app, "POST", f"{APPROVALS_CORE}/{{room_id}}/approve")
-    assert admin_auth.require_admin_mutation in gates
+    assert admin_auth.require_admin_security in gates
+    assert admin_auth.require_admin_mutation not in gates
 
 
 # ─── Behaviour: what an uncredentialed caller gets ───────────────────────

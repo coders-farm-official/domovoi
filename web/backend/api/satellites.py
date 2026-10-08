@@ -303,7 +303,9 @@ async def list_approvals(request: Request):
 
 @router.post(
     "/approvals/{room_id}/approve",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier at both hops (REV-32): Bearer-only, 501 before setup —
+    # approving binds a room to a device for good.
+    dependencies=[Depends(require_admin_security)],
 )
 async def approve_satellite(
     room_id: str, request: Request, body: SatelliteApproveRequest
@@ -323,7 +325,7 @@ async def approve_satellite(
 
 @router.post(
     "/approvals/{room_id}/reject",
-    dependencies=[Depends(require_admin_mutation)],
+    dependencies=[Depends(require_admin_security)],
 )
 async def reject_satellite(room_id: str, request: Request):
     """Drop a pending request. The device keeps retrying until it is

@@ -2502,9 +2502,13 @@ def approval_throttled_detail() -> str:
 
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/approve",
-    # Admin-tier: this is the decision that turns trust-on-first-use into a
-    # decision someone actually made, and it binds a room to a device.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: this is the decision that turns trust-on-first-use into
+    # a decision someone actually made, and it binds a room to a device for
+    # good. Bearer-only and 501 before first-run setup (REV-32): with strict
+    # pairing the default, the pre-setup grace let any LAN host that parked
+    # its own satellite on an unclaimed core approve it — the one pre-setup
+    # write that minted a lasting trust relationship.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_approve(
     room_id: str, body: _ApproveSatelliteBody
@@ -2574,7 +2578,9 @@ async def admin_satellite_approve(
 
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/reject",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier like approve: the two decisions on a parked device take
+    # the same credential, and neither has a pre-setup grace.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     """Drop a pending request.
