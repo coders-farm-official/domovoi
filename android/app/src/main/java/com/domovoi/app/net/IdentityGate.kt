@@ -32,7 +32,11 @@ import java.io.IOException
  * calls [networkChanged]. Then the proof is required again. Not the pinned
  * key, or no identity where one is pinned: the request never leaves
  * ([ServerIdentityException]), and the shell says the server is not the
- * one this phone paired with. The pin is the trust decision: the picker's
+ * one this phone paired with. A web backend that answers but whose core
+ * did not (`domovoi_reachable` false) is NOT a verdict
+ * ([IdentityVerdict.Unavailable]): the token is held, nothing is cached,
+ * and the shell says the server is not fully up — never that it is an
+ * impostor, and never to forget it. The pin is the trust decision: the picker's
  * dialog pins the identity it showed when the person says yes. A server
  * trusted before that existed (an upgraded install) is pinned the first
  * time it proves one; a server trusted while it offered no identity stays
@@ -66,9 +70,10 @@ sealed class IdentityVerdict {
     /** Pinned (or claiming an identity) and the answer proves nothing. */
     data class Unproven(val expected: String?, val reason: String) : IdentityVerdict()
 
-    /** Not a verdict: the proof could not be taken on one network (it kept
-     *  changing). The token is held and the server is asked again next
-     *  time; never cached. */
+    /** Not a verdict: the web backend answered but could not ask its core
+     *  (restarting, updating, slow), or the proof could not be taken on
+     *  one network (it kept changing). The token is held and the server
+     *  is asked again next time; never cached, never an impostor. */
     data class Unavailable(val expected: String?, val reason: String) : IdentityVerdict()
 
     val admitsToken: Boolean get() = this is Verified || this is Legacy
@@ -258,6 +263,10 @@ class IdentityGate(
                     log("identity: $key offered no identity but this phone pinned ${pinned.fingerprint}; token held")
                     IdentityVerdict.Unproven(pinned.fingerprint, "offered no identity")
                 }
+            ServerIdentity.Proof.CoreNotAnswering -> {
+                log("identity: $key answered but its core did not; token held until it does")
+                IdentityVerdict.Unavailable(pinned?.fingerprint, "its core is not answering (starting, updating or busy)")
+            }
             is ServerIdentity.Proof.Invalid -> {
                 log("identity: $key offered an identity that does not hold up (${proof.reason}); token held")
                 IdentityVerdict.Unproven(pinned?.fingerprint, "offered an identity that does not hold up: ${proof.reason}")

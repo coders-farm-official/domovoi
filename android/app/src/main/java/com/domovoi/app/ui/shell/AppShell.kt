@@ -428,15 +428,17 @@ private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = 
     val app = LocalApp.current
     var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
     var showConnect by rememberSaveable { mutableStateOf(false) }
-    // "Out of reach" has two faces: nothing answered, or something answered
+    // "Out of reach" has three faces: nothing answered; something answered
     // at the saved address that is NOT the Domovoi this phone paired with —
     // its identity failed the proof, so no request with the token was sent
-    // to it (net/IdentityGate.kt, A6-03). Say which.
+    // to it (net/IdentityGate.kt, A6-03); or the web backend answered but
+    // its core did not, so the proof could not be taken and the token is
+    // held until it can — not an impostor, never a reason to forget the
+    // server. Say which.
     val identity by app.identity.status.collectAsState()
-    val notOurs = identity?.let { s ->
-        s.base == IdentityGate.pinKey(serverUrl) &&
-            (s.verdict is IdentityVerdict.Mismatch || s.verdict is IdentityVerdict.Unproven)
-    } == true
+    val activeVerdict = identity?.takeIf { it.base == IdentityGate.pinKey(serverUrl) }?.verdict
+    val notOurs = activeVerdict is IdentityVerdict.Mismatch || activeVerdict is IdentityVerdict.Unproven
+    val coreDown = activeVerdict is IdentityVerdict.Unavailable
     // Back from the server picker returns to local media, not out of the app.
     BackHandler(enabled = showConnect) { showConnect = false }
 
@@ -515,14 +517,20 @@ private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = 
             if (unreachableServer != null) {
                 Surface(color = Domovoi.colors.canvas) {
                     Text(
-                        if (notOurs) {
-                            "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
-                                "this phone paired with, so nothing was sent to it. Showing media on this " +
-                                "phone; the workspace comes back when your Domovoi does. If you replaced " +
-                                "the server, forget it in the server list and pair again."
-                        } else {
-                            "Can't reach $unreachableServer. Showing media on this phone; " +
-                                "the workspace comes back when the server does."
+                        when {
+                            notOurs ->
+                                "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
+                                    "this phone paired with, so nothing was sent to it. Showing media on this " +
+                                    "phone; the workspace comes back when your Domovoi does. If you replaced " +
+                                    "the server, forget it — the X next to it in the server list, or under " +
+                                    "Settings → Connection → Trusted servers — then trust and pair it again."
+                            coreDown ->
+                                "$unreachableServer is up but its core is not answering (starting, " +
+                                    "updating, or busy), so nothing was sent to it yet. Showing media on " +
+                                    "this phone; the workspace comes back when the core does."
+                            else ->
+                                "Can't reach $unreachableServer. Showing media on this phone; " +
+                                    "the workspace comes back when the server does."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,

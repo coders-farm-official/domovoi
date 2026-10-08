@@ -46,6 +46,9 @@ class IdentityGateTest {
         var healthStatus = 200
         /** The health route accepts the connection and never answers. */
         var healthStalls = false
+        /** The web backend answers, but its core did not: no identity block,
+         *  `domovoi_reachable` false (web/backend/main.py). */
+        var coreDown = false
         val requests = CopyOnWriteArrayList<RecordedRequest>()
         val server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
@@ -56,6 +59,11 @@ class IdentityGateTest {
                         path.startsWith("/api/health") -> {
                             if (healthStalls) return MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
                             if (healthStatus != 200) return MockResponse().setResponseCode(healthStatus)
+                            if (coreDown) {
+                                return MockResponse().setBody(
+                                    """{"status":"degraded","db_reachable":true,"domovoi_reachable":false,"stt":null,"identity":null}""",
+                                )
+                            }
                             val challenge = request.requestUrl?.queryParameter("challenge")
                             MockResponse().setBody(healthBody(challenge))
                         }
@@ -293,6 +301,45 @@ class IdentityGateTest {
         } catch (e: ServerIdentityException) {
             assertTrue(e.message!!.contains("did not answer /api/health"))
         }
+    }
+
+    @Test fun aServerWhoseCoreIsDownIsNotAnImpostorAndIsAskedAgainAtOnce() {
+        read()
+        gate.networkChanged()
+        // The core restarts (an update, a reboot): the web hop answers but
+        // passes no identity through.
+        fake.coreDown = true
+        try {
+            read(); fail("expected ServerIdentityException")
+        } catch (e: ServerIdentityException) {
+            assertTrue(e.message, e.message!!.contains("not fully up"))
+            assertFalse("never an impostor", e.message!!.contains("mismatch"))
+        }
+        assertEquals(1, fake.reads().size)
+        assertTrue(gate.status.value?.verdict is IdentityVerdict.Unavailable)
+        assertNull("nothing cached: the next request asks again", gate.cachedVerdict(TokenScope.baseOf(fake.url)!!))
+        runCatching { read() }
+        assertEquals("asked again at once, not after the refusal window", 3, fake.probes().size)
+        // The pin is untouched, and when the core is back the proof goes
+        // through with no network change and no action from the person.
+        assertEquals(fake.fingerprint(), pins.book[key()]?.fingerprint)
+        fake.coreDown = false
+        read()
+        assertEquals(2, fake.reads().size)
+        assertEquals(IdentityVerdict.Verified(fake.fingerprint(), pinnedNow = false), gate.status.value?.verdict)
+    }
+
+    @Test fun aServerWhoseCoreIsDownHoldsTheTokenEvenWhenNothingIsPinned() {
+        // No pin yet (an upgraded install's first contact happens to meet a
+        // core restart): still not Legacy — the token waits for the proof.
+        fake.coreDown = true
+        try {
+            read(); fail("expected ServerIdentityException")
+        } catch (e: ServerIdentityException) {
+            assertTrue(e.message!!.contains("not fully up"))
+        }
+        assertTrue(fake.reads().isEmpty())
+        assertTrue(pins.book.isEmpty())
     }
 
     @Test fun aHealthThatStallsHoldsTheReadBackAndRemembersNothing() {
