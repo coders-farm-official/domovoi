@@ -1154,7 +1154,7 @@
           "music"
         ],
         "summary": "Upload To Library",
-        "description": "Upload audio into the library from the browser.\n\nAccepts one or more audio files directly, and/or ``.zip`` archives\n(each unpacked, with audio members extracted and non-audio members\n\u2014 cover art, ``.txt`` \u2014 ignored). Everything lands in\n``MUSIC_DIR/uploads/``; the files just written are then indexed into\n``library_tracks`` in-process and each room's MPD is asked to rescan,\nso the tracks are listed and playable right away. Neither step is the\nadmin-gated library-wide sweep \u2014 see the comment at the call site.\n\nSupported extensions: mp3, m4a, mp4, flac, ogg, oga, opus, wav,\nwma, aac, alac. Standalone files of any other type are reported in\n``skipped``; if nothing supported is found, returns 400.\n\nIf the index cannot run the files are still saved\n(``reindex_triggered=false``) and get picked up by the indexer on\nits next startup sweep.",
+        "description": "Upload audio into the library from the browser.\n\nAccepts one or more audio files directly, and/or ``.zip`` archives\n(each unpacked, with audio members extracted and non-audio members\n\u2014 cover art, ``.txt`` \u2014 ignored). Everything lands in\n``MUSIC_DIR/uploads/``; the files just written are then indexed into\n``library_tracks`` in-process and each room's MPD is asked to rescan,\nso the tracks are listed and playable right away. Neither step is the\nadmin-gated library-wide sweep \u2014 see the comment at the call site.\n\nSupported extensions: mp3, m4a, mp4, flac, ogg, oga, opus, wav,\nwma, aac, alac. Standalone files of any other type are reported in\n``skipped``; if nothing supported is found, returns 400.\n\nIf the index cannot run the files are still saved\n(``reindex_triggered=false``) and get picked up by the indexer on\nits next startup sweep.\n\nA third door into a library (WEB-12): the Files write block (\"block a\ndevice from uploading, moving or importing anywhere\") applies here\ntoo, before anything is written. The caller is identified as the\nFiles and Documents doors identify it \u2014 an optional ``device_id``\nform field, ``X-Device-Id``, ``?device_id=`` or the registration\ncookie every browser carries \u2014 and a blocked device gets ``403``.",
         "operationId": "upload_to_library_api_music_library_upload_post",
         "requestBody": {
           "content": {
@@ -11918,6 +11918,18 @@
             },
             "type": "array",
             "title": "Files"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -12396,6 +12408,18 @@
             "type": "boolean",
             "title": "Start Paused",
             "default": false
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -15239,6 +15263,18 @@
             "type": "boolean",
             "title": "Shuffle",
             "default": false
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -15258,6 +15294,18 @@
           "query": {
             "type": "string",
             "title": "Query"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -15277,6 +15325,18 @@
             "type": "integer",
             "minimum": 1.0,
             "title": "Track Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
           }
         },
         "type": "object",
@@ -16769,6 +16829,8 @@
           },
           "keep_n": {
             "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
             "title": "Keep N",
             "default": 5
           }
