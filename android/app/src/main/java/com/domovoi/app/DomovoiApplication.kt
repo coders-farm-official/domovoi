@@ -20,9 +20,11 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) watchMainThreadIo()
         TimerNotifier.createChannel(this)
         container = AppContainer(this)
-        // A new network means the saved server proves itself again before
-        // the household token goes to it (net/IdentityGate.kt, A6-03).
-        NetworkWatch.start(this) { container.identity.networkChanged() }
+        // A new network — a different default, the Wi-Fi under a VPN, new
+        // addresses on the same one — means the saved server proves itself
+        // again before the household token goes to it (net/IdentityGate.kt,
+        // A6-03). The watch's fingerprint is what every verdict is keyed to.
+        NetworkWatch.start(this, container.network)
         container.bus.start()
         container.alerts.start()
         // Earlier crashes and Android's exit history, read off the main thread.

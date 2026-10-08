@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -43,6 +44,8 @@ class IdentityGateTest {
     private inner class FakeDomovoi {
         var seed: ByteArray? = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
         var healthStatus = 200
+        /** The health route accepts the connection and never answers. */
+        var healthStalls = false
         val requests = CopyOnWriteArrayList<RecordedRequest>()
         val server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
@@ -51,6 +54,7 @@ class IdentityGateTest {
                     val path = request.path.orEmpty()
                     return when {
                         path.startsWith("/api/health") -> {
+                            if (healthStalls) return MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
                             if (healthStatus != 200) return MockResponse().setResponseCode(healthStatus)
                             val challenge = request.requestUrl?.queryParameter("challenge")
                             MockResponse().setBody(healthBody(challenge))
@@ -99,6 +103,8 @@ class IdentityGateTest {
     private val pins = Pins()
     private val log = CopyOnWriteArrayList<String>()
     private var now = 1_000_000L
+    /** The network fingerprint the phone is on (NetworkWatch in the app). */
+    private var net = "D|101|wifi|||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
     private var token: String? = "household-abc"
     private lateinit var gate: IdentityGate
     private lateinit var api: ApiClient
@@ -106,10 +112,11 @@ class IdentityGateTest {
     @Before fun up() {
         fake = FakeDomovoi()
         // Wired as AppContainer wires it: the probe runs on a token-less copy
-        // of the app's own client.
+        // of the app's own client, and the verdict is keyed to the network.
         gate = IdentityGate(
             probe = { base, challenge -> IdentityGate.httpProbe(Discovery.client(api.http, 1000), base, challenge) },
             pins = pins,
+            network = { net },
             clock = { now },
             log = { log += it },
         )
@@ -238,6 +245,103 @@ class IdentityGateTest {
         } catch (e: ServerIdentityException) {
             assertTrue(e.message!!.contains("did not answer /api/health"))
         }
+    }
+
+    @Test fun aHealthThatStallsHoldsTheReadBackAndRemembersNothing() {
+        // Only /api/health hangs; /api/timers would answer at once. The
+        // probe's timeout is the answer, and the guarded read never leaves.
+        read()
+        gate.networkChanged()
+        fake.healthStalls = true
+        try {
+            read(); fail("expected IOException")
+        } catch (e: ServerIdentityException) {
+            fail("a stalled probe is not an identity verdict")
+        } catch (e: IOException) {
+            // the probe's read timeout
+        }
+        assertEquals("the read before the change, and no other", 1, fake.reads().size)
+        assertNull(gate.cachedVerdict(TokenScope.baseOf(fake.url)!!))
+    }
+
+    // ---- what a verdict is keyed to (the review's blocker) --------------------
+
+    @Test fun aVerdictHoldsOnlyOnTheNetworkFingerprintItWasTakenOn() {
+        read()
+        assertEquals(1, fake.probes().size)
+        // The VPN case: nothing called networkChanged(), but the watch's
+        // fingerprint moved (the Wi-Fi under the VPN was replaced).
+        net = "D|120|vpn||tun0|100.64.0.5/32|||;P|102|wifi||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
+        read()
+        assertEquals("proved again on the new network", 2, fake.probes().size)
+        assertEquals(2, fake.reads().size)
+        // The same fingerprint again: the proof stands.
+        read()
+        assertEquals(2, fake.probes().size)
+        // And back on the first network, the old proof is not revived.
+        net = "D|101|wifi|||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
+        read()
+        assertEquals(3, fake.probes().size)
+    }
+
+    @Test fun aProofOlderThanTheTtlIsTakenAgainOnTheSameNetwork() {
+        read()
+        now += IdentityGate.VERDICT_TTL_MS - 1
+        read()
+        assertEquals("still within the ttl", 1, fake.probes().size)
+        now += 1
+        read()
+        assertEquals("the ttl ran out: proved again", 2, fake.probes().size)
+        assertEquals(3, fake.reads().size)
+    }
+
+    @Test fun comingBackToTheForegroundAfterASpellInTheBackgroundProvesAgain() {
+        read()
+        // The first start is not a return from the background.
+        gate.appForegrounded()
+        read()
+        assertEquals(1, fake.probes().size)
+        // Home button, then back (or screen off, then unlock).
+        gate.appBackgrounded()
+        now += 5_000
+        gate.appForegrounded()
+        read()
+        assertEquals(2, fake.probes().size)
+        assertTrue(log.any { it.contains("back in the foreground") })
+        // A rotation never calls appBackgrounded(), so it proves nothing new.
+        gate.appForegrounded()
+        read()
+        assertEquals(2, fake.probes().size)
+    }
+
+    @Test fun aProofThatStraddledANetworkChangeBelongsToTheNewNetwork() {
+        // The ConnectivityManager callback lands while the probe is in
+        // flight: the answer came over one network, the request would leave
+        // on another. The gate asks again rather than trusting a proof it
+        // cannot place.
+        var straddled = false
+        gate = IdentityGate(
+            probe = { base, challenge ->
+                if (!straddled) {
+                    straddled = true
+                    net = "D|102|wifi|||wlan0|192.168.1.23/24|192.168.1.254|192.168.1.254|"
+                }
+                IdentityGate.httpProbe(Discovery.client(api.http, 1000), base, challenge)
+            },
+            pins = pins,
+            network = { net },
+            clock = { now },
+            log = { log += it },
+        )
+        api = ApiClient({ fake.url }, { token }, gate)
+        read()
+        assertEquals("the straddling proof was thrown away and taken again", 2, fake.probes().size)
+        assertEquals(1, fake.reads().size)
+        assertTrue(log.any { it.contains("changed while") })
+        assertTrue(gate.cachedVerdict(TokenScope.baseOf(fake.url)!!) is IdentityVerdict.Verified)
+        // ...and under the old fingerprint nothing was remembered.
+        net = "D|101|wifi|||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
+        assertNull(gate.cachedVerdict(TokenScope.baseOf(fake.url)!!))
     }
 
     // ---- the other paths through the same client ----------------------------
