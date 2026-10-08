@@ -1368,6 +1368,11 @@ question gets the unbound answer, which a pinned device refuses. A
 household whose satellites reach the core by a name, or through a NAT or a
 port-forward whose outside address the core does not own, lists that
 address in `TRUSTED_HOSTS`; the core logs every refusal with that advice.
+The proof binds only to a name listed **exactly**: a wildcard entry
+(`*.local`, `*.lan`) keeps working for the `Host` check above, but the core
+signs for no name it matches (REV-08) — on a LAN anyone can claim
+`evil.local` over mDNS, and a wildcard would have signed for that relay
+too.
 The nonce and the address are restricted to URL-safe characters on the
 core, because a nonce that could carry a newline would let an unbound
 signature over `nonce\naddr` pass as a bound one.

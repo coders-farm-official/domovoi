@@ -310,6 +310,9 @@ def _configured_host_entries() -> list[tuple[str, int | None]]:
     return out
 
 
+_WILDCARD_WARNED: set[str] = set()
+
+
 def dialed_address_is_ours(addr: str, *, can_bind=None) -> bool:
     """Whether ``addr`` — the ``host:port`` a satellite says it dialed — is
     an address this server is actually reachable at, and so one it may
@@ -317,13 +320,18 @@ def dialed_address_is_ours(addr: str, *, can_bind=None) -> bool:
 
     Yes when the host is a loopback or an IP literal of one of this box's
     own interfaces, or a name (or address, with or without a port) the
-    operator listed in ``TRUSTED_HOSTS``. **A name is never resolved**: on
-    the LAN a name can be answered by anyone (mDNS, LLMNR, a router's
-    DNS), and resolving it here would hand the decision back to whoever
-    answers — which is the relay this check exists to stop. A household
-    whose satellites dial the core by a name, or through a NAT or
+    operator listed in ``TRUSTED_HOSTS`` **exactly**. **A name is never
+    resolved**: on the LAN a name can be answered by anyone (mDNS, LLMNR, a
+    router's DNS), and resolving it here would hand the decision back to
+    whoever answers — which is the relay this check exists to stop. A
+    household whose satellites dial the core by a name, or through a NAT or
     port-forward whose outside address the core does not own, lists that
     address in ``TRUSTED_HOSTS``; the refusal is logged with that advice.
+
+    A wildcard entry (``*.local``) is NOT a name for this purpose (REV-08):
+    the Host-header guard keeps honouring it, but here it would sign for
+    any name under the suffix — ``evil.local``, which anyone on the LAN can
+    claim over mDNS — and reopen the relay. It is skipped, and said so once.
     """
     can_bind = _can_bind if can_bind is None else can_bind
     host, port = split_host_port(addr)
@@ -332,10 +340,17 @@ def dialed_address_is_ours(addr: str, *, can_bind=None) -> bool:
     for ehost, eport in _configured_host_entries():
         if eport is not None and eport != port:
             continue
-        if ehost.startswith("*."):
-            if host == ehost[2:] or host.endswith(ehost[1:]):
-                return True
-        elif host == ehost:
+        if ehost.startswith("*"):
+            if ehost not in _WILDCARD_WARNED:
+                _WILDCARD_WARNED.add(ehost)
+                log.warning(
+                    "TRUSTED_HOSTS entry %s is a wildcard: the identity proof is "
+                    "signed only for names listed exactly, so a satellite that "
+                    "dials this server by a name under it needs that name listed "
+                    "on its own", ehost,
+                )
+            continue
+        if host == ehost:
             return True
     if host in ("localhost", "localhost.localdomain"):
         return True

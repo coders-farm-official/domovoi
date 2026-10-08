@@ -422,13 +422,45 @@ def test_which_addresses_this_server_will_sign_for(monkeypatch):
     assert ours("", can_bind=own) is False
 
     monkeypatch.setattr(
-        settings, "trusted_hosts", "host.docker.internal, *.ts.net, 203.0.113.9:6370"
+        settings, "trusted_hosts",
+        "host.docker.internal, *.ts.net, beelink.ts.net, 203.0.113.9:6370",
     )
     assert ours("host.docker.internal:6394", can_bind=own) is True
     assert ours("HOST.DOCKER.INTERNAL:6394", can_bind=own) is True
-    assert ours("beelink.ts.net:6370", can_bind=own) is True
+    assert ours("beelink.ts.net:6370", can_bind=own) is True, "listed exactly"
     assert ours("203.0.113.9:6370", can_bind=own) is True
     assert ours("203.0.113.9:6371", can_bind=own) is False, "an entry with a port means that port"
+
+
+@pytest.mark.parametrize("entry", ["*.local", "*.lan", "*.ts.net", "*"])
+def test_a_wildcard_entry_signs_for_no_name_under_it(monkeypatch, caplog, entry):
+    """REV-08: with ``*.local`` listed the core used to sign the bound proof
+    for ``evil.local`` — a name any LAN host can claim over mDNS — so a
+    relay registered under it passed a pinned satellite's check. The
+    Host-header guard keeps the wildcard; the proof binds exact names only."""
+    from domovoi.config import settings
+
+    ours = server_identity.dialed_address_is_ours
+    own = lambda ip: False  # noqa: E731 — none of these is an interface address
+    monkeypatch.setattr(settings, "trusted_hosts", entry)
+    monkeypatch.setattr(server_identity, "_WILDCARD_WARNED", set())
+    suffix = entry.lstrip("*.") or "local"
+    for name in (f"evil.{suffix}:6370", f"domovoi.{suffix}:6370", f"{suffix}:6370",
+                 f"a.b.{suffix}:6370"):
+        assert ours(name, can_bind=own) is False, (entry, name)
+    assert any("wildcard" in r.getMessage() for r in caplog.records)
+
+
+def test_the_host_guard_still_honours_the_wildcard(monkeypatch):
+    """Only the signing decision drops it: requests addressed to a name
+    under a listed wildcard are still served."""
+    from domovoi import transport_guard
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "trusted_hosts", "*.local")
+    assert transport_guard._matches_configured(
+        "domovoi.local", transport_guard.configured_hosts()
+    ) is True
 
 
 def test_the_real_bind_check_knows_loopback_from_test_net():

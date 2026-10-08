@@ -354,7 +354,12 @@ server signs for that address only when it is one of its own. If your
 satellites reach the server by a **name** rather than its IP (or through a
 NAT or port-forward), list that name or address in `TRUSTED_HOSTS` in the
 server's `.env`; otherwise the server refuses to sign for it (its log says
-so, naming the address) and a pinned satellite will not connect.
+so, naming the address) and a pinned satellite will not connect. List the
+**exact** name: a wildcard entry such as `*.local` still lets browsers reach
+the dashboard by any name under it, but the server never signs the proof
+for a name it matches, because anyone on the LAN can answer for
+`something.local` and a relay registered under such a name is exactly what
+the proof exists to stop (its log says so once per entry).
 
 Checking the signatures needs the `cryptography` package, which
 `requirements.txt` lists. 64-bit Pi OS (the supported build) gets an
