@@ -316,7 +316,7 @@ fulfiller later drains the backlog.
 |---|---|---|---|
 | `GET /v1/acquisitions` | Open | `?status=&limit=50` (max 200) | `{"acquisitions": [...], "fulfillers": [...], "can_fulfill_query", "can_fulfill_url"}` — rows from `media_acquisitions`, newest first. |
 | `POST /v1/admin/music/add-by-query` | **Device (`X-Device-Token` or Bearer)** | `{room_id, query, artist?, attach_to_playlist_id?}` | Enqueue a free-text acquisition. Returns `{queued, outcome, message, already_in_library, already_downloading, acquisition_id, fulfiller_available, title}`. |
-| `POST /v1/admin/music/add-by-url` | **Outbound-fetch** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Enqueue an acquisition for an exact external URL (skips fuzzy library dedup; honors `dedup_key`). Gated because it triggers provider code against a caller-chosen URL. |
+| `POST /v1/admin/music/add-by-url` | **Outbound-fetch** | `{room_id, url, title?, dedup_key?, attach_to_playlist_id?}` | Enqueue an acquisition for an exact external URL (skips fuzzy library dedup; honors `dedup_key`). Gated because it triggers provider code against a caller-chosen URL. Whoever asks — an admin session included — the URL also has to pass the outbound-URL check in store mode (§1.1): `400` for a non-http(s) scheme, `localhost`, or a host that is or resolves to a loopback / private / link-local address. `409` with `X-Domovoi-Refusal: internet-off` under the **No** internet answer (§1.6), before anything is queued. |
 
 ### 2.5 Admin: live state and satellite actions
 

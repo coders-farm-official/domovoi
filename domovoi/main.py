@@ -3686,7 +3686,20 @@ async def admin_music_add_by_url(
     extractor surface), so this endpoint requires an admin session OR a
     URL a registered fulfiller's ``url_matcher`` allowlist recognizes,
     plus a per-source rate limit for the unauthenticated path.
+
+    That decides WHO may ask. WHERE the URL may point is decided the way
+    it is for every other URL the server will fetch (CORE-16), and an
+    admin session passes neither of these:
+
+    * under the "No internet" answer it is refused now (409, the
+      internet-off refusal), rather than queued to start fetching the
+      moment the answer changes;
+    * ``net_safety.check_outbound_url`` in store mode (the fulfiller
+      fetches later, so a name that does not resolve right now may still
+      be saved): a non-http(s) scheme, ``localhost``, or a host that is or
+      resolves to a loopback / private / link-local address is a 400.
     """
+    from domovoi import egress, net_safety
     from domovoi.db.repositories import IntentLogRepository
 
     decision = await check_outbound_fetch(
@@ -3695,6 +3708,13 @@ async def admin_music_add_by_url(
     )
     if not decision.allowed:
         raise HTTPException(status_code=decision.status, detail=decision.detail)
+    if egress.internet_turned_off():
+        raise egress.http_exception("add by URL")
+    reason = await net_safety.acheck_outbound_url(body.url, require_resolution=False)
+    if reason is not None:
+        raise HTTPException(
+            status_code=400, detail=f"refusing this URL — {reason}"
+        )
 
     async with session_scope() as s:
         result = await ACQUISITIONS.enqueue(
