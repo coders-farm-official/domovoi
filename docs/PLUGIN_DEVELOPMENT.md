@@ -1834,7 +1834,11 @@ history) is why the default is keep.
   streams), or a path component ending with a dot or a space (Windows
   would strip it and the file would land under another name) are rejected
   at install.
-* **Zip caps**: 100 MB compressed, 500 MB extracted, 10,000 entries. The
+* **Zip caps**: 100 MB compressed, 500 MB extracted, 10,000 entries — and
+  every file the installer parses before the trust screen (`.py`, `.sql`,
+  `.toml`, `.lock`, plus the lockfiles and post-install script your
+  manifest names) at most **2 MiB** each and **32 MiB** together
+  (`plugin_file_too_large`); ship data as data files, not as source. The
   manifest must sit at the zip root or inside a single top-level directory
   (the GitHub archive shape — so `codeload` zips install as-is).
 * **Hand-copying into `~/.domovoi/plugins/installed/` is not an install
