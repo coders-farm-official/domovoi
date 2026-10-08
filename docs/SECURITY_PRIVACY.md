@@ -1278,7 +1278,13 @@ after `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s) with nothing created; one
 that sends any other frame first is refused the same way. Without this,
 any LAN host could mint rooms (and their MPD ports) by opening a bare
 socket, or bump a live satellite out of its slot, without ever presenting
-a token.
+a token. The HTTP side keeps the same promise: no route provisions a room
+either. The music routes that name one (the queue read, play-track,
+play-tracks, play-playlist, the queue edits) answer `404` for a room the
+house has no `mpd_rooms`, pairing or inventory row for, and the queue read
+— which used to answer, and start a player for, any name with no
+credential at all (CORE-13) — is on the device tier's read half like the
+rest of the room's music.
 
 **Approval gates the microphone — at boot.** A satellite that no core has
 ever accepted opens no capture stream, starts no mic thread, and never

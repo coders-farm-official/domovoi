@@ -2328,6 +2328,25 @@ class SatellitesRepository:
         ).first()
         return row is not None
 
+    async def room_is_known(self, room_id: str) -> bool:
+        """Whether ``room_id`` is a room this house already has: an MPD row
+        (a satellite's hello provisioned it), a pairing, or an inventory
+        row (adopted, or labelled). An HTTP route that is about to start a
+        room's music player asks this first, so a name somebody merely
+        typed into a URL never provisions a new one (CORE-13)."""
+        row = (
+            await self.s.execute(
+                text(
+                    "SELECT 1 FROM mpd_rooms WHERE room_id = :r "
+                    "UNION ALL SELECT 1 FROM satellite_pairings WHERE room_id = :r "
+                    "UNION ALL SELECT 1 FROM satellites WHERE room_id = :r "
+                    "LIMIT 1"
+                ),
+                {"r": room_id},
+            )
+        ).first()
+        return row is not None
+
 
 def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)

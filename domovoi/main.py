@@ -41,6 +41,7 @@ from domovoi.admin_auth import (  # noqa: E402
     require_admin_security_read,
     require_chat_callback,
     require_device,
+    require_device_read,
     token_sha256,
 )
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
@@ -3111,15 +3112,48 @@ async def _ensure_room_mpd(room_id: str) -> None:
     a stopped container fails with a bare connection-refused (WinError 1225 →
     502). ``ensure_room`` is idempotent and fast when the container is already
     running, so calling it here makes a cast self-healing rather than dead.
+
+    It never provisions a NEW room (CORE-13): a room is created by a
+    satellite's accepted hello, never by a name in a URL. A room the house
+    does not have — no ``mpd_rooms`` row, no pairing, no inventory row —
+    answers 404 here, before a port is allocated or a container started.
     """
     if settings.use_stubs:
         return
+    if not await _room_is_known(room_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"there is no room named {room_id!r} — a room appears once its "
+                "satellite has connected (or been adopted)"
+            ),
+        )
     try:
         from domovoi.mpd_provisioner import ensure_room
 
         await ensure_room(room_id)
     except Exception as e:  # noqa: BLE001 — non-fatal; the play call surfaces 502
         log.warning("admin music: ensure_room(%s) failed: %s", room_id, e)
+
+
+async def _room_is_known(room_id: str) -> bool:
+    """A room this house already has (see ``_ensure_room_mpd``). The live
+    port map answers for every room provisioned this boot without a query;
+    anything else is looked up. A lookup that fails is a 503, never a
+    silent yes."""
+    from domovoi.clients import mpd as mpd_module
+    from domovoi.db.repositories import SatellitesRepository
+
+    if room_id in mpd_module._room_ports:
+        return True
+    try:
+        async with session_scope() as s:
+            return await SatellitesRepository(s).room_is_known(room_id)
+    except Exception as e:  # noqa: BLE001 — fail closed, and say why
+        log.warning("admin music: could not look up room %s: %s", room_id, e)
+        raise HTTPException(
+            status_code=503, detail="could not check that room right now"
+        ) from e
 
 
 class _AdminPlayTracksBody(BaseModel):
@@ -3356,9 +3390,19 @@ async def _log_queue_edit(room_id: str, what: str) -> None:
         )
 
 
-@app.get("/v1/admin/music/queue/{room_id}")
+@app.get(
+    "/v1/admin/music/queue/{room_id}",
+    # CORE-13: the device tier's READ half, like the four queue edits beside
+    # it are on the device tier. It was the one music route with no gate,
+    # and it starts a room's player first. The web hop forwards the
+    # caller's token and cookie.
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_music_queue(room_id: str) -> dict[str, Any]:
-    """The room's live MPD queue, in order, plus which entry is playing."""
+    """The room's live MPD queue, in order, plus which entry is playing.
+
+    404 for a room the house does not have (``_ensure_room_mpd``): reading
+    a queue never creates one."""
     from domovoi.clients.mpd import get_mpd_client_for
 
     await _ensure_room_mpd(room_id)

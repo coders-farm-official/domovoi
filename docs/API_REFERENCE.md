@@ -381,7 +381,7 @@ Voice-equivalent calls (`play`, the transport actions) re-enter the regular
 routing pipeline so they land in `intents_log`/`conversation_log` exactly like
 a spoken turn. Direct-play endpoints bypass the router, write only an
 `intents_log` row (transcript prefixed `[ui]`), and never fall through to an
-external streaming provider. All are **Open**.
+external streaming provider.
 
 The `queue/*` endpoints are the exception to "music actions replace the
 queue": they edit the room's existing MPD queue in place. Entries are
@@ -391,7 +391,9 @@ entry 3" into "remove the wrong song". They know nothing about devices;
 the "added by" provenance and the device blocklist live in the web
 process (§3.5a).
 
-Everything in this table is on the **Device** tier (`X-Device-Token` or an admin Bearer) — ordinary household playback — except the two library sweeps at the end, which are **Admin (Bearer)**.
+Everything in this table is on the **Device** tier (`X-Device-Token` or an admin Bearer) — ordinary household playback — except the queue read, which is **Device read** (the same, or the dashboard cookie), and the two library sweeps at the end, which are **Admin (Bearer)**.
+
+None of them creates a room. The routes that name a room (`play-track`, `play-tracks`, `play-playlist`, the queue routes) start that room's music player if it is down, and answer **`404`** for a room the house does not have — no `mpd_rooms`, pairing or inventory row — before a port is allocated or a container started. A room appears when its satellite's hello is accepted (or it is adopted), never from a URL.
 
 | Method & path | Request | Response / purpose |
 |---|---|---|
@@ -400,7 +402,7 @@ Everything in this table is on the **Device** tier (`X-Device-Token` or an admin
 | `POST /v1/admin/music/play-tracks` | `{room_id, track_ids: [..], start_sec?, start_paused?}` (≤500) | Load an ordered queue of library tracks into the room's MPD and start playback (the browser and phone players' "cast to room"). The room starts on the first id, `start_sec` into it when given (dropped if that id or its file is missing); clients send their CURRENT track first. `start_paused: true` (a cast from a paused phone or browser): the room takes the queue and waits paused there — a person's pause, which no handshake or auto-resume undoes — until `resume`. Returns `{played, queued, requested, latency_ms, paused}`. A cast that fails names the part that failed beside the words: `502 {"failed": "music_player", "detail": …}` the room's music player on the server didn't answer; `503 {"failed": "satellite", …}` no satellite has ever connected, so no room has a player. A room whose satellite is offline is not a failure: its player takes the queue and the satellite joins when it connects. `404` when none of the ids (or their files) can be found. |
 | `POST /v1/admin/music/play-playlist` | `{room_id, playlist_id, shuffle?}` | Start a playlist (`playlist_id` 0 = the virtual Favorites). Ordered mode resumes from the saved position; stamps in-room playlist state so "next" stays in-playlist. |
 | `POST /v1/admin/music/{action}/{room_id}` | — | Transport controls; `action` ∈ `pause`, `resume`, `stop`, `skip`, `next`, `previous` (routed as the spoken equivalents). `skip`/`next` in a room whose queue holds two songs or more (a cast, queue adds) goes to the queue's next song, and after its last song the queue ends; a one-song queue keeps the smart skip (provider search, in-playlist advance, another library track). `previous` is MPD's (the queue's first song starts again). A control that did not happen is never a 200: `502` the room's player didn't answer, `409` nothing is playing, `503` no room has a player yet; the `502` and `503` bodies also name the part that failed (`failed`: `music_player` — the room's music player on the server — or `satellite`), beside `detail` in words. A 200 carries `ok: true` with `{text, matched_handler, matched_path, music_action, online}`. `400` for an unknown action. |
-| `GET /v1/admin/music/queue/{room_id}` | — | The room's live MPD queue in order: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec}], current_song_id}`. `502` MPD error. |
+| `GET /v1/admin/music/queue/{room_id}` (**Device read**) | — | The room's live MPD queue in order: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec}], current_song_id}`. `401` with no credential, `404` for a room the house does not have, `502` MPD error. |
 | `POST /v1/admin/music/queue/{room_id}/add` | `{track_ids: [..]}` (≤500) | **Append** library tracks without clearing — the one music path that doesn't replace the queue. Starts playback when the room was idle with an empty queue. `{queued:[{song_id, file}], requested, started}`. `404` when MPD can't resolve any of them. |
 | `POST /v1/admin/music/queue/{room_id}/remove` | `{song_ids: [..]}` | Drop entries by songid. `{removed:[..], skipped:[..]}` — an id MPD no longer has is reported, not an error. |
 | `POST /v1/admin/music/queue/{room_id}/move` | `{song_id, to_position}` | Reorder. `404` when the id isn't in the queue any more. |
@@ -524,7 +526,7 @@ rather than guessing. `GET /api/music/now-playing` carries the same
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/music/queue/{room_id}` | Open | `?device_id=` | The queue with provenance joined: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec, added_by, added_by_device_id, added_at, playing}], current_song_id, editable, blocked_reason}`. Reading is **never** blocked — a blocked device still sees what's on, and `editable:false` + `blocked_reason` say why it can't change anything. Reaps provenance rows whose songid has left the queue. |
+| `GET /api/music/queue/{room_id}` | **Device read (core decides)** | `?device_id=` | The queue with provenance joined: `{room_id, items:[{song_id, pos, file, title, artist, album, duration_sec, added_by, added_by_device_id, added_at, playing}], current_song_id, editable, blocked_reason}`. Reading is **never** blocked — a blocked device still sees what's on, and `editable:false` + `blocked_reason` say why it can't change anything. Reaps provenance rows whose songid has left the queue. |
 | `POST /api/music/queue/{room_id}/add` | **Device** | `{track_ids:[..], device_id}` | Append, then stamp provenance. Proxy → core. `403` when the device is blocked here. |
 | `POST /api/music/queue/{room_id}/remove` | **Device** | `{song_ids:[..], device_id}` | Drop entries and their provenance rows. `403` when blocked. |
 | `POST /api/music/queue/{room_id}/move` | **Device** | `{song_id, to_position, device_id}` | Reorder. No DB write — provenance is keyed by songid, which is exactly why. `403` when blocked. |
