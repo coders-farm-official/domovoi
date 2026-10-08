@@ -206,3 +206,75 @@ def test_pins_cover_exactly_what_the_package_downloads() -> None:
     import domovoi.satellite_media.fetchers as real
 
     assert set(real.OWW_MODEL_FILES) == names
+
+
+# ─── a bad asset does not stop the rest; a short bucket stops the build ───
+# (2026-10 review REV-17: the fetch returned at the first bad asset, the
+# build went ahead with a warning, and stage 2 then fetched the models on
+# the Pi with no digest check.)
+
+def test_one_bad_asset_does_not_stop_the_others(release, tmp_path) -> None:
+    release.files[RELEASE_PATH + "a_v0.1.onnx"] = (200, A[::-1], {})
+    with egress.override_policy("always"):
+        ok, msg = fetchers.fetch_oww_models()
+    assert not ok
+    assert "a_v0.1.onnx" in msg and "checksum mismatch" in msg
+    # b.tflite comes after it and is still fetched and kept.
+    assert sorted(release.seen) == sorted(RELEASE_PATH + n for n in PINS)
+    assert _names(tmp_path) == ["b.tflite"]
+    assert fetchers.missing_oww_models() == ["a_v0.1.onnx"]
+    assert "oww_models" not in cache.read_stamps()
+
+
+def test_every_failure_is_named(release, tmp_path) -> None:
+    release.files[RELEASE_PATH + "a_v0.1.onnx"] = (200, A + b"x", {})
+    del release.files[RELEASE_PATH + "b.tflite"]
+    with egress.override_policy("always"):
+        ok, msg = fetchers.fetch_oww_models()
+    assert not ok
+    assert msg.startswith("2 of 2 wake-word models failed")
+    assert "a_v0.1.onnx: " in msg and "b.tflite: HTTP 404" in msg
+    assert _names(tmp_path) == []
+
+
+def _offline_build(monkeypatch, tmp_path, *, missing: list[str], fetched: tuple[bool, str]):
+    import asyncio
+
+    from domovoi.satellite_media import builder, payload
+
+    ok_status = {k: {"ok": True} for k in ("wheels", "debs", "xvf_host", "oww_models", "dtbo")}
+    monkeypatch.setattr(cache, "status", lambda *a, **k: ok_status)
+    monkeypatch.setattr(fetchers, "verify_oww_models", lambda dest=None: (len(fetchers.OWW_MODEL_FILES) - len(missing), []))
+    monkeypatch.setattr(fetchers, "fetch_oww_models", lambda: fetched)
+    monkeypatch.setattr(fetchers, "missing_oww_models", lambda dest=None: list(missing))
+    assembled: list[bool] = []
+
+    class Stop(Exception):
+        pass
+
+    async def _assemble(*a, **k):
+        assembled.append(True)
+        raise Stop
+
+    monkeypatch.setattr(payload, "assemble", _assemble)
+    monkeypatch.setattr(builder, "BUILDS_ROOT", tmp_path / "builds")
+    try:
+        asyncio.run(builder.build(
+            board_id="pi02w", mic_profile="respeaker_2mic_hat_v2", target_kind="zip",
+            target_mount=None, job_id="oww", offline=True,
+        ))
+    except Stop:
+        pass
+    return assembled
+
+
+def test_an_offline_card_with_a_short_wake_word_bucket_is_not_built(release, monkeypatch, tmp_path) -> None:
+    with pytest.raises(ValueError, match=r"wake-word model cache is incomplete.*a_v0\.1\.onnx.*checksum mismatch"):
+        _offline_build(
+            monkeypatch, tmp_path, missing=["a_v0.1.onnx"],
+            fetched=(False, "1 of 2 wake-word models failed: a_v0.1.onnx: checksum mismatch"),
+        )
+
+
+def test_an_offline_card_with_every_model_goes_on_to_assemble(release, monkeypatch, tmp_path) -> None:
+    assert _offline_build(monkeypatch, tmp_path, missing=[], fetched=(True, "ok")) == [True]

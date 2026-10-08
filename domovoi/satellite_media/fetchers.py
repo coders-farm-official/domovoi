@@ -1,8 +1,9 @@
 """Cache-refresh fetchers for satellite media builds.
 
-Three sources, each degrading independently (a build NEVER hard-fails on a
-missing cache — it flips to `offline: false` with a loud warning and lets
-the device's stage-2 bootstrap pull that piece online):
+Three sources, each degrading independently (a missing wheel or deb cache
+never hard-fails a build — it flips to `offline: false` with a loud warning
+and lets the device's stage-2 bootstrap pull that piece online; the
+wake-word models are the exception, see below):
 
 * **Wheels** — native ``pip download --platform manylinux_*_aarch64``; no
   Docker involved. This is the bulk of the offline payload.
@@ -15,7 +16,11 @@ the device's stage-2 bootstrap pull that piece online):
   pinned URLs and checked against pinned SHA-256 digests and sizes
   (:data:`OWW_MODEL_FILES`). Nothing that fails the check reaches the
   bucket, and :func:`verify_oww_models` drops anything in it that the pins
-  don't vouch for before a payload is assembled.
+  don't vouch for before a payload is assembled. Every pin is tried and
+  every failure named; an offline build with a short bucket is refused
+  (builder.py), and stage 2 holds what it places on the device, and
+  anything openWakeWord downloads there, to the same pins
+  (:func:`oww_pins_text`).
 
 Prebuilt mic-board .dtbo overlays are cache-passthrough only: stage 1
 installs whatever ``cache/dtbo/`` holds; when empty, stage 2 falls back to
@@ -300,8 +305,7 @@ XVF_HOST_SHA256 = {
 
 
 def _sha256_file(path: Path) -> str:
-    import hashlib
-
+    """One helper for every pinned file here (xvf_host, the wake-word models)."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 16), b""):
@@ -431,12 +435,13 @@ OWW_MODEL_FILES: dict[str, tuple[str, int]] = {
 _OWW_CHUNK = 1 << 16
 
 
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(_OWW_CHUNK), b""):
-            h.update(block)
-    return h.hexdigest()
+def oww_pins_text() -> str:
+    """The pins as ``<sha256> <size> <name>`` lines, for stage 2 on the
+    device (``@OWW_PINS@`` in templates/stage2.sh.tmpl), which checks what
+    it places, and anything openWakeWord downloads there, against them."""
+    return "\n".join(
+        f"{sha256} {size} {name}" for name, (sha256, size) in sorted(OWW_MODEL_FILES.items())
+    )
 
 
 def _oww_http_client():
@@ -510,16 +515,27 @@ def verify_oww_models(dest: Path | None = None) -> tuple[int, list[str]]:
     return verified, removed
 
 
+def missing_oww_models(dest: Path | None = None) -> list[str]:
+    """The pinned model names the bucket does not hold. Call after
+    :func:`verify_oww_models`, which leaves only verified files there."""
+    dest = dest or cache.bucket("oww_models")
+    return [name for name in OWW_MODEL_FILES if not (dest / name).is_file()]
+
+
 def fetch_oww_models() -> tuple[bool, str]:
     """openWakeWord base models into the cache, each checked against its
-    pinned digest; what is already there and verified is kept. (ok,
-    message)."""
+    pinned digest; what is already there and verified is kept. Every pin is
+    tried: one asset that fails (a replaced release file, a network error)
+    does not stop the rest, and the message names every one that failed
+    and why. ok only when the bucket then holds every pinned model.
+    (ok, message)."""
     refused = _turned_off("oww_models")
     if refused:
         return refused
     dest = cache.bucket("oww_models")
     verify_oww_models(dest)
     fetched = 0
+    failed: list[str] = []
     for name, (sha256, size) in OWW_MODEL_FILES.items():
         target = dest / name
         if target.is_file():
@@ -527,8 +543,16 @@ def fetch_oww_models() -> tuple[bool, str]:
         try:
             _fetch_pinned(OWW_RELEASE_URL + name, target, sha256=sha256, size=size)
         except Exception as e:  # noqa: BLE001 — network/hub errors degrade
-            return False, f"model download failed: {name}: {e}"
+            log.warning("satellite media: wake-word model %s refused: %s", name, e)
+            failed.append(f"{name}: {e}")
+            continue
         fetched += 1
+    if failed:
+        return False, (
+            f"{len(failed)} of {len(OWW_MODEL_FILES)} wake-word models failed their "
+            f"download or pinned check ({fetched} downloaded, nothing unverified kept): "
+            + "; ".join(failed)
+        )
     cache.stamp("oww_models")
     return True, (
         f"{len(OWW_MODEL_FILES)} wake-word models verified in {dest} "

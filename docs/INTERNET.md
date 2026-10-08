@@ -176,7 +176,8 @@ stays yours to do:
    media* → **Refresh caches** (admin sign-in; the wheel fetch can take
    minutes). The wake-word models come from pinned URLs and are checked
    against pinned digests; the server no longer needs the `openwakeword`
-   package for that.
+   package for that. An offline card is prepared only when the cache holds
+   every pinned model, and the satellite checks them again on first boot.
 
    *Why:* the SD cards you prepare from the dashboard carry the satellite's
    Python wheels, system packages and wake-word models, so a new satellite
