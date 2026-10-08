@@ -38,7 +38,11 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.data.ServerCredentials
+import com.domovoi.app.net.Discovery
+import com.domovoi.app.net.IdentityGate
+import com.domovoi.app.net.IdentityVerdict
 import com.domovoi.app.net.ServerAddress
+import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.rememberApi
@@ -48,6 +52,9 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.shell.ForgetActiveServerDialog
+import com.domovoi.app.ui.shell.forgetActiveServer
+import com.domovoi.app.ui.shell.provenFingerprint
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
@@ -73,6 +80,11 @@ internal fun ConnectionPanel() {
 
     var url by remember(serverUrl) { mutableStateOf(serverUrl) }
     var tokenDraft by remember(serverUrl) { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+    var confirmForgetActive by remember { mutableStateOf(false) }
+    // The active server's latest identity verdict (net/IdentityGate.kt).
+    val identityStatus by app.identity.status.collectAsState()
+    val activeVerdict = identityStatus?.takeIf { it.base == IdentityGate.pinKey(serverUrl) }?.verdict
 
     // The server is the source of truth for this device's name (it may have
     // been renamed from the dashboard), so read it back from the idempotent
@@ -122,7 +134,7 @@ internal fun ConnectionPanel() {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Button(
-                        enabled = url.isNotBlank(),
+                        enabled = url.isNotBlank() && !saving,
                         onClick = {
                             // The same rule as the picker's "add manually":
                             // default scheme and port, and a plain-http address
@@ -131,31 +143,42 @@ internal fun ConnectionPanel() {
                             // a choice, so typing it IS the trust decision — and
                             // it is listed as a known server, with a forget
                             // button, like every other trusted one (P2-at-01).
+                            // The address is probed first, on the token-less
+                            // discovery client, as the picker probes it: the
+                            // identity it advertises is what the trust decision
+                            // pins, and an address nothing answers at is not
+                            // saved (A6-03 review).
                             when (val typed = ServerAddress.fromTyped(url)) {
                                 null -> Unit
                                 is ServerAddress.Result.Refused -> toast(typed.message)
                                 is ServerAddress.Result.Ok -> {
-                                    app.prefs.trustServer(typed.url)
-                                    app.prefs.upsertKnownServer(typed.url)
-                                    if (app.prefs.setServerUrl(typed.url)) toast("server saved — reconnecting")
-                                    else toast("couldn't switch to that server")
+                                    saving = true
+                                    scope.launch {
+                                        val hit = Discovery.probe(app.api.http, typed.url, timeoutMs = 3000)
+                                        saving = false
+                                        if (hit == null) {
+                                            toast("couldn't reach a dashboard at ${typed.url}")
+                                            return@launch
+                                        }
+                                        app.prefs.trustServer(hit.url, hit.identity)
+                                        app.prefs.upsertKnownServer(hit.url, hit.name)
+                                        if (app.prefs.setServerUrl(hit.url)) toast("server saved — reconnecting")
+                                        else toast("couldn't switch to that server")
+                                    }
                                 }
                             }
                         },
-                    ) { Text("Save & reconnect") }
+                    ) { Text(if (saving) "checking…" else "Save & reconnect") }
                     if (serverUrl.isNotBlank()) {
-                        val pin = app.prefs.pinForServer(serverUrl)
-                        SectionLabel("identity")
-                        Text(
-                            pin?.fingerprint ?: "not pinned yet — pinned the first time this server proves itself",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                            color = if (pin != null) Domovoi.colors.fg else Domovoi.colors.fgSubtle,
-                        )
-                        Text(
-                            "Compare with Settings → About on the dashboard. The household token is " +
-                                "sent only after the server proves this identity, again on every network change.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Domovoi.colors.fgMuted,
+                        IdentitySection(
+                            pin = app.prefs.pinForServer(serverUrl),
+                            verdict = activeVerdict,
+                            onPin = { offered ->
+                                IdentityGate.pinKey(serverUrl)?.let { key ->
+                                    app.prefs.pin(key, offered)
+                                    toast("pinned ${offered.fingerprint}")
+                                }
+                            },
                         )
                     }
                 }
@@ -219,6 +242,7 @@ internal fun ConnectionPanel() {
                 fingerprintOf = { app.prefs.pinForServer(it)?.fingerprint },
                 paired = { app.prefs.isPaired() && ServerCredentials.normalize(it) == serverUrl },
                 onForget = { app.prefs.removeKnownServer(it); toast("forgot ${ServerCredentials.address(it)}") },
+                onForgetActive = { confirmForgetActive = true },
             )
         }
 
@@ -319,6 +343,82 @@ internal fun ConnectionPanel() {
             }
         }
     }
+
+    if (confirmForgetActive && serverUrl.isNotBlank()) {
+        ForgetActiveServerDialog(
+            address = ServerCredentials.address(serverUrl),
+            pinned = app.prefs.pinForServer(serverUrl)?.fingerprint,
+            proven = provenFingerprint(identityStatus, serverUrl),
+            onDismiss = { confirmForgetActive = false },
+            onConfirm = {
+                confirmForgetActive = false
+                forgetActiveServer(app, toast)
+            },
+        )
+    }
+}
+
+/**
+ * What the phone holds the active server to: its pinned identity, or why
+ * there is none. A server that was trusted while it offered no identity
+ * and has grown one since is never pinned behind the user's back
+ * (net/IdentityGate.kt, Legacy with an offered key): the key it proved is
+ * shown here with a button to pin it, after comparing it with the
+ * dashboard's Settings → About.
+ */
+@Composable
+internal fun IdentitySection(
+    pin: ServerIdentity.Pin?,
+    verdict: IdentityVerdict?,
+    onPin: (ServerIdentity.Pin) -> Unit,
+) {
+    val offered = (verdict as? IdentityVerdict.Legacy)?.offered
+    SectionLabel("identity")
+    when {
+        pin != null -> {
+            Text(
+                pin.fingerprint,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = Domovoi.colors.fg,
+            )
+            Text(
+                "Compare with Settings → About on the dashboard. The household token is " +
+                    "sent only after the server proves this identity: on every network, " +
+                    "every ten minutes, and whenever the app comes back to the foreground.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+            )
+        }
+        offered != null -> {
+            Text(
+                offered.fingerprint,
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = Domovoi.colors.fg,
+            )
+            Text(
+                "Not pinned: this server was trusted while it offered no identity, and it " +
+                    "proves this one now. Compare it with Settings → About on the dashboard, " +
+                    "then pin it — from then on the household token goes out only after a " +
+                    "proof of this key. Until then it is sent as before (unverified).",
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+            )
+            Button(onClick = { onPin(offered) }) { Text("pin this identity") }
+        }
+        verdict is IdentityVerdict.Legacy -> Text(
+            "none — this server offers no identity (an older web backend), so the household " +
+                "token is sent as before, unverified: the app cannot tell this server from " +
+                "another one at the same address.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Domovoi.colors.warn,
+        )
+        else -> Text(
+            "not pinned yet — the identity the trust dialog showed is pinned when a server is " +
+                "trusted; a server trusted before this build is pinned the first time it proves one",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+            color = Domovoi.colors.fgSubtle,
+        )
+    }
 }
 
 /**
@@ -329,19 +429,24 @@ internal fun ConnectionPanel() {
  * — pure, so the listing rule is unit-tested.
  */
 @Composable
-private fun TrustedServersCard(
+internal fun TrustedServersCard(
     trusted: Set<String>,
     known: Map<String, String?>,
     active: String,
     fingerprintOf: (String) -> String?,
     paired: (String) -> Boolean,
     onForget: (String) -> Unit,
+    /** The active row's forget: confirmed first, then the app returns to
+     *  the server list (ui/shell/ForgetServer.kt). */
+    onForgetActive: () -> Unit,
 ) {
     val rows = trustedServersRows(trusted, known, active)
     PanelCard(
         "Trusted servers",
         "The Domovois this phone will connect to without asking again. Forgetting one also " +
-            "forgets its household token and its pinned identity.",
+            "forgets its household token and its pinned identity; forgetting the one you are " +
+            "connected to returns you to the server list — the way to re-pair after a server " +
+            "was reinstalled or replaced.",
     ) {
         if (rows.isEmpty()) {
             Text("none yet", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
@@ -375,6 +480,9 @@ private fun TrustedServersCard(
                     }
                     if (row.active) {
                         Pill("connected", Tone.Brand, live = true)
+                        IconButton(onClick = onForgetActive, modifier = Modifier.size(26.dp)) {
+                            Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+                        }
                     } else {
                         if (paired(row.url)) Pill("paired", Tone.Ok)
                         IconButton(onClick = { onForget(row.url) }, modifier = Modifier.size(26.dp)) {

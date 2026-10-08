@@ -86,9 +86,11 @@ subprotocol is always the hyphenated form), while an admin login
 fetches `GET /api/auth/device-token` and pairs the browser silently. The
 Android app keeps it sealed under an Android Keystore key (AES-256-GCM,
 `data/TokenVault.kt`) and sends it on every request to the server it was
-issued by — and to no other scheme, host or port — on the `/ws/state`
-socket and on the drop-in call socket, after that server has proved its
-identity on the current network (`GET /api/health?challenge=`). Browser
+issued by — and to no other scheme, host or port, on any redirect hop — on
+the `/ws/state` socket and on the drop-in call socket, after that server
+has proved its identity against the key pinned when it was trusted, on the
+current network, within the last ten minutes and since the app last came
+to the foreground (`GET /api/health?challenge=`). Browser
 WebSockets cannot set headers, so the dashboard's first `/ws/state` frame
 carries `{"subscribe": [...], "device_token": "..."}` instead; the Android
 socket uses the header.

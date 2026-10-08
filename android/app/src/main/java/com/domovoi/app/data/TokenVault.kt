@@ -23,7 +23,9 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * The migration is a SWEEP, not a one-shot: at every start, a `device_tokens`
  * value found in the DataStore is merged into the vault and the plain key
- * removed. That is what moves an existing install's token across once —
+ * removed — only once the vault's record is on disk ([Store.save] commits
+ * and says so), so a process killed between the two writes never leaves
+ * the token in neither file. That is what moves an existing install's token across once —
  * and what lets a test harness that writes the plain key (functional
  * testing's at.py) keep working: the value it writes is swept into the
  * vault at the next start.
@@ -46,7 +48,12 @@ class TokenVault(
     /** The one record the vault keeps. */
     interface Store {
         fun load(): String?
-        fun save(sealed: String?)
+
+        /** True once the record is ON DISK (SharedPreferences.commit, not
+         *  apply): the plain DataStore copy is removed only on a true, so
+         *  a process killed between the two writes leaves the token in one
+         *  file or the other, never in neither (A6-04 review). */
+        fun save(sealed: String?): Boolean
     }
 
     /** AES-GCM over the Keystore key, or a software key in tests. */
@@ -77,17 +84,15 @@ class TokenVault(
     }
 
     /**
-     * Seal and store [tokens]. False — and a log line — when the sealer
-     * fails (a Keystore that will not hand out its key); the record on
-     * disk is then left as it was. Never throws: this runs from a
-     * coroutine on the pairing path, where an exception would take the
-     * app down with the token in its message.
+     * Seal and store [tokens]. True once the record is on disk. False —
+     * and a log line — when the sealer fails (a Keystore that will not
+     * hand out its key) or the store could not commit; the record on disk
+     * is then left as it was. Never throws: this runs from a coroutine on
+     * the pairing path, where an exception would take the app down with
+     * the token in its message.
      */
     fun write(tokens: Map<String, String>): Boolean {
-        if (tokens.isEmpty()) {
-            store.save(null)
-            return true
-        }
+        if (tokens.isEmpty()) return store.save(null)
         val plain = ServerCredentials.encodeTokens(tokens).toByteArray(Charsets.UTF_8)
         val sealed = try {
             sealer.seal(plain)
@@ -95,8 +100,9 @@ class TokenVault(
             log("token vault: could not seal the tokens (${e.javaClass.simpleName}); nothing written")
             return false
         }
-        store.save(PREFIX + Base64.getEncoder().encodeToString(sealed))
-        return true
+        val written = store.save(PREFIX + Base64.getEncoder().encodeToString(sealed))
+        if (!written) log("token vault: the sealed tokens did not reach disk; the record stands as it was")
+        return written
     }
 
     companion object {
@@ -118,9 +124,12 @@ class PrefsVaultStore(context: Context) : TokenVault.Store {
 
     override fun load(): String? = prefs.getString(KEY, null)
 
-    override fun save(sealed: String?) {
-        prefs.edit().apply { if (sealed == null) remove(KEY) else putString(KEY, sealed) }.apply()
-    }
+    /** commit(), not apply(): the answer says whether the record is on
+     *  disk, which is what removing the plain copy is conditioned on. The
+     *  write is small and runs off the main thread on the pairing path
+     *  (and once, at start, inside the blocking preferences read). */
+    override fun save(sealed: String?): Boolean =
+        prefs.edit().apply { if (sealed == null) remove(KEY) else putString(KEY, sealed) }.commit()
 
     private companion object {
         const val FILE = "domovoi-vault"

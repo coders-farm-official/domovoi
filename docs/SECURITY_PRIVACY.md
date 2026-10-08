@@ -369,8 +369,9 @@ rotate.
 The Android app asks for it once under **Settings → Connection**, keeps it
 sealed with AES-256-GCM under a key that never leaves the Android Keystore
 (`data/TokenVault.kt`; a token an older build kept in the plain DataStore
-is moved across at the first start, and every file is outside Android
-backups and device transfers) and sends it on every HTTP request **to that
+is moved across at the first start, the plain copy going only once the
+sealed record is on disk, and every file is outside Android backups and
+device transfers) and sends it on every HTTP request **to that
 server** — scheme, host and port, like a browser's origin — on `/ws/state`
 and on the drop-in call socket to the core's port on the same host, and on
 nothing addressed anywhere else (`net/TokenScope.kt`; before 2026-10-08 the
@@ -401,21 +402,38 @@ A **satellite** verifies its server cryptographically — see "Server identity
 the **phone**: `GET /api/health` passes the core's identity block through
 (the Ed25519 public key and the `SHA256:…` fingerprint **Settings → About**
 shows), and with `?challenge=<nonce>` the core's signature over that nonce.
-The app pins the key the first time a trusted server proves one (trust on
-first use — the same trust the dialog expressed; a server that offers no
-identity at all, a web backend from before this, is treated as before and
-said so in the log) and demands the proof again after every network change
-before the first request that would carry the household token
-(`net/IdentityGate.kt`): whatever answers at the saved address on another
-network — a hotspot redirecting port 6369, a home-subnet twin — gets a
-token-less probe and, failing the proof, nothing else; the shell says the
-server did not prove it is the one this phone paired with. The pinned
+The pin is the trust decision: the picker's dialog shows the key the server
+advertises (to compare with **Settings → About**) and pins it when the
+person says yes, so the first proof has to match that key and not whoever
+answers first on some network; a server trusted by a build from before
+this is pinned the first time it proves one, and a server trusted while it
+offered none is never pinned behind the person's back (the topbar says
+"unverified", and **Settings → Connection** shows the key it proves now
+with a button to pin it). The proof is demanded before the first request
+that would carry the household token on every network — each verdict is
+keyed to a fingerprint of every network the phone could reach the server
+over (the default network and every Wi-Fi or Ethernet network, so a VPN
+that stays the default cannot hide the Wi-Fi changing under it, with their
+addresses, from all four ConnectivityManager callbacks;
+`net/NetworkWatch.kt`), stands at most ten minutes, and is taken again
+whenever the app returns from the background (`net/IdentityGate.kt`):
+whatever answers at the saved address on another network — a hotspot
+redirecting port 6369, a home-subnet twin, the new Wi-Fi under a VPN that
+never changed — gets a token-less probe and, failing the proof, nothing
+else; the shell says the server did not prove it is the one this phone
+paired with. A web backend whose core is not answering
+(`domovoi_reachable` false) is not an impostor: the token is held, nothing
+is cached, and the shell says the server is not fully up. The pinned
 fingerprint and every trusted server are listed under **Settings →
-Connection**, each with a forget button, and a server switch forgets trust
-that is no longer attached to a listed server. This is the pre-TLS interim:
-a relay to the real server from a hostile network would still pass, which
-is what TLS with a pinned certificate closes, and that stays on the
-hardening backlog. The browser does not pin a key yet.
+Connection**, each with a forget button — the server in use included,
+after a confirmation that shows the pinned key next to the one it proves
+now, which is how a phone re-pairs after a reinstalled or replaced
+server — and a server switch drops trust (only the trust) that is no
+longer attached to a listed server. This is the pre-TLS interim, and the
+proof is a signed nonce with no address bound to it: a relay that can reach
+the real core from a hostile network (a port-forward, an overlay network)
+would still pass it. TLS with a pinned certificate closes that and stays on
+the hardening backlog. The browser does not pin a key yet.
 
 ### Which names the server answers to
 
@@ -1832,14 +1850,24 @@ attempted, with a message that says so — in the picker, in **Settings →
 Connection** (which until 2026-10-08 saved any string unchecked) and for
 the save-to-device downloads, which go through the system `DownloadManager`,
 a separate HTTP stack the app's client never sees, and are refused before
-they are queued. The platform half is
+they are queued. That stack keeps every request header in its own database
+and replays it on retries and resumes, so it is handed the household token
+only for the one save on the device tier (the video stream), after a fresh
+identity proof, over unmetered networks only, and an unfinished
+token-bearing download is cancelled when the network changes; music,
+podcast and audiobook saves are open reads and carry no credential. A
+finished video download's row keeps the header in that private database
+until the download is removed (android/README.md). The platform half is
 `android/app/src/main/res/xml/network_security_config.xml` (system trust
 store only; the TOFU pin for the server certificate lands there when TLS
 does); since Android's config cannot express an IP range, the whole rule is
 enforced in `net/CleartextPolicy.kt` on the app's single HTTP client. That
 client puts the household token only on requests to the active server
-itself and strips it from everything else (`net/TokenScope.kt`), and the
-exported media session — which any app on the phone may bind to, as every
+itself and strips it from everything else (`net/TokenScope.kt`) — on every
+hop: the app follows redirects itself (`net/RedirectPolicy.kt`), so a
+`3xx` to another host loses the token, a plain-http hop to a public host
+is refused before any connection, and a WebSocket upgrade is never
+redirected — and the exported media session — which any app on the phone may bind to, as every
 `MediaSessionService` is — admits only this app, the system's own
 controllers and Android Auto, and takes no media item from any of them
 (`player/SessionAccess.kt`), so no other app can make the authenticated

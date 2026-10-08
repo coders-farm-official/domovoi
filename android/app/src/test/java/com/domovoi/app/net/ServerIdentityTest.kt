@@ -117,6 +117,35 @@ class ServerIdentityTest {
         )
     }
 
+    @Test fun aWebWhoseCoreIsNotAnsweringIsItsOwnCaseNotAServerWithoutIdentity() {
+        // web/backend/main.py leaves identity out whenever /v1/health did not
+        // answer 200 within 2 s and says so in domovoi_reachable: a restart,
+        // an update, a busy box. Not "this server has no identity".
+        assertEquals(
+            ServerIdentity.Proof.CoreNotAnswering,
+            ServerIdentity.check(
+                """{"status":"degraded","db_reachable":true,"domovoi_reachable":false,"stt":null,"identity":null}""",
+                challenge, null,
+            ),
+        )
+        // A core that answered without an identity block, or a web backend
+        // too old to say either, is a server from before identity.
+        assertEquals(
+            ServerIdentity.Proof.NoIdentity,
+            ServerIdentity.check("""{"status":"ok","domovoi_reachable":true}""", challenge, null),
+        )
+        assertEquals(ServerIdentity.Proof.NoIdentity, ServerIdentity.check("""{"status":"ok"}""", challenge, null))
+    }
+
+    @Test fun anAdvertisedIdentityIsTakenOnlyWhenItHoldsTogether() {
+        assertEquals(ServerIdentity.Pin(publicKey, fingerprint), ServerIdentity.advertised("ed25519", publicKey, fingerprint))
+        assertEquals(null, ServerIdentity.advertised("rsa", publicKey, fingerprint))
+        assertEquals(null, ServerIdentity.advertised("ed25519", publicKey, "SHA256:nope"))
+        assertEquals(null, ServerIdentity.advertised("ed25519", "AAAA", fingerprint))
+        assertEquals(null, ServerIdentity.advertised("ed25519", null, fingerprint))
+        assertEquals(null, ServerIdentity.advertised("ed25519", publicKey, null))
+    }
+
     @Test fun noIdentityBlockIsNoIdentityAndEverythingElseIsInvalid() {
         assertEquals(ServerIdentity.Proof.NoIdentity, ServerIdentity.check("""{"status":"ok"}""", challenge, null))
         assertTrue(ServerIdentity.check("not json", challenge, null) is ServerIdentity.Proof.Invalid)

@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -43,6 +44,11 @@ class IdentityGateTest {
     private inner class FakeDomovoi {
         var seed: ByteArray? = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
         var healthStatus = 200
+        /** The health route accepts the connection and never answers. */
+        var healthStalls = false
+        /** The web backend answers, but its core did not: no identity block,
+         *  `domovoi_reachable` false (web/backend/main.py). */
+        var coreDown = false
         val requests = CopyOnWriteArrayList<RecordedRequest>()
         val server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
@@ -51,7 +57,13 @@ class IdentityGateTest {
                     val path = request.path.orEmpty()
                     return when {
                         path.startsWith("/api/health") -> {
+                            if (healthStalls) return MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
                             if (healthStatus != 200) return MockResponse().setResponseCode(healthStatus)
+                            if (coreDown) {
+                                return MockResponse().setBody(
+                                    """{"status":"degraded","db_reachable":true,"domovoi_reachable":false,"stt":null,"identity":null}""",
+                                )
+                            }
                             val challenge = request.requestUrl?.queryParameter("challenge")
                             MockResponse().setBody(healthBody(challenge))
                         }
@@ -89,8 +101,11 @@ class IdentityGateTest {
 
     private class Pins : IdentityGate.PinStore {
         val book = HashMap<String, ServerIdentity.Pin>()
+        /** Servers whose trust decision was taken with the identity in view. */
+        val decided = HashSet<String>()
         override fun pinFor(key: String) = book[key]
         override fun pin(key: String, pin: ServerIdentity.Pin) { book[key] = pin }
+        override fun mayPinOnFirstProof(key: String) = key !in decided
     }
 
     private fun hex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -99,6 +114,8 @@ class IdentityGateTest {
     private val pins = Pins()
     private val log = CopyOnWriteArrayList<String>()
     private var now = 1_000_000L
+    /** The network fingerprint the phone is on (NetworkWatch in the app). */
+    private var net = "D|101|wifi|||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
     private var token: String? = "household-abc"
     private lateinit var gate: IdentityGate
     private lateinit var api: ApiClient
@@ -106,10 +123,11 @@ class IdentityGateTest {
     @Before fun up() {
         fake = FakeDomovoi()
         // Wired as AppContainer wires it: the probe runs on a token-less copy
-        // of the app's own client.
+        // of the app's own client, and the verdict is keyed to the network.
         gate = IdentityGate(
             probe = { base, challenge -> IdentityGate.httpProbe(Discovery.client(api.http, 1000), base, challenge) },
             pins = pins,
+            network = { net },
             clock = { now },
             log = { log += it },
         )
@@ -146,8 +164,53 @@ class IdentityGateTest {
         read()
         assertEquals("household-abc", fake.reads().single().getHeader(DEVICE_TOKEN_HEADER))
         assertTrue(pins.book.isEmpty())
-        assertEquals(IdentityVerdict.Legacy, gate.status.value?.verdict)
+        assertEquals(IdentityVerdict.Legacy(), gate.status.value?.verdict)
         assertTrue(log.any { it.contains("offers no identity") })
+    }
+
+    // ---- the pin is the trust decision (the review's first-pin finding) ------
+
+    @Test fun theIdentityTheDialogPinnedWinsOverWhoeverAnswersFirst() {
+        // The picker's dialog showed the real server's advertised key and the
+        // person said yes: Prefs pinned it then. The first network the phone
+        // meets afterwards has a rogue at the address, proving its own key.
+        pins.book[key()] = ServerIdentity.Pin(
+            java.util.Base64.getEncoder().encodeToString(Ed25519.publicKey(fake.seed!!)), fake.fingerprint(),
+        )
+        pins.decided += key()
+        fake.seed = hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+        try {
+            read(); fail("expected ServerIdentityException")
+        } catch (e: ServerIdentityException) {
+            assertTrue(e.message!!.contains("mismatch"))
+        }
+        assertTrue(fake.reads().isEmpty())
+        // Home again: the real key proves itself against the dialog's pin.
+        fake.seed = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+        gate.networkChanged()
+        read()
+        assertEquals(IdentityVerdict.Verified(fake.fingerprint(), pinnedNow = false), gate.status.value?.verdict)
+    }
+
+    @Test fun aServerTrustedWhileItOfferedNoIdentityIsNotPinnedBehindTheUsersBack() {
+        // The dialog showed no identity (an older web backend) and the person
+        // trusted it anyway; the server has since been updated and proves a
+        // key. The token goes out as it always did for this server, nothing
+        // is pinned silently, and Settings can pin what it offers.
+        pins.decided += key()
+        read()
+        assertEquals("household-abc", fake.reads().single().getHeader(DEVICE_TOKEN_HEADER))
+        assertTrue("nothing pinned", pins.book.isEmpty())
+        val verdict = gate.status.value?.verdict
+        assertTrue(verdict is IdentityVerdict.Legacy)
+        assertEquals(fake.fingerprint(), (verdict as IdentityVerdict.Legacy).offered?.fingerprint)
+        assertTrue(log.any { it.contains("has not pinned") })
+        // An upgraded install (trusted before the dialog showed identities)
+        // is still pinned on its first proof.
+        pins.decided.clear()
+        gate.networkChanged()
+        read()
+        assertEquals(fake.fingerprint(), pins.book[key()]?.fingerprint)
     }
 
     // ---- after a network change ---------------------------------------------
@@ -238,6 +301,142 @@ class IdentityGateTest {
         } catch (e: ServerIdentityException) {
             assertTrue(e.message!!.contains("did not answer /api/health"))
         }
+    }
+
+    @Test fun aServerWhoseCoreIsDownIsNotAnImpostorAndIsAskedAgainAtOnce() {
+        read()
+        gate.networkChanged()
+        // The core restarts (an update, a reboot): the web hop answers but
+        // passes no identity through.
+        fake.coreDown = true
+        try {
+            read(); fail("expected ServerIdentityException")
+        } catch (e: ServerIdentityException) {
+            assertTrue(e.message, e.message!!.contains("not fully up"))
+            assertFalse("never an impostor", e.message!!.contains("mismatch"))
+        }
+        assertEquals(1, fake.reads().size)
+        assertTrue(gate.status.value?.verdict is IdentityVerdict.Unavailable)
+        assertNull("nothing cached: the next request asks again", gate.cachedVerdict(TokenScope.baseOf(fake.url)!!))
+        runCatching { read() }
+        assertEquals("asked again at once, not after the refusal window", 3, fake.probes().size)
+        // The pin is untouched, and when the core is back the proof goes
+        // through with no network change and no action from the person.
+        assertEquals(fake.fingerprint(), pins.book[key()]?.fingerprint)
+        fake.coreDown = false
+        read()
+        assertEquals(2, fake.reads().size)
+        assertEquals(IdentityVerdict.Verified(fake.fingerprint(), pinnedNow = false), gate.status.value?.verdict)
+    }
+
+    @Test fun aServerWhoseCoreIsDownHoldsTheTokenEvenWhenNothingIsPinned() {
+        // No pin yet (an upgraded install's first contact happens to meet a
+        // core restart): still not Legacy — the token waits for the proof.
+        fake.coreDown = true
+        try {
+            read(); fail("expected ServerIdentityException")
+        } catch (e: ServerIdentityException) {
+            assertTrue(e.message!!.contains("not fully up"))
+        }
+        assertTrue(fake.reads().isEmpty())
+        assertTrue(pins.book.isEmpty())
+    }
+
+    @Test fun aHealthThatStallsHoldsTheReadBackAndRemembersNothing() {
+        // Only /api/health hangs; /api/timers would answer at once. The
+        // probe's timeout is the answer, and the guarded read never leaves.
+        read()
+        gate.networkChanged()
+        fake.healthStalls = true
+        try {
+            read(); fail("expected IOException")
+        } catch (e: ServerIdentityException) {
+            fail("a stalled probe is not an identity verdict")
+        } catch (e: IOException) {
+            // the probe's read timeout
+        }
+        assertEquals("the read before the change, and no other", 1, fake.reads().size)
+        assertNull(gate.cachedVerdict(TokenScope.baseOf(fake.url)!!))
+    }
+
+    // ---- what a verdict is keyed to (the review's blocker) --------------------
+
+    @Test fun aVerdictHoldsOnlyOnTheNetworkFingerprintItWasTakenOn() {
+        read()
+        assertEquals(1, fake.probes().size)
+        // The VPN case: nothing called networkChanged(), but the watch's
+        // fingerprint moved (the Wi-Fi under the VPN was replaced).
+        net = "D|120|vpn||tun0|100.64.0.5/32|||;P|102|wifi||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
+        read()
+        assertEquals("proved again on the new network", 2, fake.probes().size)
+        assertEquals(2, fake.reads().size)
+        // The same fingerprint again: the proof stands.
+        read()
+        assertEquals(2, fake.probes().size)
+        // And back on the first network, the old proof is not revived.
+        net = "D|101|wifi|||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
+        read()
+        assertEquals(3, fake.probes().size)
+    }
+
+    @Test fun aProofOlderThanTheTtlIsTakenAgainOnTheSameNetwork() {
+        read()
+        now += IdentityGate.VERDICT_TTL_MS - 1
+        read()
+        assertEquals("still within the ttl", 1, fake.probes().size)
+        now += 1
+        read()
+        assertEquals("the ttl ran out: proved again", 2, fake.probes().size)
+        assertEquals(3, fake.reads().size)
+    }
+
+    @Test fun comingBackToTheForegroundAfterASpellInTheBackgroundProvesAgain() {
+        read()
+        // The first start is not a return from the background.
+        gate.appForegrounded()
+        read()
+        assertEquals(1, fake.probes().size)
+        // Home button, then back (or screen off, then unlock).
+        gate.appBackgrounded()
+        now += 5_000
+        gate.appForegrounded()
+        read()
+        assertEquals(2, fake.probes().size)
+        assertTrue(log.any { it.contains("back in the foreground") })
+        // A rotation never calls appBackgrounded(), so it proves nothing new.
+        gate.appForegrounded()
+        read()
+        assertEquals(2, fake.probes().size)
+    }
+
+    @Test fun aProofThatStraddledANetworkChangeBelongsToTheNewNetwork() {
+        // The ConnectivityManager callback lands while the probe is in
+        // flight: the answer came over one network, the request would leave
+        // on another. The gate asks again rather than trusting a proof it
+        // cannot place.
+        var straddled = false
+        gate = IdentityGate(
+            probe = { base, challenge ->
+                if (!straddled) {
+                    straddled = true
+                    net = "D|102|wifi|||wlan0|192.168.1.23/24|192.168.1.254|192.168.1.254|"
+                }
+                IdentityGate.httpProbe(Discovery.client(api.http, 1000), base, challenge)
+            },
+            pins = pins,
+            network = { net },
+            clock = { now },
+            log = { log += it },
+        )
+        api = ApiClient({ fake.url }, { token }, gate)
+        read()
+        assertEquals("the straddling proof was thrown away and taken again", 2, fake.probes().size)
+        assertEquals(1, fake.reads().size)
+        assertTrue(log.any { it.contains("changed while") })
+        assertTrue(gate.cachedVerdict(TokenScope.baseOf(fake.url)!!) is IdentityVerdict.Verified)
+        // ...and under the old fingerprint nothing was remembered.
+        net = "D|101|wifi|||wlan0|192.168.1.57/24|192.168.1.1|192.168.1.1|"
+        assertNull(gate.cachedVerdict(TokenScope.baseOf(fake.url)!!))
     }
 
     // ---- the other paths through the same client ----------------------------
