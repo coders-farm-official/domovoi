@@ -834,10 +834,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Substring filter against title/artist/album/file_path",
+              "description": "Substring filter against title/artist/album and the library-relative file_path (the path a client is shown, never the server's absolute one)",
               "title": "Q"
             },
-            "description": "Substring filter against title/artist/album/file_path"
+            "description": "Substring filter against title/artist/album and the library-relative file_path (the path a client is shown, never the server's absolute one)"
           },
           {
             "name": "source",
