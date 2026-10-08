@@ -630,7 +630,9 @@ What is deliberately left out, and why:
   groups, the umask), and its comment lists what it leaves out. Adding any
   of those options to the core, in the unit or a drop-in, silently breaks
   the Restart button: the panel then reports no sudoers grant. The web
-  never runs sudo (its Restart button asks the core), so it keeps them all.
+  never runs sudo (its Restart button asks the core), so it keeps
+  `NoNewPrivileges` and every one of those the hardware allows (all but the
+  device, clock and W+X ones below).
 - **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
   They hide device nodes: a GPU, an SDR stick for the radio, the block
   devices the dashboard reads a satellite card's label from.
