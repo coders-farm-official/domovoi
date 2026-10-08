@@ -22,6 +22,24 @@ def pretty_room(room_id: str) -> str:
     return room_id.replace("_", " ")
 
 
+def room_may_reach_other_rooms(app: Any, room_id: str | None) -> bool:
+    """May this room's live satellite reach ANOTHER room — start a drop-in
+    there, or announce into it (CORE-11)?
+
+    False only for a socket the core accepted with no pairing token
+    (``StreamSession.token_authenticated`` is False): lenient pairing's
+    case 5, or the lenient fallback when the pairing check could not run.
+    Such a room is any LAN device that named itself, so it may use its own
+    room and nothing else, the rule timer delivery already applies to
+    house-wide fires. A room with no live session (nothing is speaking
+    from it) and a stand-in without the attribute are not this check's
+    business: the feasibility checks refuse what has to be refused there.
+    """
+    sessions = getattr(getattr(app, "state", None), "active_sessions", None) or {}
+    sess = sessions.get(room_id or "")
+    return getattr(sess, "token_authenticated", True) is not False
+
+
 def dropin_feasibility(app: Any, initiator_room: str, target_room: str) -> str:
     """Can ``initiator_room`` open a live drop-in on ``target_room`` *now*?
 

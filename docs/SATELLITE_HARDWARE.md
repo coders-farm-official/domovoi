@@ -78,9 +78,10 @@ Two details that are load-bearing rather than cosmetic:
   dashboard never shows you the code: you read it off the device, which is
   what ties the request on screen to the unit in the room. That is what
   stops whoever connects first from claiming a room. (A satellite
-  provisioned by hand presents no code and keeps the older
-  trust-on-first-use behaviour, unless `SATELLITE_PAIRING_STRICT` is on —
-  see docs/SECURITY_PRIVACY.md.)
+  provisioned by hand presents no code; with strict pairing on, the
+  default, it parks for approval too and the server gives it a code to
+  say. Only a server that turned `SATELLITE_PAIRING_STRICT` off keeps the
+  older trust-on-first-use behaviour — see docs/SECURITY_PRIVACY.md.)
 - **No USB gadget overlay.** Portal builds deliberately skip
   `dtoverlay=dwc2,dr_mode=peripheral`. Nothing ever reverts it, and on a Pi
   Zero 2 W it pins the only data port as a peripheral — where a USB mic array

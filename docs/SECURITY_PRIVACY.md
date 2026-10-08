@@ -937,7 +937,7 @@ and migration V018.
 |---|---|
 | **Timer history (V018)** | One `timer_fires` row per timer or reminder that went off (moved out of `timers` in the same transaction), and one `timer_fire_deliveries` row per room it was announced in: outcome (`spoken`, `interrupted`, `offline`, `busy_timeout`, …), a reason code (never speech), and the exact line spoken there. Kept 7 days (`timer_fire_retention_days`), then deleted with its deliveries. |
 | **Who reads a reminder's words** | A caller with a household credential — the device token, an admin Bearer, the dashboard cookie, or the pre-setup grace (a paired shared screen holds the device token) — on every open timer read: `GET /api/timers` (and its `fires`), `GET /api/satellites/{room}/timers` and `GET /api/timers/fires`. The `/ws/state` push (`timers`, `timer_fires`) is device tier already and carries them too. **Rule M1:** anyone else gets every reminder, whatever room it was set in, with `message` and `label` null and `masked: true`. Until 2026-09-30 only reminders set with no room were masked, and an unauthenticated GET answered a room's reminder text. **Satellite sockets receive the words too:** an announcement is the line itself, as text (`response_start.text`) and as audio, sent to every room that announces it. |
-| **Which satellites hear another room's words** | Only one whose hello matched its room's pairing token (or claimed an unpaired room with one). A socket the core accepted with **no** token — `SATELLITE_PAIRING_STRICT` off (the config default; fresh installs bootstrap it on, existing installs keep what they have) and a room name nobody paired — announces only the timers and reminders set in its own room; the core logs `room <x> has no pairing token; it announces only its own timers and reminders` once. Nor does such a room speak to the house: a timer or reminder set there is announced there only, and no room joins it later (while that room is connected when it goes off; one set there that goes off while it is offline, or is picked up after a core restart before it reconnects, follows the ordinary rule). The same holds when the pairing check itself could not run (a database error, strict off). **With strict pairing off, a LAN device that presents any token under a new room name is paired on trust and then hears every room's timers and reminders, words included, from then on, and up to 2 minutes of what already went off** (10 minutes after a core restart) — and that room shows in `heard_in` and on the dashboard's satellite list. Turn on `SATELLITE_PAIRING_STRICT=true` (every first pairing then waits for an admin's approval), as fresh installs already do — on an existing install, before this release's restart (the 2026-09-30 owner checklist in RELEASE_NOTES.md makes it a step). |
+| **Which satellites hear another room's words** | Only one whose hello matched its room's pairing token (or claimed an unpaired room with one). A socket the core accepted with **no** token — `SATELLITE_PAIRING_STRICT` turned off (strict is the default) and a room name nobody paired — announces only the timers and reminders set in its own room; the core logs `room <x> has no pairing token; it announces only its own timers and reminders` once. Nor does such a room speak to the house: a timer or reminder set there is announced there only, and no room joins it later (while that room is connected when it goes off; one set there that goes off while it is offline, or is picked up after a core restart before it reconnects, follows the ordinary rule). The same holds when the pairing check itself could not run (a database error, strict off). **With strict pairing off, a LAN device that presents any token under a new room name is paired on trust and then hears every room's timers and reminders, words included, from then on, and up to 2 minutes of what already went off** (10 minutes after a core restart) — and that room shows in `heard_in` and on the dashboard's satellite list. Keep `SATELLITE_PAIRING_STRICT=true`, the default (every first pairing then waits for an admin's approval). |
 | **Who reads the fire history** (rule F1) | The whole of it — 7 days of when every timer and reminder went off, each room's outcome, reason code and finish time, and which room said "stop the timer" and when — only the same household credentials that read a reminder's words: the device token (the Android app, a paired shared screen), an admin Bearer, the dashboard cookie, or the pre-setup grace. That is exactly the tier the `/ws/state` handshake admits, so the `timer_fires` push (the last hour, whole) goes to nobody the HTTP read would cut down. `GET /api/timers/fires` classifies every caller (the answer tells a good token from a bad one, so a wrong token pays the device-token backoff) and says which view it gave in `window_sec`. Until 2026-09-30's follow-up (rule F1) the whole 7 days were an open read. |
 | **What the open read still shows** | To a caller with no household credential — or a stale token, or a source throttled for guessing — `GET /api/timers/fires`, the `fires` in `GET /api/timers` and the per-room history the satellite drawer lists answer **only the last 10 minutes** (`window_sec: 600`), each fire cut to what Home's "done · garage" line and the alert card draw on an unpaired kitchen tablet: which timer or reminder (ids, kind, the room it was set in, when it was set, due and went off — all of which its running row showed openly), the rooms that heard it (`heard_in`) and the `summary` line ("heard in garage, kitchen · still announcing", "not heard in any room (garage offline)" — the open satellite list already says which rooms are offline), a reminder read as "reminder" (M1), and a plain timer's label ("pasta"), which its running row served openly until the moment it went off. **Held back from it:** each room's own row (`deliveries: []` — its outcome, where `interrupted` means someone started talking there and `busy_timeout` that a room was in a call; its live reason code, `in_call`, `recording`, `capturing`, `responding`; its finish time), who stopped it and when (`acked_by`, `acked_at`, and the summary's " · stopped in kitchen" — a log of which room somebody spoke in), `settled_at`, and anything older than 10 minutes. Home, the alert cards (a catch-up alerts only fires under 10 minutes old anyway) and the countdowns keep working on an unpaired tablet. |
 | **What is never served** | No web route or push serializes the lines the core spoke (`base_text`, `spoken_text`). They are spoken, and logged at INFO, on each satellite that announces them (the Pi rows above), and they ride in the `core.timer_fired` event payload (`message`, `text`) to in-process plugin subscribers — admin-installed code that already has database access, so no wider than before. The core's two existing "timer fired" log lines are unchanged (the reminder one already carried `message=`); its new per-room delivery log line carries no message or label. |
@@ -1195,29 +1195,46 @@ with a **pairing token** — this closes the hole where any LAN host could
 connect claiming to be one of your rooms (e.g. `kitchen`) and be treated as
 that room's satellite, and via drop-in listen in on it.
 
-**The model is lenient trust-on-first-use (TOFU).** Each satellite generates
+**The model is a pairing token per device, bound to its room once a person
+approves it (strict pairing, the default).** Each satellite generates
 a random per-device token on first boot (`secrets.token_hex(32)`, stored in
 `~/.domovoi/pairing_token`, mode 0600) and sends it in its `hello` frame. The
 server stores **only the sha256** of the token (in the `satellite_pairings`
-table — the raw token never leaves the Pi) and binds the room to it the first
-time it sees one. After that, the five cases are:
+table — the raw token never leaves the Pi). The five cases are:
 
-| `hello` presents | server has | outcome |
-|---|---|---|
-| a token | no pairing row | **PAIR** — claim the room for this token, accept |
-| a token | matching hash | accept (bump `last_seen_at`) |
-| a token | a *different* hash | **REFUSE** — impostor / wrong token; error frame + close |
-| no token | a pairing row | **REFUSE** — a paired room requires its token |
-| no token | no pairing row | accept (older/unpaired) **unless strict, below** |
+| `hello` presents | server has | strict (the default) | lenient (`SATELLITE_PAIRING_STRICT=false`) |
+|---|---|---|---|
+| a token | no pairing row | **PARK** for approval by the device's six-digit code | **PAIR** — claim the room for this token on trust (a device that brings a setup code parks either way) |
+| a token | matching hash | accept (bump `last_seen_at`) | the same |
+| a token | a *different* hash | **REFUSE** — impostor / wrong token; error frame + close | the same |
+| no token | a pairing row | **REFUSE** — a paired room requires its token | the same |
+| no token | no pairing row | **REFUSE** | accept, **unauthenticated** (below) |
 
 So any room that has *ever* paired is protected against impersonation: a
 tokenless impostor, or one with the wrong token, is refused before its `hello`
 is honored — a warning is logged, an
 `{"type":"error","reason":"pairing_rejected"}` frame is sent, and the socket
 is closed. **No audio is ever relayed to it and it can never join a drop-in**,
-so it cannot listen in or speak into the room. A room that has never paired
-still accepts a tokenless connection, so **existing tokenless satellites keep
-working with zero changes** — the default is zero-breakage.
+so it cannot listen in or speak into the room.
+
+**What lenient leaves open, said plainly.** With strict pairing off, a room
+name nobody has paired still accepts a connection with no token at all, so
+satellites from before pairing keep working — and so does **any LAN device
+that picks such a name** (`zz-anything`). The core accepts that socket as a
+room without the household token: it can stream audio, get transcripts and
+do by voice what any room's satellite can — set timers and reminders, play
+music, and write household data the way a spoken turn does (memories,
+voice-profile enrolment). What it can **not** do is reach another room: it
+starts no drop-in (the request is refused aloud, and the streaming layer
+refuses it again if anything else asks), makes no announcement in another
+room, hears no other room's timers and reminders, and no other room hears
+its own. A tokenless
+socket can also take over a room name that has never paired from another
+tokenless one (a second connect for a room replaces the first). Until
+2026-10 lenient was the **code default**, so every install whose `.env`
+lacked the line ran it, and a tokenless device could call itself a new room
+and drop in on any echo-cancelling room in the house (CORE-11). The core
+now logs a warning naming this at every boot that runs lenient.
 
 **The first-connect race (the TOFU caveat).** With strict pairing OFF, the
 *first* token wins, so there is a one-time window: for a room that has never
@@ -1230,10 +1247,11 @@ Pairing narrows the threat from "any LAN host, any time" to "an attacker who
 is already on your LAN at the exact moment a room first pairs." On a trusted
 home LAN that window is normally the moment you provision the Pi.
 
-**Strict mode (the default for a new install).** `SATELLITE_PAIRING_STRICT`
-is written as `true` into a FRESH `.env` (from `domovoi/.env.example`), and
-is also editable from the dashboard's satellite Settings → Security
-(restart-tier). It does two things:
+**Strict mode (the default).** `SATELLITE_PAIRING_STRICT` defaults to
+`true` in the code, is written as `true` into a FRESH `.env` (from
+`domovoi/.env.example`) so the file says so, and is editable from the
+dashboard's satellite Settings → Security (restart-tier). It does two
+things:
 
 * a tokenless `hello` is refused, for every room;
 * **every** first pairing for an unpaired room is parked under *waiting for
@@ -1242,12 +1260,15 @@ is also editable from the dashboard's satellite Settings → Security
   loud. That closes the first-connect race completely: connecting first
   wins you a row on a dashboard, not a room.
 
-An install that UPGRADES into this keeps whatever it already had: the
-field default stays `false` and an existing `.env` is never rewritten,
-because a household running hand-provisioned satellites would otherwise
-find its fleet parked after a restart. Turn it on there once every
-satellite has paired (or approve them one at a time — the code is on the
-device).
+An install that UPGRADES into this release and never set the line is
+strict from its next restart; an existing `.env` is never rewritten, so a
+household that wrote `SATELLITE_PAIRING_STRICT=false` keeps lenient (and
+the boot warning). Under strict a room that already paired connects as
+before; a satellite that brings a token but has no pairing row parks for
+approval **once** — type the code it says; a satellite that brings no
+token at all is refused until it runs satellite code that has one (every
+satellite build since pairing tokens existed does, and an older one picks
+it up from its next code sync, then parks).
 
 **The hello gate.** Pairing is checked on the `hello` frame, so the server
 does nothing for a room until an accepted `hello` has arrived: no MPD

@@ -609,24 +609,30 @@ class Settings(BaseSettings):
     # satellite before it self-heals.
     satellite_upgrade_reconnect_timeout_sec: int = 90
     # ─── Satellite pairing tokens (WS auth, V002) ──────────────────────
-    # Lenient trust-on-first-use: the FIRST satellite to present a pairing
-    # token for a room claims it (a `satellite_pairings` row is written with
-    # the token's sha256); thereafter that room's WS `hello` must carry the
-    # matching token or the connection is refused. A room that has never
-    # paired still accepts a tokenless `hello` (older/unpaired satellite).
+    # False is lenient trust-on-first-use: the FIRST satellite to present a
+    # pairing token for a room claims it (a `satellite_pairings` row is
+    # written with the token's sha256); thereafter that room's WS `hello`
+    # must carry the matching token or the connection is refused. A room
+    # that has never paired still accepts a tokenless `hello`
+    # (older/unpaired satellite), which can then talk only to itself: it
+    # cannot start a drop-in or an announcement in another room.
     #
-    # True requires pairing for EVERY room: a tokenless hello is refused,
-    # and the first pairing for an unpaired room is PARKED for a human to
-    # approve by the satellite's six-digit code, whether or not the device
-    # volunteers a token or a code (CORE-9).
+    # True (the default) requires pairing for EVERY room: a tokenless
+    # hello is refused, and the first pairing for an unpaired room is
+    # PARKED for a human to approve by the satellite's six-digit code,
+    # whether or not the device volunteers a token or a code (CORE-9).
     #
-    # The FIELD default stays False and must: an install that upgrades into
-    # this code has satellites in the house already, and a default that
-    # flipped under them would refuse the fleet on the next restart. A
-    # FRESH install gets `SATELLITE_PAIRING_STRICT=true` written into its
-    # .env instead (domovoi/.env.example, copied by scripts/dev.sh), which
-    # is the one moment nothing is paired yet.
-    satellite_pairing_strict: bool = False
+    # CORE-11: the FIELD default is strict too, not only the .env a fresh
+    # install bootstraps (domovoi/.env.example still writes the line, so a
+    # new household's file says so out loud). Lenient used to be the field
+    # default so that an upgrade would not refuse a fleet that predates
+    # pairing, but that left every install whose .env lacked the line
+    # open to a tokenless LAN client calling itself a new room and using
+    # the whole household surface, a live drop-in included. A room that
+    # already paired is unaffected; a satellite with a token but no
+    # pairing row parks for approval once. False is still honoured when
+    # the household sets it, and the core says so at every boot.
+    satellite_pairing_strict: bool = True
     # How long a freshly-connected /v1/stream socket gets to send its `hello`
     # before the server closes it. NOTHING about a room exists until a hello
     # has passed the pairing check — no MPD provisioning, no active_sessions

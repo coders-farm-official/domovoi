@@ -238,6 +238,27 @@ def _register_core_reapply_hooks() -> None:
 _STOP_WORKERS_SEC = 3.0
 
 
+def _warn_if_pairing_lenient() -> bool:
+    """Log, at WARNING, what lenient satellite pairing leaves open (CORE-11).
+
+    Strict is the field default; lenient only happens because the
+    household's .env says ``SATELLITE_PAIRING_STRICT=false``. That is a
+    legitimate choice for a hand-provisioned fleet that predates pairing,
+    but whoever reads the journal should not have to remember what it
+    costs. True when the warning was logged."""
+    if settings.satellite_pairing_strict:
+        return False
+    log.warning(
+        "satellite pairing is LENIENT (SATELLITE_PAIRING_STRICT=false): a "
+        "LAN device can connect without a pairing token under any room name "
+        "nobody has paired, and use it as that room (timers, music, voice "
+        "commands; never a drop-in or an announcement to another room). "
+        "Set SATELLITE_PAIRING_STRICT=true in domovoi/.env and approve each "
+        "satellite once to close it."
+    )
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # A fresh start, then SIGTERM/SIGINT flip the shutdown event the moment
@@ -273,6 +294,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await admin_auth_mod.ensure_device_token()
     except Exception as e:
         log.warning("device-token boot hook raised: %s", e)
+
+    # CORE-11: lenient pairing is a choice the household makes in .env,
+    # never a default, and every boot says what it leaves open.
+    _warn_if_pairing_lenient()
 
     # The connectivity probe starts here — before the voice seed and the
     # boot clip render, which ask it whether Microsoft voices are usable

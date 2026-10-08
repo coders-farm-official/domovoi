@@ -2546,9 +2546,9 @@ class StreamSession:
                         # only that you have a token, not that you are the
                         # device in that room. The core mints a code for a
                         # device that brought none, and the device says it
-                        # out loud. Fresh installs bootstrap strict (see
-                        # domovoi/.env.example); existing ones keep the
-                        # value they already have.
+                        # out loud. Strict is the default (CORE-11);
+                        # lenient is only ever a household's own
+                        # SATELLITE_PAIRING_STRICT=false.
                         code = ctrl.get("approval_code")
                         code = code.strip() if isinstance(code, str) else None
                         if code or settings.satellite_pairing_strict:
@@ -2593,8 +2593,9 @@ class StreamSession:
         except Exception as e:
             # A DB hiccup must not silently strip auth from a paired room, but
             # it also must not break a tokenless older fleet. Bias to the
-            # configured posture: strict → fail closed, lenient (default) →
-            # preserve the zero-breakage default and accept.
+            # configured posture: strict (the default) → fail closed;
+            # lenient (the household opted out) → keep a tokenless older
+            # fleet working and accept, unauthenticated.
             if _is_missing_pairing_table(e):
                 # Almost always a not-yet-applied migration. Warn ONCE with an
                 # actionable hint instead of once per hello for every room.
@@ -3833,6 +3834,7 @@ class StreamSession:
             and response is not None
             and response.announce_to_rooms
             and response.announce_text
+            and self._may_reach_other_rooms("intercom")
         ):
             sessions: dict[str, "StreamSession"] = self.ws.app.state.active_sessions
             for target_room in response.announce_to_rooms:
@@ -4313,6 +4315,21 @@ class StreamSession:
                 "room=%s: %s", self.room_id, e,
             )
 
+    def _may_reach_other_rooms(self, what: str) -> bool:
+        """False for a socket accepted WITHOUT a pairing token (lenient
+        pairing's case 5, or its fallback when the check could not run):
+        whatever LAN device named itself this room may use its own room and
+        nothing else, so it never opens another room's microphone or
+        speaks in it (CORE-11). Logs the refusal."""
+        if self.token_authenticated:
+            return True
+        log.warning(
+            "%s: refused for room=%s — it connected without a pairing token, "
+            "so it cannot reach another room",
+            what, self.room_id,
+        )
+        return False
+
     async def _handle_dropin_action(self, response: Any) -> None:
         """Act on `response.dropin_action` after the originating turn.
 
@@ -4332,6 +4349,11 @@ class StreamSession:
             return
 
         if action == "request":
+            # The initiator's own socket must be a paired one (CORE-11).
+            # DropInHandler already refuses aloud; this is the backstop for
+            # anything else that ever hands this layer a request.
+            if not self._may_reach_other_rooms("drop-in"):
+                return
             target_room = response.dropin_room
             target = sessions.get(target_room) if target_room else None
             if target is None or target.dropin_peer is not None:

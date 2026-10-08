@@ -599,7 +599,7 @@ Each satellite authenticates its WebSocket to the Domovoi server with a **pairin
 
 It's sent in every `hello` frame's `pairing_token` field. The server stores only the token's **sha256** (never the raw token) in the `satellite_pairings` table and binds the room to it **trust-on-first-use**: the first satellite to present a token for a room *claims* it, and from then on that room's connection must present the matching token or the server refuses it (logs a warning, sends `{"type":"error","reason":"pairing_rejected"}`, and closes the socket).
 
-A room that has never paired still accepts a tokenless connection (backward-compatible with older satellites) — unless the server sets `SATELLITE_PAIRING_STRICT=true`, which requires a token for **every** room.
+The server requires a token for **every** room by default (`SATELLITE_PAIRING_STRICT=true`), and a room's first pairing waits for an admin to approve it by the code the satellite says. Only a server that turned strict pairing off still accepts a tokenless connection for a room that has never paired (backward-compatible with older satellites), and such a room can never drop in on, or announce into, another room.
 
 **Nothing to do during provisioning.** Don't copy a token between Pis — each device generates its own, and a room can only be held by one token at a time.
 

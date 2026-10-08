@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.clients import mpd as _mpd
 from domovoi.config import settings
-from domovoi.dropin_common import OK, dropin_feasibility, pretty_room
+from domovoi.dropin_common import (
+    OK,
+    dropin_feasibility,
+    pretty_room,
+    room_may_reach_other_rooms,
+)
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.intercom import _resolve_target_rooms
 from domovoi.models import Context, Intent, Response
@@ -183,6 +188,15 @@ class DropInHandler(Handler):
             return self._say("Drop-in only works from a satellite.", ctx)
         if not getattr(settings, "dropin_enabled", True):
             return self._say("Drop-in is turned off right now.", ctx)
+        if not room_may_reach_other_rooms(ctx.app, ctx.room_id):
+            # CORE-11: a satellite the core let in WITHOUT a pairing token
+            # (strict pairing off) is whatever LAN device named itself
+            # this room. It must never open another room's microphone.
+            log.warning(
+                "drop-in: refused for room=%s — connected without a pairing "
+                "token", ctx.room_id,
+            )
+            return self._say(self._refusal_text("initiator_unpaired", ""), ctx)
 
         targets = _resolve_target_rooms(room_phrase)
         if targets is None:
@@ -246,6 +260,10 @@ class DropInHandler(Handler):
                 "echo-cancelling."
             ),
             "initiator_busy": "You're already in a call.",
+            "initiator_unpaired": (
+                "This speaker isn't paired with the house, so it can't "
+                "drop in on other rooms."
+            ),
             "target_busy": f"The {label} is already in a call.",
         }.get(code, "I can't start a drop-in right now.")
 
