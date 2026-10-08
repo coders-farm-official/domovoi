@@ -61,6 +61,7 @@ from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
     get_radio_browser_client,
 )
+from domovoi_plugin_radio.stream_types import audio_media_type
 
 log = logging.getLogger(__name__)
 
@@ -960,13 +961,10 @@ def _row_to_detection(r: Any) -> RadioDetection:
 # The relay is served on the dashboard's own origin, so what it says the
 # bytes ARE matters as much as where it fetched them from: an upstream
 # that answers ``text/html`` (or script, or SVG) would otherwise run as a
-# page of the dashboard. Only audio is relayed, under its own audio type;
-# anything else is a 502 before a byte moves.
-_RELAY_EXTRA_AUDIO_TYPES = frozenset({"application/ogg"})
-# Types a stream server sends for audio it cannot name; relayed as MP3
-# (the browser's media element sniffs the real codec either way).
-_RELAY_GENERIC_TYPES = frozenset({"", "application/octet-stream"})
-_RELAY_FALLBACK_TYPE = "audio/mpeg"
+# page of the dashboard. Only audio is relayed, under its own audio type
+# (``stream_types.audio_media_type``); anything else is a 502 before a
+# byte moves.
+#
 # Headers that hold even if something downstream disagrees about the
 # type: never sniff, download (not render) when opened as a page, and an
 # opaque, script-less origin should it be rendered anyway. A media
@@ -978,27 +976,6 @@ _RELAY_HEADERS = {
 }
 
 
-def _relay_media_type(declared: str | None) -> str | None:
-    """The type the relay serves for an upstream that declared
-    ``declared``, or None when it is not audio and must not be relayed.
-
-    ``audio/*`` and ``application/ogg`` pass through as declared (bare
-    type, parameters dropped); a missing or ``application/octet-stream``
-    type becomes ``audio/mpeg``; everything else — ``text/html``,
-    scripts, images, XML, JSON — is refused."""
-    base = (declared or "").split(";", 1)[0].strip().lower()
-    if base in _RELAY_GENERIC_TYPES:
-        return _RELAY_FALLBACK_TYPE
-    if base in _RELAY_EXTRA_AUDIO_TYPES:
-        return base
-    major, _, minor = base.partition("/")
-    if major == "audio" and minor and all(
-        c.isalnum() or c in "+-." for c in minor
-    ):
-        return base
-    return None
-
-
 async def _proxy_stream(url: str) -> StreamingResponse:
     """Open ``url`` and relay its bytes. Keeps the upstream connection +
     client alive for the life of the response (closed in the
@@ -1006,7 +983,7 @@ async def _proxy_stream(url: str) -> StreamingResponse:
     before any bytes are sent. Redirects are followed one hop at a time
     so each target is checked before it is opened.
 
-    Only an audio answer is relayed (:func:`_relay_media_type`); anything
+    Only an audio answer is relayed (:func:`audio_media_type`); anything
     else closes the upstream and answers 502, and the relay always
     carries ``nosniff``, ``Content-Disposition: attachment`` and a
     sandbox CSP (A2-02)."""
@@ -1032,7 +1009,7 @@ async def _proxy_stream(url: str) -> StreamingResponse:
         raise HTTPException(status_code=502, detail=f"upstream returned {code}")
 
     declared = resp.headers.get("content-type")
-    content_type = _relay_media_type(declared)
+    content_type = audio_media_type(declared)
     if content_type is None:
         await resp.aclose()
         await client.aclose()
