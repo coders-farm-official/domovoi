@@ -245,8 +245,8 @@ pip/
 # must not ride along on the next `git add -A`; the rest cover TLS and SSH
 # keys, Android signing keystores, the satellite's real config and the
 # update unit's allowed-signers file.
-device-token*.txt
-setup-code*.txt
+device-token*
+setup-code*
 server-identity*.json
 satellite/config.toml
 *.pem

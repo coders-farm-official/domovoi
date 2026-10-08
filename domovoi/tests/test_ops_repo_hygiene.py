@@ -38,7 +38,12 @@ def test_the_security_integration_migrator_is_gone() -> None:
 MUST_IGNORE = [
     "device-token.txt",
     "domovoi/device-token.txt",
+    # Any copy, not just the .txt the core writes (a backup, a renamed one).
+    "device-token",
+    "device-token.bak",
     "setup-code.txt",
+    "setup-code",
+    "setup-code.old",
     "server-identity.json",
     "satellite/config.toml",
     "android/app/release.jks",
