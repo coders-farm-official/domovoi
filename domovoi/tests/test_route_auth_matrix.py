@@ -41,9 +41,10 @@ One class of READ is walked too: household speech and personal content
 wake-word recordings) is for paired devices only (owner decision
 2026-09-26), so every such GET must wear ``require_device_read`` — and the
 reads beside them that were deliberately left open are pinned open, so
-moving one is a decision rather than a drive-by. So are the numbers-only
-reads about the machine itself (the speech latency summary), which are
-open by design. The opt-in command recordings (2026-09-28) sit higher than
+moving one is a decision rather than a drive-by. The speech latency
+summary, open by design until 2026-10-08, is a household read now (a
+turn count for one room says somebody just spoke there). The opt-in
+command recordings (2026-09-28) sit higher than
 the rest of the household's speech: ``require_admin_security_read``, never
 the device tier. Two open timer reads are tiered INSIDE the handler rather
 than at the gate (``TIERED_INSIDE``, rule F1): the timer fire ledger is
@@ -214,6 +215,14 @@ SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/dropin/start"),
     ("core", "POST", "/v1/admin/device-token"),
     ("core", "POST", "/v1/admin/device-token/rotate"),
+    # REV-32 (2026-10-08): approving a parked satellite binds a room to a
+    # device for good — with strict pairing the default, no pre-setup grace,
+    # or any LAN host could park its own device on an unclaimed core and
+    # approve it. Reject takes the same tier.
+    ("core", "POST", "/v1/admin/satellites/approvals/{room_id}/approve"),
+    ("core", "POST", "/v1/admin/satellites/approvals/{room_id}/reject"),
+    ("web", "POST", "/api/satellites/approvals/{room_id}/approve"),
+    ("web", "POST", "/api/satellites/approvals/{room_id}/reject"),
     ("web", "PATCH", "/api/config/editable"),
     ("web", "POST", "/api/config/version/restart"),
     ("web", "POST", "/api/satellites/{room_id}/upgrade"),
@@ -367,6 +376,21 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
     ("web", "/api/satellites/{room_id}/sessions"): "a room's sessions, with the person who spoke",
     ("web", "/api/calendar/events"): "the household's appointments: titles, places, descriptions",
     ("web", "/api/calendar/events/{event_id}"): "one appointment",
+    # REV-11 (2026-10-08): the siblings the first pass left open, each of
+    # which still told a LAN poller when a room was in use.
+    ("web", "/api/satellites/{room_id}/recently-played"): (
+        "a room's play history, every play's started_at — when the room was in use"
+    ),
+    ("web", "/api/satellites/{room_id}/config"): (
+        "whether the room's satellite is connected (200/404) and the mic, Wi-Fi and "
+        "audio settings it reported; proxies the core read below"
+    ),
+    ("core", "/v1/admin/satellite/{room_id}/config"): "the core half of the read above",
+    ("core", "/v1/stats/latency"): (
+        "per-stage voice-turn timings — numbers only, but a turn count for one room "
+        "over a short window says somebody just spoke there"
+    ),
+    ("web", "/api/stats/latency"): "proxy of the core read above (credential forwarded)",
 }
 
 
@@ -553,36 +577,6 @@ def test_the_fire_ledger_tier_is_the_state_socket_s(monkeypatch) -> None:
 
     socket = {r: asyncio.run(admitted(r)) for r in _FIRE_LEDGER_BY_RESULT}
     assert socket == _FIRE_LEDGER_BY_RESULT
-
-
-# Numbers about the machine itself, open BY DESIGN rather than pending a
-# decision: counts and milliseconds, no text, no identity (owner decision
-# 2026-09-28, early-endpointing phase 1; docs/SECURITY_PRIVACY.md, daily
-# tier). Pinned so that gating one — or widening what it returns into
-# something that would need a gate — is a recorded change.
-OPEN_NUMBERS_ONLY_READS: dict[tuple[str, str], str] = {
-    ("core", "/v1/stats/latency"): (
-        "per-stage voice-turn timings from intents_log.timings — counts and "
-        "milliseconds, the route mix and the Whisper settings; no transcript, "
-        "person or session"
-    ),
-    ("web", "/api/stats/latency"): "proxy of the core read above; needs no credential",
-}
-
-
-@pytest.mark.parametrize(
-    ("label", "path"), sorted(OPEN_NUMBERS_ONLY_READS),
-    ids=[f"{a} GET {p}" for a, p in sorted(OPEN_NUMBERS_ONLY_READS)],
-)
-def test_the_numbers_only_reads_are_open(label, path) -> None:
-    assert OPEN_NUMBERS_ONLY_READS[(label, path)].strip()
-    calls = _get_gates((label, path))
-    gates = {
-        admin_auth.require_device_read, admin_auth.require_device,
-        admin_auth.require_admin_read, admin_auth.require_admin_mutation,
-        admin_auth.require_admin_security_read,
-    }
-    assert not gates.intersection(calls), f"{label} GET {path} is gated now"
 
 
 def _answers_with(rc: Any, models: tuple[type, ...]) -> bool:

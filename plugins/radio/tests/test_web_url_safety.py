@@ -26,6 +26,8 @@ from fastapi.testclient import TestClient
 from domovoi.tests.conftest import requires_db  # noqa: F401
 from domovoi.webkit import net_safety
 
+from domovoi_plugin_radio import stream_types
+
 PUBLIC_V4 = "93.184.216.34"
 
 # Everything a station row must never be allowed to point at.
@@ -300,16 +302,26 @@ def relay_client(monkeypatch):
 
     def answer(request: httpx.Request) -> httpx.Response:
         opened.append(str(request.url))
-        headers = {}
-        if upstream["content_type"] is not None:
-            headers["content-type"] = upstream["content_type"]
+        headers: list[tuple[bytes, bytes]] = []
+        declared = upstream["content_type"]
+        if declared is not None:
+            # Bytes go on the wire as they are: how a test sends a type
+            # that is not ASCII.
+            raw = declared if isinstance(declared, bytes) else declared.encode("ascii")
+            headers.append((b"content-type", raw))
         return httpx.Response(200, headers=headers, content=upstream["body"])
 
     real_client = httpx.AsyncClient
+    closed: list[bool] = []
+
+    class _Tracked(real_client):  # type: ignore[misc, valid-type]
+        async def aclose(self) -> None:
+            closed.append(True)
+            await super().aclose()
 
     def factory(*args, **kwargs):
         kwargs["transport"] = httpx.MockTransport(answer)
-        return real_client(*args, **kwargs)
+        return _Tracked(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
 
@@ -329,6 +341,7 @@ def relay_client(monkeypatch):
     with TestClient(app) as client:
         client.upstream = upstream
         client.opened = opened
+        client.closed = closed
         yield client
 
 
@@ -418,3 +431,48 @@ def test_the_icy_poller_never_fetches_a_house_local_station(monkeypatch, url) ->
     result = asyncio.run(RealIcyClient().fetch(url))
     assert result.supported is False
     assert result.error.startswith("refused:")
+
+
+# A hostile station's type must be refused like any other non-audio type:
+# ``str.isalnum`` took any Unicode letter, so ``audio/m\u0131`` passed as
+# audio and broke the latin-1 response header — a 500, with the upstream
+# connection and client never closed (REV-B3 nit).
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "audio/m\u0131".encode("utf-8"),
+        "audio/mp\u00e9g".encode("utf-8"),
+        "audio/\u0430ac".encode("utf-8"),   # a Cyrillic a
+    ],
+    ids=["dotless-i", "e-acute", "cyrillic-a"],
+)
+def test_a_type_that_is_not_ascii_is_refused_and_closed(relay_client, declared) -> None:
+    relay_client.upstream["content_type"] = declared
+    resp = relay_client.get("/api/plugins/radio/stations/1/stream")
+    assert resp.status_code == 502, resp.text
+    assert "not an audio stream" in resp.json()["detail"]
+    assert "(unrecognised)" in resp.json()["detail"]
+    assert relay_client.opened, "the upstream was never asked (test is vacuous)"
+    assert relay_client.closed, "the upstream client was left open"
+
+
+@pytest.mark.parametrize("declared", sorted(stream_types.PLAYLIST_TYPES))
+def test_every_playlist_spelling_is_refused_alike(relay_client, declared) -> None:
+    """``audio/x-mpegurl`` is the same HLS playlist as
+    ``application/vnd.apple.mpegurl``: one rule for the relay, whichever
+    spelling a station uses."""
+    relay_client.upstream["content_type"] = declared
+    relay_client.upstream["body"] = b"#EXTM3U\nhttp://elsewhere.example/a.aac\n"
+    resp = relay_client.get("/api/plugins/radio/stations/1/stream")
+    assert resp.status_code == 502, resp.text
+    assert "not an audio stream" in resp.json()["detail"]
+    assert b"#EXTM3U" not in resp.content
+    assert relay_client.closed
+
+
+def test_the_sampler_and_the_relay_agree_on_playlists() -> None:
+    for declared in stream_types.PLAYLIST_TYPES:
+        assert stream_types.audio_media_type(declared) is None, declared
+        assert stream_types.samplable_audio_type(declared) is False, declared

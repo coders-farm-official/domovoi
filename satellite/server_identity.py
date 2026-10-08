@@ -621,7 +621,8 @@ def last_accepted_manifest(channel: str, path: Path | None = None) -> dict[str, 
 
 
 def check_manifest_freshness(
-    doc: dict[str, Any], *, channel: str, path: Path | None = None
+    doc: dict[str, Any], *, channel: str, path: Path | None = None,
+    floor: str | None = None,
 ) -> None:
     """Raise :class:`IdentityError` when ``doc`` is older than the last
     envelope this device accepted on ``channel``.
@@ -632,10 +633,18 @@ def check_manifest_freshness(
     two lists under one serial. A newer serial is always taken, whatever
     its list, so rolling the core's satellite tree back to an earlier
     commit still reaches the device: that is a new publication, not a
-    replay."""
+    replay.
+
+    ``channel`` here is the RECORD the serial is kept under. ``floor`` is an
+    older record to judge against while this one has never been written:
+    the sounds channel moved from one record per channel to one per voice,
+    and a device's first list under a new record must still be newer than
+    the last it took under the old one."""
     issued_at, serial = _freshness_fields(doc)
     del issued_at
     last = last_accepted_manifest(channel, path)
+    if last is None and floor is not None:
+        last = last_accepted_manifest(floor, path)
     if last is None:
         return
     if serial < last["serial"]:
@@ -677,17 +686,32 @@ def remember_manifest(
 
 def accept_manifest_envelope(
     doc: Any, *, channel: str, expected_fingerprint: str | None,
-    path: Path | None = None,
+    path: Path | None = None, record: str | None = None,
 ) -> Any:
     """Verify, check freshness, remember — the one call a sync channel
     makes. Returns the manifest; raises :class:`IdentityError` when the
-    envelope is not our server's or is older than the last accepted."""
+    envelope is not our server's or is older than the last accepted.
+
+    ``record`` keeps the serial under its own name when one channel serves
+    several lists side by side — the sounds channel, one list per voice
+    (:func:`sounds_record`). The server keys its serials the same way, so a
+    device that switches voice and back judges each voice's list against
+    that voice's last one, not against another voice's newer serial. Until
+    a record has been written, the channel's own record is the floor."""
     manifest = verify_manifest_envelope(
         doc, channel=channel, expected_fingerprint=expected_fingerprint
     )
-    check_manifest_freshness(doc, channel=channel, path=path)
-    remember_manifest(doc, channel=channel, path=path)
+    key = record or channel
+    floor = channel if key != channel else None
+    check_manifest_freshness(doc, channel=key, path=path, floor=floor)
+    remember_manifest(doc, channel=key, path=path)
     return manifest
+
+
+def sounds_record(voice: str | None) -> str:
+    """Where this device keeps the sounds serial for the voice it asks for
+    (``None`` = the server's default voice)."""
+    return f"{SOUNDS_CHANNEL}@{voice or ''}"
 
 
 # ─── a discovered address, before anyone has agreed to it ─────────────────

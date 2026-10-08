@@ -1014,10 +1014,10 @@ async def _proxy_stream(url: str) -> StreamingResponse:
         await resp.aclose()
         await client.aclose()
         base = (declared or "").split(";", 1)[0].strip().lower()[:60]
-        # Echo the upstream's type only when it is a plain type token.
+        # Echo the upstream's type only when it is a plain ASCII type token.
         shown = (
             base
-            if base and all(c.isalnum() or c in "+-./" for c in base)
+            if base and all(c.isascii() and (c.isalnum() or c in "+-./") for c in base)
             else "(unrecognised)"
         )
         raise HTTPException(
@@ -1038,6 +1038,13 @@ async def _proxy_stream(url: str) -> StreamingResponse:
             await resp.aclose()
             await client.aclose()
 
-    return StreamingResponse(
-        _gen(), media_type=content_type, headers=dict(_RELAY_HEADERS)
-    )
+    try:
+        return StreamingResponse(
+            _gen(), media_type=content_type, headers=dict(_RELAY_HEADERS)
+        )
+    except Exception:
+        # Building the response runs before _gen's finally can: close the
+        # upstream here, or a refusal leaks one connection per request.
+        await resp.aclose()
+        await client.aclose()
+        raise

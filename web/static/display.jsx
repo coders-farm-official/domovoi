@@ -19,9 +19,19 @@
  * in front of a kiosk to pair it, so it pairs itself from its URL: a
  * `device_token` parameter is stored exactly as the pair modal stores a
  * pasted token (Auth.pair, per server, in localStorage — the kiosk browser
- * keeps its own profile) and then taken back out of the address. An
- * unpaired kiosk still shows what is playing, with the room id for a name
- * and the clock for idle.
+ * keeps its own profile) and then taken back out of the address.
+ *
+ * A browser that already holds a token keeps it unless the URL's token
+ * proves itself first: anyone can send a household browser a link to
+ * display.html with `device_token=junk`, and storing that unchecked would
+ * unpair it. So a DIFFERENT token is tried on one credentialed read (that
+ * token alone, no cookie) and stored only if the server accepts it — which
+ * still lets a kiosk whose URL carries a rotated token re-pair itself.
+ *
+ * An unpaired kiosk shows what was playing when the page loaded, with the
+ * room id for a name and the clock for idle, and then does NOT update:
+ * the live push refuses it, so no change ever reaches the screen, and its
+ * buttons do nothing. Pair it.
  *
  * URL: /display.html?room=<room_id>[&device_token=<household token>][&theme=light]
  */
@@ -31,11 +41,40 @@ const DP_ROOM = (dpParams.get('room') || '').trim();
 if (dpParams.get('theme') === 'light') {
   document.documentElement.dataset.theme = 'light';
 }
-// Before anything renders, so the first read and the /ws/state handshake
-// already carry the token (the state bus connects on first subscribe).
+// Whether the server accepts `candidate` as the household token: one read
+// on the device tier carrying that token ALONE (`credentials: 'omit'`, so
+// the dashboard cookie cannot vouch for it). Anything but an answer past
+// the gate — a refusal, a throttle, a server error, no answer at all —
+// is "no", and the token already stored stays.
+const dpTokenAccepted = async (candidate) => {
+  const headers = {};
+  headers[(typeof Auth !== 'undefined' && Auth.DEVICE_TOKEN_HEADER) || 'X-Device-Token'] = candidate;
+  const where = DP_ROOM ? `/api/satellites/${encodeURIComponent(DP_ROOM)}` : '/api/satellites';
+  try {
+    const r = await fetch(`${API_BASE}${where}`, { credentials: 'omit', cache: 'no-store', headers });
+    return r.ok || r.status === 404;   // 404: past the gate, the room is just unknown
+  } catch { return false; }
+};
+
+// Store the URL's token. With nothing stored yet there is nothing to lose:
+// store it at once, BEFORE anything renders, so the first read and the
+// /ws/state handshake already carry it (the state bus connects on first
+// subscribe). A different token than the one stored is checked first.
+const dpAdoptUrlToken = (candidate) => {
+  if (!candidate || typeof Auth === 'undefined' || !Auth.pair) return;
+  let stored = null;
+  try { stored = Auth.deviceToken ? Auth.deviceToken() : null; } catch {}
+  if (!stored) { try { Auth.pair(candidate); } catch {} return; }
+  if (stored === candidate) return;
+  dpTokenAccepted(candidate).then((ok) => {
+    if (!ok) { console.warn('the device_token in this address was refused; keeping the stored one'); return; }
+    try { Auth.pair(candidate); } catch {}
+  });
+};
+
 if (dpParams.has('device_token')) {
   const dpToken = (dpParams.get('device_token') || '').trim();
-  try { if (dpToken && typeof Auth !== 'undefined' && Auth.pair) Auth.pair(dpToken); } catch {}
+  try { dpAdoptUrlToken(dpToken); } catch {}
   dpParams.delete('device_token');
   try {
     const rest = dpParams.toString();
@@ -227,8 +266,9 @@ const DisplayApp = () => {
             open this page as <span className="mono">/display.html?room=&lt;room_id&gt;&amp;device_token=&lt;household token&gt;</span> —
             the video satellite's kiosk launcher builds this URL from its config
             (see <span className="mono">satellite/VIDEO_SATELLITE.md</span>). Without the
-            token the screen still shows what is playing, but not the room's name,
-            its idle mode, live updates or working buttons.
+            token the screen shows what was playing when it loaded and then stops
+            updating (the live push refuses an unpaired screen), with no room name,
+            no idle mode and buttons that do nothing.
           </div>
         </div>
       </div>

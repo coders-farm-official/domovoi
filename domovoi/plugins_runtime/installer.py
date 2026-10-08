@@ -19,6 +19,7 @@ random. Every mutating endpoint depends on
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import io
 import json
@@ -29,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import time
+import weakref
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -102,12 +104,68 @@ _GITHUB_URL_RE = re.compile(
 
 
 class InstallError(ValueError):
-    """A validation-phase rejection (HTTP 422)."""
+    """A validation-phase rejection (HTTP 422 unless ``status`` says
+    otherwise: a confirm already running for the same staged id is 409)."""
 
-    def __init__(self, code: str, message: str, details: dict | None = None):
+    def __init__(
+        self, code: str, message: str, details: dict | None = None, *, status: int = 422
+    ):
         self.code = code
         self.details = details or {}
+        self.status = status
         super().__init__(message)
+
+
+# ─── one lifecycle step at a time (REV-13) ──────────────────────────────────
+#
+# pip_install / pip_uninstall / pip_dry_run run in worker threads (A7-04), so
+# the event loop no longer serialises them, and two of them at once against
+# the core's site-packages is not safe: pip_install's ``newly_installed`` is a
+# before/after diff of the WHOLE environment, so each concurrent run claims
+# the other's new dists, and the loser's rollback (or a later uninstall)
+# pip-uninstalls them from under the plugin that needs them. A double click
+# on Install did exactly that. So confirm, upgrade, uninstall and the
+# stage-time dry run each hold one lock for the whole step.
+#
+# One lock per event loop rather than one ``asyncio.Lock()`` built at import:
+# the core runs a single loop, where this IS one module-level lock, but an
+# asyncio lock binds to the loop it first waits on and the tests run each
+# case on a fresh loop.
+_LIFECYCLE_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+# Staged ids whose confirm has started and not finished. Claimed before the
+# lock is awaited (no await between the check and the claim), so a second
+# confirm of the same id answers 409 at once instead of queueing to run it
+# again.
+_CONFIRMING: set[str] = set()
+
+
+def lifecycle_lock() -> asyncio.Lock:
+    """The lock confirm, upgrade, uninstall and the pip dry run share."""
+    loop = asyncio.get_running_loop()
+    lock = _LIFECYCLE_LOCKS.get(loop)
+    if lock is None:
+        lock = _LIFECYCLE_LOCKS[loop] = asyncio.Lock()
+    return lock
+
+
+@contextlib.asynccontextmanager
+async def _confirming(staged_id: str):
+    """Claim ``staged_id`` for one confirm, then hold the lifecycle lock."""
+    if staged_id in _CONFIRMING:
+        raise InstallError(
+            "confirm_in_progress",
+            "this install is already being confirmed; wait for that to finish",
+            {"staged_id": staged_id},
+            status=409,
+        )
+    _CONFIRMING.add(staged_id)
+    try:
+        async with lifecycle_lock():
+            yield
+    finally:
+        _CONFIRMING.discard(staged_id)
 
 
 def staging_root() -> Path:
@@ -808,7 +866,10 @@ async def stage_zip(
         if manifest.python_requirements:
             lock = stage_dir / (manifest.lockfile or "requirements.lock")
             validate_lockfile(lock)
-            transitive = (await asyncio.to_thread(pip_dry_run, lock))["resolved"]
+            # Under the lifecycle lock: a dry run beside a real install
+            # resolves against a half-written environment.
+            async with lifecycle_lock():
+                transitive = (await asyncio.to_thread(pip_dry_run, lock))["resolved"]
 
         tree_hash = await asyncio.to_thread(hash_tree, stage_dir)   # step 8
 
@@ -1015,7 +1076,20 @@ async def confirm_install(
     :func:`confirm_upgrade`) runs every step but the hot load (13): the
     new version is installed and registered, and loads at the next
     restart. ``enabled=False`` (an upgrade of a disabled plugin) writes the
-    row disabled and loads nothing."""
+    row disabled and loads nothing.
+
+    One lifecycle step at a time (:func:`lifecycle_lock`); a second confirm
+    of the same staged id while this one runs is ``confirm_in_progress``
+    (409)."""
+    async with _confirming(staged_id):
+        return await _confirm_install_locked(staged_id, load=load, enabled=enabled)
+
+
+async def _confirm_install_locked(
+    staged_id: str, *, load: bool = True, enabled: bool = True
+) -> dict[str, Any]:
+    """:func:`confirm_install`'s body; the caller holds the lifecycle lock
+    and the claim on ``staged_id``."""
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -1293,8 +1367,15 @@ def _reprime_router() -> None:
 # ─── uninstall keep / purge (§3.5) ──────────────────────────────────────────
 
 async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
+    """Uninstall ``slug``, under the lifecycle lock, so its pip uninstall
+    never runs beside another plugin's install (REV-13)."""
     if data not in ("keep", "purge"):
         raise InstallError("bad_request", "data must be 'keep' or 'purge'")
+    async with lifecycle_lock():
+        return await _uninstall_plugin_locked(slug, data=data)
+
+
+async def _uninstall_plugin_locked(slug: str, *, data: str) -> dict[str, Any]:
     row = await reg.get_plugin(slug)
     if row is None:
         raise InstallError("not_installed", f"plugin {slug!r} is not installed")
@@ -1371,7 +1452,15 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     for restart instead: migrations applied, files swapped, row written,
     ``restart_required: true`` in the answer and a
     ``LOADER.pending_restart`` marker that ``/v1/admin/version`` and
-    ``/v1/plugins`` report until the Domovoi services restart."""
+    ``/v1/plugins`` report until the Domovoi services restart.
+
+    Claims ``staged_id`` and holds the lifecycle lock for the whole swap,
+    like :func:`confirm_install` (REV-13)."""
+    async with _confirming(staged_id):
+        return await _confirm_upgrade_locked(staged_id)
+
+
+async def _confirm_upgrade_locked(staged_id: str) -> dict[str, Any]:
     staged = _STAGED.get(staged_id)
     if staged is None:
         raise InstallError("staged_id_unknown", "unknown or expired staged_id")
@@ -1422,7 +1511,7 @@ async def confirm_upgrade(staged_id: str) -> dict[str, Any]:
     try:
         # A disabled plugin stays disabled: the upgrade swaps its files and
         # schema, it doesn't switch it on.
-        result = await confirm_install(
+        result = await _confirm_install_locked(
             staged_id, load=not stage_for_restart, enabled=old_row.enabled
         )
         shutil.rmtree(prev_dir, ignore_errors=True)
@@ -1520,7 +1609,7 @@ def _install_error_response(e: InstallError) -> HTTPException:
     # says nothing, and operators read consoles before dashboards.
     log.warning("plugin install rejected: %s — %s", e.code, e)
     return HTTPException(
-        status_code=422,
+        status_code=getattr(e, "status", 422),
         detail={"error": {"code": e.code, "message": str(e), "details": e.details}},
     )
 

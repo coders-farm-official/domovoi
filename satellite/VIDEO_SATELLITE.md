@@ -119,9 +119,15 @@ kiosk_url = "http://<server>:6369/display.html?room=<room_id>&device_token=<hous
 
 The household token is under Settings → Devices → Household token on an
 admin's dashboard; percent-encode it if an admin chose one with spaces or
-`&`. Without it the screen still shows what is playing, with the room id for
-a name, the clock for idle and buttons that do nothing. Rotating the
-household token means updating this line too.
+`&`. Without it the screen shows what was playing when the page loaded and
+then stops updating — the live push refuses an unpaired screen, so no
+change reaches it — with the room id for a name, the clock for idle and
+buttons that do nothing. `python -m satellite.kiosk --print-url` builds the
+URL without the token, so a kiosk left on the derived URL is in exactly
+that state after an upgrade: set `kiosk_url` as above. Rotating the
+household token means updating this line too; the page stores a NEW token
+from its address only after the server has accepted it, so a link carrying
+a wrong token cannot unpair a browser that is already paired.
 
 ## 5. What you get
 

@@ -931,7 +931,12 @@ async def server_time() -> dict[str, Any]:
     return server_time_document()
 
 
-@app.get("/v1/stats/latency")
+@app.get(
+    "/v1/stats/latency",
+    # Device READ tier (2026-10-08, REV-11): counts per room and window say
+    # whether somebody just spoke in a room.
+    dependencies=[Depends(require_device_read)],
+)
 async def stats_latency(
     since: datetime | None = Query(
         None,
@@ -952,11 +957,13 @@ async def stats_latency(
     turns ran on (``whisper_seen``), and what is transcribing now
     (``whisper``). See domovoi/turn_timings.py.
 
-    Open, like ``/v1/health``: it reads ``intents_log.timings`` (V015),
-    which holds no text and no identity, and returns counts and
-    milliseconds — no transcript, no person, no session. How often a room
-    speaks is already an open read (a room's session list); this adds how
-    long the machine took. docs/SECURITY_PRIVACY.md says so.
+    It reads ``intents_log.timings`` (V015), which holds no text and no
+    identity, and returns counts and milliseconds — no transcript, no
+    person, no session. It takes a paired device all the same (the
+    household token, an admin session or the dashboard cookie, with the
+    pre-setup grace): a turn count for one room over the last 30 seconds
+    says whether somebody just spoke there, and who is in which room is a
+    household read since 2026-10-08. docs/SECURITY_PRIVACY.md says so.
 
     ``503`` when the database is unreachable or V015 hasn't been applied.
     """
@@ -1096,10 +1103,25 @@ async def sounds_manifest_signed(voice: str | None = None) -> dict[str, Any]:
     asks for this and refuses a list its own server did not sign, so a host
     on the path cannot decide what a greeting sounds like. Declared before
     the ``{path:path}`` catch-all so the literal wins; the unsigned
-    ``manifest`` keeps serving older satellites."""
+    ``manifest`` keeps serving older satellites.
+
+    Each voice's list keeps its own serial (V-st-01): ``?voice=`` is the
+    caller's choice, and while every voice shared one serial, alternating
+    two of them minted a new one per request and ran it ahead of the clock.
+    The key is the default voice (no ``?voice=``), the voice's directory for
+    a voice with rendered clips, or one shared entry for any name without
+    them — so an unknown name cannot grow the store either."""
     manifest = await sounds_manifest(voice)
+    if not voice:
+        voice_key = ""
+    else:
+        root = await _resolve_voice_root(voice)
+        voice_key = root.name if root.is_dir() else "?"
     identity = server_identity.load_or_create()
-    return identity.signed_manifest(server_identity.SOUNDS_CHANNEL, manifest)
+    return identity.signed_manifest(
+        server_identity.SOUNDS_CHANNEL, manifest,
+        serial_key=server_identity.sounds_serial_key(voice_key),
+    )
 
 
 @app.get("/v1/sounds/{path:path}")
@@ -2242,7 +2264,13 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e)) from e
 
 
-@app.get("/v1/admin/satellite/{room_id}/config")
+@app.get(
+    "/v1/admin/satellite/{room_id}/config",
+    # Device READ tier (2026-10-08, REV-11), like the dashboard's proxy:
+    # a 200 or 404 says whether the room's satellite is connected, and the
+    # body is the hardware it reported (mic, Wi-Fi, audio devices).
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     """Editable satellite config (the schema joined with the values the Pi
     reported via config_status) for the per-satellite Settings tab. 404 when
@@ -2489,9 +2517,13 @@ def approval_throttled_detail() -> str:
 
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/approve",
-    # Admin-tier: this is the decision that turns trust-on-first-use into a
-    # decision someone actually made, and it binds a room to a device.
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier: this is the decision that turns trust-on-first-use into
+    # a decision someone actually made, and it binds a room to a device for
+    # good. Bearer-only and 501 before first-run setup (REV-32): with strict
+    # pairing the default, the pre-setup grace let any LAN host that parked
+    # its own satellite on an unclaimed core approve it — the one pre-setup
+    # write that minted a lasting trust relationship.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_approve(
     room_id: str, body: _ApproveSatelliteBody
@@ -2561,7 +2593,9 @@ async def admin_satellite_approve(
 
 @app.post(
     "/v1/admin/satellites/approvals/{room_id}/reject",
-    dependencies=[Depends(require_admin_mutation)],
+    # Security tier like approve: the two decisions on a parked device take
+    # the same credential, and neither has a pre-setup grace.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_satellite_reject(room_id: str) -> dict[str, Any]:
     """Drop a pending request.
