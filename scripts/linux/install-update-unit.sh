@@ -12,10 +12,15 @@
 #      domovoi units are installed; git works in the checkout as the service
 #      user; docker compose works for that user (domovoi-db and every update
 #      run it as them); sudoers passes visudo -c as it is, and the new rule
-#      passes visudo -cf on its own. Two things only warn: a venv the
-#      service user doesn't wholly own (an update that changes dependencies
-#      would abort; the chown that fixes it is printed, and --fix-ownership
-#      runs it), and piper-tts older than 1.3 in the venv.
+#      passes visudo -cf on its own. Signed updates (docs/LINUX_HOST.md,
+#      "Signed updates"): with the allowed-signers file in place, HEAD must
+#      verify against it as root, the way every update run will, and the
+#      pinned upstream must be the checkout's, or this stops rather than
+#      leave a unit that refuses every run. Three things only warn: a venv
+#      the service user doesn't wholly own (an update that changes
+#      dependencies would abort; the chown that fixes it is printed, and
+#      --fix-ownership runs it), piper-tts older than 1.3 in the venv, and
+#      signed updates not set up.
 #   2. The rollback baseline. When applied_sha isn't recorded yet, it becomes
 #      the SHA the core is RUNNING: running_sha from GET
 #      <core>/v1/admin/version, -dirty stripped, verified as a commit of the
@@ -652,6 +657,86 @@ check_baseline() {
     "remove it (sudo rm $APPLIED_FILE) and run this again to record the SHA the core runs."
 }
 
+# ─── Signed updates (pre-flight; see apply-update.sh, "Signed updates") ──
+
+# A remote URL for comparing: no trailing slash or .git.
+norm_url() {
+  local u=$1
+  u=${u%/}; u=${u%.git}; u=${u%/}
+  printf '%s' "$u"
+}
+
+# HEAD against the allowed-signers file $1, as root with the same pins
+# apply-update.sh uses (the checkout's .git/config belongs to the service
+# user, so what git may run is fixed here, not there). Prints the signer
+# and returns 0, or prints why not and returns 1.
+verify_head_as_root() {
+  local -a cfg=(-c "safe.directory=$REPO" -c "gpg.ssh.allowedSignersFile=$1"
+                -c gpg.ssh.program=ssh-keygen -c gpg.program=gpg
+                -c gpg.openpgp.program=gpg -c gpg.x509.program=gpgsm)
+  local out signer mark
+  if out=$(git "${cfg[@]}" -C "$REPO" verify-commit HEAD 2>&1); then
+    signer=$(git "${cfg[@]}" -C "$REPO" log -1 --format=%GS HEAD 2>/dev/null) || signer=""
+    printf '%s' "${signer:-an allowed key}"
+    return 0
+  fi
+  mark=$(git "${cfg[@]}" -C "$REPO" log -1 --format=%G? HEAD 2>/dev/null) || mark=""
+  if [ "$mark" = N ]; then
+    printf 'it is not signed'
+  else
+    printf 'its signature is not by a key in %s (%s)' "$1" "$(tail_of "$out" 1 | tr -d '\n')"
+  fi
+  return 1
+}
+
+# With the allowed-signers file in place every update run verifies HEAD
+# against it and refuses otherwise; with the upstream pinned every run
+# checks the checkout's origin and tracking branch. Both are checked here
+# the way the unit will, so a box that would refuse every run hears it
+# now, and one that has not set signing up hears that once.
+check_signing() {
+  local f url origin want up signer
+  f=$(defaults_get DOMOVOI_ALLOWED_SIGNERS)
+  f=$ROOT${f:-/etc/domovoi/allowed_signers}
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+    line warning "signed updates are not enforced: no $f"
+    more "Every update runs what upstream holds as root. To bound that to commits you signed,"
+    more "install the allowed-signers file: docs/LINUX_HOST.md, Signed updates."
+  else
+    if [ -L "$f" ]; then
+      stop "$f is a symlink, and the update unit refuses it" \
+        "Replace it with a plain file owned by root (install -m 0644 -o root -g root)."
+    fi
+    need_root_only "$f" "The update unit verifies every HEAD against the keys in $f, as root."
+    if ! signer=$(verify_head_as_root "$f"); then
+      stop "signed updates are enforced by $f, but HEAD ${HEAD_SHA:0:12} does not verify: $signer" \
+        "The update unit would refuse every run. Pull a commit signed by a key in $f (Pull the latest in the dashboard)," \
+        "or remove the file to turn enforcement off, then run this again."
+    fi
+    line ok "signed updates enforced: HEAD ${HEAD_SHA:0:12} is signed by $signer ($f)"
+  fi
+  url=$(defaults_get DOMOVOI_UPSTREAM_URL)
+  if [ -n "$url" ]; then
+    origin=$(as_user git -C "$REPO" remote get-url origin 2>/dev/null) || origin=""
+    if [ "$(norm_url "$origin")" != "$(norm_url "$url")" ]; then
+      stop "$DEFAULTS_FILE pins the upstream to $url, but the checkout's origin is ${origin:-not set}" \
+        "The update unit would refuse every run. Fix the remote as $SVC_USER (git -C $REPO remote set-url origin $url)," \
+        "or the pin, then run this again."
+    fi
+    line ok "upstream pinned: origin is $url"
+  fi
+  want=$(defaults_get DOMOVOI_UPSTREAM_BRANCH)
+  if [ -n "$want" ]; then
+    up=$(as_user git -C "$REPO" rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
+    if [ "$up" != "refs/remotes/origin/$want" ]; then
+      stop "$DEFAULTS_FILE pins the branch to origin/$want, but HEAD tracks ${up:-no upstream branch}" \
+        "The update unit would refuse every run. Fix the tracking branch as $SVC_USER (git -C $REPO branch --set-upstream-to origin/$want)," \
+        "or the pin, then run this again."
+    fi
+    line ok "upstream pinned: HEAD tracks origin/$want"
+  fi
+}
+
 check_sudoers() {
   local out
   if ! out=$(visudo -c 2>&1); then
@@ -827,8 +912,14 @@ apply_now() {
       more "once the cause is fixed, pull again and run: sudo systemctl start $UNIT_NAME"
       ;;
     refused)
-      more "Tracked files in $REPO have local changes. Commit or stash them as $SVC_USER,"
-      more "then run: sudo systemctl start $UNIT_NAME"
+      case $err in
+        *"uncommitted changes"*)
+          more "Tracked files in $REPO have local changes. Commit or stash them as $SVC_USER,"
+          more "then run: sudo systemctl start $UNIT_NAME" ;;
+        *)
+          # A signature or upstream refusal: the error says what to fix.
+          more "Nothing was changed: $err" ;;
+      esac
       ;;
     aborted)
       more "Nothing was changed: $err"
@@ -906,6 +997,7 @@ main() {
   check_docker
   check_piper
   check_baseline
+  check_signing
   check_sudoers
   check_unit
 

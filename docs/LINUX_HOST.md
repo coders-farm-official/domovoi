@@ -607,11 +607,13 @@ anyone searches ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-netw
 
 ## Updates from the dashboard
 
-The version panel pulls with `git pull --ff-only`. A pull can bring new
-Python dependencies, a new Flyway migration or a new MPD image, and a bare
-restart of core and web applies none of them: `domovoi-db` runs Flyway only
-when *it* starts. A migration that never ran looks like a broken release
-(the V013 device-token table was the first time this bit).
+The version panel's **Pull the latest** fetches, verifies the fetched tip's
+signature (see [Signed updates](#signed-updates)), and fast-forwards to
+it. A pull can bring new Python dependencies, a new Flyway migration or a
+new MPD image, and a bare restart of core and web applies none of them:
+`domovoi-db` runs Flyway only when *it* starts. A migration that never ran
+looks like a broken release (the V013 device-token table was the first
+time this bit).
 
 A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
 that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
@@ -636,10 +638,15 @@ run does this:
    so before anything happens: its confirm asks for the full update (a
    second confirm, when only the read taken at the press shows it), and
    the card says **Updating…** and waits up to 15 minutes, not seconds.
-2. Refuse, touching nothing, if tracked files have uncommitted changes. A
-   rollback could not restore that tree. Untracked files are fine. Stop,
-   touching nothing, if the dependencies changed but the service user
-   can't write the venv (step 5 would fail, and so would its rollback).
+2. Refuse, touching nothing, if the checkout's `origin` or tracking branch
+   is not the pinned upstream, or if signed updates are enforced and HEAD
+   does not verify against the root-owned allowed-signers file (both in
+   [Signed updates](#signed-updates); the first check runs before step 1,
+   on the plain restart too). Refuse, touching nothing, if tracked files
+   have uncommitted changes. A rollback could not restore that tree.
+   Untracked files are fine. Stop, touching nothing, if the dependencies
+   changed but the service user can't write the venv (step 5 would fail,
+   and so would its rollback).
 3. `pg_dump -Fc` the database through the `domovoi-postgres` container into
    `/var/lib/domovoi-update/backups/`, and `domovoi_test` next to it
    (`pre-<sha>-<time>.test.dump`) when that database exists: plugin
@@ -724,7 +731,8 @@ the result is `rollback_failed` and names it. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,
-from/to SHA, each step with its timing, the error). The version panel shows
+from/to SHA, each step with its timing, the signature verdict, the error).
+The version panel shows
 it as **last update**, and `GET /v1/admin/version` serves it as
 `last_update`. When the core can't use the file, `last_update` is `null`
 and `last_update_problem` says why (`unreadable`, `invalid`, ...); the
@@ -761,6 +769,13 @@ away from the tree: git and pip run as the service user through
 `runuser`, and root's own files live in `/var/lib/domovoi-update`, which the
 service user can read but not write.
 
+What that does not bound is upstream. The script root runs is whatever
+the pull brought, so a compromise of the repository's `main` (a stolen
+token, a merged pull request) would be root on this box at its next
+**Restart to apply changes**, with no LAN access or credential needed.
+The bound is a signature: see [Signed updates](#signed-updates). Until
+you set it up, every pull and every update says so.
+
 **`/etc/default/domovoi-update`** is optional. Every setting defaults to the
 layout on this page, so you only need the file to change one:
 
@@ -793,6 +808,13 @@ layout on this page, so you only need the file to change one:
 # Default: MPD_IMAGE_TAG / MPD_CONTAINER_PREFIX from domovoi/.env, else these.
 # DOMOVOI_MPD_IMAGE_TAG=domovoi-mpd:latest
 # DOMOVOI_MPD_CONTAINER_PREFIX=domovoi-mpd-
+# Signed updates (below). Enforcement is this file's presence; the core reads the path from here too.
+# DOMOVOI_ALLOWED_SIGNERS=/etc/domovoi/allowed_signers
+# A retired key's revocation file (ssh-keygen -Y verify -r). Default: none.
+# DOMOVOI_REVOKED_SIGNERS=/etc/domovoi/revoked_signers
+# The upstream the checkout must follow; a checkout on another remote or branch is refused. Default: not pinned.
+# DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
+# DOMOVOI_UPSTREAM_BRANCH=main
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,
@@ -819,6 +841,141 @@ above exists. Without that rule the panel says so and shows the manual
 command; it does not fall back to a plain bounce, which would skip the
 migrations. Not found, the button bounces core and web exactly as before.
 `systemctl mask domovoi-update.service` switches back to the plain bounce.
+
+### Signed updates
+
+What bounds an update is a signature. Without one, a compromise of the
+repository's `main` on GitHub (a stolen token, a compromised laptop, a
+merged pull request that edits `scripts/linux/apply-update.sh`,
+`domovoi/Dockerfile.mpd` or `pyproject.toml`) is root on every Linux
+install at its next **Restart to apply changes**: the update unit runs the
+pulled checkout's own script as root, and the attacker needs no LAN access
+and no credential to get there. Signing closes that. Every commit on
+`main` carries an SSH signature by one of your keys, the box holds the
+list of those keys in a file only root can write, and nothing from a
+checkout that does not verify runs as root.
+
+**Enforcement is the file.** While `/etc/domovoi/allowed_signers` exists,
+both halves of the pipeline check against it and refuse otherwise. While it
+doesn't, both go on and say so, loudly: the core's log on every pull, the
+update's journal and a `warn` step in **last update** on every run, and an
+**unsigned** badge beside the version in Settings. So an install that
+hasn't set signing up keeps updating, and removing the file turns
+enforcement off again. Two checks, in this order:
+
+- **Before the pull** (`POST /v1/admin/version/pull`; the core, as the
+  service user): `git fetch`, then `git verify-commit` on the fetched tip,
+  then `git merge --ff-only` to that exact SHA. A tip that does not verify
+  is refused with `pulled: false` and the tree never moves. This is the
+  gate for the dashboard path: the code doing the checking is the code
+  already loaded, which the pull cannot change.
+- **Before anything runs as root** (`apply-update.sh`, every run, the
+  plain restart as much as the full update): root runs `git verify-commit
+  HEAD` itself, not through `runuser` and not taking the core's word for
+  it, with the signers file and every program git could be told to run
+  pinned on the command line (the checkout's `.git/config` belongs to the
+  service user, and a `gpg.ssh.program` in it would otherwise choose what
+  root executes). A HEAD that does not verify is `refused`, nothing
+  stopped or changed, and the result says what to do. The signers file
+  must be a plain file owned by root that no one else can write, or it is
+  refused as well.
+
+What this does not cover: a tree already moved to an unverified commit by
+a pull that skipped the core (`git pull` by hand as the service user) has
+already replaced the script root runs, and a check inside that script is
+no check at all. Pull through the dashboard, or by hand with the same
+check git offers:
+
+```bash
+sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers pull --ff-only --verify-signatures
+```
+
+The service user is in the `docker` group and so root-equivalent already;
+signing bounds *upstream*, not the service user.
+
+**Set it up.** On the machine you commit from (once per machine):
+
+```bash
+ssh-keygen -t ed25519 -C "domovoi commit signing" -f ~/.ssh/domovoi_signing
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/domovoi_signing.pub
+git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+```
+
+Every commit you make from then on is signed, merges included. **Merges
+made by tools must be signed too.** A merge an agent, a script or GitHub's
+merge button makes with an identity that doesn't sign is unsigned, and the
+box refuses it (the signature is on the tip; a signed tip vouches for
+everything under it, so signed merge commits of unsigned work are fine).
+Merge locally with the configuration above in force, or sign a merge after
+the fact with `git commit --amend -S --no-edit`, and turn on GitHub's
+**Require signed commits** branch protection on `main` so an unsigned
+commit can't land there in the first place. `git log --show-signature -1`
+checks any commit. Only SSH signatures are checked on the box: an
+OpenPGP-signed commit reads as unverified there (no keyring).
+
+On the box, install the allowed-signers file: one line per key, a
+principal (any name; it's what the version panel shows as the signer),
+the `git` namespace, then the public key as its `.pub` file has it. The
+first command, on the machine you commit from, prints the line; the rest,
+as your admin user on the box, put it in place owned by root:
+
+```bash
+printf 'kamron namespaces="git" %s\n' "$(cut -d' ' -f1,2 ~/.ssh/domovoi_signing.pub)"
+
+sudo install -d -m 0755 -o root -g root /etc/domovoi
+echo 'kamron namespaces="git" ssh-ed25519 AAAA...' | sudo tee /etc/domovoi/allowed_signers >/dev/null
+sudo chmod 0644 /etc/domovoi/allowed_signers
+```
+
+Then check that HEAD verifies the way the unit will, before the next
+update has to:
+
+```bash
+sudo git -C /opt/domovoi -c safe.directory=/opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers verify-commit HEAD
+sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+```
+
+The first prints `Good "git" signature for kamron with ED25519 key ...`.
+The second reports `signed updates enforced: HEAD ... is signed by kamron`,
+or stops, changing nothing, if HEAD would be refused. If the checkout is
+still on a commit from before you started signing, pull a signed one first
+(**Pull the latest** verifies it), then restart. Several people can sign:
+one line each. A key is retired by removing its line; to retire it while
+its old commits stay verifiable, list it in a revocation file instead
+(`ssh-keygen -Y verify -r`) and set `DOMOVOI_REVOKED_SIGNERS`.
+
+**Pin the upstream** as well, so a checkout pointed at another remote or
+branch is refused before it is even verified. In
+`/etc/default/domovoi-update`:
+
+```bash
+DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
+DOMOVOI_UPSTREAM_BRANCH=main
+```
+
+`origin` must have that URL (a trailing `.git` or `/` doesn't matter) and
+HEAD must track `origin/main`, or the run is `refused` with an `upstream`
+step saying which. All four settings are optional and read from that
+root-owned file: `DOMOVOI_ALLOWED_SIGNERS` (default
+`/etc/domovoi/allowed_signers`; the core reads the path from the same file,
+so the two halves always look at one file), `DOMOVOI_REVOKED_SIGNERS`,
+`DOMOVOI_UPSTREAM_URL`, `DOMOVOI_UPSTREAM_BRANCH`.
+
+**What you see.** `GET /v1/admin/version` carries `signature: {status,
+signer, key, enforced, allowed_signers, detail}`: `status` is `verified`,
+`unsigned`, `unverified` (signed, but not by a listed key, or no file to
+check against) or `unknown`; `signer` and `key` name a verified
+signature's principal and fingerprint. The Settings → Version card shows
+it as a badge beside the version: **signed**, **unsigned** or **signature
+not verified**, red when enforcement would refuse an update and amber when
+signing just isn't set up. `POST /v1/admin/version/pull` answers with the
+same `signature` object, and a refusal as `pulled: false` with the reason
+in `error`. Every update result carries it as `signature` too, plus a
+`signature` step (`ok`, `warn` while not enforced, `refused`) and, when
+pinned, an `upstream` step; a refused run has status `refused`, like a
+dirty tree.
 
 ### One-time upgrade for existing installs
 
@@ -853,11 +1010,15 @@ take them:
   in the checkout as the service user; `docker compose` works for that
   user; only root can write `/var/lib/domovoi-update` (or whatever
   `DOMOVOI_UPDATE_DIR` names), the directories above it and
-  `/etc/default/domovoi-update`. If one of these fails it stops and says
-  why. Two things only warn: a venv the service user doesn't wholly own (it
-  prints the `chown` that fixes it, and `--fix-ownership` runs it, last,
-  and only on a directory with a `pyvenv.cfg`), and `piper-tts` older than
-  1.3 in the venv.
+  `/etc/default/domovoi-update`. With the allowed-signers file in place,
+  HEAD verifies against it as root the way every update run will, and the
+  pinned upstream (if any) is the checkout's; otherwise it stops rather
+  than leave a unit that refuses every run ([Signed updates](#signed-updates)).
+  If one of these fails it stops and says why. Three things only warn: a
+  venv the service user doesn't wholly own (it prints the `chown` that
+  fixes it, and `--fix-ownership` runs it, last, and only on a directory
+  with a `pyvenv.cfg`), `piper-tts` older than 1.3 in the venv, and signed
+  updates not set up yet.
 - **Records the rollback baseline** in `/var/lib/domovoi-update/applied_sha`
   when that file doesn't exist yet: the `running_sha` the core reports on
   `/v1/admin/version`, `-dirty` stripped, checked as a commit of the
@@ -967,8 +1128,12 @@ in this order.
    `journalctl -u domovoi-update -n 200` has the detail. That old SHA
    predates the script, so its Restart button is still the plain bounce:
    once the cause is fixed, pull again (step 2) and repeat this step by
-   hand. `refused` means tracked files in `/opt/domovoi` have local
-   changes; commit or stash them as `domovoi` and repeat this step.
+   hand. `refused` means nothing was changed because the tree is not one
+   the unit will apply: tracked files in `/opt/domovoi` have local changes
+   (commit or stash them as `domovoi`), or HEAD does not verify against
+   the allowed-signers file, or the checkout is not the pinned upstream
+   ([Signed updates](#signed-updates)); the `error` says which, and you
+   repeat this step once it's fixed.
    `aborted` means nothing was changed: the backup failed, or the
    dependencies changed and `domovoi` can't write the venv (`sudo chown -R
    domovoi: /opt/domovoi/.venv` fixes that one). This first run also

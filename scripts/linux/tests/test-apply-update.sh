@@ -57,16 +57,20 @@ trap cleanup EXIT
 export GIT_CONFIG_GLOBAL=$WORK/gitconfig GIT_CONFIG_NOSYSTEM=1
 SHIM_REAL_GIT=$(command -v git)
 SHIM_REAL_DATE=$(command -v date)
-export SHIM_REAL_GIT SHIM_REAL_DATE
+SHIM_REAL_STAT=$(command -v stat)
+export SHIM_REAL_GIT SHIM_REAL_DATE SHIM_REAL_STAT
 export GIT_AUTHOR_NAME=harness GIT_AUTHOR_EMAIL=harness@example.invalid
 export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 CASE_FAILED=0
 
 fail() { echo "    FAIL: $*"; CASE_FAILED=1; }
 check() { local what=$1; shift; if ! "$@"; then fail "$what"; fi; }
+# skip_case WHY: this case cannot run on this box; counted, never failed.
+skip_case() { SKIPPED=$((SKIPPED + 1)); echo "skip $CASE_NAME ($1)"; }
 
 # ─── fixtures ────────────────────────────────────────────────────────────
 
@@ -426,21 +430,29 @@ new_case() {
 
 # run_update [extra PATH dir]: run the script against the current case.
 # NO_BASH_CLOCK=1 runs it without $EPOCHREALTIME, the way a bash older than
-# 5 would, so its clock is date(1) and a shim can play that.
+# 5 would, so its clock is date(1) and a shim can play that. SIGNERS names
+# the allowed-signers file (default: a path that does not exist, so the
+# host's own file never gets a say); UPSTREAM_URL and UPSTREAM_BRANCH set
+# the upstream pins.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=()
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=()
   local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
   if [ -n "${MANAGE_SEARXNG:-}" ]; then manage_env=(DOMOVOI_MANAGE_SEARXNG="$MANAGE_SEARXNG"); fi
+  if [ -n "${UPSTREAM_URL:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_URL="$UPSTREAM_URL"); fi
+  if [ -n "${UPSTREAM_BRANCH:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_BRANCH="$UPSTREAM_BRANCH"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
-  env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG PATH="$path" \
+  env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
+    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     ${venv_env[@]+"${venv_env[@]}"} \
     ${manage_env[@]+"${manage_env[@]}"} \
+    ${pin_env[@]+"${pin_env[@]}"} \
+    DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
     DOMOVOI_CORE_STATE_DIR="$CORE_STATE" \
@@ -545,7 +557,7 @@ case_noop_restart() {
   # with the checkout's one migration applied, so no Flyway run either.
   check "asks Flyway's history what is applied" called "WHERE success AND type = 'SQL' AND version IS NOT NULL"
   check "no migrations on a plain restart" not_called "systemctl restart domovoi-db.service"
-  check "nothing but the restart's own steps" eq "$(step_names)" "stop-services start-services health searxng"
+  check "nothing but the restart's own steps, after the signature check" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "migration count recorded" eq "$(field migrations_before)" 1
   check "and left as it was" eq "$(field migrations_after)" 1
   check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
@@ -1105,12 +1117,13 @@ case_clock_stepped_back_keeps_the_result_valid() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
-  # A wall clock that NTP steps back 90 s after the run's second reading
-  # (START_MS, then the preflight's t0): the preflight and the whole run
-  # both end "before" they started. The script reads bash's clock, which
-  # no shim can move, so this run goes without it and reads date(1): 13
-  # digits of milliseconds, taken from the shim's own bash clock (the real
-  # date may be uutils, whose +%s%3N is no use).
+  # A wall clock that NTP steps back 90 s after the run's fourth reading
+  # (START_MS, the signature step's t0 and end, then the preflight's
+  # t0): the preflight and the whole run both end "before" they started.
+  # The script reads bash's clock, which no shim can move, so this run
+  # goes without it and reads date(1): 13 digits of milliseconds, taken
+  # from the shim's own bash clock (the real date may be uutils, whose
+  # +%s%3N is no use).
   mkdir -p "$CASE/clockbin"
   cat >"$CASE/clockbin/date" <<'SH'
 #!/usr/bin/env bash
@@ -1119,7 +1132,7 @@ if [ "${1-}" = +%s%3N ]; then
   echo $((n + 1)) >"$SHIM_STATE/date-readings"
   t=$EPOCHREALTIME
   t=$(( ${t%[.,]*}${t#*[.,]} / 1000 ))
-  if [ "$n" -ge 2 ]; then t=$((t - 90000)); fi
+  if [ "$n" -ge 4 ]; then t=$((t - 90000)); fi
   echo "$t"
   exit 0
 fi
@@ -1127,7 +1140,7 @@ exec "$SHIM_REAL_DATE" "$@"
 SH
   chmod +x "$CASE/clockbin/date"
   NO_BASH_CLOCK=1 run_update "$CASE/clockbin"
-  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 2 ))" 1
+  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 4 ))" 1
   check "status ok" eq "$(field status)" '"ok"'
   check "no negative duration" eq "$(grep -c '"duration_sec": -' "$RESULT")" 0
   check "no half-negative duration" eq "$(grep -c '[0-9]\.-' "$RESULT")" 0
@@ -1586,59 +1599,331 @@ case_unanswered_dependency_update_reads_the_answer_once() {
   end_case
 }
 
-case_noop_restart
-case_noop_without_any_history
-case_noop_restart_migrates_a_database_behind_the_checkout
-case_noop_restart_brings_postgres_back
-case_noop_restart_a_baseline_row_is_not_a_migration
-case_deps_changed_as_root
-case_mpd_changed
-case_mpd_conf_only
-case_migration_health_failure_rolls_back
-case_flyway_failure_without_growth
-case_plugin_migration_health_failure_restores
-case_plugin_migration_kept_when_healthy
-case_test_twin_restored_on_its_own
-case_no_test_twin
-case_test_twin_backup_failure_aborts
-case_plugin_switched_off_by_load_error_rolls_back
-case_enabled_plugin_at_load_error_rolls_back
-case_plugin_broken_before_does_not_block
-case_rollback_cannot_bring_a_plugin_back
-case_dirty_tree_refused
-case_untracked_files_do_not_block
-case_backup_failure_aborts
-case_prev_from_core_pull_record
-case_prev_from_orig_head
-case_garbage_prev_record_ignored
-case_backups_pruned
-case_noop_health_failure_reports
-case_rollback_that_cannot_get_healthy
-case_sync_failure_output_stays_valid_utf8
-case_clock_stepped_back_keeps_the_result_valid
-case_uutils_date_leaves_the_durations_alone
-case_uutils_date_without_bash_clock_falls_back_to_seconds
-case_timing_helpers
-case_venv_from_the_core_unit
-case_venv_ignores_a_non_venv_interpreter
-case_venv_not_writable_aborts
-case_stop_detail_says_how_each_unit_stopped
-case_a_unit_already_down_is_said_to_be
-case_a_hung_stop_is_killed_and_the_restart_goes_on
-case_a_hung_stop_during_an_update_still_updates
-case_a_unit_that_survives_sigkill_fails_the_stop
-case_searxng_started_after_a_healthy_restart
-case_searxng_failure_never_fails_an_update
-case_searxng_stopped_for_never
-case_searxng_not_running_for_never_is_left_alone
-case_searxng_left_alone_when_unanswered
-case_searxng_opt_out_and_an_older_checkout
-case_searxng_hung_start_is_bounded_and_the_update_stays_ok
-case_searxng_start_detached_under_systemd
-case_never_refuses_a_dependency_update
-case_never_refuses_a_music_image_change
-case_never_mpd_conf_only_keeps_the_image
-case_unanswered_dependency_update_reads_the_answer_once
+# ─── signed updates (2026-10 audit, A8-01: root ran whatever upstream main
+# held; now HEAD must verify against the root-owned signers file) ─────────
 
-echo "apply-update harness: $PASSED passed, $FAILED failed"
+# Does this box's ssh-keygen sign and verify (OpenSSH 8.0+)? Without it
+# the cases that need real signatures are skipped, not failed. (Not a
+# pipeline: under pipefail ssh-keygen's usage exit would be the answer.)
+have_ssh_signing() { local out; out=$(ssh-keygen -Y 2>&1); [[ $out == *"requires an argument"* ]]; }
+
+# Two ed25519 keys in dir $1, owner (listed in allowed_signers) and
+# stranger (not), and the allowed_signers file. The principal is what git
+# reports as the signer (%GS).
+write_signing_keys() {
+  mkdir -p "$1"
+  ssh-keygen -q -t ed25519 -N '' -C owner -f "$1/owner" >/dev/null
+  ssh-keygen -q -t ed25519 -N '' -C stranger -f "$1/stranger" >/dev/null
+  printf 'owner@example.invalid namespaces="git" %s\n' "$(cut -d' ' -f1,2 "$1/owner.pub")" >"$1/allowed_signers"
+}
+
+# commit_signed KEY MSG: commit everything, SSH-signed with private key KEY.
+commit_signed() {
+  g add -A >/dev/null && g -c gpg.format=ssh -c user.signingkey="$1" commit -q -S -m "$2" && g rev-parse HEAD
+}
+
+# For the root cases: a stat that answers for the signers file alone with
+# what signers-stat holds ("0 644" unless a case says otherwise), so the
+# ownership check can be judged without being root; everything else real.
+write_stat_shim() {
+  mkdir -p "$1"
+  cat >"$1/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -c ] && [ "${2-}" = '%u %a' ] && [ "${3-}" = "$(cat "$SHIM_STATE/signers-path" 2>/dev/null)" ]; then
+  echo "stat $*" >>"$SHIM_STATE/calls.log"
+  cat "$SHIM_STATE/signers-stat" 2>/dev/null || echo "0 644"
+  exit 0
+fi
+exec "$SHIM_REAL_STAT" "$@"
+SH
+  chmod +x "$1/stat"
+}
+
+# A bare upstream for the case's repo, origin set and main tracking it.
+# Prints the URL as git stores it (under Git Bash that is the Windows
+# spelling of the path, not the /tmp one this harness uses).
+add_upstream() {
+  local bare=$CASE/upstream.git
+  git init -q --bare -b main "$bare"
+  g remote add origin "$bare"
+  g push -q origin main 2>/dev/null
+  g branch -q --set-upstream-to=origin/main main
+  g remote get-url origin
+}
+
+# The result's signature object, one field.
+sig_field() { field signature | sed -n "s/.*\"$1\": \([^,}]*\).*/\1/p"; }
+
+case_unsigned_head_warns_when_signing_is_not_enforced() {
+  new_case unsigned_head_warns_when_signing_is_not_enforced
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok: the box keeps working" eq "$(field status)" '"ok"'
+  check "a signature step, as a warning" step_is signature warn
+  check "the step says why" grep -qF '"detail": "not enforced: HEAD is not signed, and there is no ' "$RESULT"
+  check "the journal says so, loudly" grep -qF 'WARNING: signed updates are not enforced on this box' "$CASE/output.log"
+  check "and points at the doc" grep -qF 'Signed updates' "$CASE/output.log"
+  check "the result carries the state" eq "$(sig_field status)" '"unsigned"'
+  check "and that it is not enforced" eq "$(sig_field enforced)" false
+  check "the signers path it looked for" eq "$(sig_field allowed_signers)" "\"$CASE/no-allowed-signers\""
+  check "no verification without a file to verify against" not_called "verify-commit"
+  check "no git as root" not_called "safe.directory"
+  end_case
+}
+
+case_signed_head_without_a_signers_file_is_unverified() {
+  new_case signed_head_without_a_signers_file_is_unverified
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_signed "$CASE/keys/owner" "B: signed" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a signature step, as a warning" step_is signature warn
+  check "says it is signed but unchecked" grep -qF 'HEAD is signed, but there is no ' "$RESULT"
+  check "the result says unverified" eq "$(sig_field status)" '"unverified"'
+  check "read the commit as the service user" called "cat-file commit"
+  end_case
+}
+
+case_signed_head_verifies_as_root_before_anything_runs() {
+  new_case signed_head_verifies_as_root_before_anything_runs
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_signed "$CASE/keys/owner" "B: deps, signed")
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "a signature step, ok" step_is signature ok
+  check "names the signer" grep -qF '"detail": "HEAD is signed by owner@example.invalid (SHA256:' "$RESULT"
+  check "the result says verified" eq "$(sig_field status)" '"verified"'
+  check "and who" eq "$(sig_field signer)" '"owner@example.invalid"'
+  check "and that it is enforced" eq "$(sig_field enforced)" true
+  check "root verified HEAD itself" called "git -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
+  check "with the programs pinned" called "-c gpg.ssh.program=ssh-keygen -c gpg.program=gpg"
+  check "and verify-commit on the exact HEAD" called "verify-commit $sha_b"
+  check "not through runuser" not_called "runuser -u tester -- git -c safe.directory"
+  check "the signers file was judged" called "stat -c %u %a $CASE/keys/allowed_signers"
+  check "verified before the backup" before "verify-commit" "pg_dump"
+  check "verified before anything stopped" before "verify-commit" "systemctl stop"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_unsigned_head_refused_when_enforced() {
+  new_case unsigned_head_refused_when_enforced
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: unsigned")
+  SIGNERS=$CASE/keys/allowed_signers run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status refused" eq "$(field status)" '"refused"'
+  check "the signature step refused" step_is signature refused
+  check "error says it is not signed" eq "$(field error | grep -c 'HEAD is not signed; signed updates are enforced by')" 1
+  check "and what to do" eq "$(field error | grep -c 'Pull a commit signed by a listed key, or remove that file')" 1
+  check "the result says unsigned" eq "$(sig_field status)" '"unsigned"'
+  check "and enforced" eq "$(sig_field enforced)" true
+  check "nothing stopped" not_called "systemctl stop"
+  check "nothing started" not_called "systemctl start"
+  check "no backup taken" not_called "pg_dump"
+  check "no pip" not_called "pip "
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
+  check "no bad_sha: nothing was tried" eq "$(field bad_sha)" null
+  end_case
+}
+
+case_plain_restart_is_refused_too_when_head_does_not_verify() {
+  new_case plain_restart_is_refused_too_when_head_does_not_verify
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  SIGNERS=$CASE/keys/allowed_signers run_update
+  check "status refused" eq "$(field status)" '"refused"'
+  check "mode never decided" eq "$(field mode)" null
+  check "nothing stopped" not_called "systemctl stop"
+  check "the signature step is the only step" eq "$(step_names)" "signature"
+  end_case
+}
+
+case_head_signed_by_a_stranger_is_refused() {
+  new_case head_signed_by_a_stranger_is_refused
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_signed "$CASE/keys/stranger" "B: signed by a stranger")
+  SIGNERS=$CASE/keys/allowed_signers run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status refused" eq "$(field status)" '"refused"'
+  check "error names the file the key is not in" eq "$(field error | grep -c "the signature on HEAD is not by a key in $CASE/keys/allowed_signers")" 1
+  check "and keeps ssh-keygen's reason" eq "$(field error | grep -c 'No principal matched')" 1
+  check "the result says unverified" eq "$(sig_field status)" '"unverified"'
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup taken" not_called "pg_dump"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  end_case
+}
+
+case_a_signers_file_others_can_write_is_refused() {
+  new_case a_signers_file_others_can_write_is_refused
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_signed "$CASE/keys/owner" "B: signed" >/dev/null
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+  echo "0 664" >"$STATE/signers-stat"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "status refused" eq "$(field status)" '"refused"'
+  check "says the file cannot be trusted" eq "$(field error | grep -c 'can be written by a user other than root (mode 664)')" 1
+  check "never verified against it" not_called "verify-commit"
+  check "nothing stopped" not_called "systemctl stop"
+  echo "1001 644" >"$STATE/signers-stat"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "not root's: refused" eq "$(field status)" '"refused"'
+  check "says whose it is not" eq "$(field error | grep -c 'is not owned by root')" 1
+  end_case
+}
+
+case_upstream_pin_mismatch_is_refused() {
+  new_case upstream_pin_mismatch_is_refused
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  UPSTREAM_URL=https://github.com/coders-farm-official/domovoi.git run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status refused" eq "$(field status)" '"refused"'
+  check "an upstream step, refused" step_is upstream refused
+  check "error names both" eq "$(field error | grep -c "origin is not set, not the pinned https://github.com/coders-farm-official/domovoi.git")" 1
+  check "and where the pin lives" eq "$(field error | grep -c 'DOMOVOI_UPSTREAM_URL in /etc/default/domovoi-update')" 1
+  check "refused before the signature check" eq "$(step_names)" "upstream"
+  check "nothing stopped" not_called "systemctl stop"
+  check "no backup taken" not_called "pg_dump"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  # The same with another remote in place.
+  g remote add origin https://example.invalid/someone-else/domovoi.git
+  UPSTREAM_URL=https://github.com/coders-farm-official/domovoi run_update
+  check "another origin: refused" eq "$(field status)" '"refused"'
+  check "names it" eq "$(field error | grep -c 'origin is https://example.invalid/someone-else/domovoi.git, not the pinned')" 1
+  end_case
+}
+
+case_upstream_branch_pin_mismatch_is_refused() {
+  new_case upstream_branch_pin_mismatch_is_refused
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  commit_all "B: code" >/dev/null
+  local bare; bare=$(add_upstream)
+  UPSTREAM_URL=$bare UPSTREAM_BRANCH=release run_update
+  check "status refused" eq "$(field status)" '"refused"'
+  check "the URL matched, the branch did not" eq "$(field error | grep -c 'tracks refs/remotes/origin/main, not the pinned origin/release')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+case_upstream_pin_that_matches_goes_on() {
+  new_case upstream_pin_that_matches_goes_on
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  local bare; bare=$(add_upstream)
+  # The pin without the .git and with a trailing slash is the same remote.
+  UPSTREAM_URL=${bare%.git}/ UPSTREAM_BRANCH=main run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "an upstream step, ok" step_is upstream ok
+  check "then the signature step" eq "$(step_names | cut -d' ' -f1,2)" "upstream signature"
+  check "asked git for the remote (as the service user: git_as)" called "git -C $REPO remote get-url origin"
+  check "and for the tracking branch" called "git -C $REPO rev-parse --symbolic-full-name @{u}"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+CASES=(
+  case_noop_restart
+  case_noop_without_any_history
+  case_noop_restart_migrates_a_database_behind_the_checkout
+  case_noop_restart_brings_postgres_back
+  case_noop_restart_a_baseline_row_is_not_a_migration
+  case_deps_changed_as_root
+  case_mpd_changed
+  case_mpd_conf_only
+  case_migration_health_failure_rolls_back
+  case_flyway_failure_without_growth
+  case_plugin_migration_health_failure_restores
+  case_plugin_migration_kept_when_healthy
+  case_test_twin_restored_on_its_own
+  case_no_test_twin
+  case_test_twin_backup_failure_aborts
+  case_plugin_switched_off_by_load_error_rolls_back
+  case_enabled_plugin_at_load_error_rolls_back
+  case_plugin_broken_before_does_not_block
+  case_rollback_cannot_bring_a_plugin_back
+  case_dirty_tree_refused
+  case_untracked_files_do_not_block
+  case_backup_failure_aborts
+  case_prev_from_core_pull_record
+  case_prev_from_orig_head
+  case_garbage_prev_record_ignored
+  case_backups_pruned
+  case_noop_health_failure_reports
+  case_rollback_that_cannot_get_healthy
+  case_sync_failure_output_stays_valid_utf8
+  case_clock_stepped_back_keeps_the_result_valid
+  case_uutils_date_leaves_the_durations_alone
+  case_uutils_date_without_bash_clock_falls_back_to_seconds
+  case_timing_helpers
+  case_venv_from_the_core_unit
+  case_venv_ignores_a_non_venv_interpreter
+  case_venv_not_writable_aborts
+  case_stop_detail_says_how_each_unit_stopped
+  case_a_unit_already_down_is_said_to_be
+  case_a_hung_stop_is_killed_and_the_restart_goes_on
+  case_a_hung_stop_during_an_update_still_updates
+  case_a_unit_that_survives_sigkill_fails_the_stop
+  case_searxng_started_after_a_healthy_restart
+  case_searxng_failure_never_fails_an_update
+  case_searxng_stopped_for_never
+  case_searxng_not_running_for_never_is_left_alone
+  case_searxng_left_alone_when_unanswered
+  case_searxng_opt_out_and_an_older_checkout
+  case_searxng_hung_start_is_bounded_and_the_update_stays_ok
+  case_searxng_start_detached_under_systemd
+  case_never_refuses_a_dependency_update
+  case_never_refuses_a_music_image_change
+  case_never_mpd_conf_only_keeps_the_image
+  case_unanswered_dependency_update_reads_the_answer_once
+  case_unsigned_head_warns_when_signing_is_not_enforced
+  case_signed_head_without_a_signers_file_is_unverified
+  case_signed_head_verifies_as_root_before_anything_runs
+  case_unsigned_head_refused_when_enforced
+  case_plain_restart_is_refused_too_when_head_does_not_verify
+  case_head_signed_by_a_stranger_is_refused
+  case_a_signers_file_others_can_write_is_refused
+  case_upstream_pin_mismatch_is_refused
+  case_upstream_branch_pin_mismatch_is_refused
+  case_upstream_pin_that_matches_goes_on
+)
+
+# ONLY=<regex> runs the cases whose names match it (a quick look while
+# working on one); the suite runs them all.
+for c in "${CASES[@]}"; do
+  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+  "$c"
+done
+
+echo "apply-update harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
 [ "$FAILED" -eq 0 ]

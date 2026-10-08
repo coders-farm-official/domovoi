@@ -66,10 +66,13 @@ RULE="tester ALL=(root) NOPASSWD: $GRANT_CMD"
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 CASE_FAILED=0
 
 fail() { echo "    FAIL: $*"; CASE_FAILED=1; }
 check() { local what=$1; shift; if ! "$@"; then fail "$what"; fi; }
+# skip_case WHY: this case cannot run on this box; counted, never failed.
+skip_case() { SKIPPED=$((SKIPPED + 1)); echo "skip $CASE_NAME ($1)"; }
 
 # ─── fixtures ────────────────────────────────────────────────────────────
 
@@ -421,7 +424,11 @@ case_fresh_install() {
   check "says the checkout is ahead of the running code" said "is ahead of the running code (${SHA_A:0:12})"
   check "says how to apply it" said "sudo systemctl start domovoi-update.service"
   check "never prints the core's answer" not_said SENTINEL
-  check "no warnings" not_said warning
+  # The one warning a clean box gets: signing is not set up (see the
+  # signed-updates cases below).
+  check "one warning, the signing one" eq "$(grep -c warning "$CASE/output.log")" 1
+  check "which says so" said "signed updates are not enforced: no $ROOT/etc/domovoi/allowed_signers"
+  check "and points at the doc" said "docs/LINUX_HOST.md, Signed updates"
   end_case
 }
 
@@ -667,7 +674,10 @@ case_fix_ownership() {
   check "exit 0" eq "$RC" 0
   check "hands the venv over" called "chown -R tester: $VENV"
   check "last, once the unit is in: a chown can't be taken back" before "systemctl daemon-reload" "chown -R"
-  check "no warning left" not_said warning
+  # The venv's warning is gone. Not every warning: a box without the
+  # allowed-signers file still gets the signing one, and should.
+  check "no ownership warning left" not_said "warning  $VENV"
+  check "the fix line instead" said "fix      $VENV isn't all tester's"
   end_case
 }
 
@@ -984,53 +994,215 @@ case_fix_ownership_only_for_a_venv() {
   end_case
 }
 
-case_fresh_install
-case_idempotent_rerun
-case_existing_files_replaced_and_kept
-case_unit_in_place_but_not_loaded
-case_candidate_rule_rejected
-case_sudoers_already_broken
-case_full_check_fails_puts_old_grant_back
-case_full_check_fails_removes_new_grant
-case_grant_not_effective
-case_core_unreachable_stops
-case_core_url_option
-case_core_does_not_know
-case_sha_not_in_repo_stops
-case_existing_baseline_kept
-case_garbage_baseline_stops
-case_dry_run_changes_nothing
-case_not_root_refuses
-case_help_needs_no_root
-case_venv_owned_by_root_warns
-case_fix_ownership
-case_piper_too_old_warns
-case_piper_missing_warns
-case_piper_newer_is_fine
-case_docker_denied_stops
-case_missing_unit_stops
-case_no_systemd_stops
-case_masked_unit_stops
-case_user_mismatch_stops
-case_root_owned_checkout_needs_user
-case_other_repo_stops
-case_defaults_file_user_must_agree
-case_defaults_file_update_dir
-case_apply_runs_the_update
-case_apply_reports_a_rollback
-case_install_root_needs_the_harness_flag
-case_state_dir_writable_by_others_stops
-case_state_dir_parent_writable_by_others_stops
-case_defaults_file_writable_by_others_stops
-case_relative_state_dir_stops
-case_core_url_must_be_this_box
-case_curl_is_hardened
-case_ref_named_like_the_sha_stops
-case_unit_write_fails_takes_the_grant_back
-case_daemon_reload_fails_takes_everything_back
-case_unit_not_loaded_puts_the_old_one_back
-case_unexpected_failure_takes_back
-case_fix_ownership_only_for_a_venv
+# ─── signed updates: the pre-flight check (2026-10 audit, A8-01) ──────────
 
-echo "install-update-unit harness: $PASSED passed, $FAILED failed"
+# Does this box's ssh-keygen sign and verify (OpenSSH 8.0+)? Only the case
+# with a real signature needs it; without it that case is skipped.
+have_ssh_signing() { local out; out=$(ssh-keygen -Y 2>&1); [[ $out == *"requires an argument"* ]]; }
+
+SIGNERS_FILE=""   # where the installer looks under the fake root
+
+# An ed25519 key in $1, listed in the allowed-signers file under the fake
+# root where the installer looks.
+write_signing() {
+  SIGNERS_FILE=$ROOT/etc/domovoi/allowed_signers
+  mkdir -p "$1" "$ROOT/etc/domovoi"
+  ssh-keygen -q -t ed25519 -N '' -C owner -f "$1/owner" >/dev/null
+  printf 'owner@example.invalid namespaces="git" %s\n' "$(cut -d' ' -f1,2 "$1/owner.pub")" >"$SIGNERS_FILE"
+}
+
+# A signers file that lists some key, for the cases where HEAD is unsigned
+# and the key is never consulted.
+write_some_signers() {
+  SIGNERS_FILE=$ROOT/etc/domovoi/allowed_signers
+  mkdir -p "$ROOT/etc/domovoi"
+  printf 'owner namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n' >"$SIGNERS_FILE"
+}
+
+# Re-make commit B SSH-signed by private key $1 (the case starts with it
+# unsigned), and let the core's answer name the new B.
+resign_head() {
+  g -c gpg.format=ssh -c user.signingkey="$1" commit -q --amend -S --no-edit
+  SHA_B=$(g rev-parse HEAD)
+  printf '{"sha":"%s-dirty","running_sha":"%s-dirty","checkout_sha":"%s","restart_required":true,"note":"SENTINEL-BODY-NOT-PRINTED"}\n' \
+    "${SHA_A:0:7}" "${SHA_A:0:7}" "${SHA_B:0:7}" >"$STATE/version.json"
+}
+
+case_signing_enforced_and_head_verifies() {
+  new_case signing_enforced_and_head_verifies
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing "$CASE/keys"
+  resign_head "$CASE/keys/owner"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "says who signed HEAD" said "signed updates enforced: HEAD ${SHA_B:0:12} is signed by owner@example.invalid ($SIGNERS_FILE)"
+  check "no signing warning" not_said "signed updates are not enforced"
+  check "verified as root, against that file, with the programs pinned" \
+    called "git -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$SIGNERS_FILE -c gpg.ssh.program=ssh-keygen -c gpg.program=gpg"
+  check "verify-commit on HEAD" called "verify-commit HEAD"
+  check "not as the service user" not_called "sudo -n -u tester -- git -c safe.directory"
+  check "the file judged root-only first" before "stat -c %u %a $SIGNERS_FILE" "verify-commit HEAD"
+  check "installed as usual" eq "$(cat "$UNIT")" "$(expected_unit)"
+  end_case
+}
+
+case_signing_enforced_but_head_unsigned_stops() {
+  new_case signing_enforced_but_head_unsigned_stops
+  write_some_signers
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says why" said "signed updates are enforced by $SIGNERS_FILE, but HEAD ${SHA_B:0:12} does not verify: it is not signed"
+  check "and what it would mean" said "The update unit would refuse every run"
+  check "and the way out" said "or remove the file to turn enforcement off"
+  check "the core was asked first (the baseline is still worth having)" called "curl http://127.0.0.1:6370/v1/admin/version"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_signers_file_writable_by_others_stops() {
+  new_case signers_file_writable_by_others_stops
+  write_some_signers
+  echo "$SIGNERS_FILE" >"$STATE/insecure-paths"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "names it" said "$SIGNERS_FILE can be written by a user other than root"
+  check "says what root keeps there" said "verifies every HEAD against the keys in $SIGNERS_FILE"
+  check "never verified against it" not_called "verify-commit"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_signers_file_symlink_stops() {
+  new_case signers_file_symlink_stops
+  mkdir -p "$ROOT/etc/domovoi"
+  printf 'owner namespaces="git" ssh-ed25519 AAAA\n' >"$CASE/elsewhere"
+  # MSYS's ln -s copies unless symlinks are enabled: only a real link counts.
+  ln -s "$CASE/elsewhere" "$ROOT/etc/domovoi/allowed_signers" 2>/dev/null
+  if [ ! -L "$ROOT/etc/domovoi/allowed_signers" ]; then skip_case "cannot make a symlink here"; return; fi
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says so" said "$ROOT/etc/domovoi/allowed_signers is a symlink, and the update unit refuses it"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_signers_path_comes_from_the_defaults_file() {
+  new_case signers_path_comes_from_the_defaults_file
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_ALLOWED_SIGNERS=/etc/domovoi/keys/allowed\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "looked where the unit will" said "signed updates are not enforced: no $ROOT/etc/domovoi/keys/allowed"
+  end_case
+}
+
+case_upstream_pin_mismatch_stops() {
+  new_case upstream_pin_mismatch_stops
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says why" said "pins the upstream to https://github.com/coders-farm-official/domovoi, but the checkout's origin is not set"
+  check "asked the service user's git" called "sudo -n -u tester -- git -C $REPO remote get-url origin"
+  check "gives the fix" said "git -C $REPO remote set-url origin https://github.com/coders-farm-official/domovoi"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_upstream_branch_pin_mismatch_stops() {
+  new_case upstream_branch_pin_mismatch_stops
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPSTREAM_BRANCH=main\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 1: no tracking branch at all" eq "$RC" 1
+  check "says why" said "pins the branch to origin/main, but HEAD tracks no upstream branch"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_upstream_pin_that_matches_is_reported() {
+  new_case upstream_pin_that_matches_is_reported
+  local bare=$CASE/upstream.git url
+  git init -q --bare -b main "$bare"
+  g remote add origin "$bare"
+  g push -q origin main 2>/dev/null
+  g branch -q --set-upstream-to=origin/main main
+  url=$(g remote get-url origin)
+  mkdir -p "$ROOT/etc/default"
+  # A trailing slash on the pin is the same remote.
+  printf 'DOMOVOI_UPSTREAM_URL=%s/\nDOMOVOI_UPSTREAM_BRANCH=main\n' "$url" >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "reports the URL pin" said "upstream pinned: origin is $url/"
+  check "reports the branch pin" said "upstream pinned: HEAD tracks origin/main"
+  check "installed as usual" eq "$(cat "$UNIT")" "$(expected_unit)"
+  end_case
+}
+
+CASES=(
+  case_fresh_install
+  case_idempotent_rerun
+  case_existing_files_replaced_and_kept
+  case_unit_in_place_but_not_loaded
+  case_candidate_rule_rejected
+  case_sudoers_already_broken
+  case_full_check_fails_puts_old_grant_back
+  case_full_check_fails_removes_new_grant
+  case_grant_not_effective
+  case_core_unreachable_stops
+  case_core_url_option
+  case_core_does_not_know
+  case_sha_not_in_repo_stops
+  case_existing_baseline_kept
+  case_garbage_baseline_stops
+  case_dry_run_changes_nothing
+  case_not_root_refuses
+  case_help_needs_no_root
+  case_venv_owned_by_root_warns
+  case_fix_ownership
+  case_piper_too_old_warns
+  case_piper_missing_warns
+  case_piper_newer_is_fine
+  case_docker_denied_stops
+  case_missing_unit_stops
+  case_no_systemd_stops
+  case_masked_unit_stops
+  case_user_mismatch_stops
+  case_root_owned_checkout_needs_user
+  case_other_repo_stops
+  case_defaults_file_user_must_agree
+  case_defaults_file_update_dir
+  case_apply_runs_the_update
+  case_apply_reports_a_rollback
+  case_install_root_needs_the_harness_flag
+  case_state_dir_writable_by_others_stops
+  case_state_dir_parent_writable_by_others_stops
+  case_defaults_file_writable_by_others_stops
+  case_relative_state_dir_stops
+  case_core_url_must_be_this_box
+  case_curl_is_hardened
+  case_ref_named_like_the_sha_stops
+  case_unit_write_fails_takes_the_grant_back
+  case_daemon_reload_fails_takes_everything_back
+  case_unit_not_loaded_puts_the_old_one_back
+  case_unexpected_failure_takes_back
+  case_fix_ownership_only_for_a_venv
+  case_signing_enforced_and_head_verifies
+  case_signing_enforced_but_head_unsigned_stops
+  case_signers_file_writable_by_others_stops
+  case_signers_file_symlink_stops
+  case_signers_path_comes_from_the_defaults_file
+  case_upstream_pin_mismatch_stops
+  case_upstream_branch_pin_mismatch_stops
+  case_upstream_pin_that_matches_is_reported
+)
+
+# ONLY=<regex> runs the cases whose names match it (a quick look while
+# working on one); the suite runs them all.
+for c in "${CASES[@]}"; do
+  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+  "$c"
+done
+
+echo "install-update-unit harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
 [ "$FAILED" -eq 0 ]
