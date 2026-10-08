@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_admin_mutation, require_device
+from web.backend.api.files_security import is_sensitive_name, unstorable_reason
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -613,6 +614,19 @@ async def upload_to_library(
         base = _safe_basename(raw_name)
         if not base:
             skipped.append(f"{raw_name!r}: bad filename")
+            return
+        # Judged as it will be STORED, like every Files and Documents write
+        # (WEB-17): on NTFS "song:x.mp3" is an alternate data stream hanging
+        # off a file "song" — invisible to every listing, zip and the
+        # indexer's walk, yet indexed and served by its stored path — and a
+        # trailing dot or space is trimmed into a different name. A control
+        # character is refused on every platform.
+        reason = unstorable_reason(base)
+        if reason is not None:
+            skipped.append(f"{base!r}: {reason}")
+            return
+        if is_sensitive_name(base):
+            skipped.append(f"{base}: that name is reserved")
             return
         if Path(base).suffix.lower() not in _UPLOAD_AUDIO_EXTENSIONS:
             skipped.append(f"{base}: unsupported type")
