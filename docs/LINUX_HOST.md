@@ -599,21 +599,38 @@ Domovoi does; it bounds what a process gone wrong can reach directly:
   caches and the default `~/Music`, `~/Pictures` and `~/Documents`.
   `domovoi-db` sees homes read-only and writes only its own.
 - **Private `/tmp`** per unit, files the services create are not readable
-  by other accounts (`UMask=0027`), and the kernel's tunables, modules,
-  logs, control groups and hostname are off limits.
-- **No set-uid files, no realtime scheduling, no new namespaces, native
-  system calls only,** and sockets limited to local, IPv4, IPv6 and
-  netlink.
-- **`domovoi-web` and `domovoi-db`** also run with `NoNewPrivileges=yes`
-  and no capabilities at all; `domovoi-db`, which only drives the `docker`
-  CLI, gives up devices, the clock and writable-executable memory too.
+  by other accounts (`UMask=0027`), and the control groups are read-only.
+- **`domovoi-web` and `domovoi-db`** also have the kernel's tunables,
+  modules, logs and hostname off limits; no set-uid files, no realtime
+  scheduling, no new namespaces, native system calls only, and sockets
+  limited to local, IPv4, IPv6 and netlink. They run with
+  `NoNewPrivileges=yes` and no capabilities at all; `domovoi-db`, which
+  only drives the `docker` CLI, gives up devices, the clock and
+  writable-executable memory too.
 
 What is deliberately left out, and why:
 
-- **`NoNewPrivileges` on the core.** The version panel's restart runs
-  `sudo -n systemctl ...` from the core ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)),
-  and `NoNewPrivileges` stops sudo working. The web never runs sudo (its
-  Restart button asks the core), so it keeps the setting.
+- **Everything that implies `NoNewPrivileges` on the core.** The version
+  panel's Restart runs `sudo -n systemctl ...` from the core
+  ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)), and on a
+  box with the [update unit](#updates-from-the-dashboard) that is
+  `sudo -n systemctl start domovoi-update.service`, the box's only update
+  path. sudo works only while its set-uid bit is honoured, and the kernel's
+  no-new-privileges flag turns that off ("The no new privileges flag is
+  set"). systemd sets that flag for `NoNewPrivileges=yes`, and it also
+  implies it, for a unit that runs as a non-root `User=`, for every option
+  it enforces with seccomp: `LockPersonality`, `MemoryDenyWriteExecute`,
+  `PrivateDevices`, `ProtectClock`, `ProtectHostname`, `ProtectKernelLogs`,
+  `ProtectKernelModules`, `ProtectKernelTunables`,
+  `RestrictAddressFamilies`, `RestrictNamespaces`, `RestrictRealtime`,
+  `RestrictSUIDSGID`, `SystemCallArchitectures`, `SystemCallFilter`,
+  `SystemCallLog` and `DynamicUser` (`man systemd.exec`, under
+  `NoNewPrivileges=`). So the core unit keeps only the file-system part
+  above (read-only system, private `/tmp`, hidden homes, read-only control
+  groups, the umask), and its comment lists what it leaves out. Adding any
+  of those options to the core, in the unit or a drop-in, silently breaks
+  the Restart button: the panel then reports no sudoers grant. The web
+  never runs sudo (its Restart button asks the core), so it keeps them all.
 - **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
   They hide device nodes: a GPU, an SDR stick for the radio, the block
   devices the dashboard reads a satellite card's label from.
@@ -635,18 +652,24 @@ ReadWritePaths=/data/music
 
 **Check it** after `daemon-reload` and a restart: `systemd-analyze security
 domovoi-core` scores the exposure (the units this page listed before
-scored 9.0 "UNSAFE" each; the shipped ones score about 5.9 for the core,
-3.5 for the web and 1.8 for `domovoi-db`), Settings → Version still offers
+scored 9.0 "UNSAFE" each; the shipped ones score about 3.5 for the web and
+1.8 for `domovoi-db`, and the core, which keeps only the file-system part,
+scores higher than both), Settings → Version still offers
 **Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
 satellite turn answers, and a room's music starts (the core runs
-`docker`).
+`docker`). The quick check for the sudo path on its own, as root:
+`systemd-run -p User=domovoi -p ProtectSystem=strict -p PrivateTmp=yes --wait --pipe sudo -n -l`
+lists the grant; add `-p RestrictSUIDSGID=yes` and it fails, which is the
+trap described above.
 
 **Already running units from an older copy of this page?** If they match
 this page's layout, install the shipped files over them as above, then
 `sudo systemctl daemon-reload` and restart the three. If you changed
 paths or the user, copy the sandboxing block from the shipped file into a
 drop-in instead (`sudo systemctl edit domovoi-core`, and the same for the
-other two), with your paths in `ReadWritePaths=` and `BindPaths=`.
+other two), with your paths in `ReadWritePaths=` and `BindPaths=`. Copy
+each unit's own block: the web's or the database's block in the core's
+drop-in stops its sudo.
 
 `domovoi-update.service` is not sandboxed: it runs as root to stop and
 start the other units, back up the database, rebuild the room image and

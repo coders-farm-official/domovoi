@@ -19,10 +19,27 @@ KillMode=control-group
 # checkout and its venv (pulls, plugin installs, .env), the service user's
 # home (~/.domovoi, the model caches, the default media folders) and the
 # usual mount points for media disks; every other user's home is hidden.
-# No NoNewPrivileges: the dashboard's Restart runs `sudo -n systemctl ...`
-# from this process. No ProtectClock, PrivateDevices or
-# MemoryDenyWriteExecute: the first two cut off GPU devices, the last
-# breaks the JIT compilers the speech stack uses.
+#
+# This unit is deliberately looser than domovoi-web and domovoi-db: the
+# dashboard's Restart, and with it the update unit (domovoi-update.service),
+# runs `sudo -n systemctl ...` from this process (domovoi/self_restart.py).
+# sudo needs its set-uid bit honoured, so the unit must never end up with
+# the no_new_privs flag. systemd sets that flag not only for
+# NoNewPrivileges=yes but, for a unit that runs as an unprivileged User=
+# (no CAP_SYS_ADMIN), for every option it enforces with seccomp
+# (systemd.exec(5), NoNewPrivileges=): DynamicUser, LockPersonality,
+# MemoryDenyWriteExecute, PrivateDevices, ProtectClock, ProtectHostname,
+# ProtectKernelLogs, ProtectKernelModules, ProtectKernelTunables,
+# RestrictAddressFamilies, RestrictNamespaces, RestrictRealtime,
+# RestrictSUIDSGID, SystemCallArchitectures, SystemCallFilter and
+# SystemCallLog. None of them is set here: under any one of them sudo
+# refuses ("The no new privileges flag is set") and the Restart button
+# reports no sudoers grant. What stays is the mount-namespace part, which
+# implies nothing: a read-only system, a private /tmp, hidden homes,
+# read-only control groups and a 0027 umask.
+# Also left out, for the hardware: ProtectClock and PrivateDevices hide
+# GPU and SDR devices, MemoryDenyWriteExecute breaks the speech stack's
+# JIT compilers (numba, torch, onnxruntime).
 UMask=0027
 PrivateTmp=yes
 ProtectSystem=strict
@@ -31,17 +48,7 @@ ReadWritePaths=/opt/domovoi
 ReadWritePaths=-/mnt -/media -/run/media -/srv
 ProtectHome=tmpfs
 BindPaths=/home/domovoi
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
 ProtectControlGroups=yes
-ProtectHostname=yes
-RestrictRealtime=yes
-RestrictNamespaces=yes
-RestrictSUIDSGID=yes
-LockPersonality=yes
-SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
