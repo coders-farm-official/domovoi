@@ -246,12 +246,23 @@ async def test_shazam_is_never_asked_under_never(monkeypatch) -> None:
 # ─── the voice handler ───────────────────────────────────────────────────
 
 
+def _allowlist_lan_stream(monkeypatch) -> None:
+    """The household's own LAN stream, which the operator listed in
+    ``OUTBOUND_ALLOW_HOSTS`` (a house-network station is one the server
+    may fetch only then — the handler checks a row's URL before the room's
+    player fetches it, A7-06)."""
+    from domovoi import net_safety
+
+    monkeypatch.setattr(net_safety, "configured_allow_hosts", lambda: "192.168.1.50:8000")
+
+
 @pytest.mark.asyncio
-async def test_handler_never_hands_mpd_an_internet_stream(stub_sdk) -> None:
+async def test_handler_never_hands_mpd_an_internet_stream(stub_sdk, monkeypatch) -> None:
     from domovoi.sdk import Context
 
     from domovoi_plugin_radio.handlers.radio import RadioHandler
 
+    _allowlist_lan_stream(monkeypatch)
     handler = RadioHandler(stub_sdk)
     ctx = Context(room_id="kitchen", online=False)
     station = {"id": 1, "name": "KEXP", "source": "online", "stream_url": INTERNET_URL}
@@ -355,6 +366,7 @@ async def test_the_sdk_refusal_wording_reaches_the_listener(stub_sdk, monkeypatc
                         data={"stream_url": stream_url, "ok": False, "status": "internet_off"})
 
     monkeypatch.setattr(stub_sdk.playback, "play_url", refused)
+    _allowlist_lan_stream(monkeypatch)
     station = {"id": 2, "name": "FM box", "source": "online", "stream_url": LAN_URL}
     with egress.override_policy(""):
         resp = await RadioHandler(stub_sdk)._stream_station_row(station, Context(room_id="kitchen"), None)
