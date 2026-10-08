@@ -1574,6 +1574,64 @@ case_never_mpd_conf_only_keeps_the_image() {
   end_case
 }
 
+# A compose file with digest-pinned images, committed on top of A and
+# recorded as applied; echoes the new SHA. Used by the image-pin cases.
+compose_base() {
+  printf 'services:
+  postgres:
+    # postgres 16
+    image: postgres:16@sha256:%s
+' "$(printf 'a%.0s' {1..64})"     >"$REPO/domovoi/docker-compose.yml"
+  local sha; sha=$(commit_all "A2: compose")
+  mkdir -p "$UPD" && echo "$sha" >"$UPD/applied_sha"
+  printf '%s' "$sha"
+}
+
+case_never_refuses_a_container_image_change() {
+  new_case never_refuses_a_container_image_change
+  local base; base=$(compose_base)
+  echo never >"$STATE/internet-policy"
+  sed -i "s/@sha256:a*/@sha256:$(printf 'b%.0s' {1..64})/" "$REPO/domovoi/docker-compose.yml"
+  local sha_b; sha_b=$(commit_all "B: new postgres digest")
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "names the images" eq "$(field error | grep -c 'container images (docker compose would pull them)')" 1
+  check "says the internet is off" eq "$(field error | grep -c 'internet access is turned off for this box')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  check "no migrate (compose would pull)" not_called "systemctl restart domovoi-db.service"
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$base"
+  end_case
+}
+
+case_compose_comment_change_is_not_an_image_change() {
+  new_case compose_comment_change_is_not_an_image_change
+  compose_base >/dev/null
+  echo never >"$STATE/internet-policy"
+  sed -i 's/# postgres 16/# postgres 16, the database/' "$REPO/domovoi/docker-compose.yml"
+  local sha_b; sha_b=$(commit_all "B: compose comment")
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "migrates as usual" called "systemctl restart domovoi-db.service"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_image_change_online_updates() {
+  new_case image_change_online_updates
+  compose_base >/dev/null
+  echo sometimes >"$STATE/internet-policy"
+  sed -i "s/@sha256:a*/@sha256:$(printf 'c%.0s' {1..64})/" "$REPO/domovoi/docker-compose.yml"
+  local sha_b; sha_b=$(commit_all "B: new postgres digest")
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the answer was read before stopping anything" before "domovoi.egress --print-policy" "systemctl stop"
+  check "domovoi-db brings the new image up" called "systemctl restart domovoi-db.service"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
 case_unanswered_dependency_update_reads_the_answer_once() {
   new_case unanswered_dependency_update_reads_the_answer_once
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -1638,6 +1696,9 @@ case_searxng_start_detached_under_systemd
 case_never_refuses_a_dependency_update
 case_never_refuses_a_music_image_change
 case_never_mpd_conf_only_keeps_the_image
+case_never_refuses_a_container_image_change
+case_compose_comment_change_is_not_an_image_change
+case_image_change_online_updates
 case_unanswered_dependency_update_reads_the_answer_once
 
 echo "apply-update harness: $PASSED passed, $FAILED failed"

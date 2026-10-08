@@ -144,6 +144,9 @@ FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
 # Git pathspecs, relative to the repo root.
 DEPS_PATHS=(pyproject.toml 'requirements*.lock' 'plugins/*/requirements*.lock')
 MPD_PATHS=(domovoi/Dockerfile.mpd domovoi/mpd.conf)
+# The compose file whose `image:` pins decide what domovoi-db (and the
+# search helper) pull: a moved digest is a download.
+COMPOSE_PATH=domovoi/docker-compose.yml
 
 # Run state, filled in as the run goes.
 SERVICE_USER=""
@@ -161,6 +164,8 @@ START_MS=0
 DEPS_CHANGED=0
 MPD_CHANGED=0
 MPD_IMAGE_CHANGED=0
+# An `image:` line in the compose file changed: the next compose up pulls.
+IMAGES_CHANGED=0
 # The internet answer as this run found it at the start ("" when
 # unanswered, or when the checkout can't say).
 POLICY_AT_START=""
@@ -511,6 +516,18 @@ paths_changed() {
   local rc=0
   git_as diff --quiet "$PREV_SHA" "$HEAD_SHA" -- "$@" || rc=$?
   [ "$rc" -ne 0 ]
+}
+
+# Did an `image:` line of the compose file change between PREV_SHA and
+# HEAD_SHA? Every image there is pinned by digest, so a changed line is a
+# pull on the next `docker compose up` (domovoi-db pulls Postgres and
+# Flyway). Comments and other keys don't count. A diff that errors counts
+# as changed, the same rule as paths_changed.
+images_changed() {
+  local diff
+  diff=$(git_as diff --no-color -U0 "$PREV_SHA" "$HEAD_SHA" -- "$COMPOSE_PATH") || return 0
+  printf '%s
+' "$diff" | grep -Eq '^[+-][[:space:]]*image:'
 }
 
 # ─── The steps ───────────────────────────────────────────────────────────
@@ -1121,16 +1138,20 @@ full_update() {
   if paths_changed "${DEPS_PATHS[@]}"; then DEPS_CHANGED=1; fi
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
   if paths_changed domovoi/Dockerfile.mpd; then MPD_IMAGE_CHANGED=1; fi
-  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ]; then
+  if images_changed; then IMAGES_CHANGED=1; fi
+  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; then
     # Read once, before anything is touched: what this run may download
     # depends on it (the rollback's re-sync and rebuild use it too).
     POLICY_AT_START=$(internet_policy 2>/dev/null || true)
   fi
-  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ]; }; then
-    why="this update changes"
-    if [ "$DEPS_CHANGED" = 1 ]; then why="$why the Python dependencies (pip would download them)"; fi
-    if [ "$DEPS_CHANGED" = 1 ] && [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why and"; fi
-    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why the music player image (docker build downloads it)"; fi
+  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; }; then
+    local -a what=()
+    if [ "$DEPS_CHANGED" = 1 ]; then what+=("the Python dependencies (pip would download them)"); fi
+    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then what+=("the music player image (docker build downloads it)"); fi
+    if [ "$IMAGES_CHANGED" = 1 ]; then what+=("the container images (docker compose would pull them)"); fi
+    why="this update changes ${what[0]}"
+    if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
+    if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
     add_step preflight refused "$t0" "$why; internet access is turned off for this box"
     finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No (docs/INTERNET.md)."
     return

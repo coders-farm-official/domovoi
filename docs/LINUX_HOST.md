@@ -269,11 +269,51 @@ run each room's MPD container. Without group membership it would need
 sudo, which it won't do. Log out and back in, then confirm with `docker ps`
 that you get output rather than a permission error.
 
-Ollama:
+Ollama, from a pinned release checked against its SHA-256. (Ollama's
+`curl -fsSL https://ollama.com/install.sh | sh` fetches whatever is newest
+and checks no hash; the steps below are what that script does on a
+CPU-only x86_64 box, with the check added.)
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+OLLAMA_VERSION=0.34.4
+# ollama-linux-amd64.tar.zst of that release (on arm64: ollama-linux-arm64.tar.zst,
+# 96f50a1192133028cf4e010d8c333f8af14b1505db6be7b2034c11487e7fd7e6)
+OLLAMA_SHA256=c238986e61d40c0cc5f4a9b9e40b9eea104350b77efa34741fc134e105cb9533
+sudo apt install -y zstd
+curl -fL -o /tmp/ollama.tar.zst   "https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+echo "$OLLAMA_SHA256  /tmp/ollama.tar.zst" | sha256sum -c -   # must say OK; stop if not
+sudo rm -rf /usr/local/lib/ollama
+sudo tar --zstd -xf /tmp/ollama.tar.zst -C /usr/local       # bin/ollama and lib/ollama
+rm /tmp/ollama.tar.zst
+sudo useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 ```
+
+**`/etc/systemd/system/ollama.service`** (the unit `install.sh` writes):
+
+```ini
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now ollama
+```
+
+To move to another release, take its digest from that release's
+`sha256sum.txt` (or `gh release view v<version> -R ollama/ollama --json
+assets`) and repeat the steps with both values changed. The Windows
+installer pins the same release.
 
 Then clone and install. A virtualenv is worth it here — it keeps Domovoi's
 dependency tree away from the system Python that apt manages:
@@ -692,8 +732,10 @@ run does this:
 
 Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
 update that would download is refused with status `aborted`, nothing
-stopped or changed: one whose Python dependencies changed (pip) or whose
-`Dockerfile.mpd` changed (docker build pulls the base image and runs apt).
+stopped or changed: one whose Python dependencies changed (pip), whose
+`Dockerfile.mpd` changed (docker build pulls the base image and runs apt),
+or whose `domovoi/docker-compose.yml` moves an `image:` pin (every image
+there is pinned by digest, so `domovoi-db` would pull the new one).
 An `mpd.conf`-only change keeps the image and just recreates the rooms.
 To take such an update, follow
 [INTERNET.md → Updating a box answered No](INTERNET.md#updating-a-box-answered-no).
@@ -1023,6 +1065,31 @@ file interpolates it). Rotate right away if your install predates the
 random-password bootstrap — its `.env` carries the template default, and
 `python -m domovoi.env_bootstrap` deliberately leaves an existing `.env`
 alone.
+
+**Helper-container secrets.** `docker-compose.yml` takes the Letta server
+password from `LETTA_TOKEN` and SearXNG's signing key from `SEARXNG_SECRET`
+in `domovoi/.env`. `LETTA_TOKEN` is also what the core signs in to Letta
+with, so the two always match. A fresh `.env` gets random values from
+`python -m domovoi.env_bootstrap`; an older `.env` without them falls back
+to the historical values, which were the same on every install. Both
+containers listen on `127.0.0.1` only, so on a dedicated box only the box's
+own processes reach them, but give them their own values anyway:
+
+```bash
+cd /opt/domovoi/domovoi
+gen() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
+printf 'LETTA_TOKEN=%s
+SEARXNG_SECRET=%s
+' "$(gen)" "$(gen)" >>.env
+# Recreate whichever of the two runs, so it starts with the new value:
+docker compose up -d --no-deps searxng            # if the search helper runs
+docker compose --profile chat up -d letta         # if chat mode is on
+sudo systemctl restart domovoi-core domovoi-web   # the core reads LETTA_TOKEN at start
+```
+
+Letta reads its password from the environment when it starts, so that is
+the whole rotation. Skip the `searxng` line on a box answered No: the
+helper stays stopped there.
 
 **Don't suspend.** Desktop-oriented installs sometimes ship with sleep
 targets enabled, which is fatal for a machine satellites reconnect to:

@@ -375,7 +375,8 @@ your router, it would tell Domovoi the internet is up when it isn't.
   installed still installs).
 - Updates: **Check for updates** and **Pull the latest** are greyed, and
   on Linux the update unit refuses (touching nothing) an update that
-  would download: new Python dependencies, or a new music player image.
+  would download: new Python dependencies, a new music player image, or a
+  moved container image pin (Postgres, Flyway, Letta, the search helper).
 
 #### Updating a box answered No
 

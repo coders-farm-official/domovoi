@@ -802,8 +802,10 @@ docker compose up -d letta
 ```
 
 The `letta` service (in `domovoi/docker-compose.yml`) runs
-`letta/letta:latest`, published on `127.0.0.1:6283` (loopback only — the
-core is its only client). It **bundles its own
+`letta/letta`, pinned by digest, published on `127.0.0.1:6283` (loopback
+only — the core is its only client). Its password is `LETTA_TOKEN` from
+`domovoi/.env`, which compose hands the container as
+`LETTA_SERVER_PASSWORD` and the core signs in with. It **bundles its own
 Postgres+pgvector**
 in the `letta-pgdata` volume and self-manages its own schema — it is NOT
 pointed at the core's Flyway-owned Postgres (that would collide
