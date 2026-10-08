@@ -1111,6 +1111,9 @@ check git offers:
 sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers pull --ff-only --verify-signatures
 ```
 
+(After a pull by hand, run `env_bootstrap --repair` before you restart
+anything yourself; see [Helper-container secrets](#two-more-linux-notes).)
+
 The service user is in the `docker` group and so root-equivalent already;
 signing bounds *upstream*, not the service user.
 
@@ -1423,27 +1426,43 @@ alone.
 **Helper-container secrets.** `docker-compose.yml` takes the Letta server
 password from `LETTA_TOKEN` and SearXNG's signing key from `SEARXNG_SECRET`
 in `domovoi/.env`. `LETTA_TOKEN` is also what the core signs in to Letta
-with, so the two always match. A fresh `.env` gets random values from
-`python -m domovoi.env_bootstrap`; an older `.env` without them falls back
-to the historical values, which were the same on every install. Both
-containers listen on `127.0.0.1` only, so on a dedicated box only the box's
-own processes reach them, but give them their own values anyway:
+with, so the two always match. There is no fallback: until October 2026
+an `.env` without them got values that were the same on every install,
+so compose now refuses every command (`domovoi-db`'s `compose up postgres`
+included) while either is missing, and says how to add them. A fresh
+`.env` gets random values from `python -m domovoi.env_bootstrap`. An older
+one gets them from
+
+```bash
+cd /opt/domovoi
+sudo -u domovoi .venv/bin/python -m domovoi.env_bootstrap --repair
+```
+
+which appends a generated value for each one the file lacks (or leaves
+empty, or sets to the old shared value) and changes nothing else; run
+again, it writes nothing. You rarely type it: the
+[update unit](#updates-from-the-dashboard) runs it as the service user
+before anything uses compose, on every update and every Restart (a value
+it adds is an `env-secrets` step in **last update**), and `dev.sh` /
+`dev.ps1` run it too. **Updating by hand** (`git pull`, then restarting the
+units yourself)? Run it once after the pull and before the restart, or
+`domovoi-db` refuses to start and takes the core with it.
+
+The search helper takes its new value the next time it is started (the
+update unit starts it under Yes or Sometimes). Letta, if chat mode runs it,
+keeps its old password until it is recreated, while the core signs in
+with the new one after its restart: recreate it (the update unit records
+this as a `warn` with the same line):
 
 ```bash
 cd /opt/domovoi/domovoi
-gen() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
-printf 'LETTA_TOKEN=%s
-SEARXNG_SECRET=%s
-' "$(gen)" "$(gen)" >>.env
-# Recreate whichever of the two runs, so it starts with the new value:
-docker compose up -d --no-deps searxng            # if the search helper runs
 docker compose --profile chat up -d letta         # if chat mode is on
 sudo systemctl restart domovoi-core domovoi-web   # the core reads LETTA_TOKEN at start
 ```
 
 Letta reads its password from the environment when it starts, so that is
-the whole rotation. Skip the `searxng` line on a box answered No: the
-helper stays stopped there.
+the whole rotation. To rotate later, delete the line from `.env`, run the
+repair, and do the same two steps.
 
 **Don't suspend.** Desktop-oriented installs sometimes ship with sleep
 targets enabled, which is fatal for a machine satellites reconnect to:

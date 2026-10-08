@@ -10,6 +10,13 @@ $RepoRoot = (Resolve-Path (Join-Path $CoreDir "..")).Path
 Push-Location $RepoRoot
 try {
     python -m domovoi.env_bootstrap
+    # The one thing ever added to an existing .env: the two helper-container
+    # secrets docker-compose.yml requires (LETTA_TOKEN, SEARXNG_SECRET), when
+    # a file from before they were generated lacks them. Appended, nothing
+    # else changes; a no-op once they are there. Without them every compose
+    # command below refuses.
+    python -m domovoi.env_bootstrap --repair
+    if ($LASTEXITCODE -ne 0) { throw "env_bootstrap --repair exited with $LASTEXITCODE" }
 } finally {
     Pop-Location
 }

@@ -209,6 +209,11 @@ case "${1-}" in
     exit 0
     ;;
   inspect)
+    # The chat helper (Letta) runs while letta-running exists.
+    if [ "${!#}" = domovoi-letta ]; then
+      if [ -f "$SHIM_STATE/letta-running" ]; then echo true; exit 0; fi
+      echo "Error: No such object: domovoi-letta" >&2; exit 1
+    fi
     if [ -f "$SHIM_STATE/searxng-running" ]; then cat "$SHIM_STATE/searxng-running"; exit 0; fi
     echo "Error: No such object: ${!#}" >&2; exit 1
     ;;
@@ -381,6 +386,16 @@ if [ "${1-}" = -m ] && [ "${2-}" = domovoi.egress ]; then
   if [ -f "$SHIM_STATE/egress-missing" ]; then echo "No module named domovoi.egress" >&2; exit 1; fi
   cat "$SHIM_STATE/internet-policy" 2>/dev/null
   echo
+  exit 0
+fi
+# `python -m domovoi.env_bootstrap --repair`: what env-repair-output says
+# (default: both secrets already set), or a failure while env-repair-fails.
+if [ "${1-}" = -m ] && [ "${2-}" = domovoi.env_bootstrap ]; then
+  if [ -f "$SHIM_STATE/env-repair-fails" ]; then
+    echo "could not repair $SHIM_REPO/domovoi/.env: [Errno 13] Permission denied" >&2; exit 1
+  fi
+  cat "$SHIM_STATE/env-repair-output" 2>/dev/null \
+    || echo "$SHIM_REPO/domovoi/.env: LETTA_TOKEN and SEARXNG_SECRET already set; left untouched"
   exit 0
 fi
 # The venv's Python version (sync_deps asks before using the lock):
@@ -572,6 +587,7 @@ case_noop_restart() {
   check "asks Flyway's history what is applied" called "WHERE success AND type = 'SQL' AND version IS NOT NULL"
   check "no migrations on a plain restart" not_called "systemctl restart domovoi-db.service"
   check "nothing but the restart's own steps, after the signature check" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "the helper secrets are checked, before the stop" before "python -m domovoi.env_bootstrap --repair" "systemctl stop"
   check "migration count recorded" eq "$(field migrations_before)" 1
   check "and left as it was" eq "$(field migrations_after)" 1
   check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
@@ -1932,6 +1948,103 @@ case_use_lock_other_than_1_stays_off() {
   end_case
 }
 
+# ─── the helper-container secrets (2026-10 review REV-16) ────────────────
+#
+# docker-compose.yml requires LETTA_TOKEN and SEARXNG_SECRET from .env (no
+# shared fallback any more), so an upgraded box's .env gets them, appended
+# by the checkout's own `env_bootstrap --repair` run as the service user,
+# before anything uses compose: domovoi-db's restart, the search helper.
+
+ENV_ADDED_BOTH="domovoi/.env: added LETTA_TOKEN, SEARXNG_SECRET (appended values generated for this install)"
+
+case_env_secrets_added_before_compose_on_an_update() {
+  new_case env_secrets_added_before_compose_on_an_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  local sha_b; sha_b=$(commit_all "B: migration")
+  echo "$REPO/$ENV_ADDED_BOTH" >"$STATE/env-repair-output"
+  write_root_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the repair ran as the service user" \
+    called "runuser -u tester -- $CASE/venv/bin/python -m domovoi.env_bootstrap --repair"
+  check "after the pre-flight" before "status --porcelain" "domovoi.env_bootstrap --repair"
+  check "before the backup" before "domovoi.env_bootstrap --repair" "pg_dump"
+  check "before the stop" before "domovoi.env_bootstrap --repair" "systemctl stop"
+  check "before domovoi-db's compose up" before "domovoi.env_bootstrap --repair" "systemctl restart domovoi-db.service"
+  check "an ok step that says what was added" grep -qF \
+    '{"name": "env-secrets", "status": "ok"' "$RESULT"
+  check "its detail names the keys, never a value" grep -qF \
+    '"detail": "added LETTA_TOKEN, SEARXNG_SECRET to domovoi/.env"' "$RESULT"
+  check "the step sits after the pre-flight" eq "$(step_names | cut -d' ' -f1-3)" "signature preflight env-secrets"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+case_env_secrets_added_on_a_plain_restart() {
+  new_case env_secrets_added_on_a_plain_restart
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "$REPO/domovoi/.env: added SEARXNG_SECRET (appended values generated for this install)" >"$STATE/env-repair-output"
+  echo sometimes >"$STATE/internet-policy"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the step, then the restart's own" eq "$(step_names)" "signature env-secrets stop-services start-services health searxng"
+  check "names the one it added" grep -qF '"detail": "added SEARXNG_SECRET to domovoi/.env"' "$RESULT"
+  check "the search helper is started after it" before "domovoi.env_bootstrap --repair" "docker compose"
+  end_case
+}
+
+# LETTA_TOKEN is the core's Letta password too: a running Letta keeps the
+# old shared one until it is recreated, so chat mode would fail. Said as a
+# warn the Version card shows, not silently.
+case_env_secrets_with_a_running_letta_is_a_warn() {
+  new_case env_secrets_with_a_running_letta_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo "$REPO/$ENV_ADDED_BOTH" >"$STATE/env-repair-output"
+  : >"$STATE/letta-running"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is env-secrets warn
+  check "that says how to recreate Letta" grep -qF \
+    'domovoi-letta still runs with the old shared password, so chat mode fails until it is recreated: docker compose --profile chat up -d letta' \
+    "$RESULT"
+  check "and in the journal" grep -qF "WARNING: LETTA_TOKEN added while domovoi-letta runs" "$CASE/output.log"
+  check "Letta itself is left alone" not_called "--profile chat"
+  end_case
+}
+
+case_env_secrets_repair_failure_aborts_before_anything() {
+  new_case env_secrets_repair_failure_aborts_before_anything
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  commit_all "B: migration" >/dev/null
+  : >"$STATE/env-repair-fails"
+  run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "the error says what and why" eq "$(field error | grep -c 'domovoi/.env lacks LETTA_TOKEN or SEARXNG_SECRET and could not be given them, so nothing was changed')" 1
+  check "and carries the repair's own words" eq "$(field error | grep -c 'Permission denied')" 1
+  check "a failed env-secrets step" step_is env-secrets failed
+  check "no backup taken" not_called "pg_dump"
+  check "nothing stopped" not_called "systemctl stop"
+  check "no compose" not_called "docker compose"
+  check "no bad_sha" eq "$(field bad_sha)" null
+  check "applied_sha stays A" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_env_secrets_failure_on_a_plain_restart_restarts_nothing() {
+  new_case env_secrets_failure_on_a_plain_restart_restarts_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  : >"$STATE/env-repair-fails"
+  run_update
+  check "status aborted" eq "$(field status)" '"aborted"'
+  check "nothing restarted" eq "$(field error | grep -c 'so nothing was restarted')" 1
+  check "nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
 # ─── signed updates (2026-10 audit, A8-01: root ran whatever upstream main
 # held; now HEAD must verify against the root-owned signers file) ─────────
 
@@ -2252,6 +2365,11 @@ CASES=(
   case_empty_deps_lock_opts_out
   case_lock_is_opt_in_and_off_by_default
   case_use_lock_other_than_1_stays_off
+  case_env_secrets_added_before_compose_on_an_update
+  case_env_secrets_added_on_a_plain_restart
+  case_env_secrets_with_a_running_letta_is_a_warn
+  case_env_secrets_repair_failure_aborts_before_anything
+  case_env_secrets_failure_on_a_plain_restart_restarts_nothing
   case_unsigned_head_warns_when_signing_is_not_enforced
   case_signed_head_without_a_signers_file_is_unverified
   case_signed_head_verifies_as_root_before_anything_runs

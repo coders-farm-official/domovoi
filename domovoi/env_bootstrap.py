@@ -27,9 +27,18 @@ Contract:
     ``LETTA_TOKEN`` (compose hands it to the Letta container as
     ``LETTA_SERVER_PASSWORD``, and the core authenticates with it) and
     ``SEARXNG_SECRET`` (SearXNG's signing key). Both used to be the same
-    literal on every install. An existing ``.env`` without them keeps the
-    old values through the compose fallbacks; adding them by hand is in
-    docs/LINUX_HOST.md, "Helper-container secrets".
+    literal on every install, and ``docker-compose.yml`` no longer falls
+    back to it: it refuses to run without them.
+  * ``--repair`` is the one exception to "never touch an existing .env":
+    it APPENDS a generated value for whichever of those two secrets the
+    file lacks (or sets empty), in one ``O_APPEND`` write, and changes
+    nothing else: no line is rewritten, re-ordered or re-encoded and the
+    file's mode stays. Run twice, the second run writes nothing. A missing
+    ``.env`` gets one holding only those two lines (``O_EXCL``, 0600), so
+    every other setting keeps its code default. ``dev.sh`` / ``dev.ps1``
+    run it after the create-only call, and the update unit
+    (``scripts/linux/apply-update.sh``) runs it as the service user before
+    anything uses compose, so an upgraded install heals itself.
   * ``--internet always|sometimes|never`` (aliases such as yes / no /
     offline / metered are accepted) records the household's internet answer
     as ``INTERNET_ACCESS=`` in the SAME create-only write. An existing
@@ -231,23 +240,158 @@ def ensure_env_file(
     return BootstrapResult(env_path, created=True, reused_default=reused_default)
 
 
+# What docker-compose.yml requires from .env (`${VAR:?...}`), in the order
+# a repair appends them.
+HELPER_SECRETS = ("LETTA_TOKEN", "SEARXNG_SECRET")
+# The values every install used to share (the old compose fallbacks and the
+# old .env.example comment). A .env that spells one out has no secret of
+# its own, so a repair treats it as unset and appends a fresh value, which
+# wins (the last assignment does, for compose and for the core alike).
+SHARED_HELPER_VALUES = frozenset({"domovoi-local", "domovoi-local-not-load-bearing"})
+
+
+def env_values(text: str) -> dict[str, str]:
+    """The values a Compose-style ``.env`` text assigns, the way compose and
+    python-dotenv read it: ``KEY=value`` lines (an ``export `` prefix is
+    allowed), ``#`` lines skipped, matching quotes stripped, an unquoted
+    value ending at `` #``, and the LAST assignment of a key wins."""
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export ") or line.startswith("export\t"):
+            line = line[len("export"):].lstrip()
+        key, sep, raw_value = line.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] in "'\"" and value[-1] == value[0]:
+            value = value[1:-1]
+        else:
+            # A '#' after whitespace starts a comment ("KEY= # later" is empty).
+            comment = re.search(r"\s#", raw_value)
+            if comment:
+                value = raw_value[: comment.start()].strip()
+        out[key] = value
+    return out
+
+
+def missing_helper_secrets(text: str) -> list[str]:
+    """Which of :data:`HELPER_SECRETS` the text leaves unset or empty
+    (compose's ``:?`` refuses either), or sets to a value every install
+    shared (:data:`SHARED_HELPER_VALUES`)."""
+    values = env_values(text)
+    return [
+        k for k in HELPER_SECRETS
+        if not values.get(k) or values[k] in SHARED_HELPER_VALUES
+    ]
+
+
+def _repair_block(values: dict[str, str], newline: str) -> str:
+    lines = [
+        "",
+        "# ─── Helper-container secrets (added by `python -m domovoi.env_bootstrap --repair`) ──",
+        "# Generated for this machine: this file predates them, and docker-compose.yml",
+        "# no longer falls back to the values every install used to share. LETTA_TOKEN",
+        "# is the Letta server's password and the core's; SEARXNG_SECRET is the search",
+        "# helper's signing key. Changing one: docs/LINUX_HOST.md, \"Helper-container secrets\".",
+        *(f"{k}={v}" for k, v in values.items()),
+    ]
+    return newline.join(lines) + newline
+
+
+@dataclass(frozen=True)
+class RepairResult:
+    path: Path
+    added: tuple[str, ...]   # the keys written, in HELPER_SECRETS order; () = untouched
+    created: bool            # True: there was no file, so one with only those keys was made
+
+
+def repair_env_file(
+    env_path: Path | None = None,
+    *,
+    generate: Callable[[], str] = generate_password,
+) -> RepairResult:
+    """Give ``env_path`` a generated value for every helper secret it lacks,
+    by appending; touch nothing else. Idempotent. Raises OSError when the
+    file can't be read or written."""
+    env_path = env_path or ENV_FILE
+    try:
+        data = env_path.read_bytes()
+    except FileNotFoundError:
+        data = None
+    if data is None:
+        values = {k: generate() for k in HELPER_SECRETS}
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(env_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            # Someone made it between the read and here: repair that file.
+            return repair_env_file(env_path, generate=generate)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(_repair_block(values, "\n").lstrip("\n").encode("utf-8"))
+        return RepairResult(env_path, tuple(values), created=True)
+
+    text = data.decode("utf-8", errors="replace")
+    missing = missing_helper_secrets(text)
+    if not missing:
+        return RepairResult(env_path, (), created=False)
+    newline = "\r\n" if b"\r\n" in data else "\n"
+    block = _repair_block({k: generate() for k in missing}, newline)
+    if data and not data.endswith(b"\n"):
+        block = newline + block
+    # O_APPEND without O_CREAT or O_TRUNC: the bytes already there stay as
+    # they are, and so does the mode.
+    fd = os.open(str(env_path), os.O_WRONLY | os.O_APPEND)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(block.encode("utf-8"))
+    return RepairResult(env_path, tuple(missing), created=False)
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m domovoi.env_bootstrap",
         description="Create domovoi/.env for a fresh checkout (never rewrites an existing one).",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--internet", metavar="ANSWER", default=None,
         help="will this box use the internet? always, sometimes or never "
              "(written as INTERNET_ACCESS into a NEW .env only)",
     )
+    mode.add_argument(
+        "--repair", action="store_true",
+        help="append generated values for the helper-container secrets "
+             f"({', '.join(HELPER_SECRETS)}) an existing .env lacks; nothing else changes",
+    )
     return parser.parse_args(argv)
+
+
+def _repair_main() -> int:
+    try:
+        result = repair_env_file()
+    except OSError as e:
+        print(f"could not repair {ENV_FILE}: {e}", file=sys.stderr)
+        return 1
+    if result.added:
+        what = "created with only" if result.created else "appended"
+        print(
+            f"{result.path}: added {', '.join(result.added)} "
+            f"({what} values generated for this install)"
+        )
+    else:
+        print(f"{result.path}: {' and '.join(HELPER_SECRETS)} already set; left untouched")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     """``argv`` None means no arguments (the dev scripts' plain call); the
     module entry point passes ``sys.argv[1:]``."""
     args = _parse_args([] if argv is None else argv)
+    if args.repair:
+        return _repair_main()
     internet = ""
     if args.internet is not None:
         internet = normalize_policy(args.internet)

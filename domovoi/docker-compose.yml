@@ -113,10 +113,13 @@ services:
       - ./searxng:/etc/searxng
     environment:
       SEARXNG_BASE_URL: http://localhost:6888/
-      # SearXNG's signing key (image proxy, preferences). A fresh install's
-      # .env carries a random one (python -m domovoi.env_bootstrap); an
-      # older .env without it keeps the historical shared value.
-      SEARXNG_SECRET: ${SEARXNG_SECRET:-domovoi-local-not-load-bearing}
+      # SearXNG's signing key (image proxy, preferences), from .env: a
+      # fresh install's carries a random one (python -m
+      # domovoi.env_bootstrap), and `--repair` adds one to an older .env
+      # (dev.sh/dev.ps1 and the update unit run it before compose). There is
+      # no fallback: the value every install used to share is what made it
+      # worthless, so compose refuses to run without one.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?SEARXNG_SECRET is missing from domovoi/.env - run python -m domovoi.env_bootstrap --repair in the checkout (docs/LINUX_HOST.md)}
     restart: unless-stopped
 
   # ─── Letta — conversational chat mode (#8), OPT-IN ────────────────────
@@ -173,11 +176,13 @@ services:
       # Password-protect the server. The value is LETTA_TOKEN from .env,
       # the same variable the core reads as settings.letta_token, so the
       # two can't drift. A fresh install's .env carries a random one
-      # (python -m domovoi.env_bootstrap); an older .env without it keeps
-      # the historical shared value, which is also the core's default.
-      # Unset, Letta would autogenerate a password the core doesn't know.
+      # (python -m domovoi.env_bootstrap), and `--repair` adds one to an
+      # older .env (dev.sh/dev.ps1 and the update unit run it before
+      # compose). No fallback: the old shared value was the same password
+      # on every install. Compose interpolates the whole file, so without
+      # it every compose command here refuses, with the line to run.
       SECURE: "true"
-      LETTA_SERVER_PASSWORD: ${LETTA_TOKEN:-domovoi-local}
+      LETTA_SERVER_PASSWORD: ${LETTA_TOKEN:?LETTA_TOKEN is missing from domovoi/.env - run python -m domovoi.env_bootstrap --repair in the checkout (docs/LINUX_HOST.md)}
     restart: unless-stopped
 
   # ─── Office engines: RETIRED ──────────────────────────────────────────
