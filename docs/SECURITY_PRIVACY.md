@@ -61,7 +61,7 @@ flowchart TB
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
         a2["Config read & write (carries secrets)"]
         a3["Satellite code push (makes a Pi run new code),<br/>satellite restart / display / config rewrite"]
-        a7["Opening a room-to-room drop-in from HTTP<br/>(/v1/admin/dropin/start)"]
+        a7["Opening a room-to-room drop-in from HTTP<br/>(/v1/admin/dropin/start; 501 before setup)"]
         a4["Git pull, clip re-render, library sweeps,<br/>wake-word recording and model push"]
         a5["Satellite log pull (a room transcript)"]
         a6["Chat-tool resync, session management"]
@@ -216,7 +216,13 @@ caller without a credential is closed (`1008`) before one is built, and
 the room never learns a call was attempted. A browser cannot set request
 headers on a WebSocket, so that route — and only that route — also accepts
 the token as `?token=`; every HTTP route takes the header, because a query
-string ends up in access logs and `Referer` headers.
+string ends up in access logs and `Referer` headers. Unlike the rest of the
+device tier it has **no pre-setup grace**: before an admin exists — on a
+fresh box, and again after `--reset-admin` — the upgrade is closed `1008`
+with `code: setup_required` whatever it presents, and the HTTP way of
+opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
+security tier. Nothing needed to finish setting a box up listens to a
+room (CORE-14).
 
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
@@ -718,7 +724,9 @@ The rows marked **fails closed** are the *security tier*
 had. Before setup the setup code protects *who becomes admin*; the security
 tier makes sure nothing that changes what the server runs or trusts can
 happen *meanwhile*. `python -m domovoi.main --reset-admin` returns the
-install to the pre-setup state and therefore reopens only the daily surface.
+install to the pre-setup state and therefore reopens only the daily surface
+— and never a room's live microphone: the phone drop-in socket and an
+HTTP-opened drop-in stay closed until someone signs in again.
 `domovoi/tests/test_route_auth_matrix.py` walks every mutating route of both
 processes and fails when one has no gate and is not allowlisted with a
 reason, so a new route cannot quietly ship open.

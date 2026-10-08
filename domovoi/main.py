@@ -1402,8 +1402,11 @@ class _AdminDropInEndBody(BaseModel):
     # Admin tier: this opens a live two-way microphone bridge between two
     # rooms from an HTTP call, with no one in either room asked first.
     # That is a physical-effect action on the household, so it takes an
-    # admin Bearer rather than the household device token.
-    dependencies=[Depends(require_admin_mutation)],
+    # admin Bearer rather than the household device token. The SECURITY
+    # tier's Bearer gate (CORE-14): no pre-setup grace, 501 until an admin
+    # exists, so a fresh box or one just put through --reset-admin is not
+    # a live microphone for the whole LAN.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     """Open a live two-way drop-in between two connected satellite rooms
@@ -4838,6 +4841,10 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     Anything else is closed 1008 here, before a ``PhoneDropinSession``
     exists, so the refusal leaves ``active_dropins`` untouched and the
     target room never learns a call was attempted.
+
+    No pre-setup grace (CORE-14): before an admin exists the upgrade is
+    closed 1008 with ``code: setup_required`` whatever it presents — the
+    WebSocket form of the security tier's 501.
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
@@ -4847,7 +4854,15 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
         return
-    if not await admin_auth_mod.websocket_device_ok(ws):
+    verdict = await admin_auth_mod.check_live_mic_websocket(ws)
+    if verdict == "setup_required":
+        await _refuse_ws(
+            ws, "setup_required",
+            f"/v1/dropin/{room_id} before first-run admin setup — a room's "
+            "live microphone is not part of the pre-setup grace",
+        )
+        return
+    if verdict != "ok":
         await _refuse_ws(
             ws, "unauthorized",
             f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "

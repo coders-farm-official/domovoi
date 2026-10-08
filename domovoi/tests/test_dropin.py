@@ -435,6 +435,19 @@ async def test_relay_noise_gate(monkeypatch):
 # ─── Admin endpoints (/v1/admin/dropin/*) ────────────────────────────────────
 
 
+ADMIN = "admin-token"
+
+
+def _as_admin(monkeypatch) -> dict[str, str]:
+    """An admin exists and this is its Bearer. The HTTP start is on the
+    security tier (CORE-14): no pre-setup grace, so these drive it the way
+    the dashboard does after setup."""
+    from domovoi.tests.auth_testkit import bearer, install_fake_db
+
+    install_fake_db(monkeypatch, admin=True, sessions={ADMIN})
+    return bearer(ADMIN)
+
+
 def _seed_two_rooms(app, *, fd_kitchen=True):
     """Register office+kitchen as live sessions on a real app for admin tests."""
     a = StreamSession(FakeWS(app), "office")
@@ -450,6 +463,7 @@ async def test_admin_dropin_start_happy(monkeypatch):
     monkeypatch.setattr(settings, "dropin_silence_timeout_sec", 0.0, raising=False)
     from domovoi.main import app
 
+    auth = _as_admin(monkeypatch)
     async with app.router.lifespan_context(app):
         a, b = _seed_two_rooms(app)
         transport = ASGITransport(app=app)
@@ -457,6 +471,7 @@ async def test_admin_dropin_start_happy(monkeypatch):
             r = await client.post(
                 "/v1/admin/dropin/start",
                 json={"initiator_room": "office", "target_room": "kitchen"},
+                headers=auth,
             )
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "active"
@@ -465,9 +480,10 @@ async def test_admin_dropin_start_happy(monkeypatch):
 
 
 @requires_db
-async def test_admin_dropin_start_404_when_target_offline():
+async def test_admin_dropin_start_404_when_target_offline(monkeypatch):
     from domovoi.main import app
 
+    auth = _as_admin(monkeypatch)
     async with app.router.lifespan_context(app):
         _seed_two_rooms(app)
         del app.state.active_sessions["kitchen"]  # provisioned in fd but not connected
@@ -476,14 +492,16 @@ async def test_admin_dropin_start_404_when_target_offline():
             r = await client.post(
                 "/v1/admin/dropin/start",
                 json={"initiator_room": "office", "target_room": "kitchen"},
+                headers=auth,
             )
         assert r.status_code == 404
 
 
 @requires_db
-async def test_admin_dropin_start_409_when_no_aec():
+async def test_admin_dropin_start_409_when_no_aec(monkeypatch):
     from domovoi.main import app
 
+    auth = _as_admin(monkeypatch)
     async with app.router.lifespan_context(app):
         _seed_two_rooms(app, fd_kitchen=False)
         transport = ASGITransport(app=app)
@@ -491,6 +509,7 @@ async def test_admin_dropin_start_409_when_no_aec():
             r = await client.post(
                 "/v1/admin/dropin/start",
                 json={"initiator_room": "office", "target_room": "kitchen"},
+                headers=auth,
             )
         assert r.status_code == 409
         assert r.json()["detail"] == "target_no_aec"

@@ -117,7 +117,7 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # CORE-2: the core routes behind these are gated now (start takes an
     # admin Bearer, end the household token) and this hop forwards the
     # caller's credentials, so an ungated proxy cannot open a call.
-    ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_mutation gates it (auth forwarded)",
+    ("web", "POST", "/api/satellites/{room_id}/dropin/start"): "proxy — core require_admin_security gates it (auth forwarded; 501 before setup, CORE-14)",
     ("web", "POST", "/api/satellites/{room_id}/dropin/end"): "proxy — core require_device gates it (auth forwarded)",
     ("web", "POST", "/api/models/active"): (
         "proxy — the core's security tier gates the config write it forwards to"
@@ -209,6 +209,9 @@ SECURITY_TIER_ROUTES = [
     ("core", "POST", "/v1/admin/satellites/{room_id}/pairing/preseed"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}/pairing"),
     ("core", "DELETE", "/v1/admin/satellites/{room_id}"),
+    # CORE-14: an HTTP-opened drop-in is a live microphone; no pre-setup
+    # grace for it (the phone socket's twin is in test_ws_gates).
+    ("core", "POST", "/v1/admin/dropin/start"),
     ("core", "POST", "/v1/admin/device-token"),
     ("core", "POST", "/v1/admin/device-token/rotate"),
     ("web", "PATCH", "/api/config/editable"),
