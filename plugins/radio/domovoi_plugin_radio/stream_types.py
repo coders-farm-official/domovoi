@@ -43,20 +43,31 @@ def _base(declared: str | None) -> str:
 
 
 def _is_token(minor: str) -> bool:
-    return bool(minor) and all(c.isalnum() or c in "+-." for c in minor)
+    """A media subtype spelled the way RFC 9110 allows: ASCII letters,
+    digits and ``+-.`` only. ``str.isalnum`` alone takes any Unicode
+    letter, and a type such as ``audio/m\u0131`` then reached the
+    response headers, which are latin-1: a 500, with the upstream left
+    open (REV-B3 nit)."""
+    return bool(minor) and all(c.isascii() and (c.isalnum() or c in "+-.") for c in minor)
 
 
 def audio_media_type(declared: str | None) -> str | None:
     """The audio type to serve for an upstream that declared ``declared``,
-    or None when it is not audio.
+    or None when it is not an audio STREAM.
 
     ``audio/*`` and ``application/ogg`` come back as declared (bare type,
     parameters dropped); a missing or ``application/octet-stream`` type
     becomes ``audio/mpeg``; everything else (``text/html``, scripts,
-    images, XML, JSON, video) is None."""
+    images, XML, JSON, video, a subtype that is not plain ASCII) is None.
+    So is a playlist, whatever its spelling (:data:`PLAYLIST_TYPES`):
+    ``audio/x-mpegurl`` is the same HLS playlist as
+    ``application/vnd.apple.mpegurl``, a list of other URLs rather than
+    sound, and the relay and the sampler refuse every spelling alike."""
     base = _base(declared)
     if base in _GENERIC_TYPES:
         return FALLBACK_AUDIO_TYPE
+    if base in PLAYLIST_TYPES:
+        return None
     if base in _EXTRA_AUDIO_TYPES:
         return base
     major, _, minor = base.partition("/")

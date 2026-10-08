@@ -158,6 +158,15 @@ through `sdk.connectivity` (SDK 1.4, so this plugin needs a core with SDK
   (`plugin.radio.detection_recorded`) so other installed plugins can see
   what a station played; the radio plugin itself only observes — it
   never downloads anything.
+* The dashboard's browser player hears a station through the server's
+  relay, which serves on the dashboard's own address, so it passes on
+  only an audio stream: an answer typed as a page, a script, an image,
+  a type that is not plain ASCII, or a playlist under any spelling
+  (`application/vnd.apple.mpegurl`, `audio/x-mpegurl`, `audio/mpegurl`,
+  PLS, XSPF, ASX, DASH) is refused with `502`. A station that only serves
+  an HLS or other playlist therefore does not play in the browser (the
+  room's player, which follows playlists itself, still plays it), and the
+  song sampler skips it too.
 
 ## For plugin developers
 
