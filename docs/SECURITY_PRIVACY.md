@@ -821,7 +821,16 @@ statement verbatim, and it means every word:
 
 > "This plugin runs with full access to your Domovoi server. It can read
 > and modify your library, database, configuration, and anything else this
-> machine can reach. Only install plugins from publishers you trust."
+> machine can reach. Its dashboard pages run as part of the dashboard in
+> every household browser that opens it, with the same access as whoever is
+> using it — a signed-in admin session and the household token included.
+> Only install plugins from publishers you trust."
+
+The browser half is not a figure of speech (FE-7): the dashboard fetches
+every script a plugin's manifest names and runs it in the dashboard's own
+origin, so in an admin's signed-in tab it can act as that admin (the
+bearer lives in the page's memory), and on a kiosk or tablet it can read
+the household token the browser stores.
 
 What the install flow *does* do (verified in
 `domovoi/plugins_runtime/installer.py`):
