@@ -838,6 +838,13 @@ class HealthResponse(BaseModel):
     # one), "unavailable" (nothing loaded), "stub" (tests) or "not_loaded".
     # None when the core did not answer. Never makes `status` degraded.
     stt: str | None = None
+    # The core's identity block from the same /v1/health ping, verbatim:
+    # `algorithm`, `public_key`, `fingerprint` and — when the request carried
+    # `?challenge=` — `challenge` and `signature` over it. Public by
+    # construction (domovoi/server_identity.py); None when the core did not
+    # answer or predates identity. The Android app pins the key and checks
+    # the signature after every network change (A6-03).
+    identity: dict[str, str] | None = None
 
 
 class ConfigResponse(BaseModel):

@@ -13,11 +13,12 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from domovoi import admin_auth
@@ -408,15 +409,43 @@ async def bundle() -> dict[str, str | None]:
     return {"bundle": current_bundle(_STATIC_DIR)}
 
 
+# The ``?challenge=`` /api/health forwards: the core's own cap
+# (domovoi.server_identity.CHALLENGE_MAX_LEN) and the core's own alphabet —
+# URL-safe characters only, no whitespace, so a nonce rides the hop's URL
+# verbatim and nothing with a newline in it is ever signed. The Android app
+# sends 32 hex characters.
+HEALTH_CHALLENGE_MAX_LEN = 128
+_HEALTH_CHALLENGE_RE = re.compile(rf"^[A-Za-z0-9._~-]{{1,{HEALTH_CHALLENGE_MAX_LEN}}}$")
+
+
+def health_challenge_ok(challenge: str) -> bool:
+    return bool(_HEALTH_CHALLENGE_RE.match(challenge))
+
+
 @app.get("/api/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+async def health(challenge: str | None = None) -> HealthResponse:
     """Cheap readiness probe — DB ping + domovoi ping. Returns
     'degraded' (HTTP 200, not 503) when the Domovoi server is down so
     the UI can show a partial-degradation banner instead of refusing
     to render. ``stt`` passes the core's speech-recognition state through
     from the same ping, so a page can say "the kitchen can't hear you"
-    without the costly hardware probe."""
+    without the costly hardware probe.
+
+    ``identity`` passes the core's identity block through from that same
+    ping (its Ed25519 public key and fingerprint; see
+    ``domovoi/server_identity.py``), and with ``?challenge=<nonce>`` the
+    core's signature over that nonce too — what lets the Android app tell
+    the server it paired with from anything else answering at the saved
+    address after a network change (security round 3, A6-03). Open, like
+    the rest of this answer: everything in it is public, and the client
+    asking has no credential yet by design. Absent when the core did not
+    answer (or predates identity)."""
     from sqlalchemy import text
+
+    if challenge is not None and not health_challenge_ok(challenge):
+        raise HTTPException(
+            status_code=400, detail="challenge is too long or has characters that cannot be signed"
+        )
 
     db_ok = True
     try:
@@ -431,11 +460,16 @@ async def health() -> HealthResponse:
     # configured domovoi URL. Doesn't fail the response.
     core_ok = False
     stt: str | None = None
+    identity: dict[str, str] | None = None
     try:
         import httpx
+        from urllib.parse import quote
         domovoi_url = os.environ.get("DOMOVOI_URL", "http://localhost:6370")
+        url = f"{domovoi_url}/v1/health"
+        if challenge:
+            url += f"?challenge={quote(challenge, safe='')}"
         async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get(f"{domovoi_url}/v1/health")
+            r = await client.get(url)
             core_ok = r.status_code == 200
             if core_ok:
                 # The core's speech-recognition state, passed through as-is
@@ -445,6 +479,8 @@ async def health() -> HealthResponse:
                 doc = r.json()
                 if isinstance(doc, dict) and isinstance(doc.get("stt"), str):
                     stt = doc["stt"]
+                if isinstance(doc, dict):
+                    identity = core_identity_block(doc.get("identity"))
     except Exception:
         pass
 
@@ -453,7 +489,18 @@ async def health() -> HealthResponse:
         db_reachable=db_ok,
         domovoi_reachable=core_ok,
         stt=stt,
+        identity=identity,
     )
+
+
+def core_identity_block(raw: object) -> dict[str, str] | None:
+    """The core's ``identity`` as /api/health forwards it: the string fields
+    of a dict, verbatim, or None. Nothing is interpreted here — the client
+    verifies the signature against the key it pinned."""
+    if not isinstance(raw, dict):
+        return None
+    block = {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)}
+    return block or None
 
 
 # ─── WebSocket ────────────────────────────────────────────────────────────
