@@ -239,3 +239,22 @@ android/local.properties
 
 # Local pip download cache (PIP_CACHE_DIR pointed here); never part of the source tree
 pip/
+
+# Credentials and key material (OPS-20). The core writes the first three
+# into ~/.domovoi/, never into the checkout, but a copy made for a test
+# must not ride along on the next `git add -A`; the rest cover TLS and SSH
+# keys, Android signing keystores, the satellite's real config and the
+# update unit's allowed-signers file.
+device-token*.txt
+setup-code*.txt
+server-identity*.json
+satellite/config.toml
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+allowed_signers
