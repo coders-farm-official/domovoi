@@ -155,10 +155,7 @@ fun VideosScreen() {
 
     fun saveToDevice(v: VideoRow) {
         val name = DeviceDownloads.safeName(v.name, fallback = "video")
-        val err = DeviceDownloads.enqueue(
-            context, app.api.absolute(streamPath(v, download = true)), name,
-            deviceToken = app.prefs.deviceToken.value,
-        )
+        val err = DeviceDownloads.enqueue(context, app.api, streamPath(v, download = true), name)
         toast(err ?: "saving \"$name\" to Downloads/Domovoi")
     }
 
