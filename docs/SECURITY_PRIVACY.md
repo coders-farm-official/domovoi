@@ -425,7 +425,16 @@ run uvicorn with `--limit-concurrency`
 (`MAX_CONCURRENT_CONNECTIONS`, default 128): over it uvicorn answers 503
 rather than accepting work it has no memory for, because every satellite
 WebSocket holds an utterance buffer and a frame buffer for as long as it
-is open. Relatedly, a second connect for a room now **closes** the socket
+is open. That ceiling counts every caller together; there is **no
+per-source limit** yet (CORE-15). One LAN host that opens and holds that
+many connections — an idle TCP connection counts, and uvicorn never closes
+one that has not sent a request — has every other client answered 503
+until it lets go: satellites trying to reconnect, the dashboard, the web
+process's calls into the core. It protects the box's memory, not its
+availability. A per-source ceiling has to sit below the ASGI layer, which
+never sees a connection that sends nothing, and has not been built; a
+per-source connection limit in the host's firewall on ports 6370 and 6369
+is the way to get one today. Relatedly, a second connect for a room now **closes** the socket
 it replaced (1001) instead of leaving it open and unread.
 
 ### Daily tier (LAN-trust)
