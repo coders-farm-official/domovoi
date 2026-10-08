@@ -791,7 +791,9 @@ run does this:
    whose download doesn't match its hash fails the step, so the update
    rolls back; extras beyond the lock's own (`cuda`, `fastlane`) then go
    through the resolver, and the step's detail says so. Opted in without
-   a usable lock, the step says `WARNING` and uses the resolver.
+   a usable lock, it uses the resolver and the step is a `warn`: the
+   version panel shows **lock not applied: <reason>** under the last
+   update.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
@@ -1039,9 +1041,27 @@ the newest that resolved). Re-seed it from the box first:
 
 From then on an update that changes `pyproject.toml` or a lock installs
 from the lock, every package hash-checked ([step 5](#updates-from-the-dashboard)).
-A lock change is a dependency change, so under the **No** internet answer
-that update is refused like any other. Remove the line (or set it to `0`)
-to go back to the resolver.
+A package that does not match its hash fails the update, and it rolls
+back. If a later update can't use the lock at all (the venv moved to a
+newer Python, the lock was renamed, `DOMOVOI_DEPS_LOCK` was emptied), it
+does not stop: it resolves from the index as before, but its `sync-deps`
+step is a `warn`, the journal says WARNING, and Settings → Version shows
+**lock not applied: <reason>** under the last update until the next run.
+Re-seed and commit a lock for the new Python to go back to hash-checked
+installs. A lock change is a dependency change, so under the **No**
+internet answer that update is refused like any other. Remove the line
+(or set it to `0`) to go back to the resolver.
+
+Turning `dev` out of the default extras stops a re-sync adding the test
+runner; it does not remove what an older install already has. Of the
+`dev` extra (`pyproject.toml`, `[project.optional-dependencies]`) only
+pytest and pytest-asyncio are not also production dependencies. On a box
+that does not run the test suite, take them out once while you re-seed
+(after step 1's freeze, so the freeze still names what the box ran):
+
+```bash
+sudo -u domovoi /opt/domovoi/.venv/bin/python -m pip uninstall -y pytest pytest-asyncio
+```
 
 ### Signed updates
 

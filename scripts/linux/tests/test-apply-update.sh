@@ -1810,13 +1810,19 @@ case_lock_hash_mismatch_rolls_back() {
   end_case
 }
 
+# The owner opted in and the lock can't be used (here: the venv moved to
+# another Python). The run goes on through the resolver, but never as a
+# clean `ok` step: sync-deps is a `warn` whose detail says the lock was not
+# applied and why, which the core keeps for the Version card (REV-15). The
+# lock is looked at as the service user, never by root.
 case_lock_for_another_python_falls_back_loudly() {
   new_case lock_for_another_python_falls_back_loudly
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   echo 3.13 >"$STATE/py-version"
   write_linux_lock
   commit_all "B: lock" >/dev/null
-  USE_LOCK=1 run_update
+  write_root_shims "$CASE/rootbin"
+  USE_LOCK=1 run_update "$CASE/rootbin"
   check "status ok" eq "$(field status)" '"ok"'
   check "no hash-checked install" not_called "--require-hashes"
   check "resolver, CPU torch first" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
@@ -1824,9 +1830,32 @@ case_lock_for_another_python_falls_back_loudly() {
   check "warns in the journal" grep -qF \
     "WARNING: not installing from a hash-pinned lock (requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13)" \
     "$CASE/output.log"
-  check "and in the step" grep -qF \
-    '"detail": "WARNING: resolved from the index without hash checks (requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13)"' \
+  check "sync-deps is a warn step, not ok" step_is sync-deps warn
+  check "its detail says the lock was not applied, and why" grep -qF \
+    '"detail": "lock not applied: requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13; resolved from the index without hash checks"' \
     "$RESULT"
+  check "the lock is looked for as the service user" called "runuser -u tester -- test -f $REPO/requirements-linux-py314.lock"
+  check "and its header read as the service user" called "runuser -u tester -- sed -n"
+  end_case
+}
+
+# Opted in, and the checkout has no lock at all (renamed, or a checkout from
+# before it): the same loud warn, with that reason.
+case_lock_missing_when_opted_in_is_a_warn() {
+  new_case lock_missing_when_opted_in_is_a_warn
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps, no lock")
+  USE_LOCK=1 run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "sync-deps is a warn step" step_is sync-deps warn
+  check "its detail names the missing lock" grep -qF \
+    '"detail": "lock not applied: the checkout has no requirements-linux-py314.lock; resolved from the index without hash checks"' \
+    "$RESULT"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
   end_case
 }
 
@@ -1855,7 +1884,8 @@ case_empty_deps_lock_opts_out() {
   check "status ok" eq "$(field status)" '"ok"'
   check "no hash-checked install" not_called "--require-hashes"
   check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
-  check "the step says why" grep -qF '(DOMOVOI_DEPS_LOCK is empty)' "$RESULT"
+  check "a warn step: opted in, yet no lock" step_is sync-deps warn
+  check "the step says why" grep -qF '"detail": "lock not applied: DOMOVOI_DEPS_LOCK is empty;' "$RESULT"
   end_case
 }
 
@@ -1879,6 +1909,7 @@ case_lock_is_opt_in_and_off_by_default() {
   check "then the production extras, as before" called "$PIP_RUN -e .[real-clients,voice-profile]"
   check "torch before extras" before "install torch" "install -e"
   check "no fallback warning: nothing was asked of the lock" not_said "WARNING: not installing from a hash-pinned lock"
+  check "an ok step, not a warn: the owner did not opt in" step_is sync-deps ok
   check "the step says the lock is there to opt into" grep -qF \
     '"detail": "resolved from the index, as before; requirements-linux-py314.lock is in the checkout and opt-in (DOMOVOI_USE_LOCK=1, docs/LINUX_HOST.md)"' \
     "$RESULT"
@@ -2216,6 +2247,7 @@ CASES=(
   case_deps_from_the_hash_pinned_lock
   case_lock_hash_mismatch_rolls_back
   case_lock_for_another_python_falls_back_loudly
+  case_lock_missing_when_opted_in_is_a_warn
   case_extras_beyond_the_lock_are_resolved_and_said_to_be
   case_empty_deps_lock_opts_out
   case_lock_is_opt_in_and_off_by_default

@@ -783,8 +783,10 @@ said plainly:
   so the first locked re-sync can be seeded from what the box runs.
 - **Another Python or platform.** With no lock for the venv's Python (an
   older Ubuntu, a `uv`-installed 3.13, Windows), pip's resolver installs
-  whatever the index serves within the floors; the update unit says
-  `WARNING` in its step when it does that.
+  whatever the index serves within the floors. On a box that opted in,
+  the update unit records that re-sync as a `warn` step and Settings →
+  Version shows **lock not applied: <reason>**, so the opt-in never turns
+  itself off silently.
 - **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`,
   `signing`) go through the resolver too, when you add them.
 - **The `dev` lock** (`requirements.lock`, core + `dev`, Python 3.12) is
