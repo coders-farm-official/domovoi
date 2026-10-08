@@ -12,8 +12,8 @@ no network, never skips.
 * Its pins satisfy pyproject (a pyproject change without a regenerated lock
   fails here) and stay above the advisory lines.
 * ``apply-update.sh`` and the compile script agree on the lock's name and
-  extras, and the server install docs install from it without the ``dev``
-  extra.
+  extras, the update unit uses the lock only when ``DOMOVOI_USE_LOCK=1``,
+  and the server install docs install from it without the ``dev`` extra.
 """
 
 from __future__ import annotations
@@ -143,6 +143,22 @@ def test_update_unit_and_compile_script_agree_on_the_lock() -> None:
     assert "--generate-hashes" in compile_sh and "--allow-unsafe" in compile_sh
     assert re.search(r"python:3\.14-slim@sha256:[0-9a-f]{64}", compile_sh), "the compile image is not pinned by digest"
     assert "requirements-linux-py314.in" in compile_sh and LOCK_IN.is_file()
+
+
+def test_an_update_uses_the_lock_only_when_opted_in() -> None:
+    # A live box's first update after the lock lands must re-sync the way
+    # it always has: the lock moves every package to its own version, and
+    # it should first be re-seeded from that box's pip freeze.
+    script = APPLY_UPDATE.read_text(encoding="utf-8")
+    assert "USE_LOCK=${DOMOVOI_USE_LOCK:-0}" in script
+    body = script[script.index("\nsync_deps() {"):]
+    body = body[: body.index("\n}\n")]
+    assert body.index('if [ "$USE_LOCK" != 1 ]; then') < body.index("lock_usable"), (
+        "sync_deps must take the resolver path before it looks at the lock"
+    )
+    doc = LINUX_HOST.read_text(encoding="utf-8")
+    assert "### The hash-pinned lock" in doc and "DOMOVOI_USE_LOCK=1" in doc
+    assert "DOMOVOI_LOCK_SEED=domovoi-freeze.txt" in doc, "the doc must say to re-seed from the box first"
 
 
 def test_linux_install_docs_install_from_the_lock() -> None:

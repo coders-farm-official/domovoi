@@ -387,8 +387,10 @@ pip install -e ".[real-clients,voice-profile]"
 pip install resemblyzer      # if webrtcvad fails to build: pip install --no-deps resemblyzer
 ```
 
-The [update unit](#updates-from-the-dashboard) does the same, with a
-warning in its step, whenever the venv's Python isn't the lock's.
+The [update unit](#updates-from-the-dashboard) re-syncs this way too
+until you opt it into the lock ([The hash-pinned lock](#the-hash-pinned-lock));
+once opted in, it falls back to this, with a warning in its step,
+whenever the venv's Python isn't the lock's.
 Maintainers regenerate the lock with `DOMOVOI_LOCK_SEED=requirements.lock
 bash scripts/linux/compile-linux-lock.sh` (pip-compile in a pinned
 `python:3.14-slim` container, so it resolves for this platform from any
@@ -755,15 +757,18 @@ run does this:
    needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
    in the version panel instead of hiding in a slow step.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
-   changed: re-sync the venv the way [Install](#install) builds it. When
-   the checkout has `requirements-linux-py314.lock` and the venv runs the
-   Python it was compiled for, that is the three hash-checked installs
-   from the lock, and a package whose download doesn't match its hash
-   fails the step, so the update rolls back; extras beyond the lock's own
-   (`cuda`, `fastlane`) then go through the resolver, and the step's
-   detail says so. Without a usable lock the step says `WARNING` and does
-   what it did before the lock existed: CPU torch first, then
-   `pip install -e ".[real-clients,voice-profile]"` from the index.
+   changed: re-sync the venv. By default that is pip's resolver, as it
+   was before the lock existed: CPU torch first, then
+   `pip install -e ".[real-clients,voice-profile]"` from the index; when
+   the checkout has `requirements-linux-py314.lock`, the step's detail
+   says it is there to opt into. With `DOMOVOI_USE_LOCK=1`
+   ([The hash-pinned lock](#the-hash-pinned-lock)), and when the venv runs
+   the Python the lock was compiled for, it is the three hash-checked
+   installs from the lock that [Install](#install) gives, and a package
+   whose download doesn't match its hash fails the step, so the update
+   rolls back; extras beyond the lock's own (`cuda`, `fastlane`) then go
+   through the resolver, and the step's detail says so. Opted in without
+   a usable lock, the step says `WARNING` and uses the resolver.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
@@ -901,6 +906,9 @@ layout on this page, so you only need the file to change one:
 # Extras for the venv re-sync. The lock covers real-clients and voice-profile; any other
 # (an NVIDIA host's cuda, fastlane) is resolved from the index after it, without hash checks.
 # DOMOVOI_PIP_EXTRAS=real-clients,voice-profile
+# 1: the re-sync installs from the hash-pinned lock. Default: off, pip's resolver as before.
+# Re-seed the lock from this box's pip freeze first (The hash-pinned lock, below).
+# DOMOVOI_USE_LOCK=1
 # The hash-pinned lock the re-sync installs from, relative to the checkout. Empty: never use one.
 # DOMOVOI_DEPS_LOCK=requirements-linux-py314.lock
 # CPU torch index, for the resolver path only (the lock names its own). Empty: skip that step.
@@ -958,6 +966,59 @@ above exists. Without that rule the panel says so and shows the manual
 command; it does not fall back to a plain bounce, which would skip the
 migrations. Not found, the button bounces core and web exactly as before.
 `systemctl mask domovoi-update.service` switches back to the plain bounce.
+
+### The hash-pinned lock
+
+The update unit can re-sync the venv from `requirements-linux-py314.lock`
+instead of pip's resolver, so that a substituted or tampered download
+fails the update and it rolls back. That is opt-in: until
+`/etc/default/domovoi-update` sets `DOMOVOI_USE_LOCK=1`, the re-sync
+resolves from the index exactly as it did before the lock existed, and
+its step says the lock is there. The reason is the first locked re-sync:
+it moves every package to the lock's version, and the lock in the
+repository is seeded from the test suite's set, not from what your box
+runs (torch, librosa, faster-whisper and the rest of the speech stack are
+the newest that resolved). Re-seed it from the box first:
+
+1. On the box, write down what its venv runs:
+
+   ```bash
+   sudo -u domovoi /opt/domovoi/.venv/bin/python -m pip freeze --exclude-editable >domovoi-freeze.txt
+   ```
+
+2. On a machine with Docker, in a checkout of the same commit, compile
+   the lock from that freeze, check it, and commit it. Every version that
+   still satisfies `pyproject.toml` is kept, so the first locked re-sync
+   moves only what the floors require:
+
+   ```bash
+   DOMOVOI_LOCK_SEED=domovoi-freeze.txt bash scripts/linux/compile-linux-lock.sh
+   USE_STUBS=true PYTHONPATH=. python -m pytest domovoi/tests/test_ops_linux_lock.py
+   ```
+
+   Where the freeze and `requirements.lock` disagree on a package both
+   carry, decide which wins (the suite's tested version is the safer
+   default); the seed is one file, so merge the two first if you want
+   some of each.
+
+3. Pull that commit to the box, opt in, and let the installer's
+   pre-flight say what an update will do:
+
+   ```bash
+   echo 'DOMOVOI_USE_LOCK=1' | sudo tee -a /etc/default/domovoi-update
+   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+   ```
+
+   It reports `dependency lock: on` when an update would install from
+   the lock, and warns when it could not (no lock in the checkout, or a
+   lock for another Python than the venv's). Without the setting it
+   reports `dependency lock: off`.
+
+From then on an update that changes `pyproject.toml` or a lock installs
+from the lock, every package hash-checked ([step 5](#updates-from-the-dashboard)).
+A lock change is a dependency change, so under the **No** internet answer
+that update is refused like any other. Remove the line (or set it to `0`)
+to go back to the resolver.
 
 ### Signed updates
 
@@ -1135,7 +1196,10 @@ take them:
   venv the service user doesn't wholly own (it prints the `chown` that
   fixes it, and `--fix-ownership` runs it, last, and only on a directory
   with a `pyvenv.cfg`), `piper-tts` older than 1.3 in the venv, and signed
-  updates not set up yet.
+  updates not set up yet. It also says whether an update re-syncs the venv
+  from the hash-pinned lock (`dependency lock: on`) or through pip's
+  resolver (`off`, the default; [The hash-pinned lock](#the-hash-pinned-lock)),
+  and warns when the lock is opted into but an update could not use it.
 - **Records the rollback baseline** in `/var/lib/domovoi-update/applied_sha`
   when that file doesn't exist yet: the `running_sha` the core reports on
   `/v1/admin/version`, `-dirty` stripped, checked as a commit of the

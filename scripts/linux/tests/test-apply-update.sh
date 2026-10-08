@@ -447,22 +447,24 @@ new_case() {
 # the upstream pins.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=()
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=()
   local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
   if [ -n "${MANAGE_SEARXNG:-}" ]; then manage_env=(DOMOVOI_MANAGE_SEARXNG="$MANAGE_SEARXNG"); fi
   if [ -n "${UPSTREAM_URL:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_URL="$UPSTREAM_URL"); fi
   if [ -n "${UPSTREAM_BRANCH:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_BRANCH="$UPSTREAM_BRANCH"); fi
+  if [ -n "${USE_LOCK:-}" ]; then lock_env=(DOMOVOI_USE_LOCK="$USE_LOCK"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
   env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
-    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH PATH="$path" \
+    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     ${venv_env[@]+"${venv_env[@]}"} \
     ${manage_env[@]+"${manage_env[@]}"} \
     ${pin_env[@]+"${pin_env[@]}"} \
+    ${lock_env[@]+"${lock_env[@]}"} \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
@@ -482,6 +484,7 @@ run_update() {
 field() { sed -n "s/^  \"$1\": \(.*\)$/\1/p" "$RESULT" | sed 's/,$//'; }
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
+not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
 line_of() { grep -nF -- "$1" "$STATE/calls.log" | head -n 1 | cut -d: -f1; }
 before() {  # before A B: the first call matching A precedes the first matching B
@@ -665,7 +668,9 @@ case_deps_changed_as_root() {
   check "CPU torch first" called "pip --disable-pip-version-check --no-input install torch --index-url https://download.pytorch.org/whl/cpu"
   check "then the production extras" called "pip --disable-pip-version-check --no-input install -e .[real-clients,voice-profile]"
   check "no dev extra on a server" not_called "dev,"
-  check "no lock in this checkout: says so" grep -qF '"detail": "WARNING: resolved from the index without hash checks (the checkout has no requirements-linux-py314.lock)"' "$RESULT"
+  check "the lock is opt-in: the step has no detail, as before it existed" \
+    grep -qE '\{"name": "sync-deps", "status": "ok", "duration_sec": [0-9.]+, "detail": null\}' "$RESULT"
+  check "nothing asks which Python the venv runs" not_called "python -c import sys; print"
   check "torch before extras" before "install torch" "install -e"
   check "syncs before migrating" before "install -e" "systemctl restart domovoi-db.service"
   check "migrates before starting" before "systemctl restart domovoi-db.service" "systemctl start domovoi-core.service"
@@ -1752,7 +1757,7 @@ case_deps_from_the_hash_pinned_lock() {
   write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
   local sha_b; sha_b=$(commit_all "B: a new lock")
   write_root_shims "$CASE/rootbin"
-  run_update "$CASE/rootbin"
+  USE_LOCK=1 run_update "$CASE/rootbin"
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "a lock change is a dependency change" eq "$(field deps_changed)" true
@@ -1790,7 +1795,7 @@ case_lock_hash_mismatch_rolls_back() {
     '        Expected sha256 0000000000000000000000000000000000000000000000000000000000000000' \
     '             Got        1111111111111111111111111111111111111111111111111111111111111111' \
     >"$STATE/pip-fail-output"
-  run_update
+  USE_LOCK=1 run_update
   check "exit non-zero" test "$RC" -ne 0
   check "status rolled_back" eq "$(field status)" '"rolled_back"'
   check "failed at sync-deps" eq "$(field error | grep -c 'failed at sync-deps')" 1
@@ -1811,7 +1816,7 @@ case_lock_for_another_python_falls_back_loudly() {
   echo 3.13 >"$STATE/py-version"
   write_linux_lock
   commit_all "B: lock" >/dev/null
-  run_update
+  USE_LOCK=1 run_update
   check "status ok" eq "$(field status)" '"ok"'
   check "no hash-checked install" not_called "--require-hashes"
   check "resolver, CPU torch first" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
@@ -1830,7 +1835,7 @@ case_extras_beyond_the_lock_are_resolved_and_said_to_be() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   write_linux_lock
   commit_all "B: lock" >/dev/null
-  DOMOVOI_PIP_EXTRAS="real-clients, voice-profile,fastlane,cuda" run_update
+  USE_LOCK=1 DOMOVOI_PIP_EXTRAS="real-clients, voice-profile,fastlane,cuda" run_update
   check "status ok" eq "$(field status)" '"ok"'
   check "the lock first" called "--require-hashes --no-build-isolation -r"
   check "then only the extras outside it" called "$PIP_RUN -e .[fastlane,cuda]"
@@ -1846,11 +1851,53 @@ case_empty_deps_lock_opts_out() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   write_linux_lock
   commit_all "B: lock" >/dev/null
-  DOMOVOI_DEPS_LOCK= run_update
+  USE_LOCK=1 DOMOVOI_DEPS_LOCK= run_update
   check "status ok" eq "$(field status)" '"ok"'
   check "no hash-checked install" not_called "--require-hashes"
   check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
   check "the step says why" grep -qF '(DOMOVOI_DEPS_LOCK is empty)' "$RESULT"
+  end_case
+}
+
+# The lock is opt-in (DOMOVOI_USE_LOCK=1): a box that has not opted in
+# re-syncs exactly as it did before the lock existed, and the step says the
+# lock is there. A live install's first update after the lock lands must
+# not move every package to the lock's versions.
+case_lock_is_opt_in_and_off_by_default() {
+  new_case lock_is_opt_in_and_off_by_default
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0 wheel==0.48.0
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps and a new lock")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a dependency change, as before" eq "$(field deps_changed)" true
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the lock is not read for its Python" not_called "python -c import sys; print"
+  check "CPU torch first, as before" called "$PIP_RUN torch --index-url https://download.pytorch.org/whl/cpu"
+  check "then the production extras, as before" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "torch before extras" before "install torch" "install -e"
+  check "no fallback warning: nothing was asked of the lock" not_said "WARNING: not installing from a hash-pinned lock"
+  check "the step says the lock is there to opt into" grep -qF \
+    '"detail": "resolved from the index, as before; requirements-linux-py314.lock is in the checkout and opt-in (DOMOVOI_USE_LOCK=1, docs/LINUX_HOST.md)"' \
+    "$RESULT"
+  check "said once in the journal" eq "$(grep -c 'is in the checkout and opt-in' "$CASE/output.log")" 1
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Only 1 opts in: any other value (yes, true, 0) leaves the resolver path.
+case_use_lock_other_than_1_stays_off() {
+  new_case use_lock_other_than_1_stays_off
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock
+  commit_all "B: lock" >/dev/null
+  USE_LOCK=yes run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no hash-checked install" not_called "--require-hashes"
+  check "the resolver install" called "$PIP_RUN -e .[real-clients,voice-profile]"
+  check "the step says the lock is opt-in" grep -qF 'is in the checkout and opt-in (DOMOVOI_USE_LOCK=1' "$RESULT"
   end_case
 }
 
@@ -2171,6 +2218,8 @@ CASES=(
   case_lock_for_another_python_falls_back_loudly
   case_extras_beyond_the_lock_are_resolved_and_said_to_be
   case_empty_deps_lock_opts_out
+  case_lock_is_opt_in_and_off_by_default
+  case_use_lock_other_than_1_stays_off
   case_unsigned_head_warns_when_signing_is_not_enforced
   case_signed_head_without_a_signers_file_is_unverified
   case_signed_head_verifies_as_root_before_anything_runs

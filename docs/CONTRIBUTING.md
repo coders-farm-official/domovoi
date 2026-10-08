@@ -72,7 +72,8 @@ pip install --no-deps -e .
 `requirements-linux-py314.lock` is what a Linux server installs: core,
 `real-clients`, `voice-profile`, `resemblyzer` and CPU torch, for CPython
 3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
-update unit's re-sync uses it too). Regenerate it with
+update unit's re-sync uses it on a box that opts in with
+`DOMOVOI_USE_LOCK=1`). Regenerate it with
 `DOMOVOI_LOCK_SEED=requirements.lock bash scripts/linux/compile-linux-lock.sh`,
 which runs pip-compile in a pinned `python:3.14-slim` container, so it
 resolves for the server's platform from any machine with Docker, starting

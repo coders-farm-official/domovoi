@@ -38,9 +38,10 @@
 #   3. Stop domovoi-web and domovoi-core: at most DOMOVOI_UPDATE_STOP_TIMEOUT
 #      seconds, then SIGKILL whatever is still stopping (stop_services).
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
-#      requirements lock changed: from the hash-pinned
+#      requirements lock changed: through pip's resolver, as before the
+#      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
 #      requirements-linux-py314.lock when the checkout has one for the
-#      venv's Python, otherwise (with a WARNING) through pip's resolver.
+#      venv's Python, otherwise (with a WARNING) through the resolver.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
@@ -97,6 +98,12 @@ VENV_DIR=${DOMOVOI_VENV:-$REPO_DIR/.venv}
 # CPU-torch step). No `dev`: a server does not run the test suite.
 PIP_EXTRAS=${DOMOVOI_PIP_EXTRAS-real-clients,voice-profile}
 TORCH_INDEX_URL=${DOMOVOI_TORCH_INDEX_URL-https://download.pytorch.org/whl/cpu}
+# Install from the hash-pinned lock only when this is 1. Off by default, so
+# a box re-syncs the way it always has until its owner has re-seeded the
+# lock from the box's own `pip freeze` and opted in (docs/LINUX_HOST.md,
+# "The hash-pinned lock"): the first locked re-sync moves every package to
+# the lock's version.
+USE_LOCK=${DOMOVOI_USE_LOCK:-0}
 # The hash-pinned production lock, relative to the checkout
 # (sync_deps_locked). Empty: never use one, always the resolver.
 DEPS_LOCK=${DOMOVOI_DEPS_LOCK-requirements-linux-py314.lock}
@@ -1171,15 +1178,23 @@ venv_writable() {
 
 # ─── Dependency sync: the hash-pinned lock (OPS-9) ───────────────────────
 
-# The venv the way docs/LINUX_HOST.md builds it. From the checkout's
+# The venv the way docs/LINUX_HOST.md builds it. Without DOMOVOI_USE_LOCK=1,
+# with pip's resolver as before the lock existed (sync_deps_resolved), and
+# the step says the lock is there to opt into. With it, from the checkout's
 # hash-pinned lock whenever it has one for the venv's Python
-# (sync_deps_locked); otherwise, loudly, with pip's resolver
-# (sync_deps_resolved).
+# (sync_deps_locked); otherwise, loudly, with the resolver.
 sync_deps() {
   local why
   DEPS_FROM_LOCK=0
   if [ ! -x "$VENV_DIR/bin/python" ]; then
     echo "no venv interpreter at $VENV_DIR/bin/python (set DOMOVOI_VENV)"; return 1
+  fi
+  if [ "$USE_LOCK" != 1 ]; then
+    sync_deps_resolved || return 1
+    if [ -n "$DEPS_LOCK" ] && [ -f "$REPO_DIR/$DEPS_LOCK" ]; then
+      STEP_DETAIL="resolved from the index, as before; $DEPS_LOCK is in the checkout and opt-in (DOMOVOI_USE_LOCK=1, docs/LINUX_HOST.md)"
+    fi
+    return 0
   fi
   if why=$(lock_usable); then
     sync_deps_locked

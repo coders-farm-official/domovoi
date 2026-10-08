@@ -771,10 +771,16 @@ each at an exact version with its SHA-256s, for CPython 3.14 on x86_64
 ([LINUX_HOST.md, Install](LINUX_HOST.md#install)). pip refuses a download
 that doesn't match its hash, and the packages that publish only source are
 built against hash-checked build tools rather than ones fetched unchecked
-for the build. The update unit's re-sync installs from the same lock, so a
-tampered package fails the update and it rolls back. What is not
-hash-checked, said plainly:
+for the build. Once a box opts in (`DOMOVOI_USE_LOCK=1`,
+[LINUX_HOST.md, The hash-pinned lock](LINUX_HOST.md#the-hash-pinned-lock)),
+the update unit's re-sync installs from the same lock, so a tampered
+package fails the update and it rolls back. What is not hash-checked,
+said plainly:
 
+- **An update before you opt in.** Without `DOMOVOI_USE_LOCK=1` the
+  update unit's re-sync resolves from the index, unchecked, as it did
+  before the lock existed; its step says the lock is there. It is opt-in
+  so the first locked re-sync can be seeded from what the box runs.
 - **Another Python or platform.** With no lock for the venv's Python (an
   older Ubuntu, a `uv`-installed 3.13, Windows), pip's resolver installs
   whatever the index serves within the floors; the update unit says
