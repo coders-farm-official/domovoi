@@ -1808,6 +1808,11 @@ Uninstall asks **keep** (default) or **purge**:
 Python dists are refcounted: only dists *newly installed by your plugin* and
 not declared by any other installed plugin are pip-uninstalled. Bundled
 plugins are tombstoned rather than deleted (and never auto-re-register).
+The plugin's files are deleted only when the installer put them there
+(`~/.domovoi/plugins/installed/<slug>`): uninstalling a plugin registered
+in place with `domovoi plugin dev` removes its registry row and leaves your
+working copy untouched, and installing a release over such a registration
+is refused (`dev_registration`) — uninstall the registration first.
 Design your tables so *keep* is meaningful — user-created data (favorites,
 history) is why the default is keep.
 
