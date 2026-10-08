@@ -49,6 +49,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.domovoi.app.LocalApp
+import com.domovoi.app.LocalToast
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.FoundDomovoi
 import com.domovoi.app.net.ServerAddress
@@ -78,8 +80,10 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val toast = LocalToast.current
     val currentUrl by app.prefs.serverUrl.collectAsState()
     val known by app.prefs.knownServers.collectAsState()
+    var confirmForgetActive by remember { mutableStateOf(false) }
 
     var onLan by remember { mutableStateOf(Discovery.onLan(context)) }
     var scanning by remember { mutableStateOf(false) }
@@ -257,6 +261,13 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                         Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
                     }
                 }
+                // The server in use can be forgotten too (confirmed first):
+                // the way to re-pair after it was reinstalled or replaced.
+                if (active) {
+                    IconButton(onClick = { confirmForgetActive = true }, modifier = Modifier.size(26.dp)) {
+                        Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+                    }
+                }
             }
         }
 
@@ -291,6 +302,20 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
             server = server,
             onDismiss = { gate.cancel() },
             onConfirm = { if (gate.confirm()) onSelected() },
+        )
+    }
+
+    if (confirmForgetActive && currentUrl.isNotBlank()) {
+        val identityStatus by app.identity.status.collectAsState()
+        ForgetActiveServerDialog(
+            address = ServerCredentials.address(currentUrl),
+            pinned = app.prefs.pinForServer(currentUrl)?.fingerprint,
+            proven = provenFingerprint(identityStatus, currentUrl),
+            onDismiss = { confirmForgetActive = false },
+            onConfirm = {
+                confirmForgetActive = false
+                forgetActiveServer(app, toast)
+            },
         )
     }
 }

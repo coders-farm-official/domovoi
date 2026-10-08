@@ -52,6 +52,9 @@ import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.shell.ForgetActiveServerDialog
+import com.domovoi.app.ui.shell.forgetActiveServer
+import com.domovoi.app.ui.shell.provenFingerprint
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.ThemeMode
 import kotlinx.coroutines.launch
@@ -78,6 +81,7 @@ internal fun ConnectionPanel() {
     var url by remember(serverUrl) { mutableStateOf(serverUrl) }
     var tokenDraft by remember(serverUrl) { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
+    var confirmForgetActive by remember { mutableStateOf(false) }
     // The active server's latest identity verdict (net/IdentityGate.kt).
     val identityStatus by app.identity.status.collectAsState()
     val activeVerdict = identityStatus?.takeIf { it.base == IdentityGate.pinKey(serverUrl) }?.verdict
@@ -238,6 +242,7 @@ internal fun ConnectionPanel() {
                 fingerprintOf = { app.prefs.pinForServer(it)?.fingerprint },
                 paired = { app.prefs.isPaired() && ServerCredentials.normalize(it) == serverUrl },
                 onForget = { app.prefs.removeKnownServer(it); toast("forgot ${ServerCredentials.address(it)}") },
+                onForgetActive = { confirmForgetActive = true },
             )
         }
 
@@ -338,6 +343,19 @@ internal fun ConnectionPanel() {
             }
         }
     }
+
+    if (confirmForgetActive && serverUrl.isNotBlank()) {
+        ForgetActiveServerDialog(
+            address = ServerCredentials.address(serverUrl),
+            pinned = app.prefs.pinForServer(serverUrl)?.fingerprint,
+            proven = provenFingerprint(identityStatus, serverUrl),
+            onDismiss = { confirmForgetActive = false },
+            onConfirm = {
+                confirmForgetActive = false
+                forgetActiveServer(app, toast)
+            },
+        )
+    }
 }
 
 /**
@@ -411,19 +429,24 @@ internal fun IdentitySection(
  * — pure, so the listing rule is unit-tested.
  */
 @Composable
-private fun TrustedServersCard(
+internal fun TrustedServersCard(
     trusted: Set<String>,
     known: Map<String, String?>,
     active: String,
     fingerprintOf: (String) -> String?,
     paired: (String) -> Boolean,
     onForget: (String) -> Unit,
+    /** The active row's forget: confirmed first, then the app returns to
+     *  the server list (ui/shell/ForgetServer.kt). */
+    onForgetActive: () -> Unit,
 ) {
     val rows = trustedServersRows(trusted, known, active)
     PanelCard(
         "Trusted servers",
         "The Domovois this phone will connect to without asking again. Forgetting one also " +
-            "forgets its household token and its pinned identity.",
+            "forgets its household token and its pinned identity; forgetting the one you are " +
+            "connected to returns you to the server list — the way to re-pair after a server " +
+            "was reinstalled or replaced.",
     ) {
         if (rows.isEmpty()) {
             Text("none yet", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
@@ -457,6 +480,9 @@ private fun TrustedServersCard(
                     }
                     if (row.active) {
                         Pill("connected", Tone.Brand, live = true)
+                        IconButton(onClick = onForgetActive, modifier = Modifier.size(26.dp)) {
+                            Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+                        }
                     } else {
                         if (paired(row.url)) Pill("paired", Tone.Ok)
                         IconButton(onClick = { onForget(row.url) }, modifier = Modifier.size(26.dp)) {

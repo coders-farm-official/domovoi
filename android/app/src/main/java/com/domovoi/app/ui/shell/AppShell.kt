@@ -439,6 +439,15 @@ private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = 
     val activeVerdict = identity?.takeIf { it.base == IdentityGate.pinKey(serverUrl) }?.verdict
     val notOurs = activeVerdict is IdentityVerdict.Mismatch || activeVerdict is IdentityVerdict.Unproven
     val coreDown = activeVerdict is IdentityVerdict.Unavailable
+    // Forgetting the active server (Settings, or the server list) leaves
+    // the app with none and asks for the list: open it.
+    val pendingRoute by app.pendingRoute.collectAsState()
+    LaunchedEffect(pendingRoute) {
+        if (pendingRoute == "picker") {
+            showConnect = true
+            app.pendingRoute.value = null
+        }
+    }
     // Back from the server picker returns to local media, not out of the app.
     BackHandler(enabled = showConnect) { showConnect = false }
 

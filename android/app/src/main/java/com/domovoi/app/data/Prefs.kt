@@ -284,6 +284,25 @@ class Prefs(
         forgetServer(url)
     }
 
+    /**
+     * Forget the ACTIVE server: the app is left with no server (the shell
+     * returns to the server list) and the server's row, trust, token,
+     * pinned identity and trust decision all go. The way out after a
+     * legitimate identity change — a reinstalled core, new hardware at the
+     * same address — which the shell would otherwise report as "did not
+     * prove it is the Domovoi this phone paired with" for good, since
+     * neither list could forget the server in use (P2-at-01 review).
+     * Returns the address forgotten, or null when there was none.
+     */
+    fun forgetActiveServer(): String? {
+        val url = _serverUrl.value.takeIf { it.isNotBlank() } ?: return null
+        _serverUrl.value = ""
+        _deviceToken.value = null
+        scope.launch { context.dataStore.edit { it[kServer] = "" } }
+        removeKnownServer(url)
+        return url
+    }
+
     /** Everything remembered ABOUT [url] (not its known-server row). */
     private fun forgetServer(url: String) {
         untrustServer(url)
