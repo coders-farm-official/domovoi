@@ -301,6 +301,11 @@ case "$sql" in
     mv "$(dbfile "$from")" "$(dbfile "$to")"
     if [ -f "$(ledgers "$from")" ]; then mv "$(ledgers "$from")" "$(ledgers "$to")"; fi
     if [ -f "$(registry "$from")" ]; then mv "$(registry "$from")" "$(registry "$to")"; fi ;;
+  "SELECT datname FROM pg_database WHERE datname ~ '^"*"_failed_[0-9]{14}\$' ORDER BY datname DESC")
+    base=${sql#*\'^}; base=${base%%_failed_*}
+    for f in "$SHIM_STATE"/db-"$base"_failed_*; do
+      [ -f "$f" ] && basename "$f" | sed 's/^db-//'
+    done | grep -E "^${base}_failed_[0-9]{14}\$" | sort -r ;;
   SELECT\ pg_terminate_backend*) ;;
   *) echo "psql: unexpected SQL: $sql" >&2; exit 1 ;;
 esac
@@ -1574,6 +1579,63 @@ case_never_mpd_conf_only_keeps_the_image() {
   end_case
 }
 
+case_rollback_keeps_only_the_newest_failed_database() {
+  new_case rollback_keeps_only_the_newest_failed_database
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  # Left by an earlier rolled-back update: a full copy of the database.
+  echo 1 >"$STATE/db-domovoi_failed_20260101000000"
+  : >"$STATE/ledgers-domovoi_failed_20260101000000"
+  # Another database's copies, and a name that only looks like one, stay.
+  echo 1 >"$STATE/db-domovoi_test_failed_20260101000000"
+  echo 1 >"$STATE/db-domovoi_failed_keepme"
+  printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: migration + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  run_update
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "db restored" eq "$(field db_restored)" true
+  check "the older copy is dropped" called 'DROP DATABASE IF EXISTS "domovoi_failed_20260101000000"'
+  check "one replaced copy of domovoi left" eq "$(ls "$STATE" | grep -cE '^db-domovoi_failed_[0-9]{14}$')" 1
+  check "and it is this run's" test ! -f "$STATE/db-domovoi_failed_20260101000000"
+  check "the test twin's copy is not this series" test -f "$STATE/db-domovoi_test_failed_20260101000000"
+  check "a name outside the pattern is left alone" test -f "$STATE/db-domovoi_failed_keepme"
+  end_case
+}
+
+case_result_file_is_for_the_service_users_group() {
+  new_case result_file_is_for_the_service_users_group
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_root_shims "$CASE/rootbin"
+  # The service user's group is the tester's own, so chgrp works unprivileged.
+  cat >"$CASE/rootbin/id" <<'SH'
+#!/usr/bin/env bash
+if [ "${1-}" = -u ] && [ $# -eq 1 ]; then echo 0; exit 0; fi
+if [ "${1-}" = -gn ]; then /usr/bin/id -g; exit 0; fi   # a gid chgrp takes
+exec /usr/bin/id "$@"
+SH
+  cat >"$CASE/rootbin/chgrp" <<'SH'
+#!/usr/bin/env bash
+echo "chgrp $1 $2 $(basename "${3-}")" >>"$SHIM_STATE/calls.log"
+exec /usr/bin/chgrp "$@"
+SH
+  chmod +x "$CASE/rootbin/id" "$CASE/rootbin/chgrp"
+  run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the result goes to the service user's group" called "chgrp -- $(/usr/bin/id -g) .last-result.json."
+  check "the SHA files are not regrouped" not_called ".applied_sha."
+  # Only where the filesystem keeps POSIX modes and groups (not Git for
+  # Windows' NTFS view).
+  local probe=$CASE/mode-probe
+  : >"$probe" && chmod 0640 "$probe"
+  if [ "$(stat -c %a "$probe")" = 640 ]; then
+    check "not world-readable" eq "$(stat -c %a "$RESULT")" 640
+    check "group is the service user's" eq "$(stat -c %g "$RESULT")" "$(/usr/bin/id -g)"
+    check "applied_sha still world-readable" eq "$(stat -c %a "$UPD/applied_sha")" 644
+  fi
+  end_case
+}
+
 # A compose file with digest-pinned images, committed on top of A and
 # recorded as applied; echoes the new SHA. Used by the image-pin cases.
 compose_base() {
@@ -1697,6 +1759,8 @@ case_never_refuses_a_dependency_update
 case_never_refuses_a_music_image_change
 case_never_mpd_conf_only_keeps_the_image
 case_never_refuses_a_container_image_change
+case_rollback_keeps_only_the_newest_failed_database
+case_result_file_is_for_the_service_users_group
 case_compose_comment_change_is_not_an_image_change
 case_image_change_online_updates
 case_unanswered_dependency_update_reads_the_answer_once

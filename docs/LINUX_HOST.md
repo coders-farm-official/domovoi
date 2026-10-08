@@ -754,8 +754,11 @@ file. `domovoi_test` gets the same treatment on its own evidence: its dump
 is restored if a plugin ledger in it grew. The restore goes into a fresh
 database that is then renamed to `domovoi` (or `domovoi_test`); the
 replaced one is kept as `domovoi_failed_<timestamp>` (or
-`domovoi_test_failed_<timestamp>`) for inspection, and you drop it by hand
-when you're done with it. The loader switches off a plugin whose import,
+`domovoi_test_failed_<timestamp>`) for inspection. It is a full copy of
+the database, so only the newest one of each is kept: the next restore
+drops older ones (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1). Drop the
+last one by hand (`docker exec domovoi-postgres dropdb -U domovoi
+domovoi_failed_<timestamp>`) once it's no longer interesting. The loader switches off a plugin whose import,
 `register()` or contract check fails, and a boot skips switched-off
 plugins, so every plugin that loaded before the update and that the new
 code's load errors switched off is switched back on before the previous SHA
@@ -766,7 +769,12 @@ the result is `rollback_failed` and names it. The panel stops offering a
 pull while upstream still points at that commit, and offers the next one.
 
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,
-from/to SHA, each step with its timing, the error). The version panel shows
+from/to SHA, each step with its timing, the error). It carries the tail of
+each failed command's output, so it is mode 0640, group the service
+user's: the core reads it, other local accounts don't. The dumps in
+`backups/` hold everything the database holds, the household token
+included; that directory is 0700 and each dump 0600, root only
+([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)). The version panel shows
 it as **last update**, and `GET /v1/admin/version` serves it as
 `last_update`. When the core can't use the file, `last_update` is `null`
 and `last_update_problem` says why (`unreadable`, `invalid`, ...); the
@@ -819,6 +827,8 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 # DOMOVOI_UPDATE_DIR=/var/lib/domovoi-update
 # DOMOVOI_UPDATE_KEEP_BACKUPS=5
+# Replaced databases (<db>_failed_<time>) a rollback keeps for inspection, newest first.
+# DOMOVOI_UPDATE_KEEP_FAILED_DBS=1
 # 0 lets an update go ahead when the pre-update backup fails (then no restore is possible).
 # DOMOVOI_UPDATE_REQUIRE_BACKUP=1
 # DOMOVOI_UPDATE_HEALTH_TIMEOUT=120

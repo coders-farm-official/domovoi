@@ -92,6 +92,10 @@ TORCH_INDEX_URL=${DOMOVOI_TORCH_INDEX_URL-https://download.pytorch.org/whl/cpu}
 UPDATE_DIR=${DOMOVOI_UPDATE_DIR:-/var/lib/domovoi-update}
 BACKUP_DIR=${DOMOVOI_UPDATE_BACKUP_DIR:-$UPDATE_DIR/backups}
 KEEP_BACKUPS=${DOMOVOI_UPDATE_KEEP_BACKUPS:-5}
+# How many of each database's replaced copies (<db>_failed_<ts>, left by a
+# rollback's restore) stay in Postgres for inspection; older ones are
+# dropped after the next restore. At least 1.
+KEEP_FAILED_DBS=${DOMOVOI_UPDATE_KEEP_FAILED_DBS:-1}
 REQUIRE_BACKUP=${DOMOVOI_UPDATE_REQUIRE_BACKUP:-1}
 HEALTH_TIMEOUT=${DOMOVOI_UPDATE_HEALTH_TIMEOUT:-120}
 HEALTH_INTERVAL=${DOMOVOI_UPDATE_HEALTH_INTERVAL:-2}
@@ -150,6 +154,9 @@ COMPOSE_PATH=domovoi/docker-compose.yml
 
 # Run state, filled in as the run goes.
 SERVICE_USER=""
+# The service user's group: last-result.json is readable by it (the core
+# reads the file as that user) and by no other account.
+RESULT_GROUP=""
 CORE_STATE_DIR=""
 MPD_TAG=""
 MPD_PREFIX=""
@@ -272,12 +279,19 @@ tail_lines() {
 }
 
 # Write "$2" to "$1" by rename, so a reader never sees half a file and a
-# symlink planted at the target is replaced rather than followed.
+# symlink planted at the target is replaced rather than followed. Mode 0644,
+# or with a group in $3: that group and mode 0640, set before the rename so
+# the file is never briefly readable by everyone (0644 when the chgrp
+# fails, so the core can still read it).
 write_atomic() {
-  local target=$1 content=$2 tmp
+  local target=$1 content=$2 group=${3-} tmp
   tmp=$(mktemp "$(dirname "$target")/.$(basename "$target").XXXXXX")
   printf '%s' "$content" >"$tmp"
-  chmod 0644 "$tmp"
+  if [ -n "$group" ] && chgrp -- "$group" "$tmp" 2>/dev/null; then
+    chmod 0640 "$tmp"
+  else
+    chmod 0644 "$tmp"
+  fi
   mv -f "$tmp" "$target"
 }
 
@@ -287,6 +301,8 @@ write_result() {
   if [ "${#STEPS[@]}" -gt 0 ]; then
     steps=$(IFS=,; printf '%s' "${STEPS[*]}")
   fi
+  # The steps carry the tail of each failed command's output (pip, docker,
+  # git, pg_dump), so the file is for the core's user, not every account.
   write_atomic "$RESULT_FILE" "$(
     printf '{\n'
     printf '  "status": %s,\n' "$(json_str "$status")"
@@ -316,7 +332,7 @@ write_result() {
     printf '  "error": %s,\n' "$(json_str_or_null "$err")"
     printf '  "steps": [%s]\n' "$steps"
     printf '}'
-  )"$'\n'
+  )"$'\n' "$RESULT_GROUP"
 }
 
 finish() {
@@ -428,6 +444,7 @@ resolve_service_user() {
       LAST_ERROR="cannot tell which user owns $REPO_DIR; set DOMOVOI_USER in /etc/default/domovoi-update"
       return 1
     fi
+    RESULT_GROUP=$(id -gn "$SERVICE_USER" 2>/dev/null) || RESULT_GROUP=""
   fi
 }
 
@@ -865,12 +882,39 @@ prune_series() {
   done
 }
 
+# The replaced copies of database $1 (<db>_failed_<14-digit UTC time>),
+# newest first.
+failed_dbs() {
+  psql_admin "SELECT datname FROM pg_database WHERE datname ~ '^${1}_failed_[0-9]{14}\$' ORDER BY datname DESC"
+}
+
+# Keep the newest KEEP_FAILED_DBS replaced copies of database $1 and drop
+# the rest. Each holds everything the database held (transcripts, voice
+# embeddings, credential hashes, the household token), so they don't pile
+# up. Best effort: a copy that can't be listed or dropped stays, and says so.
+prune_failed_dbs() {
+  local db=$1 names name n=0
+  [[ $KEEP_FAILED_DBS =~ ^[0-9]+$ ]] && [ "$KEEP_FAILED_DBS" -ge 1 ] || KEEP_FAILED_DBS=1
+  if ! names=$(failed_dbs "$db" 2>/dev/null); then
+    echo "could not list the ${db}_failed_* databases; none dropped"
+    return 0
+  fi
+  while IFS= read -r name; do
+    [[ $name =~ ^${db}_failed_[0-9]{14}$ ]] || continue
+    n=$((n + 1))
+    [ "$n" -gt "$KEEP_FAILED_DBS" ] || continue
+    echo "dropping $name (the newest $KEEP_FAILED_DBS replaced copies of $db are kept)"
+    psql_admin "DROP DATABASE IF EXISTS \"$name\"" || echo "could not drop $name"
+  done <<<"$names"
+  return 0
+}
+
 # Restore dump $2 into a fresh database, then swap it in for database $1 by
 # rename. `pg_restore --clean` into the live database would leave behind
 # every object a failed migration CREATED (it only drops what the dump
 # contains), and the re-run of that migration after a fix would then fail on
 # "already exists". The replaced database is kept as <db>_failed_<ts> for
-# inspection; drop it by hand once it's no longer interesting.
+# inspection; only the newest KEEP_FAILED_DBS of those stay (prune_failed_dbs).
 restore_into() {
   local db=$1 dump=$2 ts tmpdb olddb
   [ -n "$dump" ] && [ -s "$dump" ] || { echo "no backup of $db to restore"; return 1; }
@@ -893,6 +937,7 @@ restore_into() {
     return 1
   fi
   echo "restored $dump; the replaced database is kept as $olddb"
+  prune_failed_dbs "$db"
 }
 
 restore_db() { restore_into "$PG_DB" "$BACKUP_FILE" && DB_RESTORED=1; }
