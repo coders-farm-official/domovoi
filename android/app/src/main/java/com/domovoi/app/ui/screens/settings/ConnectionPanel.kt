@@ -9,10 +9,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -28,14 +33,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.data.ServerCredentials
+import com.domovoi.app.net.ServerAddress
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.registerDevice
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.net.renameDevice
 import com.domovoi.app.net.suggestedDeviceName
+import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
@@ -58,6 +67,9 @@ internal fun ConnectionPanel() {
     val listenerId by app.prefs.listenerPersonId.collectAsState()
     val connected by app.bus.connected.collectAsState()
     val deviceToken by app.prefs.deviceToken.collectAsState()
+    val trusted by app.prefs.trustedServers.collectAsState()
+    val known by app.prefs.knownServers.collectAsState()
+    val pins by app.prefs.identityPins.collectAsState()
 
     var url by remember(serverUrl) { mutableStateOf(serverUrl) }
     var tokenDraft by remember(serverUrl) { mutableStateOf("") }
@@ -112,14 +124,40 @@ internal fun ConnectionPanel() {
                     Button(
                         enabled = url.isNotBlank(),
                         onClick = {
-                            // A hand-typed address is a choice, so typing it
-                            // here IS the trust decision (the picker's dialog
-                            // is for the ones a LAN sweep turned up).
-                            app.prefs.trustServer(url)
-                            if (app.prefs.setServerUrl(url)) toast("server saved — reconnecting")
-                            else toast("couldn't switch to that server")
+                            // The same rule as the picker's "add manually":
+                            // default scheme and port, and a plain-http address
+                            // outside the home network is refused here, before
+                            // anything is saved (A6-05). A hand-typed address is
+                            // a choice, so typing it IS the trust decision — and
+                            // it is listed as a known server, with a forget
+                            // button, like every other trusted one (P2-at-01).
+                            when (val typed = ServerAddress.fromTyped(url)) {
+                                null -> Unit
+                                is ServerAddress.Result.Refused -> toast(typed.message)
+                                is ServerAddress.Result.Ok -> {
+                                    app.prefs.trustServer(typed.url)
+                                    app.prefs.upsertKnownServer(typed.url)
+                                    if (app.prefs.setServerUrl(typed.url)) toast("server saved — reconnecting")
+                                    else toast("couldn't switch to that server")
+                                }
+                            }
                         },
                     ) { Text("Save & reconnect") }
+                    if (serverUrl.isNotBlank()) {
+                        val pin = app.prefs.pinForServer(serverUrl)
+                        SectionLabel("identity")
+                        Text(
+                            pin?.fingerprint ?: "not pinned yet — pinned the first time this server proves itself",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = if (pin != null) Domovoi.colors.fg else Domovoi.colors.fgSubtle,
+                        )
+                        Text(
+                            "Compare with Settings → About on the dashboard. The household token is " +
+                                "sent only after the server proves this identity, again on every network change.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgMuted,
+                        )
+                    }
                 }
             }
         }
@@ -144,8 +182,8 @@ internal fun ConnectionPanel() {
                     }
                     if (deviceToken != null) {
                         Text(
-                            "This phone sends the household token with every request. " +
-                                "Paste a new one here after an admin rotates it.",
+                            "This phone sends the household token with every request to this server, " +
+                                "and to nothing else. Paste a new one here after an admin rotates it.",
                             style = MaterialTheme.typography.bodySmall,
                             color = Domovoi.colors.fgMuted,
                         )
@@ -171,6 +209,17 @@ internal fun ConnectionPanel() {
                     }
                 }
             }
+        }
+
+        item {
+            TrustedServersCard(
+                trusted = trusted,
+                known = known.associate { ServerCredentials.normalize(it.url) to it.name },
+                active = serverUrl,
+                fingerprintOf = { app.prefs.pinForServer(it)?.fingerprint },
+                paired = { app.prefs.isPaired() && ServerCredentials.normalize(it) == serverUrl },
+                onForget = { app.prefs.removeKnownServer(it); toast("forgot ${ServerCredentials.address(it)}") },
+            )
         }
 
         item {
@@ -270,4 +319,93 @@ internal fun ConnectionPanel() {
             }
         }
     }
+}
+
+/**
+ * Every server this phone trusts, with what it remembers about each, and a
+ * way to forget it. Until 2026-10-08 the trust list was write-only: an
+ * address trusted here stayed trusted through every later switch with
+ * nothing in the UI showing it (P2-at-01). The rows are [trustedServersRows]
+ * — pure, so the listing rule is unit-tested.
+ */
+@Composable
+private fun TrustedServersCard(
+    trusted: Set<String>,
+    known: Map<String, String?>,
+    active: String,
+    fingerprintOf: (String) -> String?,
+    paired: (String) -> Boolean,
+    onForget: (String) -> Unit,
+) {
+    val rows = trustedServersRows(trusted, known, active)
+    PanelCard(
+        "Trusted servers",
+        "The Domovois this phone will connect to without asking again. Forgetting one also " +
+            "forgets its household token and its pinned identity.",
+    ) {
+        if (rows.isEmpty()) {
+            Text("none yet", style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            rows.forEach { row ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            row.name ?: "domovoi",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Domovoi.colors.fg,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            ServerCredentials.address(row.url),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Domovoi.colors.fgMuted,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            fingerprintOf(row.url) ?: "identity not pinned yet",
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = Domovoi.colors.fgSubtle,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (row.active) {
+                        Pill("connected", Tone.Brand, live = true)
+                    } else {
+                        if (paired(row.url)) Pill("paired", Tone.Ok)
+                        IconButton(onClick = { onForget(row.url) }, modifier = Modifier.size(26.dp)) {
+                            Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One row of the trusted-servers list. */
+internal data class TrustedServerRow(val url: String, val name: String?, val active: Boolean)
+
+/**
+ * What Settings → Connection lists: every trusted server and every known
+ * one (a known server is trusted by construction, but the two lists can
+ * drift — a pre-trust-list install, a harness write), the active one
+ * first, then by address. The active server is listed even when it is
+ * known to nothing else, so there is never a server the phone talks to
+ * that the list does not show.
+ */
+internal fun trustedServersRows(
+    trusted: Set<String>,
+    known: Map<String, String?>,
+    active: String,
+): List<TrustedServerRow> {
+    val activeClean = ServerCredentials.normalize(active)
+    val urls = (trusted.map(ServerCredentials::normalize) + known.keys.map(ServerCredentials::normalize) +
+        listOfNotNull(activeClean.takeIf { it.isNotBlank() })).filter { it.isNotBlank() }.toSet()
+    return urls.map { TrustedServerRow(it, known[it], it == activeClean) }
+        .sortedWith(compareByDescending<TrustedServerRow> { it.active }.thenBy { ServerCredentials.address(it.url) })
 }

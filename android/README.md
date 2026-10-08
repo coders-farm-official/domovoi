@@ -17,7 +17,7 @@ administration is the deliberate exception — see *Settings* below.
 | Playback | Media3 ExoPlayer behind a `MediaSessionService` (background audio + media notification); one queue for library / radio / podcasts / audiobooks; casting to satellite rooms via the admin music endpoints |
 | Images | Coil |
 | Alerts | A notification when a timer or reminder goes off anywhere in the house: live over `/ws/state`, plus a local `AlarmManager` mirror for when the socket is down — `alerts/` |
-| Settings | Preferences DataStore (server URL, theme, device id, "listening as" person) — device-local only; server administration hands off to the dashboard |
+| Settings | Preferences DataStore (server URL, theme, device id, "listening as" person, trusted servers and their pinned identities) — device-local only; server administration hands off to the dashboard. The household token is NOT in it: `data/TokenVault.kt` seals it under an Android Keystore key (see *Security*) |
 
 ## Building
 
@@ -49,9 +49,65 @@ half of that rule is `res/xml/network_security_config.xml` (referenced
 from the manifest, system trust store only); because Android cannot
 express an IP range there, `net/CleartextPolicy.kt` enforces the whole
 rule on the app's single `OkHttpClient`, which the API, both WebSockets,
-media3 and Coil share. Backups are off (`allowBackup="false"`), so the
-server address, device id and — once it lands — the pairing token never
-leave the device in a cloud or `adb` backup.
+media3 and Coil share; the same rule is applied in Settings → Connection
+and, by hand, to every save-to-device download (`DownloadManager` is its
+own HTTP stack). Backups are off (`allowBackup="false"`,
+`dataExtractionRules`), so the server address, device id, pinned server
+identities and the sealed pairing token never leave the device in a cloud
+or `adb` backup or a device-to-device transfer.
+
+## Security: what the phone holds and where it sends it
+
+The household token (`X-Device-Token`, docs/SECURITY_PRIVACY.md) is the
+one credential the app has. The rules, all unit-tested under
+`app/src/test/java/com/domovoi/app/net/`:
+
+- **Scope** (`net/TokenScope.kt`, `DeviceAuthInterceptor`): the token goes
+  only to the active server — same scheme, host and port, like a browser
+  origin — and the interceptor strips it from anything else, whatever a
+  caller put on the request. The one exception is the app's own WebSocket
+  upgrades, which may reach another port on the same host (the drop-in
+  socket to the core). A radio stream's host, a LAN sweep's 254 probes
+  (`net/Discovery.kt` uses a copy of the client with no token interceptor),
+  a URL another app pushes at the player: none of them see it.
+- **Identity before token** (`net/IdentityGate.kt`, `net/ServerIdentity.kt`):
+  the first time in a process — and again after every default-network
+  change (`net/NetworkWatch.kt`) — the app asks the saved server
+  `GET /api/health?challenge=<nonce>` without a token and checks the
+  signed answer against the Ed25519 key it pinned for that server. The
+  pin is made the first time a trusted server proves one (trust on first
+  use; pair at home). Not the pinned key, or no identity where one is
+  pinned, and no token-bearing request leaves — the state socket, the
+  background timer sync and a ringing alarm's confirm included — and the
+  shell says the server did not prove it is the one this phone paired
+  with. A server that offers no identity at all (an older web backend, or
+  one whose core is down) is treated as before, with a log line. The pin
+  shows under Settings → Connection next to the server, with every other
+  trusted server and a forget button each; switching servers forgets trust
+  that is attached to no listed server. The Ed25519 verifier is a plain
+  Kotlin port of the core's vendored one, pinned to the RFC 8032 vectors.
+- **At rest** (`data/TokenVault.kt`): tokens are one AES-256-GCM blob in
+  `shared_prefs/domovoi-vault.xml`, under a non-exportable key in the
+  Android Keystore; a blob the key cannot open is "nothing paired" and the
+  app asks to pair again. At every start a plain `device_tokens` value in
+  the DataStore (an install from before the vault — or
+  `functional-testing/at.py pair --via datastore`, which writes exactly
+  that) is swept into the vault and the plain key removed, so the harness
+  keeps working and nothing stays in the clear. **Debug-build caveat:** the
+  CI workflow publishes `assembleDebug`, which is `android:debuggable`;
+  on a debuggable build `adb shell run-as com.domovoi.app` and an attached
+  debugger run as the app's uid and can drive it to decrypt. The Keystore
+  protects the file, not a debugger; a release build (not debuggable,
+  minified) is what closes that, and at.py's DataStore pairing depends on
+  the debug build's `run-as`.
+- **The media session** (`player/SessionAccess.kt`, `PlaybackService`):
+  the session is exported, as every `MediaSessionService` must be, so any
+  app on the phone can bind to it. Its callback admits only this app, the
+  service's own notification controller, Android Auto / Automotive and
+  controllers the system vouches for (lock screen, Bluetooth, a watch),
+  grants none of them `COMMAND_SET_MEDIA_ITEM` / `COMMAND_CHANGE_MEDIA_ITEMS`,
+  and fails `onAddMediaItems` / `onSetMediaItems` for everyone. The UI
+  drives the ExoPlayer directly, so nothing legitimate needed either.
 
 ## Settings: device-local only
 

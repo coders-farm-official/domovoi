@@ -125,10 +125,10 @@ fun AudiobooksScreen() {
         ) + ext
         val err = DeviceDownloads.enqueue(
             context,
-            app.api.absolute("/api/audiobooks/${book.id}/download"),
+            app.api,
+            "/api/audiobooks/${book.id}/download",
             name,
             mimeType = if (book.is_folder) "application/zip" else null,
-            deviceToken = app.prefs.deviceToken.value,
         )
         toast(err ?: "saving \"$name\" to Downloads/Domovoi")
     }

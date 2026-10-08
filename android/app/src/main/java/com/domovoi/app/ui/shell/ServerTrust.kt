@@ -5,7 +5,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /** A server the picker found and the user has not answered for yet. */
-data class PendingServer(val url: String, val name: String?) {
+data class PendingServer(
+    val url: String,
+    val name: String?,
+    /** The identity it advertised on `/api/health` (`SHA256:…`), unproven
+     *  — shown so a person can compare it with the dashboard's Settings →
+     *  About; proven and pinned by the first request after trust. */
+    val fingerprint: String? = null,
+) {
     /** `10.0.0.42:6369` — shown prominently, so the address can be checked
      *  against the box before anything is trusted. */
     val address: String get() = ServerCredentials.address(url)
@@ -37,11 +44,11 @@ class ServerConnectGate(
 
     /** True when the server was already trusted and is now connected;
      *  false when the user has to answer first (see [pending]). */
-    fun select(url: String, name: String? = null): Boolean {
+    fun select(url: String, name: String? = null, fingerprint: String? = null): Boolean {
         val clean = ServerCredentials.normalize(url)
         if (clean.isBlank()) return false
         if (!isTrusted(clean)) {
-            _pending.value = PendingServer(clean, name)
+            _pending.value = PendingServer(clean, name, fingerprint)
             return false
         }
         _pending.value = null

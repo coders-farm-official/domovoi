@@ -1,8 +1,10 @@
 package com.domovoi.app.net
 
 import kotlinx.coroutines.runBlocking
+import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,15 +12,24 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * Once this phone is paired, the household device token goes out on
- * EVERYTHING it sends — JSON calls, the media3 / Coil loads that share the
- * client, and both WebSocket upgrades — and a refusal that asks for it
- * sends the app back to the pairing screen (security batch B1).
+ * EVERYTHING it sends TO ITS SERVER — JSON calls, the media3 / Coil loads
+ * that share the client, and both WebSocket upgrades — and on nothing
+ * addressed anywhere else (security round 3, A6-01/A6-02: the interceptor
+ * scopes the token to the active server's scheme, host and port). A
+ * refusal that asks for it sends the app back to the pairing screen
+ * (security batch B1).
  */
 class DeviceAuthTest {
+    @get:Rule val timeout: Timeout = Timeout.seconds(60)
+
     private lateinit var server: MockWebServer
     private var token: String? = "household-abc"
     private lateinit var api: ApiClient
@@ -30,6 +41,10 @@ class DeviceAuthTest {
 
     @After fun down() = server.shutdown()
 
+    /** The next request, or a failure — never a hang. */
+    private fun MockWebServer.next(): RecordedRequest =
+        takeRequest(5, TimeUnit.SECONDS) ?: error("no request reached the server")
+
     @Test fun everyRequestCarriesTheToken() = runBlocking {
         repeat(4) { server.enqueue(MockResponse().setBody("{}")) }
         api.get("/api/music/library")
@@ -37,7 +52,7 @@ class DeviceAuthTest {
         api.patch("/api/devices/x", null)
         api.delete("/api/music/queue/1")
         repeat(4) {
-            assertEquals("household-abc", server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+            assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
         }
     }
 
@@ -47,39 +62,182 @@ class DeviceAuthTest {
         server.enqueue(MockResponse().setBody("audio"))
         val req = okhttp3.Request.Builder().url(server.url("/api/music/library/7/audio")).build()
         api.http.newCall(req).execute().use { it.body?.string() }
-        assertEquals("household-abc", server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
     }
 
     @Test fun bothWebSocketUpgradesCarryIt() {
-        val ws = api.wsRequest("ws://host:6370/ws/state")
-        val dropin = api.wsRequest("ws://host:6370/v1/dropin/kitchen?phone_id=android-1")
+        // The state socket is on the server itself; the drop-in socket is on
+        // the core's port of the SAME host (phone-info points it there).
+        val host = server.hostName
+        val ws = api.wsRequest("ws://$host:${server.port}/ws/state")
+        val dropin = api.wsRequest("ws://$host:6370/v1/dropin/kitchen?phone_id=android-1")
         assertEquals("household-abc", ws.header(DEVICE_TOKEN_HEADER))
         assertEquals("household-abc", dropin.header(DEVICE_TOKEN_HEADER))
+
+        // ...and the interceptor, which has the last word, lets both through
+        // on the wire: the state socket on the server's own port and the
+        // drop-in socket on another port of its host.
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+        val stateSocket = api.http.newWebSocket(ws, object : WebSocketListener() {})
+        assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
+        stateSocket.cancel()
+
+        val core = MockWebServer().also { it.start() }
+        try {
+            core.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+            val toCore = api.wsRequest("ws://$host:${core.port}/v1/dropin/kitchen?phone_id=android-1")
+            val coreSocket = api.http.newWebSocket(toCore, object : WebSocketListener() {})
+            assertEquals("household-abc", core.next().getHeader(DEVICE_TOKEN_HEADER))
+            coreSocket.cancel()
+        } finally {
+            core.shutdown()
+        }
     }
 
     @Test fun anUnpairedPhoneSendsNoHeaderAtAll() = runBlocking {
         token = null
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertNull(server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertNull(server.next().getHeader(DEVICE_TOKEN_HEADER))
         assertNull(api.wsRequest("ws://host/ws/state").header(DEVICE_TOKEN_HEADER))
 
         token = "   "
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertNull("a blank token is not a token", server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertNull("a blank token is not a token", server.next().getHeader(DEVICE_TOKEN_HEADER))
     }
 
     @Test fun pairingTakesEffectOnTheNextRequestWithoutARestart() = runBlocking {
         token = null
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertNull(server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertNull(server.next().getHeader(DEVICE_TOKEN_HEADER))
 
         token = "paired-now"
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertEquals("paired-now", server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals("paired-now", server.next().getHeader(DEVICE_TOKEN_HEADER))
+    }
+
+    // ---- the token goes to the active server and nowhere else (A6-01/02) ----
+
+    /** A second listener reached by a DIFFERENT host name: MockWebServer
+     *  binds localhost, and 127.0.0.1 is the same socket under another name,
+     *  which is exactly what the scope compares (names, like an origin). */
+    private fun otherHost(other: MockWebServer, path: String): String =
+        "http://127.0.0.1:${other.port}$path"
+
+    @Test fun aRequestToAnotherHostCarriesNoToken() {
+        val other = MockWebServer().also { it.start() }
+        try {
+            other.enqueue(MockResponse().setBody("audio"))
+            val req = okhttp3.Request.Builder().url(otherHost(other, "/grab.mp3")).build()
+            api.http.newCall(req).execute().use { it.body?.string() }
+            assertNull("the attacker's listener sees no token", other.next().getHeader(DEVICE_TOKEN_HEADER))
+
+            // An absolute URL through the JSON client is the same request.
+            other.enqueue(MockResponse().setBody("{}"))
+            runBlocking { api.get(otherHost(other, "/api/health")) }
+            assertNull(other.next().getHeader(DEVICE_TOKEN_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun aRequestToAnotherPortOnTheSameHostCarriesNoToken() {
+        val other = MockWebServer().also { it.start() }
+        try {
+            other.enqueue(MockResponse().setBody("{}"))
+            val req = okhttp3.Request.Builder().url("http://${server.hostName}:${other.port}/api/x").build()
+            api.http.newCall(req).execute().use { it.body?.string() }
+            assertNull(other.next().getHeader(DEVICE_TOKEN_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun anExplicitHeaderOnAForeignRequestIsStrippedNotHonoured() {
+        val other = MockWebServer().also { it.start() }
+        try {
+            other.enqueue(MockResponse().setBody("{}"))
+            val req = okhttp3.Request.Builder().url(otherHost(other, "/api/x"))
+                .header(DEVICE_TOKEN_HEADER, "household-abc").build()
+            api.http.newCall(req).execute().use { it.body?.string() }
+            assertNull("the interceptor decides, not the caller", other.next().getHeader(DEVICE_TOKEN_HEADER))
+
+            // The same for an upgrade the app built itself: host-bound.
+            other.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+            val ws = api.wsRequest("ws://127.0.0.1:${other.port}/ws/state")
+            val socket = api.http.newWebSocket(ws, object : WebSocketListener() {})
+            assertNull(other.next().getHeader(DEVICE_TOKEN_HEADER))
+            socket.cancel()
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun theSharedClientStillAuthenticatesTheActiveServerAfterAForeignCall() = runBlocking {
+        val other = MockWebServer().also { it.start() }
+        try {
+            other.enqueue(MockResponse().setBody("{}"))
+            api.http.newCall(okhttp3.Request.Builder().url(otherHost(other, "/x")).build()).execute().close()
+            other.next()
+            server.enqueue(MockResponse().setBody("{}"))
+            api.get("/api/music/library")
+            assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    // ---- the gate: what the server must prove before the token goes out ----
+
+    @Test fun aGateThatRefusesHoldsTheWholeRequestBack() = runBlocking {
+        var asked = 0
+        val gated = ApiClient(
+            { server.url("/").toString().trimEnd('/') }, { token },
+            gate = { asked++; throw IOException("server identity mismatch") },
+        )
+        server.enqueue(MockResponse().setBody("{}"))
+        try {
+            gated.get("/api/timers")
+            fail("expected the gate's IOException")
+        } catch (e: IOException) {
+            assertEquals("server identity mismatch", e.message)
+        }
+        assertEquals(1, asked)
+        assertEquals("nothing left the phone", 0, server.requestCount)
+        assertFalse("a server that is not ours is out of reach", gated.answers())
+    }
+
+    @Test fun theGateIsOnlyAskedWhenThereIsATokenToProtectAndAServerToSendItTo() = runBlocking {
+        var asked = 0
+        val gated = ApiClient(
+            { server.url("/").toString().trimEnd('/') }, { token },
+            gate = { asked++ },
+        )
+        // A foreign host: no token, so nothing to gate.
+        val other = MockWebServer().also { it.start() }
+        try {
+            other.enqueue(MockResponse().setBody("{}"))
+            gated.get(otherHost(other, "/api/health"))
+            assertEquals(0, asked)
+        } finally {
+            other.shutdown()
+        }
+        // An unpaired phone: likewise.
+        token = null
+        server.enqueue(MockResponse().setBody("{}"))
+        gated.get("/api/health")
+        assertEquals(0, asked)
+        // Paired and addressed to the server: asked once per request, and
+        // the token goes out once the gate lets it.
+        token = "household-abc"
+        server.enqueue(MockResponse().setBody("{}"))
+        gated.get("/api/health")
+        assertEquals(1, asked)
+        server.next()
+        assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
     }
 
     // ---- a refusal routes to the pairing screen ---------------------------
@@ -154,7 +312,7 @@ class DeviceAuthTest {
         token = "Maple Street, 1984!"
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertEquals("Maple Street, 1984!", server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals("Maple Street, 1984!", server.next().getHeader(DEVICE_TOKEN_HEADER))
         assertEquals("Maple Street, 1984!", api.wsRequest("ws://host/ws/state").header(DEVICE_TOKEN_HEADER))
     }
 
@@ -162,7 +320,7 @@ class DeviceAuthTest {
         token = (0x20..0x7E).map { it.toChar() }.joinToString("").trim()
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertEquals(token, server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertEquals(token, server.next().getHeader(DEVICE_TOKEN_HEADER))
     }
 
     @Test fun aNonAsciiTokenIsDroppedRatherThanThrown() = runBlocking {
@@ -170,10 +328,10 @@ class DeviceAuthTest {
         // on EVERY request, with the token in the message (X-Device-Token is
         // not in its isSensitiveHeader set). Drop it instead: the server
         // answers 401 and the phone is sent to the pairing screen.
-        token = "caf\u00E9-token-abcdef"
+        token = "café-token-abcdef"
         server.enqueue(MockResponse().setBody("{}"))
         api.get("/api/health")
-        assertNull(server.takeRequest().getHeader(DEVICE_TOKEN_HEADER))
+        assertNull(server.next().getHeader(DEVICE_TOKEN_HEADER))
         assertNull(api.wsRequest("ws://host/ws/state").header(DEVICE_TOKEN_HEADER))
     }
 
@@ -190,8 +348,8 @@ class DeviceAuthTest {
         assertTrue(isStorableDeviceToken("abcdef ghijkl"))
         assertTrue(isStorableDeviceToken("abcdef~ghijkl"))
         assertFalse(isStorableDeviceToken("abcdef\u007Fghijkl"))
-        assertFalse(isStorableDeviceToken("abcdef\u00E9ghijkl"))
-        assertFalse(isStorableDeviceToken("abcdef\uD83D\uDC31ghijkl"))
+        assertFalse(isStorableDeviceToken("abcdeféghijkl"))
+        assertFalse(isStorableDeviceToken("abcdef🐱ghijkl"))
         assertFalse(isStorableDeviceToken("abcdef\tghijkl"))
         // the shapes a real server mints
         assertTrue(isStorableDeviceToken("acorn-maple-river-thistle-harbor-quartz-willow-ember"))

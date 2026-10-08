@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.Context
 import android.net.Uri
 import android.os.Environment
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Save-to-device downloads — the Android analog of the web UI's
@@ -12,9 +13,14 @@ import android.os.Environment
  * (under Downloads/Domovoi/) with a progress notification, so downloads
  * survive app death and show up in the Files app.
  *
- * The download carries this phone's household device token like every other
- * request; DownloadManager is a separate HTTP stack, so it is set as an
- * explicit request header rather than by the shared interceptor.
+ * DownloadManager is a separate HTTP stack: neither the app's cleartext
+ * policy nor its token interceptor sees the request. So both rules are
+ * applied HERE, in [plan], before anything is enqueued (security round 3,
+ * A6-05): a plain-http address outside the home network is refused with
+ * the policy's own message, and the household token is attached only when
+ * the URL is the active server itself (net/TokenScope.kt) and that server
+ * has proved its identity on this network (net/IdentityGate.kt) — the same
+ * two conditions every other request meets.
  *
  * The server marks these responses `Content-Disposition: attachment`
  * (?download=1 / /download endpoints), but DownloadManager wants an explicit
@@ -30,21 +36,39 @@ object DeviceDownloads {
         return cleaned.take(150).ifBlank { fallback }
     }
 
+    /** What would be enqueued: the URL and the header, or why not. Pure. */
+    data class Plan(val url: String, val token: String?, val refusal: String?)
+
     /**
-     * Enqueue [url] to save as Downloads/Domovoi/[fileName]. Returns a
-     * user-showable error message, or null when the download was enqueued
-     * (completion is the DownloadManager notification's job).
+     * Decide the request for [path] (server-relative, or absolute) against
+     * the active [api]: the policy's refusal, or the URL with the token it
+     * may carry.
+     */
+    fun plan(api: ApiClient, path: String): Plan {
+        val url = api.absolute(path)
+        val parsed = url.toHttpUrlOrNull() ?: return Plan(url, null, "that is not a web address")
+        if (!CleartextPolicy.permits(parsed)) return Plan(url, null, CleartextPolicy.refusalMessage(parsed.host))
+        return Plan(url, api.tokenForDownload(parsed), null)
+    }
+
+    /**
+     * Enqueue [path] (as [plan] resolves it) to save as
+     * Downloads/Domovoi/[fileName]. Returns a user-showable error message,
+     * or null when the download was enqueued (completion is the
+     * DownloadManager notification's job).
      */
     fun enqueue(
         context: Context,
-        url: String,
+        api: ApiClient,
+        path: String,
         fileName: String,
         mimeType: String? = null,
-        deviceToken: String? = null,
     ): String? {
+        val plan = plan(api, path)
+        plan.refusal?.let { return it }
         return try {
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            val req = DownloadManager.Request(Uri.parse(url))
+            val req = DownloadManager.Request(Uri.parse(plan.url))
                 .setTitle(fileName)
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Domovoi/$fileName")
@@ -52,10 +76,8 @@ object DeviceDownloads {
                 .setAllowedOverRoaming(true)
             mimeType?.let { req.setMimeType(it) }
             // DownloadManager fetches outside the app's OkHttp client, so the
-            // household device token has to be attached by hand here or this
-            // would be the one request the app makes without it.
-            deviceToken?.trim()?.takeIf { it.isNotEmpty() }
-                ?.let { req.addRequestHeader(DEVICE_TOKEN_HEADER, it) }
+            // household device token has to be attached by hand here.
+            plan.token?.let { req.addRequestHeader(DEVICE_TOKEN_HEADER, it) }
             dm.enqueue(req)
             null
         } catch (e: SecurityException) {

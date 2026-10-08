@@ -84,8 +84,11 @@ refused request is replayed once the phrase is entered (the browser
 canonicalises it first, so the value it stores and offers as a WebSocket
 subprotocol is always the hyphenated form), while an admin login
 fetches `GET /api/auth/device-token` and pairs the browser silently. The
-Android app keeps it in `EncryptedSharedPreferences` and sends it on every
-request, on the `/ws/state` socket and on the drop-in call socket. Browser
+Android app keeps it sealed under an Android Keystore key (AES-256-GCM,
+`data/TokenVault.kt`) and sends it on every request to the server it was
+issued by — and to no other scheme, host or port — on the `/ws/state`
+socket and on the drop-in call socket, after that server has proved its
+identity on the current network (`GET /api/health?challenge=`). Browser
 WebSockets cannot set headers, so the dashboard's first `/ws/state` frame
 carries `{"subscribe": [...], "device_token": "..."}` instead; the Android
 socket uses the header.
@@ -1260,7 +1263,7 @@ fetching runs in a core background worker.
 
 | Method & path | Auth | Response / purpose |
 |---|---|---|
-| `GET /api/health` | Open | `{status: "ok"\|"degraded", db_reachable, domovoi_reachable, stt}`. Returns `200` even when degraded so the UI can render a partial-degradation banner. `stt` passes the core's `/v1/health` speech-recognition state through (`ok` / `fallback` / `unavailable` / `stub` / `not_loaded`; `null` when the core did not answer with one); it never makes `status` degraded. |
+| `GET /api/health` | Open | `{status: "ok"\|"degraded", db_reachable, domovoi_reachable, stt, identity}`. Returns `200` even when degraded so the UI can render a partial-degradation banner. `stt` passes the core's `/v1/health` speech-recognition state through (`ok` / `fallback` / `unavailable` / `stub` / `not_loaded`; `null` when the core did not answer with one); it never makes `status` degraded. `identity` passes the core's identity block through from the same ping (`algorithm`, `public_key`, `fingerprint` — public by construction, the string Settings → About shows), and `?challenge=<nonce>` (1–128 characters from `A-Z a-z 0-9 . _ ~ -`, the alphabet the core signs; anything else is `400` here, before the hop) is forwarded to the core so the block also carries `challenge` and the core's `signature` over `domovoi-health-v1\n<nonce>`. `null` when the core did not answer or predates identity. The Android app pins the key the first time it talks to a server and demands this proof again after every network change before it sends the household token (A6-03). |
 | `GET /api/stats/latency` | Open | Proxy → core `GET /v1/stats/latency` (§2.1), same `since` / `room` query and the same answer. `since` is parsed here, so a malformed one is this process's `422`; `502` when the core doesn't answer. Needs no credential; like every web→core hop it forwards the caller's headers anyway. The Models page shows it as the "recent speech timings" line under speech-to-text. |
 
 ### 3.22 The static mount, and how a front-end change reaches a browser
