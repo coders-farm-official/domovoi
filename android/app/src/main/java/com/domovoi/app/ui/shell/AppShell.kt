@@ -67,6 +67,8 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Capabilities
+import com.domovoi.app.net.IdentityGate
+import com.domovoi.app.net.IdentityVerdict
 import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.net.canRegister
 import com.domovoi.app.net.isSharedScreen
@@ -135,6 +137,7 @@ fun AppShell() {
             when (shellMode(serverUrl, unreachable, pairingRequired)) {
                 ShellMode.Local -> OfflineShell(
                     unreachableServer = if (serverUrl.isBlank()) null else app.prefs.serverLabel(),
+                    serverUrl = serverUrl,
                 )
                 // Kept in a saveable slot so a trip through local media
                 // (server out of reach) returns to the same screen.
@@ -421,9 +424,19 @@ private fun TopChrome(content: @Composable () -> Unit) {
 // AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
-private fun OfflineShell(unreachableServer: String? = null) {
+private fun OfflineShell(unreachableServer: String? = null, serverUrl: String = "") {
+    val app = LocalApp.current
     var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
     var showConnect by rememberSaveable { mutableStateOf(false) }
+    // "Out of reach" has two faces: nothing answered, or something answered
+    // at the saved address that is NOT the Domovoi this phone paired with —
+    // its identity failed the proof, so no request with the token was sent
+    // to it (net/IdentityGate.kt, A6-03). Say which.
+    val identity by app.identity.status.collectAsState()
+    val notOurs = identity?.let { s ->
+        s.base == IdentityGate.pinKey(serverUrl) &&
+            (s.verdict is IdentityVerdict.Mismatch || s.verdict is IdentityVerdict.Unproven)
+    } == true
     // Back from the server picker returns to local media, not out of the app.
     BackHandler(enabled = showConnect) { showConnect = false }
 
@@ -502,8 +515,15 @@ private fun OfflineShell(unreachableServer: String? = null) {
             if (unreachableServer != null) {
                 Surface(color = Domovoi.colors.canvas) {
                     Text(
-                        "Can't reach $unreachableServer. Showing media on this phone; " +
-                            "the workspace comes back when the server does.",
+                        if (notOurs) {
+                            "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
+                                "this phone paired with, so nothing was sent to it. Showing media on this " +
+                                "phone; the workspace comes back when your Domovoi does. If you replaced " +
+                                "the server, forget it in the server list and pair again."
+                        } else {
+                            "Can't reach $unreachableServer. Showing media on this phone; " +
+                                "the workspace comes back when the server does."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
                         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),

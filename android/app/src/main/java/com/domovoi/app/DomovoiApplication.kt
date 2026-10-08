@@ -7,6 +7,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.domovoi.app.alerts.TimerNotifier
 import com.domovoi.app.diagnostics.Diagnostics
+import com.domovoi.app.net.NetworkWatch
 
 class DomovoiApplication : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -19,6 +20,9 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) watchMainThreadIo()
         TimerNotifier.createChannel(this)
         container = AppContainer(this)
+        // A new network means the saved server proves itself again before
+        // the household token goes to it (net/IdentityGate.kt, A6-03).
+        NetworkWatch.start(this) { container.identity.networkChanged() }
         container.bus.start()
         container.alerts.start()
         // Earlier crashes and Android's exit history, read off the main thread.
