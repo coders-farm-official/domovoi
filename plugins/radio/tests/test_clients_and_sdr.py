@@ -58,7 +58,12 @@ async def test_shazam_stub_encodes_input() -> None:
 
 class _Upstream:
     """What the mocked station answers: a status, headers and a body,
-    plus a log of every URL the grab asked for (redirect hops included)."""
+    plus a log of every URL the grab asked for (redirect hops included).
+
+    URLs are logged by NAME, as the station row spells them: the outbound
+    guard may connect to the literal address it vetted while sending the
+    name as ``Host`` (and SNI), so the name is read from the ``Host``
+    header rather than from the address the request was sent to."""
 
     def __init__(self) -> None:
         self.status = 200
@@ -70,7 +75,8 @@ class _Upstream:
     def answer(self, request):
         import httpx
 
-        url = str(request.url)
+        host = request.headers.get("host") or request.url.netloc.decode()
+        url = f"{request.url.scheme}://{host}{request.url.raw_path.decode()}"
         self.opened.append(url)
         if url in self.redirects:
             return httpx.Response(302, headers={"location": self.redirects[url]})
