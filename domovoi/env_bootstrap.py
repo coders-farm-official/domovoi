@@ -293,9 +293,9 @@ def _repair_block(values: dict[str, str], newline: str) -> str:
     lines = [
         "",
         "# ─── Helper-container secrets (added by `python -m domovoi.env_bootstrap --repair`) ──",
-        "# Generated for this machine: this file predates them, and docker-compose.yml",
-        "# no longer falls back to the values every install used to share. LETTA_TOKEN",
-        "# is the Letta server's password and the core's; SEARXNG_SECRET is the search",
+        "# Generated for this machine. docker-compose.yml requires them and no longer",
+        "# falls back to the values every install used to share. LETTA_TOKEN is the",
+        "# Letta server's password and the core's; SEARXNG_SECRET is the search",
         "# helper's signing key. Changing one: docs/LINUX_HOST.md, \"Helper-container secrets\".",
         *(f"{k}={v}" for k, v in values.items()),
     ]
