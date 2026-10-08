@@ -22,13 +22,18 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * A dashboard that answered `/api/health`. [fingerprint] is the identity
- * it advertises there (`identity.fingerprint`, `SHA256:…`), unproven at
- * this point — shown in the trust dialog so a person can compare it with
- * the dashboard's Settings → About, and proven with a signed challenge the
- * first time the app talks to the server (net/IdentityGate.kt).
+ * A dashboard that answered `/api/health`. [identity] is the key and
+ * fingerprint it advertises there (`identity.public_key` /
+ * `identity.fingerprint`, `SHA256:…`), unproven at this point — shown in
+ * the trust dialog so a person can compare it with the dashboard's
+ * Settings → About, PINNED when the person says yes to that dialog, and
+ * proven with a signed challenge against that pin the first time the app
+ * talks to the server (net/IdentityGate.kt). Null for an older backend or
+ * a block whose key and fingerprint do not agree.
  */
-data class FoundDomovoi(val url: String, val name: String?, val fingerprint: String? = null)
+data class FoundDomovoi(val url: String, val name: String?, val identity: ServerIdentity.Pin? = null) {
+    val fingerprint: String? get() = identity?.fingerprint
+}
 
 /**
  * LAN discovery for domovoi dashboards: probes the phone's /24
@@ -83,10 +88,10 @@ object Discovery {
             val client = client(http, timeoutMs)
             val clean = base.trimEnd('/')
             runCatching {
-                val fingerprint = client.newCall(Request.Builder().url("$clean/api/health").build())
+                val identity = client.newCall(Request.Builder().url("$clean/api/health").build())
                     .execute().use { resp ->
                         if (!resp.isSuccessful) return@withContext null
-                        advertisedFingerprint(resp.body?.string())
+                        advertisedIdentity(resp.body?.string())
                     }
                 val name = runCatching {
                     client.newCall(Request.Builder().url("$clean/api/config").build())
@@ -96,17 +101,23 @@ object Discovery {
                                 .jsonObject["bot_name"]?.jsonPrimitive?.contentOrNull
                         }
                 }.getOrNull()
-                FoundDomovoi(clean, name, fingerprint)
+                FoundDomovoi(clean, name, identity)
             }.getOrNull()
         }
 
-    /** The `identity.fingerprint` a health answer advertises, if any. */
-    internal fun advertisedFingerprint(healthBody: String?): String? = runCatching {
-        (DomovoiJson.parseToJsonElement(healthBody.orEmpty()) as? JsonObject)
-            ?.get("identity")?.let { it as? JsonObject }
-            ?.get("fingerprint")?.jsonPrimitive?.contentOrNull
-            ?.takeIf { it.isNotBlank() }
+    /** The identity a health answer advertises — only when its key and
+     *  fingerprint are well-formed and agree ([ServerIdentity.advertised]);
+     *  a fingerprint with no key behind it is nothing to pin. */
+    internal fun advertisedIdentity(healthBody: String?): ServerIdentity.Pin? = runCatching {
+        val identity = (DomovoiJson.parseToJsonElement(healthBody.orEmpty()) as? JsonObject)
+            ?.get("identity")?.let { it as? JsonObject } ?: return null
+        fun field(name: String) = identity[name]?.jsonPrimitive?.contentOrNull
+        ServerIdentity.advertised(field("algorithm"), field("public_key"), field("fingerprint"))
     }.getOrNull()
+
+    /** The `identity.fingerprint` a health answer advertises, if any — as
+     *  [advertisedIdentity] vets it. */
+    internal fun advertisedFingerprint(healthBody: String?): String? = advertisedIdentity(healthBody)?.fingerprint
 
     /**
      * Scan the /24 around the phone's address for dashboards on

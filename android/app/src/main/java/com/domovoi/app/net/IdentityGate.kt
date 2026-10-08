@@ -32,13 +32,15 @@ import java.io.IOException
  * calls [networkChanged]. Then the proof is required again. Not the pinned
  * key, or no identity where one is pinned: the request never leaves
  * ([ServerIdentityException]), and the shell says the server is not the
- * one this phone paired with. A server never seen with an identity is
- * pinned the first time it proves one (trust on first use — the same
- * trust the picker's dialog already expressed); a server with no identity
- * at all (a web backend from before identity) is treated as before, with
- * a log line. A refusal is remembered for [retryAfterMs] so a reconnect
- * loop does not hammer; a server that cannot be reached at all is simply
- * unreachable, as it always was, and nothing is cached.
+ * one this phone paired with. The pin is the trust decision: the picker's
+ * dialog pins the identity it showed when the person says yes. A server
+ * trusted before that existed (an upgraded install) is pinned the first
+ * time it proves one; a server trusted while it offered no identity stays
+ * [IdentityVerdict.Legacy] — token as before, said so in Settings — until
+ * Settings pins what it later proves, never behind the user's back. A
+ * refusal is remembered for [retryAfterMs] so a reconnect loop does not
+ * hammer; a server that cannot be reached at all is simply unreachable,
+ * as it always was, and nothing is cached.
  *
  * Pre-TLS interim: the proper fix is TLS with a pinned certificate. Until
  * then this makes the token conditional on a proof only the real server's
@@ -50,8 +52,13 @@ sealed class IdentityVerdict {
      *  the key was pinned by this very answer). */
     data class Verified(val fingerprint: String, val pinnedNow: Boolean) : IdentityVerdict()
 
-    /** No pin, no identity offered: a server from before identity. */
-    data object Legacy : IdentityVerdict()
+    /** No pin, and nothing to hold the server to: it offered no identity
+     *  ([offered] null — a server from before identity, or one trusted
+     *  while it had none), or it proved one this phone has not pinned
+     *  ([offered] set — a server trusted without identity that has grown
+     *  one since; Settings → Connection can pin it). The token goes out as
+     *  it always did for this server. */
+    data class Legacy(val offered: ServerIdentity.Pin? = null) : IdentityVerdict()
 
     /** Pinned, and whoever answered proved a DIFFERENT key. */
     data class Mismatch(val expected: String, val seen: String) : IdentityVerdict()
@@ -95,6 +102,15 @@ class IdentityGate(
     interface PinStore {
         fun pinFor(key: String): ServerIdentity.Pin?
         fun pin(key: String, pin: ServerIdentity.Pin)
+
+        /**
+         * Whether a server with no pin may be pinned from its first proof.
+         * True for a server trusted before 2026-10-08 (an upgraded install,
+         * whose trust dialog showed no identity); false once the trust
+         * decision was taken with the identity in view — the dialog pinned
+         * what the server advertised, or recorded that it advertised none.
+         */
+        fun mayPinOnFirstProof(key: String): Boolean = true
     }
 
     /** The active server's latest verdict, for the shell: which server and
@@ -223,16 +239,21 @@ class IdentityGate(
             }
         return when (val proof = ServerIdentity.check(body, challenge, pinned)) {
             is ServerIdentity.Proof.Verified -> {
-                if (pinned == null) {
+                if (pinned != null) {
+                    IdentityVerdict.Verified(proof.pin.fingerprint, pinnedNow = false)
+                } else if (pins.mayPinOnFirstProof(key)) {
                     pins.pin(key, proof.pin)
                     log("identity: pinned ${proof.pin.fingerprint} for $key")
+                    IdentityVerdict.Verified(proof.pin.fingerprint, pinnedNow = true)
+                } else {
+                    log("identity: $key proved ${proof.pin.fingerprint}, which this phone has not pinned (trusted without one); the token goes out as before")
+                    IdentityVerdict.Legacy(offered = proof.pin)
                 }
-                IdentityVerdict.Verified(proof.pin.fingerprint, pinnedNow = pinned == null)
             }
             ServerIdentity.Proof.NoIdentity ->
                 if (pinned == null) {
                     log("identity: $key offers no identity (an older server); the token goes out as before")
-                    IdentityVerdict.Legacy
+                    IdentityVerdict.Legacy()
                 } else {
                     log("identity: $key offered no identity but this phone pinned ${pinned.fingerprint}; token held")
                     IdentityVerdict.Unproven(pinned.fingerprint, "offered no identity")

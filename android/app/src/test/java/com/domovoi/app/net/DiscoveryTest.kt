@@ -42,15 +42,23 @@ class DiscoveryTest {
         assertTrue("the cleartext policy stays", client.interceptors.contains(CleartextPolicy.interceptor))
     }
 
+    /** A well-formed advertised identity: the RFC 8032 test key. */
+    private val seed = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+        .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    private val publicKey = java.util.Base64.getEncoder().encodeToString(Ed25519.publicKey(seed))
+    private val fingerprint = ServerIdentity.fingerprintOf(Ed25519.publicKey(seed))
+    private val identityBlock = """{"algorithm":"ed25519","public_key":"$publicKey","fingerprint":"$fingerprint"}"""
+
     @Test fun aProbeCarriesNoTokenEvenToTheActiveServer() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"status":"ok","identity":{"fingerprint":"SHA256:abc"}}"""))
+        server.enqueue(MockResponse().setBody("""{"status":"ok","identity":$identityBlock}"""))
         server.enqueue(MockResponse().setBody("""{"bot_name":"kitchen-box"}"""))
 
         val hit = Discovery.probe(api.http, server.url("/").toString())
 
         assertEquals(server.url("/").toString().trimEnd('/'), hit?.url)
         assertEquals("kitchen-box", hit?.name)
-        assertEquals("SHA256:abc", hit?.fingerprint)
+        assertEquals(fingerprint, hit?.fingerprint)
+        assertEquals(ServerIdentity.Pin(publicKey, fingerprint), hit?.identity)
         val health = server.takeRequest(5, TimeUnit.SECONDS)!!
         val config = server.takeRequest(5, TimeUnit.SECONDS)!!
         assertEquals("/api/health", health.path)
@@ -65,9 +73,18 @@ class DiscoveryTest {
         assertNull(server.takeRequest(5, TimeUnit.SECONDS)!!.getHeader(DEVICE_TOKEN_HEADER))
     }
 
-    @Test fun anAdvertisedFingerprintIsReadAndAnythingElseIsNot() {
-        assertEquals("SHA256:abc", Discovery.advertisedFingerprint("""{"identity":{"fingerprint":"SHA256:abc"}}"""))
+    @Test fun anAdvertisedIdentityIsShownOnlyWhenItsKeyAndFingerprintAgree() {
+        assertEquals(fingerprint, Discovery.advertisedFingerprint("""{"identity":$identityBlock}"""))
         assertNull("an older web backend", Discovery.advertisedFingerprint("""{"status":"ok"}"""))
+        assertNull("a fingerprint with no key behind it is nothing to pin", Discovery.advertisedFingerprint("""{"identity":{"fingerprint":"SHA256:abc"}}"""))
+        assertNull(
+            "a fingerprint that is not the key's",
+            Discovery.advertisedFingerprint("""{"identity":{"algorithm":"ed25519","public_key":"$publicKey","fingerprint":"SHA256:abc"}}"""),
+        )
+        assertNull(
+            "an algorithm the phone does not verify",
+            Discovery.advertisedFingerprint("""{"identity":{"algorithm":"rsa","public_key":"$publicKey","fingerprint":"$fingerprint"}}"""),
+        )
         assertNull(Discovery.advertisedFingerprint("""{"identity":{"fingerprint":""}}"""))
         assertNull(Discovery.advertisedFingerprint("not json"))
         assertNull(Discovery.advertisedFingerprint(null))

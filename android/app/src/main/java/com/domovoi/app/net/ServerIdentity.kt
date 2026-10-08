@@ -98,6 +98,22 @@ object ServerIdentity {
         return Proof.Verified(Pin(keyB64, fingerprint))
     }
 
+    /**
+     * The identity a server ADVERTISES (an open `/api/health` read with no
+     * challenge, as the picker's probe makes): the key and its fingerprint
+     * when they are well-formed and agree, else null. Unproven — a rogue
+     * can advertise the real server's public key — but what the trust
+     * dialog shows, and what is pinned when the user says yes to it, so
+     * that the first proof has to match THIS key rather than whoever
+     * answers first on some network.
+     */
+    fun advertised(algorithm: String?, publicKey: String?, fingerprint: String?): Pin? {
+        if (algorithm != ALGORITHM || publicKey == null || fingerprint == null) return null
+        val key = unb64(publicKey)?.takeIf { it.size == Ed25519.KEY_SIZE } ?: return null
+        if (fingerprintOf(key) != fingerprint) return null
+        return Pin(publicKey, fingerprint)
+    }
+
     private fun unb64(value: String): ByteArray? =
         if (value.length > 256) null else runCatching { Base64.getDecoder().decode(value) }.getOrNull()
 

@@ -1,6 +1,7 @@
 package com.domovoi.app.ui.shell
 
 import com.domovoi.app.data.ServerCredentials
+import com.domovoi.app.net.ServerIdentity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -18,10 +19,14 @@ class ServerTrustTest {
      *  refused server produced none of it. */
     private class Recorder {
         val trusted = linkedSetOf<String>()
+        val pinned = HashMap<String, ServerIdentity.Pin?>()
         val connected = mutableListOf<Pair<String, String?>>()
         fun gate() = ServerConnectGate(
             isTrusted = { ServerCredentials.isTrusted(trusted, it) },
-            onTrust = { trusted += ServerCredentials.normalize(it) },
+            onTrust = { url, identity ->
+                trusted += ServerCredentials.normalize(url)
+                pinned[ServerCredentials.normalize(url)] = identity
+            },
             onConnect = { url, name -> connected += url to name },
         )
     }
@@ -69,6 +74,27 @@ class ServerTrustTest {
         // The prompt is gone, so a second confirm cannot connect again.
         assertFalse(gate.confirm())
         assertEquals(1, r.connected.size)
+    }
+
+    @Test fun confirmingHandsTheTrustDecisionTheIdentityTheDialogShowed() {
+        // What the person compared with Settings → About is what gets
+        // pinned — not whatever answers first on some later network.
+        val r = Recorder()
+        val gate = r.gate()
+        val identity = ServerIdentity.Pin("a2V5", "SHA256:kitchen")
+        gate.select("http://10.0.0.42:6369", "kitchen-box", identity)
+        assertEquals("SHA256:kitchen", gate.pending.value?.fingerprint)
+
+        assertTrue(gate.confirm())
+
+        assertEquals(identity, r.pinned["http://10.0.0.42:6369"])
+
+        // A server that advertised none is trusted with none to pin.
+        gate.select("http://10.0.0.43:6369", "den")
+        assertNull(gate.pending.value?.fingerprint)
+        gate.confirm()
+        assertTrue(r.pinned.containsKey("http://10.0.0.43:6369"))
+        assertNull(r.pinned["http://10.0.0.43:6369"])
     }
 
     @Test fun anAlreadyTrustedServerConnectsWithoutAsking() {

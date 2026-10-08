@@ -758,6 +758,12 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
 
     val serverLabel = knownServers.firstOrNull { it.url == serverUrl }?.name
         ?: serverUrl.removePrefix("http://").removePrefix("https://")
+    // A server the phone cannot hold to a key (no identity pinned, token
+    // sent as before) is said so, where the server's name is.
+    val identityStatus by app.identity.status.collectAsState()
+    val unverified = identityStatus?.let {
+        it.base == IdentityGate.pinKey(serverUrl) && it.verdict is IdentityVerdict.Legacy
+    } == true
 
     // targetSdk 35 forces edge-to-edge, so this bar is laid out from y=0 and
     // would render UNDER the status bar — clock and battery icons on top of
@@ -809,6 +815,9 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.widthIn(max = 140.dp),
                 )
+                if (unverified) {
+                    Text("unverified", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.warn)
+                }
             }
             Box(Modifier.width(10.dp))
             StatusDot(if (connected) Tone.Ok else Tone.Idle, live = connected)

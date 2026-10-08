@@ -93,8 +93,11 @@ class IdentityGateTest {
 
     private class Pins : IdentityGate.PinStore {
         val book = HashMap<String, ServerIdentity.Pin>()
+        /** Servers whose trust decision was taken with the identity in view. */
+        val decided = HashSet<String>()
         override fun pinFor(key: String) = book[key]
         override fun pin(key: String, pin: ServerIdentity.Pin) { book[key] = pin }
+        override fun mayPinOnFirstProof(key: String) = key !in decided
     }
 
     private fun hex(s: String): ByteArray = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
@@ -153,8 +156,53 @@ class IdentityGateTest {
         read()
         assertEquals("household-abc", fake.reads().single().getHeader(DEVICE_TOKEN_HEADER))
         assertTrue(pins.book.isEmpty())
-        assertEquals(IdentityVerdict.Legacy, gate.status.value?.verdict)
+        assertEquals(IdentityVerdict.Legacy(), gate.status.value?.verdict)
         assertTrue(log.any { it.contains("offers no identity") })
+    }
+
+    // ---- the pin is the trust decision (the review's first-pin finding) ------
+
+    @Test fun theIdentityTheDialogPinnedWinsOverWhoeverAnswersFirst() {
+        // The picker's dialog showed the real server's advertised key and the
+        // person said yes: Prefs pinned it then. The first network the phone
+        // meets afterwards has a rogue at the address, proving its own key.
+        pins.book[key()] = ServerIdentity.Pin(
+            java.util.Base64.getEncoder().encodeToString(Ed25519.publicKey(fake.seed!!)), fake.fingerprint(),
+        )
+        pins.decided += key()
+        fake.seed = hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+        try {
+            read(); fail("expected ServerIdentityException")
+        } catch (e: ServerIdentityException) {
+            assertTrue(e.message!!.contains("mismatch"))
+        }
+        assertTrue(fake.reads().isEmpty())
+        // Home again: the real key proves itself against the dialog's pin.
+        fake.seed = hex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+        gate.networkChanged()
+        read()
+        assertEquals(IdentityVerdict.Verified(fake.fingerprint(), pinnedNow = false), gate.status.value?.verdict)
+    }
+
+    @Test fun aServerTrustedWhileItOfferedNoIdentityIsNotPinnedBehindTheUsersBack() {
+        // The dialog showed no identity (an older web backend) and the person
+        // trusted it anyway; the server has since been updated and proves a
+        // key. The token goes out as it always did for this server, nothing
+        // is pinned silently, and Settings can pin what it offers.
+        pins.decided += key()
+        read()
+        assertEquals("household-abc", fake.reads().single().getHeader(DEVICE_TOKEN_HEADER))
+        assertTrue("nothing pinned", pins.book.isEmpty())
+        val verdict = gate.status.value?.verdict
+        assertTrue(verdict is IdentityVerdict.Legacy)
+        assertEquals(fake.fingerprint(), (verdict as IdentityVerdict.Legacy).offered?.fingerprint)
+        assertTrue(log.any { it.contains("has not pinned") })
+        // An upgraded install (trusted before the dialog showed identities)
+        // is still pinned on its first proof.
+        pins.decided.clear()
+        gate.networkChanged()
+        read()
+        assertEquals(fake.fingerprint(), pins.book[key()]?.fingerprint)
     }
 
     // ---- after a network change ---------------------------------------------

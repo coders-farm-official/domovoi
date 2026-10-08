@@ -53,6 +53,9 @@ class Prefs(
     /** The pre-vault home of the tokens; read once at start and removed. */
     private val kDeviceTokens = stringPreferencesKey("device_tokens")
     private val kIdentityPins = stringPreferencesKey("identity_pins")
+    /** Servers (by pin key) whose trust decision was taken with the identity
+     *  in view — pinned from the dialog, or recorded as offering none. */
+    private val kTrustDecided = stringPreferencesKey("trust_decisions")
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
@@ -79,6 +82,9 @@ class Prefs(
     /** Each server's pinned identity, by [IdentityGate.pinKey] (A6-03). */
     private val _identityPins = MutableStateFlow<Map<String, ServerIdentity.Pin>>(emptyMap())
     val identityPins: StateFlow<Map<String, ServerIdentity.Pin>> = _identityPins
+
+    @Volatile
+    private var trustDecided: Set<String> = emptySet()
 
     private val _themeMode = MutableStateFlow(ThemeMode.System)
     val themeMode: StateFlow<ThemeMode> = _themeMode
@@ -153,6 +159,7 @@ class Prefs(
             }
             _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, _serverUrl.value)
             _identityPins.value = ServerIdentity.decodePins(p[kIdentityPins])
+            trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
@@ -192,7 +199,21 @@ class Prefs(
     fun isTrusted(url: String): Boolean =
         ServerCredentials.isTrusted(_trustedServers.value, url)
 
-    fun trustServer(url: String) = setTrusted(ServerCredentials.withTrusted(_trustedServers.value, url))
+    /**
+     * Trust [url], with the [identity] the trust dialog (or the Connection
+     * panel's probe) showed. That identity becomes the pin — the first
+     * proof has to match it, not whoever answers first on some network —
+     * unless one is pinned already (a pin changes only by forgetting the
+     * server). A server that advertised none is recorded as such, so it
+     * is not pinned later behind the user's back
+     * ([mayPinOnFirstProof]; A6-03 review).
+     */
+    fun trustServer(url: String, identity: ServerIdentity.Pin? = null) {
+        setTrusted(ServerCredentials.withTrusted(_trustedServers.value, url))
+        val key = IdentityGate.pinKey(url) ?: return
+        if (identity != null && pinFor(key) == null) pin(key, identity)
+        setTrustDecided(trustDecided + key)
+    }
 
     fun untrustServer(url: String) = setTrusted(ServerCredentials.withoutTrusted(_trustedServers.value, url))
 
@@ -222,6 +243,15 @@ class Prefs(
     override fun pinFor(key: String): ServerIdentity.Pin? = _identityPins.value[key]
 
     override fun pin(key: String, pin: ServerIdentity.Pin) = setPins(_identityPins.value + (key to pin))
+
+    /** Only a server trusted before the dialog pinned identities (an
+     *  upgraded install) may be pinned from its first proof. */
+    override fun mayPinOnFirstProof(key: String): Boolean = key !in trustDecided
+
+    private fun setTrustDecided(next: Set<String>) {
+        trustDecided = next
+        scope.launch { context.dataStore.edit { it[kTrustDecided] = ServerCredentials.encodeTrusted(next) } }
+    }
 
     /** The identity pinned for a saved server address, if any. */
     fun pinForServer(url: String): ServerIdentity.Pin? = IdentityGate.pinKey(url)?.let(::pinFor)
@@ -259,6 +289,7 @@ class Prefs(
         untrustServer(url)
         setDeviceTokenFor(url, null)
         clearPinFor(url)
+        IdentityGate.pinKey(url)?.let { key -> if (key in trustDecided) setTrustDecided(trustDecided - key) }
         setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
     }
 
