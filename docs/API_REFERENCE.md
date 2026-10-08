@@ -1078,15 +1078,21 @@ the tier alone is not the whole rule:
 * `/api/documents/*` and `/api/files/*` both write into `core:documents`,
   so **both enforce the same rules**: the per-device write block
   (`files_device_blocks`), the admin-write library list, the library's
-  `editable` flag, and the secret-shaped-name filter that skips `.env`,
-  `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`, `pairing_token` and
-  `setup-code.txt`. A name one door refuses is refused by the other
+  `editable` flag, and the secret-shaped-name filter that skips `.env`
+  and every `.env.*`, `*.key`, `*.pem`, `*.crt`, `*.p12`, `*.pfx`,
+  `*.kdbx`, `*.gpg`, `*.ovpn`, SSH keys under their default names
+  (`id_rsa*`, `id_dsa*`, `id_ecdsa*`, `id_ed25519*`), `.netrc`,
+  `.git-credentials`, `.pgpass`, `credentials.json`, `secrets.json`,
+  `pairing_token`, `setup-code.txt` and the folders `.ssh`, `.gnupg`,
+  `.aws`, `.kube`, `tls` and `.domovoi`. A name one door refuses is refused by the other
   (`400`, or `skipped` on an upload). The filter covers **reads** too
   (WEB-14): such a file already in `~/Documents` is left out of
   `GET /api/documents`, out of `/download-zip`, and every read route
   (`/raw`, `/text`, `/sheet`, both `/export`s, `/drawings/read`) answers
-  `404` for it — and for anything under a folder with such a name (`tls`) —
-  exactly as `/api/files` does.
+  `404` for it — and for anything under a folder with such a name (`tls`,
+  `.ssh`), or reached through a link that resolves onto one — exactly as
+  `/api/files` does (its `/browse` and `/download` ask about every segment
+  of the path too).
 * **Who the caller is does not depend on the caller mentioning it.**
   `device_id` in the body is still required on `/api/files` writes and
   optional on `/api/documents` saves — no client sends it there, and
