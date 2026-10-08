@@ -32,6 +32,15 @@ FLOORS = {
     "pillow": Version("10.3"),
 }
 
+# Floors raised for a published advisory after the dev interpreter was
+# built (OPS-17: urllib3 2.7.0 carries PYSEC-2026-4175/4176/4177, fixed in
+# 2.8.0). pyproject and the lock must hold them; the interpreter running
+# the suite catches up on its next `pip install -e .`, so it isn't checked.
+ADVISORY_FLOORS = {
+    "urllib3": Version("2.8.0"),
+}
+ALL_FLOORS = {**FLOORS, **ADVISORY_FLOORS}
+
 
 def _core_requirements() -> dict[str, Requirement]:
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
@@ -57,19 +66,19 @@ def _locked_versions() -> dict[str, Version]:
 
 # ─── pyproject floors ─────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("package", sorted(FLOORS))
+@pytest.mark.parametrize("package", sorted(ALL_FLOORS))
 def test_pyproject_declares_the_package_as_a_direct_core_dependency(package: str) -> None:
     """starlette in particular used to arrive only transitively via fastapi,
     whose own floor sits below the fixed line."""
     assert package in _core_requirements(), f"{package} is not a direct core dependency"
 
 
-@pytest.mark.parametrize("package", sorted(FLOORS))
+@pytest.mark.parametrize("package", sorted(ALL_FLOORS))
 def test_pyproject_floor_is_at_or_above_the_fixed_line(package: str) -> None:
     req = _core_requirements()[package]
     floor = _lower_bound(req)
     assert floor is not None, f"{package} has no >= floor: {req}"
-    assert floor >= FLOORS[package], f"{package} floor {floor} is below {FLOORS[package]}"
+    assert floor >= ALL_FLOORS[package], f"{package} floor {floor} is below {ALL_FLOORS[package]}"
 
 
 # ─── the lock ─────────────────────────────────────────────────────────────
@@ -88,12 +97,12 @@ def test_lock_pins_every_core_dependency() -> None:
     assert missing == [], f"core dependencies absent from requirements.lock: {missing}"
 
 
-@pytest.mark.parametrize("package", sorted(FLOORS))
+@pytest.mark.parametrize("package", sorted(ALL_FLOORS))
 def test_lock_satisfies_the_floor(package: str) -> None:
     locked = _locked_versions()
     assert package in locked, f"{package} not in requirements.lock"
-    assert locked[package] >= FLOORS[package], (
-        f"requirements.lock pins {package}=={locked[package]}, below {FLOORS[package]}"
+    assert locked[package] >= ALL_FLOORS[package], (
+        f"requirements.lock pins {package}=={locked[package]}, below {ALL_FLOORS[package]}"
     )
 
 
