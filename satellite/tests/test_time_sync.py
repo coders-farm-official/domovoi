@@ -324,13 +324,25 @@ class _R:
         return False
 
 
-def _signing_opener(seed, public, *, sign=True, fingerprint=None):
+def _signing_opener(seed, public, *, sign=True, fingerprint=None, bind="echo",
+                    asked=None):
     """Answers /v1/health the way a core does, signing whatever nonce the
-    helper actually sent."""
+    helper actually sent — and, as a current core does, the address the
+    helper said it dialed (``bind="echo"``). ``bind=None`` answers like a
+    core from before the binding; ``"refuse"`` like a core asked to sign
+    for an address that is not its own; any other string is signed as the
+    address (what a relay forwards from the real core)."""
+    import urllib.parse
+
     from satellite import _ed25519
 
     def opener(url, timeout=None):
-        challenge = url.split("challenge=", 1)[1]
+        query = {k: v[0] for k, v in
+                 urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).items()}
+        if asked is not None:
+            asked.append(query)
+        challenge = query["challenge"]
+        dialed = query.get("addr")
         digest = hashlib.sha256(public).digest()
         block = {
             "algorithm": "ed25519",
@@ -340,12 +352,19 @@ def _signing_opener(seed, public, *, sign=True, fingerprint=None):
             "public_key": base64.b64encode(public).decode(),
             "challenge": challenge,
         }
-        if sign:
-            block["signature"] = base64.b64encode(
-                _ed25519.sign(
-                    seed, b"domovoi-health-v1\n" + challenge.encode("utf-8")
-                )
-            ).decode()
+        if dialed is not None and bind == "refuse":
+            block["addr_refused"] = dialed
+        elif sign:
+            message = b"domovoi-health-v1\n" + challenge.encode("utf-8")
+            signed_addr = None
+            if dialed is not None and bind == "echo":
+                signed_addr = dialed
+            elif dialed is not None and bind is not None:
+                signed_addr = bind
+            if signed_addr is not None:
+                block["addr"] = signed_addr
+                message += b"\n" + signed_addr.encode("utf-8")
+            block["signature"] = base64.b64encode(_ed25519.sign(seed, message)).decode()
         return _R(json.dumps({"status": "ok", "identity": block}).encode("utf-8"))
 
     return opener
@@ -448,6 +467,78 @@ def test_an_answer_with_no_signature_does_not_pass(helper):
         "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
         opener=_signing_opener(seed, public, sign=False), verifier=_ed25519,
     )
+
+
+# --- and that the answer is about the host we dialed ---------------------
+#
+# The identity check used to prove only that SOME host holding the key had
+# signed our nonce; a LAN host forwarding the question to the real server
+# passed it, and the clock then came from whatever that host served at
+# /v1/time. The question now names the address dialed, the server signs for
+# it only when it is one of its own, and the answer has to name it back.
+
+
+def test_the_helper_asks_the_server_to_sign_for_the_address_it_dialed(helper):
+    from satellite import _ed25519
+
+    seed, public, fingerprint = _keypair()
+    asked: list[dict] = []
+    assert helper.verify_identity(
+        "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public, asked=asked), verifier=_ed25519,
+    ) == ""
+    assert asked[0]["addr"] == "192.168.0.117:6370"
+
+
+def test_an_answer_signed_for_another_address_does_not_pass(helper):
+    """A relay's answer: the real server signed, for the address the relay
+    dialed it on."""
+    from satellite import _ed25519
+
+    seed, public, fingerprint = _keypair()
+    problem = helper.verify_identity(
+        "ws://192.168.0.9:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public, bind="192.168.0.117:6370"),
+        verifier=_ed25519,
+    )
+    assert "not the one dialed" in problem
+
+
+def test_an_answer_bound_to_no_address_does_not_pass(helper):
+    from satellite import _ed25519
+
+    seed, public, fingerprint = _keypair()
+    problem = helper.verify_identity(
+        "ws://192.168.0.9:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public, bind=None), verifier=_ed25519,
+    )
+    assert "not bound to the address dialed" in problem
+
+
+def test_a_server_that_would_not_sign_for_the_address_is_named(helper):
+    from satellite import _ed25519
+
+    seed, public, fingerprint = _keypair()
+    problem = helper.verify_identity(
+        "ws://192.168.0.9:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public, bind="refuse"), verifier=_ed25519,
+    )
+    assert "would not sign" in problem and "192.168.0.9:6370" in problem
+
+
+@pytest.mark.parametrize("url,addr", [
+    ("ws://192.168.0.117:6370", "192.168.0.117:6370"),
+    ("http://core.lan:6370/", "core.lan:6370"),
+    ("wss://core.lan", "core.lan:443"),
+    ("ws://[fd00::1]:6370", "[fd00::1]:6370"),
+])
+def test_the_dialed_address_is_spelled_the_way_the_client_spells_it(helper, url, addr):
+    """Both ask the same server to sign the same string for the same
+    connection; the two spellings must never drift."""
+    from satellite import server_identity
+
+    assert helper.dialed_address(url) == addr
+    assert server_identity.dialed_address(helper.http_base(url)) == addr
 
 
 def test_a_unit_with_no_verifier_installed_carries_on(helper):

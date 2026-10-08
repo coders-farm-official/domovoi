@@ -20,13 +20,29 @@
 # applied state lands in /var/lib/domovoi/plugin_payload_state.json so
 # plugin_sync stops flagging the slug.
 #
+# Root does not take the satellite account's word for where the mirror
+# came from. On a device with the root-owned server pin
+# (/etc/domovoi/server-identity.json, installed by first boot from the
+# card), the signed payload manifest plugin_sync saved beside its mirror
+# (~/.domovoi/plugin_payloads/.manifest.sig) is verified HERE, with the
+# root-owned verifier at /usr/local/lib/domovoi, against that pin — and
+# the request is then only a list of slugs: what each slug installs and
+# runs is read from the SIGNED manifest, only files the signed list names
+# are staged, each one is checked against the hash the list gives, and an
+# envelope with a serial older than the last one applied is refused. The
+# account can therefore stage a request for a server it chose, and nothing
+# happens. A unit with no root pin (hand-built, or a card from before
+# server identities) has nothing to verify against and keeps the old
+# request-driven behaviour; the log says so.
+#
 # The security posture (a plugin with satellite_root runs root code on
 # every satellite that carries it) is documented in docs/SECURITY_PRIVACY.md
 # and gated at install-confirm time by the plugin's manifest permission +
 # warnings. What this file guarantees is narrower and exact: the ONLY root
-# code path the satellite account can trigger is a script the SERVER served
-# under a slug the server declared, after the whole of it was copied into a
-# directory that account cannot touch.
+# code path the satellite account can trigger is a script the SERVER THIS
+# DEVICE WAS PREPARED FOR signed into a payload list, under a slug that
+# list declares, after the whole of it was copied into a directory that
+# account cannot touch.
 #
 # offline-aware: a slug the request marks "offline" (the server's answer is
 # INTERNET_ACCESS=never) gets its apt packages from the local caches only
@@ -59,11 +75,19 @@ MIRROR="$HOME_DIR/.domovoi/plugin_payloads"
 # Root's, every one of them. NOT read from the request file.
 STATE_DIR=/var/lib/domovoi
 STATE_FILE=/var/lib/domovoi/plugin_payload_state.json
+# The serial of the last signed payload manifest applied; an older one is
+# a recording and is refused.
+SERIAL_FILE=/var/lib/domovoi/plugin_payload_serial.json
 STAGING=/var/lib/domovoi/payload-staging
 LOGFILE=/var/log/domovoi-payload-apply.log
 # Unpacked by stage 1 from the payload, root-owned; absent on a hand-built
 # satellite, which simply installs online.
 DEB_CACHE=/opt/domovoi-payload/debs
+# This device's server, as first boot installed it from the card, and the
+# verifier its signatures are checked with. Both root-owned; both absent
+# on a unit from before server identities.
+ROOT_PIN=/etc/domovoi/server-identity.json
+VERIFIER=/usr/local/lib/domovoi/domovoi_ed25519.py
 
 log() { printf '%s %s\n' "$(date -Is)" "$*" >>"$LOGFILE"; }
 
@@ -85,49 +109,149 @@ fi
 
 log "apply-payload start (invoker=$INVOKER)"
 
-# Python walks the request and STAGES the scripts; the shell does the
-# privileged calls. Only "slugs" is read out of the request. A slug, a
-# package name or a script path that fails its pattern is skipped with a
-# note - it never reaches the shell.
-"$PY" - "$PENDING" "$MIRROR" "$STAGING" <<'EOF' >"$STAGING/steps" 2>>"$LOGFILE" || exit 1
-import json, os, posixpath, re, stat, sys
+# Python verifies the signed manifest, walks the request and STAGES the
+# scripts; the shell does the privileged calls. Only "slugs" is read out of
+# the request. A slug, a package name or a script path that fails its
+# pattern is skipped with a note - it never reaches the shell. A REFUSE
+# line means nothing at all is to be installed or run.
+"$PY" - "$PENDING" "$MIRROR" "$STAGING" "$ROOT_PIN" "$VERIFIER" "$SERIAL_FILE" <<'EOF' >"$STAGING/steps" 2>>"$LOGFILE" || exit 1
+import base64, hashlib, importlib.machinery, importlib.util, json, os, posixpath, re, stat, sys
 
 # The shell reads this back line by line: LF only, whatever the platform.
 sys.stdout.reconfigure(newline="\n")
-pending, mirror, staging = sys.argv[1], sys.argv[2], sys.argv[3]
+pending, mirror, staging, root_pin, verifier_path, serial_file = sys.argv[1:7]
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 PKG_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]{1,127}$")
 REL_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]{0,255}$")
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# Where plugin_sync saves the envelope it verified: beside the mirror, as
+# a dotfile no channel path can ever land on (they are all <slug>/<rel>).
+envelope_path = os.path.join(mirror, ".manifest.sig")
+PLUGIN_CHANNEL = "satellite-plugins"
+MANIFEST_CONTEXT_V2 = b"domovoi-manifest-v2"
 
 
 def note(msg):
     print(f"SKIP\t-\t{msg}")
 
 
+def refuse(msg):
+    """Nothing is installed or run this time; the request is kept."""
+    print(f"REFUSE\t-\t{msg}")
+    sys.exit(0)
+
+
+def canonical(doc):
+    # Byte-identical to domovoi/server_identity.py and satellite/server_identity.py.
+    return json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def fingerprint_for(public):
+    digest = hashlib.sha256(public).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+def load_pin():
+    """The root-owned server pin, or None on a unit that has none."""
+    try:
+        with open(root_pin, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    fp = doc.get("fingerprint") if isinstance(doc, dict) else None
+    return doc if isinstance(fp, str) and fp.startswith("SHA256:") else None
+
+
+def load_verifier():
+    """The root-owned Ed25519 module. Never anything under the account's home."""
+    if not os.path.isfile(verifier_path):
+        return None
+    try:
+        loader = importlib.machinery.SourceFileLoader("domovoi_ed25519", verifier_path)
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+    except Exception:  # noqa: BLE001 - a broken verifier is "no verifier"
+        return None
+
+
+def verify_envelope(env, pin, verifier):
+    """(files, meta, serial) out of a manifest.sig our server signed, else ValueError."""
+    if not isinstance(env, dict):
+        raise ValueError("not a document")
+    if env.get("algorithm") != "ed25519":
+        raise ValueError("unsupported signature algorithm")
+    if env.get("channel") != PLUGIN_CHANNEL:
+        raise ValueError("signed for channel %r, not %r" % (env.get("channel"), PLUGIN_CHANNEL))
+    try:
+        public = base64.b64decode(env.get("public_key") or "", validate=True)
+        signature = base64.b64decode(env.get("signature_v2") or "", validate=True)
+    except Exception:  # noqa: BLE001
+        raise ValueError("malformed key or signature")
+    if not signature:
+        raise ValueError("no signature over the serial (an older server signed it)")
+    if fingerprint_for(public) != pin["fingerprint"]:
+        raise ValueError("signed by %s, not this device's server %s" % (fingerprint_for(public), pin["fingerprint"]))
+    issued_at, serial = env.get("issued_at"), env.get("serial")
+    for value in (issued_at, serial):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError("no issue time or serial")
+    manifest = env.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("the signed manifest is not a document")
+    message = MANIFEST_CONTEXT_V2 + b"\n" + canonical(
+        {"channel": PLUGIN_CHANNEL, "issued_at": issued_at, "manifest": manifest, "serial": serial})
+    if not verifier.verify(public, message, signature):
+        raise ValueError("the signature did not verify")
+    files = manifest.get("files")
+    meta = manifest.get("meta")
+    if not isinstance(files, dict) or not isinstance(meta, dict):
+        raise ValueError("the signed manifest has no files/meta")
+    return files, meta, serial
+
+
+def last_applied_serial():
+    try:
+        with open(serial_file, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    value = doc.get("serial") if isinstance(doc, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def copy_regular(src, dest):
-    """Copy one regular file without ever following a symlink at the source."""
+    """Copy one regular file without ever following a symlink at the source.
+    Returns the sha256 of what was copied, or None when it was not a regular file."""
     fd = os.open(src, os.O_RDONLY | O_NOFOLLOW)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
-            return False
+            return None
+        digest = hashlib.sha256()
         with os.fdopen(fd, "rb") as fin, open(dest, "wb") as fout:
             fd = None
             while True:
                 chunk = fin.read(1 << 16)
                 if not chunk:
                     break
+                digest.update(chunk)
                 fout.write(chunk)
     finally:
         if fd is not None:
             os.close(fd)
     os.chmod(dest, 0o644)
-    return True
+    return digest.hexdigest()
 
 
-def stage(slug, src_root, dest_root):
-    """Regular files only, directory by directory, never through a link."""
+def stage(slug, src_root, dest_root, allowed=None):
+    """Regular files only, directory by directory, never through a link.
+
+    With ``allowed`` (the signed list's ``{rel: sha256}`` for this slug),
+    only a file the list names is staged, and only when its bytes hash to
+    what the list says - anything else in the mirror stays where the
+    account put it and is noted."""
     if os.path.islink(src_root) or not os.path.isdir(src_root):
         return 0
     copied = 0
@@ -138,14 +262,50 @@ def stage(slug, src_root, dest_root):
         out_dir = dest_root if rel == "." else os.path.join(dest_root, rel)
         os.makedirs(out_dir, mode=0o755, exist_ok=True)
         for name in filenames:
+            rel_file = name if rel == "." else posixpath.join(rel.replace(os.sep, "/"), name)
+            if allowed is not None and rel_file not in allowed:
+                note(f"{slug}: {rel_file} is not in the signed list; not staged")
+                continue
+            dest = os.path.join(out_dir, name)
             try:
-                if copy_regular(os.path.join(dirpath, name),
-                                os.path.join(out_dir, name)):
-                    copied += 1
+                sha = copy_regular(os.path.join(dirpath, name), dest)
             except OSError as e:
                 note(f"{slug}: could not stage {name}: {e}")
+                continue
+            if sha is None:
+                continue
+            if allowed is not None and sha != allowed[rel_file]:
+                os.unlink(dest)
+                note(f"{slug}: {rel_file} does not hash to what the signed list says; not staged")
+                continue
+            copied += 1
     return copied
 
+
+# Whose payloads these are. With the root pin, the signed manifest decides;
+# without it there is nothing to decide with, and the request stands.
+signed = None
+pin = load_pin()
+if pin is not None:
+    verifier = load_verifier()
+    if verifier is None:
+        refuse("this device is pinned to a server but the root-owned verifier is missing")
+    try:
+        with open(envelope_path, encoding="utf-8") as f:
+            envelope = json.load(f)
+    except (OSError, ValueError):
+        refuse("no signed payload manifest beside the mirror: the sync that staged this request did not verify the server")
+    try:
+        signed_files, signed_meta, serial = verify_envelope(envelope, pin, verifier)
+    except ValueError as e:
+        refuse(f"payload not signed by this device's server: {e}")
+    last = last_applied_serial()
+    if last is not None and serial < last:
+        refuse(f"signed payload manifest (serial {serial}) is older than the one last applied (serial {last})")
+    print(f"SERIAL\t-\t{serial}")
+    signed = (signed_files, signed_meta)
+else:
+    note("no root-owned server pin on this unit: payload authenticity is not checked (hand-built, or a card from before server identities)")
 
 try:
     doc = json.load(open(pending))
@@ -158,6 +318,19 @@ for slug, m in sorted((slugs or {}).items()):
     if not isinstance(slug, str) or not SLUG_RE.match(slug) or not isinstance(m, dict):
         note(f"ignoring slug {slug!r}")
         continue
+    allowed = None
+    if signed is not None:
+        declared = signed[1].get(slug)
+        if not isinstance(declared, dict):
+            note(f"{slug}: not in the signed payload manifest; ignoring")
+            continue
+        for key in ("apt_packages", "post_install", "version", "offline"):
+            if m.get(key) != declared.get(key):
+                note(f"{slug}: the request's {key} differs from the signed manifest; using the signed value")
+        m = declared
+        prefix = slug + "/"
+        allowed = {rel[len(prefix):]: sha for rel, sha in signed[0].items()
+                   if isinstance(rel, str) and rel.startswith(prefix) and isinstance(sha, str)}
     pkgs = []
     for pkg in m.get("apt_packages") or []:
         if isinstance(pkg, str) and PKG_RE.match(pkg):
@@ -181,7 +354,7 @@ for slug, m in sorted((slugs or {}).items()):
     # posixpath, not os.path: the shell below reads these paths back, and
     # they must be spelled the way it spells them.
     dest_root = posixpath.join(staging, slug)
-    n = stage(slug, posixpath.join(mirror, slug), dest_root)
+    n = stage(slug, posixpath.join(mirror, slug), dest_root, allowed)
     script = posixpath.join(dest_root, post)
     if n and os.path.isfile(script) and not os.path.islink(script):
         os.chmod(script, 0o755)
@@ -196,13 +369,25 @@ EOF
 FAIL=0
 APT_PKGS=""
 APT_OFFLINE=0
+REFUSED=0
+SERIAL=""
 while IFS="$(printf '\t')" read -r kind slug arg; do
   case "$kind" in
     APT) APT_PKGS="$APT_PKGS $arg" ;;
     OFFLINE) APT_OFFLINE=1 ;;
     SKIP) log "skipped: $arg" ;;
+    SERIAL) SERIAL="$arg" ;;
+    REFUSE) REFUSED=1; log "refused: $arg" ;;
   esac
 done <"$STAGING/steps"
+
+if [ "$REFUSED" -eq 1 ]; then
+  # Nothing was staged for running, nothing goes to apt. The request is
+  # kept: the next sync that verifies the server stages a fresh one.
+  log "apply-payload refused: nothing was installed or run (pending kept)"
+  rm -rf "$STAGING"
+  exit 1
+fi
 
 if [ -n "$APT_PKGS" ]; then
   if [ "$APT_OFFLINE" -eq 1 ]; then
@@ -243,12 +428,15 @@ done <"$STAGING/steps"
 
 if [ "$FAIL" -eq 0 ]; then
   # Record applied state (per-slug apt set + post-install sha, hashed from
-  # the STAGED bytes that actually ran) so plugin_sync stops flagging them.
-  "$PY" - "$STAGING/request.json" "$STATE_FILE" <<'EOF' >>"$LOGFILE" 2>&1 || true
+  # the STAGED bytes that actually ran) so plugin_sync stops flagging them,
+  # and the serial of the signed manifest this run applied, so an older
+  # one is refused from here on.
+  "$PY" - "$STAGING/request.json" "$STATE_FILE" "$SERIAL_FILE" "$SERIAL" <<'EOF' >>"$LOGFILE" 2>&1 || true
 import hashlib, json, os, sys
 
 request = json.load(open(sys.argv[1]))
 state_path = sys.argv[2]
+serial_path, serial = sys.argv[3], sys.argv[4]
 state = {}
 try:
     state = json.load(open(state_path))
@@ -272,6 +460,13 @@ with open(tmp, "w") as f:
 os.chmod(tmp, 0o644)
 os.replace(tmp, state_path)
 print("state recorded")
+if serial.isdigit():
+    tmp = serial_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"serial": int(serial)}, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, serial_path)
+    print(f"serial {serial} recorded")
 EOF
   rm -f "$PENDING"
   rm -rf "$STAGING"
