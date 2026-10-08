@@ -1,6 +1,8 @@
 package com.domovoi.app.net
 
 import kotlinx.coroutines.runBlocking
+import okhttp3.Response
+import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -16,6 +18,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.Timeout
 import java.io.IOException
+import java.net.UnknownServiceException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
@@ -185,6 +189,74 @@ class DeviceAuthTest {
             server.enqueue(MockResponse().setBody("{}"))
             api.get("/api/music/library")
             assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    // ---- redirects: every hop decides the token and the cleartext rule afresh ----
+
+    @Test fun aRedirectToAnotherHostDropsTheToken() = runBlocking {
+        val other = MockWebServer().also { it.start() }
+        try {
+            // The media path: a plain call on the shared client, as media3
+            // and Coil make them.
+            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", otherHost(other, "/grab.mp3")))
+            other.enqueue(MockResponse().setBody("audio"))
+            val req = okhttp3.Request.Builder().url(server.url("/api/music/library/7/audio")).build()
+            val body = api.http.newCall(req).execute().use { it.body?.string() }
+            assertEquals("the redirect was followed", "audio", body)
+            assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
+            assertNull("the host it was sent on to sees no token", other.next().getHeader(DEVICE_TOKEN_HEADER))
+
+            // The JSON path too.
+            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", otherHost(other, "/api/x")))
+            other.enqueue(MockResponse().setBody("{}"))
+            api.get("/api/x")
+            server.next()
+            assertNull(other.next().getHeader(DEVICE_TOKEN_HEADER))
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test fun aRedirectWithinTheServerKeepsTheToken() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", "/api/music/library/7/audio?download=1"))
+        server.enqueue(MockResponse().setBody("{}"))
+        api.get("/api/music/library/7/audio")
+        assertEquals("household-abc", server.next().getHeader(DEVICE_TOKEN_HEADER))
+        val hop = server.next()
+        assertEquals("/api/music/library/7/audio?download=1", hop.path)
+        assertEquals("household-abc", hop.getHeader(DEVICE_TOKEN_HEADER))
+    }
+
+    @Test fun aRedirectToAPublicPlainHttpHostIsRefusedBeforeAnyConnection() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", "http://203.0.113.5/grab.mp3"))
+        val started = System.nanoTime()
+        try {
+            api.get("/api/x")
+            fail("expected UnknownServiceException")
+        } catch (e: UnknownServiceException) {
+            assertEquals(CleartextPolicy.refusalMessage("203.0.113.5"), e.message)
+        }
+        assertTrue("refused by the rule, not by a connect timeout", System.nanoTime() - started < 2_000_000_000L)
+    }
+
+    @Test fun theStateSocketUpgradeIsNeverRedirected() {
+        val other = MockWebServer().also { it.start() }
+        try {
+            server.enqueue(MockResponse().setResponseCode(302).setHeader("Location", otherHost(other, "/ws/state")))
+            other.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {}))
+            val failed = CountDownLatch(1)
+            api.http.newWebSocket(
+                api.wsRequest("ws://${server.hostName}:${server.port}/ws/state"),
+                object : WebSocketListener() {
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = failed.countDown()
+                },
+            )
+            assertTrue(failed.await(5, TimeUnit.SECONDS))
+            server.next()
+            assertEquals("nothing reached the host it was sent on to", 0, other.requestCount)
         } finally {
             other.shutdown()
         }

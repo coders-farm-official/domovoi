@@ -98,13 +98,19 @@ class ApiClient(
 
     /** The ONE http client the app uses — JSON calls, media3 playback,
      *  Coil images and both WebSockets (discovery takes a copy WITHOUT the
-     *  token interceptor, [Discovery.client]). Every one of them gets both
-     *  interceptors: [CleartextPolicy] runs first, so a plain-http
-     *  connection the policy refuses never has the household token attached
-     *  to it, and DeviceAuthInterceptor puts that token on everything else
-     *  that is addressed to the active server — and strips it from anything
-     *  that is not ([TokenScope]). */
+     *  token interceptor, [Discovery.client]). Every one of them gets all
+     *  three interceptors, on EVERY hop: [RedirectPolicy] follows redirects
+     *  itself (OkHttp's follower is off, since it would carry the token to
+     *  whatever a 3xx named and skip the cleartext rule for that hop),
+     *  [CleartextPolicy] runs next, so a plain-http connection the policy
+     *  refuses never has the household token attached to it, and
+     *  DeviceAuthInterceptor puts that token on everything that is
+     *  addressed to the active server — and strips it from anything that
+     *  is not ([TokenScope]). */
     val http: OkHttpClient = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .addInterceptor(RedirectPolicy.interceptor)
         .addInterceptor(CleartextPolicy.interceptor)
         .addInterceptor(DeviceAuthInterceptor(deviceTokenProvider, baseUrlProvider, gate))
         .connectTimeout(6, TimeUnit.SECONDS)
