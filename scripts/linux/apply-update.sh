@@ -21,6 +21,12 @@
 # checkout ships a migration its Flyway history doesn't hold as applied
 # (plain_db_reason).
 #
+# Before either path, touching nothing: the checkout must be the pinned
+# upstream (DOMOVOI_UPSTREAM_URL / DOMOVOI_UPSTREAM_BRANCH, when set), and
+# HEAD must carry an SSH signature by a key in the root-owned
+# allowed-signers file while that file exists (check_signature; "Signed
+# updates" below). Without the file the run warns and goes on.
+#
 # Something new: a real update.
 #   1. Refuse, touching nothing, if tracked files have uncommitted changes:
 #      the rollback below could not restore that tree.
@@ -135,6 +141,18 @@ SEARXNG_DETACH=${DOMOVOI_UPDATE_SEARXNG_DETACH:-auto}
 SEARXNG_TIMEOUT=${DOMOVOI_UPDATE_SEARXNG_TIMEOUT:-300}
 SEARXNG_START_UNIT=domovoi-searxng-start
 
+# Signed updates (docs/LINUX_HOST.md, "Signed updates"). While the
+# allowed-signers file exists, HEAD must carry an SSH signature by one of
+# the keys in it or the run refuses before it touches anything; without
+# the file the run warns and goes on. An optional revocation file
+# (ssh-keygen -Y verify -r) retires a key. The upstream pins, when set,
+# refuse a checkout whose origin URL or tracking branch is not the one
+# named, before anything else.
+ALLOWED_SIGNERS=${DOMOVOI_ALLOWED_SIGNERS:-/etc/domovoi/allowed_signers}
+REVOKED_SIGNERS=${DOMOVOI_REVOKED_SIGNERS:-}
+UPSTREAM_URL=${DOMOVOI_UPSTREAM_URL:-}
+UPSTREAM_BRANCH=${DOMOVOI_UPSTREAM_BRANCH:-}
+
 RESULT_FILE=$UPDATE_DIR/last-result.json
 APPLIED_FILE=$UPDATE_DIR/applied_sha
 BAD_FILE=$UPDATE_DIR/bad_sha
@@ -188,6 +206,13 @@ RESULT_READY=0
 FINAL_WRITTEN=0
 FINAL_STATUS=""
 SERVICES_STOPPED=0
+# HEAD's signature state (signature_state): verified, unsigned or
+# unverified; who signed it; whether the signers file is there.
+SIG_STATUS=""
+SIG_SIGNER=""
+SIG_KEY=""
+SIG_ENFORCED=0
+SIG_DETAIL=""
 
 log() { printf 'apply-update: %s\n' "$*"; }
 
@@ -248,6 +273,14 @@ json_bool() {
   if [ "$1" = 1 ]; then printf 'true'; else printf 'false'; fi
 }
 
+# HEAD's signature state as the result carries it, null before it is known.
+json_signature() {
+  if [ -z "$SIG_STATUS" ]; then printf 'null'; return; fi
+  printf '{"status": %s, "signer": %s, "key": %s, "enforced": %s, "allowed_signers": %s}' \
+    "$(json_str "$SIG_STATUS")" "$(json_str_or_null "$SIG_SIGNER")" "$(json_str_or_null "$SIG_KEY")" \
+    "$(json_bool "$SIG_ENFORCED")" "$(json_str "$ALLOWED_SIGNERS")"
+}
+
 # The first $2 characters of $1. Characters, not bytes: cut(1) on
 # Debian/Ubuntu counts bytes and can split pip's "╰─>" mid-character, which
 # leaves invalid UTF-8 in the result JSON. Bash counts by the locale, so
@@ -300,6 +333,7 @@ write_result() {
     fi
     printf '  "deps_changed": %s,\n' "$(json_bool "$DEPS_CHANGED")"
     printf '  "mpd_changed": %s,\n' "$(json_bool "$MPD_CHANGED")"
+    printf '  "signature": %s,\n' "$(json_signature)"
     printf '  "migrations_before": %s,\n' "$(json_int_or_null "$MIGRATIONS_BEFORE")"
     printf '  "migrations_after": %s,\n' "$(json_int_or_null "$MIGRATIONS_AFTER")"
     printf '  "plugin_migrations_before": %s,\n' "$(json_int_or_null "$(ledger_total "$LEDGERS_BEFORE")")"
@@ -511,6 +545,166 @@ paths_changed() {
   local rc=0
   git_as diff --quiet "$PREV_SHA" "$HEAD_SHA" -- "$@" || rc=$?
   [ "$rc" -ne 0 ]
+}
+
+# ─── Signed updates ──────────────────────────────────────────────────────
+#
+# Root is about to run what the checkout holds: this script, then the
+# services, the MPD image build and pip. While ALLOWED_SIGNERS exists, HEAD
+# has to carry an SSH signature by one of the keys in it (git
+# verify-commit), or the run refuses before it touches anything. Without
+# the file the run warns and goes on, so a box that has not set signing up
+# keeps updating.
+#
+# The verdict is root's own. The core verified the tip before it pulled,
+# but the core runs as the service user and root does not take its word
+# for it: git runs as root here, not through runuser, with every program
+# git could be told to run pinned on the command line, because the
+# checkout's .git/config belongs to the service user and a gpg.ssh.program
+# in it would otherwise choose what root executes. safe.directory is pinned
+# the same way (git refuses another user's checkout without it). Only a
+# file root owns and only root can write counts as the signers file.
+#
+# What this cannot do: a tree already moved to an unverified commit by a
+# pull that skipped the core (a by-hand `git pull` as the service user)
+# has already replaced this script. The core's own check before the
+# fast-forward is the gate for the dashboard path; this one catches the
+# rest (a signers file installed after the pull, a tool's unsigned merge)
+# and keeps the two halves from disagreeing.
+
+# git as root, for the signature verdict alone. Nothing here writes.
+git_root() {
+  local -a cfg=(-c "safe.directory=$REPO_DIR" -c "gpg.ssh.allowedSignersFile=$ALLOWED_SIGNERS"
+                -c gpg.ssh.program=ssh-keygen -c gpg.program=gpg
+                -c gpg.openpgp.program=gpg -c gpg.x509.program=gpgsm)
+  if [ -n "$REVOKED_SIGNERS" ]; then cfg+=(-c "gpg.ssh.revocationFile=$REVOKED_SIGNERS"); fi
+  git "${cfg[@]}" -C "$REPO_DIR" "$@"
+}
+
+# Why ALLOWED_SIGNERS cannot be trusted, printed; nothing when it can. A
+# file another user can change would let them choose the keys. Ownership
+# is judged only when this runs as root (a by-hand run as another user
+# cannot own files as root, and the unit never runs that way).
+signers_file_problem() {
+  local st
+  if [ -L "$ALLOWED_SIGNERS" ]; then printf '%s is a symlink' "$ALLOWED_SIGNERS"; return 0; fi
+  if [ ! -f "$ALLOWED_SIGNERS" ]; then printf '%s is not a regular file' "$ALLOWED_SIGNERS"; return 0; fi
+  [ "$RUN_AS_ROOT" = 1 ] || return 0
+  st=$(stat -c '%u %a' "$ALLOWED_SIGNERS" 2>/dev/null) || st=""
+  if [ -z "$st" ]; then printf 'stat cannot read %s' "$ALLOWED_SIGNERS"; return 0; fi
+  if ! [[ $st =~ ^0\ ([0-7]{3,4})$ ]]; then printf '%s is not owned by root' "$ALLOWED_SIGNERS"; return 0; fi
+  if (( 8#${BASH_REMATCH[1]} & 8#022 )); then
+    printf '%s can be written by a user other than root (mode %s)' "$ALLOWED_SIGNERS" "${BASH_REMATCH[1]}"
+  fi
+}
+
+# HEAD's signature state into SIG_*: verified (signed by a key in the
+# signers file), unsigned, or unverified (signed, but not by a listed key,
+# or nothing to check it against). SIG_ENFORCED says whether the signers
+# file is there. Returns 0 when a run under enforcement may go on.
+signature_state() {
+  local problem mark info err
+  SIG_STATUS="" SIG_SIGNER="" SIG_KEY="" SIG_DETAIL="" SIG_ENFORCED=0
+  if [ ! -e "$ALLOWED_SIGNERS" ] && [ ! -L "$ALLOWED_SIGNERS" ]; then
+    # Nothing to check against. Say whether HEAD is signed at all: a read
+    # of the commit object, as the service user like every other look at
+    # the tree. A signature shows as a gpgsig header.
+    if git_as cat-file commit "$HEAD_SHA" 2>/dev/null | grep -q '^gpgsig'; then
+      SIG_STATUS=unverified
+      SIG_DETAIL="HEAD is signed, but there is no $ALLOWED_SIGNERS to check it against"
+    else
+      SIG_STATUS=unsigned
+      SIG_DETAIL="HEAD is not signed, and there is no $ALLOWED_SIGNERS"
+    fi
+    return 0
+  fi
+  SIG_ENFORCED=1
+  problem=$(signers_file_problem)
+  if [ -n "$problem" ]; then
+    SIG_STATUS=unverified
+    SIG_DETAIL="the allowed-signers file cannot be trusted: $problem"
+    return 1
+  fi
+  err=$(mktemp)
+  if git_root verify-commit "$HEAD_SHA" >/dev/null 2>"$err"; then
+    info=$(git_root log -1 --format='%GS%n%GK' "$HEAD_SHA" 2>/dev/null) || info=""
+    SIG_SIGNER=$(printf '%s\n' "$info" | sed -n 1p)
+    SIG_KEY=$(printf '%s\n' "$info" | sed -n 2p)
+    SIG_STATUS=verified
+    SIG_DETAIL="HEAD is signed by ${SIG_SIGNER:-an allowed key}${SIG_KEY:+ ($SIG_KEY)}, listed in $ALLOWED_SIGNERS"
+    rm -f "$err"
+    return 0
+  fi
+  # N: no signature at all. Anything else is a signature that did not
+  # verify (a key not in the file, a revoked key, a format with no keyring).
+  mark=$(git_root log -1 --format='%G?' "$HEAD_SHA" 2>/dev/null) || mark=""
+  if [ "$mark" = N ]; then
+    SIG_STATUS=unsigned
+    SIG_DETAIL="HEAD is not signed"
+  else
+    SIG_STATUS=unverified
+    SIG_DETAIL="the signature on HEAD is not by a key in $ALLOWED_SIGNERS: $(tail_lines "$err" 2 200 | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  fi
+  rm -f "$err"
+  return 1
+}
+
+# The signature step, before anything is touched, on both paths. The
+# verdict goes into the result as a step and as `signature`. Under
+# enforcement a HEAD that does not verify refuses the run; without it the
+# run goes on and says so, loudly, every time.
+check_signature() {
+  local t0 rc=0
+  t0=$(now_ms)
+  signature_state || rc=$?
+  if [ "$SIG_ENFORCED" = 1 ] && [ "$rc" -eq 0 ]; then
+    add_step signature ok "$t0" "$SIG_DETAIL"
+    log "signature: $SIG_DETAIL"
+    return 0
+  fi
+  if [ "$SIG_ENFORCED" = 1 ]; then
+    add_step signature refused "$t0" "$SIG_DETAIL"
+    finish refused "$SIG_DETAIL; signed updates are enforced by $ALLOWED_SIGNERS, so nothing was changed. Pull a commit signed by a listed key, or remove that file to turn enforcement off (docs/LINUX_HOST.md, Signed updates)."
+    return 1
+  fi
+  add_step signature warn "$t0" "not enforced: $SIG_DETAIL"
+  log "WARNING: signed updates are not enforced on this box: $SIG_DETAIL. Root runs whatever the checkout holds. To bound that to commits you signed, install the allowed-signers file (docs/LINUX_HOST.md, Signed updates)."
+  return 0
+}
+
+# A remote URL for comparing: no trailing slash or .git.
+norm_url() {
+  local u=$1
+  u=${u%/}; u=${u%.git}; u=${u%/}
+  printf '%s' "$u"
+}
+
+# The checkout's origin and tracking branch against the pins in the root
+# env file (DOMOVOI_UPSTREAM_URL, DOMOVOI_UPSTREAM_BRANCH). Nothing is
+# checked without a pin. Refuses before anything is touched: a checkout
+# that follows another remote or branch is not the one the owner signs.
+check_upstream() {
+  local t0 url up want
+  [ -n "$UPSTREAM_URL" ] || [ -n "$UPSTREAM_BRANCH" ] || return 0
+  t0=$(now_ms)
+  if [ -n "$UPSTREAM_URL" ]; then
+    url=$(git_as remote get-url origin 2>/dev/null) || url=""
+    if [ "$(norm_url "$url")" != "$(norm_url "$UPSTREAM_URL")" ]; then
+      add_step upstream refused "$t0" "origin is ${url:-not set}; the pin is $UPSTREAM_URL"
+      finish refused "the checkout's origin is ${url:-not set}, not the pinned $UPSTREAM_URL (DOMOVOI_UPSTREAM_URL in /etc/default/domovoi-update), so nothing was changed"
+      return 1
+    fi
+  fi
+  if [ -n "$UPSTREAM_BRANCH" ]; then
+    want=refs/remotes/origin/$UPSTREAM_BRANCH
+    up=$(git_as rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
+    if [ "$up" != "$want" ]; then
+      add_step upstream refused "$t0" "HEAD tracks ${up:-no upstream branch}; the pin is $want"
+      finish refused "the checkout tracks ${up:-no upstream branch}, not the pinned origin/$UPSTREAM_BRANCH (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
+      return 1
+    fi
+  fi
+  add_step upstream ok "$t0" "origin ${UPSTREAM_URL:-unpinned}, branch ${UPSTREAM_BRANCH:-unpinned}"
 }
 
 # ─── The steps ───────────────────────────────────────────────────────────
@@ -1301,6 +1495,11 @@ main() {
   fi
   resolve_prev
   BAD_SHA=$(read_sha_file "$BAD_FILE" || true)
+
+  # Before either path, touching nothing: the pinned upstream, then HEAD's
+  # signature ("Signed updates" above).
+  if ! check_upstream; then exit 1; fi
+  if ! check_signature; then exit 1; fi
 
   if [ "$PREV_SHA" = "$HEAD_SHA" ]; then
     plain_restart
