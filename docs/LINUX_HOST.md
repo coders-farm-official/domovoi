@@ -337,43 +337,68 @@ git clone https://github.com/coders-farm-official/domovoi && cd domovoi
 python3 -m venv .venv && source .venv/bin/activate
 ```
 
-**Install CPU-only torch first.** This step is not optional on a machine
-without an NVIDIA GPU:
+**Install from the hash-pinned lock.** `requirements-linux-py314.lock` at
+the repo root is the whole production set (the core, the dashboard, the
+`real-clients` and `voice-profile` extras, `resemblyzer`, and CPU-only
+`torch` from PyTorch's CPU index), every package at an exact version with
+its SHA-256s, so a substituted or tampered download fails the install
+instead of running. It was compiled for CPython 3.14 on x86_64, which is
+what Ubuntu 26.04's `python3` is (`python3 --version`). Three commands, in
+this order:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel
+pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock
+pip install --no-deps --no-build-isolation -e .
 ```
+
+The first installs the build tools, checked against the lock's hashes.
+The second installs everything else; `metaphone` and `webrtcvad` publish
+no wheels and are built here, with those checked tools rather than a
+fresh, unchecked `setuptools` that pip would otherwise download for each
+build (that is what `--no-build-isolation` is for, and why the
+`python3-dev` and `build-essential` prerequisites are there). The third
+installs Domovoi itself and nothing else. No `dev` extra: a server doesn't
+run the test suite.
 
 PyPI's default Linux `torch` build bundles its own CUDA runtime — cuBLAS,
-cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it —
-and `torch` arrives via the `voice-profile` extra. That is entirely
-separate from the `cuda` extra below, which only covers the wheels
-`ctranslate2` wants. Installing the `+cpu` build first means the next
-command sees `torch>=2.0` already satisfied and never pulls the CUDA one.
+cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it.
+The lock pins the `+cpu` build from PyTorch's CPU index (it names that
+index itself), so none of that arrives. That is entirely separate from the
+`cuda` extra below, which only covers the wheels `ctranslate2` wants.
 
-```bash
-pip install -e ".[dev,real-clients,voice-profile]"
-```
-
-Then try `resemblyzer` the normal way — the `--no-deps` dance in the
-README is a Windows workaround:
-
-```bash
-pip install resemblyzer
-```
+Check the voice encoder loads:
 
 ```bash
 python -c "from resemblyzer import VoiceEncoder; VoiceEncoder()"
 ```
 
 That should print `Loaded the voice encoder model on cpu in <N> seconds`.
-If the install fails building `webrtcvad`, fall back to `pip install
---no-deps resemblyzer` — Domovoi doesn't use the code path that calls it.
+
+**No lock for your Python?** On anything but CPython 3.14 (the
+[`uv venv --python 3.13`](#if-the-wheels-arent-there-yet) route, an arm64
+box the lock wasn't checked on), fall back to pip's resolver, which checks
+no hashes and installs whatever the index serves that day within the
+floors in `pyproject.toml`:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[real-clients,voice-profile]"
+pip install resemblyzer      # if webrtcvad fails to build: pip install --no-deps resemblyzer
+```
+
+The [update unit](#updates-from-the-dashboard) does the same, with a
+warning in its step, whenever the venv's Python isn't the lock's.
+Maintainers regenerate the lock with `bash scripts/linux/compile-linux-lock.sh`
+(pip-compile in a pinned `python:3.14-slim` container, so it resolves for
+this platform from any machine with Docker) after any change to
+`pyproject.toml`, and commit both.
 
 > **CUDA wheels are opt-in.** They used to ride along with `real-clients`;
-> they now live in a separate `cuda` extra, so the command above pulls
-> nothing NVIDIA. On a machine that *does* have an NVIDIA GPU, add
-> `pip install -e ".[cuda]"`.
+> they now live in a separate `cuda` extra, so the lock pulls nothing
+> NVIDIA. On a machine that *does* have an NVIDIA GPU, add
+> `pip install -e ".[cuda]"` (resolved from the index, not hash-checked:
+> the lock is the CPU set).
 
 > **The streaming fast lane is opt-in as well.** It is a small second
 > recognizer that follows each command while it is spoken; today it only
@@ -392,7 +417,9 @@ If the install fails building `webrtcvad`, fall back to `pip install
 > **shadow** under Settings → Speech-to-text → *Fast lane*, which applies
 > without a restart. If the [update unit](#updates-from-the-dashboard)
 > manages this box, add `fastlane` to `DOMOVOI_PIP_EXTRAS` so a venv
-> re-sync keeps it installed.
+> re-sync keeps it installed. Like `cuda`, it is outside the lock: pip
+> resolves it from the index and checks no hashes, and the update unit's
+> step says so.
 
 Bring it up — `dev.sh` is the bash twin of `dev.ps1`:
 
@@ -720,8 +747,15 @@ run does this:
    needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
    in the version panel instead of hiding in a slow step.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
-   changed: re-sync the venv the way [Install](#install) builds it (CPU
-   torch first, then `pip install -e ".[dev,real-clients,voice-profile]"`).
+   changed: re-sync the venv the way [Install](#install) builds it. When
+   the checkout has `requirements-linux-py314.lock` and the venv runs the
+   Python it was compiled for, that is the three hash-checked installs
+   from the lock, and a package whose download doesn't match its hash
+   fails the step, so the update rolls back; extras beyond the lock's own
+   (`cuda`, `fastlane`) then go through the resolver, and the step's
+   detail says so. Without a usable lock the step says `WARNING` and does
+   what it did before the lock existed: CPU torch first, then
+   `pip install -e ".[real-clients,voice-profile]"` from the index.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
@@ -849,9 +883,12 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_REPO_DIR=/opt/domovoi
 # Default: the venv domovoi-core.service's ExecStart runs from, else <checkout>/.venv.
 # DOMOVOI_VENV=/opt/domovoi/.venv
-# Extras for the venv re-sync. An NVIDIA host adds cuda: dev,real-clients,voice-profile,cuda
-# DOMOVOI_PIP_EXTRAS=dev,real-clients,voice-profile
-# CPU torch index, used first when the extras include voice-profile. Empty: skip that step.
+# Extras for the venv re-sync. The lock covers real-clients and voice-profile; any other
+# (an NVIDIA host's cuda, fastlane) is resolved from the index after it, without hash checks.
+# DOMOVOI_PIP_EXTRAS=real-clients,voice-profile
+# The hash-pinned lock the re-sync installs from, relative to the checkout. Empty: never use one.
+# DOMOVOI_DEPS_LOCK=requirements-linux-py314.lock
+# CPU torch index, for the resolver path only (the lock names its own). Empty: skip that step.
 # DOMOVOI_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 # DOMOVOI_UPDATE_DIR=/var/lib/domovoi-update
 # DOMOVOI_UPDATE_KEEP_BACKUPS=5

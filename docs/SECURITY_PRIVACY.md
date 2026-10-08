@@ -648,10 +648,32 @@ Browser uploads into the library (`POST /api/music/library/upload`) accept
 zip archives; an archive is refused with `413` before anything is inflated
 when it declares more than 5000 members, a member over 1 GiB, or more than
 4 GiB in total. The third-party packages that parse what comes in over the
-network (`starlette`, `python-multipart`, `requests`, `pillow`) carry
-one-way version floors in `pyproject.toml`, and `requirements.lock` pins
-the exact, hash-checked set a deployment installs — see
-[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
+network (`starlette`, `python-multipart`, `requests`, `urllib3`,
+`pillow`) carry one-way version floors in `pyproject.toml`.
+
+A Linux server installs its Python packages from
+`requirements-linux-py314.lock`: the core, the dashboard, the
+`real-clients` and `voice-profile` extras, `resemblyzer` and CPU torch,
+each at an exact version with its SHA-256s, for CPython 3.14 on x86_64
+([LINUX_HOST.md, Install](LINUX_HOST.md#install)). pip refuses a download
+that doesn't match its hash, and the packages that publish only source are
+built against hash-checked build tools rather than ones fetched unchecked
+for the build. The update unit's re-sync installs from the same lock, so a
+tampered package fails the update and it rolls back. What is not
+hash-checked, said plainly:
+
+- **Another Python or platform.** With no lock for the venv's Python (an
+  older Ubuntu, a `uv`-installed 3.13, Windows), pip's resolver installs
+  whatever the index serves within the floors; the update unit says
+  `WARNING` in its step when it does that.
+- **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`,
+  `signing`) go through the resolver too, when you add them.
+- **The `dev` lock** (`requirements.lock`, core + `dev`, Python 3.12) is
+  the suite's set, not a server's.
+- **A plugin's own lock** is hash-checked by the plugin installer
+  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)); the satellite card's
+  Python wheels are not yet (its wake-word models and the XVF3800 tool
+  are pinned by SHA-256).
 
 ## What the admin password actually gates
 
