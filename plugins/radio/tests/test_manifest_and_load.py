@@ -56,44 +56,45 @@ def test_manifest_parses_and_layout_validates() -> None:
     )
 
 
-def test_lockfile_pins_match_manifest() -> None:
+def test_the_bundled_plugin_ships_no_lock_of_its_own() -> None:
+    """T-03: the bundled copy runs in the core's interpreter and is never
+    installed through pip, so a lock of its own only described an
+    environment nobody installs — it had drifted below the core lock
+    (anyio 4.3.0 against 4.14.2), carried advisories (aiohttp 3.14.1,
+    multidict 6.7.1) and no longer resolved. The core's extras and lock
+    are the radio's dependency story; the manifest says so and declares
+    no pins."""
     manifest = parse_manifest_dir(PLUGIN_DIR)
-    lock_text = (PLUGIN_DIR / "requirements.lock").read_text(encoding="utf-8")
-    assert "--hash=" in lock_text
-    for req in manifest.python_requirements:
-        name, _, version = req.partition("==")
-        assert f"{name.lower()}=={version}" in lock_text.lower().replace(" ", "")
+    assert manifest.python_requirements == ()
+    assert not (PLUGIN_DIR / "requirements.lock").exists()
+    assert not (PLUGIN_DIR / "requirements.in").exists()
 
 
-def test_direct_pins_shared_with_the_core_lock_match_it() -> None:
-    """A direct pin the core's requirements.lock also pins must be the same
-    version with the same hashes: the installer's dry-run refuses a lock that
-    would change a dist already in the core's environment
-    (requirements_conflict), and the sleep plugin's tests hold its numpy pin
-    to this lock as well as the core's."""
-    manifest = parse_manifest_dir(PLUGIN_DIR)
+def test_any_lock_the_plugin_ships_matches_the_core_lock() -> None:
+    """Should a lock come back, every dist it shares with the core's
+    requirements.lock must be the same version with the same hashes: a
+    plugin lock applied to the core's environment would otherwise
+    downgrade the core (the installer's dry-run refuses that as
+    requirements_conflict, and a manual ``pip install -r`` would just do
+    it)."""
+    lock = PLUGIN_DIR / "requirements.lock"
+    if not lock.exists():
+        return
     core_lock = PLUGIN_DIR.parents[1] / "requirements.lock"
     core = {
         r.key: r for r in parse_lockfile(core_lock.read_text(encoding="utf-8"))
     }
-    ours = {
-        r.key: r
-        for r in parse_lockfile(
-            (PLUGIN_DIR / "requirements.lock").read_text(encoding="utf-8")
-        )
-    }
-    direct = (
-        normalize_name(req.split("[")[0].split("==")[0])
-        for req in manifest.python_requirements
-    )
-    shared = [key for key in direct if key in core]
-    assert "numpy" in shared
-    for key in shared:
+    ours = {r.key: r for r in parse_lockfile(lock.read_text(encoding="utf-8"))}
+    for key in sorted(set(ours) & set(core)):
         assert ours[key].version == core[key].version, (
             f"{key}: radio pins {ours[key].version}, core lock "
             f"{core[key].version}"
         )
         assert set(ours[key].hashes) == set(core[key].hashes), key
+    manifest = parse_manifest_dir(PLUGIN_DIR)
+    for req in manifest.python_requirements:
+        name = normalize_name(req.split("[")[0].split("==")[0])
+        assert name in ours, f"direct pin {req} missing from the lock"
 
 
 def test_migrations_pass_sql_lint() -> None:

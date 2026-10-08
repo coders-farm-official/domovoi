@@ -1403,10 +1403,19 @@ story. Here is the developer's tour, file by file.
   `media-acquisition-queue` — a core service, always satisfied. Nothing in
   `consumes_optional`: detection→download simply degrades when no fulfiller
   is enabled.
-* **Requirements**: five exact pins (`shazamio`, `numpy`, `scipy`,
-  `librosa`, `httpx`) with a hashed `requirements.lock` regenerated from
-  `requirements.in`; system tools `ffmpeg` (required — missing ⇒ plugin
-  loads *degraded*) and `rtl_fm` (optional hardware).
+* **Requirements**: system tools only — `ffmpeg` (required — missing ⇒
+  plugin loads *degraded*) and `rtl_fm` (optional hardware). It declares
+  **no `python` pins and ships no lockfile**, and that is particular to a
+  bundled plugin: it runs in the core's own interpreter and is loaded from
+  the checkout, never installed through pip, so a lock of its own would
+  describe an environment nobody installs. (It used to ship one; it had
+  drifted below the core's lock, carried dependency advisories and no
+  longer resolved, so it was removed rather than kept as a false record.)
+  Its heavy dependencies (`numpy`, `scipy`, `librosa`, `shazamio`) are
+  imported lazily and degrade when absent; they come from the core's
+  `fingerprint` and `shazam` extras. **A plugin you distribute as a zip is
+  different** — it must pin and lock everything it imports, as
+  [`[requirements]`](#requirements) describes.
 * **One handler** at band **280** — the anchored-media neighborhood, between
   spoken-audio (270) and playlists (290), deliberately *ahead of* the music
   handler's greedy `^play (.+)$` at 300 so "play 97.5 fm" is claimed first.
