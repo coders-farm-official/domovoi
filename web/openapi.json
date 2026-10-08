@@ -1232,7 +1232,7 @@
           "music"
         ],
         "summary": "Now Playing",
-        "description": "Per-room playback state.\n\nReads the mpd_rooms table for control-port assignments, then opens\na one-shot connection to each MPD daemon for ``status`` +\n``currentsong``. Rooms that aren't reachable (container down, port\nblocked) surface as state ``\"stop\"`` with no song \u2014 same as a real\nidle MPD.",
+        "description": "Per-room playback state.\n\nReads the mpd_rooms table for control-port assignments, then opens\na one-shot connection to each MPD daemon for ``status`` +\n``currentsong``. Rooms that aren't reachable (container down, port\nblocked) surface as state ``\"stop\"`` with no song \u2014 same as a real\nidle MPD.\n\nOpen, but ``added_by`` (the device that queued the song) is named only\nto a caller holding a household credential\n(``_READS_QUEUE_PROVENANCE``). The caller is classified only when an\nanswer names a device, so the 1.5 s poll of a room nobody queued into\ncharges no token backoff and costs no extra query.",
         "operationId": "now_playing_api_music_now_playing_get",
         "responses": {
           "200": {
