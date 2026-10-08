@@ -151,16 +151,21 @@ class ApiClient(
 
     /**
      * The token a request to [url] made OUTSIDE this client (the system
-     * DownloadManager) may carry: the same rule the interceptor applies —
-     * the active server itself, and only once it has proved itself on this
-     * network — judged from what is already known, without a probe, so a
-     * caller on the main thread can ask.
+     * DownloadManager, for the one save-to-device route on the device
+     * tier) may carry: the same rule the interceptor applies — the active
+     * server itself, and only once it has proved itself on this network —
+     * taking the proof now when there is no fresh one, which is why this
+     * suspends (the probe runs on IO). Null when [url] is not the active
+     * server or the phone is not paired; throws the gate's IOException
+     * when the server did not prove itself, so the caller can say so
+     * rather than queue a request that would carry the token and fail.
      */
-    fun tokenForDownload(url: HttpUrl): String? {
-        val base = TokenScope.baseOf(baseUrl) ?: return null
-        if (!TokenScope.sameServer(base, url)) return null
-        if (gate?.admitsTokenNow(base) == false) return null
-        return headerSafeToken(deviceTokenProvider())
+    suspend fun tokenForDownload(url: HttpUrl): String? = withContext(Dispatchers.IO) {
+        val base = TokenScope.baseOf(baseUrl) ?: return@withContext null
+        if (!TokenScope.sameServer(base, url)) return@withContext null
+        val token = headerSafeToken(deviceTokenProvider()) ?: return@withContext null
+        gate?.requireAdmitted(base)
+        token
     }
 
     fun absolute(path: String): String {

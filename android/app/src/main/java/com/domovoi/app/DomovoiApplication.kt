@@ -7,6 +7,7 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.domovoi.app.alerts.TimerNotifier
 import com.domovoi.app.diagnostics.Diagnostics
+import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.NetworkWatch
 
 class DomovoiApplication : Application(), ImageLoaderFactory {
@@ -25,6 +26,9 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         // again before the household token goes to it (net/IdentityGate.kt,
         // A6-03). The watch's fingerprint is what every verdict is keyed to.
         NetworkWatch.start(this, container.network)
+        // A token-bearing save queued by an earlier process that is waiting
+        // for a network must not resume on whichever comes next.
+        DeviceDownloads.atStart(this)
         container.bus.start()
         container.alerts.start()
         // Earlier crashes and Android's exit history, read off the main thread.

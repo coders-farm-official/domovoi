@@ -68,8 +68,10 @@ internal fun headerSafeToken(token: String?): String? =
  * (security round 3, A6-03: its identity, after every network change).
  * [requireAdmitted] returns normally when a token-bearing request to
  * [base] may go out now and throws an [IOException] — the request never
- * leaves — otherwise. Consulted only when there is a token to protect.
- * The other two answer without blocking on a probe where that matters.
+ * leaves — otherwise. Consulted only when there is a token to protect:
+ * by the interceptor for every request, and by [ApiClient.tokenForDownload]
+ * for the one save-to-device route the system DownloadManager makes with
+ * the token.
  */
 fun interface TokenGate {
     @Throws(IOException::class)
@@ -78,11 +80,6 @@ fun interface TokenGate {
     /** Whether a refusal from [base] may raise the pairing screen (a server
      *  that has not proved itself must not invite a paste of the token). */
     fun admitsPairingPrompt(base: HttpUrl?): Boolean = base != null
-
-    /** Whether the token may go to [base] right now, judged from what is
-     *  already known (no probe) — the DownloadManager hand-off asks this
-     *  on the main thread. */
-    fun admitsTokenNow(base: HttpUrl): Boolean = true
 }
 
 class DeviceAuthInterceptor(

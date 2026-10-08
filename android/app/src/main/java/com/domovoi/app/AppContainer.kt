@@ -6,6 +6,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.NetworkWatch
@@ -23,9 +24,14 @@ class AppContainer(context: Context) {
 
     /** The networks the phone is on, as one fingerprint every identity
      *  verdict is keyed to (net/NetworkWatch.kt). Registered with
-     *  ConnectivityManager by DomovoiApplication. */
+     *  ConnectivityManager by DomovoiApplication. A change also cancels
+     *  any save-to-device download still carrying the household token
+     *  (net/DeviceDownloads.kt). */
     val network = NetworkWatch(
-        onChange = { identity.networkChanged() },
+        onChange = {
+            identity.networkChanged()
+            DeviceDownloads.networkChanged(context)
+        },
         log = { Log.i("NetworkWatch", it) },
     )
 
