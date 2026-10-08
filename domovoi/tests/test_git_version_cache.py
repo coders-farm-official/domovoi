@@ -59,12 +59,17 @@ async def test_invalidate_forces_a_fresh_read(monkeypatch):
     assert calls["n"] == 2
 
 
-async def test_pull_invalidates_the_cache(monkeypatch):
+async def test_pull_invalidates_the_cache(monkeypatch, tmp_path):
     calls = _count_calls(monkeypatch, ["aaaaaaa", "bbbbbbb", "bbbbbbb"])
     assert await git_version.cached_current_sha() == "aaaaaaa"
+    # No allowed-signers file: the pull is not enforced (test_git_version_signing
+    # covers the gate), and the host's own file never leaks in.
+    monkeypatch.setenv("DOMOVOI_ALLOWED_SIGNERS", str(tmp_path / "no-such-file"))
 
-    def fake_run(*args, **kwargs):
-        return subprocess.CompletedProcess(args, 0, stdout="Already up to date.\n", stderr="")
+    def fake_run(cmd, **kwargs):
+        # fetch, then the upstream's SHA, then the fast-forward to it.
+        out = "b" * 40 + "\n" if "rev-parse" in cmd else "Already up to date.\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(git_version.subprocess, "run", fake_run)
     result = await git_version.pull()
