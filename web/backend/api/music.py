@@ -22,7 +22,7 @@ import logging
 import os
 import stat
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -1148,17 +1148,20 @@ async def _library_file_path(track_id: int) -> Path:
     try:
         target.relative_to(music_dir)
     except ValueError:
+        # Open routes answer with this (``/audio``, ``/cover``): name the
+        # track, never the server path or MUSIC_DIR (WEB-16). The log has both.
+        log.warning(
+            "refusing to serve track %s: %r is not inside MUSIC_DIR (%r)",
+            track_id, file_path_str, core_settings.music_dir,
+        )
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"refusing to serve {file_path_str!r}: not inside MUSIC_DIR "
-                f"({core_settings.music_dir!r})"
-            ),
+            detail=f"refusing to serve track {track_id}: its file is not inside the music library",
         )
     if not target.is_file():
         raise HTTPException(
             status_code=404,
-            detail=f"track {track_id} file missing on disk: {target}",
+            detail=f"track {track_id} file missing on disk",
         )
     return target
 
@@ -1601,10 +1604,58 @@ async def play_tracks(body: CastTracksRequest, request: Request):
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
 
+def public_track_path(file_path: str | None) -> str:
+    """The path a client is shown for a library track: relative to the
+    music library, never the absolute server path (WEB-16).
+
+    ``library_tracks.file_path`` is the absolute path on the host —
+    ``/home/<user>/Music/...`` or ``C:\\Users\\<user>\\Music\\...`` — and the
+    library reads are open, so serialising it told any LAN caller the
+    operator's username and directory layout. The podcasts and audiobooks
+    routers already return only an extension; the Files registry never
+    serialises a root. What the clients actually use the field for is a
+    display line and a filename (the last segment, for a title fallback
+    and the Android save-to-device name), so a library-relative path keeps
+    every one of them working — ``Artist/Album/01 Song.mp3``,
+    ``uploads/song.mp3``. A row outside the library (a stale import from an
+    older ``MUSIC_DIR``) is shown by its file name alone.
+
+    Pure path arithmetic, no filesystem calls: a page lists up to 200 rows.
+    """
+    if not file_path:
+        return ""
+    from domovoi.config import settings as core_settings
+
+    flavour = PureWindowsPath if ("\\" in file_path or ":" in file_path[:3]) else PurePosixPath
+    track = flavour(file_path)
+    for root in _music_roots(core_settings.music_dir):
+        try:
+            return flavour(*track.relative_to(flavour(root)).parts).as_posix()
+        except ValueError:
+            continue
+    return track.name
+
+
+def _music_roots(music_dir: str) -> list[str]:
+    """``MUSIC_DIR`` as configured, expanded, and resolved — the spellings a
+    stored ``file_path`` may start with."""
+    roots: list[str] = []
+    for cand in (music_dir, os.path.expanduser(music_dir)):
+        if cand and cand not in roots:
+            roots.append(cand)
+    try:
+        resolved = str(Path(music_dir).expanduser().resolve(strict=False))
+        if resolved not in roots:
+            roots.append(resolved)
+    except (OSError, RuntimeError):  # pragma: no cover — an unresolvable setting
+        pass
+    return roots
+
+
 def _row_to_track(r: Any) -> Track:
     return Track(
         id=int(r[0]),
-        file_path=r[1],
+        file_path=public_track_path(r[1]),
         title=r[2],
         artist=r[3],
         album=r[4],

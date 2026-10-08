@@ -469,7 +469,11 @@ ask for a song or add a calendar entry, but the ask should come from a
 device the household enrolled. So is reading back anything the household
 SAID — conversations, notes, chat, wake-word recordings — or what the house
 keeps about a person (above). What is left on this tier is reads of
-household state, the pre-setup grace and the kiosk below. The accepted risk is now narrower and
+household state, the pre-setup grace and the kiosk below — and none of
+those reads names a place on the server's disk: a library track's
+`file_path` is relative to the music library (since 2026-10-08, WEB-16;
+it used to be the absolute path, which named the operator's account), as
+podcasts, audiobooks and the Files registry already were. The accepted risk is now narrower and
 still real — one shared household secret, no per-device identity, and
 anything holding it can do everything on that tier. Keep your Wi-Fi password good; use a
 guest VLAN for devices you don't trust.
