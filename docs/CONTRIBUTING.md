@@ -73,13 +73,16 @@ pip install --no-deps -e .
 `real-clients`, `voice-profile`, `resemblyzer` and CPU torch, for CPython
 3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
 update unit's re-sync uses it too). Regenerate it with
-`bash scripts/linux/compile-linux-lock.sh`, which runs pip-compile in a
-pinned `python:3.14-slim` container, so it resolves for the server's
-platform from any machine with Docker.
+`DOMOVOI_LOCK_SEED=requirements.lock bash scripts/linux/compile-linux-lock.sh`,
+which runs pip-compile in a pinned `python:3.14-slim` container, so it
+resolves for the server's platform from any machine with Docker, starting
+from the dev lock's versions so every package the two share stays at the
+version the suite runs.
 
 When you change a dependency in `pyproject.toml`, regenerate both: the dev
-lock from a venv that has the versions you actually tested (recipe in its
-header), the Linux lock with the script, and commit them together. The floors on `starlette`,
+lock first, from a venv that has the versions you actually tested (recipe
+in its header), then the Linux lock seeded from it, and commit them
+together. The floors on `starlette`,
 `python-multipart`, `requests` and `pillow` are one-way — raise freely,
 never lower; `domovoi/tests/test_ops_dependency_floors.py` holds the line.
 

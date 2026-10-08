@@ -389,10 +389,11 @@ pip install resemblyzer      # if webrtcvad fails to build: pip install --no-dep
 
 The [update unit](#updates-from-the-dashboard) does the same, with a
 warning in its step, whenever the venv's Python isn't the lock's.
-Maintainers regenerate the lock with `bash scripts/linux/compile-linux-lock.sh`
-(pip-compile in a pinned `python:3.14-slim` container, so it resolves for
-this platform from any machine with Docker) after any change to
-`pyproject.toml`, and commit both.
+Maintainers regenerate the lock with `DOMOVOI_LOCK_SEED=requirements.lock
+bash scripts/linux/compile-linux-lock.sh` (pip-compile in a pinned
+`python:3.14-slim` container, so it resolves for this platform from any
+machine with Docker, starting from the suite's tested versions) after any
+change to `pyproject.toml`, and commit both.
 
 > **CUDA wheels are opt-in.** They used to ride along with `real-clients`;
 > they now live in a separate `cuda` extra, so the lock pulls nothing
