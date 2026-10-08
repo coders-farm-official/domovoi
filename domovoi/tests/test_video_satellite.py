@@ -83,8 +83,24 @@ async def _get_row(room_id: str) -> dict | None:
 # ─── hello caching + lenient defaults ─────────────────────────────────────
 
 
+@pytest.fixture
+def _paired_hello(monkeypatch: pytest.MonkeyPatch):
+    """These tests are about what a hello CACHES, not about pairing. Their
+    bare hello carries no pairing token, which only lenient pairing (no
+    longer the default, CORE-11) would accept; stand in for a paired
+    satellite's hello instead. Pairing is covered in test_satellite_pairing
+    and test_tokenless_rooms_stay_home."""
+
+    async def _accept(self, ctrl):
+        self.token_authenticated = True
+        return True
+
+    monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)
+
+
 @requires_db
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
 async def test_hello_caches_explicit_sat_type_and_mic() -> None:
     ws = _FakeWS()
     session = StreamSession(ws, "den")  # type: ignore[arg-type]
@@ -100,6 +116,7 @@ async def test_hello_caches_explicit_sat_type_and_mic() -> None:
 
 @requires_db
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
 async def test_hello_defaults_when_fields_absent() -> None:
     """An old client's hello (no sat_type / mic_enabled) caches the
     historical defaults and writes NO inventory row."""
@@ -113,6 +130,7 @@ async def test_hello_defaults_when_fields_absent() -> None:
 
 @requires_db
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
 async def test_hello_unknown_sat_type_coerced_to_voice() -> None:
     ws = _FakeWS()
     session = StreamSession(ws, "garage")  # type: ignore[arg-type]
@@ -124,6 +142,7 @@ async def test_hello_unknown_sat_type_coerced_to_voice() -> None:
 
 @requires_db
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_paired_hello")
 async def test_hello_implicit_never_downgrades_preseeded_row() -> None:
     """The adoption-protection rule: a preseeded 'video' row survives an old
     client's hello that omits sat_type; an explicit hello still updates."""

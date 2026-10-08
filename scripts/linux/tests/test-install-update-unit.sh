@@ -4,8 +4,8 @@
 # Each case builds a throwaway git repo (commit A, which the "core" is
 # running, then commit B, pulled but not applied), a fake venv, a fake root
 # directory the script reads and writes through DOMOVOI_INSTALL_ROOT, and
-# PATH shims for systemctl, visudo, sudo, curl, git, docker, id, install,
-# stat, find and chown that log every call and can be told to fail. Nothing
+# PATH shims for systemctl, visudo, sudo, curl, getent, git, docker, id,
+# install, stat, find and chown that log every call and can be told to fail. Nothing
 # touches systemd, sudoers, Docker or a real core, so this runs under Git
 # Bash as well as on Linux.
 #
@@ -23,7 +23,10 @@
 #   * visudo -cf fails when visudo-reject is set; visudo -c fails when
 #     visudo-broken is set, or when visudo-fail-with-rule is set and the new
 #     rule is in place;
-#   * curl serves version.json as GET /v1/admin/version, or fails (core-down);
+#   * curl serves version.json as GET /v1/admin/version, or fails (core-down,
+#     or exit 22 when core-wants-token holds a token its -H @- stdin lacks);
+#   * getent passwd USER answers with the home in the home file, or not at
+#     all (no such user) when there is none;
 #   * id -u says 0 (or what uid holds); install drops -o/-g (there is no root
 #     user to hand files to here) and runs the real install;
 #   * stat -c %U says what owner holds; stat -c '%u %a' says root-owned 755
@@ -176,8 +179,23 @@ SH
 url=${!#}
 echo "curl $url" >>"$SHIM_STATE/calls.log"
 echo "curl-args $*" >>"$SHIM_STATE/calls.log"
+rm -f "$SHIM_STATE/curl-stdin"
+if [[ " $* " == *" @- "* ]]; then cat >"$SHIM_STATE/curl-stdin"; fi
 if [ -f "$SHIM_STATE/core-down" ]; then echo "curl: (7) Failed to connect" >&2; exit 7; fi
+if [ -f "$SHIM_STATE/core-wants-token" ] \
+    && ! grep -qxF -- "X-Device-Token: $(cat "$SHIM_STATE/core-wants-token")" "$SHIM_STATE/curl-stdin" 2>/dev/null; then
+  echo "curl: (22) The requested URL returned error: 401" >&2; exit 22
+fi
 cat "$SHIM_STATE/version.json"
+SH
+
+  cat >"$bin/getent" <<'SH'
+#!/usr/bin/env bash
+echo "getent $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = passwd ] && [ -f "$SHIM_STATE/home" ]; then
+  printf '%s:x:1001:1001::%s:/bin/bash\n' "${2-}" "$(cat "$SHIM_STATE/home")"; exit 0
+fi
+exit 2
 SH
 
   cat >"$bin/docker" <<'SH'
@@ -914,6 +932,39 @@ case_curl_is_hardened() {
   end_case
 }
 
+# CORE-21: the version read is on the device tier, so the installer brings
+# the household token the core mirrors into the service user's home.
+case_version_read_brings_the_household_token() {
+  new_case version_read_brings_the_household_token
+  local home=$CASE/home/tester tok="acorn maple-River 7"
+  mkdir -p "$home/.domovoi"
+  printf '%s\r\n' "$tok" >"$home/.domovoi/device-token.txt"   # a CRLF file, as Windows writes it
+  echo "$home" >"$STATE/home"
+  printf '%s' "$tok" >"$STATE/core-wants-token"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "reads it as the service user, not as root" \
+    called "sudo -n -u tester -- cat -- $home/.domovoi/device-token.txt"
+  check "sends it as the header, on stdin" grep -qxF -- "X-Device-Token: $tok" "$STATE/curl-stdin"
+  check "the same hardened curl" \
+    called "curl-args -q -fsS --noproxy * --proto =http,https --max-time 10 --max-filesize 1048576 -H @- http://127.0.0.1:6370/v1/admin/version"
+  check "never on a command line" not_called "$tok"
+  check "never printed" not_said "$tok"
+  check "records the running SHA" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_version_read_refused_without_the_token_stops() {
+  new_case version_read_refused_without_the_token_stops
+  printf 'acorn-maple-river' >"$STATE/core-wants-token"   # and no home, so no token file
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the core refused the read" said "refused the version read (curl exit 22)"
+  check "says where the token comes from" said "~tester/.domovoi/device-token.txt"
+  check "nothing installed, and HEAD not recorded" nothing_installed
+  end_case
+}
+
 case_ref_named_like_the_sha_stops() {
   new_case ref_named_like_the_sha_stops
   g branch -q "${SHA_A:0:7}" "$SHA_B"   # a branch spelled like the running SHA
@@ -1181,6 +1232,8 @@ CASES=(
   case_relative_state_dir_stops
   case_core_url_must_be_this_box
   case_curl_is_hardened
+  case_version_read_brings_the_household_token
+  case_version_read_refused_without_the_token_stops
   case_ref_named_like_the_sha_stops
   case_unit_write_fails_takes_the_grant_back
   case_daemon_reload_fails_takes_everything_back

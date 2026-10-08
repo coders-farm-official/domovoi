@@ -413,7 +413,9 @@ def test_version_reports_the_last_update_and_its_bad_sha(stub_version_probes):
 
 
 def test_version_keeps_the_scripts_private_details_on_the_box(stub_version_probes):
-    """The endpoint is open: backup paths and raw step output stay local."""
+    """Backup paths and raw step output stay on the box. The endpoint is a
+    household read since CORE-21, and every household device is not the
+    operator."""
     _write_result(ROLLED_BACK)
 
     last = asyncio.run(git_version.version_state())["last_update"]

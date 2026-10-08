@@ -41,6 +41,7 @@ from domovoi.admin_auth import (  # noqa: E402
     require_admin_security_read,
     require_chat_callback,
     require_device,
+    require_device_read,
     token_sha256,
 )
 from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
@@ -238,6 +239,27 @@ def _register_core_reapply_hooks() -> None:
 _STOP_WORKERS_SEC = 3.0
 
 
+def _warn_if_pairing_lenient() -> bool:
+    """Log, at WARNING, what lenient satellite pairing leaves open (CORE-11).
+
+    Strict is the field default; lenient only happens because the
+    household's .env says ``SATELLITE_PAIRING_STRICT=false``. That is a
+    legitimate choice for a hand-provisioned fleet that predates pairing,
+    but whoever reads the journal should not have to remember what it
+    costs. True when the warning was logged."""
+    if settings.satellite_pairing_strict:
+        return False
+    log.warning(
+        "satellite pairing is LENIENT (SATELLITE_PAIRING_STRICT=false): a "
+        "LAN device can connect without a pairing token under any room name "
+        "nobody has paired, and use it as that room (timers, music, voice "
+        "commands; never a drop-in or an announcement to another room). "
+        "Set SATELLITE_PAIRING_STRICT=true in domovoi/.env and approve each "
+        "satellite once to close it."
+    )
+    return True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # A fresh start, then SIGTERM/SIGINT flip the shutdown event the moment
@@ -273,6 +295,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await admin_auth_mod.ensure_device_token()
     except Exception as e:
         log.warning("device-token boot hook raised: %s", e)
+
+    # CORE-11: lenient pairing is a choice the household makes in .env,
+    # never a default, and every boot says what it leaves open.
+    _warn_if_pairing_lenient()
 
     # The connectivity probe starts here — before the voice seed and the
     # boot clip render, which ask it whether Microsoft voices are usable
@@ -1453,8 +1479,11 @@ class _AdminDropInEndBody(BaseModel):
     # Admin tier: this opens a live two-way microphone bridge between two
     # rooms from an HTTP call, with no one in either room asked first.
     # That is a physical-effect action on the household, so it takes an
-    # admin Bearer rather than the household device token.
-    dependencies=[Depends(require_admin_mutation)],
+    # admin Bearer rather than the household device token. The SECURITY
+    # tier's Bearer gate (CORE-14): no pre-setup grace, 501 until an admin
+    # exists, so a fresh box or one just put through --reset-admin is not
+    # a live microphone for the whole LAN.
+    dependencies=[Depends(require_admin_security)],
 )
 async def admin_dropin_start(body: _AdminDropInStartBody) -> dict[str, Any]:
     """Open a live two-way drop-in between two connected satellite rooms
@@ -1691,7 +1720,17 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
 # satellite-code channel above and domovoi/git_version.py).
 
 
-@app.get("/v1/admin/version")
+@app.get(
+    "/v1/admin/version",
+    # CORE-21: the device tier's READ half. Beside the running commit it
+    # carries the update unit's last run (its error text and step log),
+    # whether this host can restart itself, and the rolled-back SHA: what
+    # an operator needs, not something to answer every LAN host. The
+    # dashboard sends the household token (the web hop forwards it with
+    # the cookie), and the update installer reads the token file as the
+    # service user.
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_version() -> dict[str, Any]:
     """What this process is RUNNING, and what's checked out on disk.
 
@@ -3163,15 +3202,48 @@ async def _ensure_room_mpd(room_id: str) -> None:
     a stopped container fails with a bare connection-refused (WinError 1225 →
     502). ``ensure_room`` is idempotent and fast when the container is already
     running, so calling it here makes a cast self-healing rather than dead.
+
+    It never provisions a NEW room (CORE-13): a room is created by a
+    satellite's accepted hello, never by a name in a URL. A room the house
+    does not have — no ``mpd_rooms`` row, no pairing, no inventory row —
+    answers 404 here, before a port is allocated or a container started.
     """
     if settings.use_stubs:
         return
+    if not await _room_is_known(room_id):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"there is no room named {room_id!r} — a room appears once its "
+                "satellite has connected (or been adopted)"
+            ),
+        )
     try:
         from domovoi.mpd_provisioner import ensure_room
 
         await ensure_room(room_id)
     except Exception as e:  # noqa: BLE001 — non-fatal; the play call surfaces 502
         log.warning("admin music: ensure_room(%s) failed: %s", room_id, e)
+
+
+async def _room_is_known(room_id: str) -> bool:
+    """A room this house already has (see ``_ensure_room_mpd``). The live
+    port map answers for every room provisioned this boot without a query;
+    anything else is looked up. A lookup that fails is a 503, never a
+    silent yes."""
+    from domovoi.clients import mpd as mpd_module
+    from domovoi.db.repositories import SatellitesRepository
+
+    if room_id in mpd_module._room_ports:
+        return True
+    try:
+        async with session_scope() as s:
+            return await SatellitesRepository(s).room_is_known(room_id)
+    except Exception as e:  # noqa: BLE001 — fail closed, and say why
+        log.warning("admin music: could not look up room %s: %s", room_id, e)
+        raise HTTPException(
+            status_code=503, detail="could not check that room right now"
+        ) from e
 
 
 class _AdminPlayTracksBody(BaseModel):
@@ -3408,9 +3480,19 @@ async def _log_queue_edit(room_id: str, what: str) -> None:
         )
 
 
-@app.get("/v1/admin/music/queue/{room_id}")
+@app.get(
+    "/v1/admin/music/queue/{room_id}",
+    # CORE-13: the device tier's READ half, like the four queue edits beside
+    # it are on the device tier. It was the one music route with no gate,
+    # and it starts a room's player first. The web hop forwards the
+    # caller's token and cookie.
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_music_queue(room_id: str) -> dict[str, Any]:
-    """The room's live MPD queue, in order, plus which entry is playing."""
+    """The room's live MPD queue, in order, plus which entry is playing.
+
+    404 for a room the house does not have (``_ensure_room_mpd``): reading
+    a queue never creates one."""
     from domovoi.clients.mpd import get_mpd_client_for
 
     await _ensure_room_mpd(room_id)
@@ -3691,7 +3773,20 @@ async def admin_music_add_by_url(
     extractor surface), so this endpoint requires an admin session OR a
     URL a registered fulfiller's ``url_matcher`` allowlist recognizes,
     plus a per-source rate limit for the unauthenticated path.
+
+    That decides WHO may ask. WHERE the URL may point is decided the way
+    it is for every other URL the server will fetch (CORE-16), and an
+    admin session passes neither of these:
+
+    * under the "No internet" answer it is refused now (409, the
+      internet-off refusal), rather than queued to start fetching the
+      moment the answer changes;
+    * ``net_safety.check_outbound_url`` in store mode (the fulfiller
+      fetches later, so a name that does not resolve right now may still
+      be saved): a non-http(s) scheme, ``localhost``, or a host that is or
+      resolves to a loopback / private / link-local address is a 400.
     """
+    from domovoi import egress, net_safety
     from domovoi.db.repositories import IntentLogRepository
 
     decision = await check_outbound_fetch(
@@ -3700,6 +3795,13 @@ async def admin_music_add_by_url(
     )
     if not decision.allowed:
         raise HTTPException(status_code=decision.status, detail=decision.detail)
+    if egress.internet_turned_off():
+        raise egress.http_exception("add by URL")
+    reason = await net_safety.acheck_outbound_url(body.url, require_resolution=False)
+    if reason is not None:
+        raise HTTPException(
+            status_code=400, detail=f"refusing this URL — {reason}"
+        )
 
     async with session_scope() as s:
         result = await ACQUISITIONS.enqueue(
@@ -4846,6 +4948,10 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
     Anything else is closed 1008 here, before a ``PhoneDropinSession``
     exists, so the refusal leaves ``active_dropins`` untouched and the
     target room never learns a call was attempted.
+
+    No pre-setup grace (CORE-14): before an admin exists the upgrade is
+    closed 1008 with ``code: setup_required`` whatever it presents — the
+    WebSocket form of the security tier's 501.
     """
     from domovoi.phone_dropin import PhoneDropinSession
 
@@ -4855,7 +4961,15 @@ async def phone_dropin(ws: WebSocket, room_id: str) -> None:
             f"/v1/dropin/{room_id} from Origin {ws.headers.get('origin')!r}",
         )
         return
-    if not await admin_auth_mod.websocket_device_ok(ws):
+    verdict = await admin_auth_mod.check_live_mic_websocket(ws)
+    if verdict == "setup_required":
+        await _refuse_ws(
+            ws, "setup_required",
+            f"/v1/dropin/{room_id} before first-run admin setup — a room's "
+            "live microphone is not part of the pre-setup grace",
+        )
+        return
+    if verdict != "ok":
         await _refuse_ws(
             ws, "unauthorized",
             f"/v1/dropin/{room_id} needs {admin_auth_mod.DEVICE_TOKEN_HEADER} "

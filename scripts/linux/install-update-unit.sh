@@ -585,15 +585,55 @@ check_piper() {
   fi
 }
 
+# Where the core mirrors the household token, which GET /v1/admin/version
+# wants since CORE-21: ~/.domovoi/device-token.txt of the user it runs as.
+# Prints nothing when that user's home is unknown.
+device_token_file() {
+  local home=""
+  if command -v getent >/dev/null 2>&1; then
+    home=$(getent passwd "$SVC_USER" 2>/dev/null | cut -d: -f6) || home=""
+  fi
+  if [[ $home == /?* ]]; then printf '%s' "$home/.domovoi/device-token.txt"; fi
+}
+
+# read_device_token FILE: the token in FILE, read AS the service user and
+# never as root: the file sits in a directory that user controls, and root
+# following a link planted there would hand the core whatever root can
+# read. Prints nothing when there is no token to read.
+read_device_token() {
+  local tok="" LC_ALL=C
+  [ -n "${1-}" ] || return 0
+  tok=$(as_user cat -- "$1" 2>/dev/null | head -c 4096 | tr -d '\r\n') || tok=""
+  # Printable ASCII, as the core stores it: nothing that could end the
+  # header line and start another.
+  if [[ $tok =~ ^[[:print:]]+$ ]]; then printf '%s' "$tok"; fi
+}
+
 # applied_sha missing: the SHA the running core reports. Never HEAD: a pull
 # moves the checkout without touching what the core runs, and an update that
 # took HEAD as its baseline would see nothing to apply.
 read_running_sha() {
-  local url=${CORE_URL%/}/v1/admin/version body rc=0 running full
+  local url=${CORE_URL%/}/v1/admin/version body rc=0 running full token_file token
+  token_file=$(device_token_file)
+  token=$(read_device_token "$token_file")
   # -q first: no ~/.curlrc. Straight to the core on this box, never through
-  # a proxy from the environment, no other protocol, nothing large.
-  body=$(curl -q -fsS --noproxy '*' --proto '=http,https' --max-time 10 --max-filesize 1048576 \
-    "$url" 2>/dev/null) || rc=$?
+  # a proxy from the environment, no other protocol, nothing large. The
+  # token rides on stdin (-H @-), never on the command line, where any
+  # local user could read it.
+  if [ -n "$token" ]; then
+    body=$(printf 'X-Device-Token: %s\n' "$token" \
+      | curl -q -fsS --noproxy '*' --proto '=http,https' --max-time 10 --max-filesize 1048576 \
+        -H @- "$url" 2>/dev/null) || rc=$?
+  else
+    body=$(curl -q -fsS --noproxy '*' --proto '=http,https' --max-time 10 --max-filesize 1048576 \
+      "$url" 2>/dev/null) || rc=$?
+  fi
+  if [ "$rc" = 22 ]; then
+    # -f: the core answered, with an HTTP error (401 without the token).
+    stop "the core at $url refused the version read (curl exit 22), and no rollback baseline is recorded yet" \
+      "That read takes the household token, which this reads as $SVC_USER from ${token_file:-~$SVC_USER/.domovoi/device-token.txt}." \
+      "The core writes that file at every start. Check it is there and readable by $SVC_USER, then run this again."
+  fi
   if [ "$rc" != 0 ]; then
     stop "the core isn't answering at $url (curl exit $rc), and no rollback baseline is recorded yet" \
       "The baseline is the SHA the core is running, and only the running core can say which that is." \

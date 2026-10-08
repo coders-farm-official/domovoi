@@ -77,10 +77,6 @@ DEVICE_TIER = [
 
 ADMIN_TIER = [
     ("POST", "/v1/admin/version/pull"),
-    # CORE-2: opening a live two-way mic bridge between two rooms from
-    # an HTTP call, with nobody in either room asked first, is a
-    # physical-effect action - admin Bearer, not the household token.
-    ("POST", "/v1/admin/dropin/start"),
     ("POST", "/v1/admin/satellite/restart"),
     ("POST", "/v1/admin/satellite/display"),
     ("POST", "/v1/admin/satellite/{room_id}/config"),
@@ -92,6 +88,14 @@ ADMIN_TIER = [
     ("POST", "/v1/admin/sounds/setup-clips"),
     ("POST", "/v1/admin/library/reindex"),
     ("POST", "/v1/admin/library/enrich"),
+]
+
+# CORE-2 / CORE-14: opening a live two-way mic bridge between two rooms
+# from an HTTP call, with nobody in either room asked first, takes an
+# admin Bearer (never the household token) AND has no pre-setup grace —
+# the security tier's gate, 501 until an admin exists.
+LIVE_MIC_TIER = [
+    ("POST", "/v1/admin/dropin/start"),
 ]
 
 # ADD-1 — an admin READ: the dashboard cookie may render it, nothing less.
@@ -140,6 +144,16 @@ def test_code_adjacent_actions_are_on_the_admin_tier(method, path) -> None:
     sweeps takes an admin Bearer."""
     gates = _gates_for(method, path)
     assert admin_auth.require_admin_mutation in gates
+    assert admin_auth.require_device not in gates
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), LIVE_MIC_TIER, ids=[f"{m} {p}" for m, p in LIVE_MIC_TIER]
+)
+def test_an_http_drop_in_is_on_the_security_tier(method, path) -> None:
+    gates = _gates_for(method, path)
+    assert admin_auth.require_admin_security in gates
+    assert admin_auth.require_admin_mutation not in gates
     assert admin_auth.require_device not in gates
 
 
@@ -202,7 +216,7 @@ BODIES: dict[str, dict[str, Any]] = {
     "/v1/admin/music/queue/{room_id}/move": {"song_id": 1, "to_position": 0},
 }
 
-GATED_POSTS = DEVICE_TIER + ADMIN_TIER
+GATED_POSTS = DEVICE_TIER + ADMIN_TIER + LIVE_MIC_TIER
 
 
 @pytest.mark.asyncio
@@ -272,7 +286,8 @@ async def test_device_tier_route_accepts_the_household_token(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "path"), ADMIN_TIER, ids=[f"{m} {p}" for m, p in ADMIN_TIER]
+    ("method", "path"), ADMIN_TIER + LIVE_MIC_TIER,
+    ids=[f"{m} {p}" for m, p in ADMIN_TIER + LIVE_MIC_TIER],
 )
 async def test_admin_tier_route_refuses_the_household_token(
     method, path, monkeypatch
@@ -301,9 +316,26 @@ async def test_the_whole_gated_surface_still_answers_before_setup(monkeypatch) -
     works before anyone claims admin."""
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
-        for _method, path in GATED_POSTS:
+        for _method, path in DEVICE_TIER + ADMIN_TIER:
             r = await c.post(_sample_path(path), json=BODIES.get(path, {}))
-            assert r.status_code not in (401, 403), f"{path}: {r.status_code}"
+            assert r.status_code not in (401, 403, 501), f"{path}: {r.status_code}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path"), LIVE_MIC_TIER, ids=[f"{m} {p}" for m, p in LIVE_MIC_TIER]
+)
+async def test_an_http_drop_in_is_closed_before_setup(method, path, monkeypatch) -> None:
+    """CORE-14: the live microphone is not part of the pre-setup grace —
+    501, like the rest of the security tier, until an admin exists (and
+    again after --reset-admin), whatever is presented."""
+    install_fake_db(monkeypatch, admin=False, device_token=DEVICE_TOKEN)
+    async with _client() as c:
+        for headers in ({}, {HEADER: DEVICE_TOKEN}):
+            r = await c.post(
+                _sample_path(path), json=BODIES.get(path, {}), headers=headers
+            )
+            assert r.status_code == 501, r.text
 
 
 @pytest.mark.asyncio

@@ -8,11 +8,17 @@ Covers:
     authed reset deletes the row, reset of an unpaired room is a no-op).
 
 The validation cases (see domovoi/streaming.py):
-  1. token, no row        -> PAIR (claim), accept
+  1. token, no row        -> PARK for approval when strict (the default
+                             since CORE-11); PAIR (claim), accept when the
+                             household turned strict off
   2. token, row match     -> accept, bump last_seen_at
   3. token, row mismatch  -> REFUSE (impostor / wrong token)
   4. no token, row exists -> REFUSE (paired room requires its token)
-  5. no token, no row     -> accept (older) UNLESS strict, then REFUSE
+  5. no token, no row     -> REFUSE when strict (the default); accept
+                             (older), unauthenticated, when lenient
+
+The lenient cases opt in with the ``lenient`` fixture, the way a
+household opts in with ``SATELLITE_PAIRING_STRICT=false``.
 """
 
 from __future__ import annotations
@@ -90,6 +96,13 @@ class _FakeWS:
 
 def _session(room_id: str = "kitchen", host: str = "192.168.1.50") -> StreamSession:
     return StreamSession(_FakeWS(host), room_id)  # type: ignore[arg-type]
+
+
+@pytest.fixture
+def lenient(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``SATELLITE_PAIRING_STRICT=false``: what a household that opted out
+    of strict pairing runs. Strict is the default (CORE-11)."""
+    monkeypatch.setattr(settings, "satellite_pairing_strict", False)
 
 
 def _frame(sess: StreamSession) -> dict:
@@ -177,7 +190,7 @@ async def test_repo_reset_deletes_and_reports() -> None:
 
 
 @pytest.mark.asyncio
-async def test_case1_token_no_row_pairs_and_accepts() -> None:
+async def test_case1_token_no_row_pairs_and_accepts(lenient) -> None:
     sess = _session("kitchen")
     accepted = await sess._validate_pairing({"pairing_token": TOKEN})
     assert accepted is True
@@ -220,11 +233,13 @@ async def test_case4_no_token_but_paired_refuses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_case5_no_token_no_row_accepts_when_lenient() -> None:
+async def test_case5_no_token_no_row_accepts_when_lenient(lenient) -> None:
     sess = _session("garage")
     accepted = await sess._validate_pairing({})
     assert accepted is True
     assert sess.ws.sent == []
+    # Accepted, never authenticated: it may not reach another room.
+    assert sess.token_authenticated is False
     # Nothing was written — an unpaired room stays unpaired.
     async with SessionLocal() as s:
         assert await SatellitePairingRepository(s).get_pairing("garage") is None
@@ -239,6 +254,20 @@ async def test_case5_no_token_no_row_refuses_when_strict(
     accepted = await sess._validate_pairing({})
     assert accepted is False
     assert "pairing_rejected" in sess.ws.sent[-1]
+
+
+@pytest.mark.asyncio
+async def test_case5_refuses_a_tokenless_new_room_by_default() -> None:
+    """CORE-11: nothing set anywhere means strict. A LAN client that
+    names itself a room nobody paired and brings no token is refused, so
+    it never becomes a room that could ask for a drop-in."""
+    assert settings.satellite_pairing_strict is True
+    sess = _session("zz-attacker")
+    assert await sess._validate_pairing({"supports_full_duplex": True}) is False
+    assert _frame(sess)["reason"] == "pairing_rejected"
+    async with SessionLocal() as s:
+        assert await SatellitePairingRepository(s).get_pairing("zz-attacker") is None
+        assert await SatelliteApprovalRepository(s).list_pending() == []
 
 
 @pytest.mark.asyncio
@@ -314,7 +343,7 @@ async def test_strict_lets_an_approved_room_back_in(
 
 
 @pytest.mark.asyncio
-async def test_lenient_still_pairs_a_token_bearing_first_connect() -> None:
+async def test_lenient_still_pairs_a_token_bearing_first_connect(lenient) -> None:
     """With strict off, a hand-provisioned satellite that brings a token
     and no code keeps the historical trust-on-first-use claim — upgrading
     the server must not strand a fleet that predates approvals."""
