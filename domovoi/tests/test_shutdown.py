@@ -263,17 +263,22 @@ def test_main_hands_uvicorn_a_graceful_timeout_and_arms_the_watchdog(monkeypatch
 
 def test_the_bounds_nest_inside_systemds_timeout() -> None:
     """grace + teardown fit inside the watchdog's deadline, and the
-    deadline inside the documented TimeoutStopSec (docs/LINUX_HOST.md), so
-    the core's own account of a hang reaches the journal before a SIGKILL."""
+    deadline inside the shipped unit's TimeoutStopSec
+    (scripts/linux/units/domovoi-core.service, which docs/LINUX_HOST.md
+    installs), so the core's own account of a hang reaches the journal
+    before a SIGKILL."""
     assert 0 < settings.shutdown_grace_sec
     assert settings.shutdown_grace_sec + settings.shutdown_teardown_sec < settings.shutdown_deadline_sec
+    unit = (REPO_ROOT / "scripts" / "linux" / "units" / "domovoi-core.service").read_text(encoding="utf-8")
+    service = unit[unit.index("[Service]"):unit.index("[Install]")]
+    stop = [line for line in service.splitlines() if line.startswith("TimeoutStopSec=")]
+    assert stop, "the shipped core unit has no TimeoutStopSec"
+    seconds = stop[0].split("=", 1)[1].strip()
+    assert settings.shutdown_deadline_sec < float(seconds)
+    assert "KillMode=" in service
+    # And the page that installs it says the same bound.
     doc = (REPO_ROOT / "docs" / "LINUX_HOST.md").read_text(encoding="utf-8")
-    core_unit = doc[doc.index("domovoi-core.service`**"):]
-    core_unit = core_unit[:core_unit.index("[Install]")]
-    stop = [line for line in core_unit.splitlines() if line.startswith("TimeoutStopSec=")]
-    assert stop, "the documented core unit has no TimeoutStopSec"
-    assert settings.shutdown_deadline_sec < float(stop[0].split("=", 1)[1])
-    assert "KillMode=" in core_unit
+    assert f"**`TimeoutStopSec={seconds}`**" in doc
 
 
 def test_the_lifespan_teardown_is_bounded_even_by_a_plugin_that_hangs(monkeypatch) -> None:
