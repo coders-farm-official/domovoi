@@ -18,6 +18,7 @@ random. Every mutating endpoint depends on
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -72,6 +73,15 @@ log = logging.getLogger(__name__)
 MAX_ZIP_BYTES = 100 * 1024 * 1024          # compressed upload / download
 MAX_EXTRACTED_BYTES = 500 * 1024 * 1024    # sum of uncompressed sizes
 MAX_ZIP_ENTRIES = 10_000
+# What the stage-time validators PARSE before the trust screen — the
+# manifest and lockfile parsers, the SQL lint, the web-import AST check
+# and the endpoint scan — is bounded on its own (A7-04): a 100 MB zip of
+# highly compressible source can expand into one 500 MB file whose parse
+# tree is many times larger than the file. Real plugins are a few hundred
+# KB of source in all.
+MAX_PARSED_FILE_BYTES = 2 * 1024 * 1024    # one .py / .sql / .toml / lockfile
+MAX_PARSED_TOTAL_BYTES = 32 * 1024 * 1024  # all of them together
+_PARSED_SUFFIXES = frozenset({".py", ".pyi", ".sql", ".toml", ".lock"})
 
 _RESERVED_DEVICE_NAMES = frozenset(
     {"con", "prn", "aux", "nul"}
@@ -246,8 +256,73 @@ def _zip_root_prefix(zf: zipfile.ZipFile) -> str:
     )
 
 
+def _parsed_file_too_large(rel: str, size: int) -> InstallError:
+    return InstallError(
+        "plugin_file_too_large",
+        f"{rel} is {size} bytes; a file the installer reads before the trust "
+        f"screen (.py, .sql, .toml, lockfiles) may be at most "
+        f"{MAX_PARSED_FILE_BYTES} bytes",
+        details={"file": rel, "size": size, "cap": MAX_PARSED_FILE_BYTES},
+    )
+
+
+def check_parsed_file_sizes(zf: zipfile.ZipFile, prefix: str) -> None:
+    """Refuse an archive whose source files are too big to parse safely
+    (A7-04): each file the stage-time validators read is held to
+    :data:`MAX_PARSED_FILE_BYTES`, and all of them together to
+    :data:`MAX_PARSED_TOTAL_BYTES`. Read from the zip's own sizes (the
+    extraction cannot exceed them: zipfile stops at the declared size and
+    checks the CRC), before a byte is written."""
+    total = 0
+    for info in zf.infolist():
+        name = info.filename
+        if prefix and not name.startswith(prefix):
+            continue
+        rel = name[len(prefix):]
+        if not rel or rel.endswith("/"):
+            continue
+        if PurePosixPath(rel).suffix.lower() not in _PARSED_SUFFIXES:
+            continue
+        if info.file_size > MAX_PARSED_FILE_BYTES:
+            raise _parsed_file_too_large(rel, info.file_size)
+        total += info.file_size
+        if total > MAX_PARSED_TOTAL_BYTES:
+            raise InstallError(
+                "plugin_file_too_large",
+                f"the archive's source files add up to more than "
+                f"{MAX_PARSED_TOTAL_BYTES} bytes",
+                details={"cap": MAX_PARSED_TOTAL_BYTES},
+            )
+
+
+def _check_declared_file_sizes(stage_dir: Path, manifest: PluginManifest) -> None:
+    """The files the manifest names that the validators read whole — the
+    lockfiles (any file name) and the satellite post-install script — held
+    to the same per-file ceiling as the source files."""
+    named = [manifest.lockfile]
+    if manifest.satellite is not None:
+        named += [manifest.satellite.pip_lockfile, manifest.satellite.post_install]
+    for rel in named:
+        if not rel:
+            continue
+        try:
+            size = (stage_dir / rel).stat().st_size
+        except (OSError, ValueError):
+            continue          # missing: the layout check names it
+        if size > MAX_PARSED_FILE_BYTES:
+            raise _parsed_file_too_large(rel, size)
+
+
+def _hash_file_into(h: Any, path: Path) -> None:
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(block)
+
+
 def hash_tree(root: Path) -> str:
-    """Deterministic sha256 over the staged tree (paths + contents)."""
+    """Deterministic sha256 over the staged tree (paths + contents).
+    Files are read in blocks, so a large payload file is hashed without
+    being held in memory whole."""
     h = hashlib.sha256()
     for path in sorted(root.rglob("*")):
         rel = path.relative_to(root).as_posix()
@@ -255,7 +330,7 @@ def hash_tree(root: Path) -> str:
             h.update(f"D:{rel}\n".encode())
         else:
             h.update(f"F:{rel}:{path.stat().st_size}\n".encode())
-            h.update(path.read_bytes())
+            _hash_file_into(h, path)
     return h.hexdigest()
 
 
@@ -557,6 +632,64 @@ class StagedInstall:
 _STAGED: dict[str, StagedInstall] = {}
 
 
+def _extract_and_validate(
+    zf: zipfile.ZipFile, prefix: str, stage_dir: Path
+) -> PluginManifest:
+    """§3.2 steps 3–5, blocking: extract the archive into ``stage_dir``,
+    parse and validate the manifest and layout, lint every migration and
+    run the web-import tripwire. Runs in a worker thread (see
+    :func:`stage_zip`); raises InstallError."""
+    for info in zf.infolist():
+        name = info.filename
+        if prefix and not name.startswith(prefix):
+            continue
+        rel = name[len(prefix):]
+        if not rel or rel.endswith("/"):
+            continue
+        target = stage_dir / PurePosixPath(rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+    # Step 4 — manifest parse + validation + layout.
+    manifest_path = stage_dir / "domovoi-plugin.toml"
+    if not manifest_path.is_file():
+        raise InstallError("manifest_missing", "no domovoi-plugin.toml")
+    try:
+        manifest = parse_manifest(manifest_path.read_text(encoding="utf-8"))
+    except ManifestError as e:
+        raise InstallError("manifest_invalid", str(e))
+    _check_declared_file_sizes(stage_dir, manifest)
+    # Lockfile shape first (§7.4): a smuggled option or a non-pin
+    # requirement gets its precise code (lockfile_option /
+    # lockfile_requirement) before the generic layout check, which
+    # parses the same file for the direct-dependency cross-check,
+    # could fold it into layout_invalid. A MISSING lockfile stays a
+    # layout error.
+    if manifest.python_requirements:
+        lock = stage_dir / (manifest.lockfile or "requirements.lock")
+        if lock.is_file():
+            validate_lockfile(lock)
+    dir_errors = validate_plugin_dir(stage_dir, manifest)
+    if dir_errors:
+        raise InstallError("layout_invalid", "; ".join(dir_errors))
+
+    # Install-time SQL lint over every migration file (§6.2).
+    for mf in discover_migrations(stage_dir / manifest.migrations_dir):
+        violations = sql_lint(mf.sql, manifest.slug)
+        if violations:
+            raise InstallError(
+                "migration_lint",
+                f"{mf.filename}: " + "; ".join(violations),
+            )
+
+    # Step 5 — web-entry import hygiene (AST tripwire).
+    hygiene = check_web_import_hygiene(stage_dir, manifest)
+    if hygiene:
+        raise InstallError("web_import_hygiene", "; ".join(hygiene))
+    return manifest
+
+
 async def stage_zip(
     data: bytes,
     *,
@@ -577,58 +710,19 @@ async def stage_zip(
 
     validate_zip_safety(zf)                       # step 2
     prefix = _zip_root_prefix(zf)                 # step 3
+    check_parsed_file_sizes(zf, prefix)           # A7-04, before any write
 
     staged_id = secrets.token_hex(16)             # 128-bit random (step 8)
     stage_dir = staging_root() / staged_id
     stage_dir.mkdir(parents=True, exist_ok=False)
     try:
-        for info in zf.infolist():
-            name = info.filename
-            if prefix and not name.startswith(prefix):
-                continue
-            rel = name[len(prefix):]
-            if not rel or rel.endswith("/"):
-                continue
-            target = stage_dir / PurePosixPath(rel)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with zf.open(info) as src, open(target, "wb") as dst:
-                shutil.copyfileobj(src, dst)
-
-        # Step 4 — manifest parse + validation + layout.
-        manifest_path = stage_dir / "domovoi-plugin.toml"
-        if not manifest_path.is_file():
-            raise InstallError("manifest_missing", "no domovoi-plugin.toml")
-        try:
-            manifest = parse_manifest(manifest_path.read_text(encoding="utf-8"))
-        except ManifestError as e:
-            raise InstallError("manifest_invalid", str(e))
-        # Lockfile shape first (§7.4): a smuggled option or a non-pin
-        # requirement gets its precise code (lockfile_option /
-        # lockfile_requirement) before the generic layout check, which
-        # parses the same file for the direct-dependency cross-check,
-        # could fold it into layout_invalid. A MISSING lockfile stays a
-        # layout error.
-        if manifest.python_requirements:
-            lock = stage_dir / (manifest.lockfile or "requirements.lock")
-            if lock.is_file():
-                validate_lockfile(lock)
-        dir_errors = validate_plugin_dir(stage_dir, manifest)
-        if dir_errors:
-            raise InstallError("layout_invalid", "; ".join(dir_errors))
-
-        # Install-time SQL lint over every migration file (§6.2).
-        for mf in discover_migrations(stage_dir / manifest.migrations_dir):
-            violations = sql_lint(mf.sql, manifest.slug)
-            if violations:
-                raise InstallError(
-                    "migration_lint",
-                    f"{mf.filename}: " + "; ".join(violations),
-                )
-
-        # Step 5 — web-entry import hygiene (AST tripwire).
-        hygiene = check_web_import_hygiene(stage_dir, manifest)
-        if hygiene:
-            raise InstallError("web_import_hygiene", "; ".join(hygiene))
+        # Steps 3–5 are disk and CPU work (up to the extraction cap, then
+        # parsers): a worker thread, so the core's event loop — the
+        # satellites' sockets included — keeps running while a plugin is
+        # previewed (A7-04).
+        manifest = await asyncio.to_thread(
+            _extract_and_validate, zf, prefix, stage_dir
+        )
 
         # Step 6 — slug collision / orphan schema.
         existing = await reg.get_plugin(manifest.slug)
@@ -707,15 +801,26 @@ async def stage_zip(
         # Step 7 — inert pip dry-run (only when python requirements exist).
         # Validate the lockfile FIRST: a poisoned lockfile (global pip
         # options) must fail here, before pip is ever invoked (§7.4).
+        # pip, the tree hash and the endpoint scan are blocking (a
+        # subprocess for up to ten minutes, a read of the whole tree):
+        # worker threads, like the validators above.
         transitive: list[dict[str, Any]] = []
         if manifest.python_requirements:
             lock = stage_dir / (manifest.lockfile or "requirements.lock")
             validate_lockfile(lock)
-            transitive = pip_dry_run(lock)["resolved"]
+            transitive = (await asyncio.to_thread(pip_dry_run, lock))["resolved"]
 
-        tree_hash = hash_tree(stage_dir)          # step 8
+        tree_hash = await asyncio.to_thread(hash_tree, stage_dir)   # step 8
 
-        marked = _collect_marked_endpoints(stage_dir, manifest)
+        marked = await asyncio.to_thread(
+            _collect_marked_endpoints, stage_dir, manifest
+        )
+        migration_count = len(
+            await asyncio.to_thread(
+                discover_migrations, stage_dir / manifest.migrations_dir
+            )
+        )
+        satellite = await asyncio.to_thread(_satellite_preview, stage_dir, manifest)
         preview = {
             "slug": manifest.slug,
             "name": manifest.name,
@@ -736,9 +841,7 @@ async def stage_zip(
                  "corpus": list(h.corpus)}
                 for h in manifest.handlers
             ],
-            "migration_count": len(
-                discover_migrations(stage_dir / manifest.migrations_dir)
-            ),
+            "migration_count": migration_count,
             "capabilities": list(manifest.provides),
             # Who can call the plugin without an admin session, one list
             # per tier: open_endpoints answer with no credential at all,
@@ -749,7 +852,7 @@ async def stage_zip(
             # (§7.5): the package list, the script, the pinned pips and the
             # size of the file payload — its own panel on the trust screen,
             # never folded into a permission flag.
-            "satellite": _satellite_preview(stage_dir, manifest),
+            "satellite": satellite,
             "trust_statement": TRUST_STATEMENT,
         }
         staged = StagedInstall(
@@ -921,7 +1024,9 @@ async def confirm_install(
 
     # Step 9a — TOCTOU close: re-hash the staged tree.
     meta_file = staged.root / ".domovoi-staging.json"
-    tree_now = hash_tree_excluding(staged.root, {meta_file.name})
+    tree_now = await asyncio.to_thread(
+        hash_tree_excluding, staged.root, {meta_file.name}
+    )
     if tree_now != staged.tree_hash:
         _drop_staged(staged)
         raise InstallError(
@@ -945,7 +1050,8 @@ async def confirm_install(
         # Step 9b — real pip install.
         if manifest.python_requirements:
             lock = staged.root / (manifest.lockfile or "requirements.lock")
-            pip_report = pip_install(lock)
+            # Blocking for up to half an hour: off the event loop.
+            pip_report = await asyncio.to_thread(pip_install, lock)
 
         # Step 10 — migrations, both DBs (the runner owns fresh-install
         # both-or-neither internally).
@@ -1083,7 +1189,7 @@ def hash_tree_excluding(root: Path, exclude_names: set[str]) -> str:
             h.update(f"D:{rel}\n".encode())
         else:
             h.update(f"F:{rel}:{path.stat().st_size}\n".encode())
-            h.update(path.read_bytes())
+            _hash_file_into(h, path)
     return h.hexdigest()
 
 
@@ -1113,8 +1219,9 @@ async def _rollback(
         except Exception:  # pragma: no cover
             log.exception("rollback: schema drop failed")
     if pip_report:
-        pip_uninstall(
-            [d["name"] for d in pip_report.get("newly_installed", [])]
+        await asyncio.to_thread(
+            pip_uninstall,
+            [d["name"] for d in pip_report.get("newly_installed", [])],
         )
     _drop_staged(staged)
 
@@ -1219,7 +1326,7 @@ async def uninstall_plugin(slug: str, *, data: str = "keep") -> dict[str, Any]:
                 continue
             for req in ((other.manifest.get("requirements") or {}).get("python") or []):
                 others.add(req.split("==")[0].split("[")[0].lower())
-        pip_uninstall(sorted(newly - others))
+        await asyncio.to_thread(pip_uninstall, sorted(newly - others))
 
     # 4/5. Bundled → tombstone (never delete dir or row); else remove the
     #      row, and the files only when the installer put them there
