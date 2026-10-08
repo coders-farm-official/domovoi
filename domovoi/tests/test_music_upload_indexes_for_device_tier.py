@@ -138,6 +138,7 @@ def _device_request() -> Request:
         {
             "type": "http",
             "headers": [(HEADER.lower().encode(), DEVICE_TOKEN.encode())],
+            "query_string": b"",
             "client": ("192.168.1.50", 12345),
         }
     )

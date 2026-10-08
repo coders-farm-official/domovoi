@@ -456,6 +456,27 @@ def caller_device_id(request: Request, body_device_id: Optional[str] = None) -> 
     return None
 
 
+async def assert_caller_may_write(
+    request: Request, device_id: Optional[str] = None
+) -> None:
+    """The per-device write block for a caller arriving through a door
+    other than ``/api/files``: identify it the way :func:`caller_device_id`
+    does (body, ``X-Device-Id``, ``?device_id=``, the registration cookie)
+    and ``403`` when that device is blocked. A caller that names itself
+    nowhere is not identified, and so not blocked — the limit
+    :func:`caller_device_id` states.
+
+    The ``files_device_blocks`` row reads "block a device from uploading,
+    moving or importing ANYWHERE", so every route that writes into a
+    library calls this — the documents saves (via
+    :func:`assert_documents_write_allowed`) and the music library upload
+    (WEB-12), which writes into ``core:music`` without passing here.
+    """
+    caller = caller_device_id(request, device_id)
+    if caller:
+        await _assert_can_write(caller)
+
+
 async def assert_documents_write_allowed(
     request: Request, device_id: Optional[str] = None
 ) -> None:
@@ -492,9 +513,7 @@ async def assert_documents_write_allowed(
     that closes and what it leaves open (the Android app, which keeps no
     cookie jar).
     """
-    caller = caller_device_id(request, device_id)
-    if caller:
-        await _assert_can_write(caller)
+    await assert_caller_may_write(request, device_id)
     # The admin-write test is applied to the library ID, BEFORE the record
     # is resolved. ``core_library`` answers None whenever ``root_rejection``
     # turns documents_dir down — most often "does not exist" on a headless

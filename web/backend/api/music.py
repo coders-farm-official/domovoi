@@ -23,9 +23,9 @@ import os
 import stat
 import zipfile
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -563,6 +563,7 @@ def _unique_path(dirpath: Path, name: str) -> Path:
 async def upload_to_library(
     request: Request,
     files: list[UploadFile] = File(...),
+    device_id: Annotated[str | None, Form(max_length=64)] = None,
 ) -> LibraryUploadResult:
     """Upload audio into the library from the browser.
 
@@ -581,8 +582,19 @@ async def upload_to_library(
     If the index cannot run the files are still saved
     (``reindex_triggered=false``) and get picked up by the indexer on
     its next startup sweep.
+
+    A third door into a library (WEB-12): the Files write block ("block a
+    device from uploading, moving or importing anywhere") applies here
+    too, before anything is written. The caller is identified as the
+    Files and Documents doors identify it — an optional ``device_id``
+    form field, ``X-Device-Id``, ``?device_id=`` or the registration
+    cookie every browser carries — and a blocked device gets ``403``.
     """
     from domovoi.config import settings as core_settings
+    # Inside the call: ``files`` imports this module at import time.
+    from web.backend.api import files as files_api
+
+    await files_api.assert_caller_may_write(request, device_id)
 
     music_dir = Path(core_settings.music_dir).expanduser()
     dest = music_dir / _UPLOAD_SUBDIR

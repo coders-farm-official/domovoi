@@ -315,7 +315,10 @@ apply the same secret-shaped-name filter — on reads as well as saves since
 2026-10-08: a `.env`, a `*.pem` / `*.key` / `*.p12` or a `pairing_token`
 sitting in `~/Documents` is not listed, zipped or served by either door
 (WEB-14; before, the documents door listed and served what the Files door
-withheld). One difference remains, and it
+withheld). The music library has a door of its own, the dashboard's music
+upload (`POST /api/music/library/upload`), and since 2026-10-08 it asks the
+same block before writing a byte (WEB-12), identifying the caller the same
+way. One difference remains, and it
 is a client limitation rather than a decision: `device_id` is **required**
 on an `/api/files` write and **optional** on a documents save, because the
 in-app editors and the Android Documents screen do not name a device on
