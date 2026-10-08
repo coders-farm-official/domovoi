@@ -269,6 +269,17 @@ run each room's MPD container. Without group membership it would need
 sudo, which it won't do. Log out and back in, then confirm with `docker ps`
 that you get output rather than a permission error.
 
+> **The `docker` group is root.** Anyone in it can start a container that
+> mounts the host's `/` and change anything on the box as root; Docker's
+> own documentation says the same. So the account the services run as is,
+> in effect, root: a bug that lets someone run code inside the core is a
+> root compromise of the server, whatever the [unit
+> sandboxing](#sandboxing-the-units) below holds back. Make that account
+> one that does nothing else: the `domovoi` service user under [Make it an
+> appliance](#make-it-an-appliance) (`sudo usermod -aG docker domovoi`),
+> not a login you also browse or read mail with, and add no one else to
+> the group.
+
 Ollama, from a pinned release checked against its SHA-256. (Ollama's
 `curl -fsSL https://ollama.com/install.sh | sh` fetches whatever is newest
 and checks no hash; the steps below are what that script does on a
@@ -447,79 +458,28 @@ This is where Linux earns its keep. The runbook warns that `dev.ps1` is a
 foreground development script that dies with its terminal — on Linux you
 replace it properly with three systemd units.
 
-Assumes the repo at `/opt/domovoi`, a venv at `/opt/domovoi/.venv`, and a
-service user named `domovoi` who is in the `docker` group. Adjust to taste.
+The three units ship with the checkout, in
+[`scripts/linux/units/`](../scripts/linux/units/). They assume the repo at
+`/opt/domovoi`, a venv at `/opt/domovoi/.venv`, and a service user named
+`domovoi` with its home at `/home/domovoi`, in the `docker` group (which
+[makes it root](#install), in effect). Install them as they are:
 
-**`/etc/systemd/system/domovoi-db.service`** — brings up Postgres and runs
-migrations before anything connects. Exactly what `dev.sh` does first:
-
-```ini
-[Unit]
-Description=Domovoi database (Postgres + migrations)
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-User=domovoi
-WorkingDirectory=/opt/domovoi/domovoi
-ExecStart=/usr/bin/docker compose up -d postgres
-ExecStart=/usr/bin/docker compose run --rm flyway
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo install -m 0644 /opt/domovoi/scripts/linux/units/domovoi-db.service   /opt/domovoi/scripts/linux/units/domovoi-core.service   /opt/domovoi/scripts/linux/units/domovoi-web.service /etc/systemd/system/
 ```
 
-**`/etc/systemd/system/domovoi-core.service`** — the voice service on
-:6370:
+A different user, checkout or home? Change `User=`, `WorkingDirectory=`,
+`ExecStart=`, `Environment=HOME=` and the `ReadWritePaths=` / `BindPaths=`
+lines of the copies in `/etc/systemd/system/` to match; [Sandboxing the
+units](#sandboxing-the-units) says what each of those lines must cover.
 
-```ini
-[Unit]
-Description=Domovoi core voice service
-After=domovoi-db.service ollama.service
-Requires=domovoi-db.service
-Wants=ollama.service
-
-[Service]
-Type=simple
-User=domovoi
-WorkingDirectory=/opt/domovoi
-Environment=PYTHONUNBUFFERED=1
-Environment=HOME=/home/domovoi
-ExecStart=/opt/domovoi/.venv/bin/python -m domovoi.main
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-KillMode=control-group
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**`/etc/systemd/system/domovoi-web.service`** — the dashboard on :6369:
-
-```ini
-[Unit]
-Description=Domovoi web dashboard
-After=domovoi-core.service
-Wants=domovoi-core.service
-
-[Service]
-Type=simple
-User=domovoi
-WorkingDirectory=/opt/domovoi
-Environment=PYTHONUNBUFFERED=1
-Environment=HOME=/home/domovoi
-ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
+- **`domovoi-db.service`** brings up Postgres and runs the migrations
+  before anything connects, exactly what `dev.sh` does first
+  (`docker compose up -d postgres`, then `docker compose run --rm flyway`).
+- **`domovoi-core.service`** is the voice service on :6370
+  (`/opt/domovoi/.venv/bin/python -m domovoi.main`).
+- **`domovoi-web.service`** is the dashboard on :6369
+  (`/opt/domovoi/.venv/bin/python -m web.backend.main`).
 
 Note `WorkingDirectory` differs: the two Python services run from the
 **repo root** so `python -m` resolves the packages, while the database
@@ -593,6 +553,74 @@ tell you so.
 whole house returns — Docker, Postgres, both services, every satellite —
 without you logging in. That's the difference between a demo and an
 appliance, and it's the thing Linux makes genuinely easy.
+
+### Sandboxing the units
+
+The shipped units carry systemd's sandboxing. None of it changes what
+Domovoi does; it bounds what a process gone wrong can reach directly:
+
+- **Read-only system.** `ProtectSystem=strict` mounts everything read-only
+  except what `ReadWritePaths=` names: the checkout and its venv
+  (`/opt/domovoi`: pulls, plugin installs, `domovoi/.env`), the usual
+  mount points for media disks and cards (`/mnt`, `/media`, `/run/media`,
+  `/srv`; a missing one is skipped), and the service user's home, the only
+  home the core and web can see at all (`ProtectHome=tmpfs` with
+  `BindPaths=/home/domovoi`). The home holds `~/.domovoi/`, the model
+  caches and the default `~/Music`, `~/Pictures` and `~/Documents`.
+  `domovoi-db` sees homes read-only and writes only its own.
+- **Private `/tmp`** per unit, files the services create are not readable
+  by other accounts (`UMask=0027`), and the kernel's tunables, modules,
+  logs, control groups and hostname are off limits.
+- **No set-uid files, no realtime scheduling, no new namespaces, native
+  system calls only,** and sockets limited to local, IPv4, IPv6 and
+  netlink.
+- **`domovoi-web` and `domovoi-db`** also run with `NoNewPrivileges=yes`
+  and no capabilities at all; `domovoi-db`, which only drives the `docker`
+  CLI, gives up devices, the clock and writable-executable memory too.
+
+What is deliberately left out, and why:
+
+- **`NoNewPrivileges` on the core.** The version panel's restart runs
+  `sudo -n systemctl ...` from the core ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)),
+  and `NoNewPrivileges` stops sudo working. The web never runs sudo (its
+  Restart button asks the core), so it keeps the setting.
+- **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
+  They hide device nodes: a GPU, an SDR stick for the radio, the block
+  devices the dashboard reads a satellite card's label from.
+- **`MemoryDenyWriteExecute` on core and web.** The speech and audio stack
+  (numba, torch, onnxruntime) compiles code at run time.
+- **The Docker socket.** No unit setting can narrow it: the core needs it
+  for the room players, and through it the service user can still do
+  anything as root ([Install](#install)). The sandbox narrows the direct
+  paths only.
+
+**Media somewhere else**, say `/data/music`? Add it with a drop-in for the
+core and the web (`sudo systemctl edit domovoi-core`, then the same for
+`domovoi-web`):
+
+```ini
+[Service]
+ReadWritePaths=/data/music
+```
+
+**Check it** after `daemon-reload` and a restart: `systemd-analyze security
+domovoi-core` scores the exposure (the units this page listed before
+scored 9.0 "UNSAFE" each; the shipped ones score about 5.9 for the core,
+3.5 for the web and 1.8 for `domovoi-db`), Settings → Version still offers
+**Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
+satellite turn answers, and a room's music starts (the core runs
+`docker`).
+
+**Already running units from an older copy of this page?** If they match
+this page's layout, install the shipped files over them as above, then
+`sudo systemctl daemon-reload` and restart the three. If you changed
+paths or the user, copy the sandboxing block from the shipped file into a
+drop-in instead (`sudo systemctl edit domovoi-core`, and the same for the
+other two), with your paths in `ReadWritePaths=` and `BindPaths=`.
+
+`domovoi-update.service` is not sandboxed: it runs as root to stop and
+start the other units, back up the database, rebuild the room image and
+roll everything back ([Updates from the dashboard](#updates-from-the-dashboard)).
 
 ### Internet or not
 
