@@ -560,7 +560,10 @@ login, so there is nobody in front of it to pair it — which is why it
 satellite, set `[display] kiosk_url` to that; see
 `satellite/VIDEO_SATELLITE.md`). The page stores the token the way the
 pair prompt stores a pasted one (per server, in the kiosk browser's own
-profile) and takes it back out of the address. Exactly what each call on
+profile) and takes it back out of the address. A browser that already
+holds a different token keeps it unless the address's token passes one
+read on the device tier first (that token alone, no cookie), so a link to
+`display.html` carrying a wrong token cannot unpair a paired browser. Exactly what each call on
 the screen needs, named rather than implied:
 
 | Kiosk call | Tier | What it gives away, or does |
@@ -569,11 +572,13 @@ the screen needs, named rather than implied:
 | `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. Not whose device queued it: `added_by` is `null` without a household credential. |
 | `GET /api/satellites/{room_id}` | Device read (2026-10-08) | The room's label and its idle mode. Unpaired, the kiosk shows the room id and the clock instead. |
 | `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Open at the web hop; **device tier at the core hop** | Pauses, resumes, stops or skips that room's playback — the kiosk's transport row. The web route asks for nothing, but it forwards to `/v1/admin/music/{action}/{room_id}`, which takes the household token, so the buttons work only on a paired kiosk and a bare LAN request is `401`. |
-| `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk polls instead. |
+| `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk is refused, so after its first read its screen does not update. |
 
 That is the whole kiosk surface. What an unpaired client on your Wi-Fi can
 do with it is see what every room is playing; every pause, resume, stop
-and skip needs the household token. All four verbs are writes, so they
+and skip needs the household token. An unpaired kiosk is not a working
+kiosk: it shows the first answer it got and then freezes, because the
+live push refuses it and nothing else refreshes it. All four verbs are writes, so they
 also need the `X-Requested-With` header like every other write, which
 keeps a page on another site from triggering them from a browser you
 happen to have open. A kiosk URL that carries the token puts the
