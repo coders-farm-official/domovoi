@@ -3,8 +3,9 @@ package com.domovoi.app.ui.shell
 import androidx.compose.runtime.compositionLocalOf
 
 /**
- * Which shell [AppShell] renders: the on-device media shell (music + videos
- * from MediaStore, no domovoi needed) or the full server workspace.
+ * Which shell [AppShell] renders: the on-device shell (music + videos from
+ * MediaStore, and the phone's own files; no domovoi needed) or the full
+ * server workspace.
  */
 internal enum class ShellMode { Local, Workspace }
 

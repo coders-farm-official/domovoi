@@ -408,7 +408,7 @@ fun ConnectionDialog(onDismiss: () -> Unit) {
                     ModeOption(
                         icon = Icons.Filled.PhoneAndroid,
                         title = "this phone",
-                        sub = "music and videos on the phone",
+                        sub = "music, videos and files on the phone",
                         selected = onPhone,
                         enabled = true,
                         modifier = Modifier.weight(1f),

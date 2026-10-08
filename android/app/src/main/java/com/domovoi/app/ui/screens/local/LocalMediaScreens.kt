@@ -67,7 +67,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * Offline/local mode screens: on-device music + videos via MediaStore
- * (data/LocalMedia.kt). These are the only two tabs when no domovoi is
+ * (data/LocalMedia.kt). These are two of the local shell's three tabs (the
+ * third is Files, ui/screens/files/PhoneFiles.kt) when no domovoi is
  * connected; files saved by the connected-mode download actions land in
  * Downloads/Domovoi, get indexed by MediaStore, and show up here.
  */

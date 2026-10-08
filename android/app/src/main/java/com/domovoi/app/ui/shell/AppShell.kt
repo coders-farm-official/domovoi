@@ -450,7 +450,7 @@ private fun TopChrome(content: @Composable () -> Unit) {
 // ---------------------------------------------------------------------------
 @Composable
 private fun OfflineShell(choice: ServerChoice) {
-    var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos
+    var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos, 2 = files
     val openConnection = LocalOpenConnection.current
     // The banner is for a server that can't be used. Choosing "this phone"
     // with the server right there is not an outage, so it says nothing.
@@ -538,7 +538,7 @@ private fun OfflineShell(choice: ServerChoice) {
             BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
-                    listOf(Route.Music, Route.Videos).forEachIndexed { i, r ->
+                    listOf(Route.Music, Route.Videos, Route.Files).forEachIndexed { i, r ->
                         NavigationBarItem(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -558,10 +558,10 @@ private fun OfflineShell(choice: ServerChoice) {
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            if (tab == 0) {
-                com.domovoi.app.ui.screens.local.LocalMusicScreen()
-            } else {
-                com.domovoi.app.ui.screens.local.LocalVideosScreen()
+            when (tab) {
+                0 -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
+                1 -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
+                else -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
             }
         }
     }

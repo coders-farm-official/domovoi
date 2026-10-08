@@ -2,6 +2,7 @@ package com.domovoi.app.ui.screens.files
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Shapes returned by the web backend's generic Files surface
@@ -65,4 +66,10 @@ data class FileBrowse(
      *  is told why in [blockedReason]. Defaults to true for older servers. */
     val writable: Boolean = true,
     @SerialName("blocked_reason") val blockedReason: String? = null,
+    /** The path each [breadcrumb] segment leads to, when it is not simply the
+     *  segments joined by "/" (the phone's photo albums, listed by id). Never
+     *  sent by the server. */
+    @Transient val crumbPaths: List<String>? = null,
+    /** Show this listing as an image grid (a phone photo album). */
+    @Transient val grid: Boolean = false,
 )

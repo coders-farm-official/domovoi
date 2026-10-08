@@ -261,13 +261,18 @@ fun LoadingState(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun ErrorState(message: String, onRetry: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+fun ErrorState(
+    message: String,
+    onRetry: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+    title: String = "couldn't reach the server",
+) {
     Column(
         modifier = modifier.fillMaxWidth().padding(vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("couldn't reach the server", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fgMuted)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fgMuted)
         Text(message, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgSubtle)
         if (onRetry != null) {
             androidx.compose.material3.TextButton(onClick = onRetry) { Text("retry") }
