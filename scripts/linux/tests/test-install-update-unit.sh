@@ -674,7 +674,10 @@ case_fix_ownership() {
   check "exit 0" eq "$RC" 0
   check "hands the venv over" called "chown -R tester: $VENV"
   check "last, once the unit is in: a chown can't be taken back" before "systemctl daemon-reload" "chown -R"
-  check "no warning left" not_said warning
+  # The venv's warning is gone. Not every warning: a box without the
+  # allowed-signers file still gets the signing one, and should.
+  check "no ownership warning left" not_said "warning  $VENV"
+  check "the fix line instead" said "fix      $VENV isn't all tester's"
   end_case
 }
 

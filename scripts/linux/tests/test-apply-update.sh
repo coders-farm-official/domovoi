@@ -1117,12 +1117,13 @@ case_clock_stepped_back_keeps_the_result_valid() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
-  # A wall clock that NTP steps back 90 s after the run's second reading
-  # (START_MS, then the preflight's t0): the preflight and the whole run
-  # both end "before" they started. The script reads bash's clock, which
-  # no shim can move, so this run goes without it and reads date(1): 13
-  # digits of milliseconds, taken from the shim's own bash clock (the real
-  # date may be uutils, whose +%s%3N is no use).
+  # A wall clock that NTP steps back 90 s after the run's fourth reading
+  # (START_MS, the signature step's t0 and end, then the preflight's
+  # t0): the preflight and the whole run both end "before" they started.
+  # The script reads bash's clock, which no shim can move, so this run
+  # goes without it and reads date(1): 13 digits of milliseconds, taken
+  # from the shim's own bash clock (the real date may be uutils, whose
+  # +%s%3N is no use).
   mkdir -p "$CASE/clockbin"
   cat >"$CASE/clockbin/date" <<'SH'
 #!/usr/bin/env bash
@@ -1131,7 +1132,7 @@ if [ "${1-}" = +%s%3N ]; then
   echo $((n + 1)) >"$SHIM_STATE/date-readings"
   t=$EPOCHREALTIME
   t=$(( ${t%[.,]*}${t#*[.,]} / 1000 ))
-  if [ "$n" -ge 2 ]; then t=$((t - 90000)); fi
+  if [ "$n" -ge 4 ]; then t=$((t - 90000)); fi
   echo "$t"
   exit 0
 fi
@@ -1139,7 +1140,7 @@ exec "$SHIM_REAL_DATE" "$@"
 SH
   chmod +x "$CASE/clockbin/date"
   NO_BASH_CLOCK=1 run_update "$CASE/clockbin"
-  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 2 ))" 1
+  check "the clock did step back" eq "$(( $(cat "$STATE/date-readings" 2>/dev/null || echo 0) > 4 ))" 1
   check "status ok" eq "$(field status)" '"ok"'
   check "no negative duration" eq "$(grep -c '"duration_sec": -' "$RESULT")" 0
   check "no half-negative duration" eq "$(grep -c '[0-9]\.-' "$RESULT")" 0
