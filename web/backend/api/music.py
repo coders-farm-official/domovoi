@@ -1156,7 +1156,7 @@ async def _library_file_path(track_id: int) -> Path:
         )
         raise HTTPException(
             status_code=400,
-            detail=f"refusing to serve track {track_id}: its file is not inside the music library",
+            detail=f"refusing to serve track {track_id}: its file is not inside MUSIC_DIR",
         )
     if not target.is_file():
         raise HTTPException(

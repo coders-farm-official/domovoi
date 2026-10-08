@@ -428,7 +428,9 @@ async def test_a_phone_uploads_and_the_track_is_in_the_library(
             )
         assert listing.status_code == 200, listing.text
         paths = [t["file_path"] for t in listing.json()["items"]]
-        assert paths == [str(written)], listing.text
+        # Library-relative since WEB-16: the open read never shows the
+        # absolute server path the row stores.
+        assert paths == [f"uploads/{name}"], listing.text
     finally:
         remove_import_guard()
         if original is not None:
