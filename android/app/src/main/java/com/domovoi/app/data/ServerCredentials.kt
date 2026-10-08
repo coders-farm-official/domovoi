@@ -5,21 +5,24 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 /**
- * The two things this phone remembers ABOUT a Domovoi server, kept as pure
+ * The things this phone remembers ABOUT a Domovoi server, kept as pure
  * functions so they can be reasoned about (and tested) without a Context:
  *
  *  * which servers the user has **trusted** — picking a server means loading
  *    its capability manifest and its plugin-backed screens, so the picker
  *    asks first and nothing is written until the answer is yes;
  *  * the **household device token** each trusted server issued, which this
- *    app presents as `X-Device-Token` on every request to it.
+ *    app presents as `X-Device-Token` on every request to it — and to
+ *    nothing else (net/TokenScope.kt);
+ *  * (in net/ServerIdentity.kt) the server's pinned **identity**.
  *
- * Both are stored per server URL: two Domovois are two households with two
+ * All are stored per server URL: two Domovois are two households with two
  * tokens, and trusting one says nothing about the other.
  *
- * [Prefs] owns the DataStore side. Tokens live in the app's own DataStore
- * file, which is private to the app's uid; keeping the file out of Android
- * cloud backups is a manifest change that ships separately.
+ * [Prefs] owns the storage side: the trust list and the pins in the app's
+ * DataStore, the tokens sealed in the [TokenVault] under an Android
+ * Keystore key. Every file is excluded from cloud backup and from
+ * device-to-device transfer (res/xml/data_extraction_rules.xml).
  */
 object ServerCredentials {
 
@@ -42,6 +45,17 @@ object ServerCredentials {
 
     fun withoutTrusted(trusted: Set<String>, url: String): Set<String> =
         trusted - normalize(url)
+
+    /**
+     * Trust that belongs to nothing: entries that are neither a known
+     * server (with a row and a forget button in the picker and in
+     * Settings) nor the [active] one. Forgotten on every server switch, so
+     * an address trusted once can never be reused silently (P2-at-01).
+     */
+    fun orphanTrust(trusted: Set<String>, known: Collection<String>, active: String): Set<String> {
+        val keep = known.map(::normalize).toSet() + normalize(active)
+        return trusted.filterNot { normalize(it) in keep }.toSet()
+    }
 
     // ── Device tokens, one per server ──────────────────────────────────
 
