@@ -61,6 +61,7 @@ from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
     get_radio_browser_client,
 )
+from domovoi_plugin_radio.stream_types import audio_media_type
 
 log = logging.getLogger(__name__)
 
@@ -957,12 +958,35 @@ def _row_to_detection(r: Any) -> RadioDetection:
     )
 
 
+# The relay is served on the dashboard's own origin, so what it says the
+# bytes ARE matters as much as where it fetched them from: an upstream
+# that answers ``text/html`` (or script, or SVG) would otherwise run as a
+# page of the dashboard. Only audio is relayed, under its own audio type
+# (``stream_types.audio_media_type``); anything else is a 502 before a
+# byte moves.
+#
+# Headers that hold even if something downstream disagrees about the
+# type: never sniff, download (not render) when opened as a page, and an
+# opaque, script-less origin should it be rendered anyway. A media
+# element ignores all three, so the browser player is unaffected.
+_RELAY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Disposition": "attachment",
+    "Content-Security-Policy": "sandbox",
+}
+
+
 async def _proxy_stream(url: str) -> StreamingResponse:
     """Open ``url`` and relay its bytes. Keeps the upstream connection +
     client alive for the life of the response (closed in the
     generator's ``finally``); an unreachable upstream surfaces as 502
     before any bytes are sent. Redirects are followed one hop at a time
-    so each target is checked before it is opened."""
+    so each target is checked before it is opened.
+
+    Only an audio answer is relayed (:func:`audio_media_type`); anything
+    else closes the upstream and answers 502, and the relay always
+    carries ``nosniff``, ``Content-Disposition: attachment`` and a
+    sandbox CSP (A2-02)."""
     import httpx
 
     client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=None))
@@ -984,7 +1008,22 @@ async def _proxy_stream(url: str) -> StreamingResponse:
         await client.aclose()
         raise HTTPException(status_code=502, detail=f"upstream returned {code}")
 
-    content_type = resp.headers.get("content-type", "audio/mpeg")
+    declared = resp.headers.get("content-type")
+    content_type = audio_media_type(declared)
+    if content_type is None:
+        await resp.aclose()
+        await client.aclose()
+        base = (declared or "").split(";", 1)[0].strip().lower()[:60]
+        # Echo the upstream's type only when it is a plain type token.
+        shown = (
+            base
+            if base and all(c.isalnum() or c in "+-./" for c in base)
+            else "(unrecognised)"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"upstream is not an audio stream (content type {shown})",
+        )
 
     async def _gen():
         try:
@@ -999,4 +1038,6 @@ async def _proxy_stream(url: str) -> StreamingResponse:
             await resp.aclose()
             await client.aclose()
 
-    return StreamingResponse(_gen(), media_type=content_type)
+    return StreamingResponse(
+        _gen(), media_type=content_type, headers=dict(_RELAY_HEADERS)
+    )

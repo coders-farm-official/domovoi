@@ -1179,9 +1179,12 @@ is `auto`, which the core resolves to its current LAN address.
   `await net_safety.fetch_bytes(url, max_bytes=...)` /
   `open_stream(client, url)` do that check on every redirect hop and cap the
   body. Pass `require_resolution=False` when you are only *storing* a URL to
-  fetch later. Handing such a URL to an external tool instead? Constrain the
-  tool too — the bundled radio plugin passes
-  `-protocol_whitelist http,https,tcp,tls` to ffmpeg. The check reads the
+  fetch later. Need an external tool to read it? Do not hand the tool the
+  URL: a tool that opens a URL resolves the name itself, follows redirects
+  unchecked and opens whatever a playlist lists, all outside the check.
+  Open it yourself with `open_stream` and feed the tool the bytes — the
+  bundled radio plugin feeds ffmpeg on stdin under
+  `-protocol_whitelist pipe` and refuses playlists. The check reads the
   operator's `OUTBOUND_ALLOW_HOSTS` for you (empty by default), so a
   household that has deliberately allowlisted a LAN endpoint gets the same
   answer from your plugin as from core — never keep your own allowlist.
@@ -1400,10 +1403,19 @@ story. Here is the developer's tour, file by file.
   `media-acquisition-queue` — a core service, always satisfied. Nothing in
   `consumes_optional`: detection→download simply degrades when no fulfiller
   is enabled.
-* **Requirements**: five exact pins (`shazamio`, `numpy`, `scipy`,
-  `librosa`, `httpx`) with a hashed `requirements.lock` regenerated from
-  `requirements.in`; system tools `ffmpeg` (required — missing ⇒ plugin
-  loads *degraded*) and `rtl_fm` (optional hardware).
+* **Requirements**: system tools only — `ffmpeg` (required — missing ⇒
+  plugin loads *degraded*) and `rtl_fm` (optional hardware). It declares
+  **no `python` pins and ships no lockfile**, and that is particular to a
+  bundled plugin: it runs in the core's own interpreter and is loaded from
+  the checkout, never installed through pip, so a lock of its own would
+  describe an environment nobody installs. (It used to ship one; it had
+  drifted below the core's lock, carried dependency advisories and no
+  longer resolved, so it was removed rather than kept as a false record.)
+  Its heavy dependencies (`numpy`, `scipy`, `librosa`, `shazamio`) are
+  imported lazily and degrade when absent; they come from the core's
+  `fingerprint` and `shazam` extras. **A plugin you distribute as a zip is
+  different** — it must pin and lock everything it imports, as
+  [`[requirements]`](#requirements) describes.
 * **One handler** at band **280** — the anchored-media neighborhood, between
   spoken-audio (270) and playlists (290), deliberately *ahead of* the music
   handler's greedy `^play (.+)$` at 300 so "play 97.5 fm" is claimed first.
@@ -1796,6 +1808,11 @@ Uninstall asks **keep** (default) or **purge**:
 Python dists are refcounted: only dists *newly installed by your plugin* and
 not declared by any other installed plugin are pip-uninstalled. Bundled
 plugins are tombstoned rather than deleted (and never auto-re-register).
+The plugin's files are deleted only when the installer put them there
+(`~/.domovoi/plugins/installed/<slug>`): uninstalling a plugin registered
+in place with `domovoi plugin dev` removes its registry row and leaves your
+working copy untouched, and installing a release over such a registration
+is refused (`dev_registration`) — uninstall the registration first.
 Design your tables so *keep* is meaningful — user-created data (favorites,
 history) is why the default is keep.
 
@@ -1817,7 +1834,11 @@ history) is why the default is keep.
   streams), or a path component ending with a dot or a space (Windows
   would strip it and the file would land under another name) are rejected
   at install.
-* **Zip caps**: 100 MB compressed, 500 MB extracted, 10,000 entries. The
+* **Zip caps**: 100 MB compressed, 500 MB extracted, 10,000 entries — and
+  every file the installer parses before the trust screen (`.py`, `.sql`,
+  `.toml`, `.lock`, plus the lockfiles and post-install script your
+  manifest names) at most **2 MiB** each and **32 MiB** together
+  (`plugin_file_too_large`); ship data as data files, not as source. The
   manifest must sit at the zip root or inside a single top-level directory
   (the GitHub archive shape — so `codeload` zips install as-is).
 * **Hand-copying into `~/.domovoi/plugins/installed/` is not an install

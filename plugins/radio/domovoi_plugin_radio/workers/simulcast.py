@@ -25,17 +25,23 @@ Best-hit selection is deliberately conservative:
    hit's name: real call signs are token-separated ("WQHH 96.5",
    "WQHH-FM"), while shared-prefix call signs run together ("WQHHE-FM")
    where ``\\b`` correctly fails.
+3. The hit's stream URL must pass the shared outbound-URL check (store
+   mode, as the dashboard's station writes apply it): radio-browser is a
+   community-edited directory, and the row it fills is one the browser
+   relay and the sampler fetch later. A hit whose URL points into the
+   house is skipped for the next one (A7-06).
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from sqlalchemy import text
 
-from domovoi.sdk import PluginSDK, egress
+from domovoi.sdk import PluginSDK, egress, net_safety
 
 from domovoi_plugin_radio.clients.radio_browser import (
     RadioBrowserStation,
@@ -135,8 +141,29 @@ async def resolve_simulcast_for_station(
     )
     hits = await client.search(name=call_sign, country_code=country_code, limit=10)
 
-    best = pick_best_match(hits, call_sign)
+    best: RadioBrowserStation | None = None
+    refused = 0
+    for hit in iter_matches(hits, call_sign):
+        reason = await net_safety.acheck_outbound_url(
+            hit.stream_url, require_resolution=False
+        )
+        if reason is None:
+            best = hit
+            break
+        refused += 1
+        log.warning(
+            "simulcast: skipping %s for %s — refusing its stream URL (%s)",
+            hit.name, call_sign, reason,
+        )
     if best is None:
+        if refused:
+            return ResolveResult(
+                resolved=False, station_id=sid,
+                message=(
+                    f"the directory's stream URL for {call_sign!r} was "
+                    "refused (it is not a public http(s) address)"
+                ),
+            )
         return ResolveResult(
             resolved=False, station_id=sid,
             message=f"no simulcast directory hit for {call_sign!r}",
@@ -179,13 +206,20 @@ def pick_best_match(
     """Most plausible simulcast hit for a call sign — first
     popularity-ordered hit whose name contains the call sign as a
     word-bounded token (see module docstring)."""
+    return next(iter_matches(hits, call_sign), None)
+
+
+def iter_matches(
+    hits: list[RadioBrowserStation], call_sign: str
+) -> Iterator[RadioBrowserStation]:
+    """Every hit whose name carries the call sign as a word-bounded
+    token, in the directory's popularity order."""
     if not hits or not call_sign:
-        return None
+        return
     pattern = re.compile(rf"\b{re.escape(call_sign)}\b", re.IGNORECASE)
     for hit in hits:
         if pattern.search(hit.name or ""):
-            return hit
-    return None
+            yield hit
 
 
 async def backfill_fm_favorites_missing_simulcast(
