@@ -119,6 +119,88 @@ def test_probe_refuses_a_host_with_no_identity_when_the_card_has_one():
     ) is False
 
 
+# ─── the probe, against a host that merely relays the core ────────────────
+#
+# Discovery is nearest-address-first and the first host that verifies wins.
+# A host nearer to the satellite than the core, forwarding /v1/health to the
+# core and handing back its answer, used to win that race and be written
+# down as the server. The probe now names the address it dialed; the core
+# signs for its own addresses only; the relay's never match.
+
+def test_probe_asks_the_core_to_sign_for_the_address_it_dialed():
+    seed, public, fingerprint = _server()
+    asked: list[dict[str, str]] = []
+    assert discovery.probe(
+        "192.168.0.117", port=6370,
+        opener=_health_opener(seed, public, asked=asked),
+        expected_fingerprint=fingerprint,
+    ) is True
+    assert asked[0]["addr"] == "192.168.0.117:6370"
+
+
+def test_probe_refuses_a_relay_the_core_would_not_sign_for(caplog):
+    """The honest relay: it forwards our question intact, the core refuses
+    to sign for the relay's address, and that refusal comes back to us."""
+    seed, public, fingerprint = _server()
+    with caplog.at_level("WARNING"):
+        assert discovery.probe(
+            "192.168.0.141", opener=_health_opener(seed, public, bind="refuse"),
+            expected_fingerprint=fingerprint,
+        ) is False
+    assert "192.168.0.141 answers as Domovoi but" in caplog.text
+    assert "the signed address is not the one dialed" in caplog.text
+
+
+def test_probe_refuses_a_relay_that_forwards_an_answer_signed_for_the_core():
+    """The relay that rewrites our question to name the core's own address:
+    the core signs, but for an address we did not dial."""
+    seed, public, fingerprint = _server()
+    assert discovery.probe(
+        "192.168.0.141",
+        opener=_health_opener(seed, public, bind="192.168.0.2:6370"),
+        expected_fingerprint=fingerprint,
+    ) is False
+
+
+def test_probe_refuses_a_relay_that_strips_our_question(caplog):
+    """The relay that drops ``addr`` so the core answers the old way: an
+    unbound answer is not proof of THIS host to a pinned device."""
+    seed, public, fingerprint = _server()
+    with caplog.at_level("WARNING"):
+        assert discovery.probe(
+            "192.168.0.141", opener=_health_opener(seed, public, bind=None),
+            expected_fingerprint=fingerprint,
+        ) is False
+    assert "not bound to the address dialed" in caplog.text
+
+
+def test_a_sweep_that_finds_only_relays_finds_nothing():
+    seed, public, fingerprint = _server()
+    opener = _health_opener(seed, public, bind="192.168.0.2:6370")
+    found = discovery.find_core(
+        hosts=["192.168.0.140", "192.168.0.141"],
+        probe_fn=lambda h, port=None, expected_fingerprint=None: discovery.probe(
+            h, opener=opener, expected_fingerprint=expected_fingerprint
+        ),
+        expected_fingerprint=fingerprint,
+    )
+    assert found is None
+
+
+def test_an_unpinned_probe_is_exactly_what_it_always_was():
+    """No challenge, no address: the compatibility promise for a device
+    prepared before identities. The bot_name answer is still enough."""
+    body = b'{"status": "ok", "bot_name": "Domovoi", "use_stubs": "false"}'
+    seen: list[str] = []
+
+    def opener(url, timeout=None):
+        seen.append(url)
+        return _Resp(body)
+
+    assert discovery.probe("192.168.0.117", opener=opener) is True
+    assert "challenge=" not in seen[0] and "addr=" not in seen[0]
+
+
 def test_a_sweep_that_finds_only_impostors_finds_nothing():
     _seed_a, _public_a, ours = _server(1)
     seed_b, public_b, _ = _server(2)

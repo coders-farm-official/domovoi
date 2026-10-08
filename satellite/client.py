@@ -2527,6 +2527,7 @@ class Satellite:
                 sound_sync.http_base_from_ws(self.cfg.domovoi_url),
                 SOUNDS_CACHE_DIR,
                 _effective_voice(self.cfg),
+                expected_fingerprint=_pinned_fingerprint(self.cfg)[0],
             )
             if n:
                 log.info("sound sync: %d clip(s) updated from server", n)
@@ -5166,6 +5167,7 @@ class Satellite:
             n = wake_model_sync.sync(
                 sound_sync.http_base_from_ws(self.cfg.domovoi_url),
                 WAKE_MODELS_DIR,
+                expected_fingerprint=_pinned_fingerprint(self.cfg)[0],
             )
             if n:
                 log.info("wake-model sync: %d model file(s) updated", n)

@@ -30,8 +30,16 @@ def _server(seed_byte: int = 1):
     return seed, public, server_identity.fingerprint_for(public)
 
 
-def _envelope(seed, public, channel, manifest):
-    return {
+ISSUED_AT = 1_760_000_000
+
+
+def _envelope(seed, public, channel, manifest, *, serial=1, issued_at=ISSUED_AT,
+              v2=True):
+    """A ``manifest.sig`` envelope the way a core builds it: the original
+    signature over channel + list (what satellites in the field verify),
+    and — unless ``v2=False``, an older core — the second signature over
+    the list with its issue time and serial."""
+    doc = {
         "algorithm": "ed25519",
         "fingerprint": server_identity.fingerprint_for(public),
         "public_key": base64.b64encode(public).decode("ascii"),
@@ -41,6 +49,14 @@ def _envelope(seed, public, channel, manifest):
             _ed25519.sign(seed, server_identity.manifest_message(channel, manifest))
         ).decode("ascii"),
     }
+    if v2:
+        doc["issued_at"] = issued_at
+        doc["serial"] = serial
+        doc["signature_v2"] = base64.b64encode(
+            _ed25519.sign(seed, server_identity.manifest_message_v2(
+                channel, manifest, issued_at, serial))
+        ).decode("ascii")
+    return doc
 
 
 class _FakeResponse:
@@ -204,6 +220,143 @@ def test_a_body_that_does_not_match_the_signed_list_is_still_refused(tmp_path, m
     assert "sha256 mismatch" in str(e.value)
 
 
+# ─── a genuine list from earlier is not a new one ─────────────────────────
+#
+# A signature proves who published a list, not when. A host on the path that
+# recorded a genuine manifest.sig could serve it again later and have the
+# device install an older tree, or re-run an older plugin post_install as
+# root. The envelope therefore carries a per-channel serial under the
+# signature, and the device remembers the last one it accepted.
+
+def _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint, manifest,
+                   bodies, **envelope_kw):
+    routes = _code_routes(seed, public, manifest, bodies)
+    routes["/v1/satellite-code/manifest.sig"] = _FakeResponse(
+        json_body=_envelope(seed, public, server_identity.CODE_CHANNEL, manifest,
+                            **envelope_kw)
+    )
+    monkeypatch.setattr(code_sync, "requests", _FakeRequests(routes))
+    return code_sync.sync_code(
+        BASE, tmp_path / "satellite", CODE_EXT_ALLOW, {},
+        expected_fingerprint=fingerprint,
+    )
+
+
+def test_a_list_signed_the_old_way_only_is_refused_by_a_pinned_device(tmp_path, monkeypatch):
+    """No serial, no way to tell a recording from a publication. The core
+    serves both signatures; one that serves only the old one predates this
+    code and is told so."""
+    seed, public, fingerprint = _server()
+    body = b"print('hello')\n"
+    manifest = {"client.py": hashlib.sha256(body).hexdigest()}
+    with pytest.raises(RuntimeError) as e:
+        _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint, manifest,
+                       {"client.py": body}, v2=False)
+    assert "upgrade the Domovoi server" in str(e.value)
+    assert not (tmp_path / "satellite" / "client.py").exists()
+
+
+def test_a_recording_of_an_older_list_is_refused(tmp_path, monkeypatch):
+    seed, public, fingerprint = _server()
+    new_body, old_body = b"print('v2')\n", b"print('v1')\n"
+    _sign_and_sync(
+        tmp_path, monkeypatch, seed, public, fingerprint,
+        {"client.py": hashlib.sha256(new_body).hexdigest()}, {"client.py": new_body},
+        serial=7,
+    )
+    assert (tmp_path / "satellite" / "client.py").read_bytes() == new_body
+
+    with pytest.raises(RuntimeError) as e:
+        _sign_and_sync(
+            tmp_path, monkeypatch, seed, public, fingerprint,
+            {"client.py": hashlib.sha256(old_body).hexdigest()}, {"client.py": old_body},
+            serial=6,
+        )
+    assert "older than the one this device already accepted" in str(e.value)
+    assert "nothing was written" in str(e.value)
+    assert (tmp_path / "satellite" / "client.py").read_bytes() == new_body
+
+
+def test_the_same_list_served_again_is_the_ordinary_case(tmp_path, monkeypatch):
+    """Every connect on which nothing changed on the server."""
+    seed, public, fingerprint = _server()
+    body = b"print('hello')\n"
+    manifest = {"client.py": hashlib.sha256(body).hexdigest()}
+    first = _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                           manifest, {"client.py": body}, serial=7)
+    second = _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                            manifest, {"client.py": body}, serial=7)
+    assert (first["downloaded"], second["downloaded"]) == (1, 0)
+
+
+def test_a_different_list_under_an_already_accepted_serial_is_refused(tmp_path, monkeypatch):
+    """Our server never issues two lists under one serial, so this is a
+    recording of something — or a server whose serial store went wrong,
+    which a new publication (a greater serial) fixes."""
+    seed, public, fingerprint = _server()
+    a, b = b"print('a')\n", b"print('b')\n"
+    _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                   {"client.py": hashlib.sha256(a).hexdigest()}, {"client.py": a},
+                   serial=7)
+    with pytest.raises(RuntimeError) as e:
+        _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                       {"client.py": hashlib.sha256(b).hexdigest()}, {"client.py": b},
+                       serial=7)
+    assert "already accepted for a different list" in str(e.value)
+
+
+def test_a_newer_serial_is_taken_whatever_its_contents(tmp_path, monkeypatch):
+    """Rolling the core's satellite tree back to an earlier commit is a new
+    publication — the server mints a new serial for it — and reaches the
+    device. Age is about publication order, never about content."""
+    seed, public, fingerprint = _server()
+    new_body, old_body = b"print('v2')\n", b"print('v1')\n"
+    _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                   {"client.py": hashlib.sha256(new_body).hexdigest()},
+                   {"client.py": new_body}, serial=7)
+    _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                   {"client.py": hashlib.sha256(old_body).hexdigest()},
+                   {"client.py": old_body}, serial=8)
+    assert (tmp_path / "satellite" / "client.py").read_bytes() == old_body
+
+
+def test_the_remembered_serial_is_per_channel(payload_sidecars, tmp_path, monkeypatch):
+    """The code channel being at serial 9 says nothing about the payload
+    channel."""
+    seed, public, fingerprint = _server()
+    body = b"print('hello')\n"
+    _sign_and_sync(tmp_path, monkeypatch, seed, public, fingerprint,
+                   {"client.py": hashlib.sha256(body).hexdigest()}, {"client.py": body},
+                   serial=9)
+    manifest = {"files": {}, "meta": {}}
+    routes = _plugin_routes(seed, public, manifest, {})
+    routes["/v1/satellite-plugins/manifest.sig"] = _FakeResponse(
+        json_body=_envelope(seed, public, server_identity.PLUGIN_CHANNEL, manifest,
+                            serial=2)
+    )
+    monkeypatch.setattr(plugin_sync, "requests", _FakeRequests(routes))
+    plugin_sync.sync_plugin_payloads(
+        BASE, payload_sidecars / "payloads", expected_fingerprint=fingerprint
+    )
+    store = json.loads(server_identity.FRESHNESS_SIDECAR.read_text(encoding="utf-8"))
+    assert store[server_identity.CODE_CHANNEL]["serial"] == 9
+    assert store[server_identity.PLUGIN_CHANNEL]["serial"] == 2
+
+
+def test_a_tampered_serial_breaks_the_signature(tmp_path, monkeypatch):
+    """The serial is under the signature, or it would be a suggestion."""
+    seed, public, fingerprint = _server()
+    body = b"print('hello')\n"
+    manifest = {"client.py": hashlib.sha256(body).hexdigest()}
+    routes = _code_routes(seed, public, manifest, {"client.py": body})
+    routes["/v1/satellite-code/manifest.sig"]._json["serial"] = 10 ** 9
+    monkeypatch.setattr(code_sync, "requests", _FakeRequests(routes))
+    with pytest.raises(RuntimeError) as e:
+        code_sync.sync_code(BASE, tmp_path / "satellite", CODE_EXT_ALLOW, {},
+                            expected_fingerprint=fingerprint)
+    assert "did not verify" in str(e.value)
+
+
 # ─── the plugin-payload channel ───────────────────────────────────────────
 
 @pytest.fixture
@@ -297,3 +450,59 @@ def test_a_pinned_device_refuses_a_payload_server_with_no_signature(
             BASE, payload_sidecars / "payloads", expected_fingerprint=fingerprint
         )
     assert "upgrade the Domovoi server" in str(e.value)
+
+
+# ─── root gets to check the same envelope itself ──────────────────────────
+#
+# The helper that runs a payload's post_install as root used to trust this
+# process's verdict about where the mirror came from. It now re-verifies the
+# signed envelope with the root-owned verifier against the root-owned pin,
+# so the envelope has to be where it can find it: beside the mirror.
+
+def test_the_verified_envelope_is_saved_beside_the_mirror_for_root(
+    payload_sidecars, monkeypatch
+):
+    seed, public, fingerprint = _server()
+    body = b"#!/bin/sh\ntrue\n"
+    manifest = {
+        "files": {"radio/setup.sh": hashlib.sha256(body).hexdigest()},
+        "meta": {"radio": {"post_install": "setup.sh"}},
+    }
+    routes = _plugin_routes(seed, public, manifest, {"radio/setup.sh": body})
+    served = routes["/v1/satellite-plugins/manifest.sig"]._json
+    monkeypatch.setattr(plugin_sync, "requests", _FakeRequests(routes))
+
+    root = payload_sidecars / "payloads"
+    plugin_sync.sync_plugin_payloads(BASE, root, expected_fingerprint=fingerprint)
+    saved = json.loads((root / plugin_sync.ENVELOPE_NAME).read_text(encoding="utf-8"))
+    assert saved == served
+    assert plugin_sync.ENVELOPE_NAME.startswith("."), \
+        "a dotfile at the mirror root: no <slug>/<rel> channel path can land on it"
+
+
+def test_an_envelope_that_failed_to_verify_is_not_saved(payload_sidecars, monkeypatch):
+    _seed_a, _public_a, ours = _server(1)
+    seed_b, public_b, _ = _server(2)
+    manifest = {"files": {}, "meta": {}}
+    monkeypatch.setattr(
+        plugin_sync, "requests",
+        _FakeRequests(_plugin_routes(seed_b, public_b, manifest, {})),
+    )
+    root = payload_sidecars / "payloads"
+    with pytest.raises(RuntimeError):
+        plugin_sync.sync_plugin_payloads(BASE, root, expected_fingerprint=ours)
+    assert not (root / plugin_sync.ENVELOPE_NAME).exists()
+
+
+def test_an_unpinned_device_saves_no_envelope(payload_sidecars, monkeypatch):
+    """There was none to verify; the helper on such a unit has no root pin
+    to check one against either."""
+    seed, public, _fingerprint = _server()
+    manifest = {"files": {}, "meta": {}}
+    monkeypatch.setattr(
+        plugin_sync, "requests",
+        _FakeRequests(_plugin_routes(seed, public, manifest, {}, signed=False)),
+    )
+    root = payload_sidecars / "payloads"
+    plugin_sync.sync_plugin_payloads(BASE, root, expected_fingerprint=None)
+    assert not (root / plugin_sync.ENVELOPE_NAME).exists()

@@ -60,7 +60,10 @@ def fetch_manifest(
     anything that does not verify, BEFORE a single body is downloaded.
     Checking the list rather than each file is what makes this worth
     doing: the per-file sha256 below only ever proved that the bodies
-    matched the list the same host handed us.
+    matched the list the same host handed us. The envelope also carries
+    a serial; one older than the last this device accepted is refused,
+    so a genuine list recorded earlier cannot be served again to roll
+    the tree back.
 
     With nothing pinned (an image prepared before server identities) we
     fetch the plain manifest exactly as before and say so once, at
@@ -86,7 +89,7 @@ def fetch_manifest(
             )
         r.raise_for_status()
         try:
-            manifest = server_identity.verify_manifest_envelope(
+            manifest = server_identity.accept_manifest_envelope(
                 r.json(),
                 channel=server_identity.CODE_CHANNEL,
                 expected_fingerprint=expected_fingerprint,

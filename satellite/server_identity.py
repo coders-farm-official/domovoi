@@ -9,13 +9,18 @@ into a decision.
 Three checks, all of them "verify if known":
 
 * :func:`verify_server` — ask ``/v1/health`` to sign a nonce we just made
-  up and confirm the signature against the pinned fingerprint. Used by
-  discovery before an address is ever written down, and again on every
-  reconnect.
-* :func:`verify_manifest_envelope` — confirm a code or plugin-payload file
-  list before a single byte of it is downloaded.
+  up AND the address we dialed, and confirm the signature against the
+  pinned fingerprint. Used by discovery before an address is ever written
+  down, and again on every reconnect. Binding the address is what tells
+  the core from a host that merely forwards our question to it: the core
+  refuses to sign for an address that is not its own, and an answer
+  signed for the core's own address is not the one we dialed.
+* :func:`accept_manifest_envelope` — confirm a file list (code, plugin
+  payloads, sounds, wake models) before a single byte of it is
+  downloaded, and refuse one older than the last this device accepted.
 * :func:`pinned_fingerprint` — what we are comparing against, and where it
-  came from.
+  came from. The root-owned pin first boot installed wins over anything
+  the satellite account can edit.
 
 **Verify if known, not verify always.** A device prepared before server
 identities existed has no fingerprint, and must keep working: with nothing
@@ -44,6 +49,7 @@ import json
 import logging
 import os
 import secrets
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -57,11 +63,21 @@ FINGERPRINT_PREFIX = "SHA256:"
 # for the job it was minted for.
 HEALTH_CONTEXT = b"domovoi-health-v1"
 MANIFEST_CONTEXT = b"domovoi-manifest-v1"
+# The manifest signature that also covers the list's issue time and serial.
+MANIFEST_CONTEXT_V2 = b"domovoi-manifest-v2"
 
 CODE_CHANNEL = "satellite-code"
 PLUGIN_CHANNEL = "satellite-plugins"
+SOUNDS_CHANNEL = "satellite-sounds"
+WAKE_MODELS_CHANNEL = "satellite-wake-models"
 
 CONFIG_DIR = Path("~/.domovoi").expanduser()
+# The last manifest this device accepted, per channel: ``{channel:
+# {serial, issued_at, digest}}``. What makes "older than what I already
+# have" a question with an answer. Owned by the satellite account, like
+# the code tree it protects; the root helper keeps its own record for the
+# payload channel.
+FRESHNESS_SIDECAR = CONFIG_DIR / "manifest-serials.json"
 # What this device learned on its own (trust on first use), for images
 # prepared before fingerprints were baked in.
 #
@@ -139,8 +155,13 @@ def canonical_json(doc: Any) -> bytes:
     ).encode("utf-8")
 
 
-def health_message(challenge: str) -> bytes:
-    return HEALTH_CONTEXT + b"\n" + challenge.encode("utf-8")
+def health_message(challenge: str, addr: str | None = None) -> bytes:
+    """What the core signs for a health challenge. With ``addr`` — the
+    ``host:port`` we dialed — the address is part of the message."""
+    message = HEALTH_CONTEXT + b"\n" + challenge.encode("utf-8")
+    if addr is not None:
+        message += b"\n" + addr.encode("utf-8")
+    return message
 
 
 def manifest_message(channel: str, manifest: Any) -> bytes:
@@ -150,8 +171,48 @@ def manifest_message(channel: str, manifest: Any) -> bytes:
     )
 
 
+def manifest_message_v2(
+    channel: str, manifest: Any, issued_at: int, serial: int
+) -> bytes:
+    """The bytes under ``signature_v2``: one canonical document carrying the
+    channel, the list, its issue time and its serial. Byte-identical to
+    what the core and the root helper build."""
+    signed = {
+        "channel": channel,
+        "issued_at": int(issued_at),
+        "manifest": manifest,
+        "serial": int(serial),
+    }
+    return MANIFEST_CONTEXT_V2 + b"\n" + canonical_json(signed)
+
+
+def manifest_digest(manifest: Any) -> str:
+    return hashlib.sha256(canonical_json(manifest)).hexdigest()
+
+
 def new_challenge() -> str:
     return secrets.token_hex(_CHALLENGE_BYTES)
+
+
+def dialed_address(http_base: str) -> str:
+    """The ``host:port`` a URL dials, spelled the way we ask the core to
+    sign it. The port is always present (the scheme's default when the URL
+    has none) so the string is unambiguous; an IPv6 literal keeps its
+    brackets."""
+    text = http_base.strip()
+    if "://" not in text:
+        text = "http://" + text
+    parts = urllib.parse.urlsplit(text)
+    host = parts.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = 443 if parts.scheme in ("https", "wss") else 80
+    return f"{host}:{port}"
 
 
 # ─── what we are comparing against ────────────────────────────────────────
@@ -282,15 +343,32 @@ def recorded_document() -> dict[str, Any]:
 
 def pinned_fingerprint(configured: object = None) -> tuple[str | None, str]:
     """The fingerprint this device holds the server to, and where it came
-    from: ``"config"`` (baked into config.toml at adoption), ``"image"``
-    (the root-owned copy first boot installed), ``"recorded"`` (learned on
-    first contact) or ``"none"``."""
+    from: ``"image"`` (the root-owned copy first boot installed),
+    ``"config"`` (written into config.toml at adoption), ``"recorded"``
+    (learned on first contact) or ``"none"``.
+
+    The root-owned pin wins. config.toml belongs to the satellite account,
+    and every trust decision on the device — which core to connect to,
+    whose code to install, whose plugin ``post_install`` root runs — takes
+    this value; a pin that account could rewrite would let a shell as that
+    account choose what root runs, by choosing the server. The root copy is
+    what first boot installed from the card and nothing on the device can
+    edit, so when it exists it is the answer, and a config value that
+    disagrees with it is said out loud as the tampering or the mistake it
+    is."""
     from_config = normalize_fingerprint(configured)
-    if from_config:
-        return from_config, "config"
     from_image = normalize_fingerprint(_read_json(ROOT_PIN).get("fingerprint"))
     if from_image:
+        if from_config and from_config != from_image:
+            log.error(
+                "config.toml names server %s but this device was prepared "
+                "for %s (%s, root-owned); the root-owned pin is the one this "
+                "device trusts. Something edited config.toml — check who.",
+                from_config, from_image, ROOT_PIN,
+            )
         return from_image, "image"
+    if from_config:
+        return from_config, "config"
     recorded = normalize_fingerprint(recorded_document().get("fingerprint"))
     if recorded:
         return recorded, "recorded"
@@ -340,7 +418,8 @@ class IdentityUnavailable(IdentityError):
 
 
 def verify_health_document(
-    doc: Any, *, challenge: str, expected_fingerprint: str | None
+    doc: Any, *, challenge: str, expected_fingerprint: str | None,
+    addr: str | None = None,
 ) -> str:
     """The fingerprint the answer proved, or raise :class:`IdentityError`.
 
@@ -348,7 +427,17 @@ def verify_health_document(
     the nonce WE chose in this call, the signature checks out against that
     key, and — when a fingerprint is pinned — the key hashes to it. Without
     a pin this still rules out a host that cannot sign at all, and gives
-    the caller a fingerprint worth recording."""
+    the caller a fingerprint worth recording.
+
+    ``addr`` is the ``host:port`` we dialed. When this device is pinned the
+    answer must name that same address and the signature must cover it:
+    an answer that names no address came from a core running older code
+    (or from something relaying one, after stripping our question), and an
+    answer naming a different address was signed for somebody else's
+    connection. Either way it is not proof that THIS host is the server.
+    Unpinned, an unbound answer is still accepted and recorded — a device
+    with nothing to compare against cannot tell a relay from a core by any
+    means, and refusing would only strand it against an older core."""
     if not isinstance(doc, dict):
         raise IdentityError("the server's answer was not a document")
     identity = doc.get("identity")
@@ -361,10 +450,34 @@ def verify_health_document(
     public = unb64(identity.get("public_key"))
     signature = unb64(identity.get("signature"))
     if public is None or signature is None:
+        if addr is not None and identity.get("addr_refused") == addr:
+            raise IdentityError(
+                f"the server would not sign for {addr}: the signed address "
+                "is not the one dialed (that address is not the server's "
+                "own, so something is relaying its answers — or the server "
+                "needs it listed in TRUSTED_HOSTS)"
+            )
         raise IdentityError("the server's identity is malformed")
     if identity.get("challenge") != challenge:
         raise IdentityError("the server answered a different challenge")
-    if not verify(public, health_message(challenge), signature):
+    signed_addr = identity.get("addr")
+    bound = addr is not None and (expected_fingerprint or signed_addr is not None)
+    if bound:
+        if signed_addr is None:
+            raise IdentityError(
+                f"the signed address is missing: the proof is not bound to "
+                f"the address dialed ({addr}) — an older Domovoi server, or "
+                "something relaying one"
+            )
+        if signed_addr != addr:
+            raise IdentityError(
+                f"the signed address {signed_addr} is not the one dialed "
+                f"({addr}): this answer was signed for a different connection"
+            )
+        message = health_message(challenge, addr)
+    else:
+        message = health_message(challenge)
+    if not verify(public, message, signature):
         raise IdentityError("the server's signature did not verify")
     actual = fingerprint_for(public)
     claimed = normalize_fingerprint(identity.get("fingerprint"))
@@ -380,13 +493,15 @@ def verify_health_document(
 
 def fetch_health(
     http_base: str, *, challenge: str, timeout: float = HTTP_TIMEOUT_SEC,
-    opener=None,
+    opener=None, addr: str | None = None,
 ) -> Any:
-    """GET ``/v1/health?challenge=…``. The nonce rides in the query so a
-    core that predates challenges simply ignores it and answers as it
-    always did."""
+    """GET ``/v1/health?challenge=…[&addr=…]``. Both ride in the query so a
+    core that predates them simply ignores what it does not know and
+    answers as it always did."""
     opener = opener or urllib.request.urlopen
     url = f"{http_base.rstrip('/')}/v1/health?challenge={challenge}"
+    if addr is not None:
+        url += "&addr=" + urllib.parse.quote(addr, safe="")
     with opener(url, timeout=timeout) as r:
         if getattr(r, "status", 200) != 200:
             raise IdentityError("the server did not answer /v1/health")
@@ -400,20 +515,45 @@ def verify_server(
     """Prove the host at ``http_base`` is the server this device belongs to,
     and return its fingerprint. Raises :class:`IdentityError` otherwise.
 
+    The proof is bound to the address in ``http_base`` — the one we are
+    about to connect to — so a host that relays the question to the real
+    core gets an answer the core would not sign for it.
+
     With nothing pinned the host still has to hold a key and sign with it;
     the fingerprint comes back so the caller can record it."""
     challenge = new_challenge()
+    addr = dialed_address(http_base)
     try:
         doc = fetch_health(
-            http_base, challenge=challenge, timeout=timeout, opener=opener
+            http_base, challenge=challenge, timeout=timeout, opener=opener,
+            addr=addr,
         )
     except IdentityError:
         raise
     except Exception as e:      # noqa: BLE001 — every transport failure is "not provable"
         raise IdentityError(f"could not reach {http_base}: {e}") from e
     return verify_health_document(
-        doc, challenge=challenge, expected_fingerprint=expected_fingerprint
+        doc, challenge=challenge, expected_fingerprint=expected_fingerprint,
+        addr=addr,
     )
+
+
+def _freshness_fields(doc: dict[str, Any]) -> tuple[int, int]:
+    """``(issued_at, serial)`` out of an envelope, or raise. Integers only
+    — a float or a bool here would canonicalize differently from what was
+    signed, and a negative serial is nobody's."""
+    issued_at, serial = doc.get("issued_at"), doc.get("serial")
+    ok = (
+        isinstance(issued_at, int) and not isinstance(issued_at, bool)
+        and isinstance(serial, int) and not isinstance(serial, bool)
+        and issued_at >= 0 and serial >= 0
+    )
+    if not ok:
+        raise IdentityError(
+            "the signed manifest carries no issue time or serial: the server "
+            "signed it the old way; upgrade the Domovoi server first"
+        )
+    return issued_at, serial
 
 
 def verify_manifest_envelope(
@@ -423,7 +563,15 @@ def verify_manifest_envelope(
 
     The envelope carries the manifest it signed, so what is verified and
     what is used are the same object — there is no window in which the file
-    list could change between the signature and the download."""
+    list could change between the signature and the download.
+
+    What is checked is ``signature_v2``: the signature over the list AND
+    its ``issued_at`` and ``serial``. An envelope with only the original
+    ``signature`` is refused — the core serves both, and a core that serves
+    only the old one predates this code. Whether the serial is NEW ENOUGH
+    is :func:`check_manifest_freshness`'s question; this function answers
+    only "did our server sign exactly this".
+    """
     if not isinstance(doc, dict):
         raise IdentityError("the signed manifest was not a document")
     if doc.get("algorithm") != ALGORITHM:
@@ -435,8 +583,7 @@ def verify_manifest_envelope(
     if "manifest" not in doc:
         raise IdentityError("the signed manifest carried no manifest")
     public = unb64(doc.get("public_key"))
-    signature = unb64(doc.get("signature"))
-    if public is None or signature is None:
+    if public is None:
         raise IdentityError("the signed manifest is malformed")
     actual = fingerprint_for(public)
     if expected_fingerprint and actual != expected_fingerprint:
@@ -444,9 +591,102 @@ def verify_manifest_envelope(
             f"the manifest was signed by {actual}, not the "
             f"{expected_fingerprint} this device was prepared for"
         )
+    issued_at, serial = _freshness_fields(doc)
+    signature = unb64(doc.get("signature_v2"))
+    if signature is None:
+        raise IdentityError(
+            "the signed manifest carries no signature over its serial; "
+            "upgrade the Domovoi server first"
+        )
     manifest = doc["manifest"]
-    if not verify(public, manifest_message(channel, manifest), signature):
+    if not verify(public, manifest_message_v2(channel, manifest, issued_at, serial),
+                  signature):
         raise IdentityError("the manifest signature did not verify")
+    return manifest
+
+
+# ─── older than what we already have? ─────────────────────────────────────
+
+def last_accepted_manifest(channel: str, path: Path | None = None) -> dict[str, Any] | None:
+    """What this device last accepted on ``channel``: ``{serial, issued_at,
+    digest}``, or None when it never has."""
+    path = FRESHNESS_SIDECAR if path is None else path
+    entry = _read_json(path).get(channel)
+    if not isinstance(entry, dict):
+        return None
+    serial = entry.get("serial")
+    if not isinstance(serial, int) or isinstance(serial, bool):
+        return None
+    return entry
+
+
+def check_manifest_freshness(
+    doc: dict[str, Any], *, channel: str, path: Path | None = None
+) -> None:
+    """Raise :class:`IdentityError` when ``doc`` is older than the last
+    envelope this device accepted on ``channel``.
+
+    Older means a smaller serial. The same serial is fine when it is the
+    same list — that is every connect on which nothing changed — and
+    refused when it is a different list, because our server never issues
+    two lists under one serial. A newer serial is always taken, whatever
+    its list, so rolling the core's satellite tree back to an earlier
+    commit still reaches the device: that is a new publication, not a
+    replay."""
+    issued_at, serial = _freshness_fields(doc)
+    del issued_at
+    last = last_accepted_manifest(channel, path)
+    if last is None:
+        return
+    if serial < last["serial"]:
+        raise IdentityError(
+            f"the signed manifest (serial {serial}) is older than the one "
+            f"this device already accepted (serial {last['serial']}); "
+            "a recording of an earlier list is being served"
+        )
+    if serial == last["serial"] and last.get("digest") not in (None, manifest_digest(doc["manifest"])):
+        raise IdentityError(
+            f"the signed manifest carries serial {serial}, which this device "
+            "already accepted for a different list"
+        )
+
+
+def remember_manifest(
+    doc: dict[str, Any], *, channel: str, path: Path | None = None
+) -> bool:
+    """Record ``doc`` as the last accepted on ``channel``. Best-effort: a
+    read-only config dir costs the record, not the sync."""
+    path = FRESHNESS_SIDECAR if path is None else path
+    issued_at, serial = _freshness_fields(doc)
+    state = _read_json(path)
+    state[channel] = {
+        "serial": serial,
+        "issued_at": issued_at,
+        "digest": manifest_digest(doc["manifest"]),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("could not record the accepted manifest serial: %s", e)
+        return False
+    return True
+
+
+def accept_manifest_envelope(
+    doc: Any, *, channel: str, expected_fingerprint: str | None,
+    path: Path | None = None,
+) -> Any:
+    """Verify, check freshness, remember — the one call a sync channel
+    makes. Returns the manifest; raises :class:`IdentityError` when the
+    envelope is not our server's or is older than the last accepted."""
+    manifest = verify_manifest_envelope(
+        doc, channel=channel, expected_fingerprint=expected_fingerprint
+    )
+    check_manifest_freshness(doc, channel=channel, path=path)
+    remember_manifest(doc, channel=channel, path=path)
     return manifest
 
 

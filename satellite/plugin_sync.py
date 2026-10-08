@@ -18,6 +18,15 @@ records what it applied in ``/var/lib/domovoi/plugin_payload_state.json``).
 The request names WHAT to apply, never WHERE from or WHERE to. Payload sync
 failure never blocks a code upgrade — plugins degrade, the satellite runs.
 
+Root does not take this process's word for where the files came from. The
+signed ``manifest.sig`` envelope that vouched for the mirror is saved beside
+it (``<payloads_root>/.manifest.sig``, :data:`ENVELOPE_NAME`), and on a
+device with a root-owned server pin the helper re-verifies that envelope
+itself — with the root-owned verifier, against the root-owned pin — and
+stages only files the signed list names, with the hashes it gives, before
+it runs anything. A request this account could forge therefore names slugs
+the server declared, or nothing happens.
+
 UNTESTED on the dev host beyond unit tests — exercised on a real device
 during an upgrade, like code_sync.
 """
@@ -47,6 +56,11 @@ ROOT_STATE_FILE = Path("/var/lib/domovoi/plugin_payload_state.json")
 STATE_SIDECAR = CONFIG_DIR / "plugin_payload_state.json"
 PENDING_FILE = CONFIG_DIR / "pending_payload.json"
 APPLY_HELPER = "/usr/local/sbin/domovoi-apply-payload"
+# The verified envelope, saved beside the mirror for the root helper to
+# verify again. A dotfile at the mirror's top level: channel paths are
+# always ``<slug>/<rel>``, so no served file can ever land on it, and the
+# conservative prune only ever removes paths a previous manifest listed.
+ENVELOPE_NAME = ".manifest.sig"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -65,6 +79,42 @@ def applied_state() -> dict[str, Any]:
     return _read_json(STATE_SIDECAR)
 
 
+def _fetch_manifest(
+    base: str,
+    timeout: float = 10.0,
+    expected_fingerprint: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """``(manifest, envelope)`` — the envelope only when the device is
+    pinned and the list came signed; see :func:`fetch_manifest`."""
+    from satellite import server_identity
+
+    if not expected_fingerprint:
+        log.warning(
+            "plugin sync: this device has no server fingerprint, so the "
+            "payload manifest is taken on trust"
+        )
+        r = requests.get(f"{base}/v1/satellite-plugins/manifest", timeout=timeout)
+        r.raise_for_status()
+        return r.json(), None
+    r = requests.get(f"{base}/v1/satellite-plugins/manifest.sig", timeout=timeout)
+    if r.status_code == 404:
+        raise RuntimeError(
+            "plugin sync: this device expects a signed manifest and the "
+            "server serves none; upgrade the Domovoi server first"
+        )
+    r.raise_for_status()
+    envelope = r.json()
+    try:
+        manifest = server_identity.accept_manifest_envelope(
+            envelope,
+            channel=server_identity.PLUGIN_CHANNEL,
+            expected_fingerprint=expected_fingerprint,
+        )
+    except server_identity.IdentityError as e:
+        raise RuntimeError(f"plugin sync: {e}; nothing was written") from e
+    return manifest, envelope
+
+
 def fetch_manifest(
     base: str,
     timeout: float = 10.0,
@@ -75,34 +125,22 @@ def fetch_manifest(
     the more important of the two: these are the files whose
     ``post_install`` runs as root on this device.
 
-    Pinned, we take ``manifest.sig`` and refuse anything that does not
-    verify before a byte is fetched. Unpinned, the old unsigned manifest,
-    with one warning line so it is visible."""
-    from satellite import server_identity
+    Pinned, we take ``manifest.sig``, refuse anything that does not
+    verify before a byte is fetched, and refuse a list older than the
+    last one accepted. Unpinned, the old unsigned manifest, with one
+    warning line so it is visible."""
+    manifest, _envelope = _fetch_manifest(base, timeout, expected_fingerprint)
+    return manifest
 
-    if not expected_fingerprint:
-        log.warning(
-            "plugin sync: this device has no server fingerprint, so the "
-            "payload manifest is taken on trust"
-        )
-        r = requests.get(f"{base}/v1/satellite-plugins/manifest", timeout=timeout)
-        r.raise_for_status()
-        return r.json()
-    r = requests.get(f"{base}/v1/satellite-plugins/manifest.sig", timeout=timeout)
-    if r.status_code == 404:
-        raise RuntimeError(
-            "plugin sync: this device expects a signed manifest and the "
-            "server serves none; upgrade the Domovoi server first"
-        )
-    r.raise_for_status()
-    try:
-        return server_identity.verify_manifest_envelope(
-            r.json(),
-            channel=server_identity.PLUGIN_CHANNEL,
-            expected_fingerprint=expected_fingerprint,
-        )
-    except server_identity.IdentityError as e:
-        raise RuntimeError(f"plugin sync: {e}; nothing was written") from e
+
+def _save_envelope(payloads_root: Path, envelope: dict[str, Any]) -> None:
+    """Keep the verified envelope beside the mirror for root to re-check.
+    Written whole and renamed into place, so the helper never reads half
+    of one."""
+    target = payloads_root / ENVELOPE_NAME
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(envelope, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(target)
 
 
 def sync_plugin_payloads(
@@ -118,13 +156,15 @@ def sync_plugin_payloads(
     manifest this device's server did not sign, or on a sha mismatch —
     like code_sync, a corrupt body never lands."""
     base = http_base.rstrip("/")
-    doc = fetch_manifest(base, timeout, expected_fingerprint)
+    doc, envelope = _fetch_manifest(base, timeout, expected_fingerprint)
     if not isinstance(doc, dict):
         raise RuntimeError("plugin sync: the manifest is not a document")
     files: dict[str, str] = doc.get("files") or {}
     meta: dict[str, Any] = doc.get("meta") or {}
 
     payloads_root.mkdir(parents=True, exist_ok=True)
+    if envelope is not None:
+        _save_envelope(payloads_root, envelope)
     downloaded = 0
     for rel, sha in files.items():
         if not _safe_rel(rel) or "/" not in rel:

@@ -82,21 +82,26 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
     what ``expected_fingerprint`` is for — the fingerprint baked into this
     device's image. When one is pinned, the host also has to sign a nonce
     this call just invented with the matching key, so answering the right
-    way is no longer enough.
+    way is no longer enough — and the signature has to cover the address
+    we dialed (``host:port``), so a host that forwards our question to the
+    real core and hands back its answer is not a candidate either: the
+    core will not sign for an address that is not its own.
 
     With nothing pinned (a device prepared before server identities) the
     check is exactly what it always was.
     """
     import json
+    import urllib.parse
     import urllib.request
 
     from satellite import server_identity
 
     opener = opener or urllib.request.urlopen
     challenge = server_identity.new_challenge() if expected_fingerprint else None
+    addr = f"{host}:{port}"
     url = f"http://{host}:{port}{HEALTH_PATH}"
     if challenge:
-        url = f"{url}?challenge={challenge}"
+        url = f"{url}?challenge={challenge}&addr={urllib.parse.quote(addr, safe='')}"
     try:
         with opener(url, timeout=timeout) as r:
             if getattr(r, "status", 200) != 200:
@@ -110,7 +115,8 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
         return True
     try:
         server_identity.verify_health_document(
-            doc, challenge=challenge, expected_fingerprint=expected_fingerprint
+            doc, challenge=challenge, expected_fingerprint=expected_fingerprint,
+            addr=addr,
         )
     except server_identity.IdentityError as e:
         # Loud, unlike the silent misses above: something on this network
