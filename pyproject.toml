@@ -5,7 +5,7 @@ description = "Domovoi — a local-first home voice assistant"
 requires-python = ">=3.11"
 # Floors are the lowest versions the code is known to work with AND, for
 # the packages that parse untrusted input (starlette, python-multipart,
-# requests, pillow), the first release of the fixed line — do not lower
+# requests, urllib3, pillow), the first release of the fixed line — do not lower
 # them. The exact versions a deployment runs come from `requirements.lock`
 # (pip-compile, hashed; regenerate with the command in that file's header).
 dependencies = [
@@ -43,6 +43,11 @@ dependencies = [
     # probe; small and pure-Python, so it lives in core rather than an
     # extra (the TTS fallback chain must import without real-clients).
     "requests>=2.32",
+    # Direct floor on the HTTP library requests builds on (requests' own
+    # floor is lower): 2.8.0 fixes the streaming-decompression and
+    # proxy-TLS advisories of 2026 (PYSEC-2026-4175/4176/4177). requests
+    # carries every fetch the satellite sync clients and feed paths make.
+    "urllib3>=2.8",
     # Admin-password hashing (argon2id) for the admin_auth table. Ships in
     # core from 1.0.0 even though the auth endpoints land after the DB
     # baseline — the dependency and the schema arrive together so no

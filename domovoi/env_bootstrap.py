@@ -23,6 +23,13 @@ Contract:
     with. The file says so and points at the rotation runbook.
   * Rotation is an operator step, documented in docs/LINUX_HOST.md
     ("Rotating the Postgres password"); this module never runs it.
+  * The two helper-container secrets are generated in the same write:
+    ``LETTA_TOKEN`` (compose hands it to the Letta container as
+    ``LETTA_SERVER_PASSWORD``, and the core authenticates with it) and
+    ``SEARXNG_SECRET`` (SearXNG's signing key). Both used to be the same
+    literal on every install. An existing ``.env`` without them keeps the
+    old values through the compose fallbacks; adding them by hand is in
+    docs/LINUX_HOST.md, "Helper-container secrets".
   * ``--internet always|sometimes|never`` (aliases such as yes / no /
     offline / metered are accepted) records the household's internet answer
     as ``INTERNET_ACCESS=`` in the SAME create-only write. An existing
@@ -98,6 +105,19 @@ def _generated_block(password: str, *, reused_default: bool) -> str:
     )
 
 
+def _service_secrets_block(letta_token: str, searxng_secret: str) -> str:
+    return (
+        "\n"
+        "# ─── Helper-container secrets (written by `python -m domovoi.env_bootstrap`) ──\n"
+        "# Generated for this machine. docker-compose.yml hands LETTA_TOKEN to the\n"
+        "# Letta container as LETTA_SERVER_PASSWORD and the core signs in with the\n"
+        "# same value; SEARXNG_SECRET is the search helper's signing key. Changing\n"
+        "# one: docs/LINUX_HOST.md, \"Helper-container secrets\".\n"
+        f"LETTA_TOKEN={letta_token}\n"
+        f"SEARXNG_SECRET={searxng_secret}\n"
+    )
+
+
 def _internet_block(internet: str) -> str:
     return (
         "\n"
@@ -108,17 +128,27 @@ def _internet_block(internet: str) -> str:
 
 
 def render_fresh_env(
-    template: str, password: str, *, reused_default: bool = False, internet: str = ""
+    template: str,
+    password: str,
+    *,
+    reused_default: bool = False,
+    internet: str = "",
+    letta_token: str | None = None,
+    searxng_secret: str | None = None,
 ) -> str:
     """The text of a brand-new ``.env``: the example with the DSN password
     swapped for ``password`` and a ``POSTGRES_PASSWORD`` block appended —
-    plus, when ``internet`` is an answer, an ``INTERNET_ACCESS`` block."""
+    plus the helper-container secrets when both are given (ensure_env_file
+    always generates them), and, when ``internet`` is an answer, an
+    ``INTERNET_ACCESS`` block. Deterministic in its arguments."""
     body, n = _DSN_CRED_RE.subn(rf"\g<lead>{password}\g<tail>", template)
     if n == 0:
         raise ValueError(".env.example no longer carries the default DATABASE_URL credential")
     if not body.endswith("\n"):
         body += "\n"
     out = body + _generated_block(password, reused_default=reused_default)
+    if letta_token and searxng_secret:
+        out += _service_secrets_block(letta_token, searxng_secret)
     internet = normalize_policy(internet)
     if internet:
         out += _internet_block(internet)
@@ -177,8 +207,15 @@ def ensure_env_file(
         else:
             password = generate_password()
 
+    # The helper secrets are unrelated to the pgdata volume, so they are
+    # fresh even when the Postgres credential has to stay the default.
     content = render_fresh_env(
-        template, password, reused_default=reused_default, internet=internet
+        template,
+        password,
+        reused_default=reused_default,
+        internet=internet,
+        letta_token=generate_password(),
+        searxng_secret=generate_password(),
     )
 
     # O_EXCL: create-only. A file that appears between the exists() check
@@ -237,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             "docs/LINUX_HOST.md, \"Rotating the Postgres password\"."
         )
     else:
-        print(f"created {result.path} (fresh install: random Postgres password written)")
+        print(f"created {result.path} (fresh install: random Postgres password and helper secrets written)")
     if result.created and internet:
         print(f"  internet: INTERNET_ACCESS={internet} (change it later in Settings → Internet)")
     if result.created:

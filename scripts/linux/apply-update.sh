@@ -38,7 +38,9 @@
 #   3. Stop domovoi-web and domovoi-core: at most DOMOVOI_UPDATE_STOP_TIMEOUT
 #      seconds, then SIGKILL whatever is still stopping (stop_services).
 #   4. Re-sync the venv the LINUX_HOST.md way if pyproject.toml or a
-#      requirements lock changed.
+#      requirements lock changed: from the hash-pinned
+#      requirements-linux-py314.lock when the checkout has one for the
+#      venv's Python, otherwise (with a WARNING) through pip's resolver.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
@@ -92,12 +94,21 @@ REPO_DIR=${DOMOVOI_REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}
 # Without DOMOVOI_VENV, resolve_venv may move this to the core unit's venv.
 VENV_DIR=${DOMOVOI_VENV:-$REPO_DIR/.venv}
 # `-` rather than `:-`: an explicitly empty value is honoured (no extras; no
-# CPU-torch step).
-PIP_EXTRAS=${DOMOVOI_PIP_EXTRAS-dev,real-clients,voice-profile}
+# CPU-torch step). No `dev`: a server does not run the test suite.
+PIP_EXTRAS=${DOMOVOI_PIP_EXTRAS-real-clients,voice-profile}
 TORCH_INDEX_URL=${DOMOVOI_TORCH_INDEX_URL-https://download.pytorch.org/whl/cpu}
+# The hash-pinned production lock, relative to the checkout
+# (sync_deps_locked). Empty: never use one, always the resolver.
+DEPS_LOCK=${DOMOVOI_DEPS_LOCK-requirements-linux-py314.lock}
+# The extras that lock was compiled with (scripts/linux/compile-linux-lock.sh).
+LOCK_EXTRAS=real-clients,voice-profile
 UPDATE_DIR=${DOMOVOI_UPDATE_DIR:-/var/lib/domovoi-update}
 BACKUP_DIR=${DOMOVOI_UPDATE_BACKUP_DIR:-$UPDATE_DIR/backups}
 KEEP_BACKUPS=${DOMOVOI_UPDATE_KEEP_BACKUPS:-5}
+# How many of each database's replaced copies (<db>_failed_<ts>, left by a
+# rollback's restore) stay in Postgres for inspection; older ones are
+# dropped after the next restore. At least 1.
+KEEP_FAILED_DBS=${DOMOVOI_UPDATE_KEEP_FAILED_DBS:-1}
 REQUIRE_BACKUP=${DOMOVOI_UPDATE_REQUIRE_BACKUP:-1}
 HEALTH_TIMEOUT=${DOMOVOI_UPDATE_HEALTH_TIMEOUT:-120}
 HEALTH_INTERVAL=${DOMOVOI_UPDATE_HEALTH_INTERVAL:-2}
@@ -162,9 +173,15 @@ FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
 # Git pathspecs, relative to the repo root.
 DEPS_PATHS=(pyproject.toml 'requirements*.lock' 'plugins/*/requirements*.lock')
 MPD_PATHS=(domovoi/Dockerfile.mpd domovoi/mpd.conf)
+# The compose file whose `image:` pins decide what domovoi-db (and the
+# search helper) pull: a moved digest is a download.
+COMPOSE_PATH=domovoi/docker-compose.yml
 
 # Run state, filled in as the run goes.
 SERVICE_USER=""
+# The service user's group: last-result.json is readable by it (the core
+# reads the file as that user) and by no other account.
+RESULT_GROUP=""
 CORE_STATE_DIR=""
 MPD_TAG=""
 MPD_PREFIX=""
@@ -179,6 +196,8 @@ START_MS=0
 DEPS_CHANGED=0
 MPD_CHANGED=0
 MPD_IMAGE_CHANGED=0
+# An `image:` line in the compose file changed: the next compose up pulls.
+IMAGES_CHANGED=0
 # The internet answer as this run found it at the start ("" when
 # unanswered, or when the checkout can't say).
 POLICY_AT_START=""
@@ -198,6 +217,9 @@ BACKUP_FILE=""
 TEST_BACKUP_FILE=""
 DB_RESTORED=0
 TEST_DB_RESTORED=0
+# The last sync_deps installed from DEPS_LOCK (so restore_pins has nothing
+# left to put back).
+DEPS_FROM_LOCK=0
 STEPS=()
 # A step function may leave a note here for its step's detail on success.
 STEP_DETAIL=""
@@ -300,12 +322,19 @@ tail_lines() {
 }
 
 # Write "$2" to "$1" by rename, so a reader never sees half a file and a
-# symlink planted at the target is replaced rather than followed.
+# symlink planted at the target is replaced rather than followed. Mode 0644,
+# or with a group in $3: that group and mode 0640, set before the rename so
+# the file is never briefly readable by everyone (0644 when the chgrp
+# fails, so the core can still read it).
 write_atomic() {
-  local target=$1 content=$2 tmp
+  local target=$1 content=$2 group=${3-} tmp
   tmp=$(mktemp "$(dirname "$target")/.$(basename "$target").XXXXXX")
   printf '%s' "$content" >"$tmp"
-  chmod 0644 "$tmp"
+  if [ -n "$group" ] && chgrp -- "$group" "$tmp" 2>/dev/null; then
+    chmod 0640 "$tmp"
+  else
+    chmod 0644 "$tmp"
+  fi
   mv -f "$tmp" "$target"
 }
 
@@ -315,6 +344,8 @@ write_result() {
   if [ "${#STEPS[@]}" -gt 0 ]; then
     steps=$(IFS=,; printf '%s' "${STEPS[*]}")
   fi
+  # The steps carry the tail of each failed command's output (pip, docker,
+  # git, pg_dump), so the file is for the core's user, not every account.
   write_atomic "$RESULT_FILE" "$(
     printf '{\n'
     printf '  "status": %s,\n' "$(json_str "$status")"
@@ -345,7 +376,7 @@ write_result() {
     printf '  "error": %s,\n' "$(json_str_or_null "$err")"
     printf '  "steps": [%s]\n' "$steps"
     printf '}'
-  )"$'\n'
+  )"$'\n' "$RESULT_GROUP"
 }
 
 finish() {
@@ -457,6 +488,7 @@ resolve_service_user() {
       LAST_ERROR="cannot tell which user owns $REPO_DIR; set DOMOVOI_USER in /etc/default/domovoi-update"
       return 1
     fi
+    RESULT_GROUP=$(id -gn "$SERVICE_USER" 2>/dev/null) || RESULT_GROUP=""
   fi
 }
 
@@ -545,6 +577,17 @@ paths_changed() {
   local rc=0
   git_as diff --quiet "$PREV_SHA" "$HEAD_SHA" -- "$@" || rc=$?
   [ "$rc" -ne 0 ]
+}
+
+# Did an `image:` line of the compose file change between PREV_SHA and
+# HEAD_SHA? Every image there is pinned by digest, so a changed line is a
+# pull on the next `docker compose up` (domovoi-db pulls Postgres and
+# Flyway). Comments and other keys don't count. A diff that errors counts
+# as changed, the same rule as paths_changed.
+images_changed() {
+  local diff
+  diff=$(git_as diff --no-color -U0 "$PREV_SHA" "$HEAD_SHA" -- "$COMPOSE_PATH") || return 0
+  printf '%s\n' "$diff" | grep -Eq '^[+-][[:space:]]*image:'
 }
 
 # ─── Signed updates ──────────────────────────────────────────────────────
@@ -1042,12 +1085,39 @@ prune_series() {
   done
 }
 
+# The replaced copies of database $1 (<db>_failed_<14-digit UTC time>),
+# newest first.
+failed_dbs() {
+  psql_admin "SELECT datname FROM pg_database WHERE datname ~ '^${1}_failed_[0-9]{14}\$' ORDER BY datname DESC"
+}
+
+# Keep the newest KEEP_FAILED_DBS replaced copies of database $1 and drop
+# the rest. Each holds everything the database held (transcripts, voice
+# embeddings, credential hashes, the household token), so they don't pile
+# up. Best effort: a copy that can't be listed or dropped stays, and says so.
+prune_failed_dbs() {
+  local db=$1 names name n=0
+  [[ $KEEP_FAILED_DBS =~ ^[0-9]+$ ]] && [ "$KEEP_FAILED_DBS" -ge 1 ] || KEEP_FAILED_DBS=1
+  if ! names=$(failed_dbs "$db" 2>/dev/null); then
+    echo "could not list the ${db}_failed_* databases; none dropped"
+    return 0
+  fi
+  while IFS= read -r name; do
+    [[ $name =~ ^${db}_failed_[0-9]{14}$ ]] || continue
+    n=$((n + 1))
+    [ "$n" -gt "$KEEP_FAILED_DBS" ] || continue
+    echo "dropping $name (the newest $KEEP_FAILED_DBS replaced copies of $db are kept)"
+    psql_admin "DROP DATABASE IF EXISTS \"$name\"" || echo "could not drop $name"
+  done <<<"$names"
+  return 0
+}
+
 # Restore dump $2 into a fresh database, then swap it in for database $1 by
 # rename. `pg_restore --clean` into the live database would leave behind
 # every object a failed migration CREATED (it only drops what the dump
 # contains), and the re-run of that migration after a fix would then fail on
 # "already exists". The replaced database is kept as <db>_failed_<ts> for
-# inspection; drop it by hand once it's no longer interesting.
+# inspection; only the newest KEEP_FAILED_DBS of those stay (prune_failed_dbs).
 restore_into() {
   local db=$1 dump=$2 ts tmpdb olddb
   [ -n "$dump" ] && [ -s "$dump" ] || { echo "no backup of $db to restore"; return 1; }
@@ -1070,6 +1140,7 @@ restore_into() {
     return 1
   fi
   echo "restored $dump; the replaced database is kept as $olddb"
+  prune_failed_dbs "$db"
 }
 
 restore_db() { restore_into "$PG_DB" "$BACKUP_FILE" && DB_RESTORED=1; }
@@ -1098,21 +1169,90 @@ venv_writable() {
   done
 }
 
-# The venv the way docs/LINUX_HOST.md builds it: CPU torch first when the
-# extras pull torch in (so pip never fetches the CUDA build), then the
-# editable install with the extras. resemblyzer is not re-run: pyproject
-# doesn't declare it, so no pyproject change can require it.
+# ─── Dependency sync: the hash-pinned lock (OPS-9) ───────────────────────
+
+# The venv the way docs/LINUX_HOST.md builds it. From the checkout's
+# hash-pinned lock whenever it has one for the venv's Python
+# (sync_deps_locked); otherwise, loudly, with pip's resolver
+# (sync_deps_resolved).
 sync_deps() {
-  local target=.
+  local why
+  DEPS_FROM_LOCK=0
   if [ ! -x "$VENV_DIR/bin/python" ]; then
     echo "no venv interpreter at $VENV_DIR/bin/python (set DOMOVOI_VENV)"; return 1
   fi
+  if why=$(lock_usable); then
+    sync_deps_locked
+  else
+    log "WARNING: not installing from a hash-pinned lock ($why): pip resolves the dependencies from the index and checks no hashes"
+    sync_deps_resolved || return 1
+    STEP_DETAIL="WARNING: resolved from the index without hash checks ($why)"
+  fi
+}
+
+# lock_usable: whether sync_deps installs from DEPS_LOCK. When it can't,
+# the reason is on stdout and the status is 1.
+lock_usable() {
+  local lock=$REPO_DIR/$DEPS_LOCK want have
+  if [ -z "$DEPS_LOCK" ]; then echo "DOMOVOI_DEPS_LOCK is empty"; return 1; fi
+  if [ ! -f "$lock" ]; then echo "the checkout has no $DEPS_LOCK"; return 1; fi
+  want=$(sed -n 's/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "$lock" | head -n 1)
+  if [ -z "$want" ]; then echo "$DEPS_LOCK does not say which Python it was compiled for"; return 1; fi
+  have=$(as_user "$VENV_DIR/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null) || have=""
+  if [ "$have" != "$want" ]; then
+    echo "$DEPS_LOCK is for Python $want and the venv runs Python ${have:-unknown}"; return 1
+  fi
+}
+
+# extras_beyond_lock: the PIP_EXTRAS the lock does not cover, comma-joined.
+extras_beyond_lock() {
+  local e IFS=,
+  local -a out=()
+  for e in $PIP_EXTRAS; do
+    e=${e//[[:space:]]/}
+    [ -n "$e" ] || continue
+    case ",$LOCK_EXTRAS," in *,"$e",*) ;; *) out+=("$e") ;; esac
+  done
+  printf '%s' "${out[*]}"
+}
+
+# From the lock, as docs/LINUX_HOST.md "Install" does it by hand: the build
+# tools first, hash-checked against the lock (a constraints file's hashes
+# bind); then every pin with --require-hashes, the sdist-only ones built
+# against those tools rather than in an isolated build env that would fetch
+# an unchecked setuptools; then the checkout itself, adding nothing. The
+# lock names its own CPU torch index, so there is no torch step. Extras the
+# lock does not cover (DOMOVOI_PIP_EXTRAS beyond LOCK_EXTRAS: cuda,
+# fastlane, ...) go through the resolver afterwards, and the step says so.
+sync_deps_locked() {
+  local lock=$REPO_DIR/$DEPS_LOCK beyond
+  (cd "$REPO_DIR" && pip_as install --require-hashes -c "$lock" setuptools wheel) || return 1
+  (cd "$REPO_DIR" && pip_as install --require-hashes --no-build-isolation -r "$lock") || return 1
+  (cd "$REPO_DIR" && pip_as install --no-deps --no-build-isolation -e .) || return 1
+  DEPS_FROM_LOCK=1
+  STEP_DETAIL="installed from $DEPS_LOCK, every package hash-checked"
+  beyond=$(extras_beyond_lock)
+  if [ -n "$beyond" ]; then
+    log "WARNING: extras outside $DEPS_LOCK ($beyond) come from pip's resolver, without hash checks"
+    (cd "$REPO_DIR" && pip_as install -e ".[$beyond]") || return 1
+    STEP_DETAIL="$STEP_DETAIL; extras outside it ($beyond) resolved from the index without hash checks"
+  fi
+}
+
+# Without a usable lock: CPU torch first when the extras pull torch in (so
+# pip never fetches the CUDA build), then the editable install with the
+# extras. resemblyzer is not re-run: pyproject doesn't declare it, so no
+# pyproject change can require it (the lock does carry it).
+sync_deps_resolved() {
+  local target=.
   if [ -n "$TORCH_INDEX_URL" ] && [[ ",$PIP_EXTRAS," == *,voice-profile,* ]]; then
     (cd "$REPO_DIR" && pip_as install torch --index-url "$TORCH_INDEX_URL") || return 1
   fi
   if [ -n "$PIP_EXTRAS" ]; then target=".[$PIP_EXTRAS]"; fi
   (cd "$REPO_DIR" && pip_as install -e "$target")
 }
+
+# ─────────────────────────────────────────────────────────────────────────
 
 snapshot_venv() {
   pip_as freeze --exclude-editable >"$FREEZE_FILE.tmp" && chmod 0644 "$FREEZE_FILE.tmp" \
@@ -1124,6 +1264,12 @@ snapshot_venv() {
 # keeps any newer version that still satisfies it; the snapshot doesn't.
 restore_pins() {
   local pins=$UPDATE_DIR/pip-restore.txt extra=()
+  if [ "$DEPS_FROM_LOCK" = 1 ]; then
+    # The rolled-back checkout's lock already put back exact, hash-checked
+    # versions; the snapshot would only reinstall them unchecked.
+    STEP_DETAIL="skipped: $DEPS_LOCK put back the exact versions"
+    return 0
+  fi
   [ -s "$FREEZE_FILE" ] || { echo "no pre-update snapshot"; return 0; }
   # Direct references (name @ url) may point at files long gone.
   grep -v -e ' @ ' -e '^-e ' -e '^#' "$FREEZE_FILE" >"$pins" || true
@@ -1315,16 +1461,20 @@ full_update() {
   if paths_changed "${DEPS_PATHS[@]}"; then DEPS_CHANGED=1; fi
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
   if paths_changed domovoi/Dockerfile.mpd; then MPD_IMAGE_CHANGED=1; fi
-  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ]; then
+  if images_changed; then IMAGES_CHANGED=1; fi
+  if [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; then
     # Read once, before anything is touched: what this run may download
     # depends on it (the rollback's re-sync and rebuild use it too).
     POLICY_AT_START=$(internet_policy 2>/dev/null || true)
   fi
-  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ]; }; then
-    why="this update changes"
-    if [ "$DEPS_CHANGED" = 1 ]; then why="$why the Python dependencies (pip would download them)"; fi
-    if [ "$DEPS_CHANGED" = 1 ] && [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why and"; fi
-    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then why="$why the music player image (docker build downloads it)"; fi
+  if [ "$POLICY_AT_START" = never ] && { [ "$DEPS_CHANGED" = 1 ] || [ "$MPD_IMAGE_CHANGED" = 1 ] || [ "$IMAGES_CHANGED" = 1 ]; }; then
+    local -a what=()
+    if [ "$DEPS_CHANGED" = 1 ]; then what+=("the Python dependencies (pip would download them)"); fi
+    if [ "$MPD_IMAGE_CHANGED" = 1 ]; then what+=("the music player image (docker build downloads it)"); fi
+    if [ "$IMAGES_CHANGED" = 1 ]; then what+=("the container images (docker compose would pull them)"); fi
+    why="this update changes ${what[0]}"
+    if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
+    if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
     add_step preflight refused "$t0" "$why; internet access is turned off for this box"
     finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No (docs/INTERNET.md)."
     return

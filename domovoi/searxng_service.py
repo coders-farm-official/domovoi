@@ -23,8 +23,15 @@ Who calls :func:`reconcile`:
 
 * the core, when an admin saves the answer (the ``internet_access``
   reapply hook, :func:`schedule_reconcile`, registered in
-  ``main._register_core_reapply_hooks``). It is NEVER called at core boot:
-  no docker call may slow or break a start;
+  ``main._register_core_reapply_hooks``);
+* the core at boot, ONLY under ``never`` (:func:`schedule_boot_stop`): a
+  household that answered No by hand (``INTERNET_ACCESS=never`` in
+  ``.env`` or the unit's environment, then a restart) never saved it
+  through the API, and ``restart: unless-stopped`` brings the container
+  back after every reboot, fetching its rule and server lists as it
+  starts. The stop runs in the background and is cheap; a START is never
+  made at boot (the first one pulls the image), so no docker call can
+  slow or break a start;
 * ``domovoi/scripts/dev.sh`` / ``dev.ps1`` and the Linux update unit
   (``scripts/linux/apply-update.sh``) do the same thing in shell, with the
   answer read through ``python -m domovoi.egress --print-policy``.
@@ -263,6 +270,24 @@ async def _stop() -> SearxngAction:
     if ok:
         return SearxngAction("stop", True, f"{CONTAINER} stopped")
     return SearxngAction("stop", False, detail)
+
+
+def schedule_boot_stop() -> asyncio.Task | None:
+    """Core start: under ``never``, stop the helper in the background (a
+    no-op for any other answer, or when management is opted out). Returns
+    the task, or None when nothing was scheduled. Never raises, never
+    waits on docker."""
+    try:
+        if not managed() or egress.policy() != "never":
+            return None
+        loop = asyncio.get_running_loop()
+    except Exception as e:  # noqa: BLE001 — a boot hook never raises
+        log.debug("search helper (SearXNG): boot stop not scheduled: %s", e)
+        return None
+    task = loop.create_task(reconcile("never"), name="searxng-boot-stop")
+    _PENDING.add(task)
+    task.add_done_callback(_PENDING.discard)
+    return task
 
 
 def schedule_reconcile() -> None:

@@ -216,8 +216,8 @@ def _register_core_reapply_hooks() -> None:
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
-    # (domovoi/searxng_service.py). Never run at boot: no docker call can
-    # slow or break a start.
+    # (domovoi/searxng_service.py). At boot only the stop under never runs
+    # (schedule_boot_stop, below): a start pulls the image.
     from domovoi import searxng_service
 
     reapply.on_reapply(
@@ -417,6 +417,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import mpd_internet
 
         mpd_internet.schedule_boot_purge()
+        # The same answer, by hand in .env: stop the search helper that
+        # `restart: unless-stopped` brought back (background, cheap).
+        from domovoi import searxng_service
+
+        searxng_service.schedule_boot_stop()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")

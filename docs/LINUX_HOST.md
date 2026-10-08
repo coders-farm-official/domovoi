@@ -269,11 +269,62 @@ run each room's MPD container. Without group membership it would need
 sudo, which it won't do. Log out and back in, then confirm with `docker ps`
 that you get output rather than a permission error.
 
-Ollama:
+> **The `docker` group is root.** Anyone in it can start a container that
+> mounts the host's `/` and change anything on the box as root; Docker's
+> own documentation says the same. So the account the services run as is,
+> in effect, root: a bug that lets someone run code inside the core is a
+> root compromise of the server, whatever the [unit
+> sandboxing](#sandboxing-the-units) below holds back. Make that account
+> one that does nothing else: the `domovoi` service user under [Make it an
+> appliance](#make-it-an-appliance) (`sudo usermod -aG docker domovoi`),
+> not a login you also browse or read mail with, and add no one else to
+> the group.
+
+Ollama, from a pinned release checked against its SHA-256. (Ollama's
+`curl -fsSL https://ollama.com/install.sh | sh` fetches whatever is newest
+and checks no hash; the steps below are what that script does on a
+CPU-only x86_64 box, with the check added.)
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+OLLAMA_VERSION=0.34.4
+# ollama-linux-amd64.tar.zst of that release (on arm64: ollama-linux-arm64.tar.zst,
+# 96f50a1192133028cf4e010d8c333f8af14b1505db6be7b2034c11487e7fd7e6)
+OLLAMA_SHA256=c238986e61d40c0cc5f4a9b9e40b9eea104350b77efa34741fc134e105cb9533
+sudo apt install -y zstd
+curl -fL -o /tmp/ollama.tar.zst   "https://github.com/ollama/ollama/releases/download/v$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+echo "$OLLAMA_SHA256  /tmp/ollama.tar.zst" | sha256sum -c -   # must say OK; stop if not
+sudo rm -rf /usr/local/lib/ollama
+sudo tar --zstd -xf /tmp/ollama.tar.zst -C /usr/local       # bin/ollama and lib/ollama
+rm /tmp/ollama.tar.zst
+sudo useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
 ```
+
+**`/etc/systemd/system/ollama.service`** (the unit `install.sh` writes):
+
+```ini
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now ollama
+```
+
+To move to another release, take its digest from that release's
+`sha256sum.txt` (or `gh release view v<version> -R ollama/ollama --json
+assets`) and repeat the steps with both values changed. The Windows
+installer pins the same release.
 
 Then clone and install. A virtualenv is worth it here — it keeps Domovoi's
 dependency tree away from the system Python that apt manages:
@@ -286,43 +337,69 @@ git clone https://github.com/coders-farm-official/domovoi && cd domovoi
 python3 -m venv .venv && source .venv/bin/activate
 ```
 
-**Install CPU-only torch first.** This step is not optional on a machine
-without an NVIDIA GPU:
+**Install from the hash-pinned lock.** `requirements-linux-py314.lock` at
+the repo root is the whole production set (the core, the dashboard, the
+`real-clients` and `voice-profile` extras, `resemblyzer`, and CPU-only
+`torch` from PyTorch's CPU index), every package at an exact version with
+its SHA-256s, so a substituted or tampered download fails the install
+instead of running. It was compiled for CPython 3.14 on x86_64, which is
+what Ubuntu 26.04's `python3` is (`python3 --version`). Three commands, in
+this order:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel
+pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock
+pip install --no-deps --no-build-isolation -e .
 ```
+
+The first installs the build tools, checked against the lock's hashes.
+The second installs everything else; `metaphone` and `webrtcvad` publish
+no wheels and are built here, with those checked tools rather than a
+fresh, unchecked `setuptools` that pip would otherwise download for each
+build (that is what `--no-build-isolation` is for, and why the
+`python3-dev` and `build-essential` prerequisites are there). The third
+installs Domovoi itself and nothing else. No `dev` extra: a server doesn't
+run the test suite.
 
 PyPI's default Linux `torch` build bundles its own CUDA runtime — cuBLAS,
-cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it —
-and `torch` arrives via the `voice-profile` extra. That is entirely
-separate from the `cuda` extra below, which only covers the wheels
-`ctranslate2` wants. Installing the `+cpu` build first means the next
-command sees `torch>=2.0` already satisfied and never pulls the CUDA one.
+cuDNN, NCCL, cuFFT, cuSOLVER, Triton and friends, about **2.7 GB** of it.
+The lock pins the `+cpu` build from PyTorch's CPU index (it names that
+index itself), so none of that arrives. That is entirely separate from the
+`cuda` extra below, which only covers the wheels `ctranslate2` wants.
 
-```bash
-pip install -e ".[dev,real-clients,voice-profile]"
-```
-
-Then try `resemblyzer` the normal way — the `--no-deps` dance in the
-README is a Windows workaround:
-
-```bash
-pip install resemblyzer
-```
+Check the voice encoder loads:
 
 ```bash
 python -c "from resemblyzer import VoiceEncoder; VoiceEncoder()"
 ```
 
 That should print `Loaded the voice encoder model on cpu in <N> seconds`.
-If the install fails building `webrtcvad`, fall back to `pip install
---no-deps resemblyzer` — Domovoi doesn't use the code path that calls it.
+
+**No lock for your Python?** On anything but CPython 3.14 (the
+[`uv venv --python 3.13`](#if-the-wheels-arent-there-yet) route, an arm64
+box the lock wasn't checked on), fall back to pip's resolver, which checks
+no hashes and installs whatever the index serves that day within the
+floors in `pyproject.toml`:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install -e ".[real-clients,voice-profile]"
+pip install resemblyzer      # if webrtcvad fails to build: pip install --no-deps resemblyzer
+```
+
+The [update unit](#updates-from-the-dashboard) does the same, with a
+warning in its step, whenever the venv's Python isn't the lock's.
+Maintainers regenerate the lock with `DOMOVOI_LOCK_SEED=requirements.lock
+bash scripts/linux/compile-linux-lock.sh` (pip-compile in a pinned
+`python:3.14-slim` container, so it resolves for this platform from any
+machine with Docker, starting from the suite's tested versions) after any
+change to `pyproject.toml`, and commit both.
 
 > **CUDA wheels are opt-in.** They used to ride along with `real-clients`;
-> they now live in a separate `cuda` extra, so the command above pulls
-> nothing NVIDIA. On a machine that *does* have an NVIDIA GPU, add
-> `pip install -e ".[cuda]"`.
+> they now live in a separate `cuda` extra, so the lock pulls nothing
+> NVIDIA. On a machine that *does* have an NVIDIA GPU, add
+> `pip install -e ".[cuda]"` (resolved from the index, not hash-checked:
+> the lock is the CPU set).
 
 > **The streaming fast lane is opt-in as well.** It is a small second
 > recognizer that follows each command while it is spoken; today it only
@@ -341,7 +418,9 @@ If the install fails building `webrtcvad`, fall back to `pip install
 > **shadow** under Settings → Speech-to-text → *Fast lane*, which applies
 > without a restart. If the [update unit](#updates-from-the-dashboard)
 > manages this box, add `fastlane` to `DOMOVOI_PIP_EXTRAS` so a venv
-> re-sync keeps it installed.
+> re-sync keeps it installed. Like `cuda`, it is outside the lock: pip
+> resolves it from the index and checks no hashes, and the update unit's
+> step says so.
 
 Bring it up — `dev.sh` is the bash twin of `dev.ps1`:
 
@@ -407,79 +486,28 @@ This is where Linux earns its keep. The runbook warns that `dev.ps1` is a
 foreground development script that dies with its terminal — on Linux you
 replace it properly with three systemd units.
 
-Assumes the repo at `/opt/domovoi`, a venv at `/opt/domovoi/.venv`, and a
-service user named `domovoi` who is in the `docker` group. Adjust to taste.
+The three units ship with the checkout, in
+[`scripts/linux/units/`](../scripts/linux/units/). They assume the repo at
+`/opt/domovoi`, a venv at `/opt/domovoi/.venv`, and a service user named
+`domovoi` with its home at `/home/domovoi`, in the `docker` group (which
+[makes it root](#install), in effect). Install them as they are:
 
-**`/etc/systemd/system/domovoi-db.service`** — brings up Postgres and runs
-migrations before anything connects. Exactly what `dev.sh` does first:
-
-```ini
-[Unit]
-Description=Domovoi database (Postgres + migrations)
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-User=domovoi
-WorkingDirectory=/opt/domovoi/domovoi
-ExecStart=/usr/bin/docker compose up -d postgres
-ExecStart=/usr/bin/docker compose run --rm flyway
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo install -m 0644 /opt/domovoi/scripts/linux/units/domovoi-db.service   /opt/domovoi/scripts/linux/units/domovoi-core.service   /opt/domovoi/scripts/linux/units/domovoi-web.service /etc/systemd/system/
 ```
 
-**`/etc/systemd/system/domovoi-core.service`** — the voice service on
-:6370:
+A different user, checkout or home? Change `User=`, `WorkingDirectory=`,
+`ExecStart=`, `Environment=HOME=` and the `ReadWritePaths=` / `BindPaths=`
+lines of the copies in `/etc/systemd/system/` to match; [Sandboxing the
+units](#sandboxing-the-units) says what each of those lines must cover.
 
-```ini
-[Unit]
-Description=Domovoi core voice service
-After=domovoi-db.service ollama.service
-Requires=domovoi-db.service
-Wants=ollama.service
-
-[Service]
-Type=simple
-User=domovoi
-WorkingDirectory=/opt/domovoi
-Environment=PYTHONUNBUFFERED=1
-Environment=HOME=/home/domovoi
-ExecStart=/opt/domovoi/.venv/bin/python -m domovoi.main
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-KillMode=control-group
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**`/etc/systemd/system/domovoi-web.service`** — the dashboard on :6369:
-
-```ini
-[Unit]
-Description=Domovoi web dashboard
-After=domovoi-core.service
-Wants=domovoi-core.service
-
-[Service]
-Type=simple
-User=domovoi
-WorkingDirectory=/opt/domovoi
-Environment=PYTHONUNBUFFERED=1
-Environment=HOME=/home/domovoi
-ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
+- **`domovoi-db.service`** brings up Postgres and runs the migrations
+  before anything connects, exactly what `dev.sh` does first
+  (`docker compose up -d postgres`, then `docker compose run --rm flyway`).
+- **`domovoi-core.service`** is the voice service on :6370
+  (`/opt/domovoi/.venv/bin/python -m domovoi.main`).
+- **`domovoi-web.service`** is the dashboard on :6369
+  (`/opt/domovoi/.venv/bin/python -m web.backend.main`).
 
 Note `WorkingDirectory` differs: the two Python services run from the
 **repo root** so `python -m` resolves the packages, while the database
@@ -553,6 +581,74 @@ tell you so.
 whole house returns — Docker, Postgres, both services, every satellite —
 without you logging in. That's the difference between a demo and an
 appliance, and it's the thing Linux makes genuinely easy.
+
+### Sandboxing the units
+
+The shipped units carry systemd's sandboxing. None of it changes what
+Domovoi does; it bounds what a process gone wrong can reach directly:
+
+- **Read-only system.** `ProtectSystem=strict` mounts everything read-only
+  except what `ReadWritePaths=` names: the checkout and its venv
+  (`/opt/domovoi`: pulls, plugin installs, `domovoi/.env`), the usual
+  mount points for media disks and cards (`/mnt`, `/media`, `/run/media`,
+  `/srv`; a missing one is skipped), and the service user's home, the only
+  home the core and web can see at all (`ProtectHome=tmpfs` with
+  `BindPaths=/home/domovoi`). The home holds `~/.domovoi/`, the model
+  caches and the default `~/Music`, `~/Pictures` and `~/Documents`.
+  `domovoi-db` sees homes read-only and writes only its own.
+- **Private `/tmp`** per unit, files the services create are not readable
+  by other accounts (`UMask=0027`), and the kernel's tunables, modules,
+  logs, control groups and hostname are off limits.
+- **No set-uid files, no realtime scheduling, no new namespaces, native
+  system calls only,** and sockets limited to local, IPv4, IPv6 and
+  netlink.
+- **`domovoi-web` and `domovoi-db`** also run with `NoNewPrivileges=yes`
+  and no capabilities at all; `domovoi-db`, which only drives the `docker`
+  CLI, gives up devices, the clock and writable-executable memory too.
+
+What is deliberately left out, and why:
+
+- **`NoNewPrivileges` on the core.** The version panel's restart runs
+  `sudo -n systemctl ...` from the core ([2b](#2b-restart-from-the-dashboard-needs-one-sudoers-line)),
+  and `NoNewPrivileges` stops sudo working. The web never runs sudo (its
+  Restart button asks the core), so it keeps the setting.
+- **`PrivateDevices`, `ProtectClock`, `DevicePolicy` on core and web.**
+  They hide device nodes: a GPU, an SDR stick for the radio, the block
+  devices the dashboard reads a satellite card's label from.
+- **`MemoryDenyWriteExecute` on core and web.** The speech and audio stack
+  (numba, torch, onnxruntime) compiles code at run time.
+- **The Docker socket.** No unit setting can narrow it: the core needs it
+  for the room players, and through it the service user can still do
+  anything as root ([Install](#install)). The sandbox narrows the direct
+  paths only.
+
+**Media somewhere else**, say `/data/music`? Add it with a drop-in for the
+core and the web (`sudo systemctl edit domovoi-core`, then the same for
+`domovoi-web`):
+
+```ini
+[Service]
+ReadWritePaths=/data/music
+```
+
+**Check it** after `daemon-reload` and a restart: `systemd-analyze security
+domovoi-core` scores the exposure (the units this page listed before
+scored 9.0 "UNSAFE" each; the shipped ones score about 5.9 for the core,
+3.5 for the web and 1.8 for `domovoi-db`), Settings → Version still offers
+**Restart Domovoi** (its `sudo -n -l` probe runs inside the sandbox), a
+satellite turn answers, and a room's music starts (the core runs
+`docker`).
+
+**Already running units from an older copy of this page?** If they match
+this page's layout, install the shipped files over them as above, then
+`sudo systemctl daemon-reload` and restart the three. If you changed
+paths or the user, copy the sandboxing block from the shipped file into a
+drop-in instead (`sudo systemctl edit domovoi-core`, and the same for the
+other two), with your paths in `ReadWritePaths=` and `BindPaths=`.
+
+`domovoi-update.service` is not sandboxed: it runs as root to stop and
+start the other units, back up the database, rebuild the room image and
+roll everything back ([Updates from the dashboard](#updates-from-the-dashboard)).
 
 ### Internet or not
 
@@ -659,8 +755,15 @@ run does this:
    needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
    in the version panel instead of hiding in a slow step.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
-   changed: re-sync the venv the way [Install](#install) builds it (CPU
-   torch first, then `pip install -e ".[dev,real-clients,voice-profile]"`).
+   changed: re-sync the venv the way [Install](#install) builds it. When
+   the checkout has `requirements-linux-py314.lock` and the venv runs the
+   Python it was compiled for, that is the three hash-checked installs
+   from the lock, and a package whose download doesn't match its hash
+   fails the step, so the update rolls back; extras beyond the lock's own
+   (`cuda`, `fastlane`) then go through the resolver, and the step's
+   detail says so. Without a usable lock the step says `WARNING` and does
+   what it did before the lock existed: CPU torch first, then
+   `pip install -e ".[real-clients,voice-profile]"` from the index.
 6. If `domovoi/Dockerfile.mpd` or `domovoi/mpd.conf` changed: rebuild
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
@@ -699,8 +802,10 @@ run does this:
 
 Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
 update that would download is refused with status `aborted`, nothing
-stopped or changed: one whose Python dependencies changed (pip) or whose
-`Dockerfile.mpd` changed (docker build pulls the base image and runs apt).
+stopped or changed: one whose Python dependencies changed (pip), whose
+`Dockerfile.mpd` changed (docker build pulls the base image and runs apt),
+or whose `domovoi/docker-compose.yml` moves an `image:` pin (every image
+there is pinned by digest, so `domovoi-db` would pull the new one).
 An `mpd.conf`-only change keeps the image and just recreates the rooms.
 To take such an update, follow
 [INTERNET.md → Updating a box answered No](INTERNET.md#updating-a-box-answered-no).
@@ -719,8 +824,11 @@ file. `domovoi_test` gets the same treatment on its own evidence: its dump
 is restored if a plugin ledger in it grew. The restore goes into a fresh
 database that is then renamed to `domovoi` (or `domovoi_test`); the
 replaced one is kept as `domovoi_failed_<timestamp>` (or
-`domovoi_test_failed_<timestamp>`) for inspection, and you drop it by hand
-when you're done with it. The loader switches off a plugin whose import,
+`domovoi_test_failed_<timestamp>`) for inspection. It is a full copy of
+the database, so only the newest one of each is kept: the next restore
+drops older ones (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1). Drop the
+last one by hand (`docker exec domovoi-postgres dropdb -U domovoi
+domovoi_failed_<timestamp>`) once it's no longer interesting. The loader switches off a plugin whose import,
 `register()` or contract check fails, and a boot skips switched-off
 plugins, so every plugin that loaded before the update and that the new
 code's load errors switched off is switched back on before the previous SHA
@@ -732,7 +840,11 @@ pull while upstream still points at that commit, and offers the next one.
 
 Every run writes `/var/lib/domovoi-update/last-result.json` (status,
 from/to SHA, each step with its timing, the signature verdict, the error).
-The version panel shows
+It carries the tail of each failed command's output, so it is mode 0640,
+group the service user's: the core reads it, other local accounts don't. The dumps in
+`backups/` hold everything the database holds, the household token
+included; that directory is 0700 and each dump 0600, root only
+([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)). The version panel shows
 it as **last update**, and `GET /v1/admin/version` serves it as
 `last_update`. When the core can't use the file, `last_update` is `null`
 and `last_update_problem` says why (`unreadable`, `invalid`, ...); the
@@ -786,12 +898,17 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_REPO_DIR=/opt/domovoi
 # Default: the venv domovoi-core.service's ExecStart runs from, else <checkout>/.venv.
 # DOMOVOI_VENV=/opt/domovoi/.venv
-# Extras for the venv re-sync. An NVIDIA host adds cuda: dev,real-clients,voice-profile,cuda
-# DOMOVOI_PIP_EXTRAS=dev,real-clients,voice-profile
-# CPU torch index, used first when the extras include voice-profile. Empty: skip that step.
+# Extras for the venv re-sync. The lock covers real-clients and voice-profile; any other
+# (an NVIDIA host's cuda, fastlane) is resolved from the index after it, without hash checks.
+# DOMOVOI_PIP_EXTRAS=real-clients,voice-profile
+# The hash-pinned lock the re-sync installs from, relative to the checkout. Empty: never use one.
+# DOMOVOI_DEPS_LOCK=requirements-linux-py314.lock
+# CPU torch index, for the resolver path only (the lock names its own). Empty: skip that step.
 # DOMOVOI_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 # DOMOVOI_UPDATE_DIR=/var/lib/domovoi-update
 # DOMOVOI_UPDATE_KEEP_BACKUPS=5
+# Replaced databases (<db>_failed_<time>) a rollback keeps for inspection, newest first.
+# DOMOVOI_UPDATE_KEEP_FAILED_DBS=1
 # 0 lets an update go ahead when the pre-update backup fails (then no restore is possible).
 # DOMOVOI_UPDATE_REQUIRE_BACKUP=1
 # DOMOVOI_UPDATE_HEALTH_TIMEOUT=120
@@ -1195,6 +1312,31 @@ file interpolates it). Rotate right away if your install predates the
 random-password bootstrap — its `.env` carries the template default, and
 `python -m domovoi.env_bootstrap` deliberately leaves an existing `.env`
 alone.
+
+**Helper-container secrets.** `docker-compose.yml` takes the Letta server
+password from `LETTA_TOKEN` and SearXNG's signing key from `SEARXNG_SECRET`
+in `domovoi/.env`. `LETTA_TOKEN` is also what the core signs in to Letta
+with, so the two always match. A fresh `.env` gets random values from
+`python -m domovoi.env_bootstrap`; an older `.env` without them falls back
+to the historical values, which were the same on every install. Both
+containers listen on `127.0.0.1` only, so on a dedicated box only the box's
+own processes reach them, but give them their own values anyway:
+
+```bash
+cd /opt/domovoi/domovoi
+gen() { python3 -c 'import secrets; print(secrets.token_urlsafe(24))'; }
+printf 'LETTA_TOKEN=%s
+SEARXNG_SECRET=%s
+' "$(gen)" "$(gen)" >>.env
+# Recreate whichever of the two runs, so it starts with the new value:
+docker compose up -d --no-deps searxng            # if the search helper runs
+docker compose --profile chat up -d letta         # if chat mode is on
+sudo systemctl restart domovoi-core domovoi-web   # the core reads LETTA_TOKEN at start
+```
+
+Letta reads its password from the environment when it starts, so that is
+the whole rotation. Skip the `searxng` line on a box answered No: the
+helper stays stopped there.
 
 **Don't suspend.** Desktop-oriented installs sometimes ship with sleep
 targets enabled, which is fatal for a machine satellites reconnect to:

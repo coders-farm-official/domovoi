@@ -80,6 +80,9 @@ async def build(
     # ── Phase 1: caches ───────────────────────────────────────────────
     await progress("fetch", 5, "checking artifact caches")
     st = cache.status(board.python_version, board.os_release)
+    # Only pinned, verified wake-word models ever reach a payload: anything
+    # else in that bucket is removed first, and a short bucket is refilled.
+    oww_verified, _removed = fetchers.verify_oww_models()
     if offline:
         if not st["wheels"]["ok"]:
             await progress("fetch", 10, "downloading aarch64 wheels (first run is slow)")
@@ -96,7 +99,7 @@ async def build(
             ok, msg = fetchers.fetch_debs(board.os_release, tuple(extra))
             if not ok:
                 warnings.append(msg)
-        if not st["oww_models"]["ok"]:
+        if oww_verified < len(fetchers.OWW_MODEL_FILES):
             await progress("fetch", 40, "caching wake-word base models")
             ok, msg = fetchers.fetch_oww_models()
             if not ok:

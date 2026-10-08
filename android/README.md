@@ -32,6 +32,38 @@ cd android
 # APK lands in app/build/outputs/apk/debug/
 ```
 
+## Release-signed builds
+
+The APK the CI workflow publishes (`.github/workflows/android-apk.yml`,
+the `domovoi-debug-apk` artifact) is **debug-signed** with a key the
+runner makes up for that run, and its SHA-256 is in the run summary. It is
+a test build: each CI run carries a different key, Android won't install
+one over another (uninstalling to upgrade loses the saved servers and the
+household token), and nothing ties it to this project. For a phone that
+keeps the app, build a release APK signed with a key you keep:
+
+```bash
+# Once: a release key, kept outside the checkout (.gitignore refuses
+# *.jks and *.keystore in it anyway).
+keytool -genkeypair -v -keystore ~/domovoi-release.jks -alias domovoi \
+  -keyalg RSA -keysize 4096 -validity 10000
+
+# Every release:
+cd android
+./gradlew :app:assembleRelease   # app/build/outputs/apk/release/app-release-unsigned.apk
+BT=$ANDROID_HOME/build-tools/35.0.0
+"$BT/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk /tmp/app-release-aligned.apk
+"$BT/apksigner" sign --ks ~/domovoi-release.jks --ks-key-alias domovoi \
+  --out app-release.apk /tmp/app-release-aligned.apk
+"$BT/apksigner" verify --print-certs app-release.apk
+sha256sum app-release.apk        # publish this next to the APK
+```
+
+Keep the key and its password safe and backed up: every later release has
+to be signed with the same key, or phones refuse the upgrade. A phone with
+a debug build installed uninstalls it once before the first release build
+goes on.
+
 ## First run / offline-local mode
 
 Without a configured server the app runs in **local mode**: just a Music

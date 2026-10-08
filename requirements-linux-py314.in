@@ -1,0 +1,24 @@
+# requirements-linux-py314.in: what requirements-linux-py314.lock holds
+# beyond pyproject.toml's dependencies and its real-clients and
+# voice-profile extras, which the lock compiles from pyproject.toml itself.
+#
+# The lock is the production install of a Linux server: CPython 3.14,
+# x86_64, CPU-only torch from the PyTorch CPU index, every package at an
+# exact version with its SHA-256s (docs/LINUX_HOST.md, "Install";
+# scripts/linux/apply-update.sh, sync_deps). Regenerate it with
+# scripts/linux/compile-linux-lock.sh, which runs pip-compile in a pinned
+# python:3.14-slim container so the resolver sees Linux and Python 3.14
+# whatever machine you run it on, and commit both files together.
+
+# The speaker encoder behind voice profiles (domovoi/clients/voice_embedder.py).
+# pyproject does not declare it (its webrtcvad pin has no Windows wheels);
+# on Linux it installs normally, so the production lock carries it.
+resemblyzer>=0.1.4
+
+# The build backend: of this project (pip install --no-deps -e .) and of the
+# few pins that publish only an sdist. The install builds them with
+# --no-build-isolation against this hash-checked copy, so no build step
+# downloads an unchecked setuptools of its own. Below 82: webrtcvad (under
+# resemblyzer) imports pkg_resources, which setuptools 82 removed.
+setuptools>=68,<82
+wheel>=0.43

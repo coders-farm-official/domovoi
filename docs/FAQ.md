@@ -270,6 +270,8 @@ There's no one-button backup tool yet — but it's three pieces, all standard:
 2. **`~/.domovoi/`** on the server — copy the folder. Trained wake-word models and recorded training clips live here and are genuinely hard to recreate; the rest (rendered sounds, caches) regenerates itself.
 3. **Your media** — `MUSIC_DIR` and friends, which you're presumably backing up anyway.
 
+On Linux with the update unit, the box keeps its own copies too: a dump of the database before every update in `/var/lib/domovoi-update/backups/` (newest 5, root only) and, after a rollback, the replaced database as `domovoi_failed_<time>` (newest one). They hold everything the database holds, so count them when you move, sell or wipe the machine ([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)).
+
 Restore on a new machine: install Domovoi, start Postgres, restore the dump (`docker exec -i domovoi-postgres psql -U domovoi domovoi < domovoi-backup.sql`), copy `~/.domovoi/` and your media back, copy your `.env`, start the core. Returning users note: admin credentials live in the database, so a restored database keeps your password; a *fresh* database means first-run setup again (new setup code in `~/.domovoi/setup-code.txt`). Satellites reconnect on their own — their config never left the Pi.
 
 ## Linux or Windows for the server?
