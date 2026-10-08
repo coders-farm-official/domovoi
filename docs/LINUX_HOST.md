@@ -861,7 +861,10 @@ take them:
 - **Records the rollback baseline** in `/var/lib/domovoi-update/applied_sha`
   when that file doesn't exist yet: the `running_sha` the core reports on
   `/v1/admin/version`, `-dirty` stripped, checked as a commit of the
-  checkout by the service user. If the core isn't answering, or the SHA
+  checkout by the service user. That read takes the household token, which
+  the installer reads as the service user from its
+  `~/.domovoi/device-token.txt` and hands curl on stdin. If the core isn't
+  answering or refuses the read, or the SHA
   isn't in the checkout, it stops instead of guessing. HEAD is no stand-in,
   because a pull moves it past the running code.
 - **Installs the grant** in `/etc/sudoers.d/domovoi-update` (mode 0440),
@@ -911,12 +914,16 @@ The same, without the installer. Run these over SSH, as your admin user,
 in this order.
 
 1. Record the SHA the box is **running** now as the last known-good one.
-   Do this first, before you pull. The `/v1/admin/version` endpoint is
-   open, so no login is needed:
+   Do this first, before you pull. The `/v1/admin/version` endpoint takes
+   the household token, which the core keeps in the service user's
+   `~/.domovoi/device-token.txt`, so no admin login is needed. The token
+   goes to curl on stdin (`-H @-`) rather than on its command line:
 
    ```bash
    sudo install -d -m 0755 /var/lib/domovoi-update
-   RUNNING=$(curl -s http://127.0.0.1:6370/v1/admin/version | python3 -c 'import json,sys; print(json.load(sys.stdin)["running_sha"].removesuffix("-dirty"))')
+   RUNNING=$(sudo -u domovoi sed 's/^/X-Device-Token: /' ~domovoi/.domovoi/device-token.txt \
+     | curl -s -H @- http://127.0.0.1:6370/v1/admin/version \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["running_sha"].removesuffix("-dirty"))')
    sudo -u domovoi git -C /opt/domovoi rev-parse --verify "$RUNNING^{commit}" | sudo tee /var/lib/domovoi-update/applied_sha
    ```
 

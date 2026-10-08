@@ -1643,7 +1643,17 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
 # satellite-code channel above and domovoi/git_version.py).
 
 
-@app.get("/v1/admin/version")
+@app.get(
+    "/v1/admin/version",
+    # CORE-21: the device tier's READ half. Beside the running commit it
+    # carries the update unit's last run (its error text and step log),
+    # whether this host can restart itself, and the rolled-back SHA: what
+    # an operator needs, not something to answer every LAN host. The
+    # dashboard sends the household token (the web hop forwards it with
+    # the cookie), and the update installer reads the token file as the
+    # service user.
+    dependencies=[Depends(require_device_read)],
+)
 async def admin_version() -> dict[str, Any]:
     """What this process is RUNNING, and what's checked out on disk.
 
