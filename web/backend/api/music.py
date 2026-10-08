@@ -104,7 +104,11 @@ _SORT_CLAUSES: dict[str, str] = {
 
 @router.get("/library", response_model=LibraryPage)
 async def list_library(
-    q: str | None = Query(default=None, description="Substring filter against title/artist/album/file_path"),
+    q: str | None = Query(
+        default=None,
+        description="Substring filter against title/artist/album and the library-relative "
+                    "file_path (the path a client is shown, never the server's absolute one)",
+    ),
     source: str | None = Query(
         default=None,
         description="Filter by source column. Use 'manual' for rows with NULL source; "
@@ -130,8 +134,12 @@ async def list_library(
     where_parts: list[str] = []
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     if q:
+        # The path half of the search sees what a client is SHOWN (WEB-16):
+        # matching the stored absolute path let an open caller recover the
+        # operator's username a character at a time (``q=/home/k`` ...).
         where_parts.append(
-            "(title ILIKE :q OR artist ILIKE :q OR album ILIKE :q OR file_path ILIKE :q)"
+            "(title ILIKE :q OR artist ILIKE :q OR album ILIKE :q"
+            f" OR {_shown_path_sql(params)} ILIKE :q)"
         )
         params["q"] = f"%{q}%"
     if source:
@@ -1634,6 +1642,47 @@ def public_track_path(file_path: str | None) -> str:
         except ValueError:
             continue
     return track.name
+
+
+def _shown_path_sql(params: dict[str, Any]) -> str:
+    """SQL for :func:`public_track_path` — the library-relative path, with
+    ``/`` separators, or the file name for a row outside the library — so
+    the library search matches what a client is shown and nothing above
+    ``MUSIC_DIR`` (WEB-16). Adds its bind parameters to ``params``.
+
+    Each spelling of the root is compared as an exact prefix (``left()``,
+    not ``LIKE``, so a ``_`` or ``%`` in a path is not a wildcard), case-
+    and separator-blind for a Windows-shaped root as
+    :class:`~pathlib.PureWindowsPath` is; the longest spelling wins.
+    """
+    from domovoi.config import settings as core_settings
+
+    prefixes: list[tuple[str, bool]] = []
+    for root in _music_roots(core_settings.music_dir):
+        windows = "\\" in root or ":" in root[:3]
+        if windows:
+            prefix = PureWindowsPath(root).as_posix().rstrip("/").lower() + "/"
+        else:
+            prefix = PurePosixPath(root).as_posix().rstrip("/") + "/"
+        if (prefix, windows) not in prefixes:
+            prefixes.append((prefix, windows))
+    prefixes.sort(key=lambda pw: len(pw[0]), reverse=True)
+
+    whens: list[str] = []
+    for i, (prefix, windows) in enumerate(prefixes):
+        params[f"music_root_{i}"] = prefix
+        params[f"music_root_len_{i}"] = len(prefix)
+        params[f"music_rel_from_{i}"] = len(prefix) + 1
+        head = f"left(file_path, :music_root_len_{i})"
+        rest = f"substr(file_path, :music_rel_from_{i})"
+        if windows:
+            head = f"lower(replace({head}, chr(92), '/'))"
+            rest = f"replace({rest}, chr(92), '/')"
+        whens.append(f"WHEN {head} = :music_root_{i} THEN {rest}")
+    name_only = "regexp_replace(replace(file_path, chr(92), '/'), '^.*/', '')"
+    if not whens:
+        return name_only
+    return f"(CASE {' '.join(whens)} ELSE {name_only} END)"
 
 
 def _music_roots(music_dir: str) -> list[str]:

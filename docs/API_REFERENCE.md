@@ -487,7 +487,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. |
+| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. `q` matches title, artist, album and that same relative path, so nothing above the music library is searchable either. |
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
 | `PATCH /api/music/library/{track_id}` | **Device** | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
