@@ -863,16 +863,25 @@ dashboard is served from the same origin as the routes that hand it back,
 with the operator's session alongside. Two rules keep one from becoming
 the other:
 
-- **A document the browser would execute is downloaded, not rendered.**
-  `GET /api/documents/raw/{path}` and `GET /api/images/raw` serve HTML,
-  XHTML and SVG as `Content-Disposition: attachment` with
+- **Only what a browser shows inertly is rendered; everything else is a
+  download.** `GET /api/documents/raw/{path}` and `GET /api/images/raw`
+  open a file in the tab only when it is on a short allowlist: raster
+  pictures (PNG, JPEG, GIF, WebP, BMP, AVIF, ICO, TIFF, HEIC), `audio/*`,
+  `video/*`, PDF and plain text. Anything else — HTML, XHTML, SVG, the
+  whole `+xml` family (`.rss`, `.atom`, `.xsl`, `.rdf`, `.kml`, `.xaml`
+  …, which a browser parses as an XML document that can carry a script),
+  Markdown, JSON, CSV, a type the host's registry could not name — comes
+  back as `Content-Disposition: attachment` with
   `X-Content-Type-Options: nosniff` (believe the declared type, don't
   guess from the bytes) and `Content-Security-Policy: sandbox` (if it is
-  rendered anyway, render it in an opaque origin). PDFs, pictures and
-  everything else still open inline — that's what "open in a new tab" is
-  for. The classifier is `web/backend/api/inline_serve.py`, and it looks
-  at the extension as well as the media type, because a host with a thin
-  mimetypes registry reports `application/octet-stream` for a `.html`.
+  rendered anyway, render it in an opaque origin). It used to be the other
+  way round, a list of types to download, and the list missed the generic
+  XML family (WEB-10): which names map to which `+xml` type depends on the
+  host's mimetypes registry, so a denylist can never be complete. The
+  classifier is `web/backend/api/inline_serve.py`, and it looks at the
+  extension as well as the media type: a name that is a document's
+  (`.html`, `.svg`, `.rss`, `.xsl`, …) is a download even under a type
+  that would otherwise be allowed.
 - **Rendered markdown is sanitised before it reaches the page.** The
   document editor's preview runs `marked` output through
   `web/static/sanitize_html.js`, an allowlist-and-escape pass that keeps

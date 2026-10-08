@@ -1093,7 +1093,7 @@ row's `category` tells the UI how to open it
 | `PUT /api/documents/sheet/{rel_path}` | **Device** · `SheetWriteRequest` (optional `device_id`) | Write the grid back (.xlsx keeps formulas as formulas). `415` for anything outside .xlsx/.csv, raised before anything is created. |
 | `GET /api/documents/export/doc/{rel_path}` | **Device** · `?fmt=docx` | Export markdown/text as .docx (python-docx). |
 | `GET /api/documents/export/sheet/{rel_path}` | **Device** · `?fmt=csv\|xlsx` | Export a sheet as .csv or .xlsx. |
-| `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline for the types a browser renders safely; HTML, SVG and XHTML come back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`. |
+| `GET /api/documents/raw/{rel_path}` | **Device** | Raw file bytes. Inline only for the allowlist a browser renders inertly — raster images, `audio/*`, `video/*`, PDF, plain text; everything else (HTML, SVG, XHTML, every `+xml` type such as `.rss` / `.xsl` / `.xaml`, Markdown, JSON, an unknown type) comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` (`web/backend/api/inline_serve.py`). |
 | `POST /api/documents/drawings/read` | **Device** · `DrawingReadRequest` | Read a drawing document. |
 | `POST /api/documents/drawings/write` | **Device** · `DrawingWriteRequest` (optional `device_id`) | Save a drawing. `400` for anything outside .excalidraw/.svg. |
 
@@ -1172,7 +1172,7 @@ Images screen.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/images/thumb` | `?library_id=&path=&size=s\|m\|l\|xl` | Pillow-resized WebP thumbnail from the size-bucketed cache; `204` for undecodable files. |
-| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target). An **SVG** is a document a browser executes, so it comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` instead of rendering on the dashboard's origin. |
+| `GET /api/images/raw` | `?library_id=&path=` | The original, inline (the Files tab's Open target) when it is a raster picture. An **SVG** is a document a browser executes, so it comes back as an attachment with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` instead of rendering on the dashboard's origin — as does anything else off the inline allowlist (§3.14 raw). |
 
 ### 3.18 Chat
 

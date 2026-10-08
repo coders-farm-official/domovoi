@@ -7,6 +7,12 @@ document the browser EXECUTES, and executing it at
 ``http://<server>:6369`` would run it on the dashboard's own origin. So
 those come back as a download, declared honestly and told not to render.
 
+WEB-10: the classifier is an ALLOWLIST. The set of types a browser parses
+as a document is open-ended (every ``*/*+xml`` type is XML to it, and a
+host's mimetypes registry decides which names map to which), so only
+raster images, ``audio/*``, ``video/*``, PDF and plain text render inline
+and everything else — the ``+xml`` family included — is a download.
+
 DB-free: the auth primitives are faked (the raw serves are device tier
 since WEB-2/REV-1) and the image registry is stubbed to a tmp dir.
 """
@@ -68,13 +74,50 @@ ACTIVE = [
     # file a browser will still happily execute — the name decides too.
     ("application/octet-stream", "page.html"),
     ("text/html; charset=utf-8", "page.html"),
+    # WEB-10: the generic XML family. Browsers parse every +xml type as an
+    # XML document (XHTML-namespaced scripts, xml-stylesheet), and these
+    # are what a Debian host's /etc/mime.types and Windows' registry hand
+    # back for the names beside them.
+    ("application/rss+xml", "news.rss"),
+    ("application/x-rss+xml", "news.rss"),
+    ("application/atom+xml", "feed.atom"),
+    ("application/xslt+xml", "style.xsl"),
+    ("application/rdf+xml", "graph.rdf"),
+    ("application/vnd.google-earth.kml+xml", "route.kml"),
+    ("application/xaml+xml", "window.xaml"),
+    ("application/vnd.mozilla.xul+xml", "ui.xul"),
+    ("application/mathml+xml", "eq.mathml"),
+    # A +xml subtype in an otherwise-allowed family is still XML.
+    ("audio/x-made-up+xml", "odd.mp3"),
+    # Anything a thin registry could not name is a download, not a page.
+    ("application/octet-stream", "mystery.bin"),
+    (None, "noext"),
+    # A document's NAME wins over a harmless-looking type.
+    ("text/plain", "page.html"),
+    ("text/plain", "news.rss"),
+    ("image/png", "trick.svg"),
+    # Inert in practice, but not on the list: downloaded, which costs only
+    # an "Open raw" that saves instead of shows.
+    ("text/markdown", "notes.md"),
+    ("text/csv", "sheet.csv"),
+    ("application/json", "data.json"),
+    ("text/css", "x.css"),
+    ("text/javascript", "x.js"),
+    ("message/rfc822", "mail.eml"),
 ]
 INERT = [
     ("application/pdf", "manual.pdf"),
     ("image/png", "cat.png"),
+    ("image/jpeg", "cat.jpg"),
+    ("image/webp", "cat.webp"),
+    ("image/gif", "cat.gif"),
+    ("image/avif", "cat.avif"),
+    ("image/x-icon", "favicon.ico"),
     ("text/plain", "notes.txt"),
-    ("text/markdown", "notes.md"),
+    ("text/plain; charset=utf-8", "notes.txt"),
     ("audio/mpeg", "song.mp3"),
+    ("audio/ogg", "song.ogg"),
+    ("video/mp4", "clip.mp4"),
 ]
 
 
@@ -102,6 +145,26 @@ def test_everything_else_still_opens_in_the_tab(media_type, name):
 def test_a_document_html_file_comes_back_as_a_download(docs_dir):
     (docs_dir / "x.html").write_text("<script>alert(1)</script>", encoding="utf-8")
     r = _client().get("/api/documents/raw/x.html")
+    assert r.status_code == 200
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["content-security-policy"] == "sandbox"
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["news.rss", "feed.atom", "style.xsl", "graph.rdf", "window.xaml", "notes.md"],
+)
+def test_a_document_outside_the_inline_list_comes_back_as_a_download(docs_dir, name):
+    """WEB-10, the repro: an RSS file whose body carries an XHTML script,
+    uploaded by any paired device and opened by an admin, must not render
+    on the dashboard origin. Whatever this host's registry calls it, it is
+    not on the inline list, so it is a sandboxed download."""
+    (docs_dir / name).write_text(
+        '<rss><x:script xmlns:x="http://www.w3.org/1999/xhtml">alert(1)</x:script></rss>',
+        encoding="utf-8",
+    )
+    r = _client().get(f"/api/documents/raw/{name}")
     assert r.status_code == 200
     assert r.headers["content-disposition"].startswith("attachment")
     assert r.headers["x-content-type-options"] == "nosniff"
