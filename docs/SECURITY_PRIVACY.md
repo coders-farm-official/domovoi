@@ -327,12 +327,21 @@ request is replayed), and an admin login pairs the browser without a prompt
 by reading `GET /api/auth/device-token`. An admin sees the token
 under **Settings → Devices → Household token**, with copy, `set…` and
 rotate.
-The Android app asks for it once under **Settings → Connection**, stores it
-in `EncryptedSharedPreferences` (outside Android backups) and sends it on
-every HTTP request, on `/ws/state` and on the drop-in call socket; a
-refusal returns the app to that pairing screen. Rotating the token from
-either surface invalidates the old one everywhere: every browser and phone
-has to be paired again.
+The Android app asks for it once under **Settings → Connection**, keeps it
+sealed with AES-256-GCM under a key that never leaves the Android Keystore
+(`data/TokenVault.kt`; a token an older build kept in the plain DataStore
+is moved across at the first start, and every file is outside Android
+backups and device transfers) and sends it on every HTTP request **to that
+server** — scheme, host and port, like a browser's origin — on `/ws/state`
+and on the drop-in call socket to the core's port on the same host, and on
+nothing addressed anywhere else (`net/TokenScope.kt`; before 2026-10-08 the
+shared HTTP client put it on every request it made). A refusal returns the
+app to that pairing screen. Rotating the token from either surface
+invalidates the old one everywhere: every browser and phone has to be
+paired again. The CI's distributable build is a debuggable APK, and on a
+debuggable build anyone with USB debugging authorised can drive the app's
+own process to decrypt — the Keystore protects the file, not a debugger;
+only a release build closes that (android/README.md).
 
 ### Trusting a server before talking to it
 
@@ -343,13 +352,31 @@ to it at login — so choosing is a deliberate step: the picker shows the
 address it found and asks *trust this server?* before anything is stored.
 Until that confirmation nothing is persisted, no plugin JS is fetched or
 executed, no credential is sent, and on Android no capability or plugin
-route is loaded. Same-origin (the box that served the dashboard) is trusted
-by construction. A **satellite** does verify its server cryptographically
-— see "Server identity (which core a satellite belongs to)" below — but the
-browser and the phone do not pin a key here yet: **Settings → About** shows
-this install's fingerprint so a person can compare it by eye against the
-one printed on a prepared card, and pinning it in the picker (with TLS)
-stays on the hardening backlog.
+route is loaded. (The phone's LAN sweep and its probe of a typed address do
+ask `/api/health` and `/api/config` of the hosts they find — open reads —
+and since 2026-10-08 do so on a client with no token on it; before, both
+carried the active server's household token to every address swept.)
+Same-origin (the box that served the dashboard) is trusted by construction.
+A **satellite** verifies its server cryptographically — see "Server identity
+(which core a satellite belongs to)" below — and so, since 2026-10-08, does
+the **phone**: `GET /api/health` passes the core's identity block through
+(the Ed25519 public key and the `SHA256:…` fingerprint **Settings → About**
+shows), and with `?challenge=<nonce>` the core's signature over that nonce.
+The app pins the key the first time a trusted server proves one (trust on
+first use — the same trust the dialog expressed; a server that offers no
+identity at all, a web backend from before this, is treated as before and
+said so in the log) and demands the proof again after every network change
+before the first request that would carry the household token
+(`net/IdentityGate.kt`): whatever answers at the saved address on another
+network — a hotspot redirecting port 6369, a home-subnet twin — gets a
+token-less probe and, failing the proof, nothing else; the shell says the
+server did not prove it is the one this phone paired with. The pinned
+fingerprint and every trusted server are listed under **Settings →
+Connection**, each with a forget button, and a server switch forgets trust
+that is no longer attached to a listed server. This is the pre-TLS interim:
+a relay to the real server from a hostile network would still pass, which
+is what TLS with a pinned certificate closes, and that stays on the
+hardening backlog. The browser does not pin a key yet.
 
 ### Which names the server answers to
 
@@ -945,7 +972,7 @@ and migration V018.
 | **On the phone** | The Android app posts a notification that is `VISIBILITY_PRIVATE` with a public version saying only the kind and the room ("Reminder · garage"). Android shows that public version on the lock screen **only when the phone is set to hide sensitive notification content**; its default shows the whole notification there, a reminder's words included, and an app cannot force otherwise. A shared screen never carries the words, locked or not. The local alarm mirror keeps a reminder's words in the app's private storage, excluded from cloud backup and from device-to-device transfer (`dataExtractionRules`; `allowBackup=false` alone stops only the first from Android 12), and its alarms carry ids only. |
 | **"Only reminders for this device"** (per satellite, default off) | A row in `timer_own_only_rooms` turns it on: that satellite then announces only the timers and reminders set on it; the room a timer was set in always announces its own. Read open (`GET /api/satellites/{room}/timer-announcements`, and `timers_own_only` on every roster row) — anyone in the house may see how a room behaves, like `capture_commands`. Written on the **device tier** (`PUT` with the household token or an admin Bearer, plus the `X-Requested-With` header every write needs; the dashboard cookie alone is `403`), like volume and the room label, because it only changes what a room *says* — on, the room says less; off, the default, it announces every room's timers. It is neither a privacy control (command recording, which records audio, is the admin security tier) nor device configuration (the satellite config push rewrites the Pi and is admin), and the Android app, which holds only the household token, carries the same switch. |
 | **The dashboard's alert** | A card per fire in the corner of every open dashboard page, until dismissed (dismissals are per browser, kept in its own storage) or 30 minutes on. No browser notification and no sound: a plain-http LAN page is not a secure context, and Web Push would need a third-party push service. |
-| **What it sends anywhere** | Nothing new. No Web Push, no FCM: the phone learns of a fire over its existing socket to the Domovoi server while the app is open, from a background check it makes to that same server about every 15 minutes while it is not (two reads with the household token, from an alarm, not a service), or from its own alarm. **The background check goes only over Wi-Fi or Ethernet**: it sends the household token, usually as plain http to the server's private address, and on mobile data — or on a network away from home that reuses the same address range — whoever answers at that address would collect the token with nobody looking. Off Wi-Fi it asks nothing (the timers already on the phone still ring). On a foreign Wi-Fi that reuses the home subnet it still asks, and the token goes to whatever holds that address there; the phone does not remember which network it was paired on. The open app itself talks to its saved server on whatever network it is on, as it always has. |
+| **What it sends anywhere** | Nothing new. No Web Push, no FCM: the phone learns of a fire over its existing socket to the Domovoi server while the app is open, from a background check it makes to that same server about every 15 minutes while it is not (two reads with the household token, from an alarm, not a service), or from its own alarm. **The background check goes only over Wi-Fi or Ethernet**: it sends the household token, usually as plain http to the server's private address, and off Wi-Fi it asks nothing (the timers already on the phone still ring). **On any network, the token goes out only after the server at the saved address has proved its identity** — a token-less `GET /api/health?challenge=` whose signed answer must match the key this phone pinned (see "Trusting a server before talking to it"): on a foreign Wi-Fi that reuses the home subnet, or a hotspot redirecting the port, whatever answers there gets that probe and, failing it, nothing — not from the background check, not from the open app's socket and reachability loop, not from a ringing alarm's confirm (which has no Wi-Fi gate and so used to send the token over mobile data too). Before 2026-10-08 the token went to whatever held the address, and the phone did not remember which network it was paired on. |
 
 ## Lyrics (household tier only)
 
@@ -1514,14 +1541,26 @@ only towards the home network — RFC 1918 addresses, loopback, link-local,
 the emulator host, and names under `.local`, `.home.arpa`, `.internal`,
 `.lan` and `.home`; any other server address must be `https://`, and a
 plain-http address outside that set is refused before a connection is
-attempted, with a message that says so. The platform half is
+attempted, with a message that says so — in the picker, in **Settings →
+Connection** (which until 2026-10-08 saved any string unchecked) and for
+the save-to-device downloads, which go through the system `DownloadManager`,
+a separate HTTP stack the app's client never sees, and are refused before
+they are queued. The platform half is
 `android/app/src/main/res/xml/network_security_config.xml` (system trust
 store only; the TOFU pin for the server certificate lands there when TLS
 does); since Android's config cannot express an IP range, the whole rule is
-enforced in `net/CleartextPolicy.kt` on the app's single HTTP client. The
-app also opts out of device backups (`allowBackup="false"`), so nothing it
-stores — server address, device id, and the pairing token once it exists —
-is copied to a cloud or `adb` backup.
+enforced in `net/CleartextPolicy.kt` on the app's single HTTP client. That
+client puts the household token only on requests to the active server
+itself and strips it from everything else (`net/TokenScope.kt`), and the
+exported media session — which any app on the phone may bind to, as every
+`MediaSessionService` is — admits only this app, the system's own
+controllers and Android Auto, and takes no media item from any of them
+(`player/SessionAccess.kt`), so no other app can make the authenticated
+player fetch a URL of its choosing. The app also opts out of device
+backups (`allowBackup="false"`, `dataExtractionRules`), so nothing it stores
+— server address, device id, the pinned server identity and the sealed
+pairing token — is copied to a cloud or `adb` backup or moved in a
+device-to-device transfer.
 
 ---
 
