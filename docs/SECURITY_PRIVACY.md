@@ -442,7 +442,15 @@ body sent without one is counted as it streams and cut off the moment it
 crosses. The upload routes — a music zip, a Piper voice, satellite media,
 documents and files, a plugin zip — keep their own much larger ceilings
 (`domovoi/transport_guard.py`), on top of the domain limits they already
-enforced. `MAX_REQUEST_BYTES` moves the default.
+enforced. Within those ceilings several upload handlers still hold the
+whole upload in the dashboard process's memory before writing it (WEB-19,
+not yet fixed): `POST /api/files/upload` and `POST /api/music/library/upload`
+up to 8 GiB each, every member a music zip extracts up to 1 GiB, a
+documents upload up to 512 MiB and a chat image up to 64 MiB before its
+20 MB check — so one paired device can make that process allocate that
+much in a single request. The Piper voice upload already streams to disk
+under a running budget; doing the same for these is the fix.
+`MAX_REQUEST_BYTES` moves the default.
 
 Two smaller bounds go with it. `Intent.transcript` and `room_id` are
 length-bounded, so a body that is not a spoken turn is refused by the
@@ -943,7 +951,16 @@ the other:
   markdown's own elements, drops every `on*` attribute, drops
   `<script>`/`<style>`/`<iframe>` with their contents, and accepts only
   relative, `http(s)`, `mailto` and inline raster-image URLs in `href` /
-  `src` (entity-decoded first, so `java&#115;cript:` is refused too).
+  `src` (entity-decoded first, so `java&#115;cript:` is refused too). A
+  link's `rel` is the sanitiser's own (`noopener noreferrer nofollow`,
+  written first), never the author's. One thing it still lets through, and
+  it is a privacy leak rather than a script (FE-5, not yet fixed): an image
+  with an absolute `http(s)` address — `![](https://…)` or a raw `<img>` —
+  loads when a note is previewed, so whoever wrote the note learns when,
+  and from which address, a household member opened it, and can make the
+  viewer's browser send a blind GET to another host on your network.
+  Previewing a note somebody else wrote is visiting a page they chose the
+  images for; limiting preview images to the server's own URLs is the fix.
   Without the sanitiser loaded there is no preview at all.
   `domovoi/tests/test_markdown_preview_sanitised.py` renders the real
   pipeline and asserts on what the preview would put in the page.
