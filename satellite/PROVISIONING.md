@@ -562,34 +562,63 @@ If you skip this step the satellite still runs — with the wrong clock and zone
 
 ### 8.3 Reboot helper and hardware watchdog (self-healing while nobody is home)
 
-Two units died while idle for days (October 2026) and only a power cycle brought them back. The client now watches itself (`[health]` in the config: memory, the microphone, the wake loop, the link) and restarts its own service when a check fails; what it cannot fix from user space is a wedged radio or network stack, and for that it has one more root helper. A card from media prep (2026-10-09 on) has both of the following; a hand-built or older unit gets them with two commands each.
+Two units died while idle for days (October 2026) and only a power cycle brought them back. The client now watches itself (`[health]` in the config: memory, the microphone, the wake loop, the link) and restarts its own service when a check fails — each check acts only when it has seen its condition twice in a row, and at most three self-restarts an hour (one of them a reboot) before it only logs. What it cannot fix from user space is a wedged radio or network stack, and for that it has one more root helper. A card from media prep dated 2026-10-09 or later has both of the following. Pushing the satellite code from the dashboard does **not** install either (both need root); a unit without them keeps working and logs *a reboot would be needed* instead of rebooting.
 
-**The reboot helper.** After `[health] reboot_after_min` (15) minutes with no server AND a gateway that does not answer, the client runs `sudo -n /usr/local/sbin/domovoi-reboot`, which does exactly `systemctl reboot` and takes no arguments. Without the helper it only logs that a reboot would be needed. It never reboots while the gateway answers — a core that is down is the core's problem.
+**The reboot helper.** After `[health] reboot_after_min` (15) minutes with no server AND a gateway that does not answer (no TCP answer on 53, 80 or 443 and no ping, or no default route at all), the client runs `sudo -n /usr/local/sbin/domovoi-reboot`, which does exactly `systemctl reboot` and refuses any argument. It never reboots while the gateway answers, nor while the core's own machine answers — a core that is down is the core's problem.
+
+**The hardware watchdog.** The Pi's SoC has a watchdog timer; once systemd is told to pet it, a kernel or firmware wedge that stops PID 1 reboots the unit on its own instead of leaving it dead until someone pulls the plug. It is two files: a line in the boot partition's `config.txt` and a systemd drop-in.
+
+How to add them depends on how the unit was built.
+
+**A card from media prep before 2026-10-09 (every portal-onboarded unit so far).** The service account has no root on purpose (§6.7: it is out of the `sudo` group and `sudo -n true` fails), so none of this can be done from a shell on the unit, console included. Either prepare a new card from the dashboard (it carries both), or shut the unit down, put its card in a **Linux** machine and run, with the card's two partitions mounted (Windows can read only the boot partition, which is half of the watchdog and none of the helper):
+
+```bash
+# Where the card's partitions are mounted (names vary by distro):
+BOOT=/media/$USER/bootfs
+ROOT=/media/$USER/rootfs
+# The service account's name, from the sudoers file media prep wrote:
+sudo awk '/NOPASSWD/ {print $1; exit}' "$ROOT/etc/sudoers.d/domovoi-satellite"
+
+# 1. The reboot helper (from a checkout of this repository, run from the
+#    folder that holds it), root-owned, and its argv-less sudoers line.
+#    Check the file with visudo before the card goes back: a sudoers file
+#    with a mistake in it disables EVERY sudo line on the unit, including
+#    the Wi-Fi recovery and the self-restart.
+sudo install -o root -g root -m 0755 domovoi/satellite/scripts/domovoi-reboot "$ROOT/usr/local/sbin/domovoi-reboot"
+echo '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""' | sudo tee "$ROOT/etc/sudoers.d/satellite-reboot" >/dev/null
+sudo chmod 0440 "$ROOT/etc/sudoers.d/satellite-reboot"
+sudo visudo -cf "$ROOT/etc/sudoers.d/satellite-reboot"
+
+# 2. The watchdog: on in config.txt (under [all], whatever section the
+#    file ends in), and petted by systemd every few seconds.
+printf '\n[all]\ndtparam=watchdog=on\n' | sudo tee -a "$BOOT/config.txt" >/dev/null
+sudo mkdir -p "$ROOT/etc/systemd/system.conf.d"
+printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee "$ROOT/etc/systemd/system.conf.d/domovoi-watchdog.conf" >/dev/null
+```
+
+**A hand-built unit** (the account you created in the imager, normally in `sudo`), from a shell on it:
 
 ```bash
 sudo install -m 0755 ~/domovoi/satellite/scripts/domovoi-reboot /usr/local/sbin/domovoi-reboot
 sudo visudo -f /etc/sudoers.d/satellite-reboot
 ```
 
-Paste this single line (same `<username>` as §6.7; the posture note there applies):
+Paste this single line (same `<username>` as §6.7; the posture note there applies). The `""` allows the helper with no arguments only:
 
 ```
-<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot
+<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""
 ```
 
-**The hardware watchdog.** The Pi's SoC has a watchdog timer; once systemd is told to pet it, a kernel or firmware wedge that stops PID 1 reboots the unit on its own instead of leaving it dead until someone pulls the plug. Needs the console or the card in another machine (it edits the boot partition):
+Then the watchdog (`/boot/config.txt` on images older than Bookworm):
 
 ```bash
-# 1. Turn the watchdog on at boot (the boot partition's config.txt;
-#    /boot/config.txt on older images).
-echo 'dtparam=watchdog=on' | sudo tee -a /boot/firmware/config.txt
-# 2. Tell systemd to pet it every few seconds (a drop-in, never system.conf).
+printf '\n[all]\ndtparam=watchdog=on\n' | sudo tee -a /boot/firmware/config.txt
 sudo mkdir -p /etc/systemd/system.conf.d
 printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee /etc/systemd/system.conf.d/domovoi-watchdog.conf
 sudo reboot
 ```
 
-After the reboot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Satellites page → room → Overview) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
+After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Satellites page → room → Overview) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
 
 ## 9. Label the hardware
 
