@@ -722,6 +722,17 @@ class Settings(BaseSettings):
     # Disk cap for every room's recordings together, in MB; the oldest go
     # first once it is exceeded. One command is about 32 KB per second.
     command_capture_max_mb: int = 500
+
+    # ─── Satellite logs retained on the server ─────────────────────────
+    # A satellite's log ring is RAM and dies with its process; from
+    # 2026-10-09 a satellite pushes its lines (`log_push`: the spool it
+    # kept while disconnected, then the last 30 s of its ring every 30 s)
+    # and the core appends them to <satellite_logs_dir>/<room>.log, 1 MB
+    # per room plus one rotation (domovoi/satellite_health.py). The lines
+    # include every transcript the room heard, so the directory is
+    # server-private like wake_clips_dir and read only through the
+    # admin-read logs route.
+    satellite_logs_dir: str = str(Path.home() / ".domovoi" / "satellite-logs")
     # How often the core's pruner deletes expired recordings, enforces the
     # cap and removes anything left for a room that is no longer opted in.
     command_capture_pruner_interval_sec: float = 3600.0

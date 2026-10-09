@@ -446,6 +446,8 @@ from domovoi.config import settings
 from domovoi.connectivity import ConnectivityProbe
 from domovoi.db.repositories import (
     SatelliteApprovalRepository,
+    SatelliteHealthRepository,
+    SatelliteOutageRepository,
     SatellitePairingRepository,
     SatellitesRepository,
     SessionRepository,
@@ -467,6 +469,7 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
+from domovoi import satellite_health
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
 from domovoi.turn_timings import (
@@ -589,7 +592,12 @@ MAX_UTTERANCE_BYTES = 60 * PCM_INPUT_SAMPLE_RATE * 2  # 60s of int16 PCM
 # What this server understands beyond protocol 0.1, listed in `ready`. A
 # satellite sends a new message type only when it is listed here (see the
 # `ready` entry in the module docstring for why).
-CORE_FEATURES: tuple[str, ...] = ("speech_pause", "end_capture", "music_failed")
+CORE_FEATURES: tuple[str, ...] = (
+    "speech_pause", "end_capture", "music_failed",
+    # 2026-10-09: the satellite's minute-by-minute health sample, and its
+    # log lines pushed to the retained per-room log (domovoi/satellite_health.py).
+    "health", "log_push",
+)
 
 # When a room can take an out-of-turn announcement (a timer or reminder
 # going off elsewhere, domovoi/timer_delivery.py): StreamSession.
@@ -2764,6 +2772,17 @@ class StreamSession:
                     "timer and reminder announcements after a reconnect will be "
                     "silent until %s is upgraded", self.room_id, self.room_id,
                 )
+            # The record the previous life of this satellite's process left
+            # behind (its last health sample, the failed connects it saw
+            # while disconnected, why it exited), carried by a satellite from
+            # 2026-10-09 on until a ready acknowledges it. Absent on older
+            # clients. Best-effort and never a refusal.
+            prev_health = ctrl.get("prev_health")
+            if prev_health is not None:
+                try:
+                    await self._accept_outage_report(prev_health)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("prev_health from %s not recorded: %s", self.room_id, e)
             # Persist the type for offline dashboard display — but ONLY when
             # the frame carried it explicitly, so an old client that omits
             # the field never resets an adoption-preseeded row to 'voice'.
@@ -2897,6 +2916,20 @@ class StreamSession:
             # stopped retrying. Sent only because `ready.features` lists it.
             await consume_music_failed(self.ws.app, self.room_id, ctrl)
             return
+        if t == "health":
+            # One sample a minute from the satellite's health monitor, sent
+            # only because `ready.features` lists it. Kept per room in
+            # memory — and NOT dropped on disconnect, since the last sample
+            # before an outage is the whole point — and in satellite_health
+            # (V022), 24 h per room. See domovoi/satellite_health.py.
+            await self._on_health(ctrl)
+            return
+        if t == "log_push":
+            # Log lines for the retained per-room file: the spool the
+            # satellite kept while disconnected (`offline`), or the last
+            # 30 s of its ring. Only because `ready.features` lists it.
+            await self._on_log_push(ctrl)
+            return
         if t == "wifi_status":
             # Periodic self-report from the Pi's WiFiWatcher (~every
             # poll, default 60 s). Cached by room_id so WifiHandler's
@@ -3026,6 +3059,108 @@ class StreamSession:
             await self._clear_chat_mode()
             return
         await self._safe_send_text({"type": "error", "message": f"unknown control type: {t!r}"})
+
+    # ── Satellite health, outage reports and retained logs ──────────────
+    # The core's side of satellite/health.py. All three handlers are
+    # best-effort: a malformed frame is dropped with a debug line (never an
+    # `error`, which ends the Pi's turn), and a database without V022 costs
+    # one warning per process, not a session.
+
+    _health_samples: int = 0
+    _v022_warned: bool = False
+
+    def _v022_hint(self, exc: Exception) -> None:
+        text_ = str(exc).lower()
+        missing = "does not exist" in text_ and ("satellite_health" in text_ or "satellite_outages" in text_)
+        if missing and not StreamSession._v022_warned:
+            StreamSession._v022_warned = True
+            log.warning(
+                "satellite health is kept in memory only: the satellite_health / "
+                "satellite_outages tables are missing — run the V022 migration "
+                "(Flyway) to keep 24 h of samples and the outage reports"
+            )
+        elif not missing:
+            log.debug("satellite health persistence for %s failed: %s", self.room_id, exc)
+
+    async def _on_health(self, ctrl: dict[str, Any]) -> None:
+        sample = satellite_health.validate_sample(ctrl)
+        if sample is None:
+            log.debug("ignoring malformed health frame from %s", self.room_id)
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        satellite_health.state_dict(self.ws.app.state, "satellite_health")[self.room_id] = {
+            "received_at": now, "sample": sample,
+        }
+        self._health_samples += 1
+        if self._health_samples % satellite_health.LOG_EVERY_SAMPLES == 1:
+            log.info("%s", satellite_health.format_health_line(self.room_id, sample))
+        try:
+            async with session_scope() as s:
+                repo = SatelliteHealthRepository(s)
+                await repo.insert(self.room_id, sample)
+                if self._health_samples % satellite_health.PRUNE_EVERY_SAMPLES == 0:
+                    await repo.prune(self.room_id, satellite_health.HEALTH_KEEP_HOURS)
+        except Exception as e:  # noqa: BLE001
+            self._v022_hint(e)
+
+    async def _accept_outage_report(self, raw: Any) -> None:
+        report = satellite_health.validate_outage(raw)
+        if report is None:
+            log.debug("ignoring malformed prev_health from %s", self.room_id)
+            return
+        prev_boot = report.get("prev_boot_id")
+        prev_boot = prev_boot if isinstance(prev_boot, str) else None
+        entry = {
+            "reported_at": datetime.now(timezone.utc).isoformat(),
+            "prev_boot_id": prev_boot,
+            "report": report,
+        }
+        satellite_health.state_dict(self.ws.app.state, "satellite_last_outage")[self.room_id] = entry
+        summary = satellite_health.outage_summary(report)
+        if satellite_health.is_quiet_exit(report.get("last_exit_reason")):
+            log.info("satellite %s reports its previous life ended on request: %s",
+                     self.room_id, summary)
+        else:
+            log.warning("satellite %s reports an outage from its previous life: %s",
+                        self.room_id, summary)
+        try:
+            async with session_scope() as s:
+                await SatelliteOutageRepository(s).insert(
+                    self.room_id, prev_boot, report,
+                    keep=satellite_health.OUTAGES_KEPT_PER_ROOM,
+                )
+        except Exception as e:  # noqa: BLE001
+            self._v022_hint(e)
+
+    async def _on_log_push(self, ctrl: dict[str, Any]) -> None:
+        lines = ctrl.get("lines")
+        if not isinstance(lines, str):
+            return
+        nbytes = len(lines.encode("utf-8", errors="replace"))
+        if nbytes > satellite_health.LOG_PUSH_MAX_BYTES:
+            log.debug("log_push from %s over the frame cap (%d bytes); dropped",
+                      self.room_id, nbytes)
+            return
+        state = self.ws.app.state
+        limiter = satellite_health.state_obj(state, "log_push_limiter", satellite_health.LogPushLimiter)
+        if not limiter.allow(self.room_id, nbytes):
+            log.debug("log_push from %s over its budget; dropped %d bytes", self.room_id, nbytes)
+            return
+        retained = satellite_health.state_obj(
+            state, "satellite_retained_log", satellite_health.default_retained_log,
+        )
+        offline = bool(ctrl.get("offline"))
+        dropped = ctrl.get("dropped")
+        try:
+            await asyncio.to_thread(retained.append, self.room_id, lines, offline=offline)
+            if isinstance(dropped, int) and not isinstance(dropped, bool) and dropped > 0:
+                await asyncio.to_thread(
+                    retained.append, self.room_id,
+                    f"[core] the satellite dropped {dropped} line(s) over its push budget",
+                    offline=False,
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning("retained log for %s could not be written: %s", self.room_id, e)
 
     async def _respond_noisy_capture(self) -> None:
         """Stock-apology TTS path for the Pi-side noisy-capture trigger.

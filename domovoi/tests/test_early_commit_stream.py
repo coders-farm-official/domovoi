@@ -97,7 +97,7 @@ def test_ready_lists_end_capture(commit_on) -> None:
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         ready = _hello(ws)
     assert ready["features"] == list(CORE_FEATURES) == [
-        "speech_pause", "end_capture", "music_failed",
+        "speech_pause", "end_capture", "music_failed", "health", "log_push",
     ]
 
 
