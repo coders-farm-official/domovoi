@@ -240,6 +240,39 @@ you're not using that.)
 
 ## Install
 
+### Or let the script do it
+
+On a fresh Ubuntu 26.04 box, `scripts/linux/provision.sh` runs this
+section, [Make it an appliance](#make-it-an-appliance) and the
+[update unit](#one-time-upgrade-for-existing-installs) for you,
+unattended. It is the same script the Windows installer runs inside its
+WSL distro. Read it, or ask it what it would do, before it changes
+anything:
+
+```bash
+git clone https://github.com/coders-farm-official/domovoi /tmp/domovoi
+sudo bash /tmp/domovoi/scripts/linux/provision.sh --dry-run --internet always --timezone America/New_York
+sudo bash /tmp/domovoi/scripts/linux/provision.sh --internet always --timezone America/New_York
+```
+
+It clones the repository again into `/opt/domovoi` as the `domovoi` user,
+installs everything from pins (the lock, the compose digests, the Ollama
+release above, and `scripts/linux/provision-manifest.conf` for docker-ce,
+the Whisper revision and the models), and stops on any download that
+doesn't match. On top of the manual steps it pre-downloads what the core
+would otherwise fetch at its first boot: the Ollama models for the box's
+memory (`--tier`), the Whisper model, the Piper voice and the room image.
+It installs the update unit with `DOMOVOI_USE_LOCK=1`, since the box came
+from the lock. Run it again at any time: finished steps are skipped, a
+killed run picks up where it stopped, and nothing is restarted that
+didn't change. `--help` lists the options (`--media`, `--tier`,
+`--skip-models`, ...).
+
+The steps below are what it does. Follow them by hand instead if you
+prefer, or to see what a step changed.
+
+### By hand
+
 Prerequisites:
 
 ```bash
