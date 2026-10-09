@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -92,6 +93,33 @@ class XlsxSheetTest {
     )
 
     private fun List<List<SheetCell>>.text(r: Int, c: Int): String = getOrNull(r)?.getOrNull(c).display()
+
+    // ── bounds ──────────────────────────────────────────────────────────
+
+    @Test fun anArchiveThatInflatesPastTheBoundIsRefusedWhileInflatingNotHeld() {
+        // The bound is on what the entries unpack to, counted as they are
+        // read, so a small archive that would unpack to gigabytes is dropped
+        // at the bound. The same bound guards the patch, which unpacks too.
+        val inflated = unzip(book()).values.sumOf { it.toByteArray().size.toLong() }
+        for (bound in listOf(1024L, inflated - 1)) {
+            try {
+                XlsxSheet.read(book(), maxInflated = bound)
+                fail("read past $bound")
+            } catch (e: IOException) {
+                assertTrue(e.message!!, e.message!!.contains("too large"))
+            }
+            try {
+                XlsxSheet.patch(book(), mapOf(CellAt(0, 0) to "x"), maxInflated = bound)
+                fail("patch past $bound")
+            } catch (e: IOException) {
+                assertTrue(e.message!!, e.message!!.contains("too large"))
+            }
+        }
+        // Exactly at the bound it is admitted, and so it is at the real one.
+        assertEquals("Name", XlsxSheet.read(book(), maxInflated = inflated).text(0, 0))
+        assertEquals("Name", XlsxSheet.read(book()).text(0, 0))
+        assertTrue(XlsxSheet.MAX_UNZIPPED >= 64L * 1024 * 1024)
+    }
 
     // ── read ────────────────────────────────────────────────────────────
 

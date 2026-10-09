@@ -18,6 +18,7 @@ import com.domovoi.app.net.DeleteResult
 import com.domovoi.app.net.MoveResult
 import com.domovoi.app.net.UploadResult
 import com.domovoi.app.ui.screens.documents.CsvSheet
+import com.domovoi.app.ui.screens.documents.SHEET_MAX_BYTES
 import com.domovoi.app.ui.screens.documents.SheetCell
 import com.domovoi.app.ui.screens.documents.SheetUnsupported
 import com.domovoi.app.ui.screens.documents.XlsxSheet
@@ -343,10 +344,22 @@ internal class PhoneFileSource(
         writeBytes(fileUri(libraryId, rel), text.toByteArray(Charsets.UTF_8))
     }
 
+    /**
+     * A sheet file's bytes, bounded by [SHEET_MAX_BYTES]: the whole file is
+     * parsed (and patched) in memory, and a text read is bounded the same
+     * way. Past the bound the editor shows this message and offers another
+     * app. (XlsxSheet bounds the INFLATED size on top, while inflating.)
+     */
+    private fun readSheetBytes(uri: Uri): ByteArray = try {
+        readBytes(uri, SHEET_MAX_BYTES.toLong())
+    } catch (_: TooLarge) {
+        throw IOException("spreadsheet is too large to open here")
+    }
+
     override suspend fun readSheet(libraryId: String, rel: String): List<List<SheetCell?>> = withContext(Dispatchers.IO) {
         when (extOf(rel)) {
-            "xlsx" -> XlsxSheet.read(readBytes(fileUri(libraryId, rel)))
-            "csv" -> CsvSheet.read(readBytes(fileUri(libraryId, rel)))
+            "xlsx" -> XlsxSheet.read(readSheetBytes(fileUri(libraryId, rel)))
+            "csv" -> CsvSheet.read(readSheetBytes(fileUri(libraryId, rel)))
             else -> throw SheetUnsupported()
         }
     }
@@ -361,11 +374,11 @@ internal class PhoneFileSource(
         when (extOf(rel)) {
             "xlsx" -> {
                 val changes = sheetChanges(loaded, edited)
-                if (changes.isNotEmpty()) writeBytes(uri, XlsxSheet.patch(readBytes(uri), changes))
+                if (changes.isNotEmpty()) writeBytes(uri, XlsxSheet.patch(readSheetBytes(uri), changes))
             }
             "csv" -> {
                 sheetChanges(loaded, edited) // the same bounds check as xlsx
-                val before = CsvSheet.decode(readBytes(uri))
+                val before = CsvSheet.decode(readSheetBytes(uri))
                 writeBytes(
                     uri,
                     CsvSheet.write(edited, CsvSheet.parse(before), CsvSheet.newlineOf(before)).toByteArray(Charsets.UTF_8),

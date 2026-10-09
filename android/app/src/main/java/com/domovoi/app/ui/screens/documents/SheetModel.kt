@@ -15,6 +15,15 @@ internal data class SheetCell(val v: String? = null, val f: String? = null)
 internal const val SHEET_MAX_ROWS = 1000
 internal const val SHEET_MAX_COLS = 60
 
+/**
+ * How large a sheet FILE the phone opens: the whole file is held in memory
+ * to parse it (and, for .xlsx, to patch it on save), so a file past this is
+ * refused with a message and can be opened in another app instead. The text
+ * editor's own bound is `TEXT_MAX_BYTES` (2 MiB); a workbook with pictures
+ * or many sheets is larger than any text, so this is wider.
+ */
+internal const val SHEET_MAX_BYTES = 64 * 1024 * 1024
+
 /** A save the sheet code will not do; [message] is what the toast says. */
 internal class SheetRefused(message: String) : Exception(message)
 

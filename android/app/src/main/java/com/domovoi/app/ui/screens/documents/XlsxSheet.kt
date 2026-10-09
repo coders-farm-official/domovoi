@@ -35,14 +35,16 @@ import java.util.zip.ZipOutputStream
  */
 internal object XlsxSheet {
 
-    /** Refuse archives that inflate past this: a phone editor for household sheets. */
-    private const val MAX_UNZIPPED = 200L * 1024 * 1024
+    /** Refuse archives that inflate past this: a phone editor for household
+     *  sheets. Counted while inflating, entry by entry, so a small archive
+     *  that unpacks to gigabytes is dropped at this many bytes, not held. */
+    internal const val MAX_UNZIPPED = 200L * 1024 * 1024
 
     // ── zip ─────────────────────────────────────────────────────────────
 
     private class Entry(val name: String, val bytes: ByteArray, val time: Long)
 
-    private fun unzip(bytes: ByteArray): List<Entry> {
+    private fun unzip(bytes: ByteArray, maxInflated: Long): List<Entry> {
         val out = mutableListOf<Entry>()
         var total = 0L
         ZipInputStream(ByteArrayInputStream(bytes)).use { zin ->
@@ -54,7 +56,7 @@ internal object XlsxSheet {
                     val n = zin.read(chunk)
                     if (n < 0) break
                     total += n
-                    if (total > MAX_UNZIPPED) throw IOException("spreadsheet is too large to open here")
+                    if (total > maxInflated) throw IOException("spreadsheet is too large to open here")
                     buf.write(chunk, 0, n)
                 }
                 out += Entry(e.name, buf.toByteArray(), e.time)
@@ -398,8 +400,13 @@ internal object XlsxSheet {
      * The first worksheet as the editor's grid, bounded to the server's
      * window, trailing empty rows and cells trimmed.
      */
-    fun read(bytes: ByteArray, maxRows: Int = SHEET_MAX_ROWS, maxCols: Int = SHEET_MAX_COLS): List<List<SheetCell>> {
-        val entries = unzip(bytes)
+    fun read(
+        bytes: ByteArray,
+        maxRows: Int = SHEET_MAX_ROWS,
+        maxCols: Int = SHEET_MAX_COLS,
+        maxInflated: Long = MAX_UNZIPPED,
+    ): List<List<SheetCell>> {
+        val entries = unzip(bytes, maxInflated)
         val book = book(entries)
         val sheet = entries.text(book.sheetPath) ?: throw IOException("first worksheet is missing")
         val strings = sharedStrings(book.sharedStringsPath?.let { entries.text(it) })
@@ -480,12 +487,12 @@ internal object XlsxSheet {
      * of [bytes] and return the new file. Every other zip entry, and every
      * untouched cell's XML, is carried over byte for byte.
      */
-    fun patch(bytes: ByteArray, changes: Map<CellAt, String>): ByteArray {
+    fun patch(bytes: ByteArray, changes: Map<CellAt, String>, maxInflated: Long = MAX_UNZIPPED): ByteArray {
         if (changes.isEmpty()) return bytes
         changes.keys.firstOrNull { it.col >= SHEET_MAX_COLS }?.let {
             throw SheetRefused("more than $SHEET_MAX_COLS columns")
         }
-        val entries = unzip(bytes).toMutableList()
+        val entries = unzip(bytes, maxInflated).toMutableList()
         val book = book(entries)
         val sheetXml = entries.text(book.sheetPath) ?: throw IOException("first worksheet is missing")
         val sc = scan(sheetXml)
