@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-09 — One restart at a time
+
+Pressing **Restart to apply changes** and then reloading the dashboard
+used to bring the button back while the update was still running, ready
+to start another one on top of it. The server now keeps that state, not
+the page.
+
+* `GET /api/config/version` (core: `/v1/admin/version`) carries
+  `restart_in_progress`: true while `domovoi-update.service` runs, however
+  it was started, and for the moment between a restart being accepted and
+  systemd taking it. The core reads systemd's state of the unit without
+  sudo; nothing to set up.
+* While it is true, `POST …/version/restart` schedules nothing and answers
+  `ok: false, in_progress: true`, and `POST …/version/pull` answers
+  `pulled: false` without running git.
+* Settings → Version and the Plugins page's restart card show a greyed
+  **Updating…** (or **Restarting…**) with the underway note, follow the run
+  to its end and report how it went, after a reload too.
+
+No action needed beyond the usual update.
+
 ## 2026-10-09 — Satellites explain their own deaths: health telemetry, self-checks, retained logs
 
 Two satellites died while idle for days and only a power cycle brought

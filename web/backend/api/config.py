@@ -191,7 +191,9 @@ async def get_version(request: Request):
     SHAs diverge after a ``git pull`` without a restart — the case this panel
     most needs to get right. On a Linux host with the update unit it also
     carries ``restart_mode``, ``last_update`` (that unit's last run) and
-    ``bad_sha`` (a commit it rolled back). Read-only proxy to the Domovoi
+    ``bad_sha`` (a commit it rolled back). ``restart_in_progress`` is true
+    while a restart or update is under way, however it was started; the
+    dashboard offers no other meanwhile. Read-only proxy to the Domovoi
     server, which owns the git working tree; the web process can't see it.
 
     ``plugins_pending_restart`` is the one addition this process makes: the
@@ -277,7 +279,9 @@ async def restart_version(request: Request):
     Admin-gated at both hops. The response comes back before the restart
     fires, so a client that then sees the connection drop should treat that
     as the restart succeeding, not as an error. Hosts without the sudoers
-    grant return ``ok: false`` with the reason instead."""
+    grant return ``ok: false`` with the reason instead, and so does a press
+    while a restart or update is already under way (``in_progress: true``):
+    the client follows that one rather than reporting a failure."""
     return bridge_response(
         *await post_admin(
             "/v1/admin/version/restart",

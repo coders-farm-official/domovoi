@@ -471,11 +471,17 @@ const PHASE_LABEL = { load: 'failed to load in your browser', render: 'crashed w
  * registered, loaded at the next restart. GET /api/config/version lists
  * what is waiting (the core's staged upgrades, plus any plugin the web
  * process still runs an older copy of); the button is the same restart
- * as Settings → Version. */
+ * as Settings → Version. While the server says a restart is already under
+ * way (restart_in_progress: pressed before a reload, in another tab, or
+ * from Settings), the button is greyed and the card follows that one. */
 const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
   const [restarting, setRestarting] = React.useState(false);
   // The server took the restart and is away on purpose (onUnderway → onSettled).
   const [underway, setUnderway] = React.useState(false);
+  // One this card isn't waiting on itself: what it runs, or null.
+  const serverRuns = useServerRestartFollow({
+    core: version, fire, busy: restarting, enabled: pending.length > 0, onSettled,
+  });
   if (!pending.length) return null;
   const capable = !!(version && version.restart_capable);
   const updateUnit = !!(version && version.restart_mode === 'update');
@@ -493,10 +499,17 @@ const PluginRestartCard = ({ version, pending, fire, onSettled }) => {
         <div className="mono" style={{ fontSize: 12 }}>{pending.map(pluginUpgradeLabel).join(' · ')}</div>
         {capable ? (
           <div>
-            <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting}>
-              {restarting ? (updateUnit ? 'Updating…' : 'Restarting…') : 'Restart to finish the upgrade'}
+            <Button variant="primary" icon="refresh-cw" onClick={restart} disabled={restarting || !!serverRuns}>
+              {restarting ? (updateUnit ? 'Updating…' : 'Restarting…')
+                : serverRuns ? (serverRuns.updating ? 'Updating…' : 'Restarting…')
+                : 'Restart to finish the upgrade'}
             </Button>
             {underway && <div style={{ marginTop: 8 }}><RestartUnderwayNote updating={updateUnit}/></div>}
+            {serverRuns && (
+              <div style={{ marginTop: 8 }}>
+                <RestartUnderwayNote updating={serverRuns.updating} plain={serverRuns.plain}/>
+              </div>
+            )}
           </div>
         ) : (
           <RestartByHandHint version={version}/>

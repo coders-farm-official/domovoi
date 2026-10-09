@@ -743,8 +743,13 @@ that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
 On a box that already runs the three units, one command installs it: see
 [One-time upgrade for existing installs](#one-time-upgrade-for-existing-installs).
 Once it's installed, the panel's **Restart to apply changes** and
-**Restart Domovoi** both start it instead of bouncing core and web, and each
-run does this:
+**Restart Domovoi** both start it instead of bouncing core and web. One run
+at a time: while it runs, however it was started (the dashboard, another
+tab, `sudo systemctl start domovoi-update` over ssh), the core refuses
+another restart and a pull, and the panel, reloaded or not, shows only a
+greyed **Updating…** until the run ends, then what it did. The core asks
+systemd whether the unit is running (`systemctl show`, no sudo). Each run
+does this:
 
 1. Work out what changed since the last SHA it applied and saw healthy.
    If nothing did, it's a plain restart, which is what **Restart Domovoi**

@@ -302,8 +302,12 @@ def test_update_mode_probes_and_fires_the_start(unit_dirs, monkeypatch):
     assert res["ok"] is True
     assert res["mode"] == "update"
     assert res["units"] == ["domovoi-update.service"]
-    assert calls[0] == ["/usr/bin/sudo", "-n", "-l", "/usr/bin/systemctl", *START_UPDATE]
-    assert calls[-1] == ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", *START_UPDATE]
+    # First a plain look at whether the unit is already running (no sudo).
+    assert calls[0] == ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value",
+                        "domovoi-update.service"]
+    sudo = [c for c in calls if c[0] == "/usr/bin/sudo"]
+    assert sudo[0] == ["/usr/bin/sudo", "-n", "-l", "/usr/bin/systemctl", *START_UPDATE]
+    assert sudo[-1] == ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", *START_UPDATE]
 
 
 def test_unit_without_its_grant_is_incapable_not_downgraded(unit_dirs, monkeypatch):
@@ -319,7 +323,8 @@ def test_unit_without_its_grant_is_incapable_not_downgraded(unit_dirs, monkeypat
     assert res["ok"] is False
     assert res["mode"] == "update"
     assert "domovoi-update.service" in res["error"] and "sudoers" in res["error"]
-    assert all("-l" in c for c in calls), "nothing may fire"
+    sudo = [c for c in calls if c[0] == "/usr/bin/sudo"]
+    assert sudo and all("-l" in c for c in sudo), "nothing may fire"
     assert not any("restart" in c for c in calls), "no legacy fallback"
 
 

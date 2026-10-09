@@ -691,6 +691,108 @@ const restartRunsFullUpdate = (v) => {
   return pulled;
 };
 
+/* What a restart the server says is under way (restart_in_progress) runs,
+ * in RestartUnderwayNote's props: with the update unit, its update, unless
+ * the unit's own record says this run is its plain restart (nothing new
+ * since the commit it last applied); without the unit, the bounce, `plain`
+ * when nothing was waiting to load. */
+const underwayRuns = (v) => {
+  if (v && v.restart_mode === 'update') {
+    const run = v.last_update;
+    const quick = !!(run && run.status === 'running' && run.mode === 'restart');
+    return { updating: !quick, plain: quick };
+  }
+  return { updating: false, plain: !pendingRestart(v).any };
+};
+
+/* Follow a restart or update the server says is under way to its end,
+ * asking for nothing: one this page did not start, or started before a
+ * reload (the page forgets its press; the server doesn't), from another
+ * tab, or by hand (sudo systemctl start domovoi-update). The same quiet
+ * wait as restartDomovoiServer's, inside the same ServerRestart window:
+ * the server goes away on purpose, and no read refused meanwhile opens a
+ * prompt.
+ *
+ *   core       the version answer that said it is under way
+ *   live       false once the caller is gone: the wait stops and says
+ *              nothing, and onSettled is not called
+ *   onSettled  the wait is over, whichever way — re-read what you show
+ *
+ * Over when the server answers with restart_in_progress clear. How it went
+ * is the update unit's result when that is the run followed: the one
+ * running when the follow began, or a newer one. Resolves true when it
+ * went well. */
+const followServerRestart = async ({ core, fire, live = () => true, onSettled = () => {} }) => {
+  const updating = !!(core && core.restart_mode === 'update');
+  const what = underwayRuns(core).updating ? 'update' : 'restart';
+  const startRun = core && core.last_update;
+  let endWindow = () => {};
+  try { endWindow = ServerRestart.begin(); } catch { /* data.js without it */ }
+  const settled = async () => {
+    endWindow();
+    endWindow = () => {};
+    try { await onSettled(); } catch { /* the caller's re-read reports itself */ }
+  };
+  const deadline = Date.now() + (updating ? 15 * 60000 : 90000);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (!live()) { endWindow(); return false; }
+    let v = null;
+    try { v = await apiGet('/api/config/version', { quiet: true }); } catch { continue; }
+    if (!live()) { endWindow(); return false; }
+    if (!v || typeof v !== 'object' || v.restart_in_progress) continue;
+    await settled();
+    const run = v.last_update;
+    const followed = !!run && (!startRun || run.started_at !== startRun.started_at
+                               || startRun.status === 'running');
+    if (followed && run.status !== 'ok' && run.status !== 'running') {
+      fire(run.error || `${what} ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
+      return false;
+    }
+    fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
+    return true;
+  }
+  if (!live()) { endWindow(); return false; }
+  fire(updating
+    ? `the ${what} is taking longer than expected — check journalctl -u domovoi-update`
+    : 'restart is taking longer than expected — check the service by hand');
+  await settled();
+  return false;
+};
+
+/* For a card that offers a restart (Settings → Version, the Plugins page's
+ * restart card): while the server says one is under way that the card is
+ * not waiting on itself, follow it (followServerRestart) and return what
+ * runs (underwayRuns); null otherwise. The card offers nothing that would
+ * start another meanwhile.
+ *
+ *   core       the card's GET /api/config/version answer
+ *   busy       the card's own restart is in flight (restartDomovoiServer
+ *              is already waiting on it)
+ *   enabled    false while the card shows nothing a restart concerns
+ *   onSettled  the follow is over — re-read the version
+ *
+ * A server still busy after a follow ends (another run started meanwhile)
+ * is followed again. */
+const useServerRestartFollow = ({ core, fire, onSettled, busy = false, enabled = true }) => {
+  const serverBusy = !!(enabled && core && core.restart_in_progress);
+  const [following, setFollowing] = React.useState(null);
+  const [round, setRound] = React.useState(0);
+  const latest = React.useRef(null);
+  latest.current = { core, fire, onSettled };
+  React.useEffect(() => {
+    if (!serverBusy || busy) return undefined;
+    let live = true;
+    const { core: c, fire: f, onSettled: s } = latest.current;
+    setFollowing(underwayRuns(c));
+    followServerRestart({ core: c, fire: f, live: () => live, onSettled: () => (s ? s() : undefined) })
+      .finally(() => { if (live) { setFollowing(null); setRound((n) => n + 1); } });
+    return () => { live = false; setFollowing(null); };
+  }, [serverBusy, busy, round]);
+  if (busy) return null;
+  return following || (serverBusy ? underwayRuns(core) : null);
+};
+
 /* Bounce domovoi-core + domovoi-web — or, with domovoi-update.service
  * installed, start it — and wait until the server is back with nothing
  * left to restart. Settings → Version ("Restart to apply changes", and
@@ -732,6 +834,13 @@ const restartRunsFullUpdate = (v) => {
  * restart_required clear. restart_required alone is no proof: a plain
  * restart never set it, and the old server still answers for a moment
  * after the press.
+ *
+ * One at a time. A restart already under way when the press reads the
+ * server (restart_in_progress: another tab's, one started by hand, or this
+ * page's own from before a reload), or that the server names when it
+ * refuses this one (in_progress), is followed instead (followServerRestart)
+ * and nothing more is asked for; the wait for this one also waits out
+ * restart_in_progress.
  *
  * A view-only tab (reloaded, so it holds the cookie and no admin sign-in)
  * is refused the restart and data.js pops the login modal; the modal comes
@@ -788,6 +897,14 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, onSta
     return fallback;
   };
   let before = await readNow(core);
+  // Already under way: follow that one; asking for another would bounce
+  // the services out from under it.
+  const join = async (v) => {
+    try { onUnderway(underwayRuns(v)); } catch {}
+    fire(`${underwayRuns(v).updating ? 'an update' : 'a restart'} is already under way — waiting for it to finish`);
+    return await followServerRestart({ core: v, fire, onSettled });
+  };
+  if (before && before.restart_in_progress) return await join(before);
   let full = fullBy(before);
   if (full && !asked) {
     // Asked as a quick restart, and the server as it is now says the unit
@@ -868,7 +985,8 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, onSta
           fire(run.error || `${what} ${(UPDATE_RESULT_PILL[run.status] || {}).label || run.status} — see journalctl -u domovoi-update`);
           return false;
         }
-        if (v && !v.restart_required && (mode === 'update' ? newRun : startedAgain(v))) {
+        if (v && !v.restart_required && !v.restart_in_progress
+            && (mode === 'update' ? newRun : startedAgain(v))) {
           await settled();
           fire(`restarted — now running ${v.running_sha || v.sha || 'new code'}`);
           return true;
@@ -892,6 +1010,8 @@ const restartDomovoiServer = async ({ core, fire, question, plain = false, onSta
       fire(how.updating ? 'updating…' : 'restarting…');
       return await waitForServer(res.mode || kind);
     }
+    // Another restart got there first (a second tab, a double press).
+    if (res && res.in_progress) return await join(before);
     fire(`restart failed: ${(res && res.error) || 'unknown'}`);
     return false;
   } catch (e) {
