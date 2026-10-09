@@ -76,12 +76,15 @@ def test_validate_outage_bounds_the_report():
 
 def test_validate_outage_slims_an_oversize_report_keeping_the_newest_diag():
     raw = {
-        "last_exit_reason": "RSS", "sample": {"pad": "x" * 400},
-        "offline_diag": [{"n": i, "pad": "y" * 400} for i in range(60)],
+        "last_exit_reason": "RSS", "sample": {"rss_kb": 1, "boot_id": "x" * 64},
+        "offline_diag": [
+            {"ts": float(i), "failure": "tcp_timeout", "detail": "y" * 200, "gateway": "g" * 64}
+            for i in range(60)
+        ],
     }
     doc = sh.validate_outage(raw)
     assert doc["truncated"] is True and "sample" not in doc
-    assert doc["offline_diag"][-1]["n"] == 59
+    assert doc["offline_diag"][-1]["ts"] == 59.0
     assert len(json.dumps(doc)) <= sh.OUTAGE_MAX_BYTES
 
 
@@ -604,3 +607,34 @@ async def test_the_web_hop_needs_a_household_credential_and_forwards_it(monkeypa
     assert [p for p, _ in seen] == ["/v1/admin/satellite/den/health"] * 2
     assert "domovoi_admin=dash-session" in seen[0][1].get("Cookie", "")
     assert seen[1][1].get("X-Device-Token") == "house-token"
+
+
+def test_an_outage_report_reaches_the_dashboard_in_the_types_it_draws():
+    """The Last outage block prints `last_exit_reason`, each action's
+    `action: reason`, and builds a date from each diag entry's `ts`. An
+    object where it prints text, or a string where it builds a date, used
+    to take the room's drawer down; now they arrive as blanks."""
+    doc = sh.validate_outage({
+        "last_exit_reason": {"not": "a string"},
+        "written_at": "yesterday",
+        "actions": [{"action": {"x": 1}, "reason": ["y"], "ts": "z"}, "junk",
+                    {"action": "exit", "reason": "RSS 310 MB", "ts": 1.5}],
+        "offline_diag": [{"ts": "soon", "failure": {"a": 1}, "gateway_ok": "yes",
+                          "nm_state": {"code": "100", "state": 7}, "wifi": "fast", "extra": 1},
+                         "junk",
+                         {"ts": 2.0, "failure": "tcp_timeout", "gateway_ok": False,
+                          "core_host_ok": True, "action": None}],
+        "sample": {"rss_kb": "big", "fds": 30, "unknown": 1},
+        "restart_budget": {"limit": 3},
+    })
+    assert doc["last_exit_reason"] is None and doc["written_at"] is None
+    assert doc["actions"] == [
+        {"ts": None, "action": "", "reason": ""},
+        {"ts": 1.5, "action": "exit", "reason": "RSS 310 MB"},
+    ]
+    bad, good = doc["offline_diag"]
+    assert bad == {"ts": None, "failure": None, "gateway_ok": None,
+                   "nm_state": {"code": None, "state": None}, "wifi": None}
+    assert good["failure"] == "tcp_timeout" and good["core_host_ok"] is True
+    assert doc["sample"] == {"rss_kb": None, "fds": 30}
+    assert doc["restart_budget"] == {"limit": 3}, "the rest stays bounded JSON"

@@ -188,6 +188,47 @@ def _bound_json(value: Any, depth: int = 0) -> Any:
 #: What a slimmed outage report keeps first: the fields that say why.
 _OUTAGE_SCALARS = ("last_exit_reason", "prev_boot_id", "boot_id", "written_at")
 
+#: The shape of one `offline_diag` entry (satellite/client.py
+#: `_note_connect_failure`), coerced like a sample's fields.
+_DIAG_FIELDS: dict[str, Any] = {
+    "ts": _num, "failure": lambda v: _str(v, 40), "detail": lambda v: _str(v, 200),
+    "gateway": lambda v: _str(v, 64), "gateway_ok": _bool, "core_ok": _bool,
+    "core_host_ok": _bool, "default_route": _bool, "nm_state": _nm, "wifi": _wifi,
+    "probe_age_s": _num, "action": lambda v: _str(v, 40),
+}
+
+
+def _shape_outage(doc: dict[str, Any]) -> dict[str, Any]:
+    """The fields the dashboard draws, in the types it draws them: a string
+    where it prints text, a number where it builds a date. Anything else a
+    report carries stays as bounded JSON. A malformed record (a buggy or
+    hostile client on the room's own session) then renders as blanks rather
+    than taking the room's drawer down."""
+    for key in _OUTAGE_SCALARS:
+        if key in doc:
+            value = doc[key]
+            doc[key] = _num(value) if key == "written_at" else _str(value, 500)
+    if "sample" in doc:
+        sample = doc["sample"]
+        doc["sample"] = (
+            {k: c(sample[k]) for k, c in SAMPLE_FIELDS.items() if k in sample}
+            if isinstance(sample, dict) else None
+        )
+    if "actions" in doc:
+        actions = doc["actions"] if isinstance(doc["actions"], list) else []
+        doc["actions"] = [
+            {"ts": _num(a.get("ts")), "action": _str(a.get("action"), 40) or "",
+             "reason": _str(a.get("reason"), 500) or ""}
+            for a in actions if isinstance(a, dict)
+        ]
+    if "offline_diag" in doc:
+        diag = doc["offline_diag"] if isinstance(doc["offline_diag"], list) else []
+        doc["offline_diag"] = [
+            {k: c(e.get(k)) for k, c in _DIAG_FIELDS.items() if k in e}
+            for e in diag if isinstance(e, dict)
+        ]
+    return doc
+
 
 def validate_outage(report: Any) -> dict[str, Any] | None:
     """`prev_health` from a hello -> the report to keep, never more than
@@ -197,6 +238,7 @@ def validate_outage(report: Any) -> dict[str, Any] | None:
         return None
     doc = _bound_json(report)
     assert isinstance(doc, dict)
+    doc = _shape_outage(doc)
 
     def size(d: dict[str, Any]) -> int:
         return len(json.dumps(d, default=str))
