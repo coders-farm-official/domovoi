@@ -3392,8 +3392,13 @@ class Satellite:
 
     def _on_core_accepted_health(self) -> None:
         """`ready` arrived: the previous life's record is delivered, the
-        spool goes to a core that takes it, and live pushes start."""
-        if self._prev_health is not None:
+        spool goes to a core that takes it, and live pushes start.
+
+        The record is let go only when the core lists `health`: an older
+        core answers `ready` just the same but never recorded the field,
+        and the next core that does would then never hear of the outage
+        (seen on the container proof against a main-checkout core)."""
+        if self._prev_health is not None and "health" in self._core_features:
             self._prev_health = None
             if self._last_health is not None:
                 self._last_health.clear_previous()

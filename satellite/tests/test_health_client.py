@@ -284,12 +284,19 @@ def test_the_hello_carries_prev_health_until_a_ready_clears_it(tmp_path, monkeyp
         assert sat._prev_health is not None, "no ready came: carried again next time"
         assert sat._reconnects == 1
 
+        # A ready from an OLDER core, which lists neither feature: it never
+        # recorded prev_health, so the record is kept for a core that will.
+        sat.send_q = asyncio.Queue()
+        sat._core_features = frozenset()
+        sat._session_ready_seen = True
+        sat._on_core_accepted_health()
+        assert sat._prev_health is not None
+        assert sat._last_health.prev_path.exists()
+        assert client.LOG_SPOOL_HANDLER.mode == "off"
         # A ready from a core that lists both features: the receiver's
         # `ready` branch calls `_on_core_accepted_health` (asserted below
         # by source, since the whole branch also opens the microphone).
-        sat.send_q = asyncio.Queue()
         sat._core_features = frozenset({"health", "log_push"})
-        sat._session_ready_seen = True
         sat._on_core_accepted_health()
         assert sat._prev_health is None
         assert not sat._last_health.prev_path.exists()
