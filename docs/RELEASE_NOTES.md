@@ -4,6 +4,84 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-09 — Satellites explain their own deaths: health telemetry, self-checks, retained logs
+
+Two satellites died while idle for days and only a power cycle brought
+them back, with nothing left to read. Now each one watches itself,
+recovers what it can, and leaves a record the dashboard shows. One
+Flyway step (V022); the satellite code has to be pushed to each room.
+
+### Upgrading
+
+1. **Update the server** as usual; the update unit applies **V022**
+   (`satellite_health`, `satellite_outages`). Without it the core keeps
+   the latest sample and the last outage in memory only and logs one
+   warning per start saying so.
+2. **Push the satellite code to every room** from the dashboard
+   (Satellites → room → Overview → **Upgrade satellite**). A room on the
+   old code keeps working exactly as before — it sends nothing new until
+   the core's `ready` lists the new frames, and this core still accepts
+   its old hello — but shows *no health sample yet* until it is upgraded.
+3. **Existing units, optional:** the reboot helper and the hardware
+   watchdog — `satellite/PROVISIONING.md` §8.3. Cards prepared from today
+   on have both; the code push installs neither (both need root). On a
+   card prepared before today (every portal unit so far) the service
+   account has no root by design, so this means re-preparing the card or
+   editing it in a Linux machine; §8.3 gives the commands. Without the
+   helper the client logs that a reboot would be needed instead of
+   rebooting.
+
+### What changes
+
+* **Health card** on each room's Overview tab: memory (with the 24 h
+  peak), CPU, temperature with the throttle flags, uptime and
+  reconnects, Wi-Fi and NetworkManager state, mic frames per second and
+  the wake loop's heartbeat, whether the gateway and the core answer,
+  file descriptors — one sample a minute, kept when the room goes
+  offline, 24 h in the database. **Last outage** under it: when the
+  previous life of the satellite's process ended, why (`self-check: …`,
+  `shutdown: requested`, or unknown for a power cut / OOM / wedge), the
+  self-check actions it took, and a table of the failed connects it saw
+  while it was away (refused, timed out, DNS, refused session; gateway
+  and core reachable or not). `docs/TROUBLESHOOTING.md` says how to read
+  both.
+* **Logs tab split** into *retained on the server* (the lines the
+  satellite pushed — including the `[offline]` ones it spooled while it
+  could not reach the core, which used to be lost with its RAM ring —
+  1 MB per room on disk, surviving the Pi dying) and the live ring.
+* **Self-checks on the satellite** (`[health]` in its config): a capture
+  stream that delivers no frames is reopened, then the process exits so
+  systemd restarts it; a dead mic thread, a stalled wake loop, memory
+  over 300 MB while idle, or more than 512 open files exit the same way;
+  five minutes without a server with the link down runs the Wi-Fi
+  recovery (once per five minutes, one cooldown shared with the Wi-Fi
+  watcher); fifteen minutes without a server AND a silent gateway (no
+  TCP answer on 53/80/443 nor ping, or no default route) reboots the
+  unit through the new helper. Never while the gateway or the core's own
+  machine answers: a core that is down is the core's problem. Every
+  check acts only after seeing its condition twice in a row, and a
+  **restart budget** — 3 self-restarts a rolling hour, at most 1 of them
+  a reboot, kept across restarts — means a check that fires wrongly can
+  never loop a unit: past it the check only logs, and `last-health.json`
+  says so.
+* **A refused session no longer redials every second.** A core that
+  closed the socket before `ready` (pairing refused, parked for approval)
+  used to reset the reconnect backoff; it now backs off like a failed
+  connect (1 s doubling to 60 s), which is what pinned a Zero 2 W at
+  100 % CPU after a core restart (SAT-CRASH D1).
+* **API:** `GET /v1/admin/satellite/{room}/health` and
+  `GET /api/satellites/{room}/health` (device read); the logs routes add
+  `live`, `retained` and `last_outage` beside their old fields and answer
+  an offline room with what is retained instead of `404`; `ready.features`
+  gains `health` and `log_push` (for a token-authenticated session only;
+  the core ignores both, and `prev_health`, from any other); the `hello`
+  may carry `prev_health`; `/v1/admin/snapshot` (Open) gains a
+  `satellite_health` digest — when each room's sample and outage report
+  arrived, never their content — which `satellites.health` on the state
+  socket diffs; the `satellite_logs_dir`
+  setting (`~/.domovoi/satellite-logs`). Retained logs and health samples
+  are household data — `docs/SECURITY_PRIVACY.md`, *Data at rest*.
+
 ## 2026-10-08 — Android: phone Files tab, video feed, sheet saves that keep formatting
 
 Same-day as Security round 3 and merged on top of it. New Android build;

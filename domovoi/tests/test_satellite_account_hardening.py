@@ -31,6 +31,9 @@ EXPECTED_HELPERS = {
     "/usr/bin/systemctl --no-block restart domovoi-kiosk.service",
     "/usr/local/sbin/domovoi-apply-payload",
     "/usr/local/sbin/domovoi-sync-time",
+    # Argv-less reboot, for the client's no-server self-check (2026-10-09):
+    # sudo's "" admits it with no arguments only.
+    '/usr/local/sbin/domovoi-reboot ""',
     "/opt/xvf3800/xvf_host",
 }
 
@@ -228,3 +231,49 @@ def test_the_docs_state_the_real_posture():
     assert "domovoi-provisioning.service" in sec
     prov = (REPO / "satellite" / "PROVISIONING.md").read_text(encoding="utf-8", errors="replace")
     assert "`sudo -n true` fails" in prov
+
+
+# ─── the reboot helper (2026-10-09) ───────────────────────────────────────
+
+
+def test_the_reboot_helper_takes_no_arguments_and_only_reboots():
+    """Read, never run: refusing arguments comes before anything else, and
+    the one thing it does with root is `systemctl reboot`."""
+    script = (REPO / "satellite" / "scripts" / "domovoi-reboot").read_text(encoding="utf-8")
+    assert script.startswith("#!/bin/sh\n") and "\r" not in script
+    code = _code_lines(script)
+    guard = next(i for i, ln in enumerate(code) if '"$#" -ne 0' in ln)
+    exec_at = next(i for i, ln in enumerate(code) if ln.strip().startswith("exec "))
+    assert guard < exec_at
+    assert code[exec_at].strip() == "exec /usr/bin/systemctl reboot"
+    assert code[exec_at] == code[-1], "nothing after the exec"
+    assert "$1" not in script and "$@" not in script and "$*" not in script
+    sudoers = overlay.render_template("sudoers.tmpl", {"USER": "domovoi"})
+    assert 'domovoi ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""\n' in sudoers
+    prov = (REPO / "satellite" / "PROVISIONING.md").read_text(encoding="utf-8")
+    assert '<username> ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""' in prov
+
+
+def test_the_client_calls_the_reboot_helper_argv_less():
+    import ast
+
+    src = (REPO / "satellite" / "client.py").read_text(encoding="utf-8")
+    assert '["sudo", "-n", str(REBOOT_HELPER)]' in src
+    tree = ast.parse(src)
+    helper = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", None) == "REBOOT_HELPER" for t in n.targets)
+    )
+    assert ast.literal_eval(helper.value.args[0]) == "/usr/local/sbin/domovoi-reboot"
+
+
+def test_the_watchdog_is_on_new_cards_only():
+    """Media prep writes it (config.txt block + firstrun drop-in); nothing a
+    satellite code push runs touches either file."""
+    assert "dtparam=watchdog=on" in overlay.edit_config_txt("", usb_gadget=False)
+    script = _firstrun()
+    assert "RuntimeWatchdogSec=15" in script
+    assert "/etc/systemd/system.conf.d/domovoi-watchdog.conf" in script
+    for rel in ("satellite/client.py", "satellite/scripts/domovoi-apply-payload"):
+        text = (REPO / rel).read_text(encoding="utf-8")
+        assert "RuntimeWatchdogSec" not in text and "dtparam=watchdog" not in text, rel

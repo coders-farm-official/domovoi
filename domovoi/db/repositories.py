@@ -2377,3 +2377,149 @@ class SatellitesRepository:
 
 def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def _jsonb(value: Any) -> Any:
+    """asyncpg hands JSONB back decoded through SQLAlchemy's codec; a raw
+    text() read on a connection without it gives a string. Take both."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value
+
+
+class SatelliteHealthRepository:
+    """`satellite_health` (V022): one row per `health` sample a satellite
+    sends (about one a minute), kept 24 h per room. Numbers only — see
+    domovoi/satellite_health.py for the shape."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def insert(self, room_id: str, sample: dict[str, Any]) -> None:
+        await self.s.execute(
+            text(
+                "INSERT INTO satellite_health (room_id, sample) "
+                "VALUES (:r, CAST(:s AS jsonb))"
+            ),
+            {"r": room_id, "s": json.dumps(sample, default=str)},
+        )
+
+    async def prune(self, room_id: str | None, keep_hours: int = 24) -> int:
+        """Drop samples older than ``keep_hours``: one room's, or every
+        room's when ``room_id`` is None (the stream handler's call, so a
+        room that stopped connecting is pruned too)."""
+        if room_id is None:
+            result = await self.s.execute(
+                text(
+                    "DELETE FROM satellite_health "
+                    "WHERE received_at < now() - make_interval(hours => CAST(:h AS int))"
+                ),
+                {"h": int(keep_hours)},
+            )
+            return int(result.rowcount or 0)
+        result = await self.s.execute(
+            text(
+                "DELETE FROM satellite_health WHERE room_id = :r "
+                "AND received_at < now() - make_interval(hours => CAST(:h AS int))"
+            ),
+            {"r": room_id, "h": int(keep_hours)},
+        )
+        return int(result.rowcount or 0)
+
+    async def latest(self, room_id: str) -> dict[str, Any] | None:
+        row = (
+            await self.s.execute(
+                text(
+                    "SELECT received_at, sample FROM satellite_health "
+                    "WHERE room_id = :r ORDER BY received_at DESC, id DESC LIMIT 1"
+                ),
+                {"r": room_id},
+            )
+        ).first()
+        if row is None:
+            return None
+        return {"received_at": row[0].isoformat(), "sample": _jsonb(row[1])}
+
+    async def history(
+        self, room_id: str, hours: int = 24, limit: int = 1500
+    ) -> list[tuple[datetime, dict[str, Any]]]:
+        """``(received_at, sample)`` oldest first, at most ``limit`` rows."""
+        rows = (
+            await self.s.execute(
+                text(
+                    "SELECT received_at, sample FROM satellite_health "
+                    "WHERE room_id = :r "
+                    "AND received_at >= now() - make_interval(hours => CAST(:h AS int)) "
+                    "ORDER BY received_at ASC, id ASC LIMIT :n"
+                ),
+                {"r": room_id, "h": int(hours), "n": int(limit)},
+            )
+        ).all()
+        return [(r[0], _jsonb(r[1]) or {}) for r in rows]
+
+
+class SatelliteOutageRepository:
+    """`satellite_outages` (V022): the `prev_health` reports a satellite's
+    hello carries — what its previous process life left behind. The last
+    ``keep`` per room are retained."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def insert(
+        self, room_id: str, prev_boot_id: str | None, report: dict[str, Any], *, keep: int = 20
+    ) -> int:
+        row = (
+            await self.s.execute(
+                text(
+                    "INSERT INTO satellite_outages (room_id, prev_boot_id, report) "
+                    "VALUES (:r, :b, CAST(:p AS jsonb)) RETURNING id"
+                ),
+                {"r": room_id, "b": prev_boot_id, "p": json.dumps(report, default=str)},
+            )
+        ).first()
+        await self.s.execute(
+            text(
+                "DELETE FROM satellite_outages WHERE room_id = :r AND id NOT IN ("
+                "SELECT id FROM satellite_outages WHERE room_id = :r "
+                "ORDER BY reported_at DESC, id DESC LIMIT :n)"
+            ),
+            {"r": room_id, "n": int(keep)},
+        )
+        return int(row[0]) if row else 0
+
+    @staticmethod
+    def _row(row: Any) -> dict[str, Any]:
+        return {
+            "id": int(row[0]),
+            "reported_at": row[1].isoformat(),
+            "prev_boot_id": row[2],
+            "report": _jsonb(row[3]),
+        }
+
+    async def latest(self, room_id: str) -> dict[str, Any] | None:
+        row = (
+            await self.s.execute(
+                text(
+                    "SELECT id, reported_at, prev_boot_id, report FROM satellite_outages "
+                    "WHERE room_id = :r ORDER BY reported_at DESC, id DESC LIMIT 1"
+                ),
+                {"r": room_id},
+            )
+        ).first()
+        return self._row(row) if row is not None else None
+
+    async def list(self, room_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = (
+            await self.s.execute(
+                text(
+                    "SELECT id, reported_at, prev_boot_id, report FROM satellite_outages "
+                    "WHERE room_id = :r ORDER BY reported_at DESC, id DESC LIMIT :n"
+                ),
+                {"r": room_id, "n": int(limit)},
+            )
+        ).all()
+        return [self._row(r) for r in rows]

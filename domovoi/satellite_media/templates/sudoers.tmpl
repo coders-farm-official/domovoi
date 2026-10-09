@@ -20,6 +20,11 @@
 # setting either needs root. The helper only reads the server's /v1/time
 # and applies it - see satellite/scripts/domovoi-sync-time.
 @USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-sync-time
+# Reboots the unit, and nothing else: the client's self-check calls it
+# after 15 minutes with no server AND a silent gateway (at most once an
+# hour). Argv-less: the "" allows it with no arguments only, and the
+# helper refuses any anyway - see satellite/scripts/domovoi-reboot.
+@USER@ ALL=(root) NOPASSWD: /usr/local/sbin/domovoi-reboot ""
 # The XVF3800's LED ring is driven over USB, which needs root. The client
 # tries a plain call first and falls back to `sudo -n` (PROVISIONING §E).
 @USER@ ALL=(root) NOPASSWD: /opt/xvf3800/xvf_host

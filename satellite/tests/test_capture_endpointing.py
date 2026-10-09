@@ -247,7 +247,8 @@ def test_the_capture_number_goes_up_and_the_ready_frame_sets_the_features(monkey
 
 def test_the_hello_offers_hints_and_a_new_session_forgets_the_features() -> None:
     src = inspect.getsource(client.Satellite._run_session)
-    hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
+    start = src.index('"type": "hello"')
+    hello = src[start:src.index("json.dumps(hello)", start)]
     assert '"speech_pause": True' in hello
     src = inspect.getsource(client.Satellite._on_session_ended)
     assert "self._core_features = frozenset()" in src
@@ -553,7 +554,8 @@ def test_a_capture_that_ended_on_its_own_carries_no_watch() -> None:
 
 def test_the_hello_declares_capture_control_from_the_rooms_setting(tmp_path) -> None:
     src = inspect.getsource(client.Satellite._run_session)
-    hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
+    start = src.index('"type": "hello"')
+    hello = src[start:src.index("json.dumps(hello)", start)]
     assert '"capture_control": self.cfg.early_commit' in hello
 
     example = (client.Path(client.__file__).parent / "config.toml.example").read_text(encoding="utf-8")

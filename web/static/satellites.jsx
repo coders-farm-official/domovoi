@@ -221,6 +221,152 @@ const SatConversationTurn = ({ c }) => {
   );
 };
 
+/* ---- Health card + last outage (overview tab) -------------- */
+// GET /api/satellites/{room}/health: the latest `health` sample the Pi
+// sent (one a minute; kept by the core across disconnects, so an offline
+// room still shows its last minute), the record its previous process life
+// left behind (`prev_health` in its hello), and a 24 h summary. Fetched on
+// mount and re-read every minute while the drawer is open.
+const satHealthAgeTone = (sec) => sec == null ? 'idle' : sec < 150 ? 'ok' : sec < 900 ? 'warn' : 'err';
+const satHealthTempTone = (c) => c == null ? 'idle' : c < 70 ? 'ok' : c < 80 ? 'warn' : 'err';
+const satHealthThrottle = (flags) => (flags || []).filter(f => !f.endsWith('_occurred'));
+const satHealthMb = (kb) => kb == null ? '—' : `${(kb / 1024).toFixed(0)} MB`;
+const satHealthUptime = (sec) => {
+  if (sec == null) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const satHealthWhen = (iso) => iso ? `${relTime(iso)} · ${iso.replace('T', ' ').slice(0, 16)} UTC` : '—';
+
+const SatHealthStat = ({ label, value, sub, tone }) => (
+  <div style={{ minWidth: 0 }}>
+    <div className="label">{label}</div>
+    <div className="mono" style={{ fontSize: 15, fontWeight: 600, marginTop: 2, color: tone ? wifiColor(tone) : 'inherit' }}>{value}</div>
+    {sub && <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-muted)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>}
+  </div>
+);
+
+const SatLastOutage = ({ outage }) => {
+  if (!outage || !outage.report) return null;
+  const r = outage.report;
+  const diag = Array.isArray(r.offline_diag) ? r.offline_diag.slice(-8) : [];
+  const actions = Array.isArray(r.actions) ? r.actions.slice(-3) : [];
+  const quiet = typeof r.last_exit_reason === 'string' && r.last_exit_reason.startsWith('shutdown:');
+  return (
+    <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--border-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div className="label">last outage</div>
+        <Pill tone={quiet ? 'idle' : 'warn'}>{quiet ? 'restart on request' : 'the previous life died'}</Pill>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>reported {satHealthWhen(outage.reported_at)}</span>
+      </div>
+      <div style={{ fontSize: 12, marginTop: 6 }}>
+        <span style={{ color: 'var(--fg-muted)' }}>exit reason: </span>
+        <span className="mono">{r.last_exit_reason || 'unknown (no reason was written — a power cut, an OOM kill, or a crash the process never saw)'}</span>
+      </div>
+      {actions.length > 0 && (
+        <div style={{ fontSize: 11.5, marginTop: 4, color: 'var(--fg-muted)' }}>
+          self-checks: {actions.map((a, i) => <span key={i} className="mono">{i ? ' · ' : ''}{a.action}: {a.reason}</span>)}
+        </div>
+      )}
+      {diag.length > 0 && (
+        <table className="tbl" style={{ marginTop: 8, fontSize: 11 }}>
+          <thead><tr><th>when</th><th>failure</th><th>gateway</th><th>core</th><th>link</th><th>action</th></tr></thead>
+          <tbody>
+            {diag.map((e, i) => (
+              <tr key={i}>
+                <td className="mono">{e.ts ? new Date(e.ts * 1000).toISOString().replace('T', ' ').slice(5, 16) : '—'}</td>
+                <td className="mono">{e.failure || '—'}</td>
+                <td className="mono">{e.gateway_ok == null ? '?' : e.gateway_ok ? 'answers' : 'silent'}</td>
+                <td className="mono">{e.core_ok == null ? '?' : e.core_ok ? 'up' : 'down'}</td>
+                <td className="mono">{e.nm_state && e.nm_state.state ? e.nm_state.state : (e.wifi && e.wifi.rx_mbits != null ? `${e.wifi.rx_mbits} Mbit/s` : '—')}</td>
+                <td className="mono">{e.action || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {r.truncated && <div style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 4 }}>the record was larger than the core keeps; the oldest entries were dropped</div>}
+    </div>
+  );
+};
+
+const SatHealthCard = ({ room, online }) => {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const d = await apiGet(`/api/satellites/${room}/health`);
+        if (alive) { setData(d); setError(null); }
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      }
+    })();
+    const timer = setInterval(() => setTick(t => t + 1), 60_000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [room, tick]);
+
+  const latest = data && data.latest;
+  const s = latest && latest.sample;
+  const ageSec = latest && latest.received_at ? Math.max(0, (Date.now() - Date.parse(latest.received_at)) / 1000) : null;
+  const hist = data && data.history && data.history.samples ? data.history : null;
+  const throttle = s ? satHealthThrottle(s.throttled_flags) : [];
+  return (
+    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div className="label">health</div>
+        {s && <Pill tone={satHealthAgeTone(ageSec)}>{ageSec == null ? 'sample' : ageSec < 90 ? 'live' : `last sample ${relTime(latest.received_at)}`}</Pill>}
+        {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
+        {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
+        {s && s.throttled_flags && s.throttled_flags.length > throttle.length && throttle.length === 0 &&
+          <Pill tone="warn" title={s.throttled_flags.join(', ')}>throttled earlier this boot</Pill>}
+        {hist && <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>{hist.samples} samples in 24 h</span>}
+      </div>
+      {error && !s && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>couldn’t read health: {error}</div>}
+      {!error && !s && data && (
+        <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
+          no health sample yet — the satellite sends one a minute once it runs code from 2026-10-09 on (upgrade it from this tab)
+        </div>
+      )}
+      {!data && !error && <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>loading…</div>}
+      {s && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px 12px', marginTop: 8 }}>
+          <SatHealthStat label="memory" value={satHealthMb(s.rss_kb)}
+                         sub={`peak ${satHealthMb(s.hwm_kb)}${hist && hist.rss_kb && hist.rss_kb.max != null ? ` · 24 h max ${satHealthMb(hist.rss_kb.max)}` : ''}`}
+                         tone={s.rss_kb != null ? (s.rss_kb > 250 * 1024 ? 'err' : s.rss_kb > 180 * 1024 ? 'warn' : 'ok') : 'idle'}/>
+          <SatHealthStat label="cpu" value={s.cpu_pct == null ? '—' : `${s.cpu_pct.toFixed(0)}%`}
+                         sub={`system ${s.sys_cpu_pct == null ? '—' : s.sys_cpu_pct.toFixed(0) + '%'} · load ${s.load1 == null ? '—' : s.load1.toFixed(2)}`}/>
+          <SatHealthStat label="temperature" value={s.soc_temp_c == null ? '—' : `${s.soc_temp_c.toFixed(1)}°C`}
+                         sub={s.throttled == null ? 'no throttle data' : s.throttled === 0 ? 'never throttled this boot' : `throttled 0x${s.throttled.toString(16)}`}
+                         tone={satHealthTempTone(s.soc_temp_c)}/>
+          <SatHealthStat label="uptime" value={satHealthUptime(s.uptime_s)}
+                         sub={`process ${satHealthUptime(s.proc_uptime_s)} · ${s.reconnects == null ? '—' : s.reconnects} reconnects`}/>
+          <SatHealthStat label="wi-fi" value={s.wifi && s.wifi.rx_mbits != null ? `${s.wifi.rx_mbits.toFixed(0)} Mbit/s` : '—'}
+                         sub={s.nm_state && s.nm_state.state ? `NetworkManager: ${s.nm_state.state}` : (s.wifi && s.wifi.ssid ? s.wifi.ssid : 'no link data')}
+                         tone={s.wifi && s.wifi.rx_mbits != null ? wifiTone(s.wifi.rx_mbits) : 'idle'}/>
+          <SatHealthStat label="microphone" value={s.mic_expected === false ? 'off' : s.mic_fps == null ? '—' : `${s.mic_fps.toFixed(1)} fps`}
+                         sub={s.wake_loop_age_s == null ? 'wake loop not armed' : `wake loop ${s.wake_loop_age_s.toFixed(1)}s ago · queue ${s.mic_q == null ? '—' : s.mic_q}`}
+                         tone={s.mic_expected === false ? 'idle' : s.mic_fps == null ? 'idle' : s.mic_fps > 20 ? 'ok' : s.mic_fps > 0 ? 'warn' : 'err'}/>
+          <SatHealthStat label="reachability" value={s.gateway_ok == null ? '—' : s.gateway_ok ? 'gateway answers' : 'gateway silent'}
+                         sub={`core ${s.core_ok == null ? '?' : s.core_ok ? 'reachable' : 'unreachable'} · ws ${s.ws || '—'}${s.ws_down_for_s ? ` for ${satHealthUptime(s.ws_down_for_s)}` : ''}`}
+                         tone={s.gateway_ok == null ? 'idle' : s.gateway_ok ? 'ok' : 'err'}/>
+          <SatHealthStat label="handles" value={s.fds == null ? '—' : `${s.fds} fds`}
+                         sub={`${s.threads == null ? '—' : s.threads} threads · ${s.mem_avail_kb == null ? '—' : satHealthMb(s.mem_avail_kb)} free`}
+                         tone={s.fds == null ? 'idle' : s.fds > 400 ? 'warn' : 'ok'}/>
+        </div>
+      )}
+      {s && (
+        <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 8 }}>
+          sampled {satHealthWhen(latest.received_at)}
+        </div>
+      )}
+      <SatLastOutage outage={data && data.last_outage}/>
+    </div>
+  );
+};
+
 /* ---- Volume control (overview tab) ------------------------ */
 // Master output volume for a room's satellite. Drives the Pi's hardware mixer
 // (scales BOTH speech and music) via POST /api/satellites/{room}/volume, which
@@ -679,6 +825,8 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>nothing playing</div>
         )}
       </div>
+
+      <SatHealthCard room={s.room_id} online={s.status === 'online'}/>
 
       <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 8, fontSize: 12, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label">room id</div>
@@ -1260,6 +1408,10 @@ const RoomLogsBody = ({ room, online }) => {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
   const [data, setData] = React.useState(null);
+  // Which of the two logs is shown: the server's retained file, or the
+  // Pi's live ring. Declared with the other hooks (before any early
+  // return) — hooks must run in the same order on every render.
+  const [view, setView] = React.useState('retained');
   const preRef = React.useRef(null);
 
   const load = React.useCallback(async () => {
@@ -1288,33 +1440,54 @@ const RoomLogsBody = ({ room, online }) => {
 
   if (error)
     return <Empty glyph="sleeping" title="couldn't read the log"
-                  sub={online ? error : 'the satellite must be online — the buffer lives in its own process'}
+                  sub={online ? error : 'nothing is retained for this room yet, and the live ring needs the satellite online'}
                   action={<Button icon="rotate-cw" onClick={load}>Try again</Button>}/>;
 
-  const text = (data && data.text) || '';
+  // Two logs since 2026-10-09: what the core RETAINS on disk for this room
+  // (the lines the satellite pushed — including what it spooled while it
+  // was disconnected, marked [offline] — survives the Pi dying) and the
+  // live ring in the Pi's memory (the old pull; null while it is offline).
+  // A core from before the change answers the old flat shape: `live` and
+  // `retained` are then undefined and the ring is rendered as before.
+  const live = data && (data.live !== undefined ? data.live : { text: data.text, bytes: data.bytes,
+                                                                buffered_bytes: data.buffered_bytes, truncated: data.truncated });
+  const retained = data && data.retained;
+  const showRetained = view === 'retained' && !!retained;
+  const text = showRetained ? (retained.text || '') : ((live && live.text) || '');
+  const preStyle = {
+    flex: 1, margin: 0, padding: '12px 16px', overflow: 'auto',
+    background: 'var(--sunken)', color: 'var(--fg-muted)',
+    fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre',
+    // pre-wrap would reflow long tracebacks into an unreadable
+    // block; a horizontal scrollbar keeps one record on one line.
+    tabSize: 4,
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-soft)',
                     display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <Button icon="rotate-cw" onClick={load}>Refresh</Button>
-        {data && data.truncated &&
-          <Pill tone="idle">showing last {fmtBytes(data.bytes)} of {fmtBytes(data.buffered_bytes)}</Pill>}
-        {data && !data.truncated &&
-          <Pill tone="idle">{fmtBytes(data.bytes)} buffered</Pill>}
+        <Tabs padX={0} value={showRetained ? 'retained' : 'live'} onChange={setView} tabs={[
+          { id: 'retained', label: `retained on the server${retained ? ` · ${fmtBytes(retained.bytes)}` : ' · none'}` },
+          { id: 'live', label: `live ring${live ? ` · ${fmtBytes(live.bytes)}` : online ? '' : ' · offline'}` },
+        ]}/>
+        {showRetained && retained.truncated &&
+          <Pill tone="idle">last {fmtBytes(retained.bytes)} of {fmtBytes(retained.file_bytes)} on disk</Pill>}
+        {!showRetained && live && live.truncated &&
+          <Pill tone="idle">showing last {fmtBytes(live.bytes)} of {fmtBytes(live.buffered_bytes)}</Pill>}
         <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>
-          in memory on the Pi · lost on restart
+          {showRetained
+            ? `on the server (last 1 MB) · [offline] = spooled while disconnected${retained.updated_at ? ` · ${relTime(retained.updated_at)}` : ''}`
+            : 'in memory on the Pi · lost on restart'}
         </span>
       </div>
-      {text === ''
-        ? <Empty glyph="sleeping" title="log is empty" sub="the satellite has not written anything since it started"/>
-        : <pre ref={preRef} className="mono" style={{
-            flex: 1, margin: 0, padding: '12px 16px', overflow: 'auto',
-            background: 'var(--sunken)', color: 'var(--fg-muted)',
-            fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre',
-            // pre-wrap would reflow long tracebacks into an unreadable
-            // block; a horizontal scrollbar keeps one record on one line.
-            tabSize: 4,
-          }}>{text}</pre>}
+      {!showRetained && !live
+        ? <Empty glyph="sleeping" title="the live ring needs the satellite online"
+                 sub={retained ? 'the retained log above is what it pushed before it went offline' : 'the buffer lives in its own process'}/>
+        : text === ''
+          ? <Empty glyph="sleeping" title={showRetained ? 'nothing retained yet' : 'log is empty'}
+                   sub={showRetained ? 'the satellite pushes its lines once it runs code from 2026-10-09 on' : 'the satellite has not written anything since it started'}/>
+          : <pre ref={preRef} className="mono" style={preStyle}>{text}</pre>}
     </div>
   );
 };

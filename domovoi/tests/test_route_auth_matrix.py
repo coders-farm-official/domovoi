@@ -391,6 +391,13 @@ HOUSEHOLD_STATE_READS: dict[tuple[str, str], str] = {
         "over a short window says somebody just spoke there"
     ),
     ("web", "/api/stats/latency"): "proxy of the core read above (credential forwarded)",
+    # SAT-HEALTH (2026-10-09): a room's health sample says whether a turn,
+    # chat or call is open right now (`idle`), its SSID and gateway, and the
+    # outage report what its previous life saw.
+    ("core", "/v1/admin/satellite/{room_id}/health"): (
+        "a room's latest health sample, 24 h summary and outage reports"
+    ),
+    ("web", "/api/satellites/{room_id}/health"): "proxy of the core read above (credential forwarded)",
 }
 
 

@@ -48,7 +48,12 @@ from domovoi.canned_sounds import _SOUNDS_DIR as SOUNDS_DIR  # noqa: E402
 from domovoi.canned_sounds import regenerate_if_needed as regenerate_canned_sounds  # noqa: E402
 from domovoi.canned_sounds import voice_dir  # noqa: E402
 from domovoi.db.repositories import SatelliteApprovalRepository
+from domovoi.db.repositories import (  # noqa: E402
+    SatelliteHealthRepository,
+    SatelliteOutageRepository,
+)
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
+from domovoi import satellite_health  # noqa: E402
 from domovoi.clients.ollama import get_ollama_client  # noqa: E402
 from domovoi.clients.tts import get_tts_client  # noqa: E402
 from domovoi.clients.whisper import load_whisper_client, stt_status  # noqa: E402
@@ -532,6 +537,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ({on, kiosk_alive, brightness, idle_mode}) — drives the dashboard's
     # Display controls. Cleared on disconnect.
     app.state.satellite_display = {}
+    # Per-room health telemetry (domovoi/satellite_health.py): the latest
+    # `health` sample ({received_at, sample}) and the last outage report a
+    # hello carried as `prev_health` ({reported_at, prev_boot_id, report}).
+    # Deliberately NOT cleared on disconnect — the last sample before an
+    # outage is the one that explains it. The durable copies are
+    # satellite_health / satellite_outages (V022).
+    app.state.satellite_health = {}
+    app.state.satellite_last_outage = {}
+    # The retained per-room log files satellites push their lines into
+    # (1 MB each plus one rotation), and the per-room push budget.
+    app.state.satellite_retained_log = satellite_health.default_retained_log()
+    app.state.log_push_limiter = satellite_health.LogPushLimiter()
     # Per-room code version (the synced_sha the Pi reports in its hello frame
     # after a satellite-code sync) so the dashboard can show which satellites
     # are behind the core's current SHA. None means the Pi has never
@@ -1397,6 +1414,17 @@ async def admin_snapshot() -> dict[str, Any]:
         "active_rooms": list(app.state.active_sessions.keys()),
         "resumable_music": dict(app.state.resumable_music),
         "wifi_status": dict(app.state.wifi_status),
+        # A DIGEST of the health state per room — when the latest sample
+        # and the last outage report arrived, never their content. This
+        # route is Open; the samples (SSID, gateway, uptime, whether a turn
+        # is open) and the outage reports are device-read and are served by
+        # GET /v1/admin/satellite/{room}/health. The `satellites.health`
+        # realtime channel diffs this digest, so it still fires once a
+        # minute per satellite and the page refetches the room's /health.
+        "satellite_health": satellite_health.snapshot_digest(
+            getattr(app.state, "satellite_health", {}) or {},
+            getattr(app.state, "satellite_last_outage", {}) or {},
+        ),
         # Generic per-room now-playing stamps (design §4.7): source slug +
         # opaque data, mirrored for the dashboard's attribution pill.
         # Deliberately never carries elapsed_sec (dossier §7 inv. 8).
@@ -2398,17 +2426,62 @@ async def admin_get_satellite_logs(
         default=SATELLITE_LOG_MAX_BYTES, ge=1024, le=SATELLITE_LOG_MAX_BYTES
     ),
 ) -> dict[str, Any]:
-    """Tail of a satellite's in-RAM log ring, pulled over its live WS.
+    """A satellite's logs: the tail of its in-RAM ring, pulled over its
+    live WS, AND the tail of the log the core retains for it on disk
+    (``log_push``, 2026-10-09), with the last outage report.
 
-    404 when the room isn't connected: the buffer lives inside the Pi's
-    process, so an offline satellite has no log to give here (journald on
-    the Pi still does, over SSH). The distinct 503/504 exist so the
+    Backward compatible: ``text``/``bytes``/``truncated``/... are the
+    live ring exactly as before. New: ``live`` (the same ring, or null
+    for an offline room), ``retained`` (the on-disk tail, up to
+    ``max_bytes``) and ``last_outage``. A room that is NOT connected no
+    longer answers 404 when something is retained for it — an offline
+    satellite's retained log is the whole point — but still does when the
+    core holds nothing at all for it. The distinct 503/504 exist so the
     dashboard can say which of "it left" and "it stopped answering"
     happened — they need different next steps.
     """
+    retained_log = getattr(app.state, "satellite_retained_log", None)
+    retained: dict[str, Any] | None = None
+    if retained_log is not None:
+        info = retained_log.info(room_id)
+        if info.get("bytes") or info.get("rotated_bytes"):
+            tail = retained_log.tail(room_id, max_bytes)
+            retained = {
+                "text": tail,
+                "bytes": len(tail.encode("utf-8", errors="replace")),
+                "file_bytes": info["bytes"],
+                "rotated_bytes": info["rotated_bytes"],
+                "max_bytes": info["max_bytes"],
+                "updated_at": info["updated_at"],
+                "truncated": info["bytes"] > len(tail.encode("utf-8", errors="replace")),
+            }
+    last_outage = (getattr(app.state, "satellite_last_outage", {}) or {}).get(room_id)
+    if last_outage is None:
+        try:
+            async with session_scope() as s:
+                last_outage = await SatelliteOutageRepository(s).latest(room_id)
+        except Exception as e:  # noqa: BLE001 — V022 missing or DB down
+            log.debug("last outage for %s unavailable: %s", room_id, e)
+
     target = app.state.active_sessions.get(room_id)
     if target is None:
-        raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+        if retained is None and last_outage is None:
+            raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+        return {
+            "room_id": room_id,
+            "connected": False,
+            "text": "",
+            "bytes": 0,
+            "requested_max_bytes": max_bytes,
+            "buffered_bytes": None,
+            "buffer_max_bytes": None,
+            "dropped_lines": None,
+            "truncated": False,
+            "chunks": None,
+            "live": None,
+            "retained": retained,
+            "last_outage": last_outage,
+        }
     try:
         result = await target.request_logs(max_bytes=max_bytes)
     except TimeoutError:
@@ -2428,8 +2501,18 @@ async def admin_get_satellite_logs(
     stats: dict[str, Any] = result.get("stats") or {}
     held = stats.get("bytes")
     returned = len(body.encode("utf-8", errors="replace"))
+    live = {
+        "text": body,
+        "bytes": returned,
+        "buffered_bytes": held,
+        "buffer_max_bytes": stats.get("max_bytes"),
+        "dropped_lines": stats.get("dropped_lines"),
+        "truncated": bool(held is not None and held > returned),
+        "chunks": result.get("chunks"),
+    }
     return {
         "room_id": room_id,
+        "connected": True,
         "text": body,
         "bytes": returned,
         "requested_max_bytes": max_bytes,
@@ -2441,6 +2524,52 @@ async def admin_get_satellite_logs(
         "dropped_lines": stats.get("dropped_lines"),
         "truncated": bool(held is not None and held > returned),
         "chunks": result.get("chunks"),
+        "live": live,
+        "retained": retained,
+        "last_outage": last_outage,
+    }
+
+
+@app.get(
+    "/v1/admin/satellite/{room_id}/health",
+    # Device READ tier (the READ half of the device tier, like the room's
+    # reported config under REV-11): memory, CPU, temperature, link and
+    # reachability numbers, never speech. A paired device or a signed-in
+    # dashboard reads it; nothing less.
+    dependencies=[Depends(require_device_read)],
+)
+async def admin_get_satellite_health(room_id: str) -> dict[str, Any]:
+    """The room's latest health sample, its last outage report and a 24 h
+    history summary (domovoi/satellite_health.py). The latest sample and
+    the outage come from memory when the core has them (they survive the
+    room disconnecting), else from V022; ``history`` is V022 only
+    (``null`` without it). 200 for any room, with nulls when nothing is
+    known — an operator asking about a room the core has never heard from
+    is told that, not refused."""
+    latest = (getattr(app.state, "satellite_health", {}) or {}).get(room_id)
+    last_outage = (getattr(app.state, "satellite_last_outage", {}) or {}).get(room_id)
+    history: dict[str, Any] | None = None
+    outages: list[dict[str, Any]] = []
+    try:
+        async with session_scope() as s:
+            repo = SatelliteHealthRepository(s)
+            rows = await repo.history(room_id, satellite_health.HEALTH_KEEP_HOURS)
+            history = satellite_health.summarize_history(rows)
+            if latest is None:
+                latest = await repo.latest(room_id)
+            outage_repo = SatelliteOutageRepository(s)
+            outages = await outage_repo.list(room_id, 5)
+            if last_outage is None and outages:
+                last_outage = outages[0]
+    except Exception as e:  # noqa: BLE001 — V022 missing or DB down
+        log.debug("satellite health history for %s unavailable: %s", room_id, e)
+    return {
+        "room_id": room_id,
+        "connected": room_id in app.state.active_sessions,
+        "latest": latest,
+        "last_outage": last_outage,
+        "outages": outages,
+        "history": history,
     }
 
 

@@ -412,6 +412,12 @@ if ! skip units; then
   if [ -f "$PAYDIR/system/domovoi-sync-time" ]; then
     install -m 0755 "$PAYDIR/system/domovoi-sync-time" /usr/local/sbin/domovoi-sync-time
   fi
+  # The reboot helper (satellite/scripts/domovoi-reboot): the client's
+  # self-check calls it after 15 minutes without a server AND a silent
+  # gateway. Guarded like sync-time: a payload from before it lacks it.
+  if [ -f "$PAYDIR/system/domovoi-reboot" ]; then
+    install -m 0755 "$PAYDIR/system/domovoi-reboot" /usr/local/sbin/domovoi-reboot
+  fi
   # The verifier that helper checks the server's signature with. Root's
   # copy, not the satellite user's: the helper runs as root on that
   # user's request and must import nothing that user can edit.
@@ -452,6 +458,19 @@ if ! skip units; then
   # bootstrap arm now.
   systemctl enable domovoi-provisioning domovoi-bootstrap
   done_step units
+fi
+
+# 7b. Hardware watchdog. Media prep turned the SoC watchdog on in
+#     config.txt (dtparam=watchdog=on); with RuntimeWatchdogSec set,
+#     systemd pets it every few seconds, so a kernel or firmware wedge
+#     that stops PID 1 ends in a reboot rather than a unit that sits dead
+#     until someone pulls the plug (two of them did, 2026-10, idle for
+#     days). A drop-in, never an edit of system.conf itself.
+if ! skip watchdog; then
+  info bootstrapping watchdog
+  mkdir -p /etc/systemd/system.conf.d
+  printf '[Manager]\nRuntimeWatchdogSec=15\n' >/etc/systemd/system.conf.d/domovoi-watchdog.conf
+  done_step watchdog
 fi
 
 # 8. Remove our own first-boot hook from the kernel cmdline.

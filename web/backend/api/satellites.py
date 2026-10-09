@@ -1074,6 +1074,26 @@ async def get_satellite_config(room_id: str, request: Request):
 
 
 @router.get(
+    "/{room_id}/health",
+    # Device READ tier at both hops (like the config read): memory, CPU,
+    # temperature, link and reachability numbers for one room, never
+    # speech. The caller's credential is forwarded; the core applies the
+    # same tier.
+    dependencies=READ,
+)
+async def get_satellite_health(room_id: str, request: Request):
+    """The room's latest health sample, its last outage report and a 24 h
+    history summary (2026-10-09). Passes through to the core, which keeps
+    the latest sample in memory across disconnects and the history in
+    V022. 200 with nulls for a room nothing is known about."""
+    status, payload = await get_admin(
+        f"/v1/admin/satellite/{room_id}/health",
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.get(
     "/{room_id}/logs",
     # §7.3 gated read: the satellite logs every transcript it hears
     # ("heard: <text>" in client.py), so this returns room conversation
@@ -1085,11 +1105,14 @@ async def get_satellite_logs(
     request: Request,
     max_bytes: int = Query(default=1024 * 1024, ge=1024, le=10 * 1024 * 1024),
 ):
-    """Tail of the satellite's in-RAM log ring, pulled live over its WS.
+    """The satellite's logs: the tail of its in-RAM ring, pulled live over
+    its WS, and (2026-10-09) the tail of the log the core retains for it
+    on disk, with its last outage report.
 
     Defaults to the most recent 1 MB (what the drawer's Logs tab renders);
-    pass ``max_bytes`` up to 10 MB for the whole ring. 404 when the room
-    isn't connected — the buffer lives in the Pi's process.
+    pass ``max_bytes`` up to 10 MB for the whole ring. The core answers an
+    OFFLINE room with ``live: null`` and whatever it retains (that is the
+    point of retaining it), and 404 only when it holds nothing at all.
 
     The timeout outlasts the core's own 60 s WS wait on purpose, so a slow
     satellite surfaces the core's 504 ("stopped answering") instead of this
