@@ -83,9 +83,12 @@ def test_the_web_pending_list_is_an_admin_read() -> None:
 
 
 def test_approving_stays_on_the_admin_tier() -> None:
-    """Gating the list must not have quietly relaxed the decision itself."""
+    """Gating the list must not have quietly relaxed the decision itself.
+    Since 2026-10-08 (REV-32) the decision is one tier HIGHER: the security
+    tier, with no pre-setup grace (test_satellite_approval_setup_gate)."""
     gates = _gates_for(core_app, "POST", f"{APPROVALS_CORE}/{{room_id}}/approve")
-    assert admin_auth.require_admin_mutation in gates
+    assert admin_auth.require_admin_security in gates
+    assert admin_auth.require_admin_mutation not in gates
 
 
 # ─── Behaviour: what an uncredentialed caller gets ───────────────────────
@@ -366,3 +369,95 @@ def test_a_socket_with_no_peer_does_not_break_the_path() -> None:
 
     sess = StreamSession(_Bare(), "kitchen")  # type: ignore[arg-type]
     assert sess._hello_source() == "unknown"
+
+
+# ─── CORE-22: being first with an unapprovable request holds nothing ──────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad", ["zz", "nope", "123", "12345", "1234567", "12 34", "48 502", "\uff14\uff18\uff11\uff15\uff10\uff12", "\u00b2\u00b3\u00b9\u2074\u2075\u2076"]
+)
+async def test_a_code_no_operator_could_type_parks_nothing(fake_park, bad) -> None:
+    """The audit's squat: park ``kitchen`` with a code the approve route
+    can never match, and the real kitchen satellite is a conflict until
+    someone presses Reject. A code that is not six ASCII digits (or the
+    four an older satellite carries) is refused before anything is written — and before the source's budget
+    is spent, so a real device that mistyped nothing loses nothing."""
+    sess = _session()
+    accepted = await sess._park_for_approval(
+        object(), {}, token_hash="x" * 64, code=bad
+    )
+    assert accepted is False
+    assert _last_frame(sess)["reason"] == "approval_code_invalid"
+    assert "code" not in _last_frame(sess)
+    assert fake_park.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", ["0042", "7310"])
+async def test_an_older_satellites_four_digit_code_still_parks(fake_park, legacy) -> None:
+    """The setup portal minted four digits until SAT-5 (2026-09-22), and a
+    satellite keeps its code for good. One onboarded then must still park
+    by it — after a pairing reset, say — and be approved by the four
+    digits it says, which the dashboard's card accepts."""
+    fake_park.parked_code = legacy
+    sess = _session()
+    await sess._park_for_approval(object(), {}, token_hash="o" * 64, code=legacy)
+    assert _last_frame(sess)["reason"] == "awaiting_approval"
+    assert _last_frame(sess)["code"] == legacy
+    assert [c["code"] for c in fake_park.calls] == [legacy]
+
+
+def test_the_legacy_shape_is_the_one_the_old_portal_minted() -> None:
+    assert streaming_mod.LEGACY_APPROVAL_CODE_DIGITS == 4
+    assert streaming_mod._is_approval_code(f"{7:04d}")
+
+
+@pytest.mark.asyncio
+async def test_after_the_squatter_is_refused_the_real_device_parks(fake_park) -> None:
+    """Phase 2's reproduction, end to end at the hello: X brings ``zz`` and
+    is refused; Y, the satellite actually in the kitchen, parks with its
+    own code and is told it."""
+    x = _session(host="192.168.1.66")
+    await x._park_for_approval(object(), {}, token_hash="x" * 64, code="zz")
+    assert _last_frame(x)["reason"] == "approval_code_invalid"
+
+    fake_park.parked_code = "123456"
+    y = _session(host="192.168.1.50")
+    await y._park_for_approval(object(), {}, token_hash="y" * 64, code="123456")
+    assert _last_frame(y) == {
+        "type": "error", "reason": "awaiting_approval",
+        "message": "waiting for approval on the dashboard", "code": "123456",
+    }
+    assert [c["token_hash"] for c in fake_park.calls] == ["y" * 64]
+
+
+@pytest.mark.asyncio
+async def test_a_parked_request_is_held_for_a_bounded_time(fake_park) -> None:
+    """The first device holds the name against a different one only for
+    APPROVAL_TAKEOVER_SEC; the repository is asked to enforce it on every
+    park (its SQL is exercised in test_satellite_approvals)."""
+    sess = _session()
+    await sess._park_for_approval(object(), {}, token_hash="a" * 64, code=CODE)
+    hold = fake_park.calls[-1]["takeover_after_sec"]
+    assert hold == streaming_mod.APPROVAL_TAKEOVER_SEC
+    assert 60 <= hold <= 600
+
+
+@pytest.mark.asyncio
+async def test_the_conflict_says_when_the_newcomer_gets_its_turn(fake_park) -> None:
+    fake_park.outcome = "conflict"
+    fake_park.parked_code = None
+    sess = _session()
+    await sess._park_for_approval(object(), {}, token_hash="b" * 64, code=CODE)
+    frame = _last_frame(sess)
+    assert frame["reason"] == "approval_conflict"
+    assert "3 minutes" in frame["message"]
+
+
+def test_the_code_shape_is_the_one_the_core_mints() -> None:
+    from domovoi.satellite_media.overlay import generate_approval_code
+
+    for _ in range(50):
+        assert streaming_mod._is_approval_code(generate_approval_code())

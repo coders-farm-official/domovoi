@@ -90,23 +90,36 @@ class ApiClient(
     /** What the active server must prove before the token goes to it
      *  (A6-03); null = nothing beyond being the active server. */
     private val gate: TokenGate? = null,
+    /** The token by server address (Prefs.tokenForServer), so the one
+     *  that goes out is the one issued by the server a request is scoped
+     *  to; absent, [deviceTokenProvider] answers for every base (the
+     *  tests' shape). */
+    private val tokenForServer: ((String) -> String?)? = null,
 ) {
     /** Production wiring: the base URL and the household device token both
      *  follow the saved preferences for the active server. */
     constructor(prefs: Prefs, gate: TokenGate? = null) :
-        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate)
+        this({ prefs.serverUrl.value }, { prefs.deviceToken.value }, gate, { prefs.tokenForServer(it) })
+
+    private val tokenFor: (String) -> String? = tokenForServer ?: { deviceTokenProvider() }
 
     /** The ONE http client the app uses — JSON calls, media3 playback,
      *  Coil images and both WebSockets (discovery takes a copy WITHOUT the
-     *  token interceptor, [Discovery.client]). Every one of them gets both
-     *  interceptors: [CleartextPolicy] runs first, so a plain-http
-     *  connection the policy refuses never has the household token attached
-     *  to it, and DeviceAuthInterceptor puts that token on everything else
-     *  that is addressed to the active server — and strips it from anything
-     *  that is not ([TokenScope]). */
+     *  token interceptor, [Discovery.client]). Every one of them gets all
+     *  three interceptors, on EVERY hop: [RedirectPolicy] follows redirects
+     *  itself (OkHttp's follower is off, since it would carry the token to
+     *  whatever a 3xx named and skip the cleartext rule for that hop),
+     *  [CleartextPolicy] runs next, so a plain-http connection the policy
+     *  refuses never has the household token attached to it, and
+     *  DeviceAuthInterceptor puts that token on everything that is
+     *  addressed to the active server — and strips it from anything that
+     *  is not ([TokenScope]). */
     val http: OkHttpClient = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .addInterceptor(RedirectPolicy.interceptor)
         .addInterceptor(CleartextPolicy.interceptor)
-        .addInterceptor(DeviceAuthInterceptor(deviceTokenProvider, baseUrlProvider, gate))
+        .addInterceptor(DeviceAuthInterceptor(tokenFor, baseUrlProvider, gate))
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
@@ -141,20 +154,27 @@ class ApiClient(
 
     private fun baseUrl(): String = baseUrlProvider()
 
-    val deviceToken: String? get() = deviceTokenProvider()
+    /** The token for the active server (by its address). */
+    val deviceToken: String? get() = tokenFor(baseUrl)
 
     /**
      * The token a request to [url] made OUTSIDE this client (the system
-     * DownloadManager) may carry: the same rule the interceptor applies —
-     * the active server itself, and only once it has proved itself on this
-     * network — judged from what is already known, without a probe, so a
-     * caller on the main thread can ask.
+     * DownloadManager, for the one save-to-device route on the device
+     * tier) may carry: the same rule the interceptor applies — the active
+     * server itself, and only once it has proved itself on this network —
+     * taking the proof now when there is no fresh one, which is why this
+     * suspends (the probe runs on IO). Null when [url] is not the active
+     * server or the phone is not paired; throws the gate's IOException
+     * when the server did not prove itself, so the caller can say so
+     * rather than queue a request that would carry the token and fail.
      */
-    fun tokenForDownload(url: HttpUrl): String? {
-        val base = TokenScope.baseOf(baseUrl) ?: return null
-        if (!TokenScope.sameServer(base, url)) return null
-        if (gate?.admitsTokenNow(base) == false) return null
-        return headerSafeToken(deviceTokenProvider())
+    suspend fun tokenForDownload(url: HttpUrl): String? = withContext(Dispatchers.IO) {
+        val raw = baseUrl
+        val base = TokenScope.baseOf(raw) ?: return@withContext null
+        if (!TokenScope.sameServer(base, url)) return@withContext null
+        val token = headerSafeToken(tokenFor(raw)) ?: return@withContext null
+        gate?.requireAdmitted(base)
+        token
     }
 
     fun absolute(path: String): String {
@@ -195,7 +215,7 @@ class ApiClient(
     fun wsRequest(url: String): Request =
         Request.Builder().url(url)
             .tag(TokenScope.WsUpgrade::class.java, TokenScope.WsUpgrade.MARK)
-            .withDeviceToken(deviceTokenProvider())
+            .withDeviceToken(tokenFor(baseUrl))
             .build()
 
     private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->

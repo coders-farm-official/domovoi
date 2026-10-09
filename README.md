@@ -62,15 +62,6 @@ Domovoi gives you that on your own Wi-Fi:
   record a few clips through the satellite's own mic, train on the server,
   push to the room. No cloud, no third-party service.
 
-### The Home Assistant power user
-
-Already running Home Assistant? Domovoi is not a replacement and doesn't try
-to be — it runs alongside HA on the same network and complements HA Voice
-with a full media stack (per-room audio, library management, radio,
-podcasts/audiobooks), intercom/drop-in, and voice profiles, while HA keeps
-owning devices and automations. Setup and patterns:
-[Home Assistant guide](docs/HOME_ASSISTANT.md).
-
 ---
 
 ## First install
@@ -145,8 +136,10 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 git clone https://github.com/coders-farm-official/domovoi
 cd domovoi
 
-# Python dependencies (run from the repo root, where pyproject.toml lives)
-pip install -e ".[dev,real-clients,voice-profile]"
+# Python dependencies (run from the repo root, where pyproject.toml lives).
+# A Linux server installs from the hash-pinned lock instead:
+# docs/LINUX_HOST.md#install. Add `dev` to the extras only to run the tests.
+pip install -e ".[real-clients,voice-profile]"
 pip install -e ".[cuda]"            # NVIDIA hosts only — CUDA runtime wheels
 pip install --no-deps resemblyzer   # Windows quirk — see domovoi/README.md
                                     # (on Linux: plain `pip install resemblyzer`)
@@ -392,7 +385,7 @@ Want to write one? Start at the
 | [Plugin development](docs/PLUGIN_DEVELOPMENT.md) | Manifest, SDK, lifecycle, publishing your own plugin |
 | [Contributing](docs/CONTRIBUTING.md) | Dev setup, tests, conventions, how to send changes |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | When the house spirit sulks — fixes for common problems |
-| [Home Assistant](docs/HOME_ASSISTANT.md) | Running Domovoi alongside Home Assistant |
+| [Home Assistant](docs/HOME_ASSISTANT.md) | No integration; running both side by side and spoken announcements from Home Assistant |
 | [Security & privacy](docs/SECURITY_PRIVACY.md) | Threat model, what leaves your network (and what never does) |
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |

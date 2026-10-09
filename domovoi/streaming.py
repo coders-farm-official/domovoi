@@ -467,6 +467,7 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
+from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
 from domovoi.turn_timings import (
     TurnTimings,
@@ -490,6 +491,41 @@ APPROVAL_HELLO_LIMITER = SlidingWindowLimiter(
     max_per_window=APPROVAL_HELLO_MAX_PER_WINDOW,
     window_sec=APPROVAL_HELLO_WINDOW_SEC,
 )
+
+# CORE-22 — how long the first device to park a room name holds it against
+# a DIFFERENT device. Inside the window a second device is refused as a
+# conflict (the row on the dashboard keeps describing the device that made
+# it); after it, a different device's request REPLACES the row, token hash
+# and code together, so a request nobody can approve — a LAN host parking
+# "kitchen" with a code no person will ever be told — cannot hold the name
+# for good. The replacement carries the new device's own code, so the
+# operator, who types the code the device in the room is saying, can only
+# ever approve that device. Three minutes is long enough to read a code off
+# a satellite and type it, short enough that the real device, which keeps
+# retrying, gets its turn back quickly.
+APPROVAL_TAKEOVER_SEC = 180.0
+
+# The setup portal minted FOUR digits until SAT-5 (2026-09-22), and a
+# satellite keeps the code it was given in ~/.domovoi/approval_code for
+# good, sending it in every hello. A unit onboarded before then still
+# brings four, and must still be able to park and be approved by them
+# (the dashboard's approval card takes four or more digits for the same
+# reason) — after a pairing reset, say.
+LEGACY_APPROVAL_CODE_DIGITS = 4
+
+
+def _is_approval_code(code: str) -> bool:
+    """:data:`APPROVAL_CODE_DIGITS` ASCII digits, or the
+    :data:`LEGACY_APPROVAL_CODE_DIGITS` an older satellite still carries:
+    the shapes a Domovoi satellite has ever been given, and that a person
+    can read off the device and type (``str.isdigit`` alone would also
+    take superscripts and other scripts' digits)."""
+    return (
+        len(code) in (APPROVAL_CODE_DIGITS, LEGACY_APPROVAL_CODE_DIGITS)
+        and code.isascii()
+        and code.isdigit()
+    )
+
 
 # Set once when the pairing check hits a missing satellite_pairings table
 # (V002 not applied yet) so we log an actionable hint ONCE instead of on
@@ -2412,15 +2448,42 @@ class StreamSession:
         dashboard, which is what ties the row on screen to the device in
         the room.
 
-        Three things guard this path:
+        Four things guard this path:
 
         * a per-source-IP budget, so one address cannot fill the approvals
           list with room names;
+        * a code the device brings must be one the operator could ever
+          type — six ASCII digits, or the four an older satellite carries — or
+          nothing is parked (CORE-22);
         * :meth:`SatelliteApprovalRepository.request` refusing a device
-          that is not the one already parked under this room name;
+          that is not the one already parked under this room name, for
+          :data:`APPROVAL_TAKEOVER_SEC`; after that a different device's
+          request replaces the row, token and code together, so being first
+          with an unapprovable request no longer holds a room name;
         * a code minted here when the device brought none, so there is
           always something for the operator to match.
         """
+        if code is not None and not _is_approval_code(code):
+            # Refused before the budget is spent and before anything is
+            # written: no satellite was ever given this code — one that is
+            # not all digits can never be approved (the approve route takes
+            # digits only), and no device says one of any other length — so
+            # parking it would only take the room name away from the device
+            # that IS there.
+            log.warning(
+                "pairing: room=%s approval request refused — the code it "
+                "brought is not %d digits (or the %d of an older satellite)",
+                self.room_id, APPROVAL_CODE_DIGITS, LEGACY_APPROVAL_CODE_DIGITS,
+            )
+            await self._safe_send_text({
+                "type": "error",
+                "reason": "approval_code_invalid",
+                "message": (
+                    f"an approval code is {APPROVAL_CODE_DIGITS} digits — "
+                    "re-run the satellite's setup to get a new one"
+                ),
+            })
+            return False
         if not APPROVAL_HELLO_LIMITER.allow(self._hello_source()):
             log.warning(
                 "pairing: room=%s approval request throttled for this source",
@@ -2444,6 +2507,7 @@ class StreamSession:
             mac=ctrl.get("mac"),
             board=ctrl.get("board"),
             sat_type=ctrl.get("sat_type") or "voice",
+            takeover_after_sec=APPROVAL_TAKEOVER_SEC,
         )
         if outcome == "conflict":
             log.warning(
@@ -2456,7 +2520,9 @@ class StreamSession:
                 "reason": "approval_conflict",
                 "message": (
                     "another device is already waiting for approval for this "
-                    "room — reject that request on the dashboard first"
+                    "room — reject that request on the dashboard, or wait "
+                    f"{int(APPROVAL_TAKEOVER_SEC // 60)} minutes and this one "
+                    "takes its place"
                 ),
             })
             return False
@@ -2478,7 +2544,7 @@ class StreamSession:
         return False
 
     async def _validate_pairing(self, ctrl: dict[str, Any]) -> bool:
-        """Trust-on-first-use WS auth for the hello frame (V002).
+        """Pairing-token WS auth for the hello frame (V002).
 
         Returns True to ACCEPT the connection, False to REFUSE (the caller
         closes the socket). Only the sha256 of a token is ever compared or
@@ -2546,9 +2612,9 @@ class StreamSession:
                         # only that you have a token, not that you are the
                         # device in that room. The core mints a code for a
                         # device that brought none, and the device says it
-                        # out loud. Fresh installs bootstrap strict (see
-                        # domovoi/.env.example); existing ones keep the
-                        # value they already have.
+                        # out loud. Strict is the default (CORE-11);
+                        # lenient is only ever a household's own
+                        # SATELLITE_PAIRING_STRICT=false.
                         code = ctrl.get("approval_code")
                         code = code.strip() if isinstance(code, str) else None
                         if code or settings.satellite_pairing_strict:
@@ -2593,8 +2659,9 @@ class StreamSession:
         except Exception as e:
             # A DB hiccup must not silently strip auth from a paired room, but
             # it also must not break a tokenless older fleet. Bias to the
-            # configured posture: strict → fail closed, lenient (default) →
-            # preserve the zero-breakage default and accept.
+            # configured posture: strict (the default) → fail closed;
+            # lenient (the household opted out) → keep a tokenless older
+            # fleet working and accept, unauthenticated.
             if _is_missing_pairing_table(e):
                 # Almost always a not-yet-applied migration. Warn ONCE with an
                 # actionable hint instead of once per hello for every room.
@@ -3833,6 +3900,7 @@ class StreamSession:
             and response is not None
             and response.announce_to_rooms
             and response.announce_text
+            and self._may_reach_other_rooms("intercom")
         ):
             sessions: dict[str, "StreamSession"] = self.ws.app.state.active_sessions
             for target_room in response.announce_to_rooms:
@@ -4313,6 +4381,21 @@ class StreamSession:
                 "room=%s: %s", self.room_id, e,
             )
 
+    def _may_reach_other_rooms(self, what: str) -> bool:
+        """False for a socket accepted WITHOUT a pairing token (lenient
+        pairing's case 5, or its fallback when the check could not run):
+        whatever LAN device named itself this room may use its own room and
+        nothing else, so it never opens another room's microphone or
+        speaks in it (CORE-11). Logs the refusal."""
+        if self.token_authenticated:
+            return True
+        log.warning(
+            "%s: refused for room=%s — it connected without a pairing token, "
+            "so it cannot reach another room",
+            what, self.room_id,
+        )
+        return False
+
     async def _handle_dropin_action(self, response: Any) -> None:
         """Act on `response.dropin_action` after the originating turn.
 
@@ -4332,6 +4415,11 @@ class StreamSession:
             return
 
         if action == "request":
+            # The initiator's own socket must be a paired one (CORE-11).
+            # DropInHandler already refuses aloud; this is the backstop for
+            # anything else that ever hands this layer a request.
+            if not self._may_reach_other_rooms("drop-in"):
+                return
             target_room = response.dropin_room
             target = sessions.get(target_room) if target_room else None
             if target is None or target.dropin_peer is not None:

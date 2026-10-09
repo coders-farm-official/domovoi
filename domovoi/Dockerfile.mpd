@@ -2,7 +2,10 @@
 # was MPD 0.21.23 with zero compiled encoders — `httpd` audio output silently
 # failed to bind, breaking music streaming to Pi satellites. Debian bookworm's
 # mpd package ships 0.23.x with lame/vorbis/opus/wave/flac all available.
-FROM debian:bookworm-slim
+# Pinned by digest: debian:bookworm-slim as of 2026-10-07
+# (bookworm-20261005-slim, multi-arch index). The update unit rebuilds this
+# image whenever this file changes; moving the pin is that change.
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -40,7 +40,7 @@ tier is what keeps it from going further.
 flowchart TB
     subgraph daily["Daily tier — any LAN host, no auth"]
         d1["Reads: health, time, handlers,<br/>capabilities, the file-sync channels"]
-        d2["Dashboard reads of household STATE:<br/>now-playing, library, timers —<br/>never what anybody said, never who is home"]
+        d2["Dashboard reads of household STATE:<br/>now-playing, library, timers —<br/>never what anybody said, who is home<br/>or whose device queued what"]
     end
     subgraph fetch["Outbound-fetch tier — rate-limited"]
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
@@ -56,13 +56,13 @@ flowchart TB
         v7["Satellite room label, timer cancel,<br/>announce, volume, and<br/>'Only reminders for this device'"]
         v8["Plugin routes marked @device_endpoint —<br/>radio: play, favorite, edit, forget,<br/>simulcast lookup"]
         v9["READING what the household said:<br/>conversations, voice notes, chat,<br/>wake-word recordings — and a person's<br/>memories, favorites, preferences"]
-        v10["READING who is home: the people<br/>roster, rooms, session lists,<br/>the calendar"]
+        v10["READING who is home: the people<br/>roster, rooms, session lists,<br/>play history, the calendar,<br/>the speech latency summary"]
     end
     subgraph admin["Admin tier — password + Bearer token"]
         a1["Plugin install / enable / disable /<br/>uninstall / upgrade (code execution)"]
         a2["Config read & write (carries secrets)"]
         a3["Satellite code push (makes a Pi run new code),<br/>satellite restart / display / config rewrite"]
-        a7["Opening a room-to-room drop-in from HTTP<br/>(/v1/admin/dropin/start)"]
+        a7["Opening a room-to-room drop-in from HTTP<br/>(/v1/admin/dropin/start; 501 before setup)"]
         a4["Git pull, clip re-render, library sweeps,<br/>wake-word recording and model push"]
         a5["Satellite log pull (a room transcript)"]
         a6["Chat-tool resync, session management"]
@@ -219,7 +219,13 @@ caller without a credential is closed (`1008`) before one is built, and
 the room never learns a call was attempted. A browser cannot set request
 headers on a WebSocket, so that route — and only that route — also accepts
 the token as `?token=`; every HTTP route takes the header, because a query
-string ends up in access logs and `Referer` headers.
+string ends up in access logs and `Referer` headers. Unlike the rest of the
+device tier it has **no pre-setup grace**: before an admin exists — on a
+fresh box, and again after `--reset-admin` — the upgrade is closed `1008`
+with `code: setup_required` whatever it presents, and the HTTP way of
+opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
+security tier. Nothing needed to finish setting a box up listens to a
+room (CORE-14).
 
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
@@ -294,7 +300,21 @@ and the same pre-setup grace:
   who it is in a call with (`GET /api/satellites`, `/api/satellites/{room}`)
   — and a satellite being adopted, with its MAC, board and model
   (`GET /api/satellites/pending`);
-* the calendar (`GET /api/calendar/events`, `/api/calendar/events/{id}`).
+* the calendar (`GET /api/calendar/events`, `/api/calendar/events/{id}`);
+* and, closing the siblings that first pass left open (REV-11), what still
+  said when a room was in use: a room's play history, each play with its
+  `started_at` (`GET /api/satellites/{room}/recently-played`); a room's
+  satellite config, whose 200 or 404 says whether that satellite is
+  connected and whose body is the mic, Wi-Fi and audio hardware it
+  reported (`GET /api/satellites/{room}/config`, and the core's
+  `GET /v1/admin/satellite/{room}/config` behind it); and the speech
+  latency summary (below).
+
+`GET /api/music/now-playing` stays open — the kiosk reads it unpaired —
+but its `added_by`, the registered name of the device that queued what a
+room is playing ("Kamron's Pixel"), is named only to a household
+credential (the tiers `/ws/state` admits) and is `null` for anyone else,
+so the open poll says what plays, not whose phone is driving which room.
 
 The dashboard and the Android app already send the household token on
 every read, so a paired client sees what it saw before. An unpaired
@@ -341,7 +361,16 @@ apply the same secret-shaped-name filter — on reads as well as saves since
 2026-10-08: a `.env`, a `*.pem` / `*.key` / `*.p12` or a `pairing_token`
 sitting in `~/Documents` is not listed, zipped or served by either door
 (WEB-14; before, the documents door listed and served what the Files door
-withheld). The music library has a door of its own, the dashboard's music
+withheld). The filter also knows the secrets people keep in a home folder
+(REV-12): SSH keys under their default names (`id_rsa`, `id_ed25519`, …)
+and the `.ssh`, `.gnupg`, `.aws` and `.kube` folders, dotenv variants
+(`.env.local`), `.netrc`, `.git-credentials`, `.pgpass`,
+`credentials.json`, `secrets.json`, password databases (`*.kdbx`),
+encrypted files (`*.gpg`) and VPN profiles (`*.ovpn`). Every segment of a
+path is asked about, as sent and as resolved, so nothing inside such a
+folder is served either (`.ssh/config`), and neither is a harmless-looking
+name that links to one. The list is a backstop, not a vault: keep secrets
+out of the Documents folder. The music library has a door of its own, the dashboard's music
 upload (`POST /api/music/library/upload`), and since 2026-10-08 it asks the
 same block before writing a byte (WEB-12), identifying the caller the same
 way. One difference remains, and it
@@ -363,8 +392,9 @@ rotate.
 The Android app asks for it once under **Settings → Connection**, keeps it
 sealed with AES-256-GCM under a key that never leaves the Android Keystore
 (`data/TokenVault.kt`; a token an older build kept in the plain DataStore
-is moved across at the first start, and every file is outside Android
-backups and device transfers) and sends it on every HTTP request **to that
+is moved across at the first start, the plain copy going only once the
+sealed record is on disk, and every file is outside Android backups and
+device transfers) and sends it on every HTTP request **to that
 server** — scheme, host and port, like a browser's origin — on `/ws/state`
 and on the drop-in call socket to the core's port on the same host, and on
 nothing addressed anywhere else (`net/TokenScope.kt`; before 2026-10-08 the
@@ -395,21 +425,38 @@ A **satellite** verifies its server cryptographically — see "Server identity
 the **phone**: `GET /api/health` passes the core's identity block through
 (the Ed25519 public key and the `SHA256:…` fingerprint **Settings → About**
 shows), and with `?challenge=<nonce>` the core's signature over that nonce.
-The app pins the key the first time a trusted server proves one (trust on
-first use — the same trust the dialog expressed; a server that offers no
-identity at all, a web backend from before this, is treated as before and
-said so in the log) and demands the proof again after every network change
-before the first request that would carry the household token
-(`net/IdentityGate.kt`): whatever answers at the saved address on another
-network — a hotspot redirecting port 6369, a home-subnet twin — gets a
-token-less probe and, failing the proof, nothing else; the shell says the
-server did not prove it is the one this phone paired with. The pinned
+The pin is the trust decision: the picker's dialog shows the key the server
+advertises (to compare with **Settings → About**) and pins it when the
+person says yes, so the first proof has to match that key and not whoever
+answers first on some network; a server trusted by a build from before
+this is pinned the first time it proves one, and a server trusted while it
+offered none is never pinned behind the person's back (the topbar says
+"unverified", and **Settings → Connection** shows the key it proves now
+with a button to pin it). The proof is demanded before the first request
+that would carry the household token on every network — each verdict is
+keyed to a fingerprint of every network the phone could reach the server
+over (the default network and every Wi-Fi or Ethernet network, so a VPN
+that stays the default cannot hide the Wi-Fi changing under it, with their
+addresses, from all four ConnectivityManager callbacks;
+`net/NetworkWatch.kt`), stands at most ten minutes, and is taken again
+whenever the app returns from the background (`net/IdentityGate.kt`):
+whatever answers at the saved address on another network — a hotspot
+redirecting port 6369, a home-subnet twin, the new Wi-Fi under a VPN that
+never changed — gets a token-less probe and, failing the proof, nothing
+else; the shell says the server did not prove it is the one this phone
+paired with. A web backend whose core is not answering
+(`domovoi_reachable` false) is not an impostor: the token is held, nothing
+is cached, and the shell says the server is not fully up. The pinned
 fingerprint and every trusted server are listed under **Settings →
-Connection**, each with a forget button, and a server switch forgets trust
-that is no longer attached to a listed server. This is the pre-TLS interim:
-a relay to the real server from a hostile network would still pass, which
-is what TLS with a pinned certificate closes, and that stays on the
-hardening backlog. The browser does not pin a key yet.
+Connection**, each with a forget button — the server in use included,
+after a confirmation that shows the pinned key next to the one it proves
+now, which is how a phone re-pairs after a reinstalled or replaced
+server — and a server switch drops trust (only the trust) that is no
+longer attached to a listed server. This is the pre-TLS interim, and the
+proof is a signed nonce with no address bound to it: a relay that can reach
+the real core from a hostile network (a port-forward, an overlay network)
+would still pass it. TLS with a pinned certificate closes that and stays on
+the hardening backlog. The browser does not pin a key yet.
 
 ### Which names the server answers to
 
@@ -487,7 +534,16 @@ run uvicorn with `--limit-concurrency`
 (`MAX_CONCURRENT_CONNECTIONS`, default 128): over it uvicorn answers 503
 rather than accepting work it has no memory for, because every satellite
 WebSocket holds an utterance buffer and a frame buffer for as long as it
-is open. Relatedly, a second connect for a room now **closes** the socket
+is open. That ceiling counts every caller together; there is **no
+per-source limit** yet (CORE-15). One LAN host that opens and holds that
+many connections — an idle TCP connection counts, and uvicorn never closes
+one that has not sent a request — has every other client answered 503
+until it lets go: satellites trying to reconnect, the dashboard, the web
+process's calls into the core. It protects the box's memory, not its
+availability. A per-source ceiling has to sit below the ASGI layer, which
+never sees a connection that sends nothing, and has not been built; a
+per-source connection limit in the host's firewall on ports 6370 and 6369
+is the way to get one today. Relatedly, a second connect for a room now **closes** the socket
 it replaced (1001) instead of leaving it open and unread.
 
 ### Daily tier (LAN-trust)
@@ -522,20 +578,25 @@ login, so there is nobody in front of it to pair it — which is why it
 satellite, set `[display] kiosk_url` to that; see
 `satellite/VIDEO_SATELLITE.md`). The page stores the token the way the
 pair prompt stores a pasted one (per server, in the kiosk browser's own
-profile) and takes it back out of the address. Exactly what each call on
+profile) and takes it back out of the address. A browser that already
+holds a different token keeps it unless the address's token passes one
+read on the device tier first (that token alone, no cookie), so a link to
+`display.html` carrying a wrong token cannot unpair a paired browser. Exactly what each call on
 the screen needs, named rather than implied:
 
 | Kiosk call | Tier | What it gives away, or does |
 |---|---|---|
 | `GET /display.html?room=<room_id>` | Open | The kiosk page itself. It is a page, not data — everything on it comes from the calls below. |
-| `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. |
+| `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. Not whose device queued it: `added_by` is `null` without a household credential. |
 | `GET /api/satellites/{room_id}` | Device read (2026-10-08) | The room's label and its idle mode. Unpaired, the kiosk shows the room id and the clock instead. |
 | `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Open at the web hop; **device tier at the core hop** | Pauses, resumes, stops or skips that room's playback — the kiosk's transport row. The web route asks for nothing, but it forwards to `/v1/admin/music/{action}/{room_id}`, which takes the household token, so the buttons work only on a paired kiosk and a bare LAN request is `401`. |
-| `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk polls instead. |
+| `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk is refused, so after its first read its screen does not update. |
 
 That is the whole kiosk surface. What an unpaired client on your Wi-Fi can
 do with it is see what every room is playing; every pause, resume, stop
-and skip needs the household token. All four verbs are writes, so they
+and skip needs the household token. An unpaired kiosk is not a working
+kiosk: it shows the first answer it got and then freezes, because the
+live push refuses it and nothing else refreshes it. All four verbs are writes, so they
 also need the `X-Requested-With` header like every other write, which
 keeps a page on another site from triggering them from a browser you
 happen to have open. A kiosk URL that carries the token puts the
@@ -543,35 +604,34 @@ household token in the satellite's config file and in the kiosk browser's
 profile — treat the satellite's `~/.domovoi` like any other paired
 device's storage.
 
-**The speech latency summary is open too, and carries only numbers.**
-`GET /v1/stats/latency` (and its dashboard proxy `GET /api/stats/latency`,
-the "recent speech timings" line on the Models page) reports how long
-recent voice turns took, per stage: per-stage counts and p50 / p95 / max
-milliseconds, how many turns took each route (`fast`, `qa`, ...), and the
-Whisper settings (model, device, compute type, CPU threads). It reads one
-column, `intents_log.timings`, which the core fills with integers and the
-Whisper settings, plus the row's route and time. The one text that column
-can hold is opt-in: while the streaming fast lane runs in shadow mode
-(`fastlane_mode`, off by default), a turn it would have acted on also
-records `fastlane_text`, the closed command it heard ("pause the music"),
-and the fast path it matched: its own hearing of the words whose Whisper
-transcript the row's `transcript` column already holds, kept so a
-disagreement with Whisper can be read later. Its log line on the Domovoi
-server (`journalctl -u domovoi-core | grep fastlane`) names both the
-lane's text and Whisper's transcript for those turns. The summary reads
-the lane's counts and milliseconds and never those two keys. No
-transcript, no reply, no person, no session and no presence tier is read,
-so none can be returned; the `room` filter is an input, echoed back, and
-never a list of rooms. What it does reveal is that turns happened, when
-(by narrowing `since`) and in which room (by naming it) — counts and
-timings, never who. The reads that used to make that redundant, a room's
-session list and the people roster, are household reads since 2026-10-08
-(above), so this summary is now the one open read that says a room was
-spoken to at all; it stays open by the 2026-09-28 decision because it is
-what a person tuning Whisper needs without holding a
-credential, the same reasoning that keeps `/v1/health`'s `stt` state open.
-The route-walk pins both routes open, so gating them is a recorded
-decision.
+**The speech latency summary carries only numbers, and still takes a paired
+device.** `GET /v1/stats/latency` (and its dashboard proxy
+`GET /api/stats/latency`, the "recent speech timings" line on the Models
+page) reports how long recent voice turns took, per stage: per-stage
+counts and p50 / p95 / max milliseconds, how many turns took each route
+(`fast`, `qa`, ...), and the Whisper settings (model, device, compute type,
+CPU threads). It reads one column, `intents_log.timings`, which the core
+fills with integers and the Whisper settings, plus the row's route and
+time. The one text that column can hold is opt-in: while the streaming
+fast lane runs in shadow mode (`fastlane_mode`, off by default), a turn it
+would have acted on also records `fastlane_text`, the closed command it
+heard ("pause the music"), and the fast path it matched: its own hearing
+of the words whose Whisper transcript the row's `transcript` column
+already holds, kept so a disagreement with Whisper can be read later. Its
+log line on the Domovoi server (`journalctl -u domovoi-core | grep
+fastlane`) names both the lane's text and Whisper's transcript for those
+turns. The summary reads the lane's counts and milliseconds and never
+those two keys. No transcript, no reply, no person and no session is
+read, so none can be returned. What it does reveal is that turns
+happened, when (by narrowing `since`) and in which room (by naming it):
+`?room=kitchen&since=<thirty seconds ago>` says whether somebody just
+spoke in the kitchen. Since 2026-10-08 that makes it a household read,
+like the room's session list it used to duplicate: `require_device_read`
+at both hops (the household token, an admin session or the dashboard
+cookie; `401` otherwise; the pre-setup grace kept). It was open by the
+2026-09-28 decision, so a person tuning Whisper could read it without a
+credential; a paired dashboard still can, and the route-walk pins both
+routes to the household tier.
 
 **Device identity is self-asserted, and the room-queue blocklist depends on
 it.** A browser or phone introduces itself with an id it generates locally
@@ -746,10 +806,46 @@ Browser uploads into the library (`POST /api/music/library/upload`) accept
 zip archives; an archive is refused with `413` before anything is inflated
 when it declares more than 5000 members, a member over 1 GiB, or more than
 4 GiB in total. The third-party packages that parse what comes in over the
-network (`starlette`, `python-multipart`, `requests`, `pillow`) carry
-one-way version floors in `pyproject.toml`, and `requirements.lock` pins
-the exact, hash-checked set a deployment installs — see
-[CONTRIBUTING.md](CONTRIBUTING.md#development-setup).
+network (`starlette`, `python-multipart`, `requests`, `urllib3`,
+`pillow`) carry one-way version floors in `pyproject.toml`.
+
+A Linux server installs its Python packages from
+`requirements-linux-py314.lock`: the core, the dashboard, the
+`real-clients` and `voice-profile` extras, `resemblyzer` and CPU torch,
+each at an exact version with its SHA-256s, for CPython 3.14 on x86_64
+([LINUX_HOST.md, Install](LINUX_HOST.md#install)). pip refuses a download
+that doesn't match its hash, and the packages that publish only source are
+built against hash-checked build tools rather than ones fetched unchecked
+for the build. Once a box opts in (`DOMOVOI_USE_LOCK=1`,
+[LINUX_HOST.md, The hash-pinned lock](LINUX_HOST.md#the-hash-pinned-lock)),
+the update unit's re-sync installs from the same lock, so a tampered
+package fails the update and it rolls back. What is not hash-checked,
+said plainly:
+
+- **An update before you opt in.** Without `DOMOVOI_USE_LOCK=1` the
+  update unit's re-sync resolves from the index, unchecked, as it did
+  before the lock existed; its step says the lock is there. It is opt-in
+  so the first locked re-sync can be seeded from what the box runs.
+- **Another Python or platform.** With no lock for the venv's Python (an
+  older Ubuntu, a `uv`-installed 3.13, Windows), pip's resolver installs
+  whatever the index serves within the floors. On a box that opted in,
+  the update unit records that re-sync as a `warn` step and Settings →
+  Version shows **lock not applied: <reason>**, so the opt-in never turns
+  itself off silently.
+- **Extras outside the lock** (`cuda`, `fastlane`, `shazam`, `chat`,
+  `signing`) go through the resolver too, when you add them.
+- **The `dev` lock** (`requirements.lock`, core + `dev`, Python 3.12) is
+  the suite's set, not a server's.
+- **A plugin's own lock** is hash-checked by the plugin installer
+  ([PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md)); the satellite card's
+  Python wheels are not yet, the `openwakeword` package among them. The
+  XVF3800 tool is pinned by commit and SHA-256. The wake-word base models
+  are pinned by SHA-256 and size on the server, which fetches every one
+  and refuses to prepare an offline card unless the cache holds all of
+  them verified; stage 2 on the satellite checks them again against the
+  same pins, and runs openWakeWord's own download only for a card that
+  carries no models (prepared with offline off), deleting anything that
+  download brings that the pins don't vouch for.
 
 ## What the admin password actually gates
 
@@ -767,6 +863,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite pairing reset / preseed / delete** (lets the next device re-pair as a room; mints a room's token; frees a room name) | Core: `DELETE /v1/admin/satellites/{room_id}/pairing`, `POST .../pairing/preseed`, `DELETE /v1/admin/satellites/{room_id}`. Dashboard: `POST /api/satellites/{room_id}/pairing/reset`, `POST /api/satellites/pending/{id}/adopt`, `DELETE /api/satellites/{room_id}`. | **Fails closed** — 501 until setup. |
 | **Satellite media preparation** (builds the code and the first-boot scripts a Pi will run as root) | Dashboard: the whole `/api/satellites/media/*` router. Reads (`/status`, `/targets`, `/jobs`, `/jobs/{id}/download`, `/jobs/{id}/credentials`) take an admin **read** — the artifact is the code a satellite will run, `/jobs` lists the ids that name it, and `/targets` enumerates the drives plugged into this server. Writes (`/prepare`, `/cancel`, `/cache/refresh`) stay Bearer-only. | Pre-setup grace. The **downloadable zip carries no plaintext passwords**: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard from process memory. A card written directly to a **drive** still carries `domovoi/ap.json` and `domovoi/console.json` — stage 1 reads the first to raise its setup network, and anyone holding the card can read either anyway. |
 | **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Setting and rotating are Bearer-only; the cookie renders the read and nothing else. |
+| **Satellite approval and rejection** (binds a parked device to a room for good, or drops its request) | Core: `POST /v1/admin/satellites/approvals/{room_id}/approve`, `/reject`. Dashboard: `POST /api/satellites/approvals/{room_id}/approve`, `/reject`. The list of parked requests is an admin **read** (Bearer or cookie). | **Fails closed** — 501 until setup (2026-10-08, REV-32). With strict pairing the default, a satellite that connects to an unclaimed core parks; before this, any LAN host could park a device of its own there and approve it with no credential, and that pairing outlived the setup. Finish first-run setup, then approve. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Writes are Bearer-only; the cookie renders the list and the audio. The household token never reads these, unlike the rest of the household's speech. |
 | **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But the tablet is paired, so it can read everything Home hides that way — the calendar and the rooms are household reads (since 2026-10-08) it holds the credential for — and the rest is an **open read** that anyone on the network can fetch with no credential at all (`/api/health`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
@@ -777,7 +874,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
-| **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD. | Pre-setup grace. |
+| **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
 | **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
 
@@ -787,8 +884,9 @@ They split across the two tiers: announce, a turn, playback and the room
 queue, per-room volume, the room label, a version check and a voice sample
 take the household **device token**; wake-word recording and model push,
 sound regeneration, the library sweeps, satellite restart / display / config,
-the approvals, drop-in start, chat resync and `git pull` take the **admin**
-tier; and the rows in the table above fail closed on top of that. The
+drop-in start, chat resync and `git pull` take the **admin**
+tier; and the rows in the table above fail closed on top of that — the
+satellite approvals among them. The
 dashboard's `/api/...` twins name the same tier as the core route each one
 proxies to. `domovoi/tests/test_route_auth_matrix.py` walks both apps and
 keeps the short list of deliberately open mutations honest.
@@ -816,7 +914,9 @@ The rows marked **fails closed** are the *security tier*
 had. Before setup the setup code protects *who becomes admin*; the security
 tier makes sure nothing that changes what the server runs or trusts can
 happen *meanwhile*. `python -m domovoi.main --reset-admin` returns the
-install to the pre-setup state and therefore reopens only the daily surface.
+install to the pre-setup state and therefore reopens only the daily surface
+— and never a room's live microphone: the phone drop-in socket and an
+HTTP-opened drop-in stay closed until someone signs in again.
 `domovoi/tests/test_route_auth_matrix.py` walks every mutating route of both
 processes and fails when one has no gate and is not allowlisted with a
 reason, so a new route cannot quietly ship open.
@@ -1026,9 +1126,11 @@ All of it on hardware you own. Locations, verified against the code:
 
 | Where | What |
 |---|---|
-| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). A spoken turn's `intents_log` row also carries its stage timings (`timings`: milliseconds and the Whisper settings, no text), which the open latency summary reads. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas, and `command_capture_rooms` (which rooms an admin opted in to command recording, and since when — no audio). |
+| **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). A spoken turn's `intents_log` row also carries its stage timings (`timings`: milliseconds and the Whisper settings, no text), which the latency summary (a paired device's read) reads. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas, and `command_capture_rooms` (which rooms an admin opted in to command recording, and since when — no audio). |
 | **Postgres: timer history** (V018 `timer_fires`, `timer_fire_deliveries`, `timer_own_only_rooms`) | Every timer and reminder that went off: when it was set, due and fired, the room it was set in, its label and message, the line the origin room spoke (`base_text`) and, per room, whether and when it was announced there and the exact line spoken (`spoken_text`). Kept `timer_fire_retention_days` (default 7), pruned hourly by the core. No web route or push serializes `base_text` or `spoken_text`; the same words are spoken, and logged, on every satellite that announces them (the Pi rows below). Plus which rooms have "Only reminders for this device" on, and since when. See [Timers and reminders](#timers-and-reminders-house-wide). |
 | **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word; played back to paired devices only), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models), and `captures/` (**recordings of commands spoken in a room an admin opted in**, with their transcripts; at most 14 days, admin-only — see the next section). |
+| **Postgres: rolled-back databases** (Linux update unit only) | When a rollback restores the pre-update dump, the database it replaced is renamed `domovoi_failed_<UTC time>` (and `domovoi_test_failed_<UTC time>`) and kept for inspection: a full copy of everything the row above lists. Only the newest one of each is kept (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1); older ones are dropped at the next restore. Same credential as the live database. |
+| **`/var/lib/domovoi-update/` on the server** (Linux update unit only) | `backups/pre-<sha>-<UTC time>.dump` and `.test.dump`: a `pg_dump` of `domovoi` and `domovoi_test` taken before every full update, so **everything the database holds** — transcripts, voice embeddings, the admin password hash, session token hashes and the household device token, in plain text inside the dump. Directory 0700 and files 0600, root only; the newest 5 of each are kept (`DOMOVOI_UPDATE_KEEP_BACKUPS`). Also `last-result.json` (the last run's steps, with the tail of each failed command's output; mode 0640, readable by root and the service user's group, which is how the core reads it), `pip-freeze-pre.txt` (package versions) and the applied / bad commit SHAs. |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |
 | **`~/.domovoi/` on each Pi** | `config.toml`, synced sound clips, synced wake models, small state sidecars (`voice`, `wake`, last-synced version, and the `pairing_token` WS-auth secret — mode 0600), and a tarball backup of the previous satellite code kept for upgrade rollback. |
@@ -1073,7 +1175,7 @@ and migration V018.
 |---|---|
 | **Timer history (V018)** | One `timer_fires` row per timer or reminder that went off (moved out of `timers` in the same transaction), and one `timer_fire_deliveries` row per room it was announced in: outcome (`spoken`, `interrupted`, `offline`, `busy_timeout`, …), a reason code (never speech), and the exact line spoken there. Kept 7 days (`timer_fire_retention_days`), then deleted with its deliveries. |
 | **Who reads a reminder's words** | A caller with a household credential — the device token, an admin Bearer, the dashboard cookie, or the pre-setup grace (a paired shared screen holds the device token) — on every open timer read: `GET /api/timers` (and its `fires`), `GET /api/satellites/{room}/timers` and `GET /api/timers/fires`. The `/ws/state` push (`timers`, `timer_fires`) is device tier already and carries them too. **Rule M1:** anyone else gets every reminder, whatever room it was set in, with `message` and `label` null and `masked: true`. Until 2026-09-30 only reminders set with no room were masked, and an unauthenticated GET answered a room's reminder text. **Satellite sockets receive the words too:** an announcement is the line itself, as text (`response_start.text`) and as audio, sent to every room that announces it. |
-| **Which satellites hear another room's words** | Only one whose hello matched its room's pairing token (or claimed an unpaired room with one). A socket the core accepted with **no** token — `SATELLITE_PAIRING_STRICT` off (the config default; fresh installs bootstrap it on, existing installs keep what they have) and a room name nobody paired — announces only the timers and reminders set in its own room; the core logs `room <x> has no pairing token; it announces only its own timers and reminders` once. Nor does such a room speak to the house: a timer or reminder set there is announced there only, and no room joins it later (while that room is connected when it goes off; one set there that goes off while it is offline, or is picked up after a core restart before it reconnects, follows the ordinary rule). The same holds when the pairing check itself could not run (a database error, strict off). **With strict pairing off, a LAN device that presents any token under a new room name is paired on trust and then hears every room's timers and reminders, words included, from then on, and up to 2 minutes of what already went off** (10 minutes after a core restart) — and that room shows in `heard_in` and on the dashboard's satellite list. Turn on `SATELLITE_PAIRING_STRICT=true` (every first pairing then waits for an admin's approval), as fresh installs already do — on an existing install, before this release's restart (the 2026-09-30 owner checklist in RELEASE_NOTES.md makes it a step). |
+| **Which satellites hear another room's words** | Only one whose hello matched its room's pairing token (or claimed an unpaired room with one). A socket the core accepted with **no** token — `SATELLITE_PAIRING_STRICT` turned off (strict is the default) and a room name nobody paired — announces only the timers and reminders set in its own room; the core logs `room <x> has no pairing token; it announces only its own timers and reminders` once. Nor does such a room speak to the house: a timer or reminder set there is announced there only, and no room joins it later (while that room is connected when it goes off; one set there that goes off while it is offline, or is picked up after a core restart before it reconnects, follows the ordinary rule). The same holds when the pairing check itself could not run (a database error, strict off). **With strict pairing off, a LAN device that presents any token under a new room name is paired on trust and then hears every room's timers and reminders, words included, from then on, and up to 2 minutes of what already went off** (10 minutes after a core restart) — and that room shows in `heard_in` and on the dashboard's satellite list. Keep `SATELLITE_PAIRING_STRICT=true`, the default (every first pairing then waits for an admin's approval). |
 | **Who reads the fire history** (rule F1) | The whole of it — 7 days of when every timer and reminder went off, each room's outcome, reason code and finish time, and which room said "stop the timer" and when — only the same household credentials that read a reminder's words: the device token (the Android app, a paired shared screen), an admin Bearer, the dashboard cookie, or the pre-setup grace. That is exactly the tier the `/ws/state` handshake admits, so the `timer_fires` push (the last hour, whole) goes to nobody the HTTP read would cut down. `GET /api/timers/fires` classifies every caller (the answer tells a good token from a bad one, so a wrong token pays the device-token backoff) and says which view it gave in `window_sec`. Until 2026-09-30's follow-up (rule F1) the whole 7 days were an open read. |
 | **What the open read still shows** | To a caller with no household credential — or a stale token, or a source throttled for guessing — `GET /api/timers/fires`, the `fires` in `GET /api/timers` and the per-room history the satellite drawer lists answer **only the last 10 minutes** (`window_sec: 600`), each fire cut to what Home's "done · garage" line and the alert card draw on an unpaired kitchen tablet: which timer or reminder (ids, kind, the room it was set in, when it was set, due and went off — all of which its running row showed openly), the rooms that heard it (`heard_in`) and the `summary` line ("heard in garage, kitchen · still announcing", "not heard in any room (garage offline)" — the open satellite list already says which rooms are offline), a reminder read as "reminder" (M1), and a plain timer's label ("pasta"), which its running row served openly until the moment it went off. **Held back from it:** each room's own row (`deliveries: []` — its outcome, where `interrupted` means someone started talking there and `busy_timeout` that a room was in a call; its live reason code, `in_call`, `recording`, `capturing`, `responding`; its finish time), who stopped it and when (`acked_by`, `acked_at`, and the summary's " · stopped in kitchen" — a log of which room somebody spoke in), `settled_at`, and anything older than 10 minutes. Home, the alert cards (a catch-up alerts only fires under 10 minutes old anyway) and the countdowns keep working on an unpaired tablet. |
 | **What is never served** | No web route or push serializes the lines the core spoke (`base_text`, `spoken_text`). They are spoken, and logged at INFO, on each satellite that announces them (the Pi rows above), and they ride in the `core.timer_fired` event payload (`message`, `text`) to in-process plugin subscribers — admin-installed code that already has database access, so no wider than before. The core's two existing "timer fired" log lines are unchanged (the reminder one already carried `message=`); its new per-room delivery log line carries no message or label. |
@@ -1115,23 +1217,23 @@ outbound traffic, each with its own off switch:
 |---|---|---|
 | **Connectivity probe** — a TCP connection with no payload to `CONNECTIVITY_PROBE_TARGET` (`1.1.1.1:443`) | Every 30 s | Under `never` it doesn't dial. Otherwise keep it on an internet address: it is how the core knows the line is down. |
 | **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box replies are spoken on your hardware. Edge is never a fallback for Piper (`piper → system`), and an Edge voice is registered only when you choose Edge or the extra voices (`seed_voice_catalog`). A registered Edge voice's fixed clips (the network notice, the voice sample, the wake greetings) are rendered by Microsoft once each, and only while the internet is up; offline, Piper renders stand-ins. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. Under `never` Edge is not used at all. |
-| **Piper voice download** — one-time fetch of a voice model from Hugging Face | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
+| **Piper voice download** — one-time fetch of a voice model from Hugging Face. The voices Domovoi offers come from a pinned revision and are checked against pinned SHA-256 digests; any other standard voice name is checked against the digests Hugging Face publishes for it. Nothing that fails the check is kept, the body is capped, and every redirect is re-checked | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **Fast-lane model download** — one-time fetch of the streaming recognizer's model (103 MB) from the sherpa-onnx project's GitHub releases, checked against a pinned SHA-256 | Only if you set `fastlane_mode` to `shadow` (off by default) and the model isn't in `~/.domovoi/models/fastlane/` yet | Leave `fastlane_mode` off, or run `python -m domovoi.fast_lane fetch` once on a connected machine and copy `~/.domovoi/models/fastlane/` across. |
 | **Whisper model download** — the configured model (and its CPU fallback) from Hugging Face | Only when the model isn't on disk yet: every load tries the local cache first | Download the models while online; under `never` the core also sets `HF_HUB_OFFLINE=1` for itself. |
 | **News** — RSS feed fetches, plus SearXNG queries for feed discovery (the SearXNG container is local, but it forwards queries to public search engines) | Daily pre-fetch (default 5 a.m.) and when you ask for news | `news_enabled = false` (master switch); per-person topic fetch is separately opt-in (`news_auto_fetch`). |
-| **Web answers** — "check that online", "double-check that", the weather: search queries through the local SearXNG container to public search engines. **The container also fetches on its own every time it starts**, with no query sent: the ClearURLs rule lists (rules1/rules2.clearurls.xyz, raw.githubusercontent.com), a Wikidata SPARQL query, and the radio-browser server list | While the `searxng` container runs. It follows the internet answer: started when **Yes** or **Sometimes** is saved (and by the dev scripts and the Linux update unit), stopped on **No** — which is why **No** stops it rather than only refusing searches; never started at boot | Answer **No**, or stop the container (`docker stop domovoi-searxng`); `DOMOVOI_MANAGE_SEARXNG=0` (process environment) stops Domovoi starting it. Under `never` no query is sent even if it runs, but its startup fetches would be, so leave it stopped. |
+| **Web answers** — "check that online", "double-check that", the weather: search queries through the local SearXNG container to public search engines. **The container also fetches on its own every time it starts**, with no query sent: the ClearURLs rule lists (rules1/rules2.clearurls.xyz, raw.githubusercontent.com), a Wikidata SPARQL query, and the radio-browser server list | While the `searxng` container runs. It follows the internet answer: started when **Yes** or **Sometimes** is saved (and by the dev scripts and the Linux update unit), stopped on **No** and at every core start while the answer is No (an answer set by hand in `.env` is never "saved") — which is why **No** stops it rather than only refusing searches; never started at boot | Answer **No**, or stop the container (`docker stop domovoi-searxng`); `DOMOVOI_MANAGE_SEARXNG=0` (process environment) stops Domovoi starting it. Under `never` no query is sent even if it runs, but its startup fetches would be, so leave it stopped. |
 | **Podcasts** — the subscribed feeds and the episode files they point at; each show's artwork, fetched once by the server; a show's name to Apple's iTunes search when you subscribe by voice or use Discover | Only for shows you subscribed to, when the poller runs (on for the **Yes** answer, off otherwise) or you press "poll now"; the search only when you ask | `podcast_feed_poller_enabled = false`; unsubscribe from a show to stop fetching it. The browser and the phone load artwork from the server, never from the publisher. |
 | **Library enricher** — audio fingerprints (Chromaprint → AcoustID) and metadata lookups (MusicBrainz) to identify/clean up untagged music files | Background, when unenriched tracks exist | `library_enricher_enabled = false`. Note: fingerprints of your files go out; the files themselves never do. |
 | **MusicBrainz alias lookup** — artist names from your library are searched on musicbrainz.org for the spoken names people use for them ("Tec 9" for Tech N9ne), so a spoken request finds a stylized name. The names sent are the library's artist credits, **including the "Artist" part of an untagged file named "Artist - Title"** (a home recording "Grandma Edith - Happy Birthday" would send "Grandma Edith"). Only stage names are kept: legal names, a person's names sharing a word with one, non-English and non-Latin forms and, for a person, names that don't sound like the stage name are dropped and never stored; for a band (a MusicBrainz group) its other names are kept, which may include members' or family names ("The Farriss Brothers" for INXS) (`domovoi/workers/library_alias_fetch.py`) | **Only if you opt in** — off by default. Then one search per artist (a library of a few thousand tracks takes on the order of an hour and a half the first time), one request a second through the same paced client as every other MusicBrainz call, only while the connectivity probe reports online, and afterwards only for artists added to the library | On when the internet answer is **Yes** or **Sometimes**; set `music_alias_fetch_enabled` off (Settings → Configuration → Library → "Look up other names on MusicBrainz") to keep it off anyway; switching it off stops the fetch before its next request. A fetched name can be removed from a track's "also called" list by anyone and is never fetched back. |
 | **LRCLIB synced lyrics** — for library songs with no timed lyrics of their own (no `.lrc` next to them, none in their tags), the song's **title, artist credit and primary performer, album and length in seconds** go to lrclib.net, which answers with its lyrics, timed when it has them (`domovoi/workers/lyrics_fetch.py`, `domovoi/clients/lrclib.py`; [Lyrics](#lyrics-household-tier-only) above) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. Then about one request a second (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down), only while the connectivity probe reports online; a song LRCLIB didn't have is asked about again after 4, 8 and then 16 weeks | Set `lyrics_lrclib_enabled` off (Settings → Configuration → Library → "Synced lyrics from LRCLIB") to keep it off anyway; switching it off stops the lookup before its next request. Lyrics in `.lrc` files and in the songs' own tags never need it. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
-| **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. The first device to park holds that room name until someone approves or rejects it; a different device asking for the same name is refused as a conflict. This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
+| **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
 | **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed. |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
 | **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
-| **Wake-word base models** — one-time openWakeWord model download during satellite provisioning | Provisioning a Pi | One-time, on the Pi, at build time. |
+| **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), and **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub) | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
@@ -1186,8 +1288,9 @@ network:
   relay, a model pull and a podcast episode download stop;
 - plugins' requests through the SDK's HTTP client (`sdk.http` in the core,
   the web host's `http()`), which refuse any non-local URL;
-- the SearXNG container, which is stopped (its startup fetches, above,
-  would otherwise go out on every start).
+- the SearXNG container, which is stopped when the answer is saved and
+  again at every core start (its startup fetches, above, would otherwise
+  go out each time `restart: unless-stopped` brings it back).
 
 **What `never` can't see:** a language model server (`OLLAMA_URL`) that
 isn't on your network, or an Ollama cloud model (a name ending in
@@ -1291,6 +1394,11 @@ question gets the unbound answer, which a pinned device refuses. A
 household whose satellites reach the core by a name, or through a NAT or a
 port-forward whose outside address the core does not own, lists that
 address in `TRUSTED_HOSTS`; the core logs every refusal with that advice.
+The proof binds only to a name listed **exactly**: a wildcard entry
+(`*.local`, `*.lan`) keeps working for the `Host` check above, but the core
+signs for no name it matches (REV-08) — on a LAN anyone can claim
+`evil.local` over mDNS, and a wildcard would have signed for that relay
+too.
 The nonce and the address are restricted to URL-safe characters on the
 core, because a nonce that could carry a newline would let an unbound
 signature over `nonce\naddr` pass as a bound one.
@@ -1310,7 +1418,20 @@ with it, and verifies `signature_v2` from then on. The core serves both
 until every room has taken the new code; a later release drops the old
 form. The core's own serials live beside its key in
 `~/.domovoi/manifest-serials.json` as `max(previous + 1, now)`, so losing
-that file still moves forward.
+that file still moves forward — which holds only while no serial runs
+ahead of the clock. The sounds channel serves one list per voice, chosen
+by an open `?voice=`, and while every voice shared one serial a LAN host
+alternating two voices minted a new serial per request and pushed it
+ahead of the clock by its request rate (V-st-01); a later lost or
+restored store would then mint below what pinned satellites remember, and
+they would refuse the sounds lists until the clock caught up. Since
+2026-10-08 each voice's list keeps its own serial (minted only when that
+list changes, from the channel's highest), a name with no rendered clips
+shares one entry, and a satellite remembers the sounds serial per voice
+too, so switching voice and back is not mistaken for a replay. What is
+still not signed is which voice a list belongs to: a host on the path can
+serve one genuine voice's signed list in place of another's (a greeting
+in the wrong voice, never a clip the server did not render).
 
 **Root checks the list itself.** `domovoi-apply-payload` used to run
 whatever the satellite account's mirror held under a slug the account's
@@ -1419,29 +1540,46 @@ with a **pairing token** — this closes the hole where any LAN host could
 connect claiming to be one of your rooms (e.g. `kitchen`) and be treated as
 that room's satellite, and via drop-in listen in on it.
 
-**The model is lenient trust-on-first-use (TOFU).** Each satellite generates
+**The model is a pairing token per device, bound to its room once a person
+approves it (strict pairing, the default).** Each satellite generates
 a random per-device token on first boot (`secrets.token_hex(32)`, stored in
 `~/.domovoi/pairing_token`, mode 0600) and sends it in its `hello` frame. The
 server stores **only the sha256** of the token (in the `satellite_pairings`
-table — the raw token never leaves the Pi) and binds the room to it the first
-time it sees one. After that, the five cases are:
+table — the raw token never leaves the Pi). The five cases are:
 
-| `hello` presents | server has | outcome |
-|---|---|---|
-| a token | no pairing row | **PAIR** — claim the room for this token, accept |
-| a token | matching hash | accept (bump `last_seen_at`) |
-| a token | a *different* hash | **REFUSE** — impostor / wrong token; error frame + close |
-| no token | a pairing row | **REFUSE** — a paired room requires its token |
-| no token | no pairing row | accept (older/unpaired) **unless strict, below** |
+| `hello` presents | server has | strict (the default) | lenient (`SATELLITE_PAIRING_STRICT=false`) |
+|---|---|---|---|
+| a token | no pairing row | **PARK** for approval by the device's six-digit code | **PAIR** — claim the room for this token on trust (a device that brings a setup code parks either way) |
+| a token | matching hash | accept (bump `last_seen_at`) | the same |
+| a token | a *different* hash | **REFUSE** — impostor / wrong token; error frame + close | the same |
+| no token | a pairing row | **REFUSE** — a paired room requires its token | the same |
+| no token | no pairing row | **REFUSE** | accept, **unauthenticated** (below) |
 
 So any room that has *ever* paired is protected against impersonation: a
 tokenless impostor, or one with the wrong token, is refused before its `hello`
 is honored — a warning is logged, an
 `{"type":"error","reason":"pairing_rejected"}` frame is sent, and the socket
 is closed. **No audio is ever relayed to it and it can never join a drop-in**,
-so it cannot listen in or speak into the room. A room that has never paired
-still accepts a tokenless connection, so **existing tokenless satellites keep
-working with zero changes** — the default is zero-breakage.
+so it cannot listen in or speak into the room.
+
+**What lenient leaves open, said plainly.** With strict pairing off, a room
+name nobody has paired still accepts a connection with no token at all, so
+satellites from before pairing keep working — and so does **any LAN device
+that picks such a name** (`zz-anything`). The core accepts that socket as a
+room without the household token: it can stream audio, get transcripts and
+do by voice what any room's satellite can — set timers and reminders, play
+music, and write household data the way a spoken turn does (memories,
+voice-profile enrolment). What it can **not** do is reach another room: it
+starts no drop-in (the request is refused aloud, and the streaming layer
+refuses it again if anything else asks), makes no announcement in another
+room, hears no other room's timers and reminders, and no other room hears
+its own. A tokenless
+socket can also take over a room name that has never paired from another
+tokenless one (a second connect for a room replaces the first). Until
+2026-10 lenient was the **code default**, so every install whose `.env`
+lacked the line ran it, and a tokenless device could call itself a new room
+and drop in on any echo-cancelling room in the house (CORE-11). The core
+now logs a warning naming this at every boot that runs lenient.
 
 **The first-connect race (the TOFU caveat).** With strict pairing OFF, the
 *first* token wins, so there is a one-time window: for a room that has never
@@ -1454,10 +1592,11 @@ Pairing narrows the threat from "any LAN host, any time" to "an attacker who
 is already on your LAN at the exact moment a room first pairs." On a trusted
 home LAN that window is normally the moment you provision the Pi.
 
-**Strict mode (the default for a new install).** `SATELLITE_PAIRING_STRICT`
-is written as `true` into a FRESH `.env` (from `domovoi/.env.example`), and
-is also editable from the dashboard's satellite Settings → Security
-(restart-tier). It does two things:
+**Strict mode (the default).** `SATELLITE_PAIRING_STRICT` defaults to
+`true` in the code, is written as `true` into a FRESH `.env` (from
+`domovoi/.env.example`) so the file says so, and is editable from the
+dashboard's satellite Settings → Security (restart-tier). It does two
+things:
 
 * a tokenless `hello` is refused, for every room;
 * **every** first pairing for an unpaired room is parked under *waiting for
@@ -1466,12 +1605,15 @@ is also editable from the dashboard's satellite Settings → Security
   loud. That closes the first-connect race completely: connecting first
   wins you a row on a dashboard, not a room.
 
-An install that UPGRADES into this keeps whatever it already had: the
-field default stays `false` and an existing `.env` is never rewritten,
-because a household running hand-provisioned satellites would otherwise
-find its fleet parked after a restart. Turn it on there once every
-satellite has paired (or approve them one at a time — the code is on the
-device).
+An install that UPGRADES into this release and never set the line is
+strict from its next restart; an existing `.env` is never rewritten, so a
+household that wrote `SATELLITE_PAIRING_STRICT=false` keeps lenient (and
+the boot warning). Under strict a room that already paired connects as
+before; a satellite that brings a token but has no pairing row parks for
+approval **once** — type the code it says; a satellite that brings no
+token at all is refused until it runs satellite code that has one (every
+satellite build since pairing tokens existed does, and an older one picks
+it up from its next code sync, then parks).
 
 **The hello gate.** Pairing is checked on the `hello` frame, so the server
 does nothing for a room until an accepted `hello` has arrived: no MPD
@@ -1481,7 +1623,13 @@ after `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s) with nothing created; one
 that sends any other frame first is refused the same way. Without this,
 any LAN host could mint rooms (and their MPD ports) by opening a bare
 socket, or bump a live satellite out of its slot, without ever presenting
-a token.
+a token. The HTTP side keeps the same promise: no route provisions a room
+either. The music routes that name one (the queue read, play-track,
+play-tracks, play-playlist, the queue edits) answer `404` for a room the
+house has no `mpd_rooms`, pairing or inventory row for, and the queue read
+— which used to answer, and start a player for, any name with no
+credential at all (CORE-13) — is on the device tier's read half like the
+rest of the room's music.
 
 **Approval gates the microphone — at boot.** A satellite that no core has
 ever accepted opens no capture stream, starts no mic thread, and never
@@ -1536,9 +1684,11 @@ a **boot-time** gate and the edges matter:
 new hardware gives that room a new token that won't match — so the device is
 refused until you clear the old pairing. **Reset pairing** from the dashboard
 (Satellites → room → Overview → Reset pairing) deletes the room's pairing row
-so the next connect re-pairs. That reset is **admin-gated** (Bearer-only,
-`require_admin_mutation`) — it's a security operation, since it lets the next
-device claim the room.
+so the next connect re-pairs: under strict pairing it parks for approval by
+the new device's code like any first pairing. That reset is on the
+**security tier** (Bearer-only, `require_admin_security`, `501` before
+setup) — it's a security operation, since it lets the next device ask for
+the room (and, with strict pairing off, claim it outright).
 
 **Pre-seeded pairing (USB adoption).** The plug-in-and-adopt flow removes
 the first-connect race entirely for adopted rooms: at adopt time the core
@@ -1755,14 +1905,24 @@ attempted, with a message that says so — in the picker, in **Settings →
 Connection** (which until 2026-10-08 saved any string unchecked) and for
 the save-to-device downloads, which go through the system `DownloadManager`,
 a separate HTTP stack the app's client never sees, and are refused before
-they are queued. The platform half is
+they are queued. That stack keeps every request header in its own database
+and replays it on retries and resumes, so it is handed the household token
+only for the one save on the device tier (the video stream), after a fresh
+identity proof, over unmetered networks only, and an unfinished
+token-bearing download is cancelled when the network changes; music,
+podcast and audiobook saves are open reads and carry no credential. A
+finished video download's row keeps the header in that private database
+until the download is removed (android/README.md). The platform half is
 `android/app/src/main/res/xml/network_security_config.xml` (system trust
 store only; the TOFU pin for the server certificate lands there when TLS
 does); since Android's config cannot express an IP range, the whole rule is
 enforced in `net/CleartextPolicy.kt` on the app's single HTTP client. That
 client puts the household token only on requests to the active server
-itself and strips it from everything else (`net/TokenScope.kt`), and the
-exported media session — which any app on the phone may bind to, as every
+itself and strips it from everything else (`net/TokenScope.kt`) — on every
+hop: the app follows redirects itself (`net/RedirectPolicy.kt`), so a
+`3xx` to another host loses the token, a plain-http hop to a public host
+is refused before any connection, and a WebSocket upgrade is never
+redirected — and the exported media session — which any app on the phone may bind to, as every
 `MediaSessionService` is — admits only this app, the system's own
 controllers and Android Auto, and takes no media item from any of them
 (`player/SessionAccess.kt`), so no other app can make the authenticated

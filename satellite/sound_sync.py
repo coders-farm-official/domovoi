@@ -65,6 +65,7 @@ def fetch_manifest(
     timeout: float,
     expected_fingerprint: str | None,
     what: str,
+    record: str | None = None,
 ) -> dict[str, str]:
     """A file channel's ``{rel: sha256}`` list — the signed envelope when
     this device knows which server to expect, the plain manifest when it
@@ -73,9 +74,10 @@ def fetch_manifest(
     own, stricter wrappers.
 
     Pinned: ``manifest.sig`` is required, verified against the pin, and
-    refused when older than the last list accepted on this channel; a
-    server that serves none needs upgrading and is said so. Unpinned: the
-    unsigned list, with one warning per process."""
+    refused when older than the last list accepted on this channel (or,
+    with ``record``, under that record — the sounds channel keeps one per
+    voice); a server that serves none needs upgrading and is said so.
+    Unpinned: the unsigned list, with one warning per process."""
     global _UNSIGNED_WARNED
     from satellite import server_identity
 
@@ -102,6 +104,7 @@ def fetch_manifest(
         try:
             manifest = server_identity.accept_manifest_envelope(
                 r.json(), channel=channel, expected_fingerprint=expected_fingerprint,
+                record=record,
             )
         except server_identity.IdentityError as e:
             raise RuntimeError(f"{what}: {e}; nothing was written") from e
@@ -137,9 +140,15 @@ def sync(
     before; the body check still runs against it."""
     base = http_base.rstrip("/")
     params = {"voice": voice} if voice else None
+    from satellite import server_identity
+
     manifest = fetch_manifest(
         base, "/v1/sounds", "satellite-sounds", params=params, timeout=timeout,
         expected_fingerprint=expected_fingerprint, what="sound sync",
+        # One record per voice, as the server keeps one serial per voice:
+        # a device that switches voice and back must not judge one voice's
+        # list against another's newer serial.
+        record=server_identity.sounds_record(voice),
     )
 
     cache_dir.mkdir(parents=True, exist_ok=True)

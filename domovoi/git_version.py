@@ -508,8 +508,9 @@ def _write_prev_sha(sha: str) -> None:
 
 # The result file is small; anything bigger is not ours.
 _LAST_UPDATE_MAX_BYTES = 256 * 1024
-# What GET /v1/admin/version passes through. It's an open endpoint, so the
-# script's full record (backup paths, raw step output) stays on the box.
+# What GET /v1/admin/version passes through. Every paired device can read
+# that endpoint (device tier since CORE-21), so the script's full record
+# (backup paths, raw step output) stays on the box.
 _LAST_UPDATE_FIELDS = (
     "status", "mode", "from_sha", "to_sha", "prev_source", "bad_sha",
     "started_at", "finished_at", "duration_sec", "deps_changed",
@@ -517,6 +518,13 @@ _LAST_UPDATE_FIELDS = (
     "error", "signature",
 )
 _STEP_FIELDS = ("name", "status", "duration_sec")
+# A `warn` step of these keeps its detail, trimmed the way the signature
+# object is: the script writes these details itself ("lock not applied:
+# <why>; ...", what env-secrets added), never a tool's raw output, and they
+# are what an owner must see. Every other detail (failed steps' output
+# tails, the search helper's docker output) stays on the box.
+_WARN_DETAIL_STEPS = frozenset({"sync-deps", "rollback-deps", "env-secrets"})
+_WARN_DETAIL_MAX_CHARS = 300
 _ERROR_MAX_CHARS = 500
 # apply-update.sh before 2026-09-30 printed a negative duration as
 # "-89.-412", which no JSON parser takes: a wall clock stepped back during
@@ -635,8 +643,23 @@ def load_last_update() -> tuple[dict | None, str | None]:
         if isinstance(s, dict):
             step = {k: s.get(k) for k in _STEP_FIELDS}
             step["duration_sec"] = _duration(step["duration_sec"], bound)
+            detail = _warn_detail(s)
+            if detail is not None:
+                step["detail"] = detail
             out["steps"].append(step)
     return out, None
+
+
+def _warn_detail(step: dict) -> str | None:
+    """The detail a `warn` step of :data:`_WARN_DETAIL_STEPS` carries, one
+    line, at most :data:`_WARN_DETAIL_MAX_CHARS`; None for any other step."""
+    if step.get("status") != "warn" or step.get("name") not in _WARN_DETAIL_STEPS:
+        return None
+    detail = step.get("detail")
+    if not isinstance(detail, str):
+        return None
+    line = detail.strip().splitlines()[0].strip() if detail.strip() else ""
+    return line[:_WARN_DETAIL_MAX_CHARS] or None
 
 
 async def fetch() -> dict:

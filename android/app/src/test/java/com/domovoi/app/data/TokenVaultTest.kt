@@ -38,9 +38,13 @@ class TokenVaultTest {
         }
     }
 
-    private class MemoryStore(var value: String? = null) : TokenVault.Store {
+    private class MemoryStore(var value: String? = null, var reachesDisk: Boolean = true) : TokenVault.Store {
         override fun load() = value
-        override fun save(sealed: String?) { value = sealed }
+        override fun save(sealed: String?): Boolean {
+            if (!reachesDisk) return false
+            value = sealed
+            return true
+        }
     }
 
     private val tokens = mapOf("http://10.0.0.42:6369" to "acorn-maple-river-thistle", "http://10.0.0.43:6369" to "second-house-token")
@@ -111,6 +115,21 @@ class TokenVaultTest {
         assertEquals("and still opens", tokens, vault.read())
         assertTrue("an empty book needs no sealer", TokenVault(store, broken).write(emptyMap()))
         assertNull(store.value)
+    }
+
+    @Test fun aRecordThatDidNotReachDiskIsSaidSoAndNotCountedAsMoved() {
+        // Prefs removes the plain DataStore copy only on a true from here,
+        // so the answer has to be the store's commit, not a wish.
+        val store = MemoryStore()
+        val sealer = SoftwareSealer()
+        assertTrue(TokenVault(store, sealer).write(tokens))
+        val before = store.value
+        store.reachesDisk = false
+        val log = mutableListOf<String>()
+        assertFalse(TokenVault(store, sealer, log::add).write(tokens + ("http://10.0.0.44:6369" to "third-house-token")))
+        assertTrue(log.single().contains("did not reach disk"))
+        assertEquals("the record on disk is untouched", before, store.value)
+        assertFalse("an empty book that did not commit is not an empty book", TokenVault(store, sealer).write(emptyMap()))
     }
 
     @Test fun theSweepLaysThePlainValueOverTheVault() {

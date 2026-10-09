@@ -57,7 +57,8 @@ Any one of these; they all set the same thing, `INTERNET_ACCESS`:
   you.
 - **By hand.** `INTERNET_ACCESS=always` (or `sometimes`, `never`) in
   `domovoi/.env` (where the dashboard and `env_bootstrap` write it too),
-  then restart the core. `yes` / `no` / `online` /
+  then restart the core (under `never` the core stops the search helper
+  as it starts; it never starts it). `yes` / `no` / `online` /
   `offline` work too. Anything else counts as not answered, with one
   warning in the core's log.
 - **The server's environment** (a systemd `Environment=` line, say). It
@@ -171,16 +172,12 @@ stays yours to do:
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
 
-4. **Fill the satellite media cache.** First install `openwakeword` into
-   the server's Python environment, so the wake-word models can be cached
-   too:
-
-   ```bash
-   pip install --no-deps openwakeword
-   ```
-
-   Then: Satellites → *prepare satellite media* → **Refresh caches**
-   (admin sign-in; the wheel fetch can take minutes).
+4. **Fill the satellite media cache.** Satellites → *prepare satellite
+   media* → **Refresh caches** (admin sign-in; the wheel fetch can take
+   minutes). The wake-word models come from pinned URLs and are checked
+   against pinned digests; the server no longer needs the `openwakeword`
+   package for that. An offline card is prepared only when the cache holds
+   every pinned model, and the satellite checks them again on first boot.
 
    *Why:* the SD cards you prepare from the dashboard carry the satellite's
    Python wheels, system packages and wake-word models, so a new satellite
@@ -288,8 +285,8 @@ needs something it can only download is usually the day the line is down.
 - [ ] **Install the plugins you want** (the Plugins page). Installing one
       from GitHub, and the Python packages it needs, takes the internet.
 - [ ] **Fill the satellite media cache**
-      ([item 4 above](#if-your-domovoi-will-have-internet), `openwakeword`
-      first). Prepare the satellites' cards after that. A card built from
+      ([item 4 above](#if-your-domovoi-will-have-internet)). Prepare the
+      satellites' cards after that. A card built from
       complete caches carries what the satellite needs; if a cache was
       incomplete, the build warns and the satellite fetches the rest over
       its own connection. The manual path in
@@ -375,7 +372,8 @@ your router, it would tell Domovoi the internet is up when it isn't.
   installed still installs).
 - Updates: **Check for updates** and **Pull the latest** are greyed, and
   on Linux the update unit refuses (touching nothing) an update that
-  would download: new Python dependencies, or a new music player image.
+  would download: new Python dependencies, a new music player image, or a
+  moved container image pin (Postgres, Flyway, Letta, the search helper).
 
 #### Updating a box answered No
 

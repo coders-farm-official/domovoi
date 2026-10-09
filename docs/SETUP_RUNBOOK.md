@@ -135,8 +135,12 @@ Everything below runs from the **repo root** — the directory holding
 relative to it.
 
 ```powershell
-pip install -e ".[dev,real-clients,voice-profile]"
+pip install -e ".[real-clients,voice-profile]"
 ```
+
+(On a Linux server, install from the hash-pinned lock instead:
+[LINUX_HOST.md, Install](LINUX_HOST.md#install). Add `dev` to the extras
+only on a machine that runs the test suite.)
 
 On an **NVIDIA host**, add the CUDA runtime wheels. They live in their own
 extra so CPU-only machines don't pull ~2–3 GB they'll never load:

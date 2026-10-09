@@ -116,6 +116,7 @@ from web.backend.api.files_security import (
     MediaLibrary,
     build_libraries,
     core_library,
+    has_sensitive_segment,
     is_sensitive_name,
     private_path_check,
     safe_join,
@@ -568,6 +569,10 @@ async def browse(
     target = safe_join(root, path)
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="directory not found")
+    # A secret-shaped folder (``.ssh``, ``.gnupg``, ``tls``) is left out of
+    # its parent's listing below; typing its path must not list it either.
+    if has_sensitive_segment(path, target, root):
+        raise HTTPException(status_code=404, detail="directory not found")
 
     rel = target.relative_to(root).as_posix()
     rel = "" if rel == "." else rel
@@ -640,7 +645,9 @@ async def download(
     target = safe_join(root, path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="not found")
-    if is_sensitive_name(target.name):
+    # Every segment, as sent and as resolved: ``.ssh/config`` is inside a
+    # withheld folder even though ``config`` is an ordinary name (REV-12).
+    if is_sensitive_name(target.name) or has_sensitive_segment(path, target, root):
         raise HTTPException(status_code=404, detail="not found")
 
     if target.is_dir():

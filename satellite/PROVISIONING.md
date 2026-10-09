@@ -354,7 +354,12 @@ server signs for that address only when it is one of its own. If your
 satellites reach the server by a **name** rather than its IP (or through a
 NAT or port-forward), list that name or address in `TRUSTED_HOSTS` in the
 server's `.env`; otherwise the server refuses to sign for it (its log says
-so, naming the address) and a pinned satellite will not connect.
+so, naming the address) and a pinned satellite will not connect. List the
+**exact** name: a wildcard entry such as `*.local` still lets browsers reach
+the dashboard by any name under it, but the server never signs the proof
+for a name it matches, because anyone on the LAN can answer for
+`something.local` and a relay registered under such a name is exactly what
+the proof exists to stop (its log says so once per entry).
 
 Checking the signatures needs the `cryptography` package, which
 `requirements.txt` lists. 64-bit Pi OS (the supported build) gets an
@@ -615,9 +620,9 @@ Each satellite authenticates its WebSocket to the Domovoi server with a **pairin
 ~/.domovoi/pairing_token       # 64 hex chars, mode 0600, one per device
 ```
 
-It's sent in every `hello` frame's `pairing_token` field. The server stores only the token's **sha256** (never the raw token) in the `satellite_pairings` table and binds the room to it **trust-on-first-use**: the first satellite to present a token for a room *claims* it, and from then on that room's connection must present the matching token or the server refuses it (logs a warning, sends `{"type":"error","reason":"pairing_rejected"}`, and closes the socket).
+It's sent in every `hello` frame's `pairing_token` field. The server stores only the token's **sha256** (never the raw token) in the `satellite_pairings` table and binds the room to it: the first token a room presents is parked for an admin to approve (strict pairing, the default) or claims the room on the spot (only where strict pairing is turned off), and from then on that room's connection must present the matching token or the server refuses it (logs a warning, sends `{"type":"error","reason":"pairing_rejected"}`, and closes the socket).
 
-A room that has never paired still accepts a tokenless connection (backward-compatible with older satellites) — unless the server sets `SATELLITE_PAIRING_STRICT=true`, which requires a token for **every** room.
+The server requires a token for **every** room by default (`SATELLITE_PAIRING_STRICT=true`), and a room's first pairing waits for an admin to approve it by the code the satellite says. Only a server that turned strict pairing off still accepts a tokenless connection for a room that has never paired (backward-compatible with older satellites), and such a room can never drop in on, or announce into, another room.
 
 **Nothing to do during provisioning.** Don't copy a token between Pis — each device generates its own, and a room can only be held by one token at a time.
 
@@ -626,7 +631,7 @@ A room that has never paired still accepts a tokenless connection (backward-comp
 If you **re-flash the SD card**, **replace the Pi**, or **move a room to a new device**, the new device generates a *fresh* token that won't match the one the server has on file for that room — so its `hello` is refused (case: token mismatch) and it can't connect. Clear the old pairing so the new device can re-pair:
 
 - **From the dashboard:** Satellites page → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
-- **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room re-pairs trust-on-first-use with the new device's token.
+- **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room is a first pairing again: it waits on the dashboard for you to approve it by the six-digit code the new device says (or, where strict pairing is turned off, claims the room with the new device's token).
 
 You do **not** need to reset pairing for a normal `restart`, `upgrade`, or `reboot` — the token sidecar survives those (it lives in `~/.domovoi/`, outside the code tree). Only a wiped config dir / new device needs a reset.
 

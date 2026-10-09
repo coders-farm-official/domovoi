@@ -339,14 +339,16 @@ trust-on-first-use**; the server stores only the token's sha256 (in
 
 | `hello` presents | server has | outcome |
 |---|---|---|
-| a token | no pairing row | **PAIR** — claim the room for this token, accept |
+| a token | no pairing row | **PARK** for approval (strict, the default); **PAIR** — claim the room, accept — when strict is off |
 | a token | matching hash | accept, bump `last_seen_at` |
 | a token | a different hash | **REFUSE** — `error{reason:"pairing_rejected"}`, close |
 | no token | a pairing row | **REFUSE** — a paired room requires its token |
-| no token | no pairing row | accept (older/unpaired) unless `SATELLITE_PAIRING_STRICT` |
+| no token | no pairing row | **REFUSE** (strict, the default); accept, unauthenticated, when strict is off |
 
-`SATELLITE_PAIRING_STRICT` (default `false`) turns the last row into a
-refusal — a token is then required for **every** room. A refusal sends the
+`SATELLITE_PAIRING_STRICT` (default `true`) requires a token for **every**
+room and parks each first pairing for approval. Turned off, the last row
+accepts an older tokenless satellite, which may then use only its own room:
+it can start no drop-in and announce into no other room. A refusal sends the
 error frame (if the socket is still open) and closes the connection without
 provisioning or relaying anything. Resetting a room's pairing (admin-gated
 `DELETE /v1/admin/satellites/{room_id}/pairing`) deletes the row so the next

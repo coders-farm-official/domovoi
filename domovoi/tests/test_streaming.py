@@ -58,6 +58,9 @@ def _accept_every_hello(monkeypatch: pytest.MonkeyPatch):
     hello. Individual tests override this to spy on / refuse the check."""
 
     async def _accept(self, ctrl):
+        # As a paired satellite's hello does (case 2): a socket accepted
+        # without a token may not reach another room (CORE-11).
+        self.token_authenticated = True
         return True
 
     monkeypatch.setattr(StreamSession, "_validate_pairing", _accept)

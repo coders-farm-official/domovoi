@@ -53,6 +53,9 @@ class Prefs(
     /** The pre-vault home of the tokens; read once at start and removed. */
     private val kDeviceTokens = stringPreferencesKey("device_tokens")
     private val kIdentityPins = stringPreferencesKey("identity_pins")
+    /** Servers (by pin key) whose trust decision was taken with the identity
+     *  in view — pinned from the dialog, or recorded as offering none. */
+    private val kTrustDecided = stringPreferencesKey("trust_decisions")
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
@@ -81,6 +84,9 @@ class Prefs(
     /** Each server's pinned identity, by [IdentityGate.pinKey] (A6-03). */
     private val _identityPins = MutableStateFlow<Map<String, ServerIdentity.Pin>>(emptyMap())
     val identityPins: StateFlow<Map<String, ServerIdentity.Pin>> = _identityPins
+
+    @Volatile
+    private var trustDecided: Set<String> = emptySet()
 
     private val _themeMode = MutableStateFlow(ThemeMode.System)
     val themeMode: StateFlow<ThemeMode> = _themeMode
@@ -165,6 +171,7 @@ class Prefs(
             }
             _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, _serverUrl.value)
             _identityPins.value = ServerIdentity.decodePins(p[kIdentityPins])
+            trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
@@ -184,11 +191,14 @@ class Prefs(
      * (nothing written, `false` returned) — the picker shows the address and
      * asks first, then calls [trustServer].
      *
-     * Switching also forgets trust that belongs to nothing any more: an
+     * Switching also drops trust that belongs to nothing any more: an
      * address trusted but never listed as a known server (the Connection
      * panel used to do that) has no row and no forget button, and would
      * otherwise be reused silently the next time a sweep found something at
-     * it (P2-at-01). The one being switched to is never pruned.
+     * it (P2-at-01). Only the TRUST goes — not the token or the pin: a
+     * harness-paired or older install whose server was never listed would
+     * otherwise be unpaired from it by the next switch (P2-at-01 review).
+     * The one being switched to is never pruned.
      */
     fun setServerUrl(url: String): Boolean {
         val clean = ServerCredentials.normalize(url)
@@ -197,7 +207,7 @@ class Prefs(
         _deviceToken.value = ServerCredentials.tokenFor(deviceTokens, clean)
         scope.launch { context.dataStore.edit { it[kServer] = clean } }
         ServerCredentials.orphanTrust(_trustedServers.value, _knownServers.value.map { it.url }, clean)
-            .forEach { forgetServer(it) }
+            .forEach { untrustServer(it) }
         return true
     }
 
@@ -206,7 +216,21 @@ class Prefs(
     fun isTrusted(url: String): Boolean =
         ServerCredentials.isTrusted(_trustedServers.value, url)
 
-    fun trustServer(url: String) = setTrusted(ServerCredentials.withTrusted(_trustedServers.value, url))
+    /**
+     * Trust [url], with the [identity] the trust dialog (or the Connection
+     * panel's probe) showed. That identity becomes the pin — the first
+     * proof has to match it, not whoever answers first on some network —
+     * unless one is pinned already (a pin changes only by forgetting the
+     * server). A server that advertised none is recorded as such, so it
+     * is not pinned later behind the user's back
+     * ([mayPinOnFirstProof]; A6-03 review).
+     */
+    fun trustServer(url: String, identity: ServerIdentity.Pin? = null) {
+        setTrusted(ServerCredentials.withTrusted(_trustedServers.value, url))
+        val key = IdentityGate.pinKey(url) ?: return
+        if (identity != null && pinFor(key) == null) pin(key, identity)
+        setTrustDecided(trustDecided + key)
+    }
 
     fun untrustServer(url: String) = setTrusted(ServerCredentials.withoutTrusted(_trustedServers.value, url))
 
@@ -229,6 +253,12 @@ class Prefs(
         scope.launch { vault.write(next) }
     }
 
+    /** The token issued by the server at [url] (by its saved spelling), or
+     *  null. What the interceptor asks, with the base it scoped the
+     *  request to, so a request intercepted between a switch's two writes
+     *  can never pair the new address with the old household's token. */
+    fun tokenForServer(url: String): String? = ServerCredentials.tokenFor(deviceTokens, url)
+
     fun isPaired(): Boolean = !_deviceToken.value.isNullOrBlank()
 
     // ── Server identity pins (IdentityGate.PinStore) ───────────────────
@@ -236,6 +266,15 @@ class Prefs(
     override fun pinFor(key: String): ServerIdentity.Pin? = _identityPins.value[key]
 
     override fun pin(key: String, pin: ServerIdentity.Pin) = setPins(_identityPins.value + (key to pin))
+
+    /** Only a server trusted before the dialog pinned identities (an
+     *  upgraded install) may be pinned from its first proof. */
+    override fun mayPinOnFirstProof(key: String): Boolean = key !in trustDecided
+
+    private fun setTrustDecided(next: Set<String>) {
+        trustDecided = next
+        scope.launch { context.dataStore.edit { it[kTrustDecided] = ServerCredentials.encodeTrusted(next) } }
+    }
 
     /** The identity pinned for a saved server address, if any. */
     fun pinForServer(url: String): ServerIdentity.Pin? = IdentityGate.pinKey(url)?.let(::pinFor)
@@ -268,11 +307,35 @@ class Prefs(
         forgetServer(url)
     }
 
-    /** Everything remembered ABOUT [url] (not its known-server row). */
+    /**
+     * Forget the ACTIVE server: the app is left with no server (the shell
+     * returns to the server list) and the server's row, trust, token,
+     * pinned identity and trust decision all go. The way out after a
+     * legitimate identity change — a reinstalled core, new hardware at the
+     * same address — which the shell would otherwise report as "did not
+     * prove it is the Domovoi this phone paired with" for good, since
+     * neither list could forget the server in use (P2-at-01 review).
+     * Returns the address forgotten, or null when there was none.
+     */
+    fun forgetActiveServer(): String? {
+        val url = _serverUrl.value.takeIf { it.isNotBlank() } ?: return null
+        _serverUrl.value = ""
+        _deviceToken.value = null
+        scope.launch { context.dataStore.edit { it[kServer] = "" } }
+        removeKnownServer(url)
+        return url
+    }
+
+    /** Everything remembered ABOUT [url] (not its known-server row). The
+     *  pin is shared by every spelling of one server, so another spelling
+     *  of the ACTIVE server keeps it ([ServerCredentials.clearsPinOf]). */
     private fun forgetServer(url: String) {
         untrustServer(url)
         setDeviceTokenFor(url, null)
-        clearPinFor(url)
+        if (ServerCredentials.clearsPinOf(url, _serverUrl.value)) {
+            clearPinFor(url)
+            IdentityGate.pinKey(url)?.let { key -> if (key in trustDecided) setTrustDecided(trustDecided - key) }
+        }
         setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
     }
 

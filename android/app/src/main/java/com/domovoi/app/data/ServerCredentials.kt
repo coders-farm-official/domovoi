@@ -1,5 +1,6 @@
 package com.domovoi.app.data
 
+import com.domovoi.app.net.IdentityGate
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -55,6 +56,21 @@ object ServerCredentials {
     fun orphanTrust(trusted: Set<String>, known: Collection<String>, active: String): Set<String> {
         val keep = known.map(::normalize).toSet() + normalize(active)
         return trusted.filterNot { normalize(it) in keep }.toSet()
+    }
+
+    /**
+     * Whether forgetting [url] may clear the identity pin at its pin key.
+     * Pins are keyed by `scheme://host:port` while the other books are
+     * keyed by the spelling the person saved, so two spellings of one
+     * server (`HTTP://h:6390/`, `http://h:6390`) share a pin: forgetting
+     * the spelling that is NOT the [active] server must not clear the
+     * active server's pin, which would reopen trust-on-first-use for it on
+     * the next network (P2-at-01 review). Forgetting the active server
+     * itself does clear it.
+     */
+    fun clearsPinOf(url: String, active: String): Boolean {
+        val key = IdentityGate.pinKey(url) ?: return false
+        return normalize(url) == normalize(active) || key != IdentityGate.pinKey(active)
     }
 
     // ── Device tokens, one per server ──────────────────────────────────

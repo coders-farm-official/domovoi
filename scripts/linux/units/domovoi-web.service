@@ -1,0 +1,44 @@
+[Unit]
+Description=Domovoi web dashboard
+After=domovoi-core.service
+Wants=domovoi-core.service
+
+[Service]
+Type=simple
+User=domovoi
+WorkingDirectory=/opt/domovoi
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/domovoi
+ExecStart=/opt/domovoi/.venv/bin/python -m web.backend.main
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+# Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"): the full set,
+# NoNewPrivileges and no capabilities included, since the dashboard
+# process never runs sudo (the Restart button goes through the core, whose
+# unit is looser for exactly that reason).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0027
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/domovoi
+# Media disks and removable cards (a missing path is skipped).
+ReadWritePaths=-/mnt -/media -/run/media -/srv
+ProtectHome=tmpfs
+BindPaths=/home/domovoi
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

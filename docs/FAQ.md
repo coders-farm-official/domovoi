@@ -113,7 +113,7 @@ Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in
 
 Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired room is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).
 
-The honest caveat applies only with strict pairing off: because the *first* token wins, there's a one-time window when a room has never paired — whoever connects first claims it. On a home Wi-Fi you control, that's normally just you provisioning the Pi. A new install starts with `SATELLITE_PAIRING_STRICT=true`, which closes that window: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. An install that upgraded from an older version keeps its existing setting, so older tokenless satellites keep working — pairing protects any room that has paired without breaking ones that haven't.
+Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one. An install that upgrades into this release and never set the line becomes strict at its next restart: paired rooms are unaffected, and a satellite that hasn't paired yet asks for approval once.
 
 **Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Satellites → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
@@ -146,7 +146,7 @@ Bottom line: treat a plugin like any software you install on a home server — o
 
 ## Can I use it with Home Assistant?
 
-They coexist happily — Domovoi doesn't replace Home Assistant (it doesn't do lights, locks, or thermostats out of the box), and Home Assistant doesn't do what Domovoi does (local voice, music, intercom, per-room audio). The practical bridge is Domovoi's HTTP API on port 6370: Home Assistant automations can, for instance, POST to the announce endpoint to speak a message in any room ("the wash is done") through your satellites. See [Home Assistant](HOME_ASSISTANT.md) for recipes and [API Reference](API_REFERENCE.md) for the endpoints. Deeper integration (device control by voice) is natural plugin territory.
+There is no integration. Domovoi doesn't control lights, locks or thermostats, and Home Assistant has no Domovoi add-on. The two run side by side on one network without conflict, and a Home Assistant automation can POST to Domovoi's announce endpoint to speak a message in any room ("the wash is done"). See [Home Assistant](HOME_ASSISTANT.md) for the recipe and [API Reference](API_REFERENCE.md) for the endpoint.
 
 ## Does it support multiple people?
 
@@ -269,6 +269,8 @@ There's no one-button backup tool yet — but it's three pieces, all standard:
    ```
 2. **`~/.domovoi/`** on the server — copy the folder. Trained wake-word models and recorded training clips live here and are genuinely hard to recreate; the rest (rendered sounds, caches) regenerates itself.
 3. **Your media** — `MUSIC_DIR` and friends, which you're presumably backing up anyway.
+
+On Linux with the update unit, the box keeps its own copies too: a dump of the database before every update in `/var/lib/domovoi-update/backups/` (newest 5, root only) and, after a rollback, the replaced database as `domovoi_failed_<time>` (newest one). They hold everything the database holds, so count them when you move, sell or wipe the machine ([SECURITY_PRIVACY.md → Data at rest](SECURITY_PRIVACY.md#data-at-rest)).
 
 Restore on a new machine: install Domovoi, start Postgres, restore the dump (`docker exec -i domovoi-postgres psql -U domovoi domovoi < domovoi-backup.sql`), copy `~/.domovoi/` and your media back, copy your `.env`, start the core. Returning users note: admin credentials live in the database, so a restored database keeps your password; a *fresh* database means first-run setup again (new setup code in `~/.domovoi/setup-code.txt`). Satellites reconnect on their own — their config never left the Pi.
 

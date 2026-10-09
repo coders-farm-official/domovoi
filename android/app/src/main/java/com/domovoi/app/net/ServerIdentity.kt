@@ -5,6 +5,8 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.security.MessageDigest
@@ -45,9 +47,15 @@ object ServerIdentity {
          *  key to pin when there was none. */
         data class Verified(val pin: Pin) : Proof()
 
-        /** The answer carried no identity block at all: a web backend from
-         *  before identity, or one whose core did not answer. */
+        /** The answer carried no identity block at all, and the web backend
+         *  reached its core (or said nothing about it): a web backend from
+         *  before identity. */
         data object NoIdentity : Proof()
+
+        /** The answer carried no identity block because the web backend
+         *  could not ask its core (`domovoi_reachable` false: restarting,
+         *  updating, slow). Not a verdict about who the server is. */
+        data object CoreNotAnswering : Proof()
 
         /** An identity block that does not hold up: wrong algorithm, a
          *  fingerprint that is not the key's, our challenge not echoed, a
@@ -82,7 +90,14 @@ object ServerIdentity {
     fun check(healthBody: String?, challenge: String, pinned: Pin?): Proof {
         val doc = runCatching { DomovoiJson.parseToJsonElement(healthBody.orEmpty()) as? JsonObject }.getOrNull()
             ?: return Proof.Invalid("the health answer is not a JSON object")
-        val identity = doc["identity"] as? JsonObject ?: return Proof.NoIdentity
+        val identity = doc["identity"] as? JsonObject
+        if (identity == null) {
+            // The web backend passes the identity through from its core's
+            // /v1/health and leaves it out when that ping failed: that is
+            // the core being down, not a server without an identity.
+            val coreUp = (doc["domovoi_reachable"] as? JsonPrimitive)?.booleanOrNull
+            return if (coreUp == false) Proof.CoreNotAnswering else Proof.NoIdentity
+        }
         fun field(name: String): String? = identity[name]?.let { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
 
         if (field("algorithm") != ALGORITHM) return Proof.Invalid("unknown identity algorithm")
@@ -96,6 +111,22 @@ object ServerIdentity {
         if (!Ed25519.verify(key, healthMessage(challenge), signature)) return Proof.Invalid("the signature does not verify")
         if (pinned != null && pinned.public_key != keyB64) return Proof.Mismatch(pinned.fingerprint, fingerprint)
         return Proof.Verified(Pin(keyB64, fingerprint))
+    }
+
+    /**
+     * The identity a server ADVERTISES (an open `/api/health` read with no
+     * challenge, as the picker's probe makes): the key and its fingerprint
+     * when they are well-formed and agree, else null. Unproven — a rogue
+     * can advertise the real server's public key — but what the trust
+     * dialog shows, and what is pinned when the user says yes to it, so
+     * that the first proof has to match THIS key rather than whoever
+     * answers first on some network.
+     */
+    fun advertised(algorithm: String?, publicKey: String?, fingerprint: String?): Pin? {
+        if (algorithm != ALGORITHM || publicKey == null || fingerprint == null) return null
+        val key = unb64(publicKey)?.takeIf { it.size == Ed25519.KEY_SIZE } ?: return null
+        if (fingerprintOf(key) != fingerprint) return null
+        return Pin(publicKey, fingerprint)
     }
 
     private fun unb64(value: String): ByteArray? =

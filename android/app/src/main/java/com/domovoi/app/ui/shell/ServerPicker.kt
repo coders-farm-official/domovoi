@@ -52,9 +52,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.domovoi.app.LocalApp
+import com.domovoi.app.LocalToast
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.FoundDomovoi
 import com.domovoi.app.net.ServerAddress
+import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.DomovoiGlyph
@@ -80,12 +83,14 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val toast = LocalToast.current
     val currentUrl by app.prefs.serverUrl.collectAsState()
     val known by app.prefs.knownServers.collectAsState()
     val preferLocal by app.prefs.preferLocal.collectAsState()
     // The saved server is "connected" only while it is the one in use; on the
     // phone, or with it out of reach, it is just the selected server.
     val inUse = !preferLocal && LocalServerChoice.current.enabled
+    var confirmForgetActive by remember { mutableStateOf(false) }
 
     var onLan by remember { mutableStateOf(Discovery.onLan(context)) }
     var scanning by remember { mutableStateOf(false) }
@@ -103,7 +108,8 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     val gate = remember {
         ServerConnectGate(
             isTrusted = { app.prefs.isTrusted(it) },
-            onTrust = { app.prefs.trustServer(it) },
+            // What the dialog showed is what gets pinned (A6-03 review).
+            onTrust = { url, identity -> app.prefs.trustServer(url, identity) },
             onConnect = { url, name ->
                 app.prefs.upsertKnownServer(url, name)
                 app.prefs.setServerUrl(url)
@@ -113,8 +119,8 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     }
     val pendingTrust by gate.pending.collectAsState()
 
-    fun select(url: String, name: String?, fingerprint: String? = null) {
-        if (gate.select(url, name, fingerprint)) onSelected()
+    fun select(url: String, name: String?, identity: ServerIdentity.Pin? = null) {
+        if (gate.select(url, name, identity)) onSelected()
     }
 
     fun rescan() {
@@ -147,7 +153,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
         scope.launch {
             val hit = Discovery.probe(app.api.http, url, timeoutMs = 3000)
             manualBusy = false
-            if (hit != null) select(hit.url, hit.name, hit.fingerprint)
+            if (hit != null) select(hit.url, hit.name, hit.identity)
             else manualError = "couldn't reach a dashboard at $url"
         }
     }
@@ -203,7 +209,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
 
         // ── Known + found servers ─────────────────────────────────────
         val foundUrls = found.map { it.url }.toSet()
-        val fingerprints = found.associate { it.url to it.fingerprint }
+        val identities = found.associate { it.url to it.identity }
         val rows = known.map { Triple(it.url, it.name, true) } +
             found.filter { f -> known.none { it.url == f.url } }
                 .map { Triple(it.url, it.name, false) }
@@ -226,7 +232,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                         if (active) Domovoi.colors.brandSoft else Domovoi.colors.sunken,
                         RoundedCornerShape(8.dp),
                     )
-                    .clickable(enabled = !active) { select(url, name, fingerprints[url]) }
+                    .clickable(enabled = !active) { select(url, name, identities[url]) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -260,6 +266,13 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                 }
                 if (saved && !active) {
                     IconButton(onClick = { app.prefs.removeKnownServer(url) }, modifier = Modifier.size(26.dp)) {
+                        Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
+                    }
+                }
+                // The server in use can be forgotten too (confirmed first):
+                // the way to re-pair after it was reinstalled or replaced.
+                if (active) {
+                    IconButton(onClick = { confirmForgetActive = true }, modifier = Modifier.size(26.dp)) {
                         Icon(Icons.Filled.Close, "forget", tint = Domovoi.colors.fgSubtle, modifier = Modifier.size(14.dp))
                     }
                 }
@@ -297,6 +310,20 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
             server = server,
             onDismiss = { gate.cancel() },
             onConfirm = { if (gate.confirm()) onSelected() },
+        )
+    }
+
+    if (confirmForgetActive && currentUrl.isNotBlank()) {
+        val identityStatus by app.identity.status.collectAsState()
+        ForgetActiveServerDialog(
+            address = ServerCredentials.address(currentUrl),
+            pinned = app.prefs.pinForServer(currentUrl)?.fingerprint,
+            proven = provenFingerprint(identityStatus, currentUrl),
+            onDismiss = { confirmForgetActive = false },
+            onConfirm = {
+                confirmForgetActive = false
+                forgetActiveServer(app, toast)
+            },
         )
     }
 }
@@ -351,7 +378,14 @@ private fun TrustServerDialog(
                         if (server.fingerprint != null) {
                             append(
                                 " The identity above should match Settings → About on the dashboard; " +
-                                    "the app pins it once the server proves it.",
+                                    "trusting pins it, and the household token goes out only after the " +
+                                    "server proves it holds that key.",
+                            )
+                        } else {
+                            append(
+                                " This server offers no identity (an older web backend), so nothing " +
+                                    "can be pinned: the app will not be able to tell it from another " +
+                                    "server at the same address.",
                             )
                         }
                     },

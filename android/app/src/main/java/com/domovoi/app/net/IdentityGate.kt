@@ -23,30 +23,46 @@ import java.io.IOException
  * the active server on the current network, it first asks that server, with
  * no token, `GET /api/health?challenge=<nonce>` and checks the signed
  * answer against the key it has pinned for that server
- * ([ServerIdentity]). Verified: the token flows until the network changes
- * ([networkChanged], from a ConnectivityManager callback), then the proof
- * is required again. Not the pinned key, or no identity where one is
- * pinned: the request never leaves ([ServerIdentityException]), and the
- * shell says the server is not the one this phone paired with. A server
- * never seen with an identity is pinned the first time it proves one
- * (trust on first use — the same trust the picker's dialog already
- * expressed); a server with no identity at all (a web backend from before
- * identity, or one whose core is down) is treated as before, with a log
- * line. A refusal is remembered for [retryAfterMs] so a reconnect loop
- * does not hammer; a server that cannot be reached at all is simply
- * unreachable, as it always was, and nothing is cached.
+ * ([ServerIdentity]). Verified: the token flows — on the network
+ * fingerprint the proof was taken on ([network], from [NetworkWatch]: a
+ * change in the default network, the Wi-Fi under a VPN, the addresses the
+ * phone was given, anything the ConnectivityManager callbacks describe),
+ * for at most [ttlMs], and until the app next comes back to the foreground
+ * after a spell in the background ([appForegrounded]) or something else
+ * calls [networkChanged]. Then the proof is required again. Not the pinned
+ * key, or no identity where one is pinned: the request never leaves
+ * ([ServerIdentityException]), and the shell says the server is not the
+ * one this phone paired with. A web backend that answers but whose core
+ * did not (`domovoi_reachable` false) is NOT a verdict
+ * ([IdentityVerdict.Unavailable]): the token is held, nothing is cached,
+ * and the shell says the server is not fully up — never that it is an
+ * impostor, and never to forget it. The pin is the trust decision: the picker's
+ * dialog pins the identity it showed when the person says yes. A server
+ * trusted before that existed (an upgraded install) is pinned the first
+ * time it proves one; a server trusted while it offered no identity stays
+ * [IdentityVerdict.Legacy] — token as before, said so in Settings — until
+ * Settings pins what it later proves, never behind the user's back. A
+ * refusal is remembered for [retryAfterMs] so a reconnect loop does not
+ * hammer; a server that cannot be reached at all is simply unreachable,
+ * as it always was, and nothing is cached.
  *
  * Pre-TLS interim: the proper fix is TLS with a pinned certificate. Until
  * then this makes the token conditional on a proof only the real server's
- * key can give.
+ * key can give. A relay that reaches the real core from a hostile network
+ * would pass it; see docs/SECURITY_PRIVACY.md.
  */
 sealed class IdentityVerdict {
     /** Proved with a signed challenge against the pinned key ([pinnedNow]:
      *  the key was pinned by this very answer). */
     data class Verified(val fingerprint: String, val pinnedNow: Boolean) : IdentityVerdict()
 
-    /** No pin, no identity offered: a server from before identity. */
-    data object Legacy : IdentityVerdict()
+    /** No pin, and nothing to hold the server to: it offered no identity
+     *  ([offered] null — a server from before identity, or one trusted
+     *  while it had none), or it proved one this phone has not pinned
+     *  ([offered] set — a server trusted without identity that has grown
+     *  one since; Settings → Connection can pin it). The token goes out as
+     *  it always did for this server. */
+    data class Legacy(val offered: ServerIdentity.Pin? = null) : IdentityVerdict()
 
     /** Pinned, and whoever answered proved a DIFFERENT key. */
     data class Mismatch(val expected: String, val seen: String) : IdentityVerdict()
@@ -54,12 +70,22 @@ sealed class IdentityVerdict {
     /** Pinned (or claiming an identity) and the answer proves nothing. */
     data class Unproven(val expected: String?, val reason: String) : IdentityVerdict()
 
+    /** Not a verdict: the web backend answered but could not ask its core
+     *  (restarting, updating, slow), or the proof could not be taken on
+     *  one network (it kept changing). The token is held and the server
+     *  is asked again next time; never cached, never an impostor. */
+    data class Unavailable(val expected: String?, val reason: String) : IdentityVerdict()
+
     val admitsToken: Boolean get() = this is Verified || this is Legacy
+
+    /** Whether the verdict stands for a while ([Unavailable] does not). */
+    val cacheable: Boolean get() = this !is Unavailable
 }
 
 /** The request never left: the server at the saved address did not prove
- *  it is the one this phone paired with. An IOException so every caller's
- *  existing failure path (offline, out of reach) applies. */
+ *  it is the one this phone paired with (or is not fully up). An
+ *  IOException so every caller's existing failure path (offline, out of
+ *  reach) applies. */
 class ServerIdentityException(message: String) : IOException(message)
 
 class IdentityGate(
@@ -67,8 +93,13 @@ class IdentityGate(
      *  2xx, null otherwise; throws IOException when nothing answers. */
     private val probe: (base: HttpUrl, challenge: String) -> String?,
     private val pins: PinStore,
+    /** The network fingerprint the phone is on right now
+     *  ([NetworkWatch.fingerprint]): a verdict holds only on the one it was
+     *  taken on. */
+    private val network: () -> String = { NetworkWatch.NONE },
     private val clock: () -> Long = System::currentTimeMillis,
     private val retryAfterMs: Long = RETRY_AFTER_MS,
+    private val ttlMs: Long = VERDICT_TTL_MS,
     private val log: (String) -> Unit = {},
 ) : TokenGate {
 
@@ -76,6 +107,15 @@ class IdentityGate(
     interface PinStore {
         fun pinFor(key: String): ServerIdentity.Pin?
         fun pin(key: String, pin: ServerIdentity.Pin)
+
+        /**
+         * Whether a server with no pin may be pinned from its first proof.
+         * True for a server trusted before 2026-10-08 (an upgraded install,
+         * whose trust dialog showed no identity); false once the trust
+         * decision was taken with the identity in view — the dialog pinned
+         * what the server advertised, or recorded that it advertised none.
+         */
+        fun mayPinOnFirstProof(key: String): Boolean = true
     }
 
     /** The active server's latest verdict, for the shell: which server and
@@ -85,23 +125,45 @@ class IdentityGate(
     private val _status = MutableStateFlow<Status?>(null)
     val status: StateFlow<Status?> = _status
 
-    private class Entry(val generation: Long, val verdict: IdentityVerdict, val atMs: Long)
+    private class Entry(val epoch: Long, val network: String, val verdict: IdentityVerdict, val atMs: Long)
+
+    /** Bumped by every explicit invalidation; a verdict from an older epoch
+     *  is stale whatever the network says. */
+    @Volatile
+    private var epoch = 0L
 
     @Volatile
-    private var generation = 0L
+    private var backgroundedAt: Long? = null
+
     private val verdicts = HashMap<String, Entry>()
     private val locks = HashMap<String, Any>()
 
-    /** The default network changed (came up, went away, became another):
-     *  every server has to prove itself again. */
+    /** The network changed (the watch saw a different picture, or a caller
+     *  knows better): every server has to prove itself again. */
     fun networkChanged() {
-        generation++
+        epoch++
         log("network changed; the server will have to prove its identity again")
+    }
+
+    /** The app left the screen (MainActivity.onStop, not for a rotation). */
+    fun appBackgrounded() {
+        backgroundedAt = clock()
+    }
+
+    /** The app is back on screen. After a spell in the background — any
+     *  spell: the phone may have moved — every server proves itself again
+     *  before the next token-bearing request. The first start is not a
+     *  return. */
+    fun appForegrounded() {
+        val since = backgroundedAt ?: return
+        backgroundedAt = null
+        epoch++
+        log("back in the foreground after ${(clock() - since) / 1000} s; the server will have to prove its identity again")
     }
 
     override fun requireAdmitted(base: HttpUrl) {
         when (val verdict = verdictFor(base)) {
-            is IdentityVerdict.Verified, IdentityVerdict.Legacy -> return
+            is IdentityVerdict.Verified, is IdentityVerdict.Legacy -> return
             is IdentityVerdict.Mismatch -> throw ServerIdentityException(
                 "server identity mismatch: ${base.host}:${base.port} is not the Domovoi this phone " +
                     "paired with (expected ${verdict.expected}, it proved ${verdict.seen})",
@@ -110,36 +172,47 @@ class IdentityGate(
                 "server identity unproven: ${base.host}:${base.port} ${verdict.reason}" +
                     (verdict.expected?.let { " (this phone pinned $it)" } ?: ""),
             )
+            is IdentityVerdict.Unavailable -> throw ServerIdentityException(
+                "server not fully up: ${base.host}:${base.port} ${verdict.reason}; the token is held until it is",
+            )
         }
     }
 
     /**
      * The verdict for [base] on the current network, asking the server
-     * when there is none yet (or a refusal is old enough to retry). Blocks
-     * for the probe; one probe per server at a time, the others wait for
-     * its answer. Throws the probe's IOException when nothing answers.
+     * when there is none yet (or a refusal is old enough to retry, or the
+     * proof is older than [ttlMs]). Blocks for the probe; one probe per
+     * server at a time, the others wait for its answer. A proof that
+     * straddled a network change is thrown away and asked for again —
+     * the verdict must belong to the network the request leaves on.
+     * Throws the probe's IOException when nothing answers.
      */
     fun verdictFor(base: HttpUrl): IdentityVerdict {
         val key = pinKey(base)
         synchronized(lockFor(key)) {
-            val gen = generation
-            val now = clock()
-            cached(key)?.let { entry ->
-                if (entry.generation == gen && (entry.verdict.admitsToken || now - entry.atMs < retryAfterMs)) {
-                    return entry.verdict
+            repeat(PROOF_ATTEMPTS) {
+                val gen = epoch
+                val net = network()
+                val now = clock()
+                cached(key)?.let { entry -> if (holds(entry, gen, net, now)) return entry.verdict }
+                val verdict = ask(base, key)
+                if (epoch != gen || network() != net) {
+                    log("the network changed while $key was proving itself; asking again")
+                    return@repeat
                 }
+                if (verdict.cacheable) synchronized(verdicts) { verdicts[key] = Entry(gen, net, verdict, now) }
+                _status.value = Status(key, verdict)
+                return verdict
             }
-            val verdict = ask(base, key)
-            synchronized(verdicts) { verdicts[key] = Entry(gen, verdict, now) }
-            _status.value = Status(key, verdict)
-            return verdict
+            return IdentityVerdict.Unavailable(pins.pinFor(key)?.fingerprint, "the network kept changing while it was proving itself")
+                .also { _status.value = Status(key, it) }
         }
     }
 
     /** The verdict already reached for [base] on this network, if any —
      *  no probe (for callers on the main thread). */
     fun cachedVerdict(base: HttpUrl): IdentityVerdict? =
-        cached(pinKey(base))?.takeIf { it.generation == generation }?.verdict
+        cached(pinKey(base))?.takeIf { holds(it, epoch, network(), clock()) }?.verdict
 
     /**
      * Whether a `401`/`403` from [base] may send the phone to the pairing
@@ -152,14 +225,11 @@ class IdentityGate(
         return runCatching { verdictFor(base) }.getOrNull()?.admitsToken == true
     }
 
-    /**
-     * Whether the token may go to [base] RIGHT NOW, without a probe — for
-     * a caller on the main thread (the DownloadManager hand-off). The
-     * verdict already reached on this network, or, for a server with no
-     * pin (nothing to prove yet), yes.
-     */
-    override fun admitsTokenNow(base: HttpUrl): Boolean =
-        cachedVerdict(base)?.admitsToken ?: (pins.pinFor(pinKey(base)) == null)
+    private fun holds(entry: Entry, epoch: Long, network: String, now: Long): Boolean {
+        if (entry.epoch != epoch || entry.network != network) return false
+        val age = now - entry.atMs
+        return if (entry.verdict.admitsToken) age < ttlMs else age < retryAfterMs
+    }
 
     private fun cached(key: String): Entry? = synchronized(verdicts) { verdicts[key] }
 
@@ -174,20 +244,29 @@ class IdentityGate(
             }
         return when (val proof = ServerIdentity.check(body, challenge, pinned)) {
             is ServerIdentity.Proof.Verified -> {
-                if (pinned == null) {
+                if (pinned != null) {
+                    IdentityVerdict.Verified(proof.pin.fingerprint, pinnedNow = false)
+                } else if (pins.mayPinOnFirstProof(key)) {
                     pins.pin(key, proof.pin)
                     log("identity: pinned ${proof.pin.fingerprint} for $key")
+                    IdentityVerdict.Verified(proof.pin.fingerprint, pinnedNow = true)
+                } else {
+                    log("identity: $key proved ${proof.pin.fingerprint}, which this phone has not pinned (trusted without one); the token goes out as before")
+                    IdentityVerdict.Legacy(offered = proof.pin)
                 }
-                IdentityVerdict.Verified(proof.pin.fingerprint, pinnedNow = pinned == null)
             }
             ServerIdentity.Proof.NoIdentity ->
                 if (pinned == null) {
                     log("identity: $key offers no identity (an older server); the token goes out as before")
-                    IdentityVerdict.Legacy
+                    IdentityVerdict.Legacy()
                 } else {
                     log("identity: $key offered no identity but this phone pinned ${pinned.fingerprint}; token held")
                     IdentityVerdict.Unproven(pinned.fingerprint, "offered no identity")
                 }
+            ServerIdentity.Proof.CoreNotAnswering -> {
+                log("identity: $key answered but its core did not; token held until it does")
+                IdentityVerdict.Unavailable(pinned?.fingerprint, "its core is not answering (starting, updating or busy)")
+            }
             is ServerIdentity.Proof.Invalid -> {
                 log("identity: $key offered an identity that does not hold up (${proof.reason}); token held")
                 IdentityVerdict.Unproven(pinned?.fingerprint, "offered an identity that does not hold up: ${proof.reason}")
@@ -203,9 +282,18 @@ class IdentityGate(
         /** How long a refusal stands before the server is asked again. */
         const val RETRY_AFTER_MS = 30_000L
 
+        /** How long a proof stands on one network before it is asked for
+         *  again: short, because the watch cannot see every way a phone
+         *  moves (a VPN that reports nothing, a callback that never came). */
+        const val VERDICT_TTL_MS = 10 * 60_000L
+
         /** How long the identity probe may take. Short: it runs inside the
          *  background sync's 8 s budget before the request it guards. */
         const val PROBE_TIMEOUT_MS = 3_000L
+
+        /** How often a proof that straddled a network change is retried
+         *  before the gate gives up for this request. */
+        const val PROOF_ATTEMPTS = 3
 
         /** The one spelling of a server the pin book is keyed by. */
         fun pinKey(base: HttpUrl): String = "${base.scheme}://${base.host}:${base.port}"

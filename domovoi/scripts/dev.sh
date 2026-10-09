@@ -9,6 +9,12 @@ REPO_ROOT="$(cd "$CORE_DIR/.." && pwd)"
 # An existing .env is NEVER touched (exit 0 either way): that file is the
 # household's posture, including the satellites it has already let in.
 (cd "$REPO_ROOT" && python -m domovoi.env_bootstrap)
+# The one thing ever added to an existing .env: the two helper-container
+# secrets docker-compose.yml requires (LETTA_TOKEN, SEARXNG_SECRET), when a
+# file from before they were generated lacks them. Appended, nothing else
+# changes; a no-op once they are there. Without them every compose command
+# below refuses.
+(cd "$REPO_ROOT" && python -m domovoi.env_bootstrap --repair)
 
 (cd "$CORE_DIR" && docker compose up -d postgres)
 (cd "$CORE_DIR" && docker compose run --rm flyway)

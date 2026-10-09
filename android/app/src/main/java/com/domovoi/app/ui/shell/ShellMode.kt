@@ -51,6 +51,11 @@ internal sealed interface ServerChoice {
     /** Something answers at the address but failed the identity proof (A6-03). */
     data class NotOurs(val label: String) : ServerChoice
 
+    /** The web backend answers but its core does not, so the proof could not
+     *  be taken and the token is held until it can (A6-03 review): starting,
+     *  updating or busy — not an impostor, never a reason to forget it. */
+    data class CoreDown(val label: String) : ServerChoice
+
     /** Answering; [needsPairing] when it wants the household token first. */
     data class Available(val label: String, val needsPairing: Boolean = false) : ServerChoice
 }
@@ -63,9 +68,13 @@ internal fun serverChoice(
     unreachable: Boolean,
     notOurs: Boolean,
     pairingRequired: Boolean,
+    coreDown: Boolean = false,
 ): ServerChoice = when {
     serverUrl.isBlank() -> ServerChoice.NoServer
     notOurs -> ServerChoice.NotOurs(label)
+    // With the token held, every request fails and the server reads as
+    // unreachable; the identity verdict says why, so it is named first.
+    coreDown -> ServerChoice.CoreDown(label)
     unreachable -> ServerChoice.Unreachable(label)
     else -> ServerChoice.Available(label, pairingRequired)
 }
@@ -75,6 +84,7 @@ internal fun ServerChoice.reason(): String = when (this) {
     ServerChoice.NoServer -> "no server yet · pick one below"
     is ServerChoice.Unreachable -> "can't reach it right now"
     is ServerChoice.NotOurs -> "didn't prove it's your Domovoi"
+    is ServerChoice.CoreDown -> "up, but its core isn't answering yet"
     is ServerChoice.Available -> if (needsPairing) "available · needs the household token" else "available"
 }
 
@@ -83,6 +93,7 @@ internal fun ServerChoice.title(): String = when (this) {
     ServerChoice.NoServer -> "your Domovoi"
     is ServerChoice.Unreachable -> label
     is ServerChoice.NotOurs -> label
+    is ServerChoice.CoreDown -> label
     is ServerChoice.Available -> label
 }
 

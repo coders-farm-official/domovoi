@@ -1232,7 +1232,7 @@
           "music"
         ],
         "summary": "Now Playing",
-        "description": "Per-room playback state.\n\nReads the mpd_rooms table for control-port assignments, then opens\na one-shot connection to each MPD daemon for ``status`` +\n``currentsong``. Rooms that aren't reachable (container down, port\nblocked) surface as state ``\"stop\"`` with no song \u2014 same as a real\nidle MPD.",
+        "description": "Per-room playback state.\n\nReads the mpd_rooms table for control-port assignments, then opens\na one-shot connection to each MPD daemon for ``status`` +\n``currentsong``. Rooms that aren't reachable (container down, port\nblocked) surface as state ``\"stop\"`` with no song \u2014 same as a real\nidle MPD.\n\nOpen, but ``added_by`` (the device that queued the song) is named only\nto a caller holding a household credential\n(``_READS_QUEUE_PROVENANCE``). The caller is classified only when an\nanswer names a device, so the 1.5 s poll of a room nobody queued into\ncharges no token backoff and costs no extra query.",
         "operationId": "now_playing_api_music_now_playing_get",
         "responses": {
           "200": {
@@ -11477,8 +11477,26 @@
     "/api/health": {
       "get": {
         "summary": "Health",
-        "description": "Cheap readiness probe \u2014 DB ping + domovoi ping. Returns\n'degraded' (HTTP 200, not 503) when the Domovoi server is down so\nthe UI can show a partial-degradation banner instead of refusing\nto render. ``stt`` passes the core's speech-recognition state through\nfrom the same ping, so a page can say \"the kitchen can't hear you\"\nwithout the costly hardware probe.",
+        "description": "Cheap readiness probe \u2014 DB ping + domovoi ping. Returns\n'degraded' (HTTP 200, not 503) when the Domovoi server is down so\nthe UI can show a partial-degradation banner instead of refusing\nto render. ``stt`` passes the core's speech-recognition state through\nfrom the same ping, so a page can say \"the kitchen can't hear you\"\nwithout the costly hardware probe.\n\n``identity`` passes the core's identity block through from that same\nping (its Ed25519 public key and fingerprint; see\n``domovoi/server_identity.py``), and with ``?challenge=<nonce>`` the\ncore's signature over that nonce too \u2014 what lets the Android app tell\nthe server it paired with from anything else answering at the saved\naddress after a network change (security round 3, A6-03). Open, like\nthe rest of this answer: everything in it is public, and the client\nasking has no credential yet by design. Absent when the core did not\nanswer (or predates identity).",
         "operationId": "health_api_health_get",
+        "parameters": [
+          {
+            "name": "challenge",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Challenge"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -11486,6 +11504,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -13495,6 +13523,20 @@
               }
             ],
             "title": "Stt"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identity"
           }
         },
         "type": "object",

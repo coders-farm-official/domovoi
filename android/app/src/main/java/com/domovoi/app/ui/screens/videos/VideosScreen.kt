@@ -164,8 +164,13 @@ fun VideosScreen() {
 
     fun saveToDevice(v: VideoRow) {
         val name = DeviceDownloads.safeName(v.name, fallback = "video")
-        val err = DeviceDownloads.enqueue(context, app.api, streamPath(v, download = true), name)
-        toast(err ?: "saving \"$name\" to Downloads/Domovoi")
+        // The video stream is a device-tier read (web/backend/api/videos.py),
+        // the one save that needs the household token: it is handed over
+        // only after the server proved itself on this network, right now.
+        scope.launch {
+            val err = DeviceDownloads.enqueueWithToken(context, app.api, streamPath(v, download = true), name)
+            toast(err ?: "saving \"$name\" to Downloads/Domovoi")
+        }
     }
 
     val q = filter.trim().lowercase()

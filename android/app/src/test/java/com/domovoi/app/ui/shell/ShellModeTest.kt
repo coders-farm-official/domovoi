@@ -54,7 +54,8 @@ class ShellModeTest {
         unreachable: Boolean = false,
         notOurs: Boolean = false,
         pairingRequired: Boolean = false,
-    ) = serverChoice(serverUrl, "Domovoi", unreachable, notOurs, pairingRequired)
+        coreDown: Boolean = false,
+    ) = serverChoice(serverUrl, "Domovoi", unreachable, notOurs, pairingRequired, coreDown)
 
     @Test fun noSavedServerCannotBePicked() {
         val c = choice(serverUrl = "")
@@ -89,5 +90,30 @@ class ShellModeTest {
         val c = choice(pairingRequired = true)
         assertTrue(c.enabled)
         assertEquals("available · needs the household token", c.reason())
+    }
+
+    // ---- the core-down verdict (A6-03 review): held, not an impostor ------
+
+    @Test fun aServerWhoseCoreIsDownIsGreyedWithItsOwnReasonNotUnreachable() {
+        // The web backend answered, so "can't reach it" would be wrong; the
+        // token is held until the core proves the identity, so it cannot be
+        // picked either. Named before unreachable: with the token held every
+        // request fails and the shell's probe reads the server as unreachable.
+        val c = choice(unreachable = true, coreDown = true)
+        assertEquals(ServerChoice.CoreDown("Domovoi"), c)
+        assertFalse(c.enabled)
+        assertEquals("up, but its core isn't answering yet", c.reason())
+        assertEquals("Domovoi", c.title())
+    }
+
+    @Test fun anIdentityFailureBeatsACoreDownReading() {
+        // Both cannot be true of one verdict, but if the inputs disagree the
+        // impostor reading wins: it is the one that must never be softened.
+        val c = choice(notOurs = true, coreDown = true)
+        assertEquals(ServerChoice.NotOurs("Domovoi"), c)
+    }
+
+    @Test fun coreDownDefaultsToFalseForEveryOlderCaller() {
+        assertTrue(choice().enabled)
     }
 }

@@ -137,23 +137,37 @@ fun AppShell() {
         }
     }
 
-    // "Out of reach" has two faces: nothing answered, or something answered
+    // "Out of reach" has three faces: nothing answered; something answered
     // at the saved address that is NOT the Domovoi this phone paired with —
     // its identity failed the proof, so no request with the token was sent
-    // to it (net/IdentityGate.kt, A6-03). The connection dialog and the
-    // local shell's banner both say which.
+    // to it (net/IdentityGate.kt, A6-03); or the web backend answered but
+    // its core did not, so the proof could not be taken and the token is
+    // held until it can — not an impostor, never a reason to forget the
+    // server. The connection dialog and the local shell's banner both say
+    // which (ShellMode.kt, ServerChoice).
     val identity by app.identity.status.collectAsState()
-    val notOurs = identity?.let { s ->
-        s.base == IdentityGate.pinKey(serverUrl) &&
-            (s.verdict is IdentityVerdict.Mismatch || s.verdict is IdentityVerdict.Unproven)
-    } == true
+    val activeVerdict = identity?.takeIf { it.base == IdentityGate.pinKey(serverUrl) }?.verdict
+    val notOurs = activeVerdict is IdentityVerdict.Mismatch || activeVerdict is IdentityVerdict.Unproven
+    val coreDown = activeVerdict is IdentityVerdict.Unavailable
     val choice = serverChoice(
         serverUrl = serverUrl,
         label = if (serverUrl.isBlank()) "" else app.prefs.serverLabel(),
         unreachable = unreachable,
         notOurs = notOurs,
+        coreDown = coreDown,
         pairingRequired = pairingRequired,
     )
+    // Forgetting the active server (Settings, or the server list) leaves
+    // the app with none and asks for the list: open the connection dialog.
+    // It is owned here, above both shells, so it survives the shell swap
+    // the forget itself causes (the workspace drops to local media).
+    val pendingRoute by app.pendingRoute.collectAsState()
+    LaunchedEffect(pendingRoute) {
+        if (pendingRoute == "picker") {
+            showConnection = true
+            app.pendingRoute.value = null
+        }
+    }
 
     CompositionLocalProvider(
         LocalToast provides toast,
@@ -454,7 +468,19 @@ private fun OfflineShell(choice: ServerChoice) {
     val openConnection = LocalOpenConnection.current
     // The banner is for a server that can't be used. Choosing "this phone"
     // with the server right there is not an outage, so it says nothing.
-    val outOfReach = (choice as? ServerChoice.Unreachable)?.label ?: (choice as? ServerChoice.NotOurs)?.label
+    // "Can't be used" has three faces (ShellMode.kt): nothing answered;
+    // something answered at the saved address that is NOT the Domovoi this
+    // phone paired with — its identity failed the proof, so no request with
+    // the token was sent to it (net/IdentityGate.kt, A6-03); or the web
+    // backend answered but its core did not, so the proof could not be taken
+    // and the token is held until it can — not an impostor, never a reason to
+    // forget the server. The banner says which.
+    val outOfReach = when (choice) {
+        is ServerChoice.Unreachable -> choice.label
+        is ServerChoice.NotOurs -> choice.label
+        is ServerChoice.CoreDown -> choice.label
+        else -> null
+    }
     val serverName = when (choice) {
         ServerChoice.NoServer -> null
         else -> choice.title()
@@ -517,14 +543,20 @@ private fun OfflineShell(choice: ServerChoice) {
                 val unreachableServer = outOfReach
                 Surface(color = Domovoi.colors.canvas) {
                     Text(
-                        if (choice is ServerChoice.NotOurs) {
-                            "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
-                                "this phone paired with, so nothing was sent to it. Showing media on this " +
-                                "phone; the workspace comes back when your Domovoi does. If you replaced " +
-                                "the server, forget it in the server list and pair again."
-                        } else {
-                            "Can't reach $unreachableServer. Showing media on this phone; " +
-                                "the workspace comes back when the server does."
+                        when (choice) {
+                            is ServerChoice.NotOurs ->
+                                "Whatever answers at $unreachableServer did not prove it is the Domovoi " +
+                                    "this phone paired with, so nothing was sent to it. Showing media on this " +
+                                    "phone; the workspace comes back when your Domovoi does. If you replaced " +
+                                    "the server, forget it — the X next to it in the server list, or under " +
+                                    "Settings → Connection → Trusted servers — then trust and pair it again."
+                            is ServerChoice.CoreDown ->
+                                "$unreachableServer is up but its core is not answering (starting, " +
+                                    "updating, or busy), so nothing was sent to it yet. Showing media on " +
+                                    "this phone; the workspace comes back when the core does."
+                            else ->
+                                "Can't reach $unreachableServer. Showing media on this phone; " +
+                                    "the workspace comes back when the server does."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = Domovoi.colors.fgMuted,
@@ -760,6 +792,12 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
 
     val serverLabel = knownServers.firstOrNull { it.url == serverUrl }?.name
         ?: serverUrl.removePrefix("http://").removePrefix("https://")
+    // A server the phone cannot hold to a key (no identity pinned, token
+    // sent as before) is said so, where the server's name is.
+    val identityStatus by app.identity.status.collectAsState()
+    val unverified = identityStatus?.let {
+        it.base == IdentityGate.pinKey(serverUrl) && it.verdict is IdentityVerdict.Legacy
+    } == true
 
     // targetSdk 35 forces edge-to-edge, so this bar is laid out from y=0 and
     // would render UNDER the status bar — clock and battery icons on top of
@@ -811,6 +849,9 @@ private fun Topbar(route: Route, navigate: (Route) -> Unit) {
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.widthIn(max = 140.dp),
                 )
+                if (unverified) {
+                    Text("unverified", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.warn)
+                }
             }
             Box(Modifier.width(10.dp))
             StatusDot(if (connected) Tone.Ok else Tone.Idle, live = connected)

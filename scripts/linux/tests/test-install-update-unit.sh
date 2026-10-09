@@ -4,8 +4,8 @@
 # Each case builds a throwaway git repo (commit A, which the "core" is
 # running, then commit B, pulled but not applied), a fake venv, a fake root
 # directory the script reads and writes through DOMOVOI_INSTALL_ROOT, and
-# PATH shims for systemctl, visudo, sudo, curl, git, docker, id, install,
-# stat, find and chown that log every call and can be told to fail. Nothing
+# PATH shims for systemctl, visudo, sudo, curl, getent, git, docker, id,
+# install, stat, find and chown that log every call and can be told to fail. Nothing
 # touches systemd, sudoers, Docker or a real core, so this runs under Git
 # Bash as well as on Linux.
 #
@@ -23,7 +23,10 @@
 #   * visudo -cf fails when visudo-reject is set; visudo -c fails when
 #     visudo-broken is set, or when visudo-fail-with-rule is set and the new
 #     rule is in place;
-#   * curl serves version.json as GET /v1/admin/version, or fails (core-down);
+#   * curl serves version.json as GET /v1/admin/version, or fails (core-down,
+#     or exit 22 when core-wants-token holds a token its -H @- stdin lacks);
+#   * getent passwd USER answers with the home in the home file, or not at
+#     all (no such user) when there is none;
 #   * id -u says 0 (or what uid holds); install drops -o/-g (there is no root
 #     user to hand files to here) and runs the real install;
 #   * stat -c %U says what owner holds; stat -c '%u %a' says root-owned 755
@@ -34,7 +37,8 @@
 #     domovoi-update.service never loads when update-unit-unloadable is set;
 #     install fails on the unit's temp file when install-fail-unit is set;
 #   * the venv's python answers `pip show piper-tts` with piper-version
-#     (1.3.0), or not at all when piper-missing is set.
+#     (1.3.0), or not at all when piper-missing is set, and the version
+#     query (-c ...version_info...) with py-version (3.14).
 #
 # Usage: bash scripts/linux/tests/test-install-update-unit.sh
 # Exit status is non-zero if any case failed.
@@ -176,8 +180,23 @@ SH
 url=${!#}
 echo "curl $url" >>"$SHIM_STATE/calls.log"
 echo "curl-args $*" >>"$SHIM_STATE/calls.log"
+rm -f "$SHIM_STATE/curl-stdin"
+if [[ " $* " == *" @- "* ]]; then cat >"$SHIM_STATE/curl-stdin"; fi
 if [ -f "$SHIM_STATE/core-down" ]; then echo "curl: (7) Failed to connect" >&2; exit 7; fi
+if [ -f "$SHIM_STATE/core-wants-token" ] \
+    && ! grep -qxF -- "X-Device-Token: $(cat "$SHIM_STATE/core-wants-token")" "$SHIM_STATE/curl-stdin" 2>/dev/null; then
+  echo "curl: (22) The requested URL returned error: 401" >&2; exit 22
+fi
 cat "$SHIM_STATE/version.json"
+SH
+
+  cat >"$bin/getent" <<'SH'
+#!/usr/bin/env bash
+echo "getent $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = passwd ] && [ -f "$SHIM_STATE/home" ]; then
+  printf '%s:x:1001:1001::%s:/bin/bash\n' "${2-}" "$(cat "$SHIM_STATE/home")"; exit 0
+fi
+exit 2
 SH
 
   cat >"$bin/docker" <<'SH'
@@ -265,6 +284,9 @@ echo "python $*" >>"$SHIM_STATE/calls.log"
 if [ "${1-}" = -m ] && [ "${2-}" = pip ] && [[ " $* " == *" show piper-tts "* ]]; then
   if [ -f "$SHIM_STATE/piper-missing" ]; then echo "WARNING: Package(s) not found: piper-tts" >&2; exit 1; fi
   printf 'Name: piper-tts\nVersion: %s\nSummary: fast local TTS\n' "$(cat "$SHIM_STATE/piper-version" 2>/dev/null || echo 1.3.0)"
+fi
+if [ "${1-}" = -c ] && [[ ${2-} == *version_info* ]]; then
+  cat "$SHIM_STATE/py-version" 2>/dev/null || echo 3.14
 fi
 exit 0
 SH
@@ -914,6 +936,39 @@ case_curl_is_hardened() {
   end_case
 }
 
+# CORE-21: the version read is on the device tier, so the installer brings
+# the household token the core mirrors into the service user's home.
+case_version_read_brings_the_household_token() {
+  new_case version_read_brings_the_household_token
+  local home=$CASE/home/tester tok="acorn maple-River 7"
+  mkdir -p "$home/.domovoi"
+  printf '%s\r\n' "$tok" >"$home/.domovoi/device-token.txt"   # a CRLF file, as Windows writes it
+  echo "$home" >"$STATE/home"
+  printf '%s' "$tok" >"$STATE/core-wants-token"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "reads it as the service user, not as root" \
+    called "sudo -n -u tester -- cat -- $home/.domovoi/device-token.txt"
+  check "sends it as the header, on stdin" grep -qxF -- "X-Device-Token: $tok" "$STATE/curl-stdin"
+  check "the same hardened curl" \
+    called "curl-args -q -fsS --noproxy * --proto =http,https --max-time 10 --max-filesize 1048576 -H @- http://127.0.0.1:6370/v1/admin/version"
+  check "never on a command line" not_called "$tok"
+  check "never printed" not_said "$tok"
+  check "records the running SHA" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+case_version_read_refused_without_the_token_stops() {
+  new_case version_read_refused_without_the_token_stops
+  printf 'acorn-maple-river' >"$STATE/core-wants-token"   # and no home, so no token file
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says the core refused the read" said "refused the version read (curl exit 22)"
+  check "says where the token comes from" said "~tester/.domovoi/device-token.txt"
+  check "nothing installed, and HEAD not recorded" nothing_installed
+  end_case
+}
+
 case_ref_named_like_the_sha_stops() {
   new_case ref_named_like_the_sha_stops
   g branch -q "${SHA_A:0:7}" "$SHA_B"   # a branch spelled like the running SHA
@@ -995,6 +1050,59 @@ case_fix_ownership_only_for_a_venv() {
 }
 
 # ─── signed updates: the pre-flight check (2026-10 audit, A8-01) ──────────
+
+# ─── the hash-pinned lock is opt-in (DOMOVOI_USE_LOCK=1) ──────────────────
+
+# The checkout's requirements-linux-py314.lock, with pip-compile's header
+# naming the Python it was compiled for.
+write_lock() {
+  printf '#\n# This file is autogenerated by pip-compile with Python %s\n#\nnumpy==2.4.7 \\\n    --hash=sha256:%064d\n' \
+    "${1:-3.14}" 0 >"$REPO/requirements-linux-py314.lock"
+}
+
+case_dependency_lock_is_off_by_default() {
+  new_case dependency_lock_is_off_by_default
+  write_lock
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "says the lock is off and the resolver re-syncs, as before" \
+    said "ok       dependency lock: off; an update re-syncs through pip's resolver, as before"
+  check "says how to opt in, and to re-seed first" said "box's pip freeze and set DOMOVOI_USE_LOCK=1"
+  check "not a warning: still only the signing one" eq "$(grep -c warning "$CASE/output.log")" 1
+  check "the lock is not read" not_called "sed -n s/^# This file is autogenerated"
+  check "nor the venv's Python asked" not_called "python -c import sys"
+  end_case
+}
+
+case_dependency_lock_opted_in_is_reported() {
+  new_case dependency_lock_opted_in_is_reported
+  write_lock
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_USE_LOCK=1\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "says the lock is on" \
+    said "ok       dependency lock: on; an update installs from requirements-linux-py314.lock, every package hash-checked"
+  check "reads the lock's header as the service user" called "sudo -n -u tester -- sed -n"
+  check "asks the venv's Python as the service user" called "sudo -n -u tester -- $VENV/bin/python -c import sys"
+  check "no warning beyond the signing one" eq "$(grep -c warning "$CASE/output.log")" 1
+  end_case
+}
+
+case_dependency_lock_opted_in_but_unusable_warns() {
+  new_case dependency_lock_opted_in_but_unusable_warns
+  write_lock
+  echo 3.13 >"$STATE/py-version"
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_USE_LOCK=1\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 0: a warning, not a stop" eq "$RC" 0
+  check "names both Pythons" \
+    said "warning  DOMOVOI_USE_LOCK=1, but requirements-linux-py314.lock is for Python 3.14 and the venv runs Python 3.13"
+  check "says what an update does then" said "falls back to pip's resolver, without hash checks"
+  check "still installed" eq "$(cat "$UNIT")" "$(expected_unit)"
+  end_case
+}
 
 # Does this box's ssh-keygen sign and verify (OpenSSH 8.0+)? Only the case
 # with a real signature needs it; without it that case is skipped.
@@ -1181,12 +1289,17 @@ CASES=(
   case_relative_state_dir_stops
   case_core_url_must_be_this_box
   case_curl_is_hardened
+  case_version_read_brings_the_household_token
+  case_version_read_refused_without_the_token_stops
   case_ref_named_like_the_sha_stops
   case_unit_write_fails_takes_the_grant_back
   case_daemon_reload_fails_takes_everything_back
   case_unit_not_loaded_puts_the_old_one_back
   case_unexpected_failure_takes_back
   case_fix_ownership_only_for_a_venv
+  case_dependency_lock_is_off_by_default
+  case_dependency_lock_opted_in_is_reported
+  case_dependency_lock_opted_in_but_unusable_warns
   case_signing_enforced_and_head_verifies
   case_signing_enforced_but_head_unsigned_stops
   case_signers_file_writable_by_others_stops

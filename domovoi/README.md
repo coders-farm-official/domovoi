@@ -802,8 +802,10 @@ docker compose up -d letta
 ```
 
 The `letta` service (in `domovoi/docker-compose.yml`) runs
-`letta/letta:latest`, published on `127.0.0.1:6283` (loopback only — the
-core is its only client). It **bundles its own
+`letta/letta`, pinned by digest, published on `127.0.0.1:6283` (loopback
+only — the core is its only client). Its password is `LETTA_TOKEN` from
+`domovoi/.env`, which compose hands the container as
+`LETTA_SERVER_PASSWORD` and the core signs in with. It **bundles its own
 Postgres+pgvector**
 in the `letta-pgdata` volume and self-manages its own schema — it is NOT
 pointed at the core's Flyway-owned Postgres (that would collide
@@ -994,7 +996,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `CHAT_MODE_ENABLED` | `false` | Master gate for conversational chat mode. Off → `LettaStubClient`, Letta never contacted |
 | `CHAT_SILENCE_TIMEOUT_SEC` | `30.0` | Auto-exit an open-mic conversation after this much silence |
 | `LETTA_BASE_URL` | `http://localhost:6283` | Self-hosted Letta server (the `letta` compose service) |
-| `LETTA_TOKEN` | `domovoi-local` | SDK token = the server's `LETTA_SERVER_PASSWORD` |
+| `LETTA_TOKEN` | *(random, written on first bootstrap)* | SDK token = the server's `LETTA_SERVER_PASSWORD` (compose hands Letta the same value). Generated per install by `python -m domovoi.env_bootstrap`; `--repair` adds one to an older `.env`, and compose refuses to run without it. The core's own default (`domovoi-local`, the old shared value) only matters for a Letta started some other way |
 | `LETTA_MODEL` | `ollama/qwen2.5:14b` | Letta LLM handle (local Ollama) |
 | `LETTA_EMBEDDING_MODEL` | `ollama/nomic-embed-text` | Letta embedding handle — REQUIRED on self-hosted Letta |
 

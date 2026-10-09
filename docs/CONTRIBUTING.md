@@ -60,19 +60,30 @@ For test-only work, `pip install -e ".[dev]"` is enough — the suite runs
 entirely on deterministic stubs (`USE_STUBS=true`), no GPU, no Ollama, no
 audio hardware.
 
-**Pinned installs.** `requirements.lock` at the repo root is the exact,
-hash-pinned set (core + `dev`) the suite is run against. A deployment that
-wants reproducible installs uses it instead of the resolver:
+**Pinned installs.** Two hash-pinned locks sit at the repo root.
+`requirements.lock` is the set the suite is run against (core + `dev`,
+Python 3.12):
 
 ```bash
 pip install --require-hashes -r requirements.lock
 pip install --no-deps -e .
-pip install -e ".[real-clients]"     # hardware extras stay outside the lock
 ```
 
-When you change a dependency in `pyproject.toml`, regenerate the lock from
-a venv that has the versions you actually tested (recipe in the lock's
-header) and commit both files together. The floors on `starlette`,
+`requirements-linux-py314.lock` is what a Linux server installs: core,
+`real-clients`, `voice-profile`, `resemblyzer` and CPU torch, for CPython
+3.14 on x86_64 ([LINUX_HOST.md, Install](LINUX_HOST.md#install); the
+update unit's re-sync uses it on a box that opts in with
+`DOMOVOI_USE_LOCK=1`). Regenerate it with
+`DOMOVOI_LOCK_SEED=requirements.lock bash scripts/linux/compile-linux-lock.sh`,
+which runs pip-compile in a pinned `python:3.14-slim` container, so it
+resolves for the server's platform from any machine with Docker, starting
+from the dev lock's versions so every package the two share stays at the
+version the suite runs.
+
+When you change a dependency in `pyproject.toml`, regenerate both: the dev
+lock first, from a venv that has the versions you actually tested (recipe
+in its header), then the Linux lock seeded from it, and commit them
+together. The floors on `starlette`,
 `python-multipart`, `requests` and `pillow` are one-way — raise freely,
 never lower; `domovoi/tests/test_ops_dependency_floors.py` holds the line.
 
