@@ -262,8 +262,7 @@ the Whisper revision and the models), and stops on any download that
 doesn't match. On top of the manual steps it pre-downloads what the core
 would otherwise fetch at its first boot: the Ollama models for the box's
 memory (`--tier`), the Whisper model, the Piper voice and the room image.
-It installs the update unit with `DOMOVOI_USE_LOCK=1`, since the box came
-from the lock. Run it again at any time: finished steps are skipped, a
+Run it again at any time: finished steps are skipped, a
 killed run picks up where it stopped, and nothing is restarted that
 didn't change. `--help` lists the options (`--media`, `--tier`,
 `--skip-models`, ...).

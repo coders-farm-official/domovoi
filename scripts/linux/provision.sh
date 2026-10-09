@@ -44,8 +44,7 @@
 #   start        enable and start domovoi-db, domovoi-core, domovoi-web; wait
 #                for /v1/health and /api/health
 #   update-unit  scripts/linux/install-update-unit.sh (the dashboard's update
-#                button), with DOMOVOI_USE_LOCK=1: this box was installed
-#                from the lock, so its updates are too
+#                button), with the doc's defaults
 #   finish       result, setup-code presence (never its content)
 #
 # Idempotent and resumable. Each finished step leaves a marker in
@@ -132,7 +131,6 @@ UNIT_DIR=$ROOT/etc/systemd/system
 SUDOERS_DIR=$ROOT/etc/sudoers.d
 APT_KEYRING=$ROOT/etc/apt/keyrings/docker.asc
 APT_SOURCE=$ROOT/etc/apt/sources.list.d/docker.sources
-DEFAULTS_UPDATE=$ROOT/etc/default/domovoi-update
 SIGNERS_FILE=$ROOT/etc/domovoi/allowed_signers
 ZONEINFO=$ROOT/usr/share/zoneinfo
 LOCALTIME=$ROOT/etc/localtime
@@ -1214,6 +1212,48 @@ lock_python() {
 }
 system_python() { python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null; }
 
+# lock_stanzas NAME...: the lock's requirement lines (name==version and
+# every --hash) for those packages and everything they need, found through
+# pip-compile's "# via" lines to a fixed point (wheel needs packaging, for
+# one). Read as the service user: the checkout is that user's, and root
+# never opens a path in it that the user could point elsewhere.
+LOCK_CLOSURE_AWK='
+function flush() { if (cur != "") { body[cur] = buf; vias[cur] = via } cur = "" }
+/^[A-Za-z0-9]/ {
+  flush()
+  cur = tolower($1); sub(/[=<>!~;\[ ].*/, "", cur)
+  buf = $0 "\n"; via = " "; invia = 0
+  next
+}
+cur != "" && /^[ \t]+--hash/ { buf = buf $0 "\n"; next }
+cur != "" && /^[ \t]+# via/ {
+  invia = 1
+  rest = $0; sub(/^[ \t]+# via[ \t]*/, "", rest)
+  if (rest != "") { sub(/[ \t].*/, "", rest); via = via tolower(rest) " " }
+  next
+}
+cur != "" && invia && /^[ \t]+#[ \t]+[^ \t]/ {
+  v = $0; sub(/^[ \t]+#[ \t]+/, "", v); sub(/[ \t\[].*/, "", v)
+  via = via tolower(v) " "
+  next
+}
+/^#/ || /^[ \t]*$/ { flush(); next }
+END {
+  flush()
+  n = split(roots, r, " ")
+  for (i = 1; i <= n; i++) sel[tolower(r[i])] = 1
+  changed = 1
+  while (changed) {
+    changed = 0
+    for (p in vias) {
+      if (p in sel) continue
+      for (s in sel) if (index(vias[p], " " s " ")) { sel[p] = 1; changed = 1; break }
+    }
+  }
+  for (p in sel) if (p in body) printf "%s", body[p]
+}'
+lock_stanzas() { as_svc awk -v roots="$*" "$LOCK_CLOSURE_AWK" "$CHECKOUT/$LOCK_NAME"; }
+
 # --progress-bar is an install option, not a global one: it goes in the
 # environment (PIP_PROGRESS_BAR, set by as_svc) so it can't land in front
 # of the subcommand, where pip refuses it.
@@ -1249,7 +1289,7 @@ if bad:
 print("imports OK: %d modules, torch %s" % (len(mods), torch.__version__))'
 
 do_venv() {
-  local want have
+  local want have tools reqs
   [ -f "$CHECKOUT/$LOCK_NAME" ] || die "the checkout has no $LOCK_NAME"
   want=$(lock_python)
   have=$(system_python) || have=""
@@ -1261,9 +1301,27 @@ do_venv() {
   fi
   # docs/LINUX_HOST.md "Install from the hash-pinned lock": the build tools
   # from the lock, every pin (sdist-only ones built with those tools), then
-  # Domovoi itself and nothing else.
+  # Domovoi itself and nothing else. The build tools go in as their own
+  # stanzas of the lock (name==version and every --hash) in a requirements
+  # file: the pip that Ubuntu 26.04's venv ships (25.1) takes no hashes
+  # from a constraints file, so "-c <lock> setuptools wheel" is refused
+  # there. The file is root's, in root's cache directory, readable by the
+  # service user (who can't open a root pipe as /dev/stdin).
   emit_frac 50 "Installing build tools"
-  pip_svc install --require-hashes -c "$LOCK_NAME" setuptools wheel || die "pip install of the build tools from $LOCK_NAME failed"
+  tools=$(lock_stanzas setuptools wheel) || tools=""
+  printf '%s\n' "$tools" | grep -q '^setuptools==' && printf '%s\n' "$tools" | grep -q '^wheel==' \
+    && [[ $tools == *--hash=sha256:* ]] \
+    || die "$LOCK_NAME has no hash-pinned setuptools and wheel to build with"
+  log "build tools from the lock: $(printf '%s\n' "$tools" | sed -n 's/^\([A-Za-z0-9._-]*==[^ ]*\).*/\1/p' | tr '\n' ' ')"
+  install -d -m 0755 "$CACHE_DIR"
+  reqs=$(mktemp "$CACHE_DIR/build-tools.XXXXXX")
+  printf '%s\n' "$tools" >"$reqs"
+  chmod 0644 "$reqs"
+  if ! pip_svc install --require-hashes -r "$reqs"; then
+    rm -f "$reqs"
+    die "pip install of the build tools from $LOCK_NAME failed"
+  fi
+  rm -f "$reqs"
   emit_frac 100 "Installing the locked packages (CPU torch, Whisper, Piper, ...)"
   pip_svc install --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
   emit_frac 900 "Installing Domovoi"
@@ -1878,37 +1936,19 @@ do_start() {
 
 # ─── update-unit ─────────────────────────────────────────────────────────
 
-defaults_text() {
-  cat <<'EOF'
-# Settings for domovoi-update.service (docs/LINUX_HOST.md, Updates from the
-# dashboard). Root reads this file; keep it root-owned and not writable by
-# anyone else.
-# Written by scripts/linux/provision.sh: this box was installed from the
-# hash-pinned lock, so a dependency re-sync installs from it too.
-DOMOVOI_USE_LOCK=1
-EOF
-}
+# The update unit's defaults are left as docs/LINUX_HOST.md has them: no
+# /etc/default/domovoi-update, so its venv re-sync uses pip's resolver.
+# Opting in (DOMOVOI_USE_LOCK=1) would fit a box installed from the lock,
+# but apply-update.sh's locked re-sync installs the build tools with
+# "-c <lock> setuptools wheel", which the pip Ubuntu 26.04's venv ships
+# (25.1) refuses; the do_venv comment says why.
 inputs_update_unit() {
   file_sig "$CHECKOUT/scripts/linux/install-update-unit.sh"
   echo "$CHECKOUT $SVC_USER"
-  defaults_text
 }
-check_update_unit() {
-  [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ] \
-    && grep -q '^DOMOVOI_USE_LOCK=1' "$DEFAULTS_UPDATE" 2>/dev/null
-}
-plan_update_unit() { echo "/etc/default/domovoi-update: DOMOVOI_USE_LOCK=1"; echo "bash scripts/linux/install-update-unit.sh --repo $CHECKOUT --user $SVC_USER"; }
+check_update_unit() { [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ]; }
+plan_update_unit() { echo "bash scripts/linux/install-update-unit.sh --repo $CHECKOUT --user $SVC_USER"; }
 do_update_unit() {
-  if [ ! -e "$DEFAULTS_UPDATE" ]; then
-    defaults_text | write_if_changed "$DEFAULTS_UPDATE" 0644 || true
-    log "wrote /etc/default/domovoi-update (DOMOVOI_USE_LOCK=1)"
-  elif ! grep -q '^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=' "$DEFAULTS_UPDATE"; then
-    { cat "$DEFAULTS_UPDATE"; printf '\n# Added by scripts/linux/provision.sh: installed from the lock.\nDOMOVOI_USE_LOCK=1\n'; } \
-      | write_if_changed "$DEFAULTS_UPDATE" 0644 || true
-    log "added DOMOVOI_USE_LOCK=1 to /etc/default/domovoi-update"
-  else
-    log "/etc/default/domovoi-update already says whether to use the lock; left as it is"
-  fi
   bash "$CHECKOUT/scripts/linux/install-update-unit.sh" --repo "$CHECKOUT" --user "$SVC_USER" \
     || die "scripts/linux/install-update-unit.sh stopped (its output above says why)"
   STEP_DONE_MSG="Updater installed"
