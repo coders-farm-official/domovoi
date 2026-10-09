@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="docs/assets/banner.jpg" width="100%"
+       alt="Domovoi, the open-source voice assistant: the amber cat answering &quot;Hey Domovoi&quot;. Your voice stays home, local and privacy-first. github.com/coders-farm-official/domovoi">
+</p>
+
 # Domovoi
 
 **A self-hosted, local-first voice assistant for your home.**

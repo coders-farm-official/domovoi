@@ -13,6 +13,7 @@ If the user invokes this skill without any other guidance, ask them what they wa
 ## Quick orientation
 - `colors_and_type.css` — standalone token file for prototypes outside the repo. The **canonical** production token file is `web/static/colors_and_type.css` (same values, plus vendored webfonts and a `--bg` alias) — production code references that one.
 - `web/static/assets/domovoi.svg` — the brand cat glyph (the domovoi, a cat house-spirit; the mascot has no personal name). `web/static/assets/domovoi-sleeping.svg` — empty-state cat. `web/static/assets/wordmark.svg` — full lockup.
+- `docs/assets/domovoi-icon.png` — the app icon: the glossy amber cat head, transparent, 1024px. It is the Android launcher icon, the Play Store icon and the web install icons and favicon; the line-art glyph above stays the cat inside the UI. `docs/assets/banner.jpg` heads the README, and `docs/assets/README.md` lists where every derived size lives.
 - `web/static/components.jsx` — the production primitives (`Sidebar`, `Topbar`, `Pill`, `RoomChip`, `StatusDot`, `Card`, `Empty`, `Button`, `Avatar`, `DomovoiGlyph`, `SleepingDomovoi`, `HeadphonesDomovoi`). Reuse these; don't fork them into new copies.
 - `preview/` — token + component specimen cards, useful as a visual cheatsheet.
 
