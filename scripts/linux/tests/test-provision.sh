@@ -464,6 +464,13 @@ echo "venv-python $*" >>"$SHIM_STATE/calls.log"
 envf=domovoi/.env
 case "${1-} ${2-}" in
   "-m pip")
+    # Like pip: an install option in front of the subcommand is refused.
+    for a in "${@:3}"; do
+      case $a in
+        install|download|show|freeze|uninstall|list) break ;;
+        --progress-bar*|--require-hashes|--no-build-isolation|--no-deps|-r|-c|-e) echo "no such option: $a" >&2; exit 2 ;;
+      esac
+    done
     if [ -f "$SHIM_STATE/pip-fail" ] && [[ " $* " == *" -r "* ]]; then echo "ERROR: fixture: hash mismatch" >&2; exit 1; fi
     exit 0 ;;
   "-m domovoi.env_bootstrap")
@@ -758,7 +765,9 @@ case_full_run_wsl() {
   check "held" called "apt-mark hold docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
   check "user in the docker group" called "usermod -aG docker domovoi"
   # venv: the three LINUX_HOST.md installs, in order
-  check "build tools from the lock" called "-m pip --disable-pip-version-check --no-input --progress-bar off install --require-hashes -c requirements-linux-py314.lock setuptools wheel"
+  check "build tools from the lock" called "-m pip --disable-pip-version-check --no-input install --require-hashes -c requirements-linux-py314.lock setuptools wheel"
+  check "no install option before the subcommand" not_called "--progress-bar off install"
+  check "pip's progress bar off through the environment" called "PIP_PROGRESS_BAR=off"
   check "every pin, hash-checked" called "install --require-hashes --no-build-isolation -r requirements-linux-py314.lock"
   check "domovoi itself, no deps" called "install --no-deps --no-build-isolation -e ."
   # .env

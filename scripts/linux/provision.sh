@@ -441,7 +441,7 @@ svc_home() { getent passwd "$SVC_USER" 2>/dev/null | cut -d: -f6; }
 # calls initgroups, so a group added moments ago (docker) is live.
 as_svc() {
   runuser -u "$SVC_USER" -- env HOME="$SVC_HOME" PATH="$SVC_PATH" LANG=C.UTF-8 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 HF_HUB_DISABLE_TELEMETRY=1 "$@"
+    PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 PIP_PROGRESS_BAR=off HF_HUB_DISABLE_TELEMETRY=1 "$@"
 }
 
 # The checkout's python, as the service user, from the checkout (python -m
@@ -1214,7 +1214,10 @@ lock_python() {
 }
 system_python() { python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null; }
 
-pip_svc() { svc_py -m pip --disable-pip-version-check --no-input --progress-bar off "$@"; }
+# --progress-bar is an install option, not a global one: it goes in the
+# environment (PIP_PROGRESS_BAR, set by as_svc) so it can't land in front
+# of the subcommand, where pip refuses it.
+pip_svc() { svc_py -m pip --disable-pip-version-check --no-input "$@"; }
 
 inputs_venv() {
   file_sig "$CHECKOUT/$LOCK_NAME"
