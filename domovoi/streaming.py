@@ -598,6 +598,13 @@ CORE_FEATURES: tuple[str, ...] = (
     # log lines pushed to the retained per-room log (domovoi/satellite_health.py).
     "health", "log_push",
 )
+# Listed in `ready` only for a session whose hello proved its room with the
+# pairing token (`token_authenticated`): these two write to the database and
+# to disk for the room. A tokenless session (strict pairing off, or the
+# lenient fallback) is never told about them, so a current satellite there
+# neither sends them nor lets go of its `prev_health` record; and the
+# handlers drop them from such a session regardless.
+AUTHENTICATED_FEATURES: frozenset[str] = frozenset({"health", "log_push"})
 
 # When a room can take an out-of-turn announcement (a timer or reminder
 # going off elsewhere, domovoi/timer_delivery.py): StreamSession.
@@ -1573,7 +1580,7 @@ class StreamSession:
             "room_id": self.room_id,
             "bot_name": settings.bot_name,
             "audio_sample_rate_in": PCM_INPUT_SAMPLE_RATE,
-            "features": list(CORE_FEATURES),
+            "features": self._ready_features(),
         })
         self._connected_at = time.monotonic()
         # A timer or reminder that went off while this room was away (or
@@ -2778,7 +2785,7 @@ class StreamSession:
             # 2026-10-09 on until a ready acknowledges it. Absent on older
             # clients. Best-effort and never a refusal.
             prev_health = ctrl.get("prev_health")
-            if prev_health is not None:
+            if prev_health is not None and self.token_authenticated:
                 try:
                     await self._accept_outage_report(prev_health)
                 except Exception as e:  # noqa: BLE001
@@ -3068,6 +3075,29 @@ class StreamSession:
 
     _health_samples: int = 0
     _v022_warned: bool = False
+    # When this session last wrote a health row (monotonic): a satellite
+    # sends one a minute; anything faster is kept in memory, not persisted.
+    _health_persisted_at: float | None = None
+    _unauth_health_said: bool = False
+
+    def _ready_features(self) -> list[str]:
+        """What `ready` lists for THIS session: everything, or everything
+        but :data:`AUTHENTICATED_FEATURES` for a tokenless one."""
+        if self.token_authenticated:
+            return list(CORE_FEATURES)
+        return [f for f in CORE_FEATURES if f not in AUTHENTICATED_FEATURES]
+
+    def _health_frame_allowed(self, kind: str) -> bool:
+        """`health` / `log_push` only from the room's own authenticated
+        session. A tokenless session was never told about them; one that
+        sends them anyway is ignored (said once, at debug)."""
+        if self.token_authenticated:
+            return True
+        if not self._unauth_health_said:
+            self._unauth_health_said = True
+            log.debug("ignoring %s from %s: the session is not token-authenticated",
+                      kind, self.room_id)
+        return False
 
     def _v022_hint(self, exc: Exception) -> None:
         text_ = str(exc).lower()
@@ -3083,6 +3113,8 @@ class StreamSession:
             log.debug("satellite health persistence for %s failed: %s", self.room_id, exc)
 
     async def _on_health(self, ctrl: dict[str, Any]) -> None:
+        if not self._health_frame_allowed("health"):
+            return
         sample = satellite_health.validate_sample(ctrl)
         if sample is None:
             log.debug("ignoring malformed health frame from %s", self.room_id)
@@ -3094,12 +3126,23 @@ class StreamSession:
         self._health_samples += 1
         if self._health_samples % satellite_health.LOG_EVERY_SAMPLES == 1:
             log.info("%s", satellite_health.format_health_line(self.room_id, sample))
+        # One row per HEALTH_MIN_PERSIST_SEC per session at most: a device
+        # that floods the frame costs memory updates, not database writes.
+        mono = time.monotonic()
+        last = self._health_persisted_at
+        if last is not None and mono - last < satellite_health.HEALTH_MIN_PERSIST_SEC:
+            return
+        self._health_persisted_at = mono
         try:
             async with session_scope() as s:
                 repo = SatelliteHealthRepository(s)
                 await repo.insert(self.room_id, sample)
-                if self._health_samples % satellite_health.PRUNE_EVERY_SAMPLES == 0:
-                    await repo.prune(self.room_id, satellite_health.HEALTH_KEEP_HOURS)
+                # Pruned on a session's first sample and every PRUNE_EVERY
+                # after, across ALL rooms: a satellite that reconnects more
+                # often than hourly (or a room that is gone) used to never
+                # reach its 60th sample, so its rows were never pruned.
+                if self._health_samples % satellite_health.PRUNE_EVERY_SAMPLES == 1:
+                    await repo.prune(None, satellite_health.HEALTH_KEEP_HOURS)
         except Exception as e:  # noqa: BLE001
             self._v022_hint(e)
 
@@ -3110,12 +3153,20 @@ class StreamSession:
             return
         prev_boot = report.get("prev_boot_id")
         prev_boot = prev_boot if isinstance(prev_boot, str) else None
+        outages = satellite_health.state_dict(self.ws.app.state, "satellite_last_outage")
+        # The satellite carries the same record in every hello until a
+        # `ready` listing `health` reaches it; a session that dropped
+        # between the two (a flapping link) must not store it twice.
+        held = outages.get(self.room_id)
+        if isinstance(held, dict) and satellite_health.same_outage(held.get("report"), report):
+            log.debug("prev_health from %s already recorded", self.room_id)
+            return
         entry = {
             "reported_at": datetime.now(timezone.utc).isoformat(),
             "prev_boot_id": prev_boot,
             "report": report,
         }
-        satellite_health.state_dict(self.ws.app.state, "satellite_last_outage")[self.room_id] = entry
+        outages[self.room_id] = entry
         summary = satellite_health.outage_summary(report)
         if satellite_health.is_quiet_exit(report.get("last_exit_reason")):
             log.info("satellite %s reports its previous life ended on request: %s",
@@ -3133,6 +3184,8 @@ class StreamSession:
             self._v022_hint(e)
 
     async def _on_log_push(self, ctrl: dict[str, Any]) -> None:
+        if not self._health_frame_allowed("log_push"):
+            return
         lines = ctrl.get("lines")
         if not isinstance(lines, str):
             return

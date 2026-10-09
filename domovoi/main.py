@@ -1414,11 +1414,17 @@ async def admin_snapshot() -> dict[str, Any]:
         "active_rooms": list(app.state.active_sessions.keys()),
         "resumable_music": dict(app.state.resumable_music),
         "wifi_status": dict(app.state.wifi_status),
-        # Latest health sample and last outage report per room (kept across
-        # disconnects; the `satellites.health` realtime channel is the
-        # former). Numbers only — see domovoi/satellite_health.py.
-        "satellite_health": dict(getattr(app.state, "satellite_health", {}) or {}),
-        "satellite_last_outage": dict(getattr(app.state, "satellite_last_outage", {}) or {}),
+        # A DIGEST of the health state per room — when the latest sample
+        # and the last outage report arrived, never their content. This
+        # route is Open; the samples (SSID, gateway, uptime, whether a turn
+        # is open) and the outage reports are device-read and are served by
+        # GET /v1/admin/satellite/{room}/health. The `satellites.health`
+        # realtime channel diffs this digest, so it still fires once a
+        # minute per satellite and the page refetches the room's /health.
+        "satellite_health": satellite_health.snapshot_digest(
+            getattr(app.state, "satellite_health", {}) or {},
+            getattr(app.state, "satellite_last_outage", {}) or {},
+        ),
         # Generic per-room now-playing stamps (design §4.7): source slug +
         # opaque data, mirrored for the dashboard's attribution pill.
         # Deliberately never carries elapsed_sec (dossier §7 inv. 8).

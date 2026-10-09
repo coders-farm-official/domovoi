@@ -125,7 +125,9 @@ def test_retained_log_tail_is_whole_lines_and_room_names_are_file_safe(tmp_path)
     rl = sh.RetainedLog(tmp_path)
     for i in range(20):
         rl.append("../../etc/passwd room", f"line {i:02d}", offline=False, now=1_700_000_000)
-    assert sorted(p.name for p in tmp_path.iterdir()) == [".._.._etc_passwd_room.log"]
+    [only] = list(tmp_path.iterdir())
+    assert only.name.startswith("______etc_passwd_room-") and only.name.endswith(".log")
+    assert only.parent == tmp_path
     tail = rl.tail("../../etc/passwd room", 80)
     assert tail.startswith("2023-") and tail.endswith("line 19\n")
     assert len(tail.encode()) <= 80
@@ -180,10 +182,17 @@ def no_db(monkeypatch):
     StreamSession._v022_warned = False
 
 
+def paired(ws, room="den") -> StreamSession:
+    """A session whose hello proved its room with the pairing token."""
+    session = StreamSession(ws, room)
+    session.token_authenticated = True
+    return session
+
+
 @pytest.mark.asyncio
 async def test_a_health_frame_is_kept_per_room_and_logged_every_tenth(no_db, caplog):
     ws = FakeWS()
-    session = StreamSession(ws, "den")
+    session = paired(ws)
     caplog.set_level(logging.INFO)
     for i in range(12):
         await session._on_control({"type": "health", "seq": i, "rss_kb": 1000 + i, "mic_fps": 33.0})
@@ -199,7 +208,7 @@ async def test_a_health_frame_is_kept_per_room_and_logged_every_tenth(no_db, cap
 @pytest.mark.asyncio
 async def test_a_malformed_health_frame_is_dropped_quietly(no_db):
     ws = FakeWS()
-    session = StreamSession(ws, "den")
+    session = paired(ws)
     await session._on_control({"type": "health", "ws": "x" * 9000})
     await session._on_control({"type": "health"})
     assert "den" not in getattr(ws.app.state, "satellite_health", {})
@@ -217,7 +226,7 @@ def test_health_is_not_dropped_when_the_room_disconnects():
 @pytest.mark.asyncio
 async def test_prev_health_becomes_the_rooms_last_outage(no_db, caplog):
     ws = FakeWS()
-    session = StreamSession(ws, "den")
+    session = paired(ws)
     caplog.set_level(logging.INFO)
     await session._accept_outage_report({
         "prev_boot_id": "boot-1", "last_exit_reason": "RSS 310 MB is above the limit",
@@ -242,7 +251,7 @@ async def test_log_push_lands_in_the_retained_log(no_db, tmp_path):
         log_push_limiter=sh.LogPushLimiter(capacity=200, refill_per_sec=0),
     )
     ws = FakeWS(state)
-    session = StreamSession(ws, "den")
+    session = paired(ws)
     await session._on_control({"type": "log_push", "lines": "spooled one\nspooled two\n", "offline": True})
     await session._on_control({"type": "log_push", "lines": "live line", "offline": False, "dropped": 3})
     text = (tmp_path / "den.log").read_text()
@@ -402,3 +411,196 @@ async def test_outages_keep_the_last_n_per_room():
         assert latest["prev_boot_id"] == "boot-6"
         assert await repo.latest("never-reported") is None
         await s.execute(text("DELETE FROM satellite_outages WHERE room_id = :r"), {"r": room})
+
+
+# ─── review 2026-10-09: containment, authentication, bounds ───────────────
+
+
+@pytest.mark.parametrize("room", [
+    "..", ".", "...", "../x", "a/b", "a\\b", "x\x00y", "NUL", "con.log", "Com1", "C:evil",
+    "/etc/passwd", "a" * 300, "",
+])
+def test_a_room_id_always_maps_to_one_file_inside_the_directory(tmp_path, room):
+    rl = sh.RetainedLog(tmp_path / "logs")
+    path = rl.path(room)
+    assert path.parent == tmp_path / "logs"
+    assert path.name.endswith(".log") and "/" not in path.name and "\\" not in path.name
+    assert "\x00" not in path.name and ":" not in path.name
+    assert path.name not in (".log", "..log") and not path.name.startswith(".")
+    assert len(path.name) <= 130
+    stem = path.name[:-4].split(".")[0].lower()
+    assert stem not in ("con", "nul", "com1", "prn", "aux")
+    if room:
+        rl.append(room, "a line", offline=False)
+        assert [p.name for p in (tmp_path / "logs").iterdir()] == [path.name]
+
+
+def test_a_safe_room_id_keeps_its_own_name_and_lookalikes_never_share_a_file(tmp_path):
+    rl = sh.RetainedLog(tmp_path)
+    assert rl.path("kitchen").name == "kitchen.log"
+    assert rl.path("living_room").name == "living_room.log"
+    names = {rl.path(r).name for r in ("living_room", "living room", "living/room", "living\x00room")}
+    assert len(names) == 4, "a lookalike room never writes into another room's log"
+
+
+def test_an_outage_report_is_held_to_16kb_whichever_key_is_large():
+    raw = {
+        "last_exit_reason": "RSS 310 MB",
+        "prev_boot_id": "b1",
+        "written_at": 1_700_000_000.0,
+        "actions": [{f"k{j}": "x" * 500 for j in range(64)} for _ in range(60)],
+        "junk": {f"k{j}": ["y" * 500] * 60 for j in range(64)},
+        "offline_diag": [{"failure": "tcp_timeout", "gateway_ok": False}] * 5,
+    }
+    doc = sh.validate_outage(raw)
+    assert len(json.dumps(doc)) <= sh.OUTAGE_MAX_BYTES
+    assert doc["truncated"] is True and doc["last_exit_reason"] == "RSS 310 MB"
+    assert doc["offline_diag"][-1]["failure"] == "tcp_timeout"
+    assert "junk" not in doc
+    for bad in (None, "x" * 100_000, 42, [1, 2], {"a": float("inf")}):
+        out = sh.validate_outage(bad)
+        assert out is None or len(json.dumps(out)) <= sh.OUTAGE_MAX_BYTES
+
+
+def test_ready_lists_health_and_log_push_only_to_an_authenticated_session():
+    ws = FakeWS()
+    tokenless = StreamSession(ws, "den")
+    assert "health" not in tokenless._ready_features()
+    assert "log_push" not in tokenless._ready_features()
+    assert "music_failed" in tokenless._ready_features()
+    assert paired(ws)._ready_features() == list(CORE_FEATURES)
+    src = inspect.getsource(StreamSession.run)
+    assert '"features": self._ready_features()' in src
+
+
+@pytest.mark.asyncio
+async def test_a_tokenless_session_writes_nothing(no_db, tmp_path):
+    state = SimpleNamespace(
+        active_sessions={}, satellite_retained_log=sh.RetainedLog(tmp_path),
+        log_push_limiter=sh.LogPushLimiter(),
+    )
+    ws = FakeWS(state)
+    session = StreamSession(ws, "den")          # strict pairing off, no token
+    await session._on_control({"type": "health", "seq": 1, "rss_kb": 1000})
+    await session._on_control({"type": "log_push", "lines": "forged line", "offline": True})
+    assert "den" not in getattr(state, "satellite_health", {})
+    assert list(tmp_path.iterdir()) == []
+    assert ws.sent_text == [], "ignored, never answered with error"
+    src = inspect.getsource(StreamSession._on_control)
+    hello = src[src.index('if t == "hello"'):src.index('if t == "ping"')]
+    assert "prev_health is not None and self.token_authenticated" in hello
+
+
+@pytest.mark.asyncio
+async def test_the_same_prev_health_carried_twice_is_stored_once(monkeypatch, caplog):
+    inserted: list[str] = []
+
+    class Repo:
+        def __init__(self, s):
+            pass
+
+        async def insert(self, room, boot, report, keep=20):
+            inserted.append(report.get("last_exit_reason"))
+
+    @asynccontextmanager
+    async def scope():
+        yield None
+
+    monkeypatch.setattr(streaming, "session_scope", scope)
+    monkeypatch.setattr(streaming, "SatelliteOutageRepository", Repo)
+    ws = FakeWS()
+    report = {"prev_boot_id": "b1", "written_at": 1_700_000_000.0, "last_exit_reason": "RSS 310 MB"}
+    await paired(ws)._accept_outage_report(dict(report))
+    await paired(ws)._accept_outage_report(dict(report))       # the next hello, same record
+    assert inserted == ["RSS 310 MB"]
+    await paired(ws)._accept_outage_report(dict(report, written_at=1_700_000_900.0))
+    assert len(inserted) == 2, "a new record from a later life is stored"
+
+
+@pytest.mark.asyncio
+async def test_health_rows_are_rate_limited_and_pruned_across_rooms(monkeypatch):
+    calls: list[tuple] = []
+
+    class Repo:
+        def __init__(self, s):
+            pass
+
+        async def insert(self, room, sample):
+            calls.append(("insert", room))
+
+        async def prune(self, room, hours):
+            calls.append(("prune", room, hours))
+
+    @asynccontextmanager
+    async def scope():
+        yield None
+
+    monkeypatch.setattr(streaming, "session_scope", scope)
+    monkeypatch.setattr(streaming, "SatelliteHealthRepository", Repo)
+    clock = [1000.0]
+    monkeypatch.setattr(streaming.time, "monotonic", lambda: clock[0])
+    ws = FakeWS()
+    session = paired(ws)
+    await session._on_control({"type": "health", "seq": 1, "rss_kb": 1})
+    assert calls == [("insert", "den"), ("prune", None, sh.HEALTH_KEEP_HOURS)], (
+        "the first sample of a session prunes every room"
+    )
+    for i in range(50):                         # a flood within the same second
+        await session._on_control({"type": "health", "seq": 2 + i, "rss_kb": 1})
+    assert calls.count(("insert", "den")) == 1
+    assert ws.app.state.satellite_health["den"]["sample"]["seq"] == 51, "memory still current"
+    clock[0] += sh.HEALTH_MIN_PERSIST_SEC
+    await session._on_control({"type": "health", "seq": 99, "rss_kb": 1})
+    assert calls.count(("insert", "den")) == 2
+
+
+def test_the_open_snapshot_carries_a_digest_never_the_samples():
+    digest = sh.snapshot_digest(
+        {"den": {"received_at": "2026-10-09T10:00:00+00:00",
+                 "sample": {"seq": 7, "wifi": {"ssid": "Home"}, "idle": False, "gateway": "10.0.0.1"}}},
+        {"den": {"reported_at": "2026-10-09T09:00:00+00:00", "report": {"offline_diag": [1]}},
+         "attic": {"reported_at": "x", "report": {}}},
+    )
+    assert digest == {
+        "den": {"received_at": "2026-10-09T10:00:00+00:00", "seq": 7,
+                "outage_reported_at": "2026-10-09T09:00:00+00:00"},
+        "attic": {"outage_reported_at": "x"},
+    }
+    from domovoi import main as core_main
+
+    src = inspect.getsource(core_main.admin_snapshot)
+    assert "satellite_health.snapshot_digest(" in src
+    assert '"satellite_last_outage":' not in src, "the reports are not on the Open snapshot"
+
+
+
+@pytest.mark.asyncio
+async def test_the_web_hop_needs_a_household_credential_and_forwards_it(monkeypatch):
+    """Both hops are device-read: the dashboard's cookie session reads the
+    card, a LAN caller with nothing is refused at the web hop before the
+    core is asked, and the caller's credential rides to the core."""
+    from httpx import ASGITransport, AsyncClient
+
+    from domovoi.tests.auth_testkit import install_fake_db
+    from web.backend.api import satellites as sat_api
+    from web.backend.main import app as web_app
+
+    install_fake_db(monkeypatch, admin=True, sessions={"dash-session"}, device_token="house-token")
+    seen: list[tuple[str, dict]] = []
+
+    async def _get_admin(path, timeout=10.0, headers=None):
+        seen.append((path, dict(headers or {})))
+        return 200, {"room_id": "den", "latest": None}
+
+    monkeypatch.setattr(sat_api, "get_admin", _get_admin)
+    async with AsyncClient(transport=ASGITransport(app=web_app), base_url="http://test") as c:
+        r = await c.get("/api/satellites/den/health")
+        assert r.status_code == 401, r.text
+        assert seen == [], "refused before the core is asked"
+        r = await c.get("/api/satellites/den/health", cookies={"domovoi_admin": "dash-session"})
+        assert r.status_code == 200, r.text
+        r = await c.get("/api/satellites/den/health", headers={"X-Device-Token": "house-token"})
+        assert r.status_code == 200, r.text
+    assert [p for p, _ in seen] == ["/v1/admin/satellite/den/health"] * 2
+    assert "domovoi_admin=dash-session" in seen[0][1].get("Cookie", "")
+    assert seen[1][1].get("X-Device-Token") == "house-token"

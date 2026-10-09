@@ -2407,8 +2407,19 @@ class SatelliteHealthRepository:
             {"r": room_id, "s": json.dumps(sample, default=str)},
         )
 
-    async def prune(self, room_id: str, keep_hours: int = 24) -> int:
-        """Drop this room's samples older than ``keep_hours``."""
+    async def prune(self, room_id: str | None, keep_hours: int = 24) -> int:
+        """Drop samples older than ``keep_hours``: one room's, or every
+        room's when ``room_id`` is None (the stream handler's call, so a
+        room that stopped connecting is pruned too)."""
+        if room_id is None:
+            result = await self.s.execute(
+                text(
+                    "DELETE FROM satellite_health "
+                    "WHERE received_at < now() - make_interval(hours => CAST(:h AS int))"
+                ),
+                {"h": int(keep_hours)},
+            )
+            return int(result.rowcount or 0)
         result = await self.s.execute(
             text(
                 "DELETE FROM satellite_health WHERE room_id = :r "

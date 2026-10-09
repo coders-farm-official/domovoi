@@ -96,9 +96,12 @@ def _speak_then_pause(ws, *, utt: int = 1, trigger: str = "wake_word", voiced: i
 def test_ready_lists_end_capture(commit_on) -> None:
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         ready = _hello(ws)
-    assert ready["features"] == list(CORE_FEATURES) == [
+    assert list(CORE_FEATURES) == [
         "speech_pause", "end_capture", "music_failed", "health", "log_push",
     ]
+    # This hello carries no pairing token: the two features that write for
+    # the room (health, log_push) are listed only to an authenticated one.
+    assert ready["features"] == ["speech_pause", "end_capture", "music_failed"]
 
 
 def test_a_closed_command_ends_the_capture_after_the_short_hold(commit_on, caplog) -> None:

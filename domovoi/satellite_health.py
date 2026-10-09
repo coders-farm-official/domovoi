@@ -28,6 +28,7 @@ a missing table or an unwritable directory costs a warning, not a session.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -56,8 +57,12 @@ LOG_PUSH_REFILL_BYTES_PER_SEC = 64 * 1024 / 60.0
 OUTAGES_KEPT_PER_ROOM = 20
 #: Health samples kept per room (hours).
 HEALTH_KEEP_HOURS = 24
-#: Every this many samples per room, the room's old rows are pruned.
+#: On a session's first sample and every this many after, rows older than
+#: HEALTH_KEEP_HOURS are pruned (all rooms).
 PRUNE_EVERY_SAMPLES = 60
+#: A session writes at most one health row per this many seconds; faster
+#: frames only refresh the in-memory latest sample.
+HEALTH_MIN_PERSIST_SEC = 20.0
 #: Every this many samples per room, one INFO line goes to the journal.
 LOG_EVERY_SAMPLES = 10
 
@@ -132,7 +137,7 @@ SAMPLE_FIELDS: dict[str, Any] = {
     "soc_temp_c": _num, "throttled": _int, "throttled_flags": _flags,
     "uptime_s": _num, "proc_uptime_s": _num, "boot_id": lambda v: _str(v, 64),
     "nm_state": _nm, "gateway": lambda v: _str(v, 64),
-    "gateway_ok": _bool, "core_ok": _bool,
+    "gateway_ok": _bool, "core_ok": _bool, "core_host_ok": _bool, "default_route": _bool,
     "mic_expected": _bool, "mic_fps": _num, "mic_q": _int, "playback_q": _int,
     "send_q": _int, "wake_loop_age_s": _num, "idle": _bool,
     "ws": lambda v: _str(v, 8), "ws_down_for_s": _num, "reconnects": _int,
@@ -180,26 +185,69 @@ def _bound_json(value: Any, depth: int = 0) -> Any:
     return str(value)[:200]
 
 
+#: What a slimmed outage report keeps first: the fields that say why.
+_OUTAGE_SCALARS = ("last_exit_reason", "prev_boot_id", "boot_id", "written_at")
+
+
 def validate_outage(report: Any) -> dict[str, Any] | None:
-    """`prev_health` from a hello -> the report to keep, bounded to
-    :data:`OUTAGE_MAX_BYTES`, or None."""
+    """`prev_health` from a hello -> the report to keep, never more than
+    :data:`OUTAGE_MAX_BYTES` of JSON whatever key the sender made large,
+    or None when it is not an object."""
     if not isinstance(report, dict):
         return None
     doc = _bound_json(report)
     assert isinstance(doc, dict)
 
-    def size() -> int:
-        return len(json.dumps(doc, default=str))
+    def size(d: dict[str, Any]) -> int:
+        return len(json.dumps(d, default=str))
 
-    if size() > OUTAGE_MAX_BYTES:
-        # Keep what explains the outage: drop the sample, then the oldest
-        # diagnosis entries, until it fits with the marker in place.
-        doc["truncated"] = True
-        doc.pop("sample", None)
-        diag = doc.get("offline_diag")
-        while isinstance(diag, list) and diag and size() > OUTAGE_MAX_BYTES:
-            diag.pop(0)
-    return doc
+    if size(doc) <= OUTAGE_MAX_BYTES:
+        return doc
+    # Keep what explains the outage: drop the sample, then the oldest
+    # diagnosis entries, until it fits with the marker in place — when the
+    # rest of the report fits at all.
+    trimmed = {k: v for k, v in doc.items() if k not in ("sample", "offline_diag")}
+    trimmed["truncated"] = True
+    diag = doc.get("offline_diag")
+    if size(dict(trimmed, offline_diag=[])) <= OUTAGE_MAX_BYTES:
+        kept_diag = list(diag) if isinstance(diag, list) else []
+        trimmed["offline_diag"] = kept_diag
+        while kept_diag and size(trimmed) > OUTAGE_MAX_BYTES:
+            kept_diag.pop(0)
+        if not isinstance(diag, list):
+            trimmed.pop("offline_diag")
+        return trimmed
+    # Something else is large (any key, up to 64 x 60 x 500 characters
+    # after _bound_json): rebuild from the fields that say why, then the
+    # newest actions and diagnosis entries while they fit.
+    slim: dict[str, Any] = {"truncated": True}
+    for key in _OUTAGE_SCALARS:
+        value = doc.get(key)
+        if value is None or isinstance(value, (str, int, float, bool)):
+            slim[key] = value
+    for key in ("actions", "offline_diag"):
+        items = doc.get(key)
+        if not isinstance(items, list):
+            continue
+        kept: list[Any] = []
+        for item in reversed(items[-20:]):
+            slim[key] = [item] + kept
+            if size(slim) > OUTAGE_MAX_BYTES:
+                break
+            kept.insert(0, item)
+        slim[key] = kept
+    return slim
+
+
+def same_outage(a: Any, b: Any) -> bool:
+    """Whether two outage reports are the same record (the satellite sends
+    it again on every hello until a `ready` listing `health` acknowledges
+    it). Keyed on when it was written and which boot wrote it."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    if a.get("written_at") is None and b.get("written_at") is None:
+        return a == b
+    return all(a.get(k) == b.get(k) for k in ("written_at", "prev_boot_id", "last_exit_reason"))
 
 
 # ─── what the journal says ────────────────────────────────────────────────
@@ -256,10 +304,36 @@ def is_quiet_exit(reason: Any) -> bool:
 # ─── the retained log ─────────────────────────────────────────────────────
 
 _ROOM_SAFE = re.compile(r"[^A-Za-z0-9_.-]")
+# DOS device names: on a Windows core `NUL.log` is the null device.
+_WINDOWS_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(10)} | {f"lpt{i}" for i in range(10)}
+)
 
 
 def room_file_stem(room_id: str) -> str:
-    return _ROOM_SAFE.sub("_", room_id)[:120] or "_"
+    """A file name for the room's retained log, inside the logs directory
+    whatever the room id holds (`..`, `/`, `\\`, NUL, a drive letter).
+
+    A room id that is already safe keeps its own name (`kitchen.log`).
+    Anything else — a replaced character, a cut, a dot-only name, a
+    Windows device name — gets a hash of the full id appended, so two
+    different rooms can never share a file: `living room` and
+    `living_room` are different rooms and must not read each other's
+    lines."""
+    safe = _ROOM_SAFE.sub("_", room_id)[:100]
+    altered = (
+        safe != room_id
+        or not safe
+        or set(safe) <= {"."}
+        or safe.split(".")[0].lower() in _WINDOWS_RESERVED
+    )
+    if not altered:
+        return safe
+    digest = hashlib.sha256(room_id.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+    # Dots go too: Windows reads `con.anything` as the device, and a name
+    # made of dots and underscores is no better a name for being kept.
+    return f"{safe.replace('.', '_') or '_'}-{digest}"
 
 
 class RetainedLog:
@@ -391,6 +465,24 @@ def default_retained_log() -> RetainedLog:
     from domovoi.config import settings
 
     return RetainedLog(Path(settings.satellite_logs_dir))
+
+
+def snapshot_digest(
+    latest: dict[str, Any], outages: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Per room, WHEN the latest sample and the last outage report arrived
+    (and the sample's sequence number) — what the Open admin snapshot and
+    the `satellites.health` channel carry instead of the data itself."""
+    out: dict[str, dict[str, Any]] = {}
+    for room, entry in latest.items():
+        if isinstance(entry, dict):
+            sample = entry.get("sample")
+            out.setdefault(str(room), {})["received_at"] = entry.get("received_at")
+            out[str(room)]["seq"] = sample.get("seq") if isinstance(sample, dict) else None
+    for room, entry in outages.items():
+        if isinstance(entry, dict):
+            out.setdefault(str(room), {})["outage_reported_at"] = entry.get("reported_at")
+    return out
 
 
 # ─── history ──────────────────────────────────────────────────────────────

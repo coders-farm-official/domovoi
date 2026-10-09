@@ -240,7 +240,9 @@ def _end(utt: int | None = None, *, frames: int | None = None, last: int | None 
 def test_ready_lists_what_this_core_understands(pipeline) -> None:
     with TestClient(app) as client, client.websocket_connect("/v1/stream/kitchen") as ws:
         ready = _connect(ws, hints=False)
-    assert ready["features"] == list(CORE_FEATURES)
+    # A tokenless hello: everything but the features that write for the
+    # room (health, log_push), which need a token-authenticated session.
+    assert ready["features"] == [f for f in CORE_FEATURES if f not in ("health", "log_push")]
     assert "speech_pause" in ready["features"]
 
 
