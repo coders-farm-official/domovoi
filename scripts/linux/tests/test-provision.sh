@@ -741,7 +741,7 @@ case_dry_run_changes_nothing() {
   check "no mount" not_called "mount "
   check "plans wsl.conf" said "default=domovoi"
   check "plans interop off" said "enabled=false"
-  check "plans the fstab line" said 'C:/Users/Public/Domovoi/My\040Music /srv/media/music drvfs metadata,uid=1000,gid=1000,noatime,nofail 0 0'
+  check "plans the fstab line" said 'C:/Users/Public/Domovoi/My\040Music /srv/media/music drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
   check "plans MUSIC_DIR (manifest beside the script)" said "MUSIC_DIR=/srv/media/music"
   check "plans the standard tier from 64 GB" said "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
@@ -783,8 +783,8 @@ case_full_run_wsl() {
   # media
   check "fstab keeps its own lines" has_line "$ROOT/etc/fstab" "# UNCONFIGURED FSTAB FOR BASE SYSTEM"
   check "fstab: music, spaces escaped, forward slashes" has_line "$ROOT/etc/fstab" \
-    'C:/Users/Public/Domovoi/My\040Music /srv/media/music drvfs metadata,uid=1000,gid=1000,noatime,nofail 0 0'
-  check "fstab: videos" has_line "$ROOT/etc/fstab" 'D:/Videos /srv/media/videos drvfs metadata,uid=1000,gid=1000,noatime,nofail 0 0'
+    'C:/Users/Public/Domovoi/My\040Music /srv/media/music drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
+  check "fstab: videos" has_line "$ROOT/etc/fstab" 'D:/Videos /srv/media/videos drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
   check "one block" eq "$(grep -c '^# BEGIN Domovoi media folders' "$ROOT/etc/fstab")" 1
   check "mount points made" test -d "$ROOT/srv/media/music"
   check "mounted now" called "mount /srv/media/music"
@@ -1050,10 +1050,18 @@ case_media_list_change_rewrites_the_block() {
   check "exit 0" eq "$RC" 0
   check "media re-ran" eq "$(state_of media)" done
   check "music line gone" eq "$(grep -c '/srv/media/music' "$ROOT/etc/fstab")" 0
-  check "pictures line kept" has_line "$ROOT/etc/fstab" 'C:/P /srv/media/pictures drvfs metadata,uid=1000,gid=1000,noatime,nofail 0 0'
+  check "pictures line kept" has_line "$ROOT/etc/fstab" 'C:/P /srv/media/pictures drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
   check "music unmounted" called "umount /srv/media/music"
   check "still one block" eq "$(grep -c '^# END Domovoi media folders' "$ROOT/etc/fstab")" 1
   check "PICTURES_DIR" has_line "$CHECKOUT/domovoi/.env" "PICTURES_DIR=/srv/media/pictures"
+  check "an unchanged folder is not remounted" not_called "umount /srv/media/pictures"
+  # The same name, another Windows folder: mounted again from the new one.
+  run_prov "${wsl_args[@]}" --media 'pictures=D:\Photos'
+  check "exit 0" eq "$RC" 0
+  check "the new source in fstab" has_line "$ROOT/etc/fstab" 'D:/Photos /srv/media/pictures drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
+  check "unmounted the old source" called "umount /srv/media/pictures"
+  check "mounted the new one" called "mount /srv/media/pictures"
+  check "said so" said "remounting /srv/media/pictures"
   end_case
 }
 

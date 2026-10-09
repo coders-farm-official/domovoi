@@ -976,20 +976,29 @@ do_wsl_config() {
 FSTAB_BEGIN="# BEGIN Domovoi media folders (scripts/linux/provision.sh rewrites this block)"
 FSTAB_END="# END Domovoi media folders"
 
-# The block's lines. drvfs options: metadata keeps Linux owners and modes
-# on files the server writes, uid/gid make the household's files the
-# service user's, nofail lets the distro start when a folder (a USB drive)
-# is missing; then the empty mount point is root's and the services can't
-# write into it by mistake.
+# The block's lines. drvfs options (https://learn.microsoft.com/windows/wsl/wsl-config,
+# "Automount options"): metadata keeps Linux owners and modes on files the
+# server writes; uid/gid make the household's files the service user's;
+# umask=022 and fmask=133 show files Windows wrote (they carry no Linux
+# metadata) as 0644 and folders as 0755 rather than 0777, so no other
+# account in the distro can change them; nofail lets the distro start when
+# a folder (a USB drive) is missing, and then the empty mount point is
+# root's, so the services can't write into it by mistake.
 fstab_lines() {
   local name uid gid
   [ "${#MEDIA_NAMES[@]}" -gt 0 ] || return 0
   uid=$(id -u "$SVC_USER" 2>/dev/null || echo 1000)
   gid=$(id -g "$SVC_USER" 2>/dev/null || echo 1000)
   for name in "${MEDIA_NAMES[@]}"; do
-    printf '%s %s drvfs metadata,uid=%s,gid=%s,noatime,nofail 0 0\n' \
+    printf '%s %s drvfs metadata,uid=%s,gid=%s,umask=022,fmask=133,noatime,nofail 0 0\n' \
       "$(fstab_source "${MEDIA_SRC[$name]}")" "$MEDIA_BASE/$name" "$uid" "$gid"
   done
+}
+
+# The block's current line for mount point $1, or nothing.
+fstab_block_line() {
+  [ -f "$FSTAB" ] || return 0
+  awk -v b="$FSTAB_BEGIN" -v e="$FSTAB_END" -v mp="$1" '$0==b{in_b=1; next} $0==e{in_b=0; next} in_b && $2==mp {print; exit}' "$FSTAB"
 }
 
 # /etc/fstab with this script's block replaced by CONTENT on stdin (no
@@ -1056,13 +1065,25 @@ do_media() {
     return 0
   fi
   old=$(fstab_block_targets)
+  declare -A old_line=()
   for name in "${MEDIA_NAMES[@]}"; do
+    old_line[$name]=$(fstab_block_line "$MEDIA_BASE/$name")
     # Never chown/chmod a mounted Windows folder: only the empty mount point.
     mountpoint -q "$MEDIA_BASE/$name" || install -d -m 0755 -o root -g root "$ROOT$MEDIA_BASE/$name"
   done
   if fstab_lines | fstab_with_block | write_if_changed "$FSTAB" 0644; then
     log "updated the media block in /etc/fstab"
   fi
+  # A folder already mounted under another line (another source or other
+  # options): mount it again as the line now says. A busy one (a room's
+  # player has it open) keeps its old mount until the distro restarts.
+  for name in "${MEDIA_NAMES[@]}"; do
+    mp=$MEDIA_BASE/$name
+    if mountpoint -q "$mp" && [ "${old_line[$name]}" != "$(fstab_block_line "$mp")" ]; then
+      if umount "$mp"; then log "remounting $mp: its /etc/fstab line changed"
+      else warn "$mp is busy; its new /etc/fstab line applies at the distro's next start"; fi
+    fi
+  done
   # A folder dropped from the list: unmount it (its line is gone).
   for t in $old; do
     case " ${MEDIA_NAMES[*]} " in *" ${t#"$MEDIA_BASE"/} "*) continue ;; esac
