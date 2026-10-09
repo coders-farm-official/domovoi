@@ -437,6 +437,14 @@ const VoicesPanel = () => {
  * failure; the panel shows that unit's last result, and stops offering a
  * pull while the upstream is the commit it rolled back (bad_sha).
  *
+ * While the server says a restart or update is under way
+ * (restart_in_progress) that this card is not waiting on itself — pressed
+ * before a reload, in another tab, or started by hand — the card offers
+ * nothing: one greyed "Updating…" (or "Restarting…") and the underway
+ * note, and it follows that run to its end (useServerRestartFollow,
+ * components.jsx). The server refuses a second restart, and a pull,
+ * meanwhile anyway.
+ *
  * Data:
  *   GET   /api/config              · web build (web_version)
  *   GET   /api/config/version      · domovoi git SHA → { sha, restart_mode, last_update, bad_sha, … }
@@ -598,6 +606,12 @@ const VersionSection = () => {
   // press asks for the password once (data.js replays the restart). A
   // household member without the admin password never sees the restart.
   const admin = useAdminSignedIn();
+  // A restart the server says is under way and this card isn't waiting on
+  // itself (see the header): what it runs, or null.
+  const serverRuns = useServerRestartFollow({
+    core, fire, busy: !!restarting,
+    onSettled: () => { setStatus(null); return refreshCore(); },
+  });
 
   const check = async () => {
     setChecking(true); setStatus(null);
@@ -681,12 +695,13 @@ const VersionSection = () => {
   // One action at a time, in the order the operator actually needs them:
   // code already on disk beats fetching more of it, and "check" is only
   // honest when we have no reason to think anything is pending.
-  const mode = restartPending ? 'restart'
+  // 'busy' first: while a restart is under way nothing else may start.
+  const mode = serverRuns ? 'busy' : restartPending ? 'restart'
     : ((behind || 0) > 0 ? (upstreamIsBad ? 'held' : 'pull') : 'check');
   // Restart Domovoi: an admin's, whenever no restart is waiting (that one
   // is the primary action, and it restarts too). On a host that can't
   // restart itself, the command to run instead.
-  const plainRestart = admin && !!core && mode !== 'restart';
+  const plainRestart = admin && !!core && mode !== 'restart' && mode !== 'busy';
   const plainRunning = restarting === 'plain';
   // Signed updates (docs/LINUX_HOST.md): whether the checked-out commit
   // carries a signature by a key in the server's root-owned allowed-signers
@@ -758,14 +773,14 @@ const VersionSection = () => {
         </div>
       )}
       {lastUpdate && <LastUpdateWarnings lastUpdate={lastUpdate}/>}
-      {codePending && (
+      {codePending && mode !== 'busy' && (
         <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
           New code is on disk but this process is still running the old
           modules{restartCapable ? ' — restart below to load it.'
                                  : ' — restart the Domovoi server for it to take effect.'}
         </div>
       )}
-      {pending.plugins.length > 0 && (
+      {pending.plugins.length > 0 && mode !== 'busy' && (
         <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
           Plugin upgrade{pending.plugins.length === 1 ? '' : 's'} waiting for a restart:{' '}
           <span className="mono">{pending.plugins.map(pluginUpgradeLabel).join(', ')}</span>
@@ -773,6 +788,12 @@ const VersionSection = () => {
         </div>
       )}
       <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {mode === 'busy' && (
+          <Button variant="primary" icon="refresh-cw" disabled
+                  title="a restart is under way — this card shows the version it runs when it’s done">
+            {serverRuns.updating ? 'Updating…' : 'Restarting…'}
+          </Button>
+        )}
         {mode === 'restart' && restartCapable && (
           <Button variant="primary" icon="refresh-cw" onClick={() => restart(false)} disabled={!!restarting}>
             {restarting ? (updateUnit && !plainRunning ? 'Updating…' : 'Restarting…') : 'Restart to apply changes'}
@@ -790,8 +811,8 @@ const VersionSection = () => {
             {checking ? 'Checking…' : 'Check for updates'}
           </Button>
         )}
-        {internetOff && mode !== 'restart' && <NeedsInternetNote compact/>}
-        {mode !== 'restart' && behind != null && (
+        {internetOff && mode !== 'restart' && mode !== 'busy' && <NeedsInternetNote compact/>}
+        {mode !== 'restart' && mode !== 'busy' && behind != null && (
           <span style={{ fontSize: 12, color: behind > 0 ? 'var(--warn)' : 'var(--ok)' }}>
             {behind > 0
               ? `${behind} commit${behind === 1 ? '' : 's'} behind`
@@ -811,6 +832,11 @@ const VersionSection = () => {
       {underway && (
         <div style={{ padding: '0 16px 14px' }}>
           <RestartUnderwayNote updating={!!(runs && runs.updating)} plain={!!(runs && runs.plain)}/>
+        </div>
+      )}
+      {serverRuns && (
+        <div style={{ padding: '0 16px 14px' }}>
+          <RestartUnderwayNote updating={serverRuns.updating} plain={serverRuns.plain}/>
         </div>
       )}
       {plainRestart && !restartCapable && (

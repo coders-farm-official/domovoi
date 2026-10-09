@@ -56,6 +56,16 @@ one to a dead socket) until the scenario lets it back on a fresh start:
   changes" keeps its own confirm, and a restart whose answer is cut off is
   told and waited for as what runs.
 
+* one restart at a time (OWNER REPORT 2026-10-09: pressed "Restart to apply
+  changes", reloaded, and the card offered the restart again while the
+  update unit was still running): a card that loads while the server says
+  a restart is under way (restart_in_progress) offers nothing, one greyed
+  "Updating…" (or "Restarting…" for the unit's quick restart) and the
+  underway note, follows that run quietly through the server going away,
+  and reports how it ended; a press whose fresh read finds one under way,
+  or that the server refuses for one (in_progress), follows it instead of
+  asking for another.
+
 The scripted unit runs its plain restart or its full update by the same
 comparison (``applied`` against the checkout) and records which, so every
 flow also says what the "server" did.
@@ -152,10 +162,18 @@ window.confirm = (msg) => {
 // applied: the commit the update unit last applied (apply-update.sh's
 // applied_sha), the running one unless a scenario says otherwise. plugins:
 // upgrades staged for the next restart.
+// busy: a restart already under way that this page did not ask for (the
+// update unit started before a reload, from another tab, by hand). Version
+// reads say so (restart_in_progress) until a scenario sets busyPolls to 0;
+// then the server is away for busyDownPolls reads and back on a fresh
+// start. A restart asked for meanwhile is refused (in_progress), and so is
+// one with busyOnPost (another tab's press got there first), which makes
+// the server busy from then on.
 window.__srv = Object.assign({
   sessions: new Set(__SESSIONS), cookie: __COOKIE, n: 0, device: 'house-token',
   phase: 'up', goDown: false, restarted: false, lingerPolls: 0, downPolls: 10 ** 9,
   run: 'run-1', last: null, newRunStatus: 'ok', newRunError: null, plugins: [], clockStep: 2000,
+  busy: false, busyPolls: 10 ** 9, busyDownPolls: 0, busyOnPost: false,
 }, __SRV);
 if (window.__srv.applied === undefined) window.__srv.applied = window.__srv.running;
 // A commit as the update unit names it: HEAD's, whatever the tree holds.
@@ -177,7 +195,7 @@ const __version = () => {
               restart_required: pending || s.plugins.length > 0, code_restart_required: pending,
               plugins_pending_restart: s.plugins,
               restart_capable: s.capable, restart_mode: s.mode, restart_hint: s.hint,
-              started_at: s.started, uptime_sec: 7200,
+              started_at: s.started, uptime_sec: 7200, restart_in_progress: !!s.busy,
               last_update: s.mode === 'update' ? s.last : null, bad_sha: null };
   if (s.command !== undefined) v.restart_command = s.command;
   return v;
@@ -220,6 +238,13 @@ const __route = (method, path, c, body) => {
       return __answer(403, { detail: 'mutations require Authorization: Bearer — the dashboard cookie only renders GET state' });
     }
     if (c.who !== 'bearer') return __answer(401, __ADMIN_401);
+    if (srv.busy || srv.busyOnPost) {
+      srv.busy = true;
+      return __answer(200, { ok: false, in_progress: true, mode: srv.mode, delay_sec: null,
+                             error: 'a restart or update is already under way; wait for it to finish',
+                             units: srv.mode === 'update' ? ['domovoi-update.service']
+                               : ['domovoi-core.service', 'domovoi-web.service'] });
+    }
     srv.restarted = true;
     srv.goDown = true;
     return __answer(200, { ok: true, mode: srv.mode, delay_sec: 1, error: null,
@@ -249,6 +274,18 @@ fetch = async (url, opts) => {
   const hd = o.headers || {};
   const srv = window.__srv;
   if (method === 'GET' && bare === '/api/config/version' && window.__onVersionRead) window.__onVersionRead();
+  if (srv.busy && method === 'GET' && bare === '/api/config/version') {
+    if (srv.busyPolls > 0) {
+      srv.busyPolls -= 1;
+    } else if (srv.busyDownPolls > 0) {
+      srv.busyDownPolls -= 1;
+      window.__fetches.push({ method, path, who: 'busy', phase: 'down', started: srv.started });
+      throw new TypeError('Failed to fetch');
+    } else {
+      srv.busy = false;
+      __comeBack();
+    }
+  }
   if (srv.goDown) { srv.goDown = false; srv.phase = srv.lingerPolls > 0 ? 'linger' : 'down'; }
   const auth = String(hd.Authorization || '');
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -691,6 +728,88 @@ return { result: w.__result, toasts: toasts(), confirms: w.__confirms, restarts:
     **LOADED_BY_HAND, "cutAnswer": True, "newRunStatus": "rolled_back",
     "newRunError": f"update to {SHA} failed at health and was rolled back to {OLD}: not healthy after 120s"},
     component=DIRECT)
+
+
+# ─── one restart at a time ──────────────────────────────────────────────
+
+# The update unit's record of the run under way (apply-update.sh writes
+# "running" once it is past its pre-flight). __comeBack names the finished
+# run 'run-2' too, so the run followed is the one that ends.
+RUNNING_UPDATE = {"status": "running", "mode": "update", "started_at": "run-2", "finished_at": None,
+                  "from_sha": FULL[SHA], "to_sha": FULL[PULLED], "prev_source": "applied",
+                  "error": None}
+RUNNING_QUICK = {**RUNNING_UPDATE, "mode": "restart", "to_sha": FULL[SHA]}
+MID_UPDATE = {"mode": "update", "checkout": PULLED, "busy": True, "busyDownPolls": 2,
+              "last": RUNNING_UPDATE}
+
+# The owner's report: "Restart to apply changes" pressed, the page reloaded
+# (a view-only tab now) while the update unit runs. __SIGN_IN: '' for that
+# tab, or an admin signing in first.
+RELOADED = r"""
+__SIGN_IN
+await start();
+const out = { during: view() };
+await pumpUntil(() => versionReads().length >= 4);
+out.stillDuring = view();
+out.readsDuring = versionReads().length;
+w.__srv.busyPolls = 0;
+await pumpUntil(() => toasts().length > 0);
+await step(); await step();
+out.after = view();
+out.restarts = restarts();
+out.pulls = posts('/api/config/version/pull');
+out.downReads = versionReads().filter((f) => f.phase === 'down').length;
+return out;
+"""
+SIGN_IN = f"await A.login({json.dumps(PASSWORD)});"
+SCENARIOS["reloaded_mid_update"] = scenario(RELOADED.replace("__SIGN_IN", ""), srv=MID_UPDATE)
+SCENARIOS["reloaded_mid_update_signed_in"] = scenario(RELOADED.replace("__SIGN_IN", SIGN_IN),
+                                                      srv=MID_UPDATE)
+SCENARIOS["reloaded_mid_update_rolled_back"] = scenario(RELOADED.replace("__SIGN_IN", ""), srv={
+    **MID_UPDATE, "newRunStatus": "rolled_back",
+    "newRunError": f"update to {PULLED} failed at health and was rolled back to {SHA}: not healthy after 120s"})
+# The unit's quick restart (nothing new since the commit it applied).
+SCENARIOS["reloaded_mid_quick_restart"] = scenario(RELOADED.replace("__SIGN_IN", SIGN_IN), srv={
+    "mode": "update", "busy": True, "last": RUNNING_QUICK})
+# A server whose unit is running but hasn't written its record yet: the
+# record is the run before (ok), which the follow must not report as how
+# this one went.
+SCENARIOS["reloaded_before_the_unit_wrote_its_record"] = scenario(
+    RELOADED.replace("__SIGN_IN", ""), srv={**MID_UPDATE, "last": None})
+
+# The panel read the version before the run started (another tab pressed,
+# or it was started by hand); the fresh read at the press finds it.
+SCENARIOS["press_finds_one_under_way"] = scenario(r"""
+await A.login(__PW);
+await start();
+const out = { before: view() };
+w.__srv.busy = true; w.__srv.checkout = __PULLED; w.__srv.last = __RUNNING;
+const flow = press(plainButton); await step();
+await pumpUntil(() => !!note());
+out.away = Object.assign(view(), { restarts: restarts() });
+w.__srv.busyPolls = 0;
+out.result = await flow; await step(); await step();
+out.after = view();
+out.confirms = w.__confirms;
+out.restarts = restarts();
+return out;
+""".replace("__PW", json.dumps(PASSWORD)).replace("__PULLED", json.dumps(PULLED))
+    .replace("__RUNNING", json.dumps(RUNNING_UPDATE)), srv={"mode": "update"})
+# Both reads said nothing was under way, and the server refuses the press
+# for one anyway (another tab's press landed between).
+SCENARIOS["press_refused_for_one_under_way"] = scenario(r"""
+await A.login(__PW);
+await start();
+const out = { before: view() };
+const flow = press(plainButton); await step();
+await pumpUntil(() => !!note());
+out.away = Object.assign(view(), { restarts: restarts() });
+w.__srv.busyPolls = 0;
+out.result = await flow; await step(); await step();
+out.after = view();
+out.restarts = restarts();
+return out;
+""".replace("__PW", json.dumps(PASSWORD)), srv={"busyOnPost": True})
 
 
 @pytest.fixture(scope="module")
@@ -1204,3 +1323,73 @@ def test_a_cut_off_answer_is_waited_for_as_the_read_at_the_press_says(driven) ->
         o["toasts"]
     assert not any(t.startswith("restarted") for t in o["toasts"]), o["toasts"]
     assert "updating…" in o["toasts"] and "restarting…" not in o["toasts"], o["toasts"]
+
+
+# ─── one restart at a time ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["reloaded_mid_update", "reloaded_mid_update_signed_in"])
+def test_a_reload_mid_update_offers_nothing_that_restarts(driven, name) -> None:
+    """The owner's report: the card offered "Restart to apply changes" again
+    while the update it started was still running."""
+    o = driven[name]
+    for when in ("during", "stillDuring"):
+        assert o[when]["buttons"] == [UPDATING], o[when]["buttons"]
+        assert o[when]["note"].startswith("Updating —"), o[when]["note"]
+        assert o[when]["modal"] is False
+    assert o["restarts"] == [] and o["pulls"] == []
+
+
+@pytest.mark.parametrize("name", ["reloaded_mid_update", "reloaded_mid_update_signed_in"])
+def test_the_reloaded_card_follows_the_update_to_its_end(driven, name) -> None:
+    o = driven[name]
+    assert o["readsDuring"] >= 4, "the card polls while the update runs"
+    assert o["downReads"] == 2, "and keeps polling while the server is away"
+    assert o["after"]["toasts"] == [f"restarted — now running {PULLED}"]
+    assert o["after"]["buttons"] == ["Check for updates", RESTART]
+    assert o["after"]["note"] is None
+    assert o["after"]["modal"] is False, "no prompt for a read refused while it came back"
+
+
+def test_a_followed_update_that_rolled_back_says_so(driven) -> None:
+    o = driven["reloaded_mid_update_rolled_back"]
+    assert o["after"]["toasts"] == [
+        f"update to {PULLED} failed at health and was rolled back to {SHA}: not healthy after 120s"]
+    assert o["restarts"] == []
+
+
+def test_the_units_quick_restart_is_told_as_a_restart(driven) -> None:
+    o = driven["reloaded_mid_quick_restart"]
+    assert o["during"]["buttons"] == [RESTARTING], o["during"]["buttons"]
+    assert o["during"]["note"].startswith("Restarting —"), o["during"]["note"]
+    assert o["after"]["toasts"] == [RESTARTED]
+    assert o["after"]["buttons"] == ["Check for updates", RESTART]
+
+
+def test_a_run_before_its_record_is_still_an_update_under_way(driven) -> None:
+    o = driven["reloaded_before_the_unit_wrote_its_record"]
+    assert o["during"]["buttons"] == [UPDATING]
+    assert o["after"]["toasts"] == [f"restarted — now running {PULLED}"]
+    assert o["restarts"] == []
+
+
+def test_a_press_that_finds_one_under_way_asks_for_nothing(driven) -> None:
+    o = driven["press_finds_one_under_way"]
+    assert RESTART in o["before"]["buttons"]
+    assert len(o["confirms"]) == 1, "no second question about a full update"
+    assert o["restarts"] == [], "nothing was asked of the server"
+    assert o["away"]["note"].startswith("Updating —")
+    assert o["away"]["toasts"][0] == "an update is already under way — waiting for it to finish"
+    assert o["result"] is True
+    assert o["after"]["toasts"][-1] == f"restarted — now running {PULLED}"
+    assert o["after"]["buttons"] == ["Check for updates", RESTART]
+
+
+def test_a_press_the_server_refuses_for_one_under_way_follows_it(driven) -> None:
+    o = driven["press_refused_for_one_under_way"]
+    assert o["restarts"] == ["bearer"], "one press, refused"
+    assert o["away"]["toasts"][0] == "a restart is already under way — waiting for it to finish"
+    assert not any(t.startswith("restart failed") for t in o["after"]["toasts"]), o["after"]["toasts"]
+    assert o["result"] is True
+    assert o["after"]["toasts"][-1] == RESTARTED
+    assert o["after"]["buttons"] == ["Check for updates", RESTART]

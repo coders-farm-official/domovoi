@@ -78,6 +78,13 @@ SCENARIOS = {
                               "restart_hint": "systemctl not found — not a systemd host",
                               "restart_command": None}, RADIO_WAITING),
     "card_nothing_waiting": _card({"restart_capable": True}, []),
+    # A restart already under way (pressed in Settings, before a reload, or
+    # by hand): the card offers no second one.
+    "card_update_under_way": _card({"restart_capable": True, "restart_mode": "update",
+                                    "restart_in_progress": True, "last_update": None}, RADIO_WAITING),
+    "card_restart_under_way": _card({"restart_capable": True, "restart_mode": "restart",
+                                     "restart_in_progress": True, "restart_required": True},
+                                    RADIO_WAITING),
     "row_waiting": _row(True),
     "row_not_waiting": _row(False),
     "controls_zip": _controls(),
@@ -152,6 +159,18 @@ def test_a_host_without_systemd_is_given_no_systemctl_line(rendered) -> None:
             "Restart the Domovoi services the way they were started.") in texts, texts
     assert not any("sudo systemctl" in t for t in texts), texts
     assert not any(t == "Restart to finish the upgrade" for t in texts), texts
+
+
+@pytest.mark.parametrize("name,word,note", [
+    ("card_update_under_way", "Updating…", "Updating —"),
+    ("card_restart_under_way", "Restarting…", "Restarting —"),
+])
+def test_a_restart_under_way_greys_the_card(rendered, name, word, note) -> None:
+    els = rendered[name]
+    buttons = [e for e in els if e["type"] == "Button" or e["type"] == "button"]
+    assert [b["text"] for b in buttons] == [word], buttons
+    assert buttons[0]["props"].get("disabled") is True
+    assert any(t.startswith(note) for t in _texts(els)), _texts(els)
 
 
 def test_nothing_waiting_renders_no_card(rendered) -> None:

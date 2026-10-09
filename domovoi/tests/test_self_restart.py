@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import time
 
 import pytest
 
@@ -254,3 +255,192 @@ def test_the_refusal_log_never_leaks_a_password(monkeypatch, caplog):
     # The logged command is the systemctl invocation only — no credentials
     # exist in this path, and none should ever appear if that changes.
     assert "password=" not in caplog.text
+
+
+# ─── one restart at a time ────────────────────────────────────────────────
+#
+# OWNER REPORT (2026-10-09): pressed "Restart to apply changes", reloaded
+# the page, and the button offered the restart again while the update unit
+# was still running. The page's memory of the press is gone on a reload, so
+# the server says whether one is under way, and refuses a second.
+
+SHOW_STATE = ["/usr/bin/systemctl", "show", "--property=ActiveState", "--value",
+              "domovoi-update.service"]
+
+
+def _unit_host(monkeypatch, *, state=None, show_rc=0, record=None, grant=True):
+    """A Linux host with the update unit installed: `systemctl show` answers
+    `state` (rc `show_rc`), sudo grants the unit's start when `grant`."""
+    monkeypatch.setattr(self_restart, "_WINDOWS", False)
+    monkeypatch.setattr(self_restart, "restart_mode", lambda: "update")
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+
+    def run(cmd, **kw):
+        if record is not None:
+            record.append(cmd)
+        if cmd == SHOW_STATE:
+            return subprocess.CompletedProcess(cmd, show_rc, stdout=f"{state or ''}\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0 if grant else 1, stdout="", stderr="")
+
+    monkeypatch.setattr(self_restart.subprocess, "run", run)
+
+
+def _result(status, started_at):
+    return {"status": status, "started_at": started_at}
+
+
+def _iso(epoch):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def test_nothing_is_under_way_by_default(monkeypatch):
+    _unit_host(monkeypatch, state="inactive")
+    assert self_restart.underway(None) is False
+
+
+@pytest.mark.parametrize("state", ["activating", "active", "deactivating", "reloading"])
+def test_the_update_unit_running_is_a_restart_under_way(monkeypatch, state):
+    """However it was started: the dashboard, another tab, or by hand."""
+    _unit_host(monkeypatch, state=state)
+    assert self_restart.underway(None) is True
+
+
+@pytest.mark.parametrize("state", ["inactive", "failed"])
+def test_a_finished_unit_is_not(monkeypatch, state):
+    _unit_host(monkeypatch, state=state)
+    # A "running" record the unit never got to finish (killed hard) is
+    # overruled by systemd's word.
+    assert self_restart.underway(_result("running", _iso(time.time() - 30))) is False
+
+
+def test_without_systemd_the_running_record_answers_while_recent(monkeypatch):
+    _unit_host(monkeypatch, show_rc=1)
+    assert self_restart.underway(_result("running", _iso(time.time() - 60))) is True
+    assert self_restart.underway(_result("ok", _iso(time.time() - 60))) is False
+    # Older than the unit's TimeoutStartSec: a run that can't still be going.
+    stale = time.time() - self_restart._RUNNING_RECORD_MAX_SEC - 60
+    assert self_restart.underway(_result("running", _iso(stale))) is False
+    assert self_restart.underway(_result("running", "not a time")) is False
+
+
+def test_without_the_unit_only_the_accepted_restart_counts(monkeypatch):
+    """No unit to ask: the bounce ends this process, so the restart it
+    accepted is the whole story, and systemctl is never asked."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(0, calls))
+    assert self_restart.underway(None, "restart") is False
+    self_restart._note_request("restart")
+    assert self_restart.underway(None, "restart") is True
+    assert calls == []
+
+
+def test_a_second_press_is_refused_and_schedules_nothing(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(0, calls))
+    monkeypatch.setattr(self_restart, "_RESTART_DELAY_SEC", 0.01)
+
+    async def _go():
+        first = await self_restart.restart()
+        second = await self_restart.restart()
+        await asyncio.sleep(0.15)
+        return first, second
+
+    first, second = asyncio.run(_go())
+    assert first["ok"] is True and first["in_progress"] is False
+    assert second["ok"] is False and second["in_progress"] is True
+    assert "under way" in second["error"]
+    fired = [c for c in calls if "-l" not in c]
+    assert len(fired) == 1, "only the first press may bounce the services"
+
+
+def test_two_presses_at_once_schedule_one_restart(monkeypatch):
+    """Both get past the first look before either is recorded: the record
+    is checked again with no await in between."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+    monkeypatch.setattr(self_restart.subprocess, "run", _fake_run(0, calls))
+    monkeypatch.setattr(self_restart, "_RESTART_DELAY_SEC", 0.01)
+
+    async def _go():
+        res = await asyncio.gather(self_restart.restart(), self_restart.restart())
+        await asyncio.sleep(0.15)
+        return res
+
+    results = asyncio.run(_go())
+    assert sorted(r["ok"] for r in results) == [False, True]
+    assert len([c for c in calls if "-l" not in c]) == 1
+
+
+def test_a_restart_that_never_fired_is_not_under_way(monkeypatch):
+    """sudo refused at the fire: nothing restarts, so the next press must
+    not be refused for it."""
+    monkeypatch.setattr(self_restart.shutil, "which", _fake_which(BOTH_PRESENT))
+
+    def refuse_fire(cmd, **kw):
+        rc = 0 if "-l" in cmd else 1
+        return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="no")
+
+    monkeypatch.setattr(self_restart.subprocess, "run", refuse_fire)
+    monkeypatch.setattr(self_restart, "_RESTART_DELAY_SEC", 0.01)
+
+    async def _go():
+        res = await self_restart.restart()
+        during = self_restart.underway(None, "restart")
+        await asyncio.sleep(0.15)
+        return res, during, self_restart.underway(None, "restart")
+
+    res, during, after = asyncio.run(_go())
+    assert res["ok"] is True
+    assert during is True
+    assert after is False
+
+
+def test_the_accepted_restart_lapses_after_its_grace():
+    self_restart._note_request("restart")
+    at_mono, at_wall, mode = self_restart._REQUEST
+    self_restart._REQUEST = (at_mono - self_restart._REQUEST_GRACE_SEC - 1, at_wall, mode)
+    assert self_restart.underway(None, "restart") is False
+
+
+def test_a_run_the_unit_finished_since_the_press_ends_it(monkeypatch):
+    """A run the unit refuses at once (a signature check, say) never ends
+    this process; its result, newer than the press, ends the wait. A result
+    from before the press is the run before, and doesn't."""
+    _unit_host(monkeypatch, state="inactive")
+    self_restart._note_request("update")
+    now = time.time()
+    assert self_restart.underway(_result("ok", _iso(now - 3600))) is True
+    assert self_restart.underway(_result("running", _iso(now + 1))) is True
+    assert self_restart.underway(_result("refused", _iso(now + 1))) is False
+
+
+def test_an_update_already_running_refuses_the_press(monkeypatch):
+    calls: list[list[str]] = []
+    _unit_host(monkeypatch, state="activating", record=calls)
+    res = asyncio.run(self_restart.restart())
+    assert res == {"ok": False, "mode": "update", "units": ["domovoi-update.service"],
+                   "delay_sec": None, "in_progress": True,
+                   "error": "a restart or update is already under way; wait for it to finish"}
+    assert calls == [SHOW_STATE], "no sudo at all, not even the probe"
+
+
+def test_version_state_says_a_restart_is_under_way(monkeypatch):
+    _unit_host(monkeypatch, state="activating")
+    assert asyncio.run(git_version.version_state())["restart_in_progress"] is True
+    _unit_host(monkeypatch, state="inactive")
+    assert asyncio.run(git_version.version_state())["restart_in_progress"] is False
+
+
+def test_no_pull_while_a_restart_is_under_way(monkeypatch):
+    """The unit applies the HEAD it read when it started; moving the
+    checkout under it would load code it never checked."""
+    _unit_host(monkeypatch, state="activating")
+    ran: list = []
+    monkeypatch.setattr(git_version, "_run", lambda *a: ran.append(a))
+    monkeypatch.setattr(git_version.egress, "internet_turned_off", lambda: False)
+    res = asyncio.run(git_version.pull())
+    assert res["pulled"] is False
+    assert "under way" in res["error"]
+    assert ran == [], "no git at all"

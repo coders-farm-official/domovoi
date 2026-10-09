@@ -196,6 +196,7 @@ async def version_state() -> dict:
     if problem == "missing" and mode != "update":
         # A host without the unit has no result, and that is no problem.
         problem = None
+    in_progress = await asyncio.to_thread(self_restart.underway, last, mode)
     signature = await asyncio.to_thread(signature_state, checkout)
     return {
         # `sha` stays for backwards compatibility with existing callers —
@@ -218,6 +219,11 @@ async def version_state() -> dict:
         # migrate, health-check, roll back); "restart" when it only bounces
         # core and web, as every host did before that unit existed.
         "restart_mode": mode,
+        # A restart or update is under way right now (self_restart.underway):
+        # the restart this process just accepted, or the update unit running,
+        # however it was started. The panel offers nothing that would start
+        # another, and follows this one to its end, after a reload too.
+        "restart_in_progress": in_progress,
         # The update unit's last run, or None on a host without one.
         "last_update": last,
         # Why last_update is None when it shouldn't be: "missing" (the unit
@@ -765,9 +771,17 @@ async def pull() -> dict:
     :func:`_rollback_baseline`).
 
     Under ``INTERNET_ACCESS=never`` it reports ``pulled=False`` with the
-    turned-off reason and runs no git at all."""
+    turned-off reason and runs no git at all. So it does while a restart or
+    update is under way (:func:`self_restart.underway`): the update unit
+    applies the HEAD it read when it started, and moving the checkout under
+    it would leave the services running code it never checked."""
     if egress.internet_turned_off():
         return _not_pulled(egress.TURNED_OFF_REASON)
+    last = await asyncio.to_thread(read_last_update)
+    if await asyncio.to_thread(self_restart.underway, last):
+        return _not_pulled(
+            "a restart or update is under way; pull again once it has finished"
+        )
     try:
         baseline = await asyncio.to_thread(_rollback_baseline)
     except Exception:  # noqa: BLE001 — the pull matters more than the record

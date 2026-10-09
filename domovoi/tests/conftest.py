@@ -223,7 +223,8 @@ def _isolate_update_state(tmp_path, monkeypatch):
     real domovoi-update.service on the machine running pytest (a Linux
     server that has it installed) flip every restart test into update
     mode: the unit search path points at an empty dir unless a test sets
-    its own."""
+    its own. A restart one test accepted is not under way in the next
+    (self_restart._REQUEST), or every later restart and pull is refused."""
     from domovoi import self_restart
 
     monkeypatch.setattr(settings, "update_state_dir", str(tmp_path / "update-state"))
@@ -231,6 +232,7 @@ def _isolate_update_state(tmp_path, monkeypatch):
         settings, "update_result_file", str(tmp_path / "update-unit" / "last-result.json")
     )
     monkeypatch.setattr(self_restart, "_UNIT_DIRS", (str(tmp_path / "no-systemd-units"),))
+    monkeypatch.setattr(self_restart, "_REQUEST", None)
 
 
 @pytest.fixture(autouse=True)

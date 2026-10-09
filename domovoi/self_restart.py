@@ -35,6 +35,17 @@ a plain restart that would skip the migrations.
 Both units are bounced together: a pull moves the whole checkout, and core
 and web import from the same tree, so restarting one would leave the other
 running stale code — the exact confusion the version panel exists to end.
+
+One at a time. :func:`underway` says whether a restart or update is under
+way right now, and :func:`restart` refuses another while one is (and
+:func:`git_version.pull` refuses to move the checkout under it). The
+dashboard's own memory of a press is gone on a reload, so the answer comes
+from the server: systemd's state of the update unit, which outlives this
+process and covers a run started any way (the dashboard, another tab,
+``sudo systemctl start`` over ssh); the restart this process accepted,
+for the second before systemd has the job (and, without the unit, until
+the bounce ends this process); and the unit's own ``running`` record when
+systemctl can't say.
 """
 
 from __future__ import annotations
@@ -46,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
@@ -73,6 +85,31 @@ _PENDING: set[asyncio.Task] = set()
 # "restarting" from "the server broke".
 _RESTART_DELAY_SEC = 1.0
 _PROBE_TIMEOUT_SEC = 5.0
+
+# The restart this process accepted and has not seen through, as
+# (monotonic time, wall-clock time, mode) of its ok answer; None when there
+# is none. See underway().
+_REQUEST: tuple[float, float, str] | None = None
+
+# How long an accepted restart counts as under way on its own. It covers
+# _RESTART_DELAY_SEC, the sudo fork and systemd taking the job, after which
+# the update unit's state answers (or, without the unit, the bounce has
+# ended this process). Short, so a run the unit refuses at once doesn't
+# hold the dashboard's buttons for long.
+_REQUEST_GRACE_SEC = 20.0
+
+# systemd's ActiveState while the oneshot update unit runs is
+# "activating"; the others are a stop or reload of it in flight.
+_UNIT_BUSY_STATES = frozenset({"activating", "active", "deactivating", "reloading"})
+
+# The unit's own "running" record, believed only while systemctl can't say
+# and only this long after the run started: TimeoutStartSec=30min
+# (install-update-unit.sh) ends a longer run, and a record a power cut left
+# "running" must not hold the buttons for good.
+_RUNNING_RECORD_MAX_SEC = 30 * 60
+
+# last-result.json's timestamps (apply-update.sh now_iso).
+_RESULT_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _systemctl() -> str | None:
@@ -193,6 +230,109 @@ async def capable_async() -> tuple[bool, str | None]:
     return result
 
 
+# ─── a restart under way ──────────────────────────────────────────────────
+
+
+def update_unit_state() -> str | None:
+    """Blocking. systemd's ActiveState for the update unit: "activating"
+    while it runs, "inactive" or "failed" once it is done. None when
+    systemctl can't say (no systemd, the bus out of reach). A plain read
+    over the system bus: no sudo, and nothing changes."""
+    if _WINDOWS:
+        return None
+    systemctl = _systemctl()
+    if systemctl is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [systemctl, "show", "--property=ActiveState", "--value", UPDATE_UNIT],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    state = (proc.stdout or "").strip()
+    return state if proc.returncode == 0 and state else None
+
+
+def _result_started(last_update: dict | None) -> float | None:
+    """When the unit's run in ``last_update`` started, as epoch seconds."""
+    value = last_update.get("started_at") if isinstance(last_update, dict) else None
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, _RESULT_TIME_FORMAT).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _note_request(mode: str) -> None:
+    global _REQUEST
+    _REQUEST = (time.monotonic(), time.time(), mode)
+
+
+def _forget_request() -> None:
+    global _REQUEST
+    _REQUEST = None
+
+
+def _request_pending(last_update: dict | None) -> bool:
+    """Whether the restart this process accepted still counts as under way
+    on its own: inside the grace, and, with the update unit, no run the
+    unit has finished since (one it refused at once never ends this
+    process)."""
+    if _REQUEST is None:
+        return False
+    at_mono, at_wall, mode = _REQUEST
+    if time.monotonic() - at_mono > _REQUEST_GRACE_SEC:
+        return False
+    if mode == "update" and isinstance(last_update, dict) and last_update.get("status") != "running":
+        started = _result_started(last_update)
+        # The unit stamps its start to the second, a second or more after
+        # the answer: a result from before the request is the run before.
+        if started is not None and started >= int(at_wall):
+            return False
+    return True
+
+
+def _running_record(last_update: dict | None) -> bool:
+    if not isinstance(last_update, dict) or last_update.get("status") != "running":
+        return False
+    started = _result_started(last_update)
+    return started is not None and 0 <= time.time() - started <= _RUNNING_RECORD_MAX_SEC
+
+
+def underway(last_update: dict | None = None, mode: str | None = None) -> bool:
+    """Blocking. Whether a restart or update is under way right now, so
+    nothing may start another: the restart this process just accepted
+    (:func:`_request_pending`), else, with the update unit, systemd's word
+    on it (:func:`update_unit_state`), else the unit's own ``running``
+    record while it is recent. ``last_update`` is the unit's last result
+    (git_version.read_last_update)."""
+    mode = mode or restart_mode()
+    if _request_pending(last_update):
+        return True
+    if mode != "update":
+        return False
+    state = update_unit_state()
+    if state is not None:
+        return state in _UNIT_BUSY_STATES
+    return _running_record(last_update)
+
+
+def _already_under_way(mode: str, units: list[str]) -> dict:
+    return {
+        "ok": False,
+        "mode": mode,
+        "units": units,
+        "delay_sec": None,
+        "error": "a restart or update is already under way; wait for it to finish",
+        "in_progress": True,
+    }
+
+
 def _spawn_restart(mode: str | None = None) -> None:
     """Fire the restart. ``--no-block`` returns immediately instead of waiting
     on units that are about to kill this very process.
@@ -200,10 +340,15 @@ def _spawn_restart(mode: str | None = None) -> None:
     The outcome is LOGGED rather than discarded. The endpoint has already
     answered "ok" by the time this runs — all it knew was that a restart had
     been scheduled — so if sudo refuses here, the journal is the only place
-    anyone can find out. Silence looks identical to success from the UI."""
+    anyone can find out. Silence looks identical to success from the UI.
+
+    A restart that never left this process is no longer under way: the
+    record :func:`restart` kept is dropped, so the next press is not
+    refused for it."""
     mode = mode or restart_mode()
     systemctl, sudo = _systemctl(), _sudo()
     if systemctl is None or sudo is None:  # pragma: no cover — capable() gates
+        _forget_request()
         log.error("self-restart: systemctl or sudo vanished between probe and fire")
         return
     cmd = [sudo, "-n", systemctl, *_action(mode)]
@@ -213,9 +358,11 @@ def _spawn_restart(mode: str | None = None) -> None:
             timeout=_PROBE_TIMEOUT_SEC, check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
+        _forget_request()
         log.error("self-restart failed to spawn: %s", e)
         return
     if proc.returncode != 0:
+        _forget_request()
         log.error(
             "self-restart REFUSED (rc=%s): %s — check the sudoers grant in "
             "docs/LINUX_HOST.md matches this exact command: %s",
@@ -231,14 +378,30 @@ async def restart() -> dict:
     """Schedule the restart, shortly after this response flushes: start the
     update unit when it's installed, else bounce both units.
 
-    Returns ``{"ok", "mode", "units", "delay_sec", "error"}`` and never
-    raises — an incapable host reports why instead of half-restarting.
+    Returns ``{"ok", "mode", "units", "delay_sec", "error", "in_progress"}``
+    and never raises — an incapable host reports why instead of
+    half-restarting, and while a restart or update is already under way
+    (:func:`underway`) the answer is ``ok: false`` with ``in_progress:
+    true`` and nothing is scheduled: a second press would bounce the
+    services out from under the first, or race it for the update unit.
     """
+    # git_version imports this module; it owns reading the unit's result.
+    from domovoi import git_version
+
     mode = restart_mode()
     units = _units(mode)
+    last = await asyncio.to_thread(git_version.read_last_update) if mode == "update" else None
+    if await asyncio.to_thread(underway, last, mode):
+        return _already_under_way(mode, units)
     ok, why = await capable_async()
     if not ok:
-        return {"ok": False, "mode": mode, "units": units, "delay_sec": None, "error": why}
+        return {"ok": False, "mode": mode, "units": units, "delay_sec": None,
+                "error": why, "in_progress": False}
+    # Again, with no await between the look and the record: two presses
+    # that both got past the check above must not both schedule.
+    if _request_pending(last):
+        return _already_under_way(mode, units)
+    _note_request(mode)
 
     async def _later() -> None:
         await asyncio.sleep(_RESTART_DELAY_SEC)
@@ -261,4 +424,5 @@ async def restart() -> dict:
         "units": units,
         "delay_sec": _RESTART_DELAY_SEC,
         "error": None,
+        "in_progress": False,
     }
