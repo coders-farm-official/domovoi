@@ -3258,7 +3258,20 @@ class Satellite:
     _health_last_reboot_note: float | None = None
     _health_last_push: float = 0.0
     _health_samples: int = 0
+    _health_process_started: float | None = None
     _last_server_error: str | None = None
+
+    def _no_server_since(self) -> float | None:
+        """When this process last had an accepted session, or started
+        without one. None while a session is up. A process that boots into
+        a dead network has never had a session to lose, and its outage
+        still counts — `_ws_disconnected_since` is only stamped when a
+        session ends, so this is what self-check 5 and the sample use."""
+        if self.ws is not None and self._session_ready_seen:
+            return None
+        if self._ws_disconnected_since is not None:
+            return self._ws_disconnected_since
+        return self._health_process_started
 
     def _hcfg(self, name: str, default: Any) -> Any:
         """A [health] setting, with its default for a Config built without
@@ -3299,10 +3312,8 @@ class Satellite:
             fps = round((frames - self._health_last_frames) / (now - self._health_last_sample_at), 1)
         self._health_last_frames = frames
         ws_up = self.ws is not None and self._session_ready_seen
-        down_for = (
-            None if self._ws_disconnected_since is None
-            else round(now - self._ws_disconnected_since, 1)
-        )
+        since = self._no_server_since()
+        down_for = None if since is None else round(now - since, 1)
         send_q = self.send_q
         return {
             "mic_expected": bool(self._voice_input_started and self._input_stream is not None),
@@ -3477,8 +3488,8 @@ class Satellite:
             fds=s.get("fds") if isinstance(s.get("fds"), int) else None,
             fd_limit=int(self._hcfg("fd_limit", 512)),
             no_server_for=(
-                now - self._ws_disconnected_since
-                if self._ws_disconnected_since is not None else None
+                now - self._no_server_since()
+                if self._no_server_since() is not None else None
             ),
             nm_connected=nm_connected,
             gateway_ok=s.get("gateway_ok") if isinstance(s.get("gateway_ok"), bool) else None,
@@ -6820,6 +6831,10 @@ class Satellite:
                     self._prev_health.get("last_exit_reason"),
                     len(diag) if isinstance(diag, list) else 0,
                 )
+            # "No server for N minutes" counts from here until the first
+            # accepted session: a unit that boots into a dead network has
+            # no session to lose, and its outage still counts.
+            self._health_process_started = time.monotonic()
             self._health_thread = threading.Thread(
                 target=self._health_monitor_thread_run, daemon=True, name="health-monitor"
             )

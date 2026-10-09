@@ -164,6 +164,29 @@ def test_no_server_with_the_gateway_answering_touches_nothing(tmp_path):
     assert recovered == [] and sat.fatal_error is None
 
 
+def test_a_process_that_never_connected_still_counts_its_outage(tmp_path):
+    """`_ws_disconnected_since` is stamped only when a session ends. A unit
+    that boots into a dead network never had one, and used to look
+    'connected' to check 5 for ever."""
+    sat = health_sat(tmp_path)
+    sat._voice_input_started = False
+    sat._ws_disconnected_since = None
+    sat._health_process_started = 0.0
+    sat._health_last_sample = {"rss_kb": 50_000, "fds": 30, "gateway_ok": False}
+    recovered: list[int] = []
+    sat._reassociate_wifi = lambda: recovered.append(1) or True
+    facts = sat._health_process_facts(240.0)
+    assert facts["ws"] == "down" and facts["ws_down_for_s"] == 240.0
+    sat._health_checks(240.0)
+    assert recovered == [], "four minutes: not yet"
+    sat._health_checks(5 * 60.0)
+    assert recovered == [1], "five minutes since the process started"
+    # A session up again: nothing counts.
+    sat.ws = object()
+    sat._session_ready_seen = True
+    assert sat._health_process_facts(400.0)["ws_down_for_s"] is None
+
+
 def test_no_server_with_the_gateway_silent_recovers_the_link_once_per_cooldown(tmp_path):
     sat = health_sat(tmp_path)
     sat._voice_input_started = False      # a network-only scenario
