@@ -22,10 +22,14 @@ Flyway step (V022); the satellite code has to be pushed to each room.
    old code keeps working exactly as before — it sends nothing new until
    the core's `ready` lists the new frames, and this core still accepts
    its old hello — but shows *no health sample yet* until it is upgraded.
-3. **Existing units, optional but recommended:** the reboot helper and
-   the hardware watchdog, two commands each — `satellite/PROVISIONING.md`
-   §8.3. Cards prepared from today on have both. Without the helper the
-   client logs that a reboot would be needed instead of rebooting.
+3. **Existing units, optional:** the reboot helper and the hardware
+   watchdog — `satellite/PROVISIONING.md` §8.3. Cards prepared from today
+   on have both; the code push installs neither (both need root). On a
+   card prepared before today (every portal unit so far) the service
+   account has no root by design, so this means re-preparing the card or
+   editing it in a Linux machine; §8.3 gives the commands. Without the
+   helper the client logs that a reboot would be needed instead of
+   rebooting.
 
 ### What changes
 
@@ -46,14 +50,20 @@ Flyway step (V022); the satellite code has to be pushed to each room.
   could not reach the core, which used to be lost with its RAM ring —
   1 MB per room on disk, surviving the Pi dying) and the live ring.
 * **Self-checks on the satellite** (`[health]` in its config): a capture
-  stream that delivers no frames is reopened once, then the process
-  exits so systemd restarts it; a dead mic thread, a stalled wake loop,
-  memory over 300 MB while idle, or more than 512 open files exit the
-  same way; five minutes without a server with the link down runs the
-  Wi-Fi recovery (once per five minutes); fifteen minutes without a
-  server AND a silent gateway reboots the unit through the new helper.
-  Never a reboot while the gateway answers: a core that is down is the
-  core's problem.
+  stream that delivers no frames is reopened, then the process exits so
+  systemd restarts it; a dead mic thread, a stalled wake loop, memory
+  over 300 MB while idle, or more than 512 open files exit the same way;
+  five minutes without a server with the link down runs the Wi-Fi
+  recovery (once per five minutes, one cooldown shared with the Wi-Fi
+  watcher); fifteen minutes without a server AND a silent gateway (no
+  TCP answer on 53/80/443 nor ping, or no default route) reboots the
+  unit through the new helper. Never while the gateway or the core's own
+  machine answers: a core that is down is the core's problem. Every
+  check acts only after seeing its condition twice in a row, and a
+  **restart budget** — 3 self-restarts a rolling hour, at most 1 of them
+  a reboot, kept across restarts — means a check that fires wrongly can
+  never loop a unit: past it the check only logs, and `last-health.json`
+  says so.
 * **A refused session no longer redials every second.** A core that
   closed the socket before `ready` (pairing refused, parked for approval)
   used to reset the reconnect backoff; it now backs off like a failed
@@ -63,8 +73,12 @@ Flyway step (V022); the satellite code has to be pushed to each room.
   `GET /api/satellites/{room}/health` (device read); the logs routes add
   `live`, `retained` and `last_outage` beside their old fields and answer
   an offline room with what is retained instead of `404`; `ready.features`
-  gains `health` and `log_push`; the `hello` may carry `prev_health`;
-  `satellites.health` on the state socket; the `satellite_logs_dir`
+  gains `health` and `log_push` (for a token-authenticated session only;
+  the core ignores both, and `prev_health`, from any other); the `hello`
+  may carry `prev_health`; `/v1/admin/snapshot` (Open) gains a
+  `satellite_health` digest — when each room's sample and outage report
+  arrived, never their content — which `satellites.health` on the state
+  socket diffs; the `satellite_logs_dir`
   setting (`~/.domovoi/satellite-logs`). Retained logs and health samples
   are household data — `docs/SECURITY_PRIVACY.md`, *Data at rest*.
 
