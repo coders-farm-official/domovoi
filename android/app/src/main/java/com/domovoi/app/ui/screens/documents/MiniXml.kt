@@ -131,9 +131,8 @@ internal object MiniXml {
                         ent == "amp" -> "&"
                         ent == "quot" -> "\""
                         ent == "apos" -> "'"
-                        ent.startsWith("#x") || ent.startsWith("#X") ->
-                            ent.substring(2).toIntOrNull(16)?.let { String(Character.toChars(it)) }
-                        ent.startsWith("#") -> ent.substring(1).toIntOrNull()?.let { String(Character.toChars(it)) }
+                        ent.startsWith("#x") || ent.startsWith("#X") -> codePoint(ent.substring(2).toIntOrNull(16))
+                        ent.startsWith("#") -> codePoint(ent.substring(1).toIntOrNull())
                         else -> null
                     }
                     if (rep != null) {
@@ -148,6 +147,16 @@ internal object MiniXml {
         }
         return out.toString()
     }
+
+    /**
+     * The text for a numeric character reference, or null when [n] is not a
+     * code point (unparsable, negative, past U+10FFFF, or a lone surrogate):
+     * the reference is then left as written. `Character.toChars` throws for
+     * those, and a crafted .xlsx must not throw out of the reader.
+     */
+    private fun codePoint(n: Int?): String? =
+        if (n == null || !Character.isValidCodePoint(n) || n in 0xD800..0xDFFF) null
+        else String(Character.toChars(n))
 
     /** Escape text content (and attribute values: quotes too). */
     fun escape(s: String): String {
