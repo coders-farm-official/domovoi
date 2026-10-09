@@ -1,7 +1,8 @@
 # Build an installable debug APK for the Android app and publish it as a
-# workflow artifact. Runs on any push/PR that touches android/, and can be
-# fired by hand from the Actions tab (workflow_dispatch) when you just want
-# an APK of the current branch.
+# workflow artifact. It runs ONLY when started by hand from the Actions tab
+# (workflow_dispatch): Actions minutes cost the owner money (2026-10-09), so
+# no push or pull request builds an APK. The everyday APK is built locally
+# (android/README.md) and handed over directly.
 #
 # The APK is debug-signed with the runner's throwaway debug keystore, a new
 # key on every run: fine for sideloading a test build, but it is NOT a
@@ -18,14 +19,6 @@ name: android-apk
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "android/**"
-      - ".github/workflows/android-apk.yml"
-  pull_request:
-    paths:
-      - "android/**"
-      - ".github/workflows/android-apk.yml"
 
 # The job only reads the repository; the artifact upload uses the runner's
 # own token, not GITHUB_TOKEN scopes.

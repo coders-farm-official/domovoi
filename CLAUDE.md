@@ -135,11 +135,12 @@ defaults.
 
 - **No pull requests.** Don't open one unless the owner asks for it in
   that session. PRs spend the GitHub Actions allowance.
-- **Pushing `android/**` runs CI too.** `.github/workflows/android-apk.yml`
-  fires on a push to *any* branch that touches `android/`, so a push costs
-  Actions minutes even without a PR. Put `[skip ci]` in the message of
-  every commit pushed from a session (GitHub skips push workflows when the
-  head commit carries it), so work is saved to the branch for free.
+- **GitHub Actions runs only by hand.** Actions minutes cost the owner
+  money, so `.github/workflows/android-apk.yml` has no push or
+  pull_request trigger (2026-10-09). Don't add one, and don't start the
+  workflow: build the APK yourself (below). Still put `[skip ci]` in the
+  message of every commit pushed from a session, so a workflow added
+  later can't fire on it by accident.
 - **Android changes ship as an APK built in the session.** Install the SDK,
   build the debug APK, and send it with `SendUserFile`:
 
