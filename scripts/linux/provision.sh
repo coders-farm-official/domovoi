@@ -1570,11 +1570,21 @@ do_ollama() {
 # ─── models ──────────────────────────────────────────────────────────────
 
 # The digest /api/tags reports for an exact tag, or nothing.
+# Status 1 when Ollama doesn't answer at all. Right after a pull, Ollama
+# 0.34.4 took 51 s to answer GET /api/tags on a fresh WSL distro (its own
+# request log), so each try waits up to 3 minutes.
 model_digest() {
-  local tag=${1//./\\.}
-  curl -fsS --max-time 15 "$OLLAMA_API/api/tags" 2>/dev/null | tr -d '\n' \
-    | grep -o "\"name\":\"$tag\"[^}]*\"digest\":\"[0-9a-f]*\"" | head -n 1 \
-    | sed 's/.*"digest":"\([0-9a-f]*\)"/\1/' || true
+  local tag=${1//./\\.} json i
+  for i in 1 2 3; do
+    if json=$(curl -fsS --max-time 180 "$OLLAMA_API/api/tags" 2>/dev/null); then
+      printf '%s' "$json" | tr -d '\n' \
+        | grep -o "\"name\":\"$tag\"[^}]*\"digest\":\"[0-9a-f]*\"" | head -n 1 \
+        | sed 's/.*"digest":"\([0-9a-f]*\)"/\1/' || true
+      return 0
+    fi
+    [ "$i" = 3 ] || sleep 5
+  done
+  return 1
 }
 
 # pull_model TAG I N: POST /api/pull, streaming, with progress lines for
@@ -1624,15 +1634,16 @@ do_models() {
   local tag want got i=0 n
   n=$(model_pairs | grep -c .)
   while read -r tag want; do
-    got=$(model_digest "$tag")
+    got=$(model_digest "$tag") || got=""
     if [ "$got" = "$want" ]; then
       log "$tag is present (digest ${want:0:12})"
     else
       [ -z "$got" ] || warn "$tag is present with digest ${got:0:12}, not the pinned ${want:0:12}: pulling it again"
       log "pulling $tag"
       pull_model "$tag" "$i" "$n" || die "ollama pull $tag failed"
-      got=$(model_digest "$tag")
-      [ "$got" = "$want" ] || die "$tag has digest ${got:-none} after the pull, the manifest pins $want: the registry now serves another build under that tag"
+      got=$(model_digest "$tag") || die "Ollama did not list its models (GET $OLLAMA_API/api/tags) after pulling $tag"
+      [ -n "$got" ] || die "$tag is not among Ollama's models after the pull"
+      [ "$got" = "$want" ] || die "$tag has digest $got after the pull, the manifest pins $want: the registry now serves another build under that tag"
       log "$tag pulled, digest matches the pin"
     fi
     i=$((i + 1))
