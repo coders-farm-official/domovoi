@@ -226,6 +226,11 @@ SH
 echo "gpg $*" >>"$SHIM_STATE/calls.log"
 echo "pub:-:4096:1:8D81803C0EBFCD88:1487788586:::-:::scESA::::::23::0:"
 echo "fpr:::::::::$(cat "$SHIM_STATE/docker-fpr"):"
+# More output after a pause, like the subkey lines: a reader that stops at
+# the first fpr makes this write hit a closed pipe (SIGPIPE), and under
+# pipefail that used to throw the fingerprint away.
+sleep 0.3
+echo "sub:-:4096:1:7EA0A9C3F273FCD8:1487792064:::-:::s::::::23:"
 echo "fpr:::::::::D3306A018370199E527AE7997EA0A9C3F273FCD8:"
 SH
 
