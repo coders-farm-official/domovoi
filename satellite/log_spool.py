@@ -137,8 +137,11 @@ class LogSpool:
             return
         if len(data) > keep:
             cut = data[-keep:]
-            nl = cut.find(b"\n")
-            cut = cut[nl + 1:] if nl >= 0 else cut
+            # Start on a whole line: drop a partial first line, but keep a
+            # first line that already begins at a boundary.
+            if data[-keep - 1:-keep] != b"\n":
+                nl = cut.find(b"\n")
+                cut = cut[nl + 1:] if nl >= 0 else cut
         else:
             cut = data
         tmp = self.path.with_name(self.path.name + ".tmp")
