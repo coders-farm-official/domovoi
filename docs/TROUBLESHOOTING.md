@@ -32,6 +32,33 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 | Both satellites go to the orange "no server" ring together while the server is up | Before 2026-09-15 the watcher reassociated any link whose rx rate read under 5 Mbit/s, and an idle link reports the 1 Mbit/s beacon rate | Update the satellite code (dashboard upgrade); the watcher now leaves a link alone while a session is live and probes the server before blaming the Wi-Fi |
 | The satellite's clock or time zone differs from the server's (log lines in the wrong zone, or dated months ago) | A Pi has no battery clock and Pi OS ships in Europe/London; a hand-built unit has no `domovoi-sync-time` helper, or the sudoers line for it is missing | A prepared card syncs both from the server at stage 1, stage 2 and on every connect (look for `time sync:` in the satellite log). On a hand-built unit run `sudo timedatectl set-timezone <zone>` once, or install the helper per PROVISIONING.md §8.2 |
 
+## A satellite died while nobody was using it (the Health card and Last outage)
+
+Two units did this in October 2026: fine for days, then the room offline and the ring orange, and only a power cycle brought them back — with nothing left to read, because the Pi's log ring is RAM. Since 2026-10-09 the satellite explains itself. Open the room on the Satellites page; the **Overview** tab has a **Health** card and, under it, a **Last outage** block; the **Logs** tab has a **retained on the server** view beside the live ring.
+
+**Reading the Health card.** One sample a minute while the satellite is connected, and the last one is kept when it goes offline (the pill says *kept from before it went offline*). What to look at:
+
+| Field | Healthy | What a bad value means |
+|---|---|---|
+| memory | 60–120 MB, peak not far above | Climbing towards 300 MB: a leak; the client exits and restarts itself at `[health] rss_limit_mb` while idle (the Last outage block then says `RSS … above the limit`) |
+| cpu | a few % idle, system under 30 % | Pinned at 100 % with nothing to do: a reconnect storm (see *reconnects* and the retained log for `reconnecting in`) or a predict loop stuck behind throttling |
+| temperature | under 70 °C, *never throttled this boot* | A red pill names the live `vcgencmd` flag (`under voltage`, `throttled`, `soft temp limit`): the power supply or the case. *throttled earlier this boot* means it happened and recovered |
+| uptime | days, with few reconnects | A short uptime you did not cause is a reboot (power cut, the watchdog, the reboot helper); many reconnects on a long uptime is the link |
+| wi-fi | 20–70 Mbit/s, NetworkManager *connected* | 1 Mbit/s on an IDLE link is the beacon rate and normal; *disconnected* or no link data while the room is offline is the radio |
+| microphone | about 33 fps, wake loop a fraction of a second ago | 0 fps while the mic is on: the USB array stopped delivering (the client reopens the stream once, then restarts itself); a wake loop *ago* value that grows while nobody is talking: the mic thread is stuck (the client restarts itself after 60 s) |
+| reachability | *gateway answers*, core reachable, ws up | *gateway silent* with the core unreachable is the network, not Domovoi: after 5 min the client runs the Wi-Fi recovery, after 15 min it reboots through `domovoi-reboot` (new cards; PROVISIONING §8.3 for existing ones) |
+| handles | a few dozen fds | Hundreds and climbing: a leak; the client exits at 512 |
+
+**Reading Last outage.** It is what the satellite's previous process life wrote to its SD card before it ended, delivered in its next hello:
+
+* **exit reason** — `self-check: …` names the check that restarted it (the table above); `shutdown: requested` is a restart someone asked for (a config save, the Restart button, an upgrade); *unknown* means the process never got to write one: a power cut, the kernel's OOM killer, or a kernel/firmware wedge (then look at *uptime* — a reboot — and the offline table).
+* **the offline table** — one row per failed connect while it was disconnected: the failure (`tcp_refused` = the core's port is closed, the core is down; `tcp_timeout` / `dns` = nothing answers, the network; `closed_before_ready` = the core took the socket and refused the session: pairing, approval — check the Satellites page for a pending approval), whether the **gateway** answered (silent = the Pi's own link or the router), whether the **core** answered, the link state, and the action the client took.
+* **self-checks** — the last actions it took and why.
+
+**The retained log** (Logs tab → *retained on the server*) is the Pi's own log as it pushed it, including the lines marked `[offline]` that it wrote while it could not reach the core — the part that used to be lost. It survives the Pi dying and the core restarting; the last 1 MB per room is kept.
+
+A room that shows **no health sample yet** runs satellite code from before 2026-10-09: upgrade it from the Overview tab, then it reports within a minute.
+
 ## No TTS audio / Domovoi is silent
 
 The TTS engine chain is **piper → system** (**edge → piper → system** if you chose Edge; Edge is never a fallback for Piper, and is skipped when the server is answered **No** to the internet question): a per-engine failure (network drop, missing voice, or an engine "succeeding" with a zero-length WAV) falls through to the next, so total silence is usually playback-side, not synthesis-side.
@@ -255,7 +282,9 @@ poaches it is the deterministic fix. Re-run the corpus after either.
 | Core log | The `python -m domovoi.main` console (level via `LOG_LEVEL`) | The whole voice pipeline: routing, handlers, MPD provisioning, workers. Millisecond timestamps; snapshot/health polling spam is filtered out for you |
 | Per-plugin logs | `~/.domovoi/logs/plugin_<slug>.log` (5 MB × 3 rotation) | Everything a given plugin does. Also tailed live on that plugin's dashboard detail page. Crank one plugin to DEBUG without drowning the core: `LOG_LEVEL_PLUGIN_<SLUG>=DEBUG` |
 | Web backend log | The `python -m web.backend.main` console (`LOG_LEVEL`) | Dashboard API, realtime listeners, plugin web pages |
-| Satellite log | `journalctl -u domovoi-satellite -f` on the Pi (level via `[log]` in its config) | Wake word, capture, playback, Wi-Fi watcher, sync channels |
+| Satellite log | `journalctl -u domovoi-satellite -f` on the Pi (level via `[log]` in its config) | Wake word, capture, playback, Wi-Fi watcher, sync channels, and one `health:` line every ten minutes |
+| Satellite log, retained on the server | Satellites page → room → Logs → *retained on the server*; the file is `~/.domovoi/satellite-logs/<room>.log` (1 MB, one rotation) | The same lines, as the Pi pushed them — including `[offline]` lines written while it could not reach the core. Survives the Pi dying |
+| Satellite health | Satellites page → room → Overview → Health; `GET /api/satellites/<room>/health`; the core log's `satellite health room=…` lines (one per ten samples) and `reports an outage from its previous life` warnings | Memory, CPU, temperature and throttling, uptime, mic rate, link, reachability — one sample a minute, 24 h kept; and what the previous process life left behind |
 | MPD (per room) | `docker logs domovoi-mpd-<room>` | Library scan, stream/decoder errors for that room |
 | Postgres / SearXNG / Letta | `docker logs domovoi-postgres` etc. | Infrastructure containers |
 
