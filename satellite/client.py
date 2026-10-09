@@ -3532,10 +3532,7 @@ class Satellite:
                 else (self._health_process_started or now)
             )
         s = self._health_last_sample or {}
-        nm = s.get("nm_state")
-        nm_connected: bool | None = None
-        if isinstance(nm, dict) and isinstance(nm.get("code"), int):
-            nm_connected = nm["code"] >= 100
+        nm_connected = health.nm_connected(s.get("nm_state"))
 
         def _flag(key: str) -> bool | None:
             v = s.get(key)

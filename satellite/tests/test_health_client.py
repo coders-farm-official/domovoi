@@ -795,3 +795,28 @@ def test_a_self_check_exit_has_a_hard_exit_backstop(tmp_path, monkeypatch):
     for i in range(3):
         sat2._health_budget.record("exit", f"earlier {i}")
     assert sat2._health_exit("again") is False and started == []
+
+
+def test_networkmanager_failed_is_not_connected(tmp_path, monkeypatch):
+    """NM state 120 is FAILED; it used to read as connected (>= 100), which
+    kept a radio with no route from ever being recovered or rebooted."""
+    monkeypatch.setattr(client, "REBOOT_HELPER", tmp_path / "domovoi-reboot")
+    (tmp_path / "domovoi-reboot").write_text("#!/bin/sh\n")
+
+    class Result:
+        returncode = 0
+        stderr = ""
+
+    ran: list[list[str]] = []
+    monkeypatch.setattr(client.subprocess, "run", lambda argv, **kw: ran.append(argv) or Result())
+    sat = health_sat(tmp_path)
+    sat._voice_input_started = False
+    sat._ws_disconnected_since = 0.0
+    recovered: list[int] = []
+    sat._reassociate_wifi = lambda: recovered.append(1) or False
+    for i, t in enumerate((16 * 60.0, 17 * 60.0)):
+        sat._health_last_sample = sample(i + 1, gateway=None, gateway_ok=None, default_route=False,
+                                         nm_state={"code": 120, "state": "failed"})
+        sat._health_checks(t)
+    assert recovered == [1]
+    assert ran and ran[0][2].endswith("domovoi-reboot")

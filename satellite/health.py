@@ -295,6 +295,24 @@ def parse_nm_state(text: str | None) -> dict[str, Any] | None:
     return None
 
 
+def nm_connected(nm: Any) -> bool | None:
+    """NetworkManager's device state -> connected (True), not (False), or
+    no opinion (None). Only 100 (activated) is connected: 110 is
+    deactivating and 120 is FAILED — reading ">= 100" as connected hid
+    exactly the wedged-radio state from the link checks. 0 (unknown) and
+    10 (unmanaged: NetworkManager does not drive this radio) say nothing."""
+    if not isinstance(nm, dict):
+        return None
+    code = nm.get("code")
+    if not isinstance(code, int) or isinstance(code, bool):
+        return None
+    if code == 100:
+        return True
+    if code in (0, 10):
+        return None
+    return False
+
+
 def read_nm_state(run: Callable[..., str | None] = run_tool, device: str = "wlan0") -> dict[str, Any] | None:
     return parse_nm_state(
         run(["nmcli", "-t", "-f", "GENERAL.STATE", "device", "show", device], timeout=5.0)

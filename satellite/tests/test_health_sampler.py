@@ -602,3 +602,13 @@ def test_the_budget_is_in_the_last_health_record(tmp_path):
     lh.write(None)
     doc = json.loads((tmp_path / "last-health.json").read_text())
     assert doc["restart_budget"]["limit"] == 3 and doc["restart_budget"]["window_s"] == 3600.0
+
+
+
+@pytest.mark.parametrize("code, expected", [
+    (100, True), (110, False), (120, False), (30, False), (20, False), (70, False),
+    (10, None), (0, None), (None, None), ("100", None), (True, None),
+])
+def test_only_an_activated_device_is_connected(code, expected):
+    assert health.nm_connected({"code": code, "state": "x"}) is expected
+    assert health.nm_connected(None) is None
