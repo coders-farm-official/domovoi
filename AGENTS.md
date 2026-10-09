@@ -3,10 +3,18 @@
 Guidance for AI coding agents working in this repository: any agent, from
 any vendor. It is also the short version of the house rules for people.
 
-Most coding agents read `AGENTS.md` on their own. Claude Code reads it
-through `CLAUDE.md`, which imports this file. If your tool reads neither,
-point it here. Rules go in this file, never in a tool-specific copy, so
-every agent works from the same text.
+Most coding agents read `AGENTS.md` on their own (Codex, Cursor, GitHub
+Copilot's agent, Windsurf, Cline, Roo Code, Junie, Kiro, Zed, Continue,
+Amp, opencode, Devin, Jules, Warp, among others). A few get it through a
+small shim, and each shim only points here: `CLAUDE.md` and `GEMINI.md`
+import this file, `.aider.conf.yml` reads it into every chat, and
+`.amazonq/rules/agents.md` tells Amazon Q to follow it. If your tool reads
+none of these, point it here.
+
+Rules go in this file, never in a tool-specific copy, so every agent works
+from the same text. Don't add `.github/copilot-instructions.md`, `.rules`,
+`.cursorrules` or similar: Zed uses the first of those it finds instead of
+this file, and copies drift.
 
 ## What this repo is
 

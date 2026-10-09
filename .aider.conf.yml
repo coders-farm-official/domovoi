@@ -1,0 +1,4 @@
+# Aider: load the repo's agent guidance (AGENTS.md) into every chat, read-only.
+# The path resolves from where aider starts, so start it at the repo root.
+# Rules go in AGENTS.md, not here.
+read: AGENTS.md

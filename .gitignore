@@ -262,3 +262,7 @@ allowed_signers
 # POSTGRES_PASSWORD, LETTA_TOKEN and the rest. Only the example is tracked.
 .env.*
 !.env.example
+
+# Aider's chat history and caches (its config, .aider.conf.yml, is tracked).
+.aider*
+!.aider.conf.yml
