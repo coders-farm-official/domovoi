@@ -4,6 +4,49 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-08 — Android: phone Files tab, video feed, sheet saves that keep formatting
+
+Same-day as Security round 3 and merged on top of it. New Android build;
+one server-side change in the Documents API. No Flyway step.
+
+### Upgrading
+
+1. **Install the new Android build.** It carries the round-3 security
+   changes plus this feature set; the phone re-pairs silently.
+2. **Nothing to do on the server** beyond the round-3 update. `PUT
+   /api/documents/sheet/<name>.xlsx` now edits the existing workbook cell
+   by changed cell instead of rewriting it, so a save from the dashboard or
+   the app keeps formatting, column widths, merges, other sheets and
+   anything past the editor's window. A workbook with charts, pictures or
+   pivot tables is refused with `409` and left untouched rather than
+   silently losing them; an `.xlsx` that would unpack past the size bound
+   is refused with `413` before it is opened.
+
+### What changes
+
+* **Video feed.** Tapping a video opens a vertical swipe feed of the list
+  it was tapped in (swipe, tap to pause, double-tap an edge to skip, long
+  press for queue, details, save, and share for phone-local videos only).
+  Server streams go through the app's one HTTP client, so the household
+  token, the identity proof, the redirect rule and the cleartext rule apply.
+* **One connection pop-up.** The server pill opens a dialog with a
+  "this phone" / "your Domovoi" switch and the server list. The server side
+  is greyed with the reason when it cannot be used, including a new "core
+  not answering" state. Trusting a server still goes through the trust
+  dialog, and the server in use can be forgotten from the list.
+* **Files tab on the phone.** The local shell gains a Files tab: the same
+  browser, text editor and sheet editor as the server's Files, over the
+  phone's own folders chosen through the system folder picker (per-folder
+  grants) and its photo albums. It cannot reach the app's own private
+  storage or other apps' data. "Send to home" uploads through the Files
+  door with the device id, so the household's write blocks and the
+  secret-name filter apply. New permission: `READ_MEDIA_IMAGES` (API 33+),
+  asked for when the photos library is first opened.
+* **.xlsx editing on the phone keeps formatting**: only changed cells are
+  patched into the first worksheet, every other byte is copied through.
+  Sheet files are read under a 64 MiB bound and unpacked under a 200 MiB
+  bound; a malformed character reference is left as text.
+
 ## 2026-10-08 — Security round 3
 
 The fixes from the October security review, in one update. Several

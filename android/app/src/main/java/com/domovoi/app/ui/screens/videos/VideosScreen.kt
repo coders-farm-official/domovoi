@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -139,9 +142,14 @@ fun VideosScreen() {
     }
 
     var filter by remember { mutableStateOf("") }
-    var playing by remember { mutableStateOf<Pair<VideoRow, Long>?>(null) } // video + resume sec
+    var feed by remember { mutableStateOf<OpenFeed?>(null) }
+    /** Set when a feed closes: which list to centre, and on which video. */
+    var centerOn by remember { mutableStateOf<Pair<FeedFrom, String>?>(null) }
+    val gridState = rememberLazyGridState()
+    val recentState = rememberLazyListState()
 
-    fun play(v: VideoRow, resumeOverride: Long? = null) {
+    /** Open the swipe feed on [v], with [order] (the list as shown) as the viewing order. */
+    fun play(v: VideoRow, order: List<VideoRow>, from: FeedFrom, resumeOverride: Long? = null) {
         scope.launch {
             val resume = resumeOverride ?: runCatching {
                 app.api.get(
@@ -149,7 +157,8 @@ fun VideosScreen() {
                         "&${app.videoIdentityQuery()}"
                 ).decode<PositionRow>().position_sec.toLong()
             }.getOrDefault(0L)
-            playing = v to resume
+            val start = order.indexOfFirst { videoKey(it) == videoKey(v) }.coerceAtLeast(0)
+            feed = OpenFeed(from, order, start, resume)
         }
     }
 
@@ -169,6 +178,21 @@ fun VideosScreen() {
         q.isBlank() || it.name.lowercase().contains(q) || it.rel.lowercase().contains(q)
     }
     val grouped = filtered.groupBy { it.library_id }
+    val rec = recent.data.orEmpty()
+    val entries = videoGridEntries(showRecent = rec.isNotEmpty() && q.isBlank(), grouped = grouped)
+    val gridOrder = gridFeedOrder(entries)
+
+    LaunchedEffect(centerOn) {
+        val (from, key) = centerOn ?: return@LaunchedEffect
+        when (from) {
+            FeedFrom.Grid -> gridState.centerOn(entries.indexOfFirst { it.key == key })
+            FeedFrom.Recent -> {
+                gridState.scrollToItem(0)
+                recentState.centerOn(rec.indexOfFirst { videoKey(it) == key })
+            }
+        }
+        centerOn = null
+    }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         PageHeader("Videos", "videos across your files libraries · resume where you left off")
@@ -188,24 +212,29 @@ fun VideosScreen() {
                 "drop video files (mp4 · webm · mkv · mov) into any files library",
             )
             else -> LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(160.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f),
             ) {
-                val rec = recent.data.orEmpty()
-                if (rec.isNotEmpty() && q.isBlank()) {
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        Column {
+                // Rendered straight from `entries`, so a video's index there is its grid index.
+                items(
+                    entries,
+                    key = { it.key },
+                    span = { if (it is VideoGridEntry.Tile) GridItemSpan(1) else GridItemSpan(maxLineSpan) },
+                ) { entry ->
+                    when (entry) {
+                        VideoGridEntry.Recent -> Column {
                             SectionLabel("recently played")
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                items(rec, key = { "${it.library_id}:${it.rel}" }) { r ->
+                            LazyRow(state = recentState, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                items(rec, key = { videoKey(it) }) { r ->
                                     Column(Modifier.width(200.dp)) {
                                         PosterTile(
                                             r,
                                             progress = r.duration_sec?.takeIf { it > 0 }
                                                 ?.let { d -> (r.position_sec ?: 0).toFloat() / d },
-                                        ) { play(r, (r.position_sec ?: 0).toLong()) }
+                                        ) { play(r, rec, FeedFrom.Recent, (r.position_sec ?: 0).toLong()) }
                                         Text(
                                             r.title ?: r.name,
                                             style = MaterialTheme.typography.labelMedium,
@@ -224,17 +253,11 @@ fun VideosScreen() {
                             }
                             Spacer(Modifier.height(8.dp))
                         }
-                    }
-                }
-                grouped.forEach { (libId, vids) ->
-                    item(span = { GridItemSpan(maxLineSpan) }, key = "hdr:$libId") {
-                        SectionLabel("${vids.first().library_label ?: libId} · ${vids.size}")
-                    }
-                    items(vids, key = { "${it.library_id}:${it.rel}" }) { v ->
-                        Column {
-                            PosterTile(v) { play(v) }
+                        is VideoGridEntry.Header -> SectionLabel("${entry.label} · ${entry.count}")
+                        is VideoGridEntry.Tile -> Column {
+                            PosterTile(entry.video) { play(entry.video, gridOrder, FeedFrom.Grid) }
                             Text(
-                                v.name,
+                                entry.video.name,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = Domovoi.colors.fg,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -247,19 +270,42 @@ fun VideosScreen() {
         }
     }
 
-    playing?.let { (video, resumeSec) ->
-        VideoPlayerDialog(
-            title = video.title ?: video.name,
-            mediaUri = app.api.absolute(streamPath(video)),
-            resumeSec = resumeSec,
-            onSave = { saveToDevice(video) },
-            onPersist = { pos, dur, ended ->
-                savePosition(app, video, if (ended) 0 else pos, dur)
+    feed?.let { open ->
+        val byKey = remember(open) { open.videos.associateBy(::videoKey) }
+        val feedVideos = remember(open) {
+            open.videos.map { v ->
+                FeedVideo(
+                    key = videoKey(v),
+                    title = v.title ?: v.name,
+                    uri = app.api.absolute(streamPath(v)),
+                    posterModel = app.api.absolute(posterPath(v)),
+                    sizeBytes = v.size,
+                    modifiedEpochSec = v.mtime,
+                    location = "${v.library_label ?: v.library_id}/${v.rel}",
+                )
+            }
+        }
+        VideoFeedPlayer(
+            videos = feedVideos,
+            startIndex = open.start,
+            resumeSec = open.resumeSec,
+            onSave = { fv -> byKey[fv.key]?.let(::saveToDevice) },
+            onPersist = { fv, pos, dur, ended ->
+                byKey[fv.key]?.let { savePosition(app, it, if (ended) 0 else pos, dur) }
             },
-            onClose = { playing = null; recent.refresh() },
+            onClose = { key ->
+                feed = null
+                recent.refresh()
+                if (key != null) centerOn = open.from to key
+            },
         )
     }
 }
+
+/** Which list a feed was opened from, and so which list its close centres. */
+private enum class FeedFrom { Grid, Recent }
+
+private data class OpenFeed(val from: FeedFrom, val videos: List<VideoRow>, val start: Int, val resumeSec: Long)
 
 @Composable
 private fun SectionLabel(text: String) {
@@ -326,5 +372,5 @@ private fun PosterFallback() {
     }
 }
 
-// Full-screen playback uses the shared VideoPlayerDialog (VideoPlayerDialog.kt),
-// with resume persistence wired through savePosition above.
+// Full-screen playback is the swipe feed (VideoFeed.kt), with resume
+// persistence wired through savePosition above.

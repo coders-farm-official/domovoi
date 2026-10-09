@@ -1,6 +1,8 @@
 package com.domovoi.app.ui.screens.files
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,9 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.domovoi.app.LocalApp
-import com.domovoi.app.net.decode
-import com.domovoi.app.net.filesBrowsePath
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.SectionLabel
@@ -55,6 +54,11 @@ import com.domovoi.app.ui.theme.Domovoi
  * collisions). This sheet only keeps the obvious mistakes off the wire: the
  * folder being moved is not offered as its own destination, and neither is the
  * folder the selection already sits in.
+ *
+ * Listings come through [browse] (the screen's FileSource), so the same sheet
+ * moves files between the phone's own folders, and — with a different
+ * [title]/[actionLabel] and no source library — picks where on the server a
+ * phone file is sent ("send to home").
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,13 +67,22 @@ internal fun FilesMoveSheet(
     sourceLibraryId: String,
     sourcePath: String,
     libraries: List<FileLibrary>,
+    browse: suspend (libraryId: String, path: String) -> FileBrowse,
     onMove: (targetLibraryId: String, targetPath: String) -> Unit,
     onDismiss: () -> Unit,
+    title: String = "move \"${entry.name}\" to…",
+    actionLabel: String = "move here",
+    verb: String = "move",
+    initialLibraryId: String? = null,
 ) {
-    val app = LocalApp.current
     val targets = libraries.filter { it.editable }
 
-    var libId by remember { mutableStateOf(sourceLibraryId.takeIf { id -> targets.any { it.id == id } } ?: targets.firstOrNull()?.id) }
+    var libId by remember {
+        mutableStateOf(
+            (initialLibraryId ?: sourceLibraryId).takeIf { id -> targets.any { it.id == id } }
+                ?: targets.firstOrNull()?.id,
+        )
+    }
     var path by remember { mutableStateOf(if (libId == sourceLibraryId) sourcePath else "") }
     LaunchedEffect(libId) { if (libId != sourceLibraryId) path = "" }
 
@@ -80,7 +93,7 @@ internal fun FilesMoveSheet(
         val id = libId ?: return@LaunchedEffect
         loading = true
         error = null
-        runCatching { app.api.get(filesBrowsePath(id, path, app.prefs.deviceId)).decode<FileBrowse>() }
+        runCatching { browse(id, path) }
             .onSuccess { entries = it.entries.filter { e -> e.isDir } }
             .onFailure { error = it.message ?: "couldn't open folder"; entries = emptyList() }
         loading = false
@@ -103,14 +116,14 @@ internal fun FilesMoveSheet(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "move \"${entry.name}\" to…",
+                title,
                 style = MaterialTheme.typography.titleMedium,
                 color = Domovoi.colors.fg,
             )
 
             if (targets.isEmpty()) {
                 Text(
-                    "no editable libraries — nothing writable to move into.",
+                    "no editable libraries — nothing writable to $verb into.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Domovoi.colors.fgMuted,
                 )
@@ -118,7 +131,10 @@ internal fun FilesMoveSheet(
             }
 
             SectionLabel("library")
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 targets.forEach { lib ->
                     FilterChip(
                         selected = libId == lib.id,
@@ -163,7 +179,7 @@ internal fun FilesMoveSheet(
                 )
                 entries.isEmpty() -> EmptyState(
                     "no subfolders here",
-                    "move into this folder, or pick another library",
+                    "$verb into this folder, or pick another library",
                 )
                 else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
                     items(entries, key = { it.rel }) { dir ->
@@ -207,7 +223,7 @@ internal fun FilesMoveSheet(
                     when {
                         alreadyHere -> "already in this folder"
                         intoItself -> "can't move a folder into itself"
-                        else -> "move here"
+                        else -> actionLabel
                     },
                 )
             }

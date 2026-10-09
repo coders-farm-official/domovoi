@@ -2,6 +2,9 @@ package com.domovoi.app.ui.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.alpha
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,8 +69,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Shared domovoi picker: wifi check, /24 auto-scan, saved servers,
- * and manual ip:port entry. Used by the first-run StartupScreen and by
- * the topbar server-switcher dialog. Mirrors the web ServerSwitcher.
+ * and manual ip:port entry. Lives inside [ConnectionDialog], which both
+ * shells open from their server pill. Mirrors the web ServerSwitcher.
  *
  * Every probe here — the sweep's and the typed address's — is made on a
  * client with no household token on it (Discovery.client): the hosts
@@ -83,6 +86,10 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     val toast = LocalToast.current
     val currentUrl by app.prefs.serverUrl.collectAsState()
     val known by app.prefs.knownServers.collectAsState()
+    val preferLocal by app.prefs.preferLocal.collectAsState()
+    // The saved server is "connected" only while it is the one in use; on the
+    // phone, or with it out of reach, it is just the selected server.
+    val inUse = !preferLocal && LocalServerChoice.current.enabled
     var confirmForgetActive by remember { mutableStateOf(false) }
 
     var onLan by remember { mutableStateOf(Discovery.onLan(context)) }
@@ -106,6 +113,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
             onConnect = { url, name ->
                 app.prefs.upsertKnownServer(url, name)
                 app.prefs.setServerUrl(url)
+                app.prefs.setPreferLocal(false)
             },
         )
     }
@@ -252,7 +260,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                     )
                 }
                 if (active) {
-                    Pill("connected", Tone.Brand, live = true)
+                    if (inUse) Pill("connected", Tone.Brand, live = true) else Pill("selected", Tone.Idle)
                 } else {
                     Text("use", style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.brand)
                 }
@@ -402,57 +410,95 @@ private fun TrustServerDialog(
     }
 }
 
-/** Topbar-launched switcher: the picker in a dialog. */
+/**
+ * The one connection pop-up, opened from the server pill in either shell:
+ * a switch between "this phone" (local media) and the saved Domovoi on top,
+ * the server picker below. The server side is greyed out, with the reason,
+ * when there is no server yet or it is out of reach; picking a server in the
+ * list below also means "use the server".
+ */
 @Composable
-fun ServerSwitcherDialog(onDismiss: () -> Unit) {
+fun ConnectionDialog(onDismiss: () -> Unit) {
+    val app = LocalApp.current
+    val choice = LocalServerChoice.current
+    val preferLocal by app.prefs.preferLocal.collectAsState()
+    val serverUrl by app.prefs.serverUrl.collectAsState()
+    // Which side is lit: the phone when chosen or when the server can't be used.
+    val onPhone = preferLocal || serverUrl.isBlank() || !choice.enabled
     Dialog(onDismissRequest = onDismiss) {
         DomovoiCard(Modifier.fillMaxWidth(), padding = 20) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Dns, contentDescription = null, tint = Domovoi.colors.brand, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("domovois", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+                    Text("connection", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Filled.Close, "close", tint = Domovoi.colors.fgMuted, modifier = Modifier.size(16.dp))
                     }
                 }
                 Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    ModeOption(
+                        icon = Icons.Filled.PhoneAndroid,
+                        title = "this phone",
+                        sub = "music, videos and files on the phone",
+                        selected = onPhone,
+                        enabled = true,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        app.prefs.setPreferLocal(true)
+                        onDismiss()
+                    }
+                    ModeOption(
+                        icon = Icons.Filled.Dns,
+                        title = choice.title(),
+                        sub = choice.reason(),
+                        selected = !onPhone,
+                        enabled = choice.enabled,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        app.prefs.setPreferLocal(false)
+                        onDismiss()
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
                 ServerPickerPanel(onSelected = onDismiss)
             }
         }
     }
 }
 
-/**
- * First-run / no-server screen: wifi check + auto-scan + pick or add
- * manually. Replaces the old single-URL connect form.
- */
+/** One side of the phone / server switch: a card that is lit when chosen and greyed when it can't be. */
 @Composable
-fun StartupScreen() {
-    // Same early-return story as PairingScreen: OfflineShell returns this
-    // before its own Scaffold, so it carries the keyboard inset itself. This
-    // is the first screen a new phone ever shows with a keyboard up, and the
-    // manual-address field is the LAST thing in the column.
-    Box(Modifier.fillMaxSize().imePadding(), contentAlignment = Alignment.Center) {
-        Column(
-            Modifier
-                .widthIn(max = 480.dp)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            DomovoiGlyph(48)
-            Text("domovoi", style = MaterialTheme.typography.displayLarge, color = Domovoi.colors.fg)
-            Text(
-                "looking for domovois on your network — pick one to connect",
-                style = MaterialTheme.typography.bodyMedium,
-                color = Domovoi.colors.fgMuted,
-            )
-            Spacer(Modifier.height(4.dp))
-            ServerPickerPanel(onSelected = {})
+private fun ModeOption(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    sub: String,
+    selected: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(10.dp)
+    val alpha = if (enabled) 1f else 0.45f
+    Column(
+        modifier
+            .background(if (selected) Domovoi.colors.brandSoft else Domovoi.colors.sunken, shape)
+            .border(1.dp, if (selected) Domovoi.colors.brand else Domovoi.colors.border, shape)
+            .clickable(enabled = enabled && !selected, onClickLabel = "use $title", onClick = onClick)
+            .padding(12.dp)
+            .alpha(alpha),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(icon, contentDescription = null, tint = if (selected) Domovoi.colors.brand else Domovoi.colors.fgMuted,
+                modifier = Modifier.size(16.dp))
+            Text(title, style = MaterialTheme.typography.titleSmall, color = Domovoi.colors.fg,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        Text(sub, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted, maxLines = 2,
+            overflow = TextOverflow.Ellipsis)
+        if (selected) Pill("in use", Tone.Brand)
     }
 }

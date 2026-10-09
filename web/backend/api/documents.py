@@ -13,8 +13,8 @@ iframes, no JWT/WOPI handshakes, no per-file engine locks):
     (``/export/doc``, python-docx).
   * **Sheet editor** (web/static/sheet_editor.jsx) — vendored
     ``x-spreadsheet`` grid with client-side formula evaluation. Reads and
-    writes .xlsx (openpyxl — values, formula strings) and .csv through
-    the ``/sheet`` endpoints; export to .csv/.xlsx via ``/export/sheet``.
+    writes .xlsx (openpyxl — values, formula strings; a save updates the
+    existing workbook in place) and .csv through the ``/sheet`` endpoints; export to .csv/.xlsx via ``/export/sheet``.
   * **Excalidraw** — in-page React lib, unchanged (.excalidraw scenes).
 
 Legacy office formats (.docx/.doc/.odt/.rtf and .xls/.ods) are stored,
@@ -79,6 +79,7 @@ rather than assumed:
 
 from __future__ import annotations
 
+import codecs
 import csv
 import io
 import logging
@@ -88,7 +89,7 @@ import re
 import zipfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -822,12 +823,55 @@ async def write_text_file(
 
 
 # ─── Homegrown spreadsheet editor (.xlsx / .csv) ────────────────────
+def _cell_model(val: Any) -> dict[str, Any]:
+    """One stored cell value as the editor sees it: ``{v, f}``. The read
+    and the save's "did this cell change?" test share it, so an unchanged
+    date, boolean or number compares equal to what the editor got and is
+    never rewritten as text."""
+    if isinstance(val, str) and val.startswith("="):
+        return {"v": None, "f": val}
+    if val is None:
+        return {"v": None, "f": None}
+    return {"v": str(val), "f": None}
+
+
+def _grid_model(cell: Optional[SheetCell]) -> dict[str, Any]:
+    """An editor cell normalised to the same shape as :func:`_cell_model`."""
+    if cell is None:
+        return {"v": None, "f": None}
+    if cell.f:
+        return {"v": None, "f": cell.f}
+    if cell.v is None or cell.v == "":
+        return {"v": None, "f": None}
+    return {"v": cell.v, "f": None}
+
+
+def _stored_value(model: dict[str, Any]) -> Any:
+    """What to put in an openpyxl cell for an editor cell: formulas as
+    formulas, numbers as numbers (so exports and formulas work), text as
+    text, blank as None (which keeps the cell's formatting)."""
+    if model["f"]:
+        return model["f"]
+    v = model["v"]
+    if v is None:
+        return None
+    try:
+        num = float(v)
+    except ValueError:
+        return v
+    if num != num or num in (float("inf"), float("-inf")):
+        return v  # "nan"/"inf" typed as text stay text
+    return int(num) if num.is_integer() else num
+
+
 def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
     """Parse a sheet file into the grid model the editor consumes:
     ``rows[r][c] = {v: str|None, f: str|None}``. Bounded to the
     ``_SHEET_MAX_*`` window (truncated, never errored). .xlsx reads the
     FIRST worksheet; formulas come back as ``f`` with no cached value
-    (the client grid re-evaluates)."""
+    (the client grid re-evaluates). Rows are ragged, as .csv rows always
+    were: trailing empty cells are not sent (read-only openpyxl pads every
+    row out to the column cap, which showed every .xlsx 60 columns wide)."""
     ext = target.suffix.lower()
     grid: list[list[dict[str, Any]]] = []
     if ext == ".csv":
@@ -842,25 +886,19 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
     if ext == ".xlsx":
         from openpyxl import load_workbook
 
+        _assert_xlsx_fits(target)
         wb = load_workbook(target, data_only=False, read_only=True)
         try:
             ws = wb.worksheets[0]
-            for r, row in enumerate(ws.iter_rows(max_row=_SHEET_MAX_ROWS,
-                                                 max_col=_SHEET_MAX_COLS)):
-                cells = []
-                for cell in row:
-                    val = cell.value
-                    if isinstance(val, str) and val.startswith("="):
-                        cells.append({"v": None, "f": val})
-                    elif val is None:
-                        cells.append({"v": None, "f": None})
-                    else:
-                        cells.append({"v": str(val), "f": None})
+            for row in ws.iter_rows(max_row=_SHEET_MAX_ROWS, max_col=_SHEET_MAX_COLS):
+                cells = [_cell_model(cell.value) for cell in row]
+                while cells and cells[-1]["v"] is None and cells[-1]["f"] is None:
+                    cells.pop()
                 grid.append(cells)
         finally:
             wb.close()
         # Trim fully-empty trailing rows read_only mode can over-report.
-        while grid and all(c["v"] is None and c["f"] is None for c in grid[-1]):
+        while grid and not grid[-1]:
             grid.pop()
         return grid
     raise HTTPException(
@@ -869,37 +907,164 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
     )
 
 
+# Parts of an .xlsx that openpyxl does not read, so a load-and-save would
+# silently drop them: charts, pictures and shapes (DrawingML under
+# xl/drawings/, but not the vmlDrawing that carries cell comments, which it
+# keeps), embedded media, and pivot tables.
+_XLSX_UNKEPT_PREFIXES = ("xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/")
+
+
+# What an .xlsx may hold once inflated before either sheet route opens it.
+# openpyxl reads a workbook's parts into memory with no bound of its own:
+# the save loads the whole workbook, and even the read-only read holds the
+# shared strings and styles. The Documents door takes uploads far larger than
+# any sheet, so without this a small archive that unpacks to gigabytes was a
+# one-request memory exhaustion for anything with a device token. The zip
+# directory states the sizes up front, so nothing is inflated to find out.
+_XLSX_MAX_INFLATED_BYTES = 256 * 1024 * 1024
+
+
+def _assert_xlsx_fits(target: Path) -> None:
+    """413 when ``target``'s zip directory says its entries unpack to more
+    than ``_XLSX_MAX_INFLATED_BYTES`` in all. A file that is not a zip is
+    left for the caller, which refuses it in its own words."""
+    try:
+        with zipfile.ZipFile(target) as z:
+            total = sum(info.file_size for info in z.infolist())
+    except (zipfile.BadZipFile, OSError):
+        return
+    if total > _XLSX_MAX_INFLATED_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{target.name} is too large to open in the sheet editor: it unpacks "
+            f"to more than {_XLSX_MAX_INFLATED_BYTES // (1024 * 1024)} MiB.",
+        )
+
+
+def _xlsx_unkept_parts(target: Path) -> bool:
+    try:
+        with zipfile.ZipFile(target) as z:
+            names = z.namelist()
+    except (zipfile.BadZipFile, OSError):
+        return False
+    for n in names:
+        if n.startswith(_XLSX_UNKEPT_PREFIXES):
+            return True
+        if n.startswith("xl/drawings/") and not n.startswith("xl/drawings/vmlDrawing") \
+                and n.endswith(".xml"):
+            return True
+    return False
+
+
+def _replace_atomically(target: Path, write: Callable[[Path], None]) -> None:
+    """Write through a temporary file beside ``target`` and swap it in, so
+    a save that fails half way never leaves a truncated spreadsheet."""
+    tmp = target.with_name(f".{target.name}.saving-{os.getpid()}")
+    try:
+        write(tmp)
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _write_csv_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None:
+    """Write the grid as CSV. The editor only ever saw the first
+    ``_SHEET_MAX_ROWS`` x ``_SHEET_MAX_COLS``; anything the file holds
+    beyond that window is carried over as it was rather than dropped, and
+    a UTF-8 byte-order mark the file started with is kept."""
+    original: list[list[str]] = []
+    bom = False
+    if target.is_file():
+        raw = target.read_bytes()
+        bom = raw.startswith(codecs.BOM_UTF8)
+        original = list(csv.reader(io.StringIO(raw.decode("utf-8-sig", errors="replace"), newline="")))
+
+    def text(c: Optional[SheetCell]) -> str:
+        return c.f if c and c.f else (c.v if c and c.v is not None else "")
+
+    window = _SHEET_MAX_ROWS if len(original) > _SHEET_MAX_ROWS else len(rows)
+    out: list[list[str]] = []
+    for r in range(window):
+        part = [text(c) for c in rows[r][:_SHEET_MAX_COLS]] if r < len(rows) else []
+        beyond = original[r][_SHEET_MAX_COLS:] if r < len(original) else []
+        if beyond:
+            part = part + [""] * (_SHEET_MAX_COLS - len(part)) + beyond
+        out.append(part)
+    out.extend(original[_SHEET_MAX_ROWS:])
+
+    def write(path: Path) -> None:
+        with path.open("w", encoding="utf-8-sig" if bom else "utf-8", newline="") as fh:
+            csv.writer(fh).writerows(out)
+
+    _replace_atomically(target, write)
+
+
+def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None:
+    """Save the grid into the workbook that is already there: only cells
+    whose value changed are touched, inside the editor's window of the
+    first sheet, so formatting, column widths, merges, other sheets and
+    everything past the window survive. (This used to build a brand-new
+    workbook, which threw all of that away.) A new file starts blank."""
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.cell.cell import MergedCell
+
+    wb = None
+    if target.is_file() and target.stat().st_size > 0:
+        _assert_xlsx_fits(target)
+        if _xlsx_unkept_parts(target):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} has charts, pictures or pivot tables the sheet "
+                "editor can't keep, so it was not saved. Edit it in a spreadsheet app.",
+            )
+        try:
+            wb = load_workbook(target)
+        except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
+            # Not a workbook this server can open (an .xls renamed, a damaged
+            # file). The old save would have put a brand-new workbook in its
+            # place; refusing keeps a file nobody could inspect from being
+            # replaced by a grid that was never read from it.
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} could not be read as a workbook, so it was not "
+                "saved. Open it in a spreadsheet app.",
+            ) from exc
+    if wb is None:
+        wb = Workbook()  # a new name, or an empty file
+    ws = wb.worksheets[0]
+
+    # The window the editor saw is authoritative: a cell it left blank is
+    # cleared (value only, its formatting stays), a cell outside it is not
+    # looked at. ws._cells is read directly so that walking the window does
+    # not create a cell object for every empty position.
+    height = min(_SHEET_MAX_ROWS, max(len(rows), ws.max_row or 0))
+    width = min(_SHEET_MAX_COLS, max([len(r) for r in rows] + [ws.max_column or 0]))
+    for r in range(1, height + 1):
+        grid_row = rows[r - 1] if r - 1 < len(rows) else []
+        for c in range(1, width + 1):
+            want = _grid_model(grid_row[c - 1] if c - 1 < len(grid_row) else None)
+            existing = ws._cells.get((r, c))
+            have = _cell_model(existing.value if existing is not None else None)
+            if want == have:
+                continue
+            if isinstance(existing, MergedCell):
+                continue  # covered by a merge; only its top-left cell holds a value
+            ws.cell(row=r, column=c).value = _stored_value(want)
+
+    _replace_atomically(target, lambda path: wb.save(path))
+
+
 def _write_sheet_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> None:
     ext = target.suffix.lower()
     if ext == ".csv":
-        with target.open("w", encoding="utf-8", newline="") as fh:
-            w = csv.writer(fh)
-            for row in rows:
-                w.writerow([
-                    (c.f if c and c.f else (c.v if c and c.v is not None else ""))
-                    for c in row[:_SHEET_MAX_COLS]
-                ])
+        _write_csv_grid(target, rows)
         return
     if ext == ".xlsx":
-        from openpyxl import Workbook
-
-        wb = Workbook()
-        ws = wb.active
-        for r, row in enumerate(rows, start=1):
-            for c, cell in enumerate(row[:_SHEET_MAX_COLS], start=1):
-                if cell is None:
-                    continue
-                if cell.f:
-                    ws.cell(row=r, column=c, value=cell.f)
-                elif cell.v is not None and cell.v != "":
-                    # Preserve numbers as numbers so exports/formulas work.
-                    try:
-                        num = float(cell.v)
-                        ws.cell(row=r, column=c,
-                                value=int(num) if num.is_integer() else num)
-                    except ValueError:
-                        ws.cell(row=r, column=c, value=cell.v)
-        wb.save(target)
+        _write_xlsx_grid(target, rows)
         return
     raise HTTPException(
         status_code=415,
@@ -928,8 +1093,12 @@ async def write_sheet(
 ) -> DocumentRow:
     """Write the editor grid back: .csv gets values (formula strings kept
     verbatim as text), .xlsx gets formulas as formulas and numbers as
-    numbers (openpyxl). A non-sheet target is refused with 415 up
-    front, so a save the server will not do leaves nothing behind."""
+    numbers (openpyxl). An existing file is updated in place, cell by
+    changed cell, so what the editor cannot show (formatting, other
+    sheets, anything past its window) survives; an .xlsx holding charts,
+    pictures or pivot tables is refused with 409 rather than stripped.
+    A non-sheet target is refused with 415 up front, so a save the server
+    will not do leaves nothing behind."""
     await _assert_files_policy(request, req.device_id)
     target = _safe_target(rel_path)
     _assert_saveable_name(target)

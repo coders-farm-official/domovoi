@@ -39,40 +39,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.ConfirmDialog
+import com.domovoi.app.ui.screens.files.FileSource
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import com.domovoi.app.net.decode
-
-// ---------------------------------------------------------------------------
-// Models — /api/documents/sheet grid (web sheet_editor.jsx).
-// ---------------------------------------------------------------------------
-
-@Serializable
-private data class SheetCell(val v: String? = null, val f: String? = null)
-
-@Serializable
-private data class SheetGrid(val rows: List<List<SheetCell?>> = emptyList())
 
 /**
  * Minimal spreadsheet editor for .xlsx/.csv — the mobile analog of the web
  * sheet editor, deliberately simpler: an editable value grid (formulas show
  * and save as their `=...` strings; evaluation is the web editor's job).
- * Explicit Save, dirty guard, 415 → download hint.
+ * Explicit Save, dirty guard, 415 → download hint. Reads and writes through
+ * the [FileSource]: the server's /api/documents/sheet, or the phone's own
+ * .xlsx/.csv code (which writes only the cells that changed).
  */
 @Composable
-internal fun SheetEditorOverlay(relPath: String, onClose: () -> Unit) {
-    val app = LocalApp.current
+internal fun SheetEditorOverlay(source: FileSource, libraryId: String, relPath: String, onClose: () -> Unit) {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
 
@@ -80,30 +66,28 @@ internal fun SheetEditorOverlay(relPath: String, onClose: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     // Mutable padded grid: rows × cols of plain display strings.
     val grid = remember { mutableStateListOf<MutableList<String>>() }
+    // The grid as first shown: what a phone save diffs against.
+    var loadedGrid by remember { mutableStateOf<List<List<String>>>(emptyList()) }
     var cols by remember { mutableStateOf(0) }
     var dirty by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
 
-    LaunchedEffect(relPath) {
+    LaunchedEffect(libraryId, relPath) {
         loading = true
-        runCatching {
-            app.api.get("/api/documents/sheet/${java.net.URLEncoder.encode(relPath, "UTF-8")}")
-                .decode<SheetGrid>()
-        }.onSuccess { g ->
+        runCatching { source.readSheet(libraryId, relPath) }.onSuccess { rowsIn ->
             grid.clear()
-            cols = maxOf(4, g.rows.maxOfOrNull { it.size } ?: 0)
-            val rows = maxOf(8, g.rows.size)
+            cols = maxOf(4, rowsIn.maxOfOrNull { it.size } ?: 0)
+            val rows = maxOf(8, rowsIn.size)
             for (r in 0 until rows) {
-                val src = g.rows.getOrNull(r).orEmpty()
-                grid.add(MutableList(cols) { c ->
-                    val cell = src.getOrNull(c)
-                    cell?.f ?: cell?.v ?: ""
-                })
+                val src = rowsIn.getOrNull(r).orEmpty()
+                grid.add(MutableList(cols) { c -> src.getOrNull(c).display() })
             }
+            loadedGrid = grid.map { it.toList() }
             error = null
         }.onFailure {
-            error = if ((it.message ?: "").startsWith("415")) "unsupported" else (it.message ?: "load failed")
+            error = if (it is SheetUnsupported || (it.message ?: "").startsWith("415")) "unsupported"
+            else (it.message ?: "load failed")
         }
         loading = false
     }
@@ -112,25 +96,9 @@ internal fun SheetEditorOverlay(relPath: String, onClose: () -> Unit) {
         if (saving || !dirty) return
         saving = true
         scope.launch {
-            runCatching {
-                app.api.put(
-                    "/api/documents/sheet/${java.net.URLEncoder.encode(relPath, "UTF-8")}",
-                    buildJsonObject {
-                        put("rows", buildJsonArray {
-                            grid.forEach { row ->
-                                add(buildJsonArray {
-                                    row.forEach { t ->
-                                        add(buildJsonObject {
-                                            if (t.startsWith("=")) put("f", t) else put("v", t)
-                                        })
-                                    }
-                                })
-                            }
-                        })
-                    },
-                )
-            }
-                .onSuccess { dirty = false; toast("saved") }
+            val edited = grid.map { it.toList() }
+            runCatching { source.writeSheet(libraryId, relPath, loadedGrid, edited) }
+                .onSuccess { dirty = false; loadedGrid = edited; toast("saved") }
                 .onFailure { toast("save failed: ${it.message}") }
             saving = false
         }

@@ -36,25 +36,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
-import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.ui.components.ConfirmDialog
+import com.domovoi.app.ui.screens.files.FileSource
+import com.domovoi.app.ui.screens.files.TextLoad
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.shell.keyboardCrowdsTheWindow
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import okhttp3.Request
 
 private sealed class EditorStatus {
     data object Loading : EditorStatus()
@@ -245,15 +237,15 @@ private fun EditorHeader(
 
 /**
  * Full-screen in-app text editor (web TextEditorOverlay / DocEditor):
- * GET /text → edit in a monospace field → Save PUTs {text}. Markdown files
+ * load through the [FileSource] (the server's GET /text, or the file on the
+ * phone) → edit in a monospace field → save writes it back (PUT {text}). Markdown files
  * additionally get a formatting toolbar (the mobile analog of the web
  * markdown editor's). Saves on the button only, so closing with unsaved
  * edits asks first. A 415 means the file isn't previewable as text — offer
  * the raw download instead.
  */
 @Composable
-internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
-    val app = LocalApp.current
+internal fun TextEditorOverlay(source: FileSource, libraryId: String, relPath: String, onClose: () -> Unit) {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
@@ -265,43 +257,26 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
     var saving by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
 
-    LaunchedEffect(relPath) {
+    LaunchedEffect(libraryId, relPath) {
         status = EditorStatus.Loading
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val req = Request.Builder().url(app.api.absolute(docTextPath(relPath))).build()
-                app.api.http.newCall(req).execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    status = when {
-                        resp.code == 415 -> {
-                            val reason = runCatching {
-                                DomovoiJson.parseToJsonElement(body)
-                                    .jsonObject["reason"]?.jsonPrimitive?.contentOrNull
-                            }.getOrNull()
-                            EditorStatus.Unpreviewable(reason ?: "binary")
-                        }
-                        !resp.isSuccessful -> EditorStatus.Error("${resp.code} ${resp.message}")
-                        else -> {
-                            val loaded = runCatching {
-                                DomovoiJson.parseToJsonElement(body)
-                                    .jsonObject["text"]?.jsonPrimitive?.contentOrNull
-                            }.getOrNull() ?: ""
-                            field = androidx.compose.ui.text.input.TextFieldValue(loaded)
-                            EditorStatus.Ready
-                        }
+        runCatching { source.readText(libraryId, relPath) }
+            .onSuccess { loaded ->
+                status = when (loaded) {
+                    is TextLoad.Unpreviewable -> EditorStatus.Unpreviewable(loaded.reason)
+                    is TextLoad.Ready -> {
+                        field = androidx.compose.ui.text.input.TextFieldValue(loaded.text)
+                        EditorStatus.Ready
                     }
                 }
-            }.onFailure { status = EditorStatus.Error(it.message ?: "load failed") }
-        }
+            }
+            .onFailure { status = EditorStatus.Error(it.message ?: "load failed") }
     }
 
     fun save() {
         if (saving || !dirty) return
         saving = true
         scope.launch {
-            runCatching {
-                app.api.put(docTextPath(relPath), buildJsonObject { put("text", field.text) })
-            }
+            runCatching { source.writeText(libraryId, relPath, field.text) }
                 .onSuccess {
                     dirty = false
                     toast("saved")
@@ -358,8 +333,8 @@ internal fun TextEditorOverlay(relPath: String, onClose: () -> Unit) {
                         color = Domovoi.colors.fgMuted,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { openRawDoc(ctx, app, relPath) }) {
-                            Text("download")
+                        OutlinedButton(onClick = { source.openRaw(ctx, libraryId, relPath) }) {
+                            Text(source.rawLabel)
                         }
                     }
                 }

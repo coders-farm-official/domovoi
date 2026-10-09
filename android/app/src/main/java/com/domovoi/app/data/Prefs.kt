@@ -63,6 +63,8 @@ class Prefs(
     private val kLyricsPanelOpen = booleanPreferencesKey("lyrics_panel_open")
     private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
     private val kLyricsRoomNudge = stringPreferencesKey("lyrics_room_nudge")
+    private val kPreferLocal = booleanPreferencesKey("prefer_local")
+    private val kPhoneFolders = stringPreferencesKey("phone_folders")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -118,6 +120,16 @@ class Prefs(
     private val _lyricsRoomNudge = MutableStateFlow<Map<String, Long>>(emptyMap())
     val lyricsRoomNudge: StateFlow<Map<String, Long>> = _lyricsRoomNudge
 
+    /** The connection dialog's "this phone" choice: stay on the phone's own
+     *  media even while the saved server answers, until the server is picked
+     *  again (ui/shell/ShellMode.kt). */
+    private val _preferLocal = MutableStateFlow(false)
+    val preferLocal: StateFlow<Boolean> = _preferLocal
+
+    /** Folders added to the phone's Files tab (data/PhoneFolders.kt). */
+    private val _phoneFolders = MutableStateFlow<List<PhoneFolder>>(emptyList())
+    val phoneFolders: StateFlow<List<PhoneFolder>> = _phoneFolders
+
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
     var deviceId: String = ""
         private set
@@ -166,6 +178,8 @@ class Prefs(
             _lyricsPanelOpen.value = p[kLyricsPanelOpen] ?: true
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
+            _preferLocal.value = p[kPreferLocal] ?: false
+            _phoneFolders.value = PhoneFolders.decode(p[kPhoneFolders])
             deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
@@ -363,6 +377,18 @@ class Prefs(
     fun setThemeMode(mode: ThemeMode) {
         _themeMode.value = mode
         scope.launch { context.dataStore.edit { it[kTheme] = mode.name } }
+    }
+
+    fun setPreferLocal(local: Boolean) {
+        if (_preferLocal.value == local) return
+        _preferLocal.value = local
+        scope.launch { context.dataStore.edit { it[kPreferLocal] = local } }
+    }
+
+    fun setPhoneFolders(list: List<PhoneFolder>) {
+        if (_phoneFolders.value == list) return
+        _phoneFolders.value = list
+        scope.launch { context.dataStore.edit { it[kPhoneFolders] = PhoneFolders.encode(list) } }
     }
 
     fun setListenerPersonId(id: String?) {
