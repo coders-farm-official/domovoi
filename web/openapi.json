@@ -5266,13 +5266,54 @@
         }
       }
     },
+    "/api/satellites/{room_id}/health": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Get Satellite Health",
+        "description": "The room's latest health sample, its last outage report and a 24 h\nhistory summary (2026-10-09). Passes through to the core, which keeps\nthe latest sample in memory across disconnects and the history in\nV022. 200 with nulls for a room nothing is known about.",
+        "operationId": "get_satellite_health_api_satellites__room_id__health_get",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Room Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/{room_id}/logs": {
       "get": {
         "tags": [
           "satellites"
         ],
         "summary": "Get Satellite Logs",
-        "description": "Tail of the satellite's in-RAM log ring, pulled live over its WS.\n\nDefaults to the most recent 1 MB (what the drawer's Logs tab renders);\npass ``max_bytes`` up to 10 MB for the whole ring. 404 when the room\nisn't connected \u2014 the buffer lives in the Pi's process.\n\nThe timeout outlasts the core's own 60 s WS wait on purpose, so a slow\nsatellite surfaces the core's 504 (\"stopped answering\") instead of this\nhop timing out first and reporting a less specific 502.",
+        "description": "The satellite's logs: the tail of its in-RAM ring, pulled live over\nits WS, and (2026-10-09) the tail of the log the core retains for it\non disk, with its last outage report.\n\nDefaults to the most recent 1 MB (what the drawer's Logs tab renders);\npass ``max_bytes`` up to 10 MB for the whole ring. The core answers an\nOFFLINE room with ``live: null`` and whatever it retains (that is the\npoint of retaining it), and 404 only when it holds nothing at all.\n\nThe timeout outlasts the core's own 60 s WS wait on purpose, so a slow\nsatellite surfaces the core's 504 (\"stopped answering\") instead of this\nhop timing out first and reporting a less specific 502.",
         "operationId": "get_satellite_logs_api_satellites__room_id__logs_get",
         "parameters": [
           {
@@ -5921,7 +5962,7 @@
           "config"
         ],
         "summary": "Get Version",
-        "description": "What the Domovoi server is RUNNING, and what's checked out on disk.\n\nReturns ``sha``/``running_sha`` (captured at the core's boot, so it names\nthe code actually loaded), ``checkout_sha`` (read live from the working\ntree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two\nSHAs diverge after a ``git pull`` without a restart \u2014 the case this panel\nmost needs to get right. On a Linux host with the update unit it also\ncarries ``restart_mode``, ``last_update`` (that unit's last run) and\n``bad_sha`` (a commit it rolled back). Read-only proxy to the Domovoi\nserver, which owns the git working tree; the web process can't see it.\n\n``plugins_pending_restart`` is the one addition this process makes: the\ncore lists its upgrades staged for restart, and this process adds every\nplugin whose web module it imported at an older version than the\nregistry now holds (``where`` names which process runs the old code).\nEither one makes ``restart_required`` true.",
+        "description": "What the Domovoi server is RUNNING, and what's checked out on disk.\n\nReturns ``sha``/``running_sha`` (captured at the core's boot, so it names\nthe code actually loaded), ``checkout_sha`` (read live from the working\ntree), ``restart_required``, ``started_at`` and ``uptime_sec``. The two\nSHAs diverge after a ``git pull`` without a restart \u2014 the case this panel\nmost needs to get right. On a Linux host with the update unit it also\ncarries ``restart_mode``, ``last_update`` (that unit's last run) and\n``bad_sha`` (a commit it rolled back). ``restart_in_progress`` is true\nwhile a restart or update is under way, however it was started; the\ndashboard offers no other meanwhile. Read-only proxy to the Domovoi\nserver, which owns the git working tree; the web process can't see it.\n\n``plugins_pending_restart`` is the one addition this process makes: the\ncore lists its upgrades staged for restart, and this process adds every\nplugin whose web module it imported at an older version than the\nregistry now holds (``where`` names which process runs the old code).\nEither one makes ``restart_required`` true.",
         "operationId": "get_version_api_config_version_get",
         "responses": {
           "200": {
@@ -5981,7 +6022,7 @@
           "config"
         ],
         "summary": "Restart Version",
-        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 Version's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead.",
+        "description": "Bounce the Domovoi services so pulled code actually loads, or just\nrestart them (Settings \u2192 Version's \"Restart Domovoi\"); where\ndomovoi-update.service is installed, start it instead: sync, migrate,\nrestart, roll back on failure, and with nothing new to apply only the\nrestart and its health check.\n\nAdmin-gated at both hops. The response comes back before the restart\nfires, so a client that then sees the connection drop should treat that\nas the restart succeeding, not as an error. Hosts without the sudoers\ngrant return ``ok: false`` with the reason instead, and so does a press\nwhile a restart or update is already under way (``in_progress: true``):\nthe client follows that one rather than reporting a failure.",
         "operationId": "restart_version_api_config_version_restart_post",
         "responses": {
           "200": {
@@ -8092,7 +8133,7 @@
           "documents"
         ],
         "summary": "Write Sheet",
-        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl). A non-sheet target is refused with 415 up\nfront, so a save the server will not do leaves nothing behind.",
+        "description": "Write the editor grid back: .csv gets values (formula strings kept\nverbatim as text), .xlsx gets formulas as formulas and numbers as\nnumbers (openpyxl). An existing file is updated in place, cell by\nchanged cell, so what the editor cannot show (formatting, other\nsheets, anything past its window) survives; an .xlsx holding charts,\npictures or pivot tables is refused with 409 rather than stripped.\nA non-sheet target is refused with 415 up front, so a save the server\nwill not do leaves nothing behind.",
         "operationId": "write_sheet_api_documents_sheet__rel_path__put",
         "parameters": [
           {
