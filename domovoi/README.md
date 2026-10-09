@@ -4,7 +4,7 @@ The core voice service package: STT → intent routing → handlers → TTS,
 WebSocket streaming for satellites, persistence, background workers, and
 the plugin runtime. This README is the package-internals reference —
 run-it and use-it documentation lives in the repo-root `README.md` and
-`docs/`; repo-wide conventions live in `CLAUDE.md`.
+`docs/`; repo-wide conventions live in `AGENTS.md`.
 
 ## Run locally (Windows, PowerShell)
 
@@ -1049,4 +1049,4 @@ All config is env-driven via `.env` (see `.env.example`):
 
 ## Layout
 
-See the repo-root `CLAUDE.md` for the tree and the permanent conventions.
+See the repo-root `AGENTS.md` for the tree and the permanent conventions.

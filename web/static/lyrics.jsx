@@ -274,7 +274,7 @@ const _lyrReducedMotion = () => {
 const _lyrRowSame = (a, b) => a.text === b.text && a.state === b.state && a.t === b.t && a.seek === b.seek;
 
 // A gap (an instrumental break) is a muted music note — the design system's
-// icon, not a Unicode glyph (.claude/skills/domovoi-design: no glyphs as icons).
+// icon, not a Unicode glyph (docs/design/README.md: no glyphs as icons).
 const LyricsLine = React.memo(function LyricsLine({ text, state, t, seek }) {
   const cls = `lyr-line lyr-${state}${text ? '' : ' lyr-gap'}`;
   const current = state === 'now' ? 'true' : undefined;

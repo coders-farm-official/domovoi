@@ -12,15 +12,27 @@ This is a tech-forward management UI you'd reach from a laptop or a phone on the
 - **Calendar** — local + synced events, timers, reminders
 - **Documents**, **Plugins**, and plugin-supplied pages (the sidebar interleaves core and plugin nav items by `nav_order`)
 
+## Hard rules
+
+- One accent: amber. Never introduce a second.
+- No emoji. Status uses `<StatusDot/>`, not a colored-circle character.
+- Live things pulse (`domovoi-pulse`). Idle things don't.
+- Lowercase chrome (`now playing`, `online`, `failed`). Sentence case for content.
+- Cat glyph in three places only: top-left wordmark, next to assistant-attributed lines in feeds, empty states.
+- Media acquisition UI speaks generically: "provider plugin", "source", "acquisition". Never name a specific external media platform or downloader tool anywhere in UI copy, sample data, or code (banned patterns, any case: `yout[u]be`, `yt[-_]?d[l]p` — written bracket-split here so this file itself passes the repo's vocabulary gate).
+- Likewise these reserved token patterns must never appear anywhere (any case): `har[l]ey`, `ric[h]ard`, `orche[s]trator`. The only product name is Domovoi; the mascot is just "the domovoi".
+- Reuse the primitives in `web/static/components.jsx`; don't fork copies of them.
+- The app icon (`docs/assets/domovoi-icon.png`: launcher, Play Store, web install icons) is the glossy amber cat head; inside the UI the cat stays the line-art glyph. `docs/assets/README.md` lists every derived size.
+
 ## Where the truth lives
 
 The **production frontend in this repo is the living UI kit**. Don't fork copies of it into prototypes when working on production code — extend it.
 
-- `web/static/colors_and_type.css` — canonical token file (light + dark). The copy in this skill folder is the standalone version for out-of-repo prototypes: identical token values, but it loads Inter/JetBrains Mono from CDNs instead of the vendored `/vendor/fonts` files, and lacks the `--bg` alias.
+- `web/static/colors_and_type.css` — canonical token file (light + dark). The copy in this folder (`docs/design/colors_and_type.css`) is the standalone version for out-of-repo prototypes: identical token values, but it loads Inter/JetBrains Mono from CDNs instead of the vendored `/vendor/fonts` files, and lacks the `--bg` alias.
 - `web/static/components.jsx` — shared primitives: `Sidebar`, `Topbar`, `PageHeader`, `Stat`, `Card`, `Empty`, `Button`, `IconButton`, `Pill`, `RoomChip`, `Avatar`, `StatusDot`, `DomovoiGlyph`, `SleepingDomovoi`, `HeadphonesDomovoi`.
 - `web/static/assets/domovoi.svg` — the cat glyph (awake). `domovoi-sleeping.svg` — empty-state cat. `wordmark.svg` — full lockup.
 - `web/static/styles.css` — page-shell layout (grid, sidebar, topbar, tables).
-- `preview/` in this skill — token and component specimen cards, a visual cheatsheet. They link the skill-local token file and the repo's `web/static/assets/` SVGs, so open them from inside the repo checkout.
+- `preview/` in this folder — token and component specimen cards, a visual cheatsheet. They link the folder's own token file and the repo's `web/static/assets/` SVGs, so open them from inside the repo checkout.
 
 ## The aesthetic in one paragraph
 
@@ -61,7 +73,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 
 **Errors**
 - Keep them short and machine-readable: `acquisition: source unavailable` is fine as-is. Don't rewrite to "Sorry, that item couldn't be fetched." The user is technical.
-- Media acquisition copy is **provider-generic**: "provider plugin", "source", "acquisition", "external source". UI copy, sample data, and code never name a specific external media platform or downloader tool — see the vocabulary rules in `SKILL.md` and the repo `CLAUDE.md`.
+- Media acquisition copy is **provider-generic**: "provider plugin", "source", "acquisition", "external source". UI copy, sample data, and code never name a specific external media platform or downloader tool — see the hard rules above and the permanent conventions in the repo's `AGENTS.md`.
 
 **No emoji**, ever. Status is a colored dot, not an emoji circle. The cat glyph is a real SVG, not a cat emoji. Unicode middle-dot (·) and en-dash (–) are the only special characters used routinely.
 
@@ -137,8 +149,7 @@ The product talks like a competent, slightly dry sysadmin who knows you personal
 ## Index — what's in this folder
 
 ```
-README.md                     ← you are here
-SKILL.md                      ← Agent Skill manifest (hard rules live there too)
+README.md                     ← you are here (this folder is docs/design/)
 colors_and_type.css           ← standalone token file for out-of-repo prototypes
                                  (canonical: web/static/colors_and_type.css)
 fonts/

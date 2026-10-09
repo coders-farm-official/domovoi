@@ -440,7 +440,7 @@ def test_the_strip_reads_home_music_satellites_calendar_chat(driven) -> None:
     strip = {r["route"]: r["strip"] for r in driven["sidebar_on_music"]["rows"] if r["strip"] is not None}
     assert sorted(strip, key=strip.get) == ["home", "music", "satellites", "calendar", "chat"]
     assert ".sidebar .nav-item.primary { order: var(--strip-order, 9); }" in _phone_block(_src("styles.css"))
-    readme = (REPO_ROOT / ".claude" / "skills" / "domovoi-design" / "README.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "docs" / "design" / "README.md").read_text(encoding="utf-8")
     assert "(home · music · satellites · calendar · chat)" in readme
 
 

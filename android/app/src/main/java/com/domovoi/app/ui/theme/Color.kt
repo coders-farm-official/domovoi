@@ -5,7 +5,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
 // sRGB conversions of the oklch tokens in web/static/colors_and_type.css /
-// .claude/skills/domovoi-design/colors_and_type.css. Single amber accent —
+// docs/design/colors_and_type.css. Single amber accent —
 // never introduce a second accent color.
 
 @Immutable

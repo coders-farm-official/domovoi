@@ -230,7 +230,7 @@ wrong unless that migration has never shipped anywhere.
 * **Keep the gates green** (see below) — branding, media-provider
   vocabulary, and port rules are enforced, not aspirational.
 * Small, focused diffs. Refactors and behavior changes travel separately.
-* **Don't break the invariants** listed in the repo's `CLAUDE.md` and
+* **Don't break the invariants** listed in the repo's `AGENTS.md` and
   [Architecture](ARCHITECTURE.md): local-first (`requires_network` +
   `fallback_offline`), non-optional intent logging, migration-only DB,
   test-DB-only tests, per-band handler ordering, the Windows import order,

@@ -21,7 +21,7 @@ Derived from `domovoi-icon.png`:
   transparency) and `favicon-32.png`.
 
 The cat glyph inside the dashboard itself stays the line-art
-`web/static/assets/domovoi.svg` (see `.claude/skills/domovoi-design/`).
+`web/static/assets/domovoi.svg` (see [`docs/design/`](../design/README.md)).
 
 The banner and the icon were made with an image generator. The text in the
 banner is part of the picture, so changing a word means regenerating it.
