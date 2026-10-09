@@ -509,6 +509,15 @@ degraded_after_disconnect_sec = 30
 # next boot's hello carries as `prev_health`. While disconnected every
 # log line also goes to ~/.domovoi/log-spool.txt (256 KB ring file),
 # pushed to the core on reconnect. Off turns all of it off.
+#
+# Every self-check below acts only when it has seen its condition on two
+# checks in a row (30 s apart for the mic and the wake loop, two 60 s
+# samples for memory, fds and the network), and anything that ends the
+# process (an exit for systemd, a reboot) is counted: at most 3 a rolling
+# hour, at most 1 of them a reboot, kept across restarts in
+# ~/.domovoi/self-restarts.json. Past that a check only logs (HELD BACK)
+# and last-health.json says so under "restart_budget" - a check that
+# fires wrongly costs three restarts an hour, never a unit that loops.
 enabled = true
 
 # Seconds between samples (floor 10). 60 is one row a minute in the
@@ -523,23 +532,29 @@ rss_limit_mb = 300
 # Self-check 4: open file descriptors above this exit the same way.
 fd_limit = 512
 
-# Self-check 5: minutes without a server before the link is looked at.
-# If NetworkManager says the device is not connected, or the gateway does
-# not answer, the usual recovery runs (nmcli device connect wlan0, or
-# wpa_cli reassociate on a hand-built unit) at most once per 5 minutes.
+# Self-check 5: minutes without a socket to the core before the link is
+# looked at. If NetworkManager says the device is not connected, or the
+# gateway is silent, the usual recovery runs (nmcli device connect wlan0,
+# or wpa_cli reassociate on a hand-built unit), at most once per 5 minutes
+# counting the Wi-Fi watcher's own recoveries. "Silent" means no answer to
+# TCP on 53, 80 or 443 (a refusal counts as an answer) nor to a ping, or no
+# default route at all while NetworkManager does not say connected.
 no_server_escalate_min = 5
 
 # ...and minutes without a server AND the gateway silent before the unit
 # reboots through /usr/local/sbin/domovoi-reboot (new cards; PROVISIONING
 # §8.3 for existing units; without the helper it only logs that a reboot
-# would be needed). Never while the gateway answers: a core that is down
-# is the core's problem, not this Pi's.
+# would be needed). Never while the gateway answers, and never while the
+# core's own host answers (even with a refusal): a core that is down is
+# the core's problem, not this Pi's.
 reboot_after_min = 15
 
 # Self-check 1: seconds with no mic frames, while the capture stream
-# should be live, before the stream is reopened once; still none after
-# as long again and the process exits for systemd. Self-check 2: seconds
-# the wake loop may go without a heartbeat while idle.
+# should be live (voice started and not deliberately stopped by an
+# approval refusal), before the stream is reopened; still none after the
+# reopen and the process exits for systemd. Self-check 2: seconds the
+# wake loop may go without a heartbeat while idle, counted from when the
+# client last became idle (it does not tick during a turn, chat or call).
 mic_silence_sec = 30
 heartbeat_stale_sec = 60
 

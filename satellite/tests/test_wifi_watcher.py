@@ -117,6 +117,19 @@ def test_reassociate_still_fires_when_the_rate_looks_fine():
     assert reassociated(sat)
 
 
+def test_the_watcher_honours_a_recovery_the_health_check_just_ran():
+    """Both loops run `_reassociate_wifi`, which stamps one shared clock;
+    the watcher's cooldown starts from whichever ran last, so the two never
+    tear the link down seconds apart."""
+    import time
+
+    sat = make_sat(ws_up=False, rx=52.0, core_answers=False)
+    sat._last_reassociate_at = time.monotonic() - 60.0
+    sat._wifi_watcher_thread_run()
+    assert not reassociated(sat)
+    assert sat._network_degraded.is_set()
+
+
 def test_an_unassociated_link_is_left_to_the_supplicant():
     sat = make_sat(ws_up=False, rx=None, core_answers=False)
     sat._wifi_watcher_thread_run()

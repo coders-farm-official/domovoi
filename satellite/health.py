@@ -316,8 +316,14 @@ def read_default_gateway(run: Callable[..., str | None] = run_tool) -> str | Non
     return parse_default_gateway(run(["ip", "route"], timeout=5.0))
 
 
+#: The gateway is asked on these TCP ports. A home router runs DNS (53) and
+#: a web UI (80, or 443 only); an accept OR a refusal on any of them proves
+#: it is there. Only silence on all three (and no ICMP echo) says it is not.
+GATEWAY_PORTS: tuple[int, ...] = (53, 80, 443)
+
+
 def host_answers(
-    host: str, ports: tuple[int, ...] = (53, 80), timeout: float = 1.0,
+    host: str, ports: tuple[int, ...] = GATEWAY_PORTS, timeout: float = 1.0,
     connect: Callable[..., Any] = socket.create_connection,
 ) -> bool:
     """Does the host answer a TCP SYN on any of ``ports``? A refusal (RST)
@@ -334,16 +340,64 @@ def host_answers(
     return False
 
 
+def icmp_echo(host: str, timeout: float = 1.0) -> bool | None:
+    """One ICMP echo through an unprivileged datagram socket (Linux, when
+    the process's group is in ``net.ipv4.ping_group_range``, which systemd
+    opens to everyone by default). True on a reply, False on none, None
+    when this host cannot ask (no ping socket here) — never an exception.
+
+    The second opinion behind :func:`host_answers`: a router that drops
+    SYNs to its own closed ports still answers ping, and "the gateway is
+    silent" is what licenses a reboot."""
+    import struct
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
+    except (OSError, AttributeError, ValueError):
+        return None
+    try:
+        sock.settimeout(timeout)
+        # type 8 (echo request), code 0; the kernel fills in the checksum
+        # and the identifier for a ping socket.
+        sock.sendto(struct.pack("!BBHHH", 8, 0, 0, 0, 1) + b"domovoi", (host, 0))
+        deadline = time.monotonic() + timeout
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            sock.settimeout(left)
+            data, _ = sock.recvfrom(256)
+            if data[:1] == b"\x00":          # echo reply
+                return True
+    except socket.timeout:
+        return False
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def probe_service(
+    host: str, port: int, timeout: float = 2.0,
+    connect: Callable[..., Any] = socket.create_connection,
+) -> str:
+    """``"accepted"``, ``"refused"`` (the host answered with an RST: the
+    path to it works, the service is down) or ``"silent"``."""
+    try:
+        with connect((host, port), timeout=timeout):
+            return "accepted"
+    except ConnectionRefusedError:
+        return "refused"
+    except OSError:
+        return "silent"
+
+
 def service_reachable(
     host: str, port: int, timeout: float = 2.0,
     connect: Callable[..., Any] = socket.create_connection,
 ) -> bool:
     """Does the service accept a TCP connection? A refusal is a no here."""
-    try:
-        with connect((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+    return probe_service(host, port, timeout, connect) == "accepted"
 
 
 def classify_connect_failure(exc: BaseException) -> str:
@@ -389,19 +443,42 @@ class Sampler:
     sys_root: str = "/sys"
     run: Callable[..., str | None] = run_tool
     connect: Callable[..., Any] = socket.create_connection
+    # The ICMP second opinion on the gateway (None: not asked at all).
+    ping: Callable[..., bool | None] | None = icmp_echo
     cpu: CpuMeter = field(default_factory=CpuMeter)
     started_at: float = field(default_factory=time.monotonic)
     seq: int = 0
     # The device whose link state is asked of NetworkManager.
     wifi_device: str = "wlan0"
-    # `vcgencmd` is absent on anything but a Pi; one miss and it is not
-    # asked again, so a hand-built board does not spawn a failing process
-    # every minute.
-    _vcgencmd_absent: bool = False
-    _nmcli_absent: bool = False
+    # `vcgencmd` is absent on anything but a Pi, `nmcli` on a hand-built
+    # unit: after TOOL_MISS_LATCH misses in a row a tool is left alone for
+    # TOOL_RETRY_SEC, so such a board does not spawn a failing process every
+    # minute. Not for ever: one nmcli that timed out while NetworkManager
+    # was busy with a wedged radio (exactly the outage this is for) used to
+    # silence the NetworkManager state for the rest of the process.
+    _misses: dict[str, int] = field(default_factory=dict)
+    _skip_until: dict[str, float] = field(default_factory=dict)
+
+    TOOL_MISS_LATCH = 3
+    TOOL_RETRY_SEC = 30 * 60.0
 
     def _p(self, rel: str) -> str:
         return os.path.join(self.proc_root, rel)
+
+    def _ask(self, tool: str, now: float, read: Callable[[], Any]) -> Any:
+        """``read()`` unless ``tool`` is resting after repeated misses."""
+        if now < self._skip_until.get(tool, 0.0):
+            return None
+        value = read()
+        if value is None:
+            n = self._misses.get(tool, 0) + 1
+            self._misses[tool] = n
+            if n >= self.TOOL_MISS_LATCH:
+                self._skip_until[tool] = now + self.TOOL_RETRY_SEC
+                self._misses[tool] = 0
+        else:
+            self._misses[tool] = 0
+        return value
 
     def host(self) -> dict[str, Any]:
         """The host-side half of a sample."""
@@ -414,17 +491,12 @@ class Sampler:
             read_process_cpu_ticks(self._p("self/stat")),
             now,
         )
-        throttled: int | None = None
-        if not self._vcgencmd_absent:
-            throttled = read_throttled(self.run)
-            if throttled is None:
-                self._vcgencmd_absent = True
-        nm: dict[str, Any] | None = None
-        if not self._nmcli_absent:
-            nm = read_nm_state(self.run, self.wifi_device)
-            if nm is None:
-                self._nmcli_absent = True
-        gateway = read_default_gateway(self.run)
+        throttled: int | None = self._ask("vcgencmd", now, lambda: read_throttled(self.run))
+        nm: dict[str, Any] | None = self._ask(
+            "nmcli", now, lambda: read_nm_state(self.run, self.wifi_device)
+        )
+        routes = self.run(["ip", "route"], timeout=5.0)
+        gateway = parse_default_gateway(routes)
         return {
             "rss_kb": status["rss_kb"],
             "hwm_kb": status["hwm_kb"],
@@ -446,18 +518,38 @@ class Sampler:
             "boot_id": read_boot_id(self._p("sys/kernel/random/boot_id")),
             "nm_state": nm,
             "gateway": gateway,
+            # Whether there is a default route at all: False is a fact (the
+            # link lost its lease or its association), None means `ip`
+            # could not be asked. A wedged radio looks like False here and
+            # gateway_ok None, never like gateway_ok False.
+            "default_route": None if routes is None else gateway is not None,
         }
 
     def probes(
         self, gateway: str | None, core_host: str | None, core_port: int | None,
         *, probe_core: bool,
     ) -> dict[str, bool | None]:
-        """The reachability half: ``None`` when there was nothing to ask."""
-        gateway_ok = host_answers(gateway, connect=self.connect) if gateway else None
+        """The reachability half: ``None`` when there was nothing to ask.
+
+        ``gateway_ok`` is True when the gateway answers TCP on any of
+        :data:`GATEWAY_PORTS` (accept or refusal) or, failing that, an ICMP
+        echo; False only when all of them were silent. ``core_host_ok`` is
+        True when the core's host answered at all (accept or refusal: the
+        path to it works even if the core is down), ``core_ok`` only when
+        the core accepted."""
+        gateway_ok: bool | None = None
+        if gateway:
+            gateway_ok = host_answers(gateway, connect=self.connect)
+            if not gateway_ok and self.ping is not None:
+                if self.ping(gateway) is True:
+                    gateway_ok = True
         core_ok: bool | None = None
+        core_host_ok: bool | None = None
         if probe_core and core_host and core_port:
-            core_ok = service_reachable(core_host, core_port, connect=self.connect)
-        return {"gateway_ok": gateway_ok, "core_ok": core_ok}
+            outcome = probe_service(core_host, core_port, connect=self.connect)
+            core_ok = outcome == "accepted"
+            core_host_ok = outcome != "silent"
+        return {"gateway_ok": gateway_ok, "core_ok": core_ok, "core_host_ok": core_host_ok}
 
     def sample(
         self,
@@ -482,6 +574,7 @@ class Sampler:
             log.debug("health: probes failed: %s", e)
             doc.setdefault("gateway_ok", None)
             doc.setdefault("core_ok", None)
+            doc.setdefault("core_host_ok", None)
         for key, value in process.items():
             doc[key] = value
         return bound_sample(doc)
@@ -579,6 +672,9 @@ class LastHealth:
         self.offline_diag: list[dict[str, Any]] = []
         self.actions: list[dict[str, Any]] = []
         self.last_exit_reason: str | None = None
+        # The self-restart budget's state (RestartBudget.summary()): how
+        # many restarts the last hour spent, and any check it held back.
+        self.restart_budget: dict[str, Any] | None = None
         self.last_written: float | None = None
         self.writes = 0
 
@@ -630,6 +726,7 @@ class LastHealth:
             "offline_diag": list(self.offline_diag),
             "actions": list(self.actions),
             "last_exit_reason": self.last_exit_reason,
+            "restart_budget": self.restart_budget,
         }
         if extra:
             doc.update(extra)
@@ -651,29 +748,45 @@ class CheckInput:
     """What the self-checks look at. Times are monotonic seconds."""
 
     now: float
-    # The capture stream should be delivering frames (voice input started
-    # and the stream is open).
+    # The capture stream should be delivering frames: voice input started
+    # and the voice gate open (an approval refusal closes it on purpose).
+    # NOT "the stream object exists": a reopen that failed leaves it None,
+    # and that is a stream that should be live and is not.
     mic_expected: bool = False
     # Seconds the callback has delivered no frames while expected; None
     # when frames are flowing (or nothing is expected).
     mic_silent_for: float | None = None
-    # When the stream was already reopened once for silence (None: never).
+    # When the stream was last reopened for silence (None: never, or frames
+    # flowed since).
     mic_reopened_at: float | None = None
+    # A reopen older than this is tried again rather than counted as having
+    # failed (the exit after it may have been refused by the restart budget).
+    mic_reopen_retry: float = 5 * 60.0
     mic_thread_alive: bool = True
     # Age of the wake loop's heartbeat; None until the wake word is armed.
     wake_heartbeat_age: float | None = None
     # No turn open, no call, no chat, no recording: the wake loop MUST be
     # ticking, and RSS has no reason to be high.
     idle: bool = True
+    # How long the client has been idle (monotonic seconds; None: unknown).
+    # The heartbeat is not stamped during a turn, a chat or a call, so right
+    # after a long one its age is the length of that session; the age that
+    # counts is never older than the idle stretch.
+    idle_for: float | None = None
     rss_mb: float | None = None
     rss_limit_mb: float = 300.0
     fds: int | None = None
     fd_limit: int = 512
-    # Seconds since the WebSocket went down; None while it is up.
+    # Seconds since a socket to the core was last open; None while one is.
     no_server_for: float | None = None
     nm_connected: bool | None = None
     gateway_ok: bool | None = None
+    # A default route exists (False: none; None: `ip` could not be asked).
+    default_route: bool | None = None
+    # The core's host answered at all (accept or refusal) at the last probe.
+    core_host_ok: bool | None = None
     last_wifi_recovery: float | None = None
+    # The last reboot asked for (helper) or said to be needed (no helper).
     last_reboot_note: float | None = None
     escalate_after: float = 5 * 60.0
     reboot_after: float = 15 * 60.0
@@ -687,55 +800,97 @@ class CheckInput:
 class Decision:
     action: str
     reason: str
+    # Which self-check decided it (the persistence filter's key).
+    check: str = ""
+    # What one more observation is: "tick" (every 30 s check) or "sample"
+    # (a new health sample, every 60 s — RSS, fds and the network facts
+    # only change when one is taken).
+    basis: str = "tick"
+
+
+#: Actions that end this process (the restart budget applies to them).
+TERMINAL_ACTIONS = frozenset({"exit", "reboot"})
+
+
+def gateway_silent(ci: CheckInput) -> bool:
+    """The gateway does not answer: every probe was silent, or there is no
+    default route at all while NetworkManager does not say connected (a
+    radio that lost its association has no gateway to probe)."""
+    if ci.gateway_ok is True:
+        return False
+    if ci.gateway_ok is False:
+        return True
+    return ci.default_route is False and ci.nm_connected is not True
 
 
 def decide(ci: CheckInput) -> list[Decision]:
-    """The self-check table. Order matters: a fatal exit comes first and
-    alone (nothing after it would run), then the recoverable actions."""
+    """The self-check table: every check that fires, in priority order
+    (the process-ending ones first). No side effects; the client filters
+    the list through :class:`Persistence` and the :class:`RestartBudget`
+    and acts on what is left — the first terminal action it may take ends
+    the list, and one the budget refuses is logged and skipped so the
+    recoverable actions behind it still run."""
     out: list[Decision] = []
 
     # 1 + 2: the microphone and the thread that reads it.
     if ci.mic_expected:
         if not ci.mic_thread_alive:
-            return [Decision("exit", "the mic thread is dead; nothing reads the microphone")]
+            out.append(Decision(
+                "exit", "the mic thread is dead; nothing reads the microphone",
+                check="mic_thread",
+            ))
         if ci.mic_silent_for is not None and ci.mic_silent_for >= ci.mic_silence_limit:
-            if ci.mic_reopened_at is None:
+            if (
+                ci.mic_reopened_at is None
+                or ci.now - ci.mic_reopened_at >= ci.mic_reopen_retry
+            ):
                 out.append(Decision(
                     "reopen_mic",
                     f"no mic frames for {ci.mic_silent_for:.0f}s while the capture "
-                    "stream should be live; reopening the stream once",
+                    "stream should be live; reopening the stream",
+                    check="mic_silent",
                 ))
             else:
-                return [Decision(
+                out.append(Decision(
                     "exit",
                     f"still no mic frames {ci.mic_silent_for:.0f}s after reopening the "
                     "capture stream; exiting so systemd restarts the unit",
-                )]
-        if (
-            ci.idle and ci.wake_heartbeat_age is not None
-            and ci.wake_heartbeat_age >= ci.heartbeat_limit
-        ):
-            return [Decision(
+                    check="mic_silent",
+                ))
+        age = ci.wake_heartbeat_age
+        if age is not None and ci.idle_for is not None:
+            age = min(age, ci.idle_for)
+        if ci.idle and age is not None and age >= ci.heartbeat_limit:
+            out.append(Decision(
                 "exit",
-                f"the wake loop has not ticked for {ci.wake_heartbeat_age:.0f}s while idle",
-            )]
+                f"the wake loop has not ticked for {age:.0f}s while idle",
+                check="wake_loop",
+            ))
 
     # 3: memory while idle.
     if ci.idle and ci.rss_mb is not None and ci.rss_mb > ci.rss_limit_mb:
-        return [Decision(
+        out.append(Decision(
             "exit",
             f"RSS {ci.rss_mb:.0f} MB is above the {ci.rss_limit_mb:.0f} MB limit while idle",
-        )]
+            check="rss", basis="sample",
+        ))
 
     # 4: file descriptors.
     if ci.fds is not None and ci.fds > ci.fd_limit:
-        return [Decision("exit", f"{ci.fds} open file descriptors (limit {ci.fd_limit})")]
+        out.append(Decision(
+            "exit", f"{ci.fds} open file descriptors (limit {ci.fd_limit})",
+            check="fds", basis="sample",
+        ))
 
-    # 5: no server. Never touch anything while the gateway answers and the
-    # core is merely down — that is the core's problem, not this Pi's.
-    if ci.no_server_for is not None and ci.no_server_for >= ci.escalate_after:
-        link_down = ci.nm_connected is False or ci.gateway_ok is False
-        if link_down:
+    # 5: no server. Never touch anything while the gateway answers, or
+    # while the core's own host answers (a refusal from it proves the path):
+    # a core that is down is the core's problem, not this Pi's.
+    if (
+        ci.no_server_for is not None and ci.no_server_for >= ci.escalate_after
+        and ci.gateway_ok is not True and ci.core_host_ok is not True
+    ):
+        silent = gateway_silent(ci)
+        if ci.nm_connected is False or silent:
             due = (
                 ci.last_wifi_recovery is None
                 or ci.now - ci.last_wifi_recovery >= ci.recovery_cooldown
@@ -744,18 +899,153 @@ def decide(ci: CheckInput) -> list[Decision]:
                 out.append(Decision(
                     "wifi_recover",
                     f"no server for {ci.no_server_for / 60:.0f} min and the link is down "
-                    f"(nm_connected={ci.nm_connected}, gateway_ok={ci.gateway_ok})",
+                    f"(nm_connected={ci.nm_connected}, gateway_ok={ci.gateway_ok}, "
+                    f"default_route={ci.default_route})",
+                    check="no_server_link", basis="sample",
                 ))
-        if ci.no_server_for >= ci.reboot_after and ci.gateway_ok is False:
+        if ci.no_server_for >= ci.reboot_after and silent:
             reason = (
                 f"no server for {ci.no_server_for / 60:.0f} min and the gateway does "
                 "not answer; the network stack needs a reboot"
             )
-            if ci.reboot_helper:
-                out.append(Decision("reboot", reason))
-            elif (
+            paced = (
                 ci.last_reboot_note is None
                 or ci.now - ci.last_reboot_note >= ci.reboot_after
-            ):
-                out.append(Decision("reboot_needed", reason))
-    return out
+            )
+            if paced:
+                out.append(Decision(
+                    "reboot" if ci.reboot_helper else "reboot_needed", reason,
+                    check="no_server_reboot", basis="sample",
+                ))
+
+    # Terminal first, in table order; the recoverable ones after.
+    return (
+        [d for d in out if d.action in TERMINAL_ACTIONS]
+        + [d for d in out if d.action not in TERMINAL_ACTIONS]
+    )
+
+
+class Persistence:
+    """A decision is acted on only when the same check has decided the same
+    action on ``required`` consecutive observations — two ticks (30 s
+    apart) for the mic and the wake loop, two samples (60 s apart) for RSS,
+    fds and the network. One stale reading (a heartbeat read in the instant
+    between a long turn ending and the wake loop's first pass, a sample
+    taken mid-spike) is never enough. An observation where the check does
+    not decide it resets its count."""
+
+    def __init__(self, required: int = 2) -> None:
+        self.required = max(1, int(required))
+        self._streak: dict[tuple[str, str], int] = {}
+        self._seen_seq: dict[tuple[str, str], Any] = {}
+
+    def filter(self, decisions: list[Decision], sample_seq: Any = None) -> list[Decision]:
+        keys = set()
+        out: list[Decision] = []
+        for d in decisions:
+            key = (d.check, d.action)
+            keys.add(key)
+            if d.basis == "sample":
+                if key not in self._streak or self._seen_seq.get(key) != sample_seq:
+                    self._streak[key] = self._streak.get(key, 0) + 1
+                    self._seen_seq[key] = sample_seq
+            else:
+                self._streak[key] = self._streak.get(key, 0) + 1
+            if self._streak[key] >= self.required:
+                out.append(d)
+        for key in list(self._streak):
+            if key not in keys:
+                del self._streak[key]
+                self._seen_seq.pop(key, None)
+        return out
+
+    def streak(self, check: str, action: str) -> int:
+        return self._streak.get((check, action), 0)
+
+    def forget(self, check: str) -> None:
+        """Start a check's count over (after acting on it)."""
+        for key in [k for k in self._streak if k[0] == check]:
+            del self._streak[key]
+            self._seen_seq.pop(key, None)
+
+
+class RestartBudget:
+    """At most ``limit`` self-inflicted restarts (an exit for systemd, or a
+    reboot) per rolling ``window_s``, of which at most ``reboot_limit``
+    reboots — across process lives, so it lives on disk
+    (``~/.domovoi/self-restarts.json``). Past it a self-check only logs:
+    a check that fires wrongly can cost three restarts an hour, never a
+    unit that restarts itself for ever. Wall-clock timestamps, because a
+    reboot resets the monotonic clock; an entry stamped more than one
+    window in the future (a clock that jumped back) is dropped."""
+
+    def __init__(
+        self, path: Path, *, limit: int = 3, window_s: float = 3600.0,
+        reboot_limit: int = 1, clock: Callable[[], float] = time.time,
+    ) -> None:
+        self.path = Path(path)
+        self.limit = int(limit)
+        self.window_s = float(window_s)
+        self.reboot_limit = int(reboot_limit)
+        self.clock = clock
+        self.suppressed = 0
+        self.last_suppressed: dict[str, Any] | None = None
+        self._entries: list[dict[str, Any]] = self._load()
+
+    def _load(self) -> list[dict[str, Any]]:
+        try:
+            doc = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        entries = doc.get("restarts") if isinstance(doc, dict) else None
+        if not isinstance(entries, list):
+            return []
+        out = []
+        for e in entries[-50:]:
+            if isinstance(e, dict) and isinstance(e.get("ts"), (int, float)):
+                out.append({
+                    "ts": float(e["ts"]),
+                    "action": str(e.get("action") or "exit")[:16],
+                    "reason": str(e.get("reason") or "")[:300],
+                })
+        return out
+
+    def recent(self) -> list[dict[str, Any]]:
+        now = self.clock()
+        return [
+            e for e in self._entries
+            if now - self.window_s < e["ts"] <= now + self.window_s
+        ]
+
+    def allows(self, action: str) -> bool:
+        recent = self.recent()
+        if len(recent) >= self.limit:
+            return False
+        if action == "reboot":
+            if sum(1 for e in recent if e["action"] == "reboot") >= self.reboot_limit:
+                return False
+        return True
+
+    def record(self, action: str, reason: str) -> bool:
+        """Count one restart, on disk before it happens. False when the
+        file could not be written (the count still holds in this process)."""
+        self._entries = self.recent() + [
+            {"ts": self.clock(), "action": action, "reason": reason[:300]}
+        ]
+        return write_json_atomic(self.path, {"restarts": self._entries})
+
+    def note_suppressed(self, action: str, reason: str) -> None:
+        self.suppressed += 1
+        self.last_suppressed = {"ts": self.clock(), "action": action, "reason": reason[:300]}
+
+    def summary(self) -> dict[str, Any]:
+        recent = self.recent()
+        return {
+            "limit": self.limit,
+            "reboot_limit": self.reboot_limit,
+            "window_s": self.window_s,
+            "recent": recent,
+            "spent": len(recent) >= self.limit,
+            "suppressed": self.suppressed,
+            "last_suppressed": self.last_suppressed,
+        }

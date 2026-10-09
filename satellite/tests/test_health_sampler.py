@@ -182,7 +182,53 @@ def test_gateway_counts_a_refusal_as_answering():
     assert refused.seen == [("192.168.0.1", 53)]
     silent = _connect_with({})
     assert health.host_answers("192.168.0.1", connect=silent) is False
-    assert silent.seen == [("192.168.0.1", 53), ("192.168.0.1", 80)]
+    assert silent.seen == [("192.168.0.1", 53), ("192.168.0.1", 80), ("192.168.0.1", 443)]
+
+
+def test_a_gateway_that_drops_tcp_but_answers_ping_answers(tmp_path):
+    """A router that silently drops SYNs to its closed ports is still there;
+    "the gateway is silent" licenses a reboot, so it needs every probe."""
+    proc, sysfs = make_proc(tmp_path)
+    pings: list[str] = []
+    sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=fake_tools(TOOLS),
+                             connect=_connect_with({}), ping=lambda h: pings.append(h) or True)
+    assert sampler.sample({})["gateway_ok"] is True and pings == ["192.168.0.1"]
+    sampler.ping = lambda h: False
+    assert sampler.sample({})["gateway_ok"] is False
+    sampler.ping = lambda h: None            # this host cannot ping: TCP decides
+    assert sampler.sample({})["gateway_ok"] is False
+
+
+def test_icmp_echo_never_raises():
+    # Whatever this box allows (no ping socket on Windows, perhaps none in a
+    # container), the answer is a bool or None.
+    assert health.icmp_echo("192.0.2.1", timeout=0.2) in (True, False, None)
+
+
+def test_the_core_probe_tells_a_refusing_host_from_a_silent_one(tmp_path):
+    proc, sysfs = make_proc(tmp_path)
+    connect = _connect_with({("192.168.0.1", 53): None,
+                             ("192.168.0.117", 6370): ConnectionRefusedError()})
+    sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=fake_tools(TOOLS),
+                             connect=connect, ping=None)
+    doc = sampler.sample({}, core_host="192.168.0.117", core_port=6370, probe_core=True)
+    assert doc["core_ok"] is False and doc["core_host_ok"] is True
+    sampler.connect = _connect_with({("192.168.0.1", 53): None})
+    doc = sampler.sample({}, core_host="192.168.0.117", core_port=6370, probe_core=True)
+    assert doc["core_ok"] is False and doc["core_host_ok"] is False
+
+
+def test_no_default_route_is_a_fact_and_a_failed_ip_is_not(tmp_path):
+    proc, sysfs = make_proc(tmp_path)
+    no_route = dict(TOOLS, ip="192.168.0.0/24 dev wlan0 proto kernel scope link\n")
+    sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=fake_tools(no_route),
+                             connect=_connect_with({}), ping=None)
+    doc = sampler.sample({})
+    assert doc["default_route"] is False and doc["gateway"] is None and doc["gateway_ok"] is None
+    sampler.run = fake_tools(dict(TOOLS, ip=None))
+    assert sampler.sample({})["default_route"] is None
+    sampler.run = fake_tools(TOOLS)
+    assert sampler.sample({})["default_route"] is True
 
 
 def test_the_core_must_actually_accept():
@@ -258,19 +304,40 @@ def test_the_core_is_not_probed_while_the_socket_is_up(tmp_path):
     assert ("192.168.0.117", 6370) not in connect.seen
 
 
-def test_missing_tools_yield_null_and_are_not_asked_again(tmp_path):
+def test_missing_tools_are_left_alone_after_three_misses_then_asked_again(tmp_path, monkeypatch):
     proc, sysfs = make_proc(tmp_path)
     run = fake_tools({"ip": TOOLS["ip"]})      # no vcgencmd, no nmcli
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=run,
-                             connect=_connect_with({}))
+                             connect=_connect_with({("192.168.0.1", 53): None}), ping=None)
+    clock = [1000.0]
+    monkeypatch.setattr(health.time, "monotonic", lambda: clock[0])
     first = sampler.sample({})
     assert first["throttled"] is None and first["throttled_flags"] == []
     assert first["nm_state"] is None
-    sampler.sample({})
+    for _ in range(5):
+        clock[0] += 60.0
+        sampler.sample({})
     tools_asked = [c[0] for c in run.calls]
-    assert tools_asked.count("vcgencmd") == 1, "one miss and vcgencmd is left alone"
-    assert tools_asked.count("nmcli") == 1
-    assert tools_asked.count("ip") == 2
+    assert tools_asked.count("vcgencmd") == 3, "three misses, then left alone"
+    assert tools_asked.count("nmcli") == 3
+    assert tools_asked.count("ip") == 6
+    clock[0] += health.Sampler.TOOL_RETRY_SEC
+    sampler.sample({})
+    assert [c[0] for c in run.calls].count("nmcli") == 4, "asked again after the rest"
+
+
+def test_one_failed_nmcli_does_not_silence_it_for_the_process(tmp_path):
+    """NetworkManager busy with a wedged radio times nmcli out once; the
+    next sample must still ask."""
+    proc, sysfs = make_proc(tmp_path)
+    answers = dict(TOOLS)
+    sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs),
+                             run=lambda argv, timeout=5.0: answers.get(argv[0]),
+                             connect=_connect_with({("192.168.0.1", 53): None}), ping=None)
+    answers["nmcli"] = None
+    assert sampler.sample({})["nm_state"] is None
+    answers["nmcli"] = "GENERAL.STATE:30 (disconnected)\n"
+    assert sampler.sample({})["nm_state"] == {"code": 30, "state": "disconnected"}
 
 
 def test_a_sample_is_bounded_to_4kb():
@@ -373,13 +440,19 @@ def actions(ci: CheckInput) -> list[str]:
     [
         ("healthy idle unit", _ci(), []),
         ("mic silent 29 s: wait", _ci(mic_silent_for=29.0), []),
-        ("mic silent 30 s: reopen once", _ci(mic_silent_for=30.0), ["reopen_mic"]),
+        ("mic silent 30 s: reopen", _ci(mic_silent_for=30.0), ["reopen_mic"]),
         ("still silent after the reopen: exit", _ci(mic_silent_for=31.0, mic_reopened_at=960.0), ["exit"]),
+        ("reopened over 5 min ago (exit held back): reopen again",
+         _ci(mic_silent_for=400.0, mic_reopened_at=690.0), ["reopen_mic"]),
         ("mic silent but nothing expected: nothing", _ci(mic_expected=False, mic_silent_for=500.0), []),
         ("mic thread dead: exit", _ci(mic_thread_alive=False), ["exit"]),
         ("mic thread dead but voice never started: nothing", _ci(mic_expected=False, mic_thread_alive=False), []),
         ("wake loop stale 60 s while idle: exit", _ci(wake_heartbeat_age=60.0), ["exit"]),
         ("wake loop stale during a turn: fine", _ci(wake_heartbeat_age=300.0, idle=False), []),
+        ("heartbeat as old as the chat that just ended: fine",
+         _ci(wake_heartbeat_age=600.0, idle_for=3.0), []),
+        ("idle for 60 s and still no heartbeat: exit",
+         _ci(wake_heartbeat_age=600.0, idle_for=60.0), ["exit"]),
         ("wake loop not armed yet: fine", _ci(wake_heartbeat_age=None), []),
         ("RSS over 300 MB idle: exit", _ci(rss_mb=301.0), ["exit"]),
         ("RSS over 300 MB mid-turn: wait", _ci(rss_mb=301.0, idle=False), []),
@@ -388,24 +461,41 @@ def actions(ci: CheckInput) -> list[str]:
         ("no server 4 min: nothing yet", _ci(no_server_for=240.0, gateway_ok=False), []),
         ("no server 5 min, gateway answers: never touch the link",
          _ci(no_server_for=300.0, gateway_ok=True, nm_connected=True), []),
+        ("NM says disconnected but the gateway answers (Ethernet): nothing",
+         _ci(no_server_for=900.0, gateway_ok=True, nm_connected=False, reboot_helper=True), []),
+        ("gateway silent but the core's host refuses: the core is down, nothing",
+         _ci(no_server_for=900.0, gateway_ok=False, core_host_ok=True, reboot_helper=True), []),
         ("no server 5 min, gateway silent: recover the link",
          _ci(no_server_for=300.0, gateway_ok=False), ["wifi_recover"]),
         ("no server 5 min, NM says disconnected: recover the link",
          _ci(no_server_for=300.0, nm_connected=False, gateway_ok=None), ["wifi_recover"]),
         ("recovery 4 min ago: cooldown", _ci(no_server_for=600.0, gateway_ok=False, last_wifi_recovery=800.0), []),
         ("recovery 5 min ago: again", _ci(no_server_for=600.0, gateway_ok=False, last_wifi_recovery=700.0), ["wifi_recover"]),
-        ("15 min, gateway silent, helper present: recover + reboot",
-         _ci(no_server_for=900.0, gateway_ok=False, reboot_helper=True), ["wifi_recover", "reboot"]),
+        ("15 min, gateway silent, helper present: reboot first, then recover",
+         _ci(no_server_for=900.0, gateway_ok=False, reboot_helper=True), ["reboot", "wifi_recover"]),
         ("15 min, gateway silent, no helper: say a reboot is needed",
          _ci(no_server_for=900.0, gateway_ok=False), ["wifi_recover", "reboot_needed"]),
-        ("15 min, gateway unknown: no reboot",
+        ("15 min, no default route, NM disconnected (wedged radio): reboot",
+         _ci(no_server_for=900.0, gateway_ok=None, default_route=False, nm_connected=False,
+             reboot_helper=True), ["reboot", "wifi_recover"]),
+        ("15 min, no default route, no NetworkManager (legacy unit): reboot",
+         _ci(no_server_for=900.0, gateway_ok=None, default_route=False, reboot_helper=True),
+         ["reboot", "wifi_recover"]),
+        ("15 min, no default route but NM says connected: not silent, nothing",
+         _ci(no_server_for=900.0, gateway_ok=None, default_route=False, nm_connected=True,
+             reboot_helper=True), []),
+        ("15 min, gateway unknown (ip not asked): no reboot",
          _ci(no_server_for=900.0, gateway_ok=None, nm_connected=False), ["wifi_recover"]),
         ("15 min, gateway answers: core problem, do nothing",
          _ci(no_server_for=900.0, gateway_ok=True, nm_connected=True, reboot_helper=True), []),
         ("reboot note made 10 min ago: not repeated",
          _ci(no_server_for=1200.0, gateway_ok=False, last_reboot_note=400.0, last_wifi_recovery=900.0), []),
-        ("a fatal check wins over the network ones",
-         _ci(fds=600, no_server_for=900.0, gateway_ok=False, reboot_helper=True), ["exit"]),
+        ("a failed reboot 10 min ago: not asked again yet",
+         _ci(no_server_for=1200.0, gateway_ok=False, last_reboot_note=400.0, last_wifi_recovery=900.0,
+             reboot_helper=True), []),
+        ("every check that fires is listed, the ending ones first",
+         _ci(fds=600, no_server_for=900.0, gateway_ok=False, reboot_helper=True),
+         ["exit", "reboot", "wifi_recover"]),
     ],
 )
 def test_self_check_table(label, ci, expected):
@@ -419,6 +509,96 @@ def test_every_decision_carries_a_reason():
             assert isinstance(d, Decision) and d.reason.strip()
 
 
+def test_decisions_name_their_check_and_basis():
+    by_check = {d.check: d for d in decide(_ci(
+        mic_thread_alive=False, rss_mb=999.0, fds=999, no_server_for=900.0,
+        gateway_ok=False, reboot_helper=True,
+    ))}
+    assert by_check["mic_thread"].basis == "tick"
+    assert by_check["rss"].basis == "sample" and by_check["fds"].basis == "sample"
+    assert by_check["no_server_link"].basis == "sample"
+    assert by_check["no_server_reboot"].action == "reboot"
+
+
 def test_the_rss_limit_is_the_configured_one():
     assert actions(_ci(rss_mb=250.0, rss_limit_mb=200.0)) == ["exit"]
     assert actions(_ci(rss_mb=250.0, rss_limit_mb=400.0)) == []
+
+
+# ─── persistence and the restart budget ───────────────────────────────────
+
+
+def _d(check, action="exit", basis="tick"):
+    return Decision(action, f"{check} fired", check=check, basis=basis)
+
+
+def test_persistence_needs_two_ticks_in_a_row():
+    p = health.Persistence(2)
+    assert p.filter([_d("wake_loop")]) == []
+    assert p.filter([]) == [], "a tick without it resets the count"
+    assert p.filter([_d("wake_loop")]) == []
+    assert [d.check for d in p.filter([_d("wake_loop")])] == ["wake_loop"]
+    assert p.streak("wake_loop", "exit") == 2
+
+
+def test_persistence_counts_samples_not_ticks_for_sample_facts():
+    p = health.Persistence(2)
+    rss = _d("rss", basis="sample")
+    assert p.filter([rss], sample_seq=7) == []
+    assert p.filter([rss], sample_seq=7) == [], "the same sample read twice is one observation"
+    assert p.filter([rss], sample_seq=8) == [rss]
+
+
+def test_persistence_keys_on_the_action_too():
+    """The silent-mic check moves from reopen to exit: the exit needs its
+    own two observations after the reopen."""
+    p = health.Persistence(2)
+    p.filter([_d("mic_silent", "reopen_mic")])
+    assert p.filter([_d("mic_silent", "reopen_mic")])
+    p.forget("mic_silent")
+    assert p.filter([_d("mic_silent", "exit")]) == []
+    assert p.filter([_d("mic_silent", "exit")]) == [_d("mic_silent", "exit")]
+
+
+def test_restart_budget_three_an_hour_one_of_them_a_reboot(tmp_path):
+    clock = [10_000.0]
+    path = tmp_path / "self-restarts.json"
+    b = health.RestartBudget(path, clock=lambda: clock[0])
+    assert b.allows("reboot")
+    b.record("reboot", "gateway silent")
+    assert not b.allows("reboot"), "one reboot an hour"
+    assert b.allows("exit")
+    b.record("exit", "rss")
+    clock[0] += 60
+    b.record("exit", "fds")
+    assert not b.allows("exit")
+    # Across lives: a new process reads the same file.
+    b2 = health.RestartBudget(path, clock=lambda: clock[0])
+    assert not b2.allows("exit") and len(b2.recent()) == 3
+    b2.note_suppressed("exit", "rss again")
+    summary = b2.summary()
+    assert summary["spent"] is True and summary["suppressed"] == 1
+    assert summary["last_suppressed"]["reason"] == "rss again"
+    clock[0] += 3600
+    assert health.RestartBudget(path, clock=lambda: clock[0]).allows("reboot")
+
+
+def test_restart_budget_survives_a_corrupt_file_and_a_clock_that_jumped(tmp_path):
+    path = tmp_path / "self-restarts.json"
+    path.write_text("{not json")
+    assert health.RestartBudget(path, clock=lambda: 5_000.0).allows("exit")
+    path.write_text(json.dumps({"restarts": [
+        {"ts": 5_000.0 + 10 * 3600, "action": "exit", "reason": "from a clock in the future"},
+        {"ts": "yesterday", "action": "exit"},
+        {"ts": 4_900.0, "action": "exit", "reason": "real"},
+    ]}))
+    b = health.RestartBudget(path, clock=lambda: 5_000.0)
+    assert [e["reason"] for e in b.recent()] == ["real"]
+
+
+def test_the_budget_is_in_the_last_health_record(tmp_path):
+    lh = health.LastHealth(tmp_path / "last-health.json")
+    lh.restart_budget = health.RestartBudget(tmp_path / "r.json").summary()
+    lh.write(None)
+    doc = json.loads((tmp_path / "last-health.json").read_text())
+    assert doc["restart_budget"]["limit"] == 3 and doc["restart_budget"]["window_s"] == 3600.0
