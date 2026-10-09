@@ -21,6 +21,14 @@ from satellite.tests.test_send_queue_lifecycle import FakeConnect, FakeServer, m
 client = import_client()
 
 
+@pytest.fixture(autouse=True)
+def no_hard_exit(monkeypatch):
+    """A self-check exit arms an `os._exit` backstop; in this process that
+    would end the whole test run 45 s later. Every test here gets a
+    harmless one (the backstop itself is asserted by its own test)."""
+    monkeypatch.setattr(client, "_hard_exit", lambda code: None)
+
+
 def health_sat(tmp_path, *, loop=None):
     """A Satellite with the state the health monitor reads and writes."""
     sat = make_sat(loop=loop)
@@ -761,3 +769,29 @@ def test_the_example_config_documents_the_health_section():
     assert doc["health"]["rss_limit_mb"] == 300
     assert doc["health"]["no_server_escalate_min"] == 5
     assert doc["health"]["enabled"] is True
+
+
+def test_a_self_check_exit_has_a_hard_exit_backstop(tmp_path, monkeypatch):
+    """A capture stream on a USB array that stopped answering can block in
+    PortAudio's close; a process that never exits is never restarted."""
+    started: list[tuple] = []
+
+    class FakeTimer:
+        def __init__(self, interval, fn, args=()):
+            self.interval, self.fn, self.args, self.daemon = interval, fn, args, False
+
+        def start(self):
+            started.append((self.interval, self.fn, self.args, self.daemon))
+
+    monkeypatch.setattr(client.threading, "Timer", FakeTimer)
+    sat = health_sat(tmp_path)
+    assert sat._health_exit("the mic thread is dead") is True
+    [(interval, fn, args, daemon)] = started
+    assert interval == client.HEALTH_HARD_EXIT_SEC and fn is client._hard_exit  # (the no-op stand-in)
+    assert args == (1,) and daemon is True
+    # A held-back exit arms nothing.
+    started.clear()
+    sat2 = health_sat(tmp_path / "b")
+    for i in range(3):
+        sat2._health_budget.record("exit", f"earlier {i}")
+    assert sat2._health_exit("again") is False and started == []
