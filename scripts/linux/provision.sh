@@ -36,7 +36,8 @@
 #   whisper      the Whisper model at the manifest's Hugging Face revision,
 #                model.bin checked against its SHA-256       (--skip-models: no)
 #   piper        the configured Piper voice, checked against PIPER_PINS
-#   mpd-image    docker build of domovoi-mpd exactly as the core builds it
+#   images       the database images the compose file pins, and docker build of
+#                domovoi-mpd exactly as the core builds it
 #   searxng      the search helper, started for always/sometimes, off for never
 #   units        the three shipped units from scripts/linux/units/, the
 #                restart sudoers grant, sleep targets masked
@@ -280,11 +281,11 @@ json_str() {
   printf '"%s"' "$s"
 }
 
-STEP_IDS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper mpd-image searxng units timezone start update-unit finish)
+STEP_IDS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng units timezone start update-unit finish)
 declare -A STEP_WEIGHT=(
   [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6
-  [venv]=15 [env]=1 [ollama]=8 [models]=30 [whisper]=4 [piper]=1 [mpd-image]=4
-  [searxng]=4 [units]=1 [timezone]=1 [start]=8 [update-unit]=2 [finish]=2
+  [venv]=15 [env]=1 [ollama]=8 [models]=30 [whisper]=4 [piper]=1 [images]=6
+  [searxng]=4 [units]=1 [timezone]=1 [start]=6 [update-unit]=2 [finish]=2
 )
 declare -A STEP_TITLE=(
   [preflight]="Checking this machine"
@@ -300,7 +301,7 @@ declare -A STEP_TITLE=(
   [models]="Downloading the AI models"
   [whisper]="Downloading the speech recognition model"
   [piper]="Downloading the voice"
-  [mpd-image]="Building the music player"
+  [images]="Getting the container images"
   [searxng]="Setting up the search helper"
   [units]="Installing the services"
   [timezone]="Setting the time zone"
@@ -726,7 +727,7 @@ RERUN_REASON=""
 
 # Steps that read the checkout, and those that read the pin manifest: a
 # dry run before the clone plans them without their inputs.
-after_clone() { case " docker venv env ollama models whisper piper mpd-image searxng units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
+after_clone() { case " docker venv env ollama models whisper piper images searxng units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
 needs_manifest() { case " docker env models whisper " in *" $1 "*) return 0 ;; esac; return 1; }
 
 plan_details() {
@@ -1735,21 +1736,40 @@ do_piper() {
   STEP_DONE_MSG="Voice $PIPER_VOICE"
 }
 
-# ─── mpd-image ───────────────────────────────────────────────────────────
+# ─── images ──────────────────────────────────────────────────────────────
 
+# The database's images exactly as domovoi/docker-compose.yml pins them
+# (tag@digest), read from the compose file; the search helper's comes with
+# the searxng step, and only for always/sometimes.
+DB_SERVICES=(postgres flyway)
+compose_refs() { (cd "$CHECKOUT/domovoi" && as_svc docker compose config --images "$@"); }
 mpd_tag() { local t; t=$(dotenv_get MPD_IMAGE_TAG); printf '%s' "${t:-domovoi-mpd:latest}"; }
-inputs_mpd_image() { file_sig "$CHECKOUT/domovoi/Dockerfile.mpd"; mpd_tag; }
-check_mpd_image() { as_svc docker image inspect "$(mpd_tag)" >/dev/null 2>&1; }
-plan_mpd_image() { echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi"; }
-do_mpd_image() {
+inputs_images() { file_sig "$CHECKOUT/domovoi/docker-compose.yml"; file_sig "$CHECKOUT/domovoi/Dockerfile.mpd"; mpd_tag; }
+check_images() {
+  local refs r
+  refs=$(compose_refs "${DB_SERVICES[@]}") && [ -n "$refs" ] || return 1
+  for r in $refs; do as_svc docker image inspect "$r" >/dev/null 2>&1 || return 1; done
+  as_svc docker image inspect "$(mpd_tag)" >/dev/null 2>&1
+}
+plan_images() {
+  echo "docker compose pull ${DB_SERVICES[*]} (the digests domovoi/docker-compose.yml pins)"
+  echo "docker build -t $(mpd_tag) -f domovoi/Dockerfile.mpd domovoi"
+}
+do_images() {
   local tag
+  # Pulled here rather than at domovoi-db's first start, where the download
+  # would have no progress and the start step would wait on it.
+  emit_frac 50 "Downloading the database images"
+  (cd "$CHECKOUT/domovoi" && as_svc docker compose pull "${DB_SERVICES[@]}") || die "docker compose pull ${DB_SERVICES[*]} failed"
   tag=$(mpd_tag)
   # Exactly what domovoi/mpd_provisioner.py _build_image runs, ahead of the
   # core's first boot (which would build it with no progress, and not at
   # all on a box without internet).
+  emit_frac 500 "Building the music player"
   (cd "$CHECKOUT/domovoi" && as_svc docker build --progress=plain -t "$tag" -f "$CHECKOUT/domovoi/Dockerfile.mpd" "$CHECKOUT/domovoi") \
     || die "docker build of $tag failed"
-  STEP_DONE_MSG="Built $tag"
+  check_images || die "the database images or $tag are not there after the pull and build"
+  STEP_DONE_MSG="Images ready ($tag built)"
 }
 
 # ─── searxng ─────────────────────────────────────────────────────────────
@@ -1881,15 +1901,24 @@ do_units() {
 current_tz() { readlink "$LOCALTIME" 2>/dev/null | sed 's#.*/zoneinfo/##'; }
 skip_timezone() { if [ -n "$TIMEZONE" ]; then return 1; fi; echo "no --timezone: the zone stays $(current_tz)"; }
 inputs_timezone() { echo "$TIMEZONE"; }
-check_timezone() { [ "$(current_tz)" = "$TIMEZONE" ]; }
+etc_timezone_ok() { [ ! -e "$ROOT/etc/timezone" ] || [ "$(tr -d '[:space:]' <"$ROOT/etc/timezone")" = "$TIMEZONE" ]; }
+check_timezone() { [ "$(current_tz)" = "$TIMEZONE" ] && etc_timezone_ok; }
 plan_timezone() { echo "timedatectl set-timezone $TIMEZONE (now $(current_tz))"; }
+# On WSL the zone follows Windows anyway: WSL rewrites /etc/localtime and
+# /etc/timezone to Windows' zone at every distro start (wsl.conf [time]
+# useWindowsTimezone, default true; seen with interop off too), so there
+# --timezone holds until the next start, and the installer passes Windows'
+# own zone.
 do_timezone() {
   [ -f "$ZONEINFO/$TIMEZONE" ] || die "unknown time zone $TIMEZONE (no /usr/share/zoneinfo/$TIMEZONE)"
   if ! timedatectl set-timezone "$TIMEZONE" 2>/dev/null; then
     ln -sfn "/usr/share/zoneinfo/$TIMEZONE" "$LOCALTIME"
-    printf '%s\n' "$TIMEZONE" >"$ROOT/etc/timezone"
   fi
-  [ "$(current_tz)" = "$TIMEZONE" ] || die "the time zone is $(current_tz) after setting $TIMEZONE"
+  # systemd leaves /etc/timezone alone, and the core reads it before the
+  # /etc/localtime link (domovoi/host_time.py): a stale one has /v1/time
+  # name the old zone with the new offset.
+  if ! etc_timezone_ok; then printf '%s\n' "$TIMEZONE" >"$ROOT/etc/timezone"; fi
+  [ "$(current_tz)" = "$TIMEZONE" ] && etc_timezone_ok || die "the time zone is $(current_tz) after setting $TIMEZONE"
   STEP_DONE_MSG="Time zone $TIMEZONE"
 }
 
@@ -1928,6 +1957,9 @@ inputs_start() {
   local u
   for u in "${SHIPPED_UNITS[@]}"; do file_sig "$UNIT_DIR/$u"; done
   for u in env venv units timezone media; do cat "$STEP_DIR/$u" 2>/dev/null || echo "none:$u"; done
+  # The zone in effect: Python takes the offset at the process's start, so
+  # a zone changed under a running core needs a restart.
+  echo "tz=$(current_tz) $(cat "$ROOT/etc/timezone" 2>/dev/null)"
 }
 check_start() { all_active && healthy; }
 plan_start() { echo "systemctl enable --now ${SHIPPED_UNITS[*]}; wait for $CORE_HEALTH_URL and $WEB_HEALTH_URL"; }

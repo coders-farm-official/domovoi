@@ -315,12 +315,19 @@ SH
 #!/usr/bin/env bash
 echo "docker $*" >>"$SHIM_STATE/calls.log"
 mkdir -p "$SHIM_STATE/images"
+# The digests the compose file pins (what `compose config --images` prints).
+refs="postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949"
 case "$1 ${2-}" in
   "info "*) exit 0 ;;
   "version "*) echo 29.8.1 ;;
-  "image inspect") [ -f "$SHIM_STATE/images/${3//[:\/]/_}" ] || exit 1 ;;
+  "image inspect") [ -f "$SHIM_STATE/images/${3//[:\/@]/_}" ] || exit 1 ;;
   "build "*)
-    while [ $# -gt 0 ]; do [ "$1" = -t ] && { touch "$SHIM_STATE/images/${2//[:\/]/_}"; break; }; shift; done ;;
+    while [ $# -gt 0 ]; do [ "$1" = -t ] && { touch "$SHIM_STATE/images/${2//[:\/@]/_}"; break; }; shift; done ;;
+  "compose config") echo "$refs" ;;
+  "compose pull")
+    [ ! -f "$SHIM_STATE/pull-fail" ] || { echo "Error response from daemon: toomanyrequests" >&2; exit 1; }
+    for r in $refs; do touch "$SHIM_STATE/images/${r//[:\/@]/_}"; done ;;
   "compose up") touch "$SHIM_STATE/searxng-running" ;;
   "inspect -f") if [ -f "$SHIM_STATE/searxng-running" ]; then echo true; else echo false; fi ;;
   "stop "*) rm -f "$SHIM_STATE/searxng-running" ;;
@@ -586,6 +593,8 @@ new_case() {
   : >"$ROOT/usr/share/zoneinfo/America/New_York"
   : >"$ROOT/usr/share/zoneinfo/Etc/UTC"
   : >"$ROOT/etc/localtime"
+  # WSL writes /etc/timezone at each distro start; systemd never updates it.
+  echo Etc/UTC >"$ROOT/etc/timezone"
   echo /usr/share/zoneinfo/Etc/UTC >"$ROOT/etc/localtime.harness-link"
   printf '#!/bin/sh\n' >"$ROOT/usr/bin/docker"; chmod +x "$ROOT/usr/bin/docker"
   write_shims "$CASE/bin"
@@ -680,7 +689,7 @@ end_case() {
   fi
 }
 
-STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper mpd-image searxng units timezone start update-unit)
+STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng units timezone start update-unit)
 
 # ─── cases ───────────────────────────────────────────────────────────────
 
@@ -834,6 +843,7 @@ case_full_run_wsl() {
   check "Whisper at the pinned revision" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/d1d751a5f8271d482d14ca55d9e2deeebbae577f/model.bin"
   check "Piper voice" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-lessac-medium.onnx"
   # images, search helper
+  check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
   check "MPD image built as the core does" called "docker build --progress=plain -t domovoi-mpd:latest -f $CHECKOUT/domovoi/Dockerfile.mpd $CHECKOUT/domovoi"
   check "search helper up (always)" called "docker compose up -d --no-deps searxng"
   # units
@@ -851,6 +861,7 @@ case_full_run_wsl() {
   check "grant checked by visudo first" called "visudo -cf"
   # zone, start, updater
   check "time zone set" called "timedatectl set-timezone America/New_York"
+  check "/etc/timezone follows (the core reads it first)" eq "$(cat "$ROOT/etc/timezone")" America/New_York
   check "units started" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service"
   check "nothing restarted on a first run" not_called "systemctl restart domovoi"
   check "update unit installed" called "install-update-unit --repo $CHECKOUT --user domovoi"
@@ -943,7 +954,7 @@ case_changed_input_reruns_its_step() {
   check "models re-ran" eq "$(state_of models)" done
   check "start re-ran" eq "$(state_of start)" done
   local s
-  for s in apt user checkout docker venv ollama whisper piper mpd-image units update-unit; do
+  for s in apt user checkout docker venv ollama whisper piper images units update-unit; do
     check "$s skipped" eq "$(state_of "$s")" skip
   done
   check "said why" said "[env] inputs changed since it last ran"
@@ -1062,6 +1073,18 @@ case_media_list_change_rewrites_the_block() {
   check "unmounted the old source" called "umount /srv/media/pictures"
   check "mounted the new one" called "mount /srv/media/pictures"
   check "said so" said "remounting /srv/media/pictures"
+  end_case
+}
+
+case_image_pull_failure_stops() {
+  new_case image_pull_failure_stops
+  touch "$STATE/pull-fail"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "images failed" eq "$(state_of images)" fail
+  check "says which" said "docker compose pull postgres flyway failed"
+  check "no marker" no_marker images
+  check "nothing started" not_called "systemctl start domovoi"
   end_case
 }
 
@@ -1222,6 +1245,7 @@ CASES=(
   case_lock_without_build_tools_stops
   case_media_list_change_rewrites_the_block
   case_media_mount_failure_stops
+  case_image_pull_failure_stops
   case_bare_metal
   case_internet_never_keeps_searxng_off
   case_wsl_without_systemd_stops_for_a_restart
