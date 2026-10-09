@@ -222,7 +222,8 @@ def test_the_hello_says_it_has_the_announcement_fix() -> None:
     import inspect
 
     src = inspect.getsource(client.Satellite._run_session)
-    hello = src[src.index('"type": "hello"'):src.index("}))", src.index('"type": "hello"'))]
+    start = src.index('"type": "hello"')
+    hello = src[start:src.index("json.dumps(hello)", start)]
     assert '"announce_after_session_end": True' in hello
 
 

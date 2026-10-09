@@ -496,6 +496,59 @@ cooldown_sec = 300
 # WS reconnect.
 degraded_after_disconnect_sec = 30
 
+[health]
+# Health telemetry, the last-breath record and the self-checks
+# (satellite/health.py). Why: two units died while idle for days with
+# nothing left to read afterwards - the log ring is RAM, the dashboard
+# said "offline", the ring glowed orange. Every 60 s the client samples
+# itself (memory, fds, CPU, temperature and throttle flags, uptime, mic
+# frames/s, the wake loop's heartbeat, queue depths, the link and
+# whether the gateway and the core answer) and sends it to a core that
+# lists `health` in its ready frame; every 10 min, and before anything
+# it does to itself, it writes ~/.domovoi/last-health.json, which the
+# next boot's hello carries as `prev_health`. While disconnected every
+# log line also goes to ~/.domovoi/log-spool.txt (256 KB ring file),
+# pushed to the core on reconnect. Off turns all of it off.
+enabled = true
+
+# Seconds between samples (floor 10). 60 is one row a minute in the
+# core's 24 h history; faster costs CPU on a Zero 2 W for no benefit.
+sample_interval_sec = 60
+
+# Self-check 3: resident memory above this, while no turn is open, exits
+# the process so systemd restarts it (Restart=on-failure). A healthy unit
+# idles at 60-120 MB; 300 leaves room on a 512 MB board.
+rss_limit_mb = 300
+
+# Self-check 4: open file descriptors above this exit the same way.
+fd_limit = 512
+
+# Self-check 5: minutes without a server before the link is looked at.
+# If NetworkManager says the device is not connected, or the gateway does
+# not answer, the usual recovery runs (nmcli device connect wlan0, or
+# wpa_cli reassociate on a hand-built unit) at most once per 5 minutes.
+no_server_escalate_min = 5
+
+# ...and minutes without a server AND the gateway silent before the unit
+# reboots through /usr/local/sbin/domovoi-reboot (new cards; PROVISIONING
+# §8.3 for existing units; without the helper it only logs that a reboot
+# would be needed). Never while the gateway answers: a core that is down
+# is the core's problem, not this Pi's.
+reboot_after_min = 15
+
+# Self-check 1: seconds with no mic frames, while the capture stream
+# should be live, before the stream is reopened once; still none after
+# as long again and the process exits for systemd. Self-check 2: seconds
+# the wake loop may go without a heartbeat while idle.
+mic_silence_sec = 30
+heartbeat_stale_sec = 60
+
+# How often last-health.json is written when nothing is wrong (seconds),
+# and how often buffered log lines are pushed to a core that lists
+# `log_push` (seconds, floor 5; at most 32 KB a push).
+write_interval_sec = 600
+log_push_interval_sec = 30
+
 [log]
 # DEBUG | INFO | WARNING | ERROR
 level = "INFO"

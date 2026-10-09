@@ -172,3 +172,65 @@ def test_core_reachable_never_blames_the_link_for_an_unresolved_url(monkeypatch)
     sat = object.__new__(client.Satellite)
     sat.cfg = types.SimpleNamespace(domovoi_url="auto")
     assert sat._core_reachable() is True
+
+
+# ─── the reconnect backoff ────────────────────────────────────────────────
+#
+# SAT-CRASH D1 (2026-10-08): a core that accepts the socket and closes it
+# before `ready` (pairing refused, parked for approval, the fail-closed
+# path) returned from `_run_session` NORMALLY, which reset the backoff to
+# one second. The client then redialled at about 1 Hz for as long as the
+# refusal lasted, doing the whole connect on every pass - on a Pi Zero 2 W
+# that is a unit pinned at 100 % CPU with nothing to show for it.
+
+import logging  # noqa: E402
+
+from satellite.tests.test_mic_approval_gate import (  # noqa: E402
+    accepted, make_sat as make_gate_sat, parked, run_sessions,
+)
+
+
+def _session(attempt):
+    """Mirror the real `_run_session`, which forgets the previous
+    session's `ready` before it dials."""
+    async def run(sat):
+        sat._session_ready_seen = False
+        outcome = attempt(sat)
+        if outcome is not None:
+            await outcome
+    return run
+
+
+def _waits(caplog) -> list[float]:
+    return [
+        float(r.getMessage().split("reconnecting in ")[1].rstrip("s"))
+        for r in caplog.records
+        if r.getMessage().startswith("reconnecting in ")
+    ]
+
+
+def test_a_session_refused_before_ready_backs_off_like_a_failed_connect(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    rec = make_gate_sat(monkeypatch)
+    run_sessions(rec, [_session(parked()) for _ in range(5)], monkeypatch)
+    assert _waits(caplog) == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert rec.s.fatal_error is None, "a refusal is not a crash"
+
+
+def test_an_accepted_session_resets_the_backoff(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    rec = make_gate_sat(monkeypatch)
+    run_sessions(
+        rec,
+        [_session(parked()), _session(parked()), _session(accepted()), _session(parked())],
+        monkeypatch,
+    )
+    assert _waits(caplog) == [1.0, 2.0, 1.0, 2.0]
+
+
+def test_the_backoff_is_capped_at_a_minute(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    rec = make_gate_sat(monkeypatch)
+    run_sessions(rec, [_session(parked()) for _ in range(9)], monkeypatch)
+    assert _waits(caplog)[-3:] == [60.0, 60.0, 60.0]
+    assert client._BACKOFF_MAX_SEC == 60.0
