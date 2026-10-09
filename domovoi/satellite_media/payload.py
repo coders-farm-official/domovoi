@@ -174,6 +174,13 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-sync-time",
         system / "domovoi-sync-time",
     )
+    # The reboot helper the client's self-check calls after 15 minutes with
+    # no server and a silent gateway. Extensionless and root-installed like
+    # the two above; the sudoers line allows it with no arguments.
+    shutil.copy2(
+        sat_dir / "scripts" / "domovoi-reboot",
+        system / "domovoi-reboot",
+    )
     # The verifier that helper uses to make the server prove who it is.
     # Shipped separately from the copy under satellite/ because first boot
     # installs THIS one root-owned: the helper runs as root on the

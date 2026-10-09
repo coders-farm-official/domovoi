@@ -1,0 +1,21 @@
+#!/bin/sh
+# domovoi-reboot — the one way the satellite client may reboot its unit.
+#
+# Called by the client's self-check (satellite/health.py, check 5) after
+# [health] reboot_after_min (15) minutes with no server AND a gateway that
+# does not answer a TCP SYN: the Wi-Fi recovery the client is allowed to run
+# (nmcli / wpa_cli) has already been tried and a wedged radio or network
+# stack is past what user space can fix. Never while the gateway answers —
+# a core that is down is the core's problem.
+#
+# Root-owned at /usr/local/sbin/domovoi-reboot, installed by stage 1 on
+# cards prepared from 2026-10-09 on (or by hand, PROVISIONING.md §8.3), and
+# allowed through one sudoers line with NO arguments. Argv-less on purpose:
+# anything it accepted would be something the unprivileged client chooses.
+set -eu
+if [ "$#" -ne 0 ]; then
+  echo "domovoi-reboot takes no arguments" >&2
+  exit 2
+fi
+logger -t domovoi-reboot "reboot requested by the satellite client (self-check: no server and the gateway silent)" 2>/dev/null || true
+exec /usr/bin/systemctl reboot

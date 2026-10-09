@@ -36,6 +36,9 @@ _END_MARKER = "# --- end domovoi satellite ---"
 # microphone array on the same port — a portal unit that carried these
 # would adopt cleanly and then be deaf.
 _GADGET_CONFIG_LINE = "dtoverlay=dwc2,dr_mode=peripheral"
+# The BCM283x hardware watchdog (2026-10-09): on for every new card, armed
+# by the RuntimeWatchdogSec drop-in stage 1 writes.
+_WATCHDOG_CONFIG_LINE = "dtparam=watchdog=on"
 _GADGET_CMDLINE_TOKEN = "modules-load=dwc2"
 # Force the Pi's USB link to FULL speed on a unit with a USB mic array.
 # This is the whole fix for the XVF3800 on a Zero 2 W, and it is the only
@@ -171,6 +174,10 @@ def edit_config_txt(
     lines = [_MARKER]
     if usb_gadget:
         lines.append(_GADGET_CONFIG_LINE)
+    # Every new card: the SoC watchdog, which systemd pets once stage 1
+    # writes RuntimeWatchdogSec (firstrun step 7b). A wedge that stops
+    # PID 1 then reboots the unit instead of leaving it dead for days.
+    lines.append(_WATCHDOG_CONFIG_LINE)
     lines.append(_END_MARKER)
     return text + "\n".join(lines) + "\n"
 

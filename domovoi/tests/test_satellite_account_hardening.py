@@ -31,6 +31,8 @@ EXPECTED_HELPERS = {
     "/usr/bin/systemctl --no-block restart domovoi-kiosk.service",
     "/usr/local/sbin/domovoi-apply-payload",
     "/usr/local/sbin/domovoi-sync-time",
+    # Argv-less reboot, for the client's no-server self-check (2026-10-09).
+    "/usr/local/sbin/domovoi-reboot",
     "/opt/xvf3800/xvf_host",
 }
 
