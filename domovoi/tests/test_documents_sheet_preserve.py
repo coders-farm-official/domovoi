@@ -252,3 +252,64 @@ def test_more_rows_than_the_window_is_refused(docs_dir):
         r = _put(c, "huge.csv", [[{"v": "x"}]] * (docs._SHEET_MAX_ROWS + 1))
     assert r.status_code == 422
     assert not (docs_dir / "huge.csv").exists()
+
+
+# ─── Only a workbook the server can hold is opened, and only one it could
+# read is overwritten ───────────────────────────────────────────────────
+def test_an_xlsx_that_unpacks_past_the_bound_is_refused_on_both_routes(docs_dir, monkeypatch):
+    # openpyxl holds a workbook's parts in memory with no bound of its own;
+    # the zip directory says what the parts unpack to, so a small archive
+    # that would unpack to gigabytes is refused before anything is inflated.
+    _budget(docs_dir / "budget.xlsx")
+    before = (docs_dir / "budget.xlsx").read_bytes()
+    monkeypatch.setattr(docs, "_XLSX_MAX_INFLATED_BYTES", 1024)
+    with _client() as c:
+        r = c.get("/api/documents/sheet/budget.xlsx")
+        assert r.status_code == 413, r.text
+        assert "too large" in r.json()["detail"]
+        r = _put(c, "budget.xlsx", [[{"v": "x"}]])
+        assert r.status_code == 413, r.text
+    assert (docs_dir / "budget.xlsx").read_bytes() == before
+    assert sorted(p.name for p in docs_dir.iterdir()) == ["budget.xlsx"]
+
+
+def test_the_bound_is_read_from_the_zip_directory_before_openpyxl_opens_anything(docs_dir, monkeypatch):
+    import openpyxl
+
+    _budget(docs_dir / "budget.xlsx")
+    monkeypatch.setattr(docs, "_XLSX_MAX_INFLATED_BYTES", 1024)
+
+    def never(*_a, **_k):
+        raise AssertionError("openpyxl opened the file")
+
+    monkeypatch.setattr(openpyxl, "load_workbook", never)
+    with _client() as c:
+        assert c.get("/api/documents/sheet/budget.xlsx").status_code == 413
+        assert _put(c, "budget.xlsx", [[{"v": "x"}]]).status_code == 413
+
+
+def test_a_workbook_within_the_bound_opens_as_before(docs_dir):
+    _budget(docs_dir / "budget.xlsx")
+    with _client() as c:
+        rows = _grid(c, "budget.xlsx")
+        assert rows[0][0]["v"] == "Item"
+        assert _put(c, "budget.xlsx", rows).status_code == 200
+
+
+def test_a_file_that_is_not_a_workbook_is_not_replaced_by_a_blank_one(docs_dir):
+    # The old save built a new workbook when the file would not load, so a
+    # renamed .xls or a damaged file was silently overwritten with the grid.
+    (docs_dir / "notreally.xlsx").write_bytes(b"this is not a workbook")
+    with _client() as c:
+        r = _put(c, "notreally.xlsx", [[{"v": "x"}]])
+    assert r.status_code == 409, r.text
+    assert "could not be read" in r.json()["detail"]
+    assert (docs_dir / "notreally.xlsx").read_bytes() == b"this is not a workbook"
+    assert sorted(p.name for p in docs_dir.iterdir()) == ["notreally.xlsx"]
+
+
+def test_an_empty_xlsx_becomes_a_workbook(docs_dir):
+    (docs_dir / "empty.xlsx").write_bytes(b"")
+    with _client() as c:
+        assert _put(c, "empty.xlsx", [[{"v": "hello"}]]).status_code == 200
+    assert load_workbook(docs_dir / "empty.xlsx").active["A1"].value == "hello"

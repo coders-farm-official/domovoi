@@ -886,6 +886,7 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
     if ext == ".xlsx":
         from openpyxl import load_workbook
 
+        _assert_xlsx_fits(target)
         wb = load_workbook(target, data_only=False, read_only=True)
         try:
             ws = wb.worksheets[0]
@@ -911,6 +912,33 @@ def _read_sheet_grid(target: Path) -> list[list[dict[str, Any]]]:
 # xl/drawings/, but not the vmlDrawing that carries cell comments, which it
 # keeps), embedded media, and pivot tables.
 _XLSX_UNKEPT_PREFIXES = ("xl/charts/", "xl/media/", "xl/pivotTables/", "xl/pivotCache/")
+
+
+# What an .xlsx may hold once inflated before either sheet route opens it.
+# openpyxl reads a workbook's parts into memory with no bound of its own:
+# the save loads the whole workbook, and even the read-only read holds the
+# shared strings and styles. The Documents door takes uploads far larger than
+# any sheet, so without this a small archive that unpacks to gigabytes was a
+# one-request memory exhaustion for anything with a device token. The zip
+# directory states the sizes up front, so nothing is inflated to find out.
+_XLSX_MAX_INFLATED_BYTES = 256 * 1024 * 1024
+
+
+def _assert_xlsx_fits(target: Path) -> None:
+    """413 when ``target``'s zip directory says its entries unpack to more
+    than ``_XLSX_MAX_INFLATED_BYTES`` in all. A file that is not a zip is
+    left for the caller, which refuses it in its own words."""
+    try:
+        with zipfile.ZipFile(target) as z:
+            total = sum(info.file_size for info in z.infolist())
+    except (zipfile.BadZipFile, OSError):
+        return
+    if total > _XLSX_MAX_INFLATED_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{target.name} is too large to open in the sheet editor: it unpacks "
+            f"to more than {_XLSX_MAX_INFLATED_BYTES // (1024 * 1024)} MiB.",
+        )
 
 
 def _xlsx_unkept_parts(target: Path) -> bool:
@@ -985,7 +1013,8 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
     from openpyxl.cell.cell import MergedCell
 
     wb = None
-    if target.is_file():
+    if target.is_file() and target.stat().st_size > 0:
+        _assert_xlsx_fits(target)
         if _xlsx_unkept_parts(target):
             raise HTTPException(
                 status_code=409,
@@ -994,10 +1023,18 @@ def _write_xlsx_grid(target: Path, rows: list[list[Optional[SheetCell]]]) -> Non
             )
         try:
             wb = load_workbook(target)
-        except Exception:  # noqa: BLE001 — unreadable file: the editor could not have opened it either
-            wb = None
+        except Exception as exc:  # noqa: BLE001 — whatever openpyxl could not read
+            # Not a workbook this server can open (an .xls renamed, a damaged
+            # file). The old save would have put a brand-new workbook in its
+            # place; refusing keeps a file nobody could inspect from being
+            # replaced by a grid that was never read from it.
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.name} could not be read as a workbook, so it was not "
+                "saved. Open it in a spreadsheet app.",
+            ) from exc
     if wb is None:
-        wb = Workbook()
+        wb = Workbook()  # a new name, or an empty file
     ws = wb.worksheets[0]
 
     # The window the editor saw is authoritative: a cell it left blank is
