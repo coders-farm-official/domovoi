@@ -350,6 +350,10 @@ def classify_connect_failure(exc: BaseException) -> str:
     """One word for why a connect failed, for ``offline_diag``."""
     name = type(exc).__name__
     text = str(exc).lower()
+    if "did not prove" in text:
+        # `_verify_server_identity` failed before the socket: the server
+        # was unreachable over HTTP, or answered as somebody else.
+        return "identity_unverified"
     if isinstance(exc, socket.gaierror) or "name or service not known" in text or "getaddrinfo" in text:
         return "dns"
     if isinstance(exc, ConnectionRefusedError) or "refused" in text:

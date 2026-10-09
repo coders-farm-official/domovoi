@@ -201,6 +201,8 @@ def test_the_core_must_actually_accept():
         (OSError("[Errno 113] No route to host"), "os_error"),
         (RuntimeError("SSL: CERTIFICATE_VERIFY_FAILED"), "tls"),
         (RuntimeError("server rejected WebSocket connection: HTTP 403 (handshake)"), "handshake"),
+        (ConnectionError("ws://x:6370/v1/stream/den did not prove it is this device's Domovoi server"),
+         "identity_unverified"),
     ],
 )
 def test_connect_failures_are_classified(exc, expected):
