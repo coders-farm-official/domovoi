@@ -372,6 +372,10 @@ class StatePollLoop:
             for key, new_value in (
                 ("satellites.presence", sorted(snapshot.get("active_rooms") or [])),
                 ("satellites.wifi", snapshot.get("wifi_status") or {}),
+                # The latest health sample per room (2026-10-09): one a
+                # minute per satellite, so the diff fires about that often.
+                # The page refetches the room's /health for the card.
+                ("satellites.health", snapshot.get("satellite_health") or {}),
                 # Live drop-in pairings (Feature 4). Normalized + sorted so
                 # the diff only fires when a call actually starts or ends;
                 # the page reacts by refetching /api/satellites (which
