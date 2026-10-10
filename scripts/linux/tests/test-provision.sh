@@ -64,9 +64,12 @@ origin_url() {
   printf '%s' "$u"
 }
 
-# A real Python for checking the JSON progress lines (not the shims').
+# A real Python for checking the JSON progress lines (not the shims'):
+# HARNESS_PYTHON when the pytest wrapper sets it, as for
+# test-apply-update.sh, else the first one on PATH.
 JSON_PY=""
-for p in python3 python; do
+for p in "${HARNESS_PYTHON:-}" python3 python; do
+  [ -n "$p" ] || continue
   if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import json' >/dev/null 2>&1; then JSON_PY=$(command -v "$p"); break; fi
 done
 
@@ -144,7 +147,7 @@ LOCK
   printf '[project]\nname = "domovoi"\n' >"$o/pyproject.toml"
   printf 'FROM debian:bookworm-slim\n' >"$o/domovoi/Dockerfile.mpd"
   printf 'services: {}\n' >"$o/domovoi/docker-compose.yml"
-  printf 'OLLAMA_URL=http://localhost:11434\nWHISPER_MODEL=large-v3\n' >"$o/domovoi/.env.example"
+  printf 'OLLAMA_URL=http://localhost:11434\nWHISPER_MODEL=large-v3\nMPD_HTTP_BASE=auto\n# MUSIC_DIR=\n' >"$o/domovoi/.env.example"
   git -C "$o" add -A && git -C "$o" commit -q -m "fixture A"
   FIXTURE_A=$(git -C "$o" rev-parse HEAD)
   echo "# B" >>"$o/pyproject.toml"
@@ -179,9 +182,12 @@ write_shims() {
   local bin=$1
   mkdir -p "$bin"
 
+  # Also notes what its descriptors point at: a child of the script must
+  # not hold the run lock.
   cat >"$bin/apt-get" <<'SH'
 #!/usr/bin/env bash
 echo "apt-get $*" >>"$SHIM_STATE/calls.log"
+for f in /proc/$$/fd/*; do readlink "$f" 2>/dev/null; done >>"$SHIM_STATE/apt-fds"
 [ ! -f "$SHIM_STATE/apt-fail" ] || { echo "E: fixture failure" >&2; exit 100; }
 install=0
 for a in "$@"; do
@@ -221,17 +227,45 @@ SH
 echo "apt-mark $*" >>"$SHIM_STATE/calls.log"
 SH
 
+  # A key file is "KEY <fingerprint>" lines, one per primary key (the curl
+  # shim serves Docker's, plus a second one when docker-extra-key is set).
+  # --import keeps them in $GNUPGHOME, --list-keys / --show-keys print
+  # them as gpg's colon listing, --export FPR prints that one key alone.
   cat >"$bin/gpg" <<'SH'
 #!/usr/bin/env bash
 echo "gpg $*" >>"$SHIM_STATE/calls.log"
-echo "pub:-:4096:1:8D81803C0EBFCD88:1487788586:::-:::scESA::::::23::0:"
-echo "fpr:::::::::$(cat "$SHIM_STATE/docker-fpr"):"
-# More output after a pause, like the subkey lines: a reader that stops at
-# the first fpr makes this write hit a closed pipe (SIGPIPE), and under
-# pipefail that used to throw the fingerprint away.
-sleep 0.3
-echo "sub:-:4096:1:7EA0A9C3F273FCD8:1487792064:::-:::s::::::23:"
-echo "fpr:::::::::D3306A018370199E527AE7997EA0A9C3F273FCD8:"
+mode="" arg=""
+for a in "$@"; do
+  case $a in --import) mode=import ;; --list-keys) mode=list ;; --show-keys) mode=show ;; --export) mode=export ;; -*) ;; *) arg=$a ;; esac
+done
+listing() {
+  while read -r tag fpr; do
+    [ "$tag" = KEY ] || continue
+    echo "pub:-:4096:1:${fpr:24}:1487788586:::-:::scESA::::::23::0:"
+    echo "fpr:::::::::$fpr:"
+    # More output after a pause, like the subkey lines: a reader that stops
+    # at the first fpr makes this write hit a closed pipe (SIGPIPE), and
+    # under pipefail that used to throw the fingerprint away.
+    sleep 0.3
+    echo "sub:-:4096:1:7EA0A9C3F273FCD8:1487792064:::-:::s::::::23:"
+    echo "fpr:::::::::D3306A018370199E527AE7997EA0A9C3F273FCD8:"
+  done
+}
+case $mode in
+  import) grep -q '^KEY ' "$arg" || { echo "gpg: no valid OpenPGP data found." >&2; exit 2; }
+          cat "$arg" >>"$GNUPGHOME/pubring.harness" ;;
+  list) [ ! -f "$GNUPGHOME/pubring.harness" ] || listing <"$GNUPGHOME/pubring.harness" ;;
+  show) listing <"$arg" ;;
+  export) if grep -qx "KEY $arg" "$GNUPGHOME/pubring.harness" 2>/dev/null; then
+            printf -- '-----BEGIN PGP PUBLIC KEY BLOCK-----\nKEY %s\n-----END PGP PUBLIC KEY BLOCK-----\n' "$arg"
+          fi ;;
+esac
+exit 0
+SH
+
+  cat >"$bin/gpgconf" <<'SH'
+#!/usr/bin/env bash
+echo "gpgconf $*" >>"$SHIM_STATE/calls.log"
 SH
 
   cat >"$bin/curl" <<'SH'
@@ -251,7 +285,8 @@ echo "curl $url${out:+ -o $out}${data:+ -d $data}" >>"$SHIM_STATE/calls.log"
 active() { [ -f "$SHIM_STATE/active/$1" ]; }
 case $url in
   https://download.docker.com/linux/ubuntu/gpg)
-    printf 'FAKE DOCKER KEY\n' >"$out" ;;
+    printf 'KEY %s\n' "$(cat "$SHIM_STATE/docker-fpr")" >"$out"
+    [ ! -f "$SHIM_STATE/docker-extra-key" ] || printf 'KEY %s\n' "$(cat "$SHIM_STATE/docker-extra-key")" >>"$out" ;;
   https://github.com/ollama/ollama/releases/download/v*/ollama-linux-amd64.tar.zst)
     src=$SHIM_WORK/ollama.tar.zst
     [ ! -f "$SHIM_STATE/ollama-tampered" ] || src=$SHIM_WORK/ollama-tampered.tar.zst
@@ -416,14 +451,29 @@ fi
 exec "$SHIM_REAL_GIT" "$@"
 SH
 
+  # Fails for a path that contains the text in chown-fail (a write that
+  # stops half-way).
   cat >"$bin/chown" <<'SH'
 #!/usr/bin/env bash
 echo "chown $*" >>"$SHIM_STATE/calls.log"
+if [ -f "$SHIM_STATE/chown-fail" ]; then
+  for a in "$@"; do case $a in *"$(cat "$SHIM_STATE/chown-fail")"*) echo "chown: fixture failure" >&2; exit 1 ;; esac; done
+fi
+exit 0
 SH
 
+  # flock [-n] [-E CODE] [-o] FILE COMMAND...: busy (exit CODE, 1 without
+  # -E) when the case holds the lock, else runs COMMAND, as flock does.
   cat >"$bin/flock" <<'SH'
 #!/usr/bin/env bash
-[ ! -f "$SHIM_STATE/locked" ]
+echo "flock $*" >>"$SHIM_STATE/calls.log"
+code=1
+while [ $# -gt 0 ]; do
+  case $1 in -n|-o) shift ;; -E) code=$2; shift 2 ;; *) break ;; esac
+done
+shift
+[ ! -f "$SHIM_STATE/locked" ] || exit "$code"
+[ $# -eq 0 ] || exec "$@"
 SH
 
   cat >"$bin/mountpoint" <<'SH'
@@ -475,8 +525,10 @@ echo "sudo $*" >>"$SHIM_STATE/calls.log"
 exit 0
 SH
 
+  # A unit's journal: the case's text, if it set one.
   cat >"$bin/journalctl" <<'SH'
 #!/usr/bin/env bash
+[ ! -f "$SHIM_STATE/journal" ] || cat "$SHIM_STATE/journal"
 exit 0
 SH
 
@@ -538,20 +590,36 @@ if [ "${1-}" = -c ]; then
   tag=$(printf '%s\n' "$2" | head -n 1)
   case $tag in
     "#provision:import-check") [ ! -f "$SHIM_STATE/import-fail" ] || { echo "import failures: torch"; exit 1; }; echo "imports OK"; exit 0 ;;
+    "#provision:env-read")
+      # The last KEY= line of each name asked for, quotes stripped.
+      for k in $PROVISION_ENV_NAMES; do
+        grep -q "^$k=" "$envf" || continue
+        v=$(sed -n "s/^$k=//p" "$envf" | tail -n 1); v=${v%\"}; v=${v#\"}
+        echo "$k=$v"
+      done | awk '!seen[$0]++'
+      exit 0 ;;
     "#provision:env-write")
+      # Like config_env_writer.write_env_values: a key's line rewritten in
+      # place, a new key appended.
+      [ ! -f "$SHIM_STATE/env-write-fail" ] || { echo "OSError: fixture" >&2; exit 1; }
       while IFS= read -r kv; do
         [ -n "$kv" ] || continue
         k=${kv%%=*}
-        if grep -qx -- "$kv" "$envf"; then continue; fi
         if grep -q "^$k=" "$envf"; then
-          grep -v "^$k=" "$envf" >"$envf.new"; echo "$kv" >>"$envf.new"; mv "$envf.new" "$envf"
+          awk -v k="$k" -v kv="$kv" 'index($0, k "=") == 1 {print kv; next} {print}' "$envf" >"$envf.new"; mv "$envf.new" "$envf"
         else
           echo "$kv" >>"$envf"
         fi
-        echo "$k"
       done <<<"$PROVISION_ENV_KEYS"
       exit 0 ;;
-    "#provision:env-verify") exit 0 ;;
+    "#provision:env-verify")
+      # Asked only about keys the file holds as asked.
+      while IFS= read -r kv; do
+        [ -n "$kv" ] || continue
+        k=${kv%%=*}
+        [ "$(sed -n "s/^$k=//p" "$envf" | tail -n 1)" = "${kv#*=}" ] || { echo "$k: the core would read something else"; exit 1; }
+      done <<<"$PROVISION_ENV_KEYS"
+      exit 0 ;;
     "#provision:piper-info")
       echo en_US-lessac-medium
       echo "$HOME/.domovoi/piper_voices"
@@ -740,6 +808,7 @@ case_not_root_refuses() {
   check "exit 1" eq "$RC" 1
   check "says to run as root" said "run it as root"
   check "changed nothing" not_called "apt-get"
+  check "one final line" progress_ok
   end_case
 }
 
@@ -808,13 +877,19 @@ case_full_run_wsl() {
   check "on main, tracking origin/main" eq "$(git -C "$CHECKOUT" rev-parse --abbrev-ref '@{u}')" origin/main
   check "HEAD in the final line" eq "$(final_field head)" "\"$FIXTURE_B\""
   check "cloned as the service user" called "runuser -u domovoi -- env HOME=/home/domovoi"
+  check "cloned beside the checkout, then renamed into place" said "the checkout is in place at $CHECKOUT"
+  check "no clone left beside it" absent "$CASE/opt/.domovoi.provision-clone"
+  # user
+  check "the user this run created has no password login" called "passwd -l domovoi"
   # docker
-  check "docker key fingerprint checked" called "gpg --batch --show-keys --with-colons"
+  check "docker key read through a throwaway keyring" called "gpg --batch --no-tty --quiet --import"
   check "docker key installed" test -f "$ROOT/etc/apt/keyrings/docker.asc"
+  check "the pinned key alone (gpg --export)" eq "$(grep -c '^KEY ' "$ROOT/etc/apt/keyrings/docker.asc")" 1
+  check "the pinned key" has_line "$ROOT/etc/apt/keyrings/docker.asc" "KEY 9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
   check "docker.sources" has_line "$ROOT/etc/apt/sources.list.d/docker.sources" "Suites: resolute"
   check "docker-ce at the pin" called "docker-ce=5:29.8.1-1~ubuntu.26.04~resolute"
   check "compose plugin at the pin" called "docker-compose-plugin=5.5.1-1~ubuntu.26.04~resolute"
-  check "held" called "apt-mark hold docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+  check "not held (apt upgrade moves them, as on the Beelink)" not_called "apt-mark"
   check "user in the docker group" called "usermod -aG docker domovoi"
   # venv: the three LINUX_HOST.md installs, in order
   check "build tools from the lock" called "-m pip --disable-pip-version-check --no-input install --require-hashes -r $ROOT/var/cache/domovoi-provision/build-tools."
@@ -835,6 +910,8 @@ case_full_run_wsl() {
   check ".env: MPD_HTTP_BASE" has_line "$envf" "MPD_HTTP_BASE=http://192.168.1.50"
   check ".env: MUSIC_DIR" has_line "$envf" "MUSIC_DIR=/srv/media/music"
   check ".env: no videos key" eq "$(grep -ci videos "$envf")" 0
+  check ".env: what the script wrote, recorded" has_line "$ROOT/var/lib/domovoi-provision/env-written" "OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M"
+  check ".env: the record holds no secret" eq "$(grep -c -e PASSWORD -e TOKEN -e SECRET "$ROOT/var/lib/domovoi-provision/env-written")" 0
   # ollama, models, whisper, piper
   check "Ollama tarball fetched" called "curl https://github.com/ollama/ollama/releases/download/v0.34.4/ollama-linux-amd64.tar.zst"
   check "Ollama binary" test -x "$ROOT/usr/local/bin/ollama"
@@ -1152,13 +1229,35 @@ case_wsl_without_systemd_stops_for_a_restart() {
   end_case
 }
 
-case_lock_held_refuses() {
-  new_case lock_held_refuses
+# Review finding 10: a run refused by the lock has its own exit code (4),
+# says why in its final line, and leaves result.json to the running run.
+case_lock_busy_has_its_own_exit_code() {
+  new_case lock_busy_has_its_own_exit_code
+  run_prov "${wsl_args[@]}" --skip-models
+  check "first run exit 0" eq "$RC" 0
+  local res=$ROOT/var/lib/domovoi-provision/result.json before
+  before=$(cat "$res")
   touch "$STATE/locked"
-  run_prov "${wsl_args[@]}"
-  check "exit 1" eq "$RC" 1
-  check "says another run holds it" said "another provision run holds"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 4" eq "$RC" 4
+  check "progress format, one final line" progress_ok
+  check "result busy" eq "$(final_field result)" '"busy"'
+  check "exit_code 4 in the final line" eq "$(final_field exit_code)" 4
+  check "the final line says why" grep -q '"message":"another provision run is in progress' "$CASE/progress.jsonl"
+  check "result.json left to the run that holds the lock" eq "$(cat "$res")" "$before"
   check "nothing ran" not_called "apt-get"
+  end_case
+}
+
+# Review finding 10: nothing the run starts inherits the run lock (an
+# orphaned pip held it after a SIGKILL).
+case_children_do_not_hold_the_lock() {
+  new_case children_do_not_hold_the_lock
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the lock is held by flock -o, not by the script's own descriptor" called "flock -n -E 75 -o $ROOT/var/lib/domovoi-provision/lock"
+  check "apt-get noted its descriptors" test -s "$STATE/apt-fds"
+  check "apt-get did not inherit the lock" eq "$(grep -c 'domovoi-provision/lock' "$STATE/apt-fds")" 0
   end_case
 }
 
@@ -1228,6 +1327,233 @@ case_core_not_healthy_stops() {
   end_case
 }
 
+# ─── cases for the review findings of 2026-10-09 (REVIEW.md) ─────────────
+
+# Finding 1: a re-run never undoes the household's own settings.
+case_env_keeps_household_settings() {
+  new_case env_keeps_household_settings
+  local envf=$CHECKOUT/domovoi/.env
+  # A run that stops between creating .env and writing its keys: the next
+  # one still treats the template's values as the script's own.
+  touch "$STATE/env-write-fail"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "the interrupted run exit 1" eq "$RC" 1
+  check "env failed" eq "$(state_of env)" fail
+  rm -f "$STATE/env-write-fail"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "resumed run exit 0" eq "$RC" 0
+  check "the tier's Whisper over the template's" has_line "$envf" "WHISPER_MODEL=small.en"
+  check "the tier's router written" has_line "$envf" "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
+  check "no --lan-ip: the template's MPD_HTTP_BASE stays" has_line "$envf" "MPD_HTTP_BASE=auto"
+  # The household picks other models in Settings (the writer rewrites the
+  # lines in place).
+  sed -i 's/^OLLAMA_MODEL=.*/OLLAMA_MODEL=mistral:7b/; s/^WHISPER_MODEL=.*/WHISPER_MODEL=medium.en/' "$envf"
+  # A repair run with a new LAN address.
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.60
+  check "exit 0" eq "$RC" 0
+  check "env re-ran" eq "$(state_of env)" done
+  check "the household's QA model kept" has_line "$envf" "OLLAMA_MODEL=mistral:7b"
+  check "the household's Whisper kept" has_line "$envf" "WHISPER_MODEL=medium.en"
+  check "MPD_HTTP_BASE written (the template's value was the script's)" has_line "$envf" "MPD_HTTP_BASE=http://192.168.1.60"
+  check "says it kept OLLAMA_MODEL" said "OLLAMA_MODEL holds a value this script did not write"
+  check "says it kept WHISPER_MODEL" said "WHISPER_MODEL holds a value this script did not write"
+  check "both in the final line's warnings" eq "$(final_field warnings)" 2
+  check "core and web restarted: MPD_HTTP_BASE changed" called "systemctl restart domovoi-core.service domovoi-web.service"
+  # Another tier: the router is still the script's, so it moves; the QA
+  # model stays the household's.
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.60 --tier floor
+  check "tier change exit 0" eq "$RC" 0
+  check "the floor router written" has_line "$envf" "OLLAMA_TOOL_MODEL=qwen3:4b-instruct-2507-q4_K_M"
+  check "the household's QA model still kept" has_line "$envf" "OLLAMA_MODEL=mistral:7b"
+  # The household sets MPD_HTTP_BASE too: a new --lan-ip then changes
+  # nothing in .env, and nothing restarts.
+  sed -i 's#^MPD_HTTP_BASE=.*#MPD_HTTP_BASE=http://10.0.0.9#' "$envf"
+  local env_before; env_before=$(cksum <"$envf")
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.61 --tier floor
+  check "exit 0 again" eq "$RC" 0
+  check "env re-ran (its inputs changed)" eq "$(state_of env)" done
+  check "the household's MPD_HTTP_BASE kept" has_line "$envf" "MPD_HTTP_BASE=http://10.0.0.9"
+  check ".env untouched" eq "$(cksum <"$envf")" "$env_before"
+  check "start skipped: .env did not change" eq "$(state_of start)" skip
+  check "nothing restarted" not_called "systemctl restart"
+  end_case
+}
+
+# Finding 2: an existing account's password is never locked; an
+# administrator's account is refused.
+case_existing_user_is_not_locked() {
+  new_case existing_user_is_not_locked --bare
+  echo kamron >>"$STATE/users"; echo "kamron sudo" >>"$STATE/groups"; mkdir -p "$ROOT/home/kamron"
+  run_prov --internet always --user kamron --skip-models
+  check "an administrator's account: exit 2" eq "$RC" 2
+  check "says why" said "is an administrator's account (in the sudo group)"
+  check "one final line, usage_error" eq "$(final_field result)" '"usage_error"'
+  check "its password untouched" not_called "passwd"
+  check "nothing ran" not_called "apt-get"
+  echo svc >>"$STATE/users"; mkdir -p "$ROOT/home/svc"
+  run_prov --internet always --user svc --skip-models
+  check "a plain existing account: exit 0" eq "$RC" 0
+  check "used as it is" said "the service user svc exists; its password and groups are left as they are"
+  check "its password not locked" not_called "passwd"
+  check "not created again" not_called "useradd --create-home --home-dir /home/svc"
+  end_case
+}
+
+# Finding 3: a key file holding Docker's key and another one is refused.
+case_docker_key_file_with_a_second_key_stops() {
+  new_case docker_key_file_with_a_second_key_stops
+  echo 0123456789ABCDEF0123456789ABCDEF01234567 >"$STATE/docker-extra-key"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "docker failed" eq "$(state_of docker)" fail
+  check "says why" said "holds 2 primary keys"
+  check "key not installed" absent "$ROOT/etc/apt/keyrings/docker.asc"
+  check "no docker packages" not_called "docker-ce="
+  end_case
+}
+
+# Finding 4: a failed or interrupted clone is repaired by the next run.
+case_failed_checkout_is_repaired() {
+  new_case failed_checkout_is_repaired
+  run_prov "${wsl_args[@]}" --skip-models --ref no-such-ref
+  check "a ref that isn't there: exit 1" eq "$RC" 1
+  check "checkout failed" eq "$(state_of checkout)" fail
+  check "nothing at the checkout dir" absent "$CHECKOUT"
+  check "no clone left beside it" absent "$CASE/opt/.domovoi.provision-clone"
+  # As a SIGKILL mid-clone leaves it.
+  mkdir -p "$CASE/opt/.domovoi.provision-clone/.git"; echo junk >"$CASE/opt/.domovoi.provision-clone/.git/HEAD"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "the run with the default ref: exit 0" eq "$RC" 0
+  check "said it cleared the unfinished clone" said "removed an unfinished clone from an earlier run"
+  check "HEAD is main's" eq "$(git -C "$CHECKOUT" rev-parse HEAD 2>/dev/null)" "$FIXTURE_B"
+  check "a working tree" test -f "$CHECKOUT/scripts/linux/provision-manifest.conf"
+  check "nothing left beside it" absent "$CASE/opt/.domovoi.provision-clone"
+  end_case
+}
+
+# Finding 5: a folder that was there before and can't mount now (a USB
+# drive unplugged) is a warning; a new one still has to mount.
+case_media_missing_on_a_rerun_warns() {
+  new_case media_missing_on_a_rerun_warns
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'pictures=C:\P'
+  check "first run exit 0" eq "$RC" 0
+  grep -vx /srv/media/music "$STATE/mounts" >"$STATE/mounts.new"; mv "$STATE/mounts.new" "$STATE/mounts"
+  touch "$STATE/mount-fail"
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'pictures=C:\P'
+  check "exit 0" eq "$RC" 0
+  check "media ran again and is done" eq "$(state_of media)" done
+  check "warned" said 'could not mount C:\M at /srv/media/music'
+  check "in the final line's warnings" eq "$(final_field warnings)" 1
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "nothing restarted" not_called "systemctl restart"
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'pictures=C:\P' --media 'documents=C:\D'
+  check "a new folder that can't mount: exit 1" eq "$RC" 1
+  check "media failed" eq "$(state_of media)" fail
+  check "says which" said 'could not mount C:\D at /srv/media/documents'
+  end_case
+}
+
+# Finding 7: docker-ce is not held, and a re-run never takes it back down.
+case_docker_is_not_held() {
+  new_case docker_is_not_held
+  run_prov "${wsl_args[@]}" --skip-models
+  check "first run exit 0" eq "$RC" 0
+  check "not held" not_called "apt-mark"
+  # apt upgrade moved docker-ce on; docker is down at the next run.
+  sed -i 's/^docker-ce=.*/docker-ce=5:29.9.0-1~ubuntu.26.04~resolute/' "$STATE/dpkg"
+  rm -f "$STATE/active/docker.service"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "docker ran again" eq "$(state_of docker)" done
+  check "nothing installed: no downgrade" not_called "apt-get"
+  check "docker-ce stays where apt put it" grep -qx "docker-ce=5:29.9.0-1~ubuntu.26.04~resolute" "$STATE/dpkg"
+  check "still not held" not_called "apt-mark"
+  check "docker started" called "systemctl enable --now containerd.service docker.service"
+  end_case
+}
+
+# Finding 8: journal text the script prints never carries the setup code.
+case_setup_code_kept_out_of_the_journal_it_prints() {
+  new_case setup_code_kept_out_of_the_journal_it_prints
+  printf '%s\n' "Oct 09 domovoi-core[71]: ======" \
+    "Oct 09 domovoi-core[71]:  Setup code: acorn-apple-arrow-autumn-badge-baker-basil-beach" \
+    "Oct 09 domovoi-core[71]:  (also written to /home/domovoi/.domovoi/setup-code.txt)" \
+    "Oct 09 domovoi-core[71]: echoed acorn-apple-arrow-autumn-badge-baker-basil-beach elsewhere" \
+    "Oct 09 domovoi-core[71]: an ordinary line" >"$STATE/journal"
+  touch "$STATE/core-unhealthy"
+  run_prov "${wsl_args[@]}" --skip-models --health-timeout 10
+  check "exit 1" eq "$RC" 1
+  check "start failed" eq "$(state_of start)" fail
+  check "the journal is shown" said "an ordinary line"
+  check "no setup code" not_said "acorn-apple-arrow"
+  check "no Setup code line" not_said "Setup code:"
+  end_case
+}
+
+# Finding 9: every way out ends with exactly one final line.
+case_every_exit_has_one_final_line() {
+  new_case every_exit_has_one_final_line
+  run_prov --bogus
+  check "unknown option: exit 2" eq "$RC" 2
+  check "unknown option: one final line" progress_ok
+  check "unknown option: usage_error" eq "$(final_field result)" '"usage_error"'
+  check "unknown option: exit_code 2" eq "$(final_field exit_code)" 2
+  run_prov
+  check "no --internet on WSL: one final line" progress_ok
+  check "no --internet on WSL: usage_error" eq "$(final_field result)" '"usage_error"'
+  run_prov --help
+  check "--help: exit 0" eq "$RC" 0
+  check "--help: one final line" progress_ok
+  check "--help: help" eq "$(final_field result)" '"help"'
+  echo 1000 >"$STATE/uid"
+  run_prov "${wsl_args[@]}"
+  check "not root: exit 1" eq "$RC" 1
+  check "not root: one final line" progress_ok
+  check "not root: failed" eq "$(final_field result)" '"failed"'
+  rm -f "$STATE/uid"
+  RC=0
+  env -u DOMOVOI_PROVISION_TEST_HARNESS DOMOVOI_PROVISION_ROOT="$ROOT" PATH="$CASE/bin:$PATH" \
+    bash "$SCRIPT" --dry-run >"$CASE/output.log" 2>&1 || RC=$?
+  grep '^@@DOMOVOI ' "$CASE/output.log" | sed 's/^@@DOMOVOI //' >"$CASE/progress.jsonl" || true
+  check "harness variable alone: exit 2" eq "$RC" 2
+  check "harness variable alone: one final line" progress_ok
+  check "harness variable alone: usage_error" eq "$(final_field result)" '"usage_error"'
+  check "none of them wrote result.json" absent "$ROOT/var/lib/domovoi-provision/result.json"
+  end_case
+}
+
+# Finding 11: the restart note is written before /etc/wsl.conf.
+case_wsl_conf_restart_note_comes_first() {
+  new_case wsl_conf_restart_note_comes_first
+  echo '.wsl.conf.' >"$STATE/chown-fail"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "wsl-config failed" eq "$(state_of wsl-config)" fail
+  check "the restart note is there" test -f "$ROOT/var/lib/domovoi-provision/wsl-conf-pending"
+  check "and reported" eq "$(final_field restart_required)" true
+  rm -f "$STATE/chown-fail"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "the next run exit 0" eq "$RC" 0
+  check "wsl.conf written" has_line "$ROOT/etc/wsl.conf" "default=domovoi"
+  check "restart still required" eq "$(final_field restart_required)" true
+  end_case
+}
+
+# Finding 13: bare-metal media paths the services could not see, or that
+# systemd would misread.
+case_bare_metal_media_paths() {
+  new_case bare_metal_media_paths --bare
+  run_prov --internet sometimes --skip-models --media music=/home/kamron/Music
+  check "another user's home: exit 2" eq "$RC" 2
+  check "says why" said "is in another user's home, which the services can't see"
+  check "nothing ran" not_called "apt-get"
+  run_prov --internet sometimes --skip-models --media documents=/data/100%docs --media music=/home/domovoi/Music
+  check "exit 0" eq "$RC" 0
+  check "% escaped for systemd" has_line "$ROOT/etc/systemd/system/domovoi-core.service.d/domovoi-media.conf" "ReadWritePaths=-/data/100%%docs"
+  check "the service user's own home is fine" has_line "$CHECKOUT/domovoi/.env" "MUSIC_DIR=/home/domovoi/Music"
+  end_case
+}
+
 build_origin
 
 CASES=(
@@ -1254,13 +1580,24 @@ CASES=(
   case_bare_metal
   case_internet_never_keeps_searxng_off
   case_wsl_without_systemd_stops_for_a_restart
-  case_lock_held_refuses
+  case_lock_busy_has_its_own_exit_code
   case_existing_checkout_is_not_moved
   case_ref_sha_follows_the_track_branch
   case_ref_off_the_track_branch_stops
   case_clone_from_a_bundle
   case_update_unit_failure_stops
   case_core_not_healthy_stops
+  case_env_keeps_household_settings
+  case_existing_user_is_not_locked
+  case_docker_key_file_with_a_second_key_stops
+  case_failed_checkout_is_repaired
+  case_media_missing_on_a_rerun_warns
+  case_docker_is_not_held
+  case_setup_code_kept_out_of_the_journal_it_prints
+  case_every_exit_has_one_final_line
+  case_children_do_not_hold_the_lock
+  case_wsl_conf_restart_note_comes_first
+  case_bare_metal_media_paths
 )
 
 for c in "${CASES[@]}"; do
