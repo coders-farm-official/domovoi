@@ -1137,6 +1137,22 @@ async def test_web_a_ban_check_that_fails_refuses_the_guest(web_side, fake_bans)
     assert core.calls == []
 
 
+async def test_web_a_ban_check_that_fails_on_a_read_leaves_it_read_only(
+    web_side, fake_bans
+) -> None:
+    """A read is never refused for a ban it can't check — the guest sees
+    the queue, not editable — while an edit fails closed (above)."""
+    core, _db = web_side
+    core.read_answer = (200, {"items": [{"song_id": 1, "pos": 0, "file": "a.mp3"}],
+                              "current_song_id": 1})
+    fake_bans.fail = True
+    async with _web(**GUEST_PHONE) as c:
+        r = await c.get(f"/api/music/queue/{ACTIVE}")
+    assert r.status_code == 200, r.text
+    assert r.json()["editable"] is False
+    assert len(r.json()["items"]) == 1
+
+
 async def test_web_admin_read_names_the_guest_behind_an_entry(web_side) -> None:
     core, db = web_side
     core.read_answer = (200, {

@@ -452,7 +452,16 @@ async def read_queue(
 
     blocked_reason = _blocked_message(block, room_id) if block else None
     if guest and block is None:
-        if await _guest_ban(request, device_id or guest_device_id(request)) is not None:
+        # A read is never refused for this: a ban that can't be checked
+        # just leaves the queue read-only for the guest (edits fail closed).
+        try:
+            banned = await guest_bans.find_ban(
+                device_id or guest_device_id(request), request_source(request)
+            ) is not None
+        except Exception as e:  # noqa: BLE001 — the DB did not answer
+            log.warning("guest ban check failed on a read: %s", e)
+            banned = True
+        if banned:
             blocked_reason = GUEST_BANNED_REASON
 
     items: list[QueueItem] = []

@@ -992,6 +992,7 @@ All config is env-driven via `.env` (see `.env.example`):
 | `CONNECTIVITY_PROBE_TIMEOUT_SEC` | `2` | Per-probe timeout |
 | `BOT_NAME` | `Domovoi` | Bot identity (used in responses) |
 | `LOG_LEVEL` | `INFO` | Standard library logging level |
+| `GUEST_QUEUE_EDITING` | `true` | Guests (a phone or browser with no household token) may change the queue of a room that is playing and pause / resume / skip / go back there — never clear, stop or start a room — until an admin bans them (Settings → Devices → Guests). `false` = the household token or an admin only, as before. Editable live in Settings |
 | `HOME_PROBLEMS_VISIBILITY` | `everyone` | Who sees the dashboard Home page's "needs attention" rows: `everyone` (household members see the ones that explain what they notice, an admin sees all), `summary` (one neutral line) or `admins` (only an admin). Editable live in Settings |
 | `CHAT_MODE_ENABLED` | `false` | Master gate for conversational chat mode. Off → `LettaStubClient`, Letta never contacted |
 | `CHAT_SILENCE_TIMEOUT_SEC` | `30.0` | Auto-exit an open-mic conversation after this much silence |

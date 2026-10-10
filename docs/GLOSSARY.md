@@ -40,6 +40,10 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Flyway** — the migration tool that owns the database schema. Core migrations are append-only SQL files under `domovoi/db/migrations/`; you run them with `docker compose run --rm flyway`.
 
+**Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove, reorder — never clear or remove the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
+
+**Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Devices → Guests, from the guests the core recorded acting this week.
+
 **Handler** — the unit of voice functionality: a class that declares its *fast paths*, a tool schema for LLM routing, its network needs (`requires_network: no | degraded | yes`), and an offline fallback. Timers, music, intercom, news — each is a handler; plugins add more.
 
 **ICY metadata** — the `StreamTitle` now-playing tags many internet radio streams embed. The radio plugin's ICY poller reads them as the cheap first tier of song detection, with audio sampling as the fallback.
@@ -84,7 +88,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and the Satellites page address; each room owns one satellite and one *MPD* instance.
 
-**Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every client sees the same list and can add to, reorder, or clear it. Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
+**Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every household client sees the same list and can add to, reorder, or clear it (a *guest* only while the room is playing, and never clear). Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
 
 **Satellite** — the per-room listening device: a Raspberry Pi (Zero 2 W / Pi 4) with a ReSpeaker mic board, running the client in `satellite/`. It owns the local audio loop — wake word, VAD endpointing, *barge-in*, LEDs — and streams audio to the core over a WebSocket (`ws://<server>:6370`). Config lives in `~/.domovoi/config.toml` on the Pi; it runs as the `domovoi-satellite` systemd service.
 

@@ -4,6 +4,72 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-10 — Guests can change the music in a room that is playing
+
+A friend on a phone browser tried to change the queue of a room that was
+playing and could not even find the music: the tab strip sat below the
+screen, the Room queue tab asked them to pair, and reordering needed a
+mouse. The owner's decision: **guests should be able to edit queues that
+rooms are actively playing**, and use those rooms' playback controls,
+until an admin bans them.
+
+**This deliberately loosens the October security round's device tier**,
+for the room queue and the transport controls only, by owner decision. A
+*guest* is a request carrying no credential at all (no household token, no
+sign-in) on a box past first-run setup. For a room that is playing (MPD
+`play` or `pause` with a current song), a guest may read its queue, add,
+remove and move entries, and pause, resume, skip and go back. Never clear,
+never stop, never remove the song playing now, nothing on a room that
+isn't playing, and nothing it does starts a room's player. The core decides
+"playing" at the moment of each request; a paired device or an admin gets
+exactly the answers it got before, on every room.
+
+### What changes
+
+* **New setting `GUEST_QUEUE_EDITING`, on by default** (Settings →
+  Configuration → Security: "Guests can change the music in a playing
+  room"). Off restores the old behaviour exactly: a guest's queue or
+  transport call is `401` at both hops. Applies at once.
+* **Guest bans.** Settings → Devices → **Guests** lists the guests that
+  changed the music this week (browser id, address, browser, last action,
+  room), each with **ban** / **unban**; the Room queue tab gives an admin
+  a ban button on any entry a guest added. A ban covers every room, the
+  queue and transport alike, and matches the guest's browser id or its
+  address. It never affects a paired device or an admin. Household policy,
+  not a security boundary: a determined guest comes back as a new one.
+* **Throttle.** A guest's queue edits and transport presses share 30 a
+  minute per address (`429` beyond).
+* **Dashboard on a phone.** Each Room queue row has **play next**, **up**
+  and **down** buttons (44 px; drag still works with a mouse). Every
+  now-playing card with something on it has a **queue** button that opens
+  that room's queue. A track's details gain **add to *room*'s queue**
+  (append, not replace). Opening the Room queue tab no longer pops the pair
+  prompt; a guest on a room that isn't playing sees "isn't playing" and a
+  **pair this phone** button. A guest never sees Clear, Stop or favorite.
+  Home shows a guest the rooms that are playing (with pause / resume and a
+  queue link) instead of "couldn't load rooms". The shell fits the screen
+  a phone browser really shows, so the tab strip is visible.
+* **API.** `GET/POST /api/music/queue/{room}…` (except `/clear`) and the
+  transport row answer a guest per the rule; the read gains `guest`,
+  `admin`, and (for an admin) `guest_device_id` / `guest_source` on a
+  guest's entries. New admin routes: `GET /api/music/guests`,
+  `GET`/`POST /api/music/guest-bans`, `DELETE /api/music/guest-bans/{id}`.
+  The dashboard sends `X-Domovoi-Device-Id` (its self-asserted browser id)
+  on every request; the web hop forwards it and the caller's user agent.
+  [API_REFERENCE.md](API_REFERENCE.md) §3.5 / §3.5a,
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#guests-on-a-playing-room).
+
+### Upgrading
+
+1. **Update the server** as usual; the update unit applies **V023**
+   (`guests_seen`, `guest_bans`, and two nullable columns on
+   `room_queue_items`). Without it, a guest's actions fail closed (the ban
+   check can't be read: `503`) while everything a paired device does keeps
+   working.
+2. Nothing to set: guests are allowed from the first start. To keep the old
+   behaviour, set `GUEST_QUEUE_EDITING=false` (or switch it off in
+   Settings) before you open the door.
+
 ## 2026-10-09 — One restart at a time
 
 Pressing **Restart to apply changes** and then reloading the dashboard

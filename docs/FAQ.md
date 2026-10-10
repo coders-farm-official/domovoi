@@ -155,8 +155,12 @@ Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your vo
 ## Who added that song, and can I stop someone adding more?
 
 Every room has one queue — MPD's, the thing its speaker actually plays from —
-and anyone on the network can add to it, reorder it, or drop a track from the
-dashboard's **Music → Room queue** tab or the app's **room queue** tab. Each
+and anyone in the household can add to it, reorder it, or drop a track from the
+dashboard's **Music → Room queue** tab or the app's **room queue** tab (on a
+phone, each row has **play next**, **up** and **down** buttons, since a finger
+can't drag; a room's card on the Music page has a **queue** button that goes
+straight there). A guest's phone can too, while the room is playing — see the
+next question. Each
 entry carries a quiet "added by *<device>*" note, so "who put this on?" has an
 answer. Entries Domovoi has no record of — a voice request, or a cast from
 before this existed — simply show nothing rather than a guess.
@@ -174,6 +178,30 @@ nothing on a trusted LAN forces it to be honest, so this reliably settles a
 household argument but is not a defence against someone determined. Changing
 blocks needs the admin password, which is why it can't be undone from the
 device it was applied to.
+
+## Can a guest change the music?
+
+Yes, in a room that is **playing**, until you say otherwise. A friend's phone
+on your Wi-Fi that was never paired can open the dashboard, see what each room
+is playing, and for a room that's playing (or paused on a song): see its
+queue, add songs (a track's details → **add to *room*'s queue**), reorder them,
+play one next, remove one, and pause, resume, skip or go back. A guest can't
+clear a queue or stop a room, can't remove the song that's playing (it can
+skip it), and can't touch a room that isn't playing — starting music in a quiet
+room still needs a paired device. A guest's songs show "added by a guest", and
+a guest isn't shown the names of the household's devices.
+
+To stop one guest, sign in as admin and open **Settings → Devices → Guests**:
+it lists the guests that changed the music this week, with a **ban** button
+(also on any queue entry a guest added). A ban covers every room, the queue
+and the playback buttons alike, and matches that phone's browser id or its
+address on your network — so a guest who clears the browser is still caught
+while the network gives it the same address. It never affects a paired
+device or an admin. Like a queue block, a ban is household policy rather
+than a lock: someone determined can come back as a new guest. To turn guest
+access off altogether, switch off **Guests can change the music in a playing
+room** in **Settings → Configuration → Security**; then only paired devices
+and the admin can see or change a room's queue or its playback.
 
 ## Can I move files around without the command line?
 
