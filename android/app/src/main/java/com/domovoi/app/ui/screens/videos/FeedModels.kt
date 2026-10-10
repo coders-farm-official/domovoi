@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.videos
 
+import androidx.media3.common.Player
+
 /**
  * One video in the swipe feed. The feed is built from whatever list the
  * video was tapped in, in that list's order, so the same player serves the
@@ -50,6 +52,34 @@ internal fun indexAfterRemoval(current: Int, removed: Int, newSize: Int): Int = 
  */
 internal fun centerScrollDelta(itemOffset: Int, itemSize: Int, viewportStart: Int, viewportEnd: Int): Int =
     (itemOffset + itemSize / 2) - (viewportStart + viewportEnd) / 2
+
+/**
+ * Whether the feed holds the screen on: while it means to play, a stall to
+ * buffer included, so the phone doesn't dim mid-video. Paused, failed or
+ * idle, the screen times out as usual.
+ */
+internal fun feedKeepsScreenOn(playWhenReady: Boolean, playbackState: Int, failed: Boolean): Boolean =
+    playWhenReady && !failed &&
+        (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING)
+
+/**
+ * Leaving the app pauses the feed, and coming back resumes it only if it was
+ * playing when the app was left (owner report 2026-10-09: the video played on
+ * in the background). Leaving is the app going out of sight — home, another
+ * app, the screen turning off — not split-screen focus moving to the other app.
+ */
+internal class BackgroundPause {
+    private var resumeOnReturn = false
+
+    /** The app left the screen while [playing]; true when the player should pause now. */
+    fun onLeave(playing: Boolean): Boolean {
+        resumeOnReturn = playing
+        return playing
+    }
+
+    /** The app is back on screen; true when the player should play again. */
+    fun onReturn(): Boolean = resumeOnReturn.also { resumeOnReturn = false }
+}
 
 // ---------------------------------------------------------------------------
 // The server Videos grid, as data. The grid renders straight from this list,
