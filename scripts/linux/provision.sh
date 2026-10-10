@@ -13,28 +13,41 @@
 #   preflight    root, Ubuntu x86_64, systemd as PID 1, waits for cloud-init
 #   apt          the LINUX_HOST.md "Install" prerequisites (+ curl, gnupg,
 #                zstd, tzdata, sudo, which this script needs)
-#   user         the service user (default domovoi), no password login
+#   user         the service user (default domovoi): created with password
+#                login locked, or an existing one left as it is (an
+#                existing account in sudo, admin or wheel is refused)
 #   wsl-config   WSL only: /etc/wsl.conf (systemd, default user, interop off,
 #                no automount, fstab on) and the units MS Learn says to mask
 #   media        --media folders: on WSL one drvfs line per folder in
 #                /etc/fstab, mounted at /srv/media/<name>; on bare metal the
 #                directories themselves
-#   checkout     git clone of --repo-url at --ref into --checkout-dir, as the
-#                service user; HEAD verified when /etc/domovoi/allowed_signers
-#                exists (docs/LINUX_HOST.md "Signed updates")
-#   docker       docker-ce from Docker's apt repository at the manifest's
-#                exact versions (held), the service user in the docker group
+#   checkout     git clone of --repo-url at --ref, as the service user, into
+#                a directory beside --checkout-dir that is renamed into place
+#                only once the ref is checked out (and HEAD verified when
+#                /etc/domovoi/allowed_signers exists: docs/LINUX_HOST.md
+#                "Signed updates"); an existing checkout is never moved
+#   docker       Docker's key (exactly one key, the manifest's fingerprint)
+#                and apt repository; docker-ce at the manifest's versions
+#                when it is not installed yet (not held: apt upgrade moves
+#                it later, as on the Beelink); the service user in the
+#                docker group
 #   venv         the venv and the three hash-checked installs from
 #                requirements-linux-py314.lock (LINUX_HOST.md "Install")
 #   env          domovoi/.env: python -m domovoi.env_bootstrap [--internet],
 #                then the hardware tier's keys, the WSL keys and the media
-#                paths, through the repo's own .env writer
+#                paths, through the repo's own .env writer. A key is
+#                written only when it is absent or still holds what this
+#                script last wrote there (kept in
+#                /var/lib/domovoi-provision/env-written); one the household
+#                changed (Settings, or by hand) is left alone, with a warning
 #   ollama       the Ollama release LINUX_HOST.md pins (version and SHA-256
 #                read from that file), its systemd unit as the doc gives it
 #   models       the tier's two Ollama models, each checked against the
 #                manifest digest after the pull            (--skip-models: no)
 #   whisper      the Whisper model at the manifest's Hugging Face revision,
-#                model.bin checked against its SHA-256       (--skip-models: no)
+#                model.bin checked against its SHA-256; the small files
+#                beside it (config.json, tokenizer.json, vocabulary.*) come
+#                from that revision but are not hashed  (--skip-models: no)
 #   piper        the configured Piper voice, checked against PIPER_PINS
 #   images       the database images the compose file pins, and docker build of
 #                domovoi-mpd exactly as the core builds it
@@ -60,27 +73,41 @@
 # stdout that starts with "@@DOMOVOI " is one JSON object:
 #   {"v":1,"step":"venv","index":8,"total":20,"state":"start","percent":24,
 #    "message":"Installing Python packages"}
-# state is start, progress, done, skip or fail (plan in a dry run);
-# progress lines of a download add "bytes" and "bytes_total" (null when the
-# size is unknown). The last line has "step":"finish", "final":true and
-# "result" (ok, failed, rerun_after_restart or dry_run), "restart_required"
-# (WSL: /etc/wsl.conf changed and takes effect only after
+# state is start, progress, done, skip or fail (plan in a dry run); the
+# percent never goes down; progress lines of a download add "bytes" and
+# "bytes_total" (null when the size is unknown). Every run ends with exactly
+# one line that has "step":"finish", "final":true and "result" (ok, failed,
+# rerun_after_restart, dry_run, usage_error, busy or help),
+# "restart_required" (WSL: /etc/wsl.conf changed and takes effect only after
 # `wsl --terminate <distro>`; this script never restarts the distro itself),
-# "exit_code" and "failed_step". Everything else on stdout and stderr is for
-# people. The same final object is kept in
-# /var/lib/domovoi-provision/result.json.
+# "exit_code", "failed_step" and "message" (why, for anything but ok).
+# Only a SIGKILL leaves no final line. Everything else on stdout and stderr
+# is for people. A run that got past the run lock keeps the same final
+# object in /var/lib/domovoi-provision/result.json (a refused one leaves
+# that file to the run that holds the lock).
 #
-# Exit codes: 0 done (or dry run), 1 a step failed, 2 bad usage,
-# 3 WSL without systemd as PID 1: /etc/wsl.conf was written, terminate the
-# distro and run this again.
+# Exit codes: 0 done (or dry run, or --help), 1 a step failed (or not
+# root), 2 bad usage, 3 WSL without systemd as PID 1: /etc/wsl.conf was
+# written, terminate the distro and run this again, 4 another run of this
+# script holds the run lock (busy): wait for it, then run this again.
 #
 # Pins. Whatever the repository pins is read from the checkout at the commit
 # being installed, never copied: the lock, the compose images, the MPD
 # image's base, PIPER_PINS, the Ollama release in docs/LINUX_HOST.md. The
 # few with no home in the repo (docker-ce versions and key, the Whisper
 # revision and model.bin SHA-256, the tier models and their digests) are in
-# scripts/linux/provision-manifest.conf, read from the same checkout. Every
-# download is checked against its pin; a mismatch stops the run.
+# scripts/linux/provision-manifest.conf, read from the same checkout.
+# Checked against a pin, and a mismatch stops the run: every Python package
+# (the lock's hashes), the Ollama tarball (SHA-256), Docker's apt key
+# (fingerprint; apt then checks the docker-ce packages against the index
+# that key signs), the compose images and the MPD image's base (digests),
+# each Ollama model (digest),
+# Whisper's model.bin and the Piper voice (SHA-256). Not hashed by this
+# script: Ubuntu's own packages (apt checks them against Ubuntu's signed
+# archive, at whatever version it serves), what Dockerfile.mpd installs
+# with apt inside the image build, and Whisper's small files beside
+# model.bin (config.json, tokenizer.json, vocabulary.*), which come from
+# the pinned Hugging Face revision over HTTPS.
 #
 # DOMOVOI_PROVISION_ROOT is for the tests only
 # (scripts/linux/tests/test-provision.sh): a directory put in front of every
@@ -95,176 +122,10 @@ PROG=provision
 PROGRESS_PREFIX='@@DOMOVOI '
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-ROOT=""
-if [ -n "${DOMOVOI_PROVISION_ROOT:-}" ] || [ -n "${DOMOVOI_PROVISION_TEST_HARNESS:-}" ]; then
-  if [ "${DOMOVOI_PROVISION_TEST_HARNESS:-}" != 1 ] || [[ ${DOMOVOI_PROVISION_ROOT:-} != /* ]] \
-      || [ ! -d "$DOMOVOI_PROVISION_ROOT" ] || [ "$(cd "$DOMOVOI_PROVISION_ROOT" && pwd -P)" = / ]; then
-    printf '%s: DOMOVOI_PROVISION_ROOT and DOMOVOI_PROVISION_TEST_HARNESS are for its test harness only, and only together; unset both and run it again\n' "$PROG" >&2
-    exit 2
-  fi
-  ROOT=${DOMOVOI_PROVISION_ROOT%/}
-  SVC_PATH=$PATH
-else
-  # Root runs what it finds on PATH: take it from no one's shell setup.
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-  export PATH
-  SVC_PATH=$PATH
-fi
-export LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive
-# Ubuntu's needrestart would otherwise restart services (docker, ollama) in
-# the middle of a run when apt upgrades a library they use.
-export NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1
-
-# ─── Paths (system paths carry the test harness's root) ──────────────────
-
-STATE_DIR=$ROOT/var/lib/domovoi-provision
-STEP_DIR=$STATE_DIR/steps
-RESULT_FILE=$STATE_DIR/result.json
-LOCK_FILE=$STATE_DIR/lock
-PENDING_FILE=$STATE_DIR/wsl-conf-pending
-UNITS_CHANGED_FILE=$STATE_DIR/units-changed
-CACHE_DIR=$ROOT/var/cache/domovoi-provision
-PROC=$ROOT/proc
-OS_RELEASE=$ROOT/etc/os-release
-WSL_CONF=$ROOT/etc/wsl.conf
-FSTAB=$ROOT/etc/fstab
-UNIT_DIR=$ROOT/etc/systemd/system
-SUDOERS_DIR=$ROOT/etc/sudoers.d
-APT_KEYRING=$ROOT/etc/apt/keyrings/docker.asc
-APT_SOURCE=$ROOT/etc/apt/sources.list.d/docker.sources
-SIGNERS_FILE=$ROOT/etc/domovoi/allowed_signers
-ZONEINFO=$ROOT/usr/share/zoneinfo
-LOCALTIME=$ROOT/etc/localtime
-OLLAMA_PREFIX=$ROOT/usr/local
-OLLAMA_BIN=$OLLAMA_PREFIX/bin/ollama
-OLLAMA_STAMP=$OLLAMA_PREFIX/lib/ollama/.domovoi-provision
-# As the box sees them (fstab lines, .env values): no harness root.
-MEDIA_BASE=/srv/media
-SYSTEMCTL_PATH=/usr/bin/systemctl
-OLLAMA_API=http://127.0.0.1:11434
-CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
-WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
-DASHBOARD_URL=http://localhost:6369
-LOCK_NAME=requirements-linux-py314.lock
-
-# ─── Options ─────────────────────────────────────────────────────────────
-
-REPO_URL=https://github.com/coders-farm-official/domovoi
-REF=main
-TRACK_BRANCH=main
-CHECKOUT=/opt/domovoi
-SVC_USER=domovoi
-INTERNET=""
-TIER=auto
-TIMEZONE=""
-LAN_IP=""
-MEDIA_ARGS=()
-WSL_OPT=auto
-SKIP_MODELS=0
-DRY_RUN=0
-HEALTH_TIMEOUT=900
-ALLOWED_SIGNERS=""
-KEEP_DOWNLOADS=0
-
-usage() {
-  cat <<'EOF'
-Usage: sudo bash provision.sh [options]
-
-Takes a fresh Ubuntu 26.04 box (bare metal, or the Windows installer's WSL2
-distro) to a running Domovoi server. Safe to run again: finished steps are
-skipped, a killed run resumes, a changed option re-runs what it feeds.
-
-  --repo-url URL        the repository to clone (default:
-                        https://github.com/coders-farm-official/domovoi; a
-                        local path or git bundle works too)
-  --ref REF             a branch, tag or full commit SHA to install (default: main)
-  --track-branch NAME   for a tag or SHA: the branch the checkout follows for
-                        updates; REF must be on its history (default: main)
-  --checkout-dir DIR    where the checkout goes (default: /opt/domovoi)
-  --user NAME           the service user (default: domovoi)
-  --internet ANSWER     always | sometimes | never: the household's internet
-                        answer, written into a NEW domovoi/.env (python -m
-                        domovoi.env_bootstrap --internet). Required on WSL.
-  --tier TIER           auto | floor | standard: the hardware tier's models
-                        (default: auto, from this box's MemTotal)
-  --timezone ZONE       an IANA zone (America/New_York) to set with timedatectl
-  --lan-ip IP           write MPD_HTTP_BASE=http://IP (default: the repo's
-                        "auto", which finds this host's LAN address itself)
-  --media NAME=PATH     a media folder (repeatable). On WSL PATH is a Windows
-                        folder (C:\Users\Public\Domovoi\Music), mounted alone
-                        at /srv/media/NAME through /etc/fstab; on bare metal a
-                        Linux path. music, pictures, documents, audiobooks and
-                        podcasts set MUSIC_DIR, PICTURES_DIR, ... in .env.
-  --wsl, --no-wsl       force WSL mode on or off (default: detected from the
-                        kernel, the rule domovoi/host_kind.py uses)
-  --skip-models         no Ollama pulls and no Whisper download (tests)
-  --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
-                        HEAD and every later update must verify against it
-  --health-timeout SEC  how long the first start may take (default: 900)
-  --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision
-  --dry-run             say what each step would do; change nothing
-  -h, --help            this text
-
-Progress for programs: lines starting with "@@DOMOVOI " are JSON objects;
-see the comment at the top of this file.
-EOF
-}
-
-usage_error() {
-  printf '%s: %s\n\n' "$PROG" "$1" >&2
-  usage >&2
-  exit 2
-}
-
-while [ $# -gt 0 ]; do
-  opt=$1
-  val=""
-  has_val=0
-  case $opt in
-    --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
-  esac
-  case $opt in
-    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers)
-      if [ "$has_val" = 0 ]; then
-        [ $# -ge 2 ] || usage_error "$opt needs a value"
-        val=$2
-        shift 2
-      else
-        shift
-      fi
-      [ -n "$val" ] || usage_error "$opt needs a value"
-      case $opt in
-        --repo-url) REPO_URL=$val ;;
-        --ref) REF=$val ;;
-        --track-branch) TRACK_BRANCH=$val ;;
-        --checkout-dir) CHECKOUT=${val%/} ;;
-        --user) SVC_USER=$val ;;
-        --internet) INTERNET=$val ;;
-        --tier) TIER=$val ;;
-        --timezone) TIMEZONE=$val ;;
-        --lan-ip) LAN_IP=$val ;;
-        --media) MEDIA_ARGS+=("$val") ;;
-        --health-timeout) HEALTH_TIMEOUT=$val ;;
-        --allowed-signers) ALLOWED_SIGNERS=$val ;;
-      esac
-      ;;
-    --wsl|--no-wsl|--skip-models|--dry-run|--keep-downloads|-h|--help)
-      [ "$has_val" = 0 ] || usage_error "$opt takes no value"
-      case $opt in
-        --wsl) WSL_OPT=yes ;;
-        --no-wsl) WSL_OPT=no ;;
-        --skip-models) SKIP_MODELS=1 ;;
-        --dry-run) DRY_RUN=1 ;;
-        --keep-downloads) KEEP_DOWNLOADS=1 ;;
-        -h|--help) usage; exit 0 ;;
-      esac
-      shift
-      ;;
-    *) usage_error "unknown option: $1" ;;
-  esac
-done
-
-# ─── Output ──────────────────────────────────────────────────────────────
+# ─── Output and the final line ───────────────────────────────────────────
+# First of all, so that every way out of this script (a usage error, a
+# refused harness variable, not root, the run lock) ends with one final
+# progress line.
 
 log() { printf '%s: %s\n' "$PROG" "$*"; }
 WARNINGS=0
@@ -314,12 +175,23 @@ STEP_ID=""
 STEP_INDEX=0
 STEP_W=0
 CUM_PCT=0
+LAST_PCT=0
 FINAL_EMITTED=0
 FAILED_STEP=""
 RESTART_REQUIRED=false
 LAST_ERR=""
 WATCH_PID=""
+LOCK_PID=""
+CLONE_TMP_ACTIVE=""
 TMP_DIR=""
+DRY_RUN=0
+WSL=0
+TIER_EFF=""
+HEAD_SHA=""
+# 1 once this run is past its checks and holds the run lock: only then is
+# result.json its to write, and the restart question worth asking.
+STARTED=0
+DASHBOARD_URL=http://localhost:6369
 
 # emit STATE MESSAGE [EXTRA]: one progress line. EXTRA is more JSON fields,
 # already encoded, without the surrounding braces.
@@ -330,6 +202,12 @@ emit() {
     progress) pct=${PROGRESS_PCT:-$CUM_PCT} ;;
     *) pct=$CUM_PCT ;;
   esac
+  # Never backwards: a step's second wait (the dashboard after the core)
+  # starts below where its first one got to.
+  if [ "$state" != fail ]; then
+    [ "$pct" -ge "$LAST_PCT" ] || pct=$LAST_PCT
+    LAST_PCT=$pct
+  fi
   printf '%s{"v":1,"step":"%s","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s%s}\n' \
     "$PROGRESS_PREFIX" "$STEP_ID" "$STEP_INDEX" "$STEP_TOTAL" "$state" "$pct" "$(json_str "$msg")" "${extra:+,$extra}"
 }
@@ -354,6 +232,27 @@ emit_bytes() {
   emit_frac "$f" "$3" "\"bytes\":$n,\"bytes_total\":$t"
 }
 
+# final_line RESULT EXIT_CODE MESSAGE: the last progress line. A run that
+# holds the run lock also keeps it in result.json.
+final_line() {
+  local result=$1 code=$2 msg=$3 fs=null head=null state=done pct=$LAST_PCT obj
+  [ -z "$FAILED_STEP" ] || fs=$(json_str "$FAILED_STEP")
+  if [ -n "$HEAD_SHA" ]; then head=$(json_str "$HEAD_SHA"); fi
+  case $result in failed|usage_error|busy) state=fail ;; esac
+  [ "$result" != ok ] || pct=100
+  STEP_ID=finish
+  STEP_INDEX=$STEP_TOTAL
+  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"warnings":%d,"dashboard":"%s"}' \
+    "$STEP_TOTAL" "$STEP_TOTAL" "$state" "$pct" "$(json_str "$msg")" "$result" \
+    "$RESTART_REQUIRED" "$code" "$fs" "$head" "$(json_str "$TIER_EFF")" \
+    "$([ "$WSL" = 1 ] && echo true || echo false)" "$WARNINGS" "$DASHBOARD_URL")
+  printf '%s%s\n' "$PROGRESS_PREFIX" "$obj"
+  FINAL_EMITTED=1
+  if [ "$STARTED" = 1 ] && [ "$DRY_RUN" = 0 ] && [ -d "$STATE_DIR" ]; then
+    printf '%s\n' "$obj" >"$RESULT_FILE.tmp" && mv -f "$RESULT_FILE.tmp" "$RESULT_FILE" || true
+  fi
+}
+
 # ─── Failure and exit ────────────────────────────────────────────────────
 
 trap 'LAST_ERR="line $LINENO: $BASH_COMMAND (exit $?)"' ERR
@@ -374,44 +273,235 @@ stop_watch() {
   fi
 }
 
+# The run lock's holder (take_lock) goes with this shell; ending it here
+# frees the lock at once rather than at its next look at this shell.
+release_lock() {
+  if [ -n "$LOCK_PID" ]; then
+    kill "$LOCK_PID" 2>/dev/null || true
+    wait "$LOCK_PID" 2>/dev/null || true
+    LOCK_PID=""
+  fi
+}
+
 on_exit() {
   local rc=$? msg=""
   set +e
   trap - ERR
   stop_watch
-  if [ "$rc" != 0 ] && [ "$FINAL_EMITTED" = 0 ]; then
+  if [ "$FINAL_EMITTED" = 0 ]; then
+    # Every deliberate exit writes its own final line first; anything else
+    # (a failed command under set -e, a signal) is a failure.
+    [ "$rc" != 0 ] || rc=1
     if [ -n "$TMP_DIR" ] && [ -s "$TMP_DIR/fail-message" ]; then msg=$(cat "$TMP_DIR/fail-message"); fi
     [ -n "$msg" ] || msg=${LAST_ERR:-"stopped (exit $rc)"}
     if [ -n "$STEP_ID" ] && [ "$STEP_ID" != finish ]; then
       FAILED_STEP=$STEP_ID
       emit fail "$msg"
     fi
-    compute_restart_required
+    if [ "$STARTED" = 1 ]; then compute_restart_required; fi
     final_line failed "$rc" "$msg"
   fi
+  # A clone that never reached its place (do_checkout): the next run starts
+  # it again from nothing.
+  if [ -n "$CLONE_TMP_ACTIVE" ]; then rm -rf -- "$CLONE_TMP_ACTIVE"; fi
   if [ -n "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi
+  release_lock
   exit "$rc"
 }
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
-# final_line RESULT EXIT_CODE MESSAGE: the last progress line, also kept in
-# result.json.
-final_line() {
-  local result=$1 code=$2 msg=$3 fs=null head=null obj
-  [ -z "$FAILED_STEP" ] || fs=$(json_str "$FAILED_STEP")
-  if [ -n "${HEAD_SHA:-}" ]; then head=$(json_str "$HEAD_SHA"); fi
-  STEP_ID=finish
-  STEP_INDEX=$STEP_TOTAL
-  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"warnings":%d,"dashboard":"%s"}' \
-    "$STEP_TOTAL" "$STEP_TOTAL" "$([ "$result" = failed ] && echo fail || echo done)" \
-    "$([ "$result" = ok ] && echo 100 || echo "$CUM_PCT")" "$(json_str "$msg")" "$result" \
-    "$RESTART_REQUIRED" "$code" "$fs" "$head" "$(json_str "${TIER_EFF:-}")" \
-    "$([ "${WSL:-0}" = 1 ] && echo true || echo false)" "$WARNINGS" "$DASHBOARD_URL")
-  printf '%s%s\n' "$PROGRESS_PREFIX" "$obj"
-  FINAL_EMITTED=1
-  if [ "$DRY_RUN" = 0 ] && [ -d "$STATE_DIR" ]; then
-    printf '%s\n' "$obj" >"$RESULT_FILE.tmp" && mv -f "$RESULT_FILE.tmp" "$RESULT_FILE" || true
-  fi
+# refuse CODE RESULT MESSAGE: stop before doing anything, saying why.
+refuse() {
+  printf '%s: %s\n' "$PROG" "$3" >&2
+  final_line "$2" "$1" "$3"
+  exit "$1"
 }
+
+# ─── The test harness's root ─────────────────────────────────────────────
+
+ROOT=""
+if [ -n "${DOMOVOI_PROVISION_ROOT:-}" ] || [ -n "${DOMOVOI_PROVISION_TEST_HARNESS:-}" ]; then
+  if [ "${DOMOVOI_PROVISION_TEST_HARNESS:-}" != 1 ] || [[ ${DOMOVOI_PROVISION_ROOT:-} != /* ]] \
+      || [ ! -d "$DOMOVOI_PROVISION_ROOT" ] || [ "$(cd "$DOMOVOI_PROVISION_ROOT" && pwd -P)" = / ]; then
+    refuse 2 usage_error "DOMOVOI_PROVISION_ROOT and DOMOVOI_PROVISION_TEST_HARNESS are for its test harness only, and only together; unset both and run it again"
+  fi
+  ROOT=${DOMOVOI_PROVISION_ROOT%/}
+  SVC_PATH=$PATH
+else
+  # Root runs what it finds on PATH: take it from no one's shell setup.
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  export PATH
+  SVC_PATH=$PATH
+fi
+export LANG=C.UTF-8 DEBIAN_FRONTEND=noninteractive
+# Ubuntu's needrestart would otherwise restart services (docker, ollama) in
+# the middle of a run when apt upgrades a library they use.
+export NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1
+
+# ─── Paths (system paths carry the test harness's root) ──────────────────
+
+STATE_DIR=$ROOT/var/lib/domovoi-provision
+STEP_DIR=$STATE_DIR/steps
+RESULT_FILE=$STATE_DIR/result.json
+LOCK_FILE=$STATE_DIR/lock
+PENDING_FILE=$STATE_DIR/wsl-conf-pending
+UNITS_CHANGED_FILE=$STATE_DIR/units-changed
+# The env step's own record: what it last wrote into domovoi/.env (KEY=VALUE
+# lines), the .env's hash when it last changed it (the start step's input),
+# and a note that it is creating the .env (a run killed then still owns it).
+ENV_RECORD=$STATE_DIR/env-written
+ENV_STAMP=$STATE_DIR/env-stamp
+ENV_CREATING=$STATE_DIR/env-creating
+CACHE_DIR=$ROOT/var/cache/domovoi-provision
+PROC=$ROOT/proc
+OS_RELEASE=$ROOT/etc/os-release
+WSL_CONF=$ROOT/etc/wsl.conf
+FSTAB=$ROOT/etc/fstab
+UNIT_DIR=$ROOT/etc/systemd/system
+SUDOERS_DIR=$ROOT/etc/sudoers.d
+APT_KEYRING=$ROOT/etc/apt/keyrings/docker.asc
+APT_SOURCE=$ROOT/etc/apt/sources.list.d/docker.sources
+SIGNERS_FILE=$ROOT/etc/domovoi/allowed_signers
+ZONEINFO=$ROOT/usr/share/zoneinfo
+LOCALTIME=$ROOT/etc/localtime
+OLLAMA_PREFIX=$ROOT/usr/local
+OLLAMA_BIN=$OLLAMA_PREFIX/bin/ollama
+OLLAMA_STAMP=$OLLAMA_PREFIX/lib/ollama/.domovoi-provision
+# As the box sees them (fstab lines, .env values): no harness root.
+MEDIA_BASE=/srv/media
+SYSTEMCTL_PATH=/usr/bin/systemctl
+OLLAMA_API=http://127.0.0.1:11434
+CORE_HEALTH_URL=http://127.0.0.1:6370/v1/health
+WEB_HEALTH_URL=http://127.0.0.1:6369/api/health
+LOCK_NAME=requirements-linux-py314.lock
+
+# ─── Options ─────────────────────────────────────────────────────────────
+
+REPO_URL=https://github.com/coders-farm-official/domovoi
+REF=main
+TRACK_BRANCH=main
+CHECKOUT=/opt/domovoi
+SVC_USER=domovoi
+INTERNET=""
+TIER=auto
+TIMEZONE=""
+LAN_IP=""
+MEDIA_ARGS=()
+WSL_OPT=auto
+SKIP_MODELS=0
+DRY_RUN=0
+HEALTH_TIMEOUT=900
+ALLOWED_SIGNERS=""
+KEEP_DOWNLOADS=0
+
+usage() {
+  cat <<'EOF'
+Usage: sudo bash provision.sh [options]
+
+Takes a fresh Ubuntu 26.04 box (bare metal, or the Windows installer's WSL2
+distro) to a running Domovoi server. Safe to run again: finished steps are
+skipped, a killed run resumes, a changed option re-runs what it feeds.
+
+  --repo-url URL        the repository to clone (default:
+                        https://github.com/coders-farm-official/domovoi; a
+                        local path or git bundle works too)
+  --ref REF             a branch, tag or full commit SHA to install (default: main)
+  --track-branch NAME   for a tag or SHA: the branch the checkout follows for
+                        updates; REF must be on its history (default: main)
+  --checkout-dir DIR    where the checkout goes (default: /opt/domovoi)
+  --user NAME           the service user (default: domovoi). Created with no
+                        password login; an existing account is used as it
+                        is, and one in sudo, admin or wheel is refused
+  --internet ANSWER     always | sometimes | never: the household's internet
+                        answer, written into a NEW domovoi/.env (python -m
+                        domovoi.env_bootstrap --internet). Required on WSL.
+  --tier TIER           auto | floor | standard: the hardware tier's models
+                        (default: auto, from this box's MemTotal)
+  --timezone ZONE       an IANA zone (America/New_York) to set with timedatectl
+  --lan-ip IP           write MPD_HTTP_BASE=http://IP (default: the repo's
+                        "auto", which finds this host's LAN address itself)
+  --media NAME=PATH     a media folder (repeatable). On WSL PATH is a Windows
+                        folder (C:\Users\Public\Domovoi\Music), mounted alone
+                        at /srv/media/NAME through /etc/fstab; on bare metal a
+                        Linux path outside other users' homes. music,
+                        pictures, documents, audiobooks and podcasts set
+                        MUSIC_DIR, PICTURES_DIR, ... in .env.
+                        The .env keys this script sets (models, Whisper,
+                        MPD_HTTP_BASE, media folders) are written only while
+                        they still hold what it last wrote: a value changed
+                        in Settings or by hand is kept, with a warning.
+  --wsl, --no-wsl       force WSL mode on or off (default: detected from the
+                        kernel, the rule domovoi/host_kind.py uses)
+  --skip-models         no Ollama pulls and no Whisper download (tests)
+  --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
+                        HEAD and every later update must verify against it
+  --health-timeout SEC  how long the first start may take (default: 900)
+  --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision
+  --dry-run             say what each step would do; change nothing
+  -h, --help            this text
+
+Progress for programs: lines starting with "@@DOMOVOI " are JSON objects;
+see the comment at the top of this file. Exit codes: 0 done, 1 failed,
+2 bad usage, 3 restart the WSL distro and run again, 4 another run is busy.
+EOF
+}
+
+usage_error() {
+  printf '%s: %s\n\n' "$PROG" "$1" >&2
+  usage >&2
+  final_line usage_error 2 "$1"
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  opt=$1
+  val=""
+  has_val=0
+  case $opt in
+    --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
+  esac
+  case $opt in
+    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers)
+      if [ "$has_val" = 0 ]; then
+        [ $# -ge 2 ] || usage_error "$opt needs a value"
+        val=$2
+        shift 2
+      else
+        shift
+      fi
+      [ -n "$val" ] || usage_error "$opt needs a value"
+      case $opt in
+        --repo-url) REPO_URL=$val ;;
+        --ref) REF=$val ;;
+        --track-branch) TRACK_BRANCH=$val ;;
+        --checkout-dir) CHECKOUT=${val%/} ;;
+        --user) SVC_USER=$val ;;
+        --internet) INTERNET=$val ;;
+        --tier) TIER=$val ;;
+        --timezone) TIMEZONE=$val ;;
+        --lan-ip) LAN_IP=$val ;;
+        --media) MEDIA_ARGS+=("$val") ;;
+        --health-timeout) HEALTH_TIMEOUT=$val ;;
+        --allowed-signers) ALLOWED_SIGNERS=$val ;;
+      esac
+      ;;
+    --wsl|--no-wsl|--skip-models|--dry-run|--keep-downloads|-h|--help)
+      [ "$has_val" = 0 ] || usage_error "$opt takes no value"
+      case $opt in
+        --wsl) WSL_OPT=yes ;;
+        --no-wsl) WSL_OPT=no ;;
+        --skip-models) SKIP_MODELS=1 ;;
+        --dry-run) DRY_RUN=1 ;;
+        --keep-downloads) KEEP_DOWNLOADS=1 ;;
+        -h|--help) usage; final_line help 0 "Usage printed; nothing was done"; exit 0 ;;
+      esac
+      shift
+      ;;
+    *) usage_error "unknown option: $1" ;;
+  esac
+done
 
 # ─── Small helpers ───────────────────────────────────────────────────────
 
@@ -436,6 +526,15 @@ instance_id() {
 
 svc_home() { getent passwd "$SVC_USER" 2>/dev/null | cut -d: -f6; }
 
+# sed_repl TEXT: TEXT as the right-hand side of a sed s#...#...# command.
+sed_repl() { printf '%s' "$1" | sed 's/[#&\\]/\\&/g'; }
+
+# Journal and log text this script prints: never the setup code. The core
+# prints it in its first-boot banner (domovoi/admin_auth.py, "Setup code:
+# <eight words joined by hyphens>"), so any line naming it goes, and
+# anything shaped like a code is hidden wherever it appears.
+scrub_log() { LC_ALL=C sed -E -e '/setup[ _-]?code/Id' -e 's/[A-Za-z]+(-[A-Za-z]+){7,}/[hidden]/g'; }
+
 # Run a command as the service user with a clean environment. runuser
 # calls initgroups, so a group added moments ago (docker) is live.
 as_svc() {
@@ -452,6 +551,9 @@ apt_get() { apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=600 -q "$@"; }
 # write_if_changed DEST MODE < CONTENT: put CONTENT in DEST (root-owned,
 # MODE) by rename from a dot-named temp file beside it, which neither sudo
 # nor systemd reads. Status 0 when it wrote, 1 when DEST already held it.
+# Give it CONTENT by redirection (< file, or < <(command)), never at the end
+# of a pipe: there it runs in a subshell, its die can't stop the run, and a
+# failed write would pass for "already held it".
 write_if_changed() {
   local dest=$1 mode=$2 dir tmp
   dir=$(dirname "$dest")
@@ -522,6 +624,16 @@ if ! [[ $CHECKOUT =~ ^/[A-Za-z0-9._/@+-]+$ ]] || [[ $CHECKOUT/ == *//* || $CHECK
 fi
 [[ $SVC_USER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && [ "$SVC_USER" != root ] \
   || usage_error "--user must be a plain user name other than root: $SVC_USER"
+# The services' account does nothing else (docs/LINUX_HOST.md, Make it an
+# appliance): an existing administrator's login (the Beelink's own user,
+# say) is refused rather than handed to them.
+if id -u "$SVC_USER" >/dev/null 2>&1; then
+  for g in $(id -nG "$SVC_USER" 2>/dev/null || true); do
+    case $g in
+      sudo|admin|wheel) usage_error "--user $SVC_USER is an administrator's account (in the $g group); Domovoi's services need an account of their own that does nothing else: leave --user out (domovoi) or name a new one" ;;
+    esac
+  done
+fi
 case $INTERNET in
   ""|always|sometimes|never) ;;
   *) usage_error "--internet must be always, sometimes or never: $INTERNET" ;;
@@ -586,6 +698,17 @@ for m in "${MEDIA_ARGS[@]}"; do
     [[ $path == /?* ]] || usage_error "--media $name: on Linux the path is absolute: $path"
     [[ $path/ != *"/../"* && $path/ != *"/./"* && $path != *//* ]] || usage_error "--media $name: no . or .. in the path: $path"
     [[ $path != *[[:space:]]* ]] || usage_error "--media $name: no spaces in a Linux media path: $path"
+    [[ $path != *[\"\'\\]* ]] || usage_error "--media $name: no quotes or backslashes in a Linux media path: $path"
+    # The units hide every home but the service user's (ProtectHome=tmpfs,
+    # BindPaths= that one): a folder in another one would look empty to
+    # the services.
+    home=$(svc_home) || home=""
+    [ -n "$home" ] || home=/home/$SVC_USER
+    case $path/ in
+      "$home"/*) ;;
+      /home/*|/root/*|/run/user/*)
+        usage_error "--media $name: $path is in another user's home, which the services can't see (ProtectHome= in scripts/linux/units/*.service hides /home, /root and /run/user, all but $home): move the folder somewhere like /srv/$name, or under $home" ;;
+    esac
   fi
   MEDIA_NAMES+=("$name")
   MEDIA_SRC[$name]=$path
@@ -622,8 +745,6 @@ fstab_source() {
 
 VENV_PY=$CHECKOUT/.venv/bin/python
 SVC_HOME=""
-HEAD_SHA=""
-TIER_EFF=""
 MEM_MIB=0
 declare -A M=()
 
@@ -877,24 +998,29 @@ check_user() {
   h=$(svc_home)
   id -u "$SVC_USER" >/dev/null 2>&1 && [[ $h == /?* ]] && [ -d "$ROOT$h" ]
 }
-plan_user() { echo "service user $SVC_USER, home /home/$SVC_USER, password login locked"; }
+plan_user() {
+  if id -u "$SVC_USER" >/dev/null 2>&1; then echo "service user $SVC_USER exists: used as it is (its password is not touched)"
+  else echo "service user $SVC_USER, home /home/$SVC_USER, created with password login locked"; fi
+}
 do_user() {
   if ! id -u "$SVC_USER" >/dev/null 2>&1; then
     useradd --create-home --home-dir "/home/$SVC_USER" --shell /bin/bash --user-group "$SVC_USER"
-    log "created the service user $SVC_USER"
+    # No password login for the account this script made: the dashboard is
+    # the UI, and sudo grants it exactly two NOPASSWD commands. An account
+    # that was there before (an administrator's is refused up front) keeps
+    # its password: locking it could lock someone out of their own box.
+    passwd -l "$SVC_USER" >/dev/null 2>&1 || true
+    log "created the service user $SVC_USER (password login locked)"
   else
-    log "the service user $SVC_USER exists"
+    log "the service user $SVC_USER exists; its password and groups are left as they are"
   fi
-  # No password login: the dashboard is the UI, and sudo grants it exactly
-  # two NOPASSWD commands.
-  passwd -l "$SVC_USER" >/dev/null 2>&1 || true
   SVC_HOME=$(svc_home)
   [[ $SVC_HOME == /?* ]] && [ -d "$ROOT$SVC_HOME" ] || die "the home of $SVC_USER ($SVC_HOME) does not exist"
+  # The home goes into the units (HOME=, BindPaths=), where a blank or a %
+  # would mean something else.
+  [[ $SVC_HOME =~ ^/[A-Za-z0-9._/@+-]+$ ]] || die "the home of $SVC_USER ($SVC_HOME) is not a plain path (letters, digits and . _ / @ + -) that a unit file can carry"
   if [ "$SVC_HOME" != "/home/$SVC_USER" ]; then
     warn "$SVC_USER's home is $SVC_HOME; the units are written with that home"
-  fi
-  if id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx sudo; then
-    warn "$SVC_USER is in the sudo group; the appliance model gives it only the two single-command grants"
   fi
   STEP_DONE_MSG="Service user $SVC_USER ready"
 }
@@ -962,8 +1088,12 @@ mask_units() {
 }
 
 do_wsl_config() {
-  if wsl_conf_text | write_if_changed "$WSL_CONF" 0644; then
+  # The restart note goes first: a run killed between the two still says a
+  # restart is needed (and the next run writes the file and the note again).
+  if [ ! -f "$WSL_CONF" ] || [ -L "$WSL_CONF" ] || ! wsl_conf_text | cmp -s - "$WSL_CONF"; then
     instance_id >"$PENDING_FILE"
+  fi
+  if write_if_changed "$WSL_CONF" 0644 < <(wsl_conf_text); then
     log "wrote /etc/wsl.conf; it takes effect after: wsl --terminate <this distro>"
   else
     log "/etc/wsl.conf is already this script's"
@@ -1072,7 +1202,7 @@ do_media() {
     # Never chown/chmod a mounted Windows folder: only the empty mount point.
     mountpoint -q "$MEDIA_BASE/$name" || install -d -m 0755 -o root -g root "$ROOT$MEDIA_BASE/$name"
   done
-  if fstab_lines | fstab_with_block | write_if_changed "$FSTAB" 0644; then
+  if write_if_changed "$FSTAB" 0644 < <(fstab_lines | fstab_with_block); then
     log "updated the media block in /etc/fstab"
   fi
   # A folder already mounted under another line (another source or other
@@ -1092,8 +1222,16 @@ do_media() {
   done
   for name in "${MEDIA_NAMES[@]}"; do
     mp=$MEDIA_BASE/$name
-    if ! mountpoint -q "$mp"; then
-      mount "$mp" || die "could not mount ${MEDIA_SRC[$name]} at $mp: does the Windows folder exist?"
+    if ! mountpoint -q "$mp" && ! mount "$mp"; then
+      # A folder this box has had all along (its line is unchanged) that is
+      # missing now, a USB drive unplugged say, doesn't stop a repair run:
+      # the server runs without it, and it mounts again at the distro's
+      # next start. A folder new to the list has to be there.
+      if [ -n "${old_line[$name]}" ] && [ "${old_line[$name]}" = "$(fstab_block_line "$mp")" ]; then
+        warn "could not mount ${MEDIA_SRC[$name]} at $mp (is the folder there, its drive connected?); Domovoi runs without it until then. It mounts at the distro's next start, or now with: mount $mp"
+        continue
+      fi
+      die "could not mount ${MEDIA_SRC[$name]} at $mp: does the Windows folder exist?"
     fi
     log "$mp: $(findmnt -no FSTYPE,SOURCE "$mp" 2>/dev/null | tr -s ' ') <- ${MEDIA_SRC[$name]}"
     [ -n "$(media_env_key "$name")" ] || warn "no Domovoi setting reads a '$name' folder: $mp is mounted, nothing points at it"
@@ -1104,63 +1242,94 @@ do_media() {
 # ─── checkout ────────────────────────────────────────────────────────────
 
 g() { as_svc git -C "$CHECKOUT" "$@"; }
+# gd DIR ARGS...: git in another directory, as the service user.
+gd() { local d=$1; shift; as_svc git -C "$d" "$@"; }
+
+# Where a new clone is made and checked out before it is renamed to
+# --checkout-dir: beside it (the same file system), dot-named. Only a
+# finished, verified checkout ever appears at --checkout-dir, so a failed
+# or killed clone is never taken for one; the next run starts it again.
+clone_tmp() { printf '%s/.%s.provision-clone' "$(dirname "$CHECKOUT")" "$(basename "$CHECKOUT")"; }
 
 inputs_checkout() {
   printf '%s\n' "$REPO_URL" "$REF" "$TRACK_BRANCH" "$CHECKOUT" "$SVC_USER"
   if [ -n "$ALLOWED_SIGNERS" ]; then file_sig "$ALLOWED_SIGNERS"; fi
 }
 check_checkout() { [ -d "$CHECKOUT/.git" ] && [ "$(g remote get-url origin 2>/dev/null)" = "$REPO_URL" ]; }
-plan_checkout() { echo "git clone $REPO_URL at $REF into $CHECKOUT, as $SVC_USER"; }
+plan_checkout() { echo "git clone $REPO_URL at $REF into $(clone_tmp), as $SVC_USER; renamed to $CHECKOUT once checked out"; }
 
-# HEAD against the allowed-signers file, as root, with every program git
-# could be told to run pinned on the command line (the checkout's
-# .git/config is the service user's): what apply-update.sh does.
+# verify_head DIR: HEAD against the allowed-signers file, as root, with
+# every program git could be told to run pinned on the command line (the
+# checkout's .git/config is the service user's): what apply-update.sh does.
 verify_head() {
-  local -a cfg=(-c "safe.directory=$CHECKOUT" -c "gpg.ssh.allowedSignersFile=$SIGNERS_FILE"
+  local dir=$1
+  local -a cfg=(-c "safe.directory=$dir" -c "gpg.ssh.allowedSignersFile=$SIGNERS_FILE"
                 -c gpg.ssh.program=ssh-keygen -c gpg.program=gpg
                 -c gpg.openpgp.program=gpg -c gpg.x509.program=gpgsm)
-  if ! git "${cfg[@]}" -C "$CHECKOUT" verify-commit HEAD; then
+  if ! git "${cfg[@]}" -C "$dir" verify-commit HEAD; then
     die "signed updates are enforced by /etc/domovoi/allowed_signers, but HEAD $HEAD_SHA does not verify against it"
   fi
-  log "HEAD $HEAD_SHA is signed by $(git "${cfg[@]}" -C "$CHECKOUT" log -1 --format=%GS HEAD)"
+  log "HEAD $HEAD_SHA is signed by $(git "${cfg[@]}" -C "$dir" log -1 --format=%GS HEAD)"
+}
+
+# checkout_ref DIR: check --ref out in the fresh clone DIR, on a branch that
+# follows origin (a tag or SHA: --track-branch, which must contain it).
+checkout_ref() {
+  local d=$1 sha
+  if gd "$d" rev-parse -q --verify "refs/remotes/origin/$REF^{commit}" >/dev/null; then
+    gd "$d" checkout -q -B "$REF" --track "origin/$REF" || die "checkout of $REF failed"
+  else
+    sha=$(gd "$d" rev-parse -q --verify "$REF^{commit}") || die "$REF is not a branch, tag or commit of $REPO_URL"
+    gd "$d" rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null \
+      || die "$REPO_URL has no branch $TRACK_BRANCH for updates to follow (--track-branch)"
+    gd "$d" merge-base --is-ancestor "$sha" "origin/$TRACK_BRANCH" \
+      || die "$REF is not on origin/$TRACK_BRANCH's history, so an update could never fast-forward from it"
+    gd "$d" checkout -q -B "$TRACK_BRANCH" "$sha" || die "checkout of $REF failed"
+    gd "$d" branch -q --set-upstream-to "origin/$TRACK_BRANCH" || die "can't make $TRACK_BRANCH track origin/$TRACK_BRANCH"
+  fi
 }
 
 do_checkout() {
-  local sha origin
-  if [ -d "$CHECKOUT/.git" ]; then
-    origin=$(g remote get-url origin 2>/dev/null) || origin=""
-    [ "$origin" = "$REPO_URL" ] || die "$CHECKOUT is a checkout of '${origin:-no origin}', not $REPO_URL"
-    log "the checkout exists; left where it is (updates are the dashboard's job)"
-  else
-    if [ -e "$CHECKOUT" ] && [ -n "$(ls -A "$CHECKOUT" 2>/dev/null)" ]; then
-      die "$CHECKOUT exists, is not empty and is not a git checkout"
-    fi
-    install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$CHECKOUT"
-    log "cloning $REPO_URL into $CHECKOUT"
-    (cd / && as_svc git clone --quiet --no-checkout "$REPO_URL" "$CHECKOUT") || die "git clone of $REPO_URL failed"
-    if g rev-parse -q --verify "refs/remotes/origin/$REF^{commit}" >/dev/null; then
-      g checkout -q -B "$REF" --track "origin/$REF" || die "checkout of $REF failed"
-    else
-      sha=$(g rev-parse -q --verify "$REF^{commit}") || die "$REF is not a branch, tag or commit of $REPO_URL"
-      g rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null \
-        || die "$REPO_URL has no branch $TRACK_BRANCH for updates to follow (--track-branch)"
-      g merge-base --is-ancestor "$sha" "origin/$TRACK_BRANCH" \
-        || die "$REF is not on origin/$TRACK_BRANCH's history, so an update could never fast-forward from it"
-      g checkout -q -B "$TRACK_BRANCH" "$sha" || die "checkout of $REF failed"
-      g branch -q --set-upstream-to "origin/$TRACK_BRANCH" || die "can't make $TRACK_BRANCH track origin/$TRACK_BRANCH"
-    fi
-  fi
-  HEAD_SHA=$(g rev-parse HEAD)
-  log "HEAD $HEAD_SHA ($(g log -1 --format='%cd %s' --date=short HEAD)) on $(g rev-parse --abbrev-ref HEAD), tracking $(g rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo nothing)"
+  local origin tmp dir
   if [ -n "$ALLOWED_SIGNERS" ]; then
     install -d -m 0755 -o root -g root "$(dirname "$SIGNERS_FILE")"
     install -m 0644 -o root -g root "$ALLOWED_SIGNERS" "$SIGNERS_FILE"
     log "installed /etc/domovoi/allowed_signers"
   fi
+  tmp=$(clone_tmp)
+  if [ -d "$CHECKOUT/.git" ]; then
+    origin=$(g remote get-url origin 2>/dev/null) || origin=""
+    [ "$origin" = "$REPO_URL" ] || die "$CHECKOUT is a checkout of '${origin:-no origin}', not $REPO_URL"
+    log "the checkout exists; left where it is (updates are the dashboard's job)"
+    dir=$CHECKOUT
+  else
+    if [ -e "$CHECKOUT" ] && [ -n "$(ls -A "$CHECKOUT" 2>/dev/null)" ]; then
+      die "$CHECKOUT exists, is not empty and is not a git checkout"
+    fi
+    if [ -e "$tmp" ] || [ -L "$tmp" ]; then
+      rm -rf -- "$tmp"
+      log "removed an unfinished clone from an earlier run ($tmp)"
+    fi
+    install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$tmp"
+    CLONE_TMP_ACTIVE=$tmp
+    log "cloning $REPO_URL (into $tmp until it is checked out)"
+    (cd / && as_svc git clone --quiet --no-checkout "$REPO_URL" "$tmp") || die "git clone of $REPO_URL failed"
+    checkout_ref "$tmp"
+    dir=$tmp
+  fi
+  HEAD_SHA=$(gd "$dir" rev-parse HEAD)
+  log "HEAD $HEAD_SHA ($(gd "$dir" log -1 --format='%cd %s' --date=short HEAD)) on $(gd "$dir" rev-parse --abbrev-ref HEAD), tracking $(gd "$dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo nothing)"
   if [ -e "$SIGNERS_FILE" ]; then
-    verify_head
+    verify_head "$dir"
   else
     warn "signed updates are not enforced (no /etc/domovoi/allowed_signers): docs/LINUX_HOST.md, Signed updates"
+  fi
+  if [ "$dir" = "$tmp" ]; then
+    # Checked out and verified: now it takes its place, in one rename.
+    if [ -d "$CHECKOUT" ]; then rmdir "$CHECKOUT" || die "can't replace the empty $CHECKOUT"; fi
+    mv -T "$tmp" "$CHECKOUT" || die "can't move the new checkout from $tmp to $CHECKOUT"
+    CLONE_TMP_ACTIVE=""
+    log "the checkout is in place at $CHECKOUT"
   fi
   STEP_DONE_MSG="Domovoi ${HEAD_SHA:0:12}"
 }
@@ -1172,7 +1341,18 @@ docker_wanted() {
   printf '%s\n' "containerd.io=${M[containerd_io]}" "docker-buildx-plugin=${M[docker_buildx_plugin]}" \
     "docker-ce-cli=${M[docker_ce_cli]}" "docker-ce=${M[docker_ce]}" "docker-compose-plugin=${M[docker_compose_plugin]}" | LC_ALL=C sort
 }
-docker_installed() { dpkg-query -W -f='${Package}=${Version}\n' "${DOCKER_PKGS[@]}" 2>/dev/null | LC_ALL=C sort; }
+docker_installed() { dpkg-query -W -f='${Package}=${Version}\n' "${DOCKER_PKGS[@]}" 2>/dev/null | LC_ALL=C sort || true; }
+# The packages not installed yet, as pkg=<the manifest's version>. One that
+# is installed counts at whatever version it is: these are not held, and an
+# ordinary apt upgrade moves them later, as on the Beelink; a run of this
+# script never takes them back down to the pins.
+docker_missing() {
+  local have p
+  have=$(dpkg-query -W -f='${Package} ${Status}\n' "${DOCKER_PKGS[@]}" 2>/dev/null | awk '/ install ok installed$/ {print $1}') || true
+  for p in "${DOCKER_PKGS[@]}"; do
+    printf '%s\n' "$have" | grep -qxF -- "$p" || printf '%s=%s\n' "$p" "${M[${p//[-.]/_}]}"
+  done
+}
 in_group() { id -nG "$SVC_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"; }
 
 docker_sources_text() {
@@ -1186,6 +1366,32 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 }
 
+# docker_key_export SRC DEST: the pinned key alone, armored, from the file
+# Docker serves. SRC goes into a throwaway keyring that must then hold
+# exactly one primary key, with the manifest's fingerprint; DEST gets
+# `gpg --export <that fingerprint>`, so no other key in a download (apt would
+# trust every key in the file it is given) ever reaches /etc/apt/keyrings.
+docker_key_export() {
+  local src=$1 dest=$2 gh listing n fpr
+  gh=$(mktemp -d) || die "can't make a temporary keyring"
+  if ! GNUPGHOME=$gh gpg --batch --no-tty --quiet --import "$src" >/dev/null 2>&1; then
+    rm -rf "$gh"
+    die "Docker's apt key from ${M[docker_key_url]} is not a key gpg can read"
+  fi
+  # Read to the end (no early-quitting reader under pipefail).
+  listing=$(GNUPGHOME=$gh gpg --batch --no-tty --with-colons --fixed-list-mode --list-keys 2>/dev/null) || listing=""
+  n=$(printf '%s\n' "$listing" | awk -F: '$1=="pub" {n++} END {print n+0}')
+  fpr=$(printf '%s\n' "$listing" | awk -F: '$1=="pub" {want=1; next} want && $1=="fpr" {print $10; want=0}')
+  if [ "$n" = 1 ] && [ "$fpr" = "${M[docker_key_fpr]}" ]; then
+    GNUPGHOME=$gh gpg --batch --no-tty --armor --export "${M[docker_key_fpr]}" >"$dest" 2>/dev/null || : >"$dest"
+  fi
+  if command -v gpgconf >/dev/null 2>&1; then GNUPGHOME=$gh gpgconf --kill all >/dev/null 2>&1 || true; fi
+  rm -rf "$gh"
+  [ "$n" = 1 ] || die "Docker's apt key file from ${M[docker_key_url]} holds $n primary keys; apt would trust every one, and only ${M[docker_key_fpr]} is pinned"
+  [ "$fpr" = "${M[docker_key_fpr]}" ] || die "Docker's apt key has fingerprint '${fpr:-none}', the manifest pins ${M[docker_key_fpr]}"
+  [ -s "$dest" ] || die "gpg exported nothing for ${M[docker_key_fpr]}"
+}
+
 inputs_docker() {
   local k
   for k in docker_key_url docker_key_fpr docker_repo_url docker_suite docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin; do
@@ -1194,30 +1400,33 @@ inputs_docker() {
   echo "$SVC_USER"
 }
 check_docker() {
-  [ "$(docker_installed)" = "$(docker_wanted)" ] && systemctl is-active --quiet docker.service && in_group docker
+  [ -z "$(docker_missing)" ] && systemctl is-active --quiet docker.service && in_group docker
 }
-plan_docker() { docker_wanted | sed 's/^/apt-get install /'; }
+plan_docker() {
+  echo "Docker's key: exactly one primary key, fingerprint ${M[docker_key_fpr]}, exported alone to /etc/apt/keyrings/docker.asc"
+  docker_wanted | sed 's/^/apt-get install /; s/$/   (when not installed yet; not held)/'
+}
 do_docker() {
-  local key fpr gh
+  local key missing
   # https://docs.docker.com/engine/install/ubuntu/ "Install using the apt
-  # repository" (deb822 docker.sources), with the key's fingerprint checked
-  # against the manifest before apt trusts it.
-  key=$TMP_DIR/docker.asc
+  # repository" (deb822 docker.sources), with the key checked against the
+  # manifest before apt trusts it.
+  key=$TMP_DIR/docker-download.asc
   curl -fsSL --retry 3 -o "$key" "${M[docker_key_url]}" || die "could not download Docker's apt key from ${M[docker_key_url]}"
-  gh=$(mktemp -d)
-  fpr=$(GNUPGHOME=$gh gpg --batch --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1=="fpr" && !n++ {print $10}') || fpr=""
-  rm -rf "$gh"
-  [ "$fpr" = "${M[docker_key_fpr]}" ] || die "Docker's apt key has fingerprint '${fpr:-none}', the manifest pins ${M[docker_key_fpr]}"
-  write_if_changed "$APT_KEYRING" 0644 <"$key" || true
-  docker_sources_text | write_if_changed "$APT_SOURCE" 0644 || true
-  if [ "$(docker_installed)" != "$(docker_wanted)" ]; then
+  docker_key_export "$key" "$TMP_DIR/docker.asc"
+  write_if_changed "$APT_KEYRING" 0644 <"$TMP_DIR/docker.asc" || true
+  write_if_changed "$APT_SOURCE" 0644 < <(docker_sources_text) || true
+  missing=$(docker_missing)
+  if [ -n "$missing" ]; then
     apt_get update
-    # The exact versions, held, so unattended-upgrades never moves them.
-    # shellcheck disable=SC2046
-    apt_get install -y --allow-downgrades --allow-change-held-packages $(docker_wanted)
-    [ "$(docker_installed)" = "$(docker_wanted)" ] || die "docker packages are not at the manifest's versions after the install: $(docker_installed | tr '\n' ' ')"
+    # The manifest's versions for a first install. Not held (apt-mark): on
+    # the Beelink docker-ce moves with apt upgrade like any package, and so
+    # it does here.
+    # shellcheck disable=SC2086
+    apt_get install -y $missing
+    [ -z "$(docker_missing)" ] || die "docker packages missing after the install: $(docker_missing | tr '\n' ' ')"
   fi
-  apt-mark hold "${DOCKER_PKGS[@]}" >/dev/null
+  log "docker packages: $(docker_installed | tr '\n' ' ')"
   systemctl enable --now containerd.service docker.service
   if ! in_group docker; then
     usermod -aG docker "$SVC_USER"
@@ -1379,18 +1588,33 @@ env_keys() {
     if [ -n "$key" ]; then echo "$key=$(media_path "$name")"; fi
   done
 }
+# Every key env_keys can write, whatever the options of this run: a .env
+# this script creates has the template's value of each recorded as the
+# script's own, so a later run with another option still replaces it.
+ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE OLLAMA_URL OLLAMA_MODEL
+  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
+  MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR)
 
-PY_ENV_WRITE='#provision:env-write
+# What domovoi/.env assigns now to the keys in PROVISION_ENV_NAMES, as
+# KEY=VALUE lines, read the way the core reads it (env_bootstrap.env_values:
+# quotes stripped, the last line wins; key case ignored, as pydantic does).
+PY_ENV_READ='#provision:env-read
 import os
 from domovoi import config_env_writer, env_bootstrap
-path = config_env_writer._ENV_FILE
-want = dict(l.split("=", 1) for l in os.environ["PROVISION_ENV_KEYS"].splitlines() if l)
-have = env_bootstrap.env_values(path.read_text(encoding="utf-8"))
-changes = {k: v for k, v in want.items() if have.get(k) != v}
-if changes:
-    config_env_writer.write_env_values(changes)
-for k in changes:
-    print(k)'
+have = {}
+for k, v in env_bootstrap.env_values(config_env_writer._ENV_FILE.read_text(encoding="utf-8")).items():
+    have[k.upper()] = v
+for k in os.environ["PROVISION_ENV_NAMES"].split():
+    if k in have:
+        print("%s=%s" % (k, have[k]))'
+
+# Write exactly the KEY=VALUE lines in PROVISION_ENV_KEYS, through the
+# writer the dashboard's Settings use (the rest of the file is kept).
+PY_ENV_WRITE='#provision:env-write
+import os
+from domovoi import config_env_writer
+changes = dict(l.split("=", 1) for l in os.environ["PROVISION_ENV_KEYS"].splitlines() if l)
+config_env_writer.write_env_values(changes)'
 
 PY_ENV_VERIFY='#provision:env-verify
 import os, sys
@@ -1418,27 +1642,105 @@ plan_env() {
   if [ -n "$TIER_EFF" ]; then
     echo "tier $TIER_EFF (MemTotal ${MEM_MIB} MiB)"
     env_keys
+    echo "(each written only when absent or still as this script last wrote it; a value changed in Settings or by hand is kept)"
   else
     echo "(the keys depend on the pin manifest, read after the clone)"
   fi
   [ -z "$INTERNET" ] || echo "INTERNET_ACCESS=$INTERNET (a new .env only)"
 }
+
+# env_py SNIPPET VAR=VALUE...: one of the snippets above, as the service
+# user, from the checkout.
+env_py() { local py=$1; shift; (cd "$CHECKOUT" && as_svc env "$@" "$VENV_PY" -c "$py"); }
+
+# The record of what this script last wrote, rewritten from the
+# associative array named $1 (sorted, root's, 0644: model names, URLs and
+# paths, no secrets).
+write_env_record() {
+  local -n rec=$1
+  local k
+  write_if_changed "$ENV_RECORD" 0644 < <(for k in "${!rec[@]}"; do printf '%s=%s\n' "$k" "${rec[$k]}"; done | LC_ALL=C sort) || true
+}
+
 do_env() {
-  local keys changed policy existed=0
-  [ ! -f "$CHECKOUT/domovoi/.env" ] || existed=1
+  local envf=$CHECKOUT/domovoi/.env policy existed=0 before after line k w out
+  local -A want=() have=() last=()
+  local -a order=() write=() same=() kept=()
+  [ ! -f "$envf" ] || existed=1
+  before=$(file_sig "$envf")
   # A NEW .env with a random Postgres password and helper secrets, and the
   # internet answer; an existing one is never rewritten (env_bootstrap's
   # contract), and --repair only appends secrets it lacks.
+  if [ "$existed" = 0 ]; then
+    : >"$ENV_CREATING"
+    printf 'pending\n' >"$ENV_STAMP"
+  fi
   if [ -n "$INTERNET" ]; then
     svc_py -m domovoi.env_bootstrap --internet "$INTERNET" || die "python -m domovoi.env_bootstrap --internet $INTERNET failed"
   else
     svc_py -m domovoi.env_bootstrap || die "python -m domovoi.env_bootstrap failed"
   fi
   svc_py -m domovoi.env_bootstrap --repair || die "python -m domovoi.env_bootstrap --repair failed"
-  keys=$(env_keys)
-  changed=$(cd "$CHECKOUT" && as_svc env PROVISION_ENV_KEYS="$keys" "$VENV_PY" -c "$PY_ENV_WRITE") || die "writing domovoi/.env failed"
-  if [ -n "$changed" ]; then log "domovoi/.env: set $(printf '%s' "$changed" | tr '\n' ' ')"; else log "domovoi/.env already has this tier's keys"; fi
-  (cd "$CHECKOUT" && as_svc env PROVISION_ENV_KEYS="$keys" "$VENV_PY" -c "$PY_ENV_VERIFY") || die "the core would not read domovoi/.env as written"
+
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    k=${line%%=*}; want[$k]=${line#*=}; order+=("$k")
+  done < <(env_keys)
+  out=$(env_py "$PY_ENV_READ" PROVISION_ENV_NAMES="${ENV_MANAGED_KEYS[*]} ${order[*]}") || die "reading domovoi/.env failed"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    have[${line%%=*}]=${line#*=}
+  done <<<"$out"
+  if [ -f "$ENV_RECORD" ]; then
+    while IFS= read -r line; do
+      [[ $line == ?*=* ]] || continue
+      last[${line%%=*}]=${line#*=}
+    done <"$ENV_RECORD"
+  fi
+  # A .env this script created (in this run, or in one killed before it got
+  # this far) holds the template's values: the script's own to replace.
+  if [ "$existed" = 0 ] || [ -f "$ENV_CREATING" ]; then
+    last=()
+    for k in "${ENV_MANAGED_KEYS[@]}" "${order[@]}"; do
+      if [ -n "${have[$k]+x}" ]; then last[$k]=${have[$k]}; fi
+    done
+    write_env_record last
+    rm -f "$ENV_CREATING"
+  fi
+
+  # Each key: written when absent or still as this script last wrote it;
+  # one the household set since (Settings, or by hand) is theirs.
+  for k in "${order[@]}"; do
+    w=${want[$k]}
+    if [ -z "${have[$k]+x}" ]; then write+=("$k")
+    elif [ "${have[$k]}" = "$w" ]; then same+=("$k")
+    elif [ -n "${last[$k]+x}" ] && [ "${have[$k]}" = "${last[$k]}" ]; then write+=("$k")
+    else kept+=("$k")
+    fi
+  done
+  if [ "${#write[@]}" -gt 0 ]; then
+    printf 'pending\n' >"$ENV_STAMP"
+    env_py "$PY_ENV_WRITE" PROVISION_ENV_KEYS="$(for k in "${write[@]}"; do printf '%s=%s\n' "$k" "${want[$k]}"; done)" \
+      || die "writing domovoi/.env failed"
+    log "domovoi/.env: set ${write[*]}"
+  else
+    log "domovoi/.env: nothing to set"
+  fi
+  for k in "${write[@]}" "${same[@]}"; do last[$k]=${want[$k]}; done
+  write_env_record last
+  for k in "${kept[@]}"; do
+    warn "domovoi/.env: $k holds a value this script did not write (set in Settings, or by hand); left as it is (this run would have written ${want[$k]})"
+  done
+  if [ "${#write[@]}" -gt 0 ] || [ "${#same[@]}" -gt 0 ]; then
+    env_py "$PY_ENV_VERIFY" PROVISION_ENV_KEYS="$(for k in "${write[@]}" "${same[@]}"; do printf '%s=%s\n' "$k" "${want[$k]}"; done)" \
+      || die "the core would not read domovoi/.env as written"
+  fi
+  # The start step restarts core and web when this hash moves: only when
+  # this script changed the file (now, or in a run killed mid-way).
+  after=$(file_sig "$envf")
+  if [ "$after" != "$before" ] || [ ! -f "$ENV_STAMP" ] || [ "$(cat "$ENV_STAMP")" = pending ]; then
+    printf '%s\n' "$after" >"$ENV_STAMP"
+  fi
   if [ -n "$INTERNET" ]; then
     policy=$(svc_py -m domovoi.egress --print-policy | tr -d '[:space:]') || policy=""
     if [ "$policy" != "$INTERNET" ]; then
@@ -1546,7 +1848,7 @@ do_ollama() {
   if ! id -u ollama >/dev/null 2>&1; then
     useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
   fi
-  if ollama_unit_text | write_if_changed "$UNIT_DIR/ollama.service" 0644; then changed=1; fi
+  if write_if_changed "$UNIT_DIR/ollama.service" 0644 < <(ollama_unit_text); then changed=1; fi
   systemctl daemon-reload
   systemctl enable --quiet ollama.service
   if [ "$changed" = 1 ] || ! systemctl is-active --quiet ollama.service; then
@@ -1563,7 +1865,7 @@ do_ollama() {
   log "Ollama $v on $OLLAMA_API"
   # What Ollama found to run on (it logs "inference compute" at start); v1 is
   # CPU-only by plan, and a GPU WSL hands through is only recorded.
-  v=$(journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | grep -i 'inference compute' | tail -n 1 | cut -c1-240) || v=""
+  v=$(journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | grep -i 'inference compute' | tail -n 1 | cut -c1-240 | scrub_log) || v=""
   [ -z "$v" ] || log "ollama: $v"
   v=$OLLAMA_VERSION
   STEP_DONE_MSG="Ollama $v"
@@ -1830,7 +2132,10 @@ SLEEP_TARGETS=(sleep.target suspend.target hibernate.target hybrid-sleep.target)
 # Make it an appliance: "change User=, WorkingDirectory=, ExecStart=,
 # Environment=HOME= and the ReadWritePaths= / BindPaths= lines").
 unit_text() {
-  sed -e "s#/opt/domovoi#$CHECKOUT#g" -e "s#/home/domovoi#$SVC_HOME#g" -e "s#^User=domovoi\$#User=$SVC_USER#" \
+  local co home
+  co=$(sed_repl "$CHECKOUT")
+  home=$(sed_repl "$SVC_HOME")
+  sed -e "s#/opt/domovoi#$co#g" -e "s#/home/domovoi#$home#g" -e "s#^User=domovoi\$#User=$SVC_USER#" \
     "$CHECKOUT/scripts/linux/units/$1"
 }
 
@@ -1845,7 +2150,8 @@ media_dropin_text() {
   [ "$WSL" = 0 ] || return 0
   for name in "${MEDIA_NAMES[@]}"; do
     p=${MEDIA_SRC[$name]}
-    case $p/ in "$CHECKOUT"/*|/mnt/*|/media/*|/run/media/*|/srv/*|"$SVC_HOME"/*) ;; *) extra+=("-$p") ;; esac
+    # systemd reads % as a specifier (systemd.unit(5)): %% is a plain %.
+    case $p/ in "$CHECKOUT"/*|/mnt/*|/media/*|/run/media/*|/srv/*|"$SVC_HOME"/*) ;; *) extra+=("-${p//%/%%}") ;; esac
   done
   [ "${#extra[@]}" -gt 0 ] || return 0
   printf '[Service]\n# Written by scripts/linux/provision.sh for --media folders.\nReadWritePaths=%s\n' "${extra[*]}"
@@ -1875,12 +2181,12 @@ do_units() {
   [ -x "$ROOT/usr/bin/docker" ] || die "/usr/bin/docker is missing; domovoi-db.service names that path"
   for u in "${SHIPPED_UNITS[@]}"; do
     [ -f "$CHECKOUT/scripts/linux/units/$u" ] || die "the checkout has no scripts/linux/units/$u"
-    if unit_text "$u" | write_if_changed "$UNIT_DIR/$u" 0644; then changed+=("$u"); log "installed /etc/systemd/system/$u"; fi
+    if write_if_changed "$UNIT_DIR/$u" 0644 < <(unit_text "$u"); then changed+=("$u"); log "installed /etc/systemd/system/$u"; fi
   done
   d=$(media_dropin_text)
   for u in domovoi-core.service domovoi-web.service; do
     if [ -n "$d" ]; then
-      if printf '%s\n' "$d" | write_if_changed "$UNIT_DIR/$u.d/domovoi-media.conf" 0644; then changed+=("$u"); fi
+      if write_if_changed "$UNIT_DIR/$u.d/domovoi-media.conf" 0644 < <(printf '%s\n' "$d"); then changed+=("$u"); fi
     elif [ -e "$UNIT_DIR/$u.d/domovoi-media.conf" ]; then
       rm -f "$UNIT_DIR/$u.d/domovoi-media.conf"
       changed+=("$u")
@@ -1943,9 +2249,11 @@ all_active() {
 }
 healthy() { curl -fsS -o /dev/null --max-time 5 "$CORE_HEALTH_URL" && curl -fsS -o /dev/null --max-time 5 "$WEB_HEALTH_URL"; }
 
-# wait_http URL TIMEOUT LABEL UNIT
+# wait_http URL TIMEOUT LABEL UNIT FROM TO: wait for URL, with progress
+# lines from FROM to TO permille of the step as the time runs out (the
+# core's wait, then the dashboard's, each in its own part of the step).
 wait_http() {
-  local url=$1 timeout=$2 label=$3 unit=$4 t0 now last=0
+  local url=$1 timeout=$2 label=$3 unit=$4 from=$5 to=$6 t0 now last=0
   t0=$(date +%s)
   while :; do
     if curl -fsS -o /dev/null --max-time 5 "$url" 2>/dev/null; then
@@ -1954,12 +2262,14 @@ wait_http() {
     fi
     now=$(date +%s)
     if [ $((now - t0)) -ge "$timeout" ]; then
-      journalctl -u "$unit" --no-pager -n 40 -o short-iso 2>/dev/null | sed 's/^/    /' || true
+      # The unit's last lines, without the setup code the core's first boot
+      # prints (scrub_log).
+      journalctl -u "$unit" --no-pager -n 40 -o short-iso 2>/dev/null | scrub_log | sed 's/^/    /' || true
       die "$label did not answer within ${timeout}s ($url; journalctl -u $unit)"
     fi
     if [ $((now - last)) -ge 30 ]; then
       last=$now
-      emit_frac $(( (now - t0) * 900 / timeout )) "Waiting for $label ($((now - t0))s)"
+      emit_frac $(( from + (now - t0) * (to - from) / timeout )) "Waiting for $label ($((now - t0))s)"
       log "waiting for $label ($((now - t0))s): $unit is $(systemctl is-active "$unit" 2>/dev/null || true)"
     fi
     sleep 3
@@ -1969,7 +2279,10 @@ wait_http() {
 inputs_start() {
   local u
   for u in "${SHIPPED_UNITS[@]}"; do file_sig "$UNIT_DIR/$u"; done
-  for u in env venv units timezone media; do cat "$STEP_DIR/$u" 2>/dev/null || echo "none:$u"; done
+  for u in venv units timezone media; do cat "$STEP_DIR/$u" 2>/dev/null || echo "none:$u"; done
+  # .env: only a change this script made (do_env's stamp), not every re-run
+  # of the env step, and never the household's own edits.
+  cat "$ENV_STAMP" 2>/dev/null || echo "none:env-stamp"
   # The zone in effect: Python takes the offset at the process's start, so
   # a zone changed under a running core needs a restart.
   echo "tz=$(current_tz) $(cat "$ROOT/etc/timezone" 2>/dev/null)"
@@ -1995,8 +2308,8 @@ do_start() {
   # The documented start, which is a no-op for what already runs.
   systemctl start "${SHIPPED_UNITS[@]}" || die "systemctl start ${SHIPPED_UNITS[*]} failed (journalctl -u domovoi-db -u domovoi-core)"
   rm -f "$UNITS_CHANGED_FILE"
-  wait_http "$CORE_HEALTH_URL" "$HEALTH_TIMEOUT" "the core (/v1/health)" domovoi-core.service
-  wait_http "$WEB_HEALTH_URL" 300 "the dashboard (/api/health)" domovoi-web.service
+  wait_http "$CORE_HEALTH_URL" "$HEALTH_TIMEOUT" "the core (/v1/health)" domovoi-core.service 0 800
+  wait_http "$WEB_HEALTH_URL" 300 "the dashboard (/api/health)" domovoi-web.service 800 990
   STEP_DONE_MSG="Domovoi is running"
 }
 
@@ -2052,24 +2365,46 @@ do_finish() {
 
 # ─── Main ────────────────────────────────────────────────────────────────
 
+# take_lock: one run at a time, or status 1 (another run holds it). The
+# lock is held by a small helper, never by a descriptor of this shell:
+# flock -o keeps it open in flock alone, and its command (tail --pid) lives
+# exactly as long as this shell. So nothing this run starts (pip, apt,
+# docker) inherits the lock, and a run killed even with SIGKILL frees it
+# within a second, whatever of its children outlive it. on_exit
+# (release_lock) frees it at once on every other way out.
+take_lock() {
+  local ok=$TMP_DIR/lock-held rc i
+  flock -n -E 75 -o "$LOCK_FILE" sh -c ': >"$1"; exec tail --pid="$2" -f /dev/null' lock-holder "$ok" "$$" \
+    </dev/null >/dev/null 2>&1 &
+  LOCK_PID=$!
+  for i in $(seq 1 400); do
+    [ ! -e "$ok" ] || return 0
+    if ! kill -0 "$LOCK_PID" 2>/dev/null; then
+      rc=0
+      wait "$LOCK_PID" || rc=$?
+      LOCK_PID=""
+      [ "$rc" != 75 ] || return 1
+      die "flock on $LOCK_FILE failed (exit $rc)"
+    fi
+    sleep 0.05
+  done
+  die "flock on $LOCK_FILE did not answer within 20 s"
+}
+
 if [ "$DRY_RUN" = 0 ] && [ "$(id -u)" != 0 ]; then
-  printf '%s: run it as root (sudo bash %s ...); --dry-run and --help work without\n' "$PROG" "$0" >&2
-  exit 1
+  refuse 1 failed "run it as root (sudo bash $0 ...); --dry-run and --help work without"
 fi
 
 TMP_DIR=$(mktemp -d)
-trap on_exit EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
 
 if [ "$DRY_RUN" = 0 ]; then
   install -d -m 0755 "$STATE_DIR" "$STEP_DIR"
-  exec 9>"$LOCK_FILE"
-  if ! flock -n 9; then
-    printf '%s: another provision run holds %s\n' "$PROG" "$LOCK_FILE" >&2
-    exit 1
+  if ! take_lock; then
+    # Busy: its own exit code, and result.json stays the running run's.
+    refuse 4 busy "another provision run is in progress (it holds $LOCK_FILE); wait for it to finish, then run this again"
   fi
 fi
+STARTED=1
 
 [ -z "$ROOT" ] || log "(test harness: system paths under $ROOT)"
 if dry; then log "dry run: nothing is changed"; fi
