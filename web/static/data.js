@@ -335,10 +335,24 @@ const _maybeRequestLogin = (status) => {
 // from this dashboard carries it; the app sends the same one.
 const REQUESTED_WITH = { 'X-Requested-With': 'XMLHttpRequest' };
 
+// This browser's self-asserted id (DeviceIdentity, below), on every call.
+// It is NOT a credential: it is what a GUEST — no household token, no
+// sign-in — is known by on a playing room (owner decision 2026-10-10), so
+// an admin's guest ban and "guests seen recently" can name this browser.
+// The server never trusts it for anything else. Wrapped: DeviceIdentity is
+// declared further down this script.
+const GUEST_DEVICE_HEADER = 'X-Domovoi-Device-Id';
+const _deviceIdHeader = () => {
+  try {
+    const id = DeviceIdentity.id();
+    return id ? { [GUEST_DEVICE_HEADER]: id } : {};
+  } catch { return {}; }
+};
+
 // Every header an /api call carries. Exported because a handful of callers
 // need a RAW fetch (streamed downloads with progress, uploads that report
 // bytes) and must send the same set these helpers do.
-const apiHeaders = () => ({ ..._authHeaders(), ...REQUESTED_WITH });
+const apiHeaders = () => ({ ..._authHeaders(), ..._deviceIdHeader(), ...REQUESTED_WITH });
 
 // Media the BROWSER fetches by URL — <img src>, <video src>, window.open —
 // can't carry a header, so the household device token rides in the query
@@ -1497,6 +1511,68 @@ const liveRelTime = (iso) => {
   return `${Math.round(s / 86400)}d ago`;
 };
 
+/* ── A guest ────────────────────────────────────────────────────────────
+ *
+ * A GUEST is a browser holding no household credential — not paired, not
+ * signed in, no cookie session — on a box that has finished setup: a
+ * friend's phone on the Wi-Fi. Owner decision 2026-10-10: a guest may
+ * change the queue of a room that is PLAYING and use its pause / resume /
+ * skip / previous, but never clear or stop it. The server is the authority
+ * (it re-checks everything); this only decides which buttons a page draws,
+ * so a guest isn't shown a control whose only answer is a pairing prompt.
+ * Unknown (status not fetched yet) is NOT a guest: the page draws what it
+ * always drew. */
+const isGuestViewer = () => {
+  try {
+    if (typeof Auth === 'undefined') return false;
+    const st = Auth.status;
+    if (!st || st.setup_complete === false || st.authenticated) return false;
+    return !(Auth.isPaired && Auth.isPaired()) && !(Auth.isLoggedIn && Auth.isLoggedIn());
+  } catch { return false; }
+};
+
+// isGuestViewer() that re-renders on every sign-in, pairing and status read.
+const useGuestViewer = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined') return undefined;
+    try {
+      const off = Auth.subscribe(force);
+      if (!Auth.status && Auth.refreshStatus) Auth.refreshStatus();
+      return off;
+    } catch { return undefined; }
+  }, []);
+  return isGuestViewer();
+};
+
+/* ── "Show me this room's queue" ────────────────────────────────────────
+ *
+ * The queue buttons on a room's card (Music's now-playing cards, Home's
+ * rooms) open Music's Room queue tab on THAT room and scroll it into view.
+ * The router has no query string (index.html routes on the bare hash), so
+ * the room rides here: openRoomQueue() leaves it and goes to #music, and
+ * the Music page takes it when it mounts — or, already showing, hears it. */
+const RoomQueueIntent = (() => {
+  let pending = null;
+  const listeners = new Set();
+  return {
+    open(room) {
+      pending = room;
+      listeners.forEach((fn) => { try { fn(room); } catch {} });
+    },
+    // The room asked for, once (null when none is waiting).
+    take() { const r = pending; pending = null; return r; },
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+  };
+})();
+
+const openRoomQueue = (room) => {
+  RoomQueueIntent.open(room);
+  try {
+    if ((window.location.hash || '').slice(1) !== 'music') window.location.hash = 'music';
+  } catch { /* no location — a test harness */ }
+};
+
 // Expose to other Babel scripts (mirrors components.jsx's pattern).
 Object.assign(window, {
   apiGet, apiPost, apiPatch, apiDelete, deviceDownload,
@@ -1507,4 +1583,5 @@ Object.assign(window, {
   useApiList, useApiObject, useStateEvents, useSidebarCounts,
   useDebouncedValue,
   liveNow, liveRelTime,
+  isGuestViewer, useGuestViewer, RoomQueueIntent, openRoomQueue,
 });

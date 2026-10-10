@@ -631,6 +631,42 @@ button.lyr-line:hover { background: var(--brand-soft); }
   .lib-play:has([data-cover="none"]) .btn-icon { color: var(--fg-muted); background: transparent; }
 }
 
+/* --- Room queue tab (music.jsx QueueTab) ---
+   One row per entry. On a desktop everything sits on one line and drag
+   reorders; on a phone (where a finger can't drag) the grip goes, the
+   tap controls — play next, move up, move down, remove — take a line of
+   their own under the title, and every one is a 44px target, as are the
+   room chips above the list. */
+.rq-rooms { padding: 12px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rq-room {
+  font: inherit; font-size: 12px; cursor: pointer; padding: 4px 10px;
+  border-radius: var(--r-full); border: 1px solid var(--border);
+}
+.rq-row {
+  display: grid; grid-template-columns: auto 26px minmax(0, 1fr) auto auto;
+  grid-template-areas: "grip num main dur ctrls";
+  gap: 10px; align-items: center; padding: 9px 16px;
+  border-top: 1px solid var(--border-soft);
+}
+.rq-grip { grid-area: grip; }
+.rq-num { grid-area: num; display: inline-flex; justify-content: flex-end; }
+.rq-main { grid-area: main; min-width: 0; }
+.rq-dur { grid-area: dur; }
+.rq-ctrls { grid-area: ctrls; display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+@media (max-width: 760px) {
+  .rq-rooms { padding: 8px 12px; }
+  .rq-room { min-height: 44px; padding: 0 14px; }
+  .rq-rooms .btn { min-height: 44px; }
+  .rq-row {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    grid-template-areas: "num main dur" "ctrls ctrls ctrls";
+    row-gap: 2px; padding: 8px 12px;
+  }
+  .rq-grip { display: none; }
+  .rq-ctrls:empty { display: none; }
+  .rq-ctrls .btn-icon { width: 44px; height: 44px; }
+}
+
 /* ================================================================
    Calendar page
    ================================================================ */

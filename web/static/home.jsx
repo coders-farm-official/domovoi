@@ -927,6 +927,71 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
   return <div className="home-sec home-sec-rooms">{head}{content}</div>;
 };
 
+/* A GUEST's rooms (data.js isGuestViewer: no household credential). The
+ * rooms read (/api/satellites) is a household read, so a friend's phone
+ * used to see "couldn't load rooms" here. It gets what it may act on
+ * instead (owner decision 2026-10-10): the rooms that are PLAYING, from
+ * the open now-playing read, each with pause / resume and a link to that
+ * room's queue — the guest may change a playing room's queue. Nothing
+ * else: no offline rooms, no timers, no stop. */
+// data.js's openRoomQueue: Music, on that room's queue tab.
+const HomeOpenQueue = (room) => {
+  if (typeof openRoomQueue === 'function') openRoomQueue(room);
+  else window.location.hash = 'music';
+};
+
+const HomeGuestRooms = ({ np, busy, onAct }) => {
+  const list = Array.isArray(np.data) ? np.data : [];
+  const live = list.filter((r) => r && r.song && (r.state === 'play' || r.state === 'pause'))
+    .sort((a, b) => (a.state === b.state ? String(a.room_id).localeCompare(String(b.room_id))
+      : a.state === 'play' ? -1 : 1));
+  let content;
+  if (!HomeAnswered(np)) {
+    content = <div className="home-rooms"><div className="home-room home-room-skel" aria-hidden="true"/></div>;
+  } else if (!HomeOk(np)) {
+    content = <Card><div className="home-att-quiet">couldn't see what's playing</div></Card>;
+  } else if (!live.length) {
+    content = <Card><div className="home-att-quiet">nothing is playing right now</div></Card>;
+  } else {
+    content = (
+      <div className="home-rooms">
+        {live.map((r) => {
+          const playing = r.state === 'play';
+          const verb = playing ? 'pause' : 'resume';
+          return (
+            <div key={r.room_id} className="home-room" data-room={r.room_id}>
+              <a className="home-room-main" href="#music" title={`${r.room_id}'s queue`}
+                 onClick={(e) => { e.preventDefault(); HomeOpenQueue(r.room_id); }}>
+                <div className="home-room-top">
+                  <StatusDot tone="ok" live={playing}/>
+                  <span className="home-room-name">{r.room_id}</span>
+                  {playing ? <Pill tone="live" live>playing</Pill> : <Pill tone="idle">paused</Pill>}
+                </div>
+                <div className="home-room-np">
+                  <span className="t">{HomeSongTitle(r.song)}</span>
+                  {r.song.artist && <span> · {r.song.artist}</span>}
+                </div>
+              </a>
+              <div className="home-room-actions">
+                <IconButton name={playing ? 'pause' : 'play'} title={`${verb} ${r.room_id}`}
+                            disabled={!!busy[r.room_id]} onClick={() => { onAct(r.room_id, verb); }}/>
+                <IconButton name="list-music" title={`${r.room_id}'s queue`}
+                            onClick={() => { HomeOpenQueue(r.room_id); }}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <div className="home-sec home-sec-rooms">
+      <div className="home-sec-head"><span className="label">playing now</span></div>
+      {content}
+    </div>
+  );
+};
+
 /* ---- today --------------------------------------------------------- */
 
 /* Today's and tomorrow's events: time, title, place, a "now" pill while
@@ -1076,6 +1141,12 @@ const HomePage = ({ counts, badges }) => {
   const cfg = useApiObject('/api/config', HOME_QUIET);
   const health = useApiObject('/api/health', HOME_QUIET);
   const sats = useApiObject('/api/satellites', HOME_QUIET);
+  // A guest (no household credential, box set up) can't read the rooms;
+  // it gets the rooms that are playing from the open now-playing read
+  // instead (HomeGuestRooms). Never issued for anyone else.
+  const guest = viewer.known && !viewer.unclaimed && !viewer.paired && !viewer.isAdmin;
+  const guestNp = useApiObject(guest ? '/api/music/now-playing' : null,
+                               { eventTypes: ['music.now_playing.changed'], quiet: true });
   // `timer_fires.changed` too: a fire's "done · kitchen" line comes from
   // the same read, and its "heard in …" moves as each room announces it.
   // A reminder's words and the fire details answer to a household
@@ -1209,7 +1280,9 @@ const HomePage = ({ counts, badges }) => {
 
   // Needs attention.
   const sources = [
-    ['server', health], ['rooms', sats], ['plugins', plugins], ['media requests', acq],
+    // A guest's rooms come from now-playing (HomeGuestRooms); its refused
+    // rooms read is not a problem to report.
+    ['server', health], ...(guest ? [] : [['rooms', sats]]), ['plugins', plugins], ['media requests', acq],
     ...(admin ? [['approvals', approvals], ['adoption', pending], ['updates', version], ['disk', hardware]]
               : [['settings', cfg]]),
   ];
@@ -1326,10 +1399,15 @@ const HomePage = ({ counts, badges }) => {
       {firstRun && HomeAnswered(manual) && <HomeFirstRun manual={manual.data}/>}
       <div className="home-cols">
         <div className="home-col">
-          <HomeRooms rooms={rooms} answered={HomeAnswered(sats)} failed={HomeAnswered(sats) && !HomeOk(sats)}
-                     dbDown={dbDown} stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}
-                     busy={busy} stoppingAll={stoppingAll}
-                     onAct={onAct} onStopAll={onStopAll}/>
+          {guest ? (
+            <HomeGuestRooms np={guestNp} busy={busy}
+                            onAct={(room, verb) => { onAct(room, verb).finally(() => guestNp.refresh()); }}/>
+          ) : (
+            <HomeRooms rooms={rooms} answered={HomeAnswered(sats)} failed={HomeAnswered(sats) && !HomeOk(sats)}
+                       dbDown={dbDown} stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}
+                       busy={busy} stoppingAll={stoppingAll}
+                       onAct={onAct} onStopAll={onStopAll}/>
+          )}
           <div className="home-pair">
             <HomeTimers active={active} done={done} now={now} shared={shared}
                         onlineRooms={onlineRooms} cancelling={cancelling} onCancel={onCancel}/>
