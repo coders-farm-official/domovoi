@@ -1478,7 +1478,7 @@ async def admin_snapshot() -> dict[str, Any]:
         # restart. Carries nothing else from the config.
         "home_problems_visibility": settings.home_problems_visibility,
         # Whether a guest (no household credential) may use a playing
-        # room's queue (domovoi/guest_queue.py). Live here for the same
+        # room's queue and transport (domovoi/guest_queue.py). Live here for the same
         # reason: the web hop refuses a guest itself while it is off, and
         # its own settings copy goes stale the moment Settings saves it.
         "guest_queue_editing": bool(settings.guest_queue_editing),
@@ -3592,10 +3592,11 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
 # process, which owns both tables and is the surface clients actually talk
 # to. These endpoints are the mechanics; they don't know about devices.
 #
-# Guests (owner decision 2026-10-10, domovoi/guest_queue.py): the read,
+# Guests (owner decisions 2026-10-10, domovoi/guest_queue.py): the read,
 # add, remove and move take a caller with NO household credential too,
-# while the room is playing — decided here, at the moment of the request,
-# because only this process sees MPD. Clear stays on the device tier.
+# while the room is playing and unless an admin banned it — decided here,
+# at the moment of the request, because only this process sees MPD. Clear
+# stays on the device tier. (The transport row below takes guests too.)
 
 
 async def _ensure_room_mpd_unless_guest(request: Request, room_id: str) -> None:
@@ -3826,9 +3827,10 @@ async def admin_music_queue_remove(
     shouldn't hand either of them an error they can act on.
 
     A guest may not drop the entry that is playing now: MPD would move on
-    to the next one, which is a skip, and the transport controls are not
-    a guest's. The whole request is refused (403) rather than trimmed, so
-    nothing a guest asked for happens behind their back."""
+    to the next one — a skip by the back door, past the transport route's
+    own gate (the guest has the skip button for that). The whole request
+    is refused (403) rather than trimmed, so nothing a guest asked for
+    happens behind their back."""
     from domovoi.clients.mpd import get_mpd_client_for
 
     activity = guest_activity(request)
