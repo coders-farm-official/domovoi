@@ -475,7 +475,7 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onBrows
       <div onClick={onClose}
            style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.16)',
                     backdropFilter: 'blur(2px)', zIndex: 40 }}/>
-      <aside style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 420, maxWidth: '100%',
+      <aside style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 420, maxWidth: '100%',
                       background: 'var(--card)', borderLeft: '1px solid var(--border)',
                       boxShadow: 'var(--shadow-md)', zIndex: 41,
                       display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
@@ -1270,7 +1270,7 @@ const PlaylistDrawer = ({ playlist, rooms, onClose, onPlay, onShuffle, onRemoveT
       <div onClick={onClose}
            style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.16)',
                     backdropFilter: 'blur(2px)', zIndex: 40 }}/>
-      <aside style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 460, maxWidth: '100%',
+      <aside style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 460, maxWidth: '100%',
                       background: 'var(--card)', borderLeft: '1px solid var(--border)',
                       boxShadow: 'var(--shadow-md)', zIndex: 41,
                       display: 'flex', flexDirection: 'column' }}>
@@ -1427,7 +1427,7 @@ const LibraryAddDrawer = ({ track, onClose, fire, onMutated }) => {
       <div onClick={onClose}
            style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.16)',
                     backdropFilter: 'blur(2px)', zIndex: 40 }}/>
-      <aside style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 380, maxWidth: '100%',
+      <aside style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 380, maxWidth: '100%',
                       background: 'var(--card)', borderLeft: '1px solid var(--border)',
                       boxShadow: 'var(--shadow-md)', zIndex: 41,
                       display: 'flex', flexDirection: 'column' }}>

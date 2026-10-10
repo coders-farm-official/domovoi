@@ -6,6 +6,16 @@
 * { box-sizing: border-box; }
 
 /* App shell ------------------------------------------------------ */
+/* The height of the screen the page can actually use. A phone browser's
+   100vh is the height with its address bar HIDDEN, but the page never
+   scrolls (.main does), so the bar never hides: the bottom of a 100vh
+   shell sat under it, and the phone's tab strip (home · music · …) was
+   not on screen at all in Chrome on Android (2026-10-10, a guest could
+   not find Music). 100dvh follows the bar. Full-height drawers and the
+   chat page use the same variable. */
+:root { --app-h: 100vh; }
+@supports (height: 100dvh) { :root { --app-h: 100dvh; } }
+
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
@@ -13,7 +23,7 @@
   grid-template-areas:
     "side top"
     "side main";
-  height: 100vh;
+  height: var(--app-h);
   overflow: hidden;
 }
 
@@ -1323,7 +1333,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-menu-item:hover:not(:disabled) { background: var(--brand-soft); }
 .chat-menu-item:disabled { color: var(--fg-faint); cursor: default; }
 .chat-details-bg { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.chat-details { width: min(520px, 100%); max-height: calc(100vh - 40px); display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md), var(--inner-highlight); overflow: hidden; }
+.chat-details { width: min(520px, 100%); max-height: calc(var(--app-h) - 40px); display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md), var(--inner-highlight); overflow: hidden; }
 .chat-details-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border-soft); font-size: 14px; }
 .chat-details-rows { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; padding: 14px 16px; overflow-y: auto; font-size: 13px; }
 .chat-details-rows dt { color: var(--fg-muted); }
