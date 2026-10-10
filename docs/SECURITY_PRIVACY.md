@@ -626,9 +626,11 @@ Around that, at both hops:
   browser id) and the caller's user agent as `X-Forwarded-User-Agent`, which
   the core believes only from a trusted proxy, like `X-Forwarded-For`.
 * **Throttle.** A guest's queue edits and transport presses share a budget
-  of 30 a minute per source address (`429` with `Retry-After` beyond it),
-  at each hop. Reads are not throttled. A household credential is never on
-  that budget.
+  of 30 a minute per source address (`429` with `Retry-After` beyond it) at
+  the core, and the web hop keeps the same budget of its own for the routes
+  it gates (the queue edits and previous; the kiosk row's pause, resume
+  and skip stay open there and are counted at the core). Reads are not
+  throttled. A household credential is never on that budget.
 * **Blocks and bans still apply.** A queue-device block matches a guest's
   self-asserted `device_id` like anyone's. And an admin can **ban a guest**
   (below).
