@@ -17,8 +17,10 @@ step, so neither side can drift alone.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from domovoi.tests.test_apply_update_script import BASH, requires_bash
@@ -45,9 +47,19 @@ def test_scripts_parse():
 
 @requires_bash
 def test_provision_harness():
-    # About 30 cases, each a whole provisioning run against shims: several
-    # minutes under Git Bash. The bound is for a hang.
-    proc = subprocess.run([BASH, str(HARNESS)], capture_output=True, text=True, timeout=3000)
+    # In the suite like test_apply_update_harness, the same way: Git Bash,
+    # HARNESS_PYTHON, and a bound that is for a hang, not a measure of
+    # speed. Each case is one or more whole provisioning runs against
+    # shims, and every fork is slow under Git Bash: the 30 cases of
+    # 2026-10-09 took 901-1024 s alone on the dev box, the review round's
+    # 41 took 1722 s.
+    proc = subprocess.run(
+        [BASH, str(HARNESS)],
+        capture_output=True,
+        text=True,
+        timeout=4800,
+        env={**os.environ, "HARNESS_PYTHON": sys.executable},
+    )
     assert proc.returncode == 0, proc.stdout[-6000:] + proc.stderr[-2000:]
     assert " 0 failed" in proc.stdout
 
@@ -124,6 +136,57 @@ def test_units_come_from_the_shipped_files():
     assert "ExecStart=/opt/domovoi/.venv/bin/python" not in script
     for unit in ("domovoi-db.service", "domovoi-core.service", "domovoi-web.service"):
         assert (REPO_ROOT / "scripts" / "linux" / "units" / unit).is_file()
+
+
+def _lock_closure(roots: set[str]) -> set[str]:
+    """ROOTS and everything they need, through pip-compile's "# via" lines
+    of the Linux lock: what provision.sh's lock_stanzas installs as the
+    build tools."""
+    lock = (REPO_ROOT / "requirements-linux-py314.lock").read_text(encoding="utf-8")
+    vias: dict[str, set[str]] = {}
+    cur: str | None = None
+    in_via = False
+    for line in lock.splitlines():
+        if re.match(r"[A-Za-z0-9]", line):
+            cur = re.split(r"[=<>!~;\[ ]", line, maxsplit=1)[0].lower()
+            vias[cur] = set()
+            in_via = False
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"\s+# via\s*(\S*)", line)
+        if m:
+            in_via = True
+            if m.group(1):
+                vias[cur].add(m.group(1).lower())
+            continue
+        m = re.match(r"\s+#\s+(\S+)", line)
+        if in_via and m:
+            vias[cur].add(m.group(1).lower())
+            continue
+        if line.startswith("#") or not line.strip():
+            cur = None
+    selected = set(roots)
+    changed = True
+    while changed:
+        changed = False
+        for name, needed_by in vias.items():
+            if name not in selected and needed_by & selected:
+                selected.add(name)
+                changed = True
+    return selected
+
+
+def test_the_docs_build_tools_are_the_locks():
+    """LINUX_HOST.md's manual build-tools install names setuptools, wheel
+    and what they need in the lock, the set provision.sh installs: a name
+    missing there would stop pip with "Hashes are required"."""
+    doc = LINUX_HOST.read_text(encoding="utf-8")
+    m = re.search(
+        r"^awk '/\^\(([a-z|-]+)\)==/ .*' requirements-linux-py314\.lock >/tmp/build-tools\.txt$", doc, re.M
+    )
+    assert m, "the build-tools awk line is gone from LINUX_HOST.md"
+    assert set(m.group(1).split("|")) == _lock_closure({"setuptools", "wheel"})
 
 
 def test_restart_grant_is_the_docs_rule():

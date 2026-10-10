@@ -255,20 +255,47 @@ sudo bash /tmp/domovoi/scripts/linux/provision.sh --dry-run --internet always --
 sudo bash /tmp/domovoi/scripts/linux/provision.sh --internet always --timezone America/New_York
 ```
 
-It clones the repository again into `/opt/domovoi` as the `domovoi` user,
-installs everything from pins (the lock, the compose digests, the Ollama
-release above, and `scripts/linux/provision-manifest.conf` for docker-ce,
-the Whisper revision and the models), and stops on any download that
-doesn't match. On top of the manual steps it pre-downloads what the core
-would otherwise fetch at its first boot: the Ollama models for the box's
-memory (`--tier`), the Whisper model, the Piper voice and the room image.
-Run it again at any time: finished steps are skipped, a
-killed run picks up where it stopped, and nothing is restarted that
-didn't change. `--help` lists the options (`--media`, `--tier`,
-`--skip-models`, ...).
+It clones the repository again into `/opt/domovoi` as the `domovoi` user
+(an account it creates with no password login; an existing `--user` is
+used as it is, and one in `sudo`, `admin` or `wheel` is refused). On top
+of the manual steps it pre-downloads what the core would otherwise fetch
+at its first boot: the Ollama models for the box's memory (`--tier`), the
+Whisper model, the Piper voice and the room image. What it checks:
 
-The steps below are what it does. Follow them by hand instead if you
-prefer, or to see what a step changed.
+- **Against a pin, stopping on a mismatch:** every Python package (the
+  lock's hashes), the Ollama release pinned under [By hand](#by-hand)
+  below (SHA-256), Docker's apt key (the fingerprint in
+  `scripts/linux/provision-manifest.conf`; that key alone is installed,
+  and apt checks the docker-ce packages against the index it signs), the
+  compose images and the room image's base (digests), each Ollama model
+  (the manifest's digests), Whisper's `model.bin` and the Piper voice
+  (SHA-256).
+- **Not hashed:** Ubuntu's own packages (apt checks them against Ubuntu's
+  signed archive, at whatever version it serves that day), what
+  `domovoi/Dockerfile.mpd` installs with apt inside the room image, and
+  Whisper's small files beside `model.bin` (`config.json`,
+  `tokenizer.json`, `vocabulary.*`), which come from the pinned Hugging
+  Face revision.
+- **Later:** docker-ce goes in at the manifest's versions on a box that
+  has none yet and is not held, so `apt upgrade` moves it like any other
+  package. The update unit keeps its defaults, so an update that changes
+  the dependencies re-syncs the venv through pip's resolver, which checks
+  no hashes ([The hash-pinned lock](#the-hash-pinned-lock) is opt-in, and
+  its locked re-sync still installs the build tools with
+  `pip install -c`, which Ubuntu 26.04's pip refuses: see the note under
+  the three installs below).
+
+Run it again at any time: finished steps are skipped, a killed run picks
+up where it stopped (a clone cut short is made again), and nothing is
+restarted that didn't change. A re-run never undoes your own settings: in
+`domovoi/.env` it sets a key only if it is missing or still holds what
+the script last wrote there, and it warns about each one it leaves alone.
+A media folder it mounted before that is missing now (an unplugged drive)
+is a warning, not a failure. `--help` lists the options (`--media`,
+`--tier`, `--skip-models`, ...) and the exit codes.
+
+The steps below are the same install by hand, without the pre-downloads.
+Follow them instead if you prefer, or to see what a step changed.
 
 ### By hand
 
@@ -375,16 +402,26 @@ the repo root is the whole production set (the core, the dashboard, the
 `torch` from PyTorch's CPU index), every package at an exact version with
 its SHA-256s, so a substituted or tampered download fails the install
 instead of running. It was compiled for CPython 3.14 on x86_64, which is
-what Ubuntu 26.04's `python3` is (`python3 --version`). Three commands, in
+what Ubuntu 26.04's `python3` is (`python3 --version`). Three installs, in
 this order:
 
 ```bash
-pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel
+awk '/^(packaging|setuptools|wheel)==/ {p = 1} p {print} p && !/\\$/ {p = 0}' requirements-linux-py314.lock >/tmp/build-tools.txt
+pip install --require-hashes -r /tmp/build-tools.txt
 pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock
 pip install --no-deps --no-build-isolation -e .
 ```
 
-The first installs the build tools, checked against the lock's hashes.
+The first installs the build tools, checked against the lock's hashes:
+the `awk` line copies the lock's own entries for `setuptools`, `wheel`
+and `packaging` (which `wheel` needs), each `name==version` with all its
+`--hash` lines, into a requirements file for it. (The shorter
+`pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel`
+is refused by the pip that Ubuntu 26.04's venv ships, 25.1: it takes no
+hashes from a constraints file. `provision.sh` installs the build tools
+the `awk` way; the update unit's locked re-sync still uses `-c`.) If pip
+stops with *Hashes are required* for another package, a build tool
+gained a dependency in the lock: add its name to the `awk` pattern.
 The second installs everything else; `metaphone` and `webrtcvad` publish
 no wheels and are built here, with those checked tools rather than a
 fresh, unchecked `setuptools` that pip would otherwise download for each
