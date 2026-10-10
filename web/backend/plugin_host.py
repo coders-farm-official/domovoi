@@ -122,6 +122,9 @@ _WEB_BACKEND_CORE_IMPORTS = (
     "domovoi.db.session",
     "domovoi.db.repositories",
     "domovoi.admin_auth",
+    # Guest bans and the guests-seen record (V023), checked and listed by
+    # the room-queue router; imported at its top, listed here as well.
+    "domovoi.guest_bans",
     "domovoi.handlers.shared.library_match",
     # Lazily imported INSIDE request handlers (audiobooks reindex, music
     # upload's post-write index, podcast poll, satellites tz). Anything

@@ -1554,3 +1554,151 @@ async def check_outbound_fetch(
             "installed media provider"
         ),
     )
+
+
+# ─── Guests on a playing room's queue (owner decision 2026-10-10) ─────────
+#
+# "Guests should be able to edit queues that rooms are actively playing."
+# A phone or browser holding NO household credential — a friend on the
+# Wi-Fi — may read a room's queue and add to it, remove from it and
+# reorder it, and pause / resume / skip / go back, but only while that room
+# is playing (MPD ``play`` or ``pause`` with a current song), and until an
+# admin bans that guest (``domovoi/guest_bans.py``). Never clear or stop,
+# never an idle room, never the song that is playing now. This
+# deliberately loosens the device tier the October security round put on
+# the room queue and the transport controls, and only there; the household
+# switch is ``Settings.guest_queue_editing`` (default on).
+#
+# This is the SHARED half, used by both hops: who counts as a guest, the
+# per-source throttle on a guest's actions, and the headers that say which
+# guest it is. Whether the room is playing is the core's call alone
+# (``domovoi/guest_queue.py``) because only the core can see MPD; the web
+# hop passes a guest through to it and never lends it a credential.
+
+# A guest's actions (queue edits and transport) per source address within
+# the window. A person tapping "move up" a dozen times is nowhere near it;
+# a script on the Wi-Fi hammering a room's MPD is.
+GUEST_QUEUE_WINDOW_SEC = 60.0
+GUEST_QUEUE_MAX_PER_WINDOW = 30
+GUEST_QUEUE_LIMITER = SlidingWindowLimiter(
+    max_per_window=GUEST_QUEUE_MAX_PER_WINDOW, window_sec=GUEST_QUEUE_WINDOW_SEC
+)
+
+# What a guest is told when the room is not playing. It names the device
+# token on purpose: the dashboard opens its "pair this browser" prompt for
+# a refusal that does, which is the way to change an idle room. The web
+# hop recognises this exact sentence to answer the queue READ quietly
+# instead (``web/backend/api/music_queue.py``), so it lives here, where
+# both processes read it.
+GUEST_ROOM_IDLE_DETAIL = (
+    "that room isn't playing, so a guest can't use its queue — pair this "
+    "phone with the household device token, or sign in as an admin"
+)
+
+# A guest removing the song that is playing now would be a skip by the back
+# door; a guest who wants the next song has the skip button (refused at
+# the core, which knows which entry is playing).
+GUEST_PLAYING_ENTRY_DETAIL = (
+    "a guest can't remove the song that's playing now — skip it instead, "
+    "or pair this phone with the household device token"
+)
+
+# What a guest an admin banned is told (``domovoi/guest_bans.py``). It
+# names the device token for the same reason as the idle sentence.
+GUEST_BANNED_DETAIL = (
+    "an admin has stopped guests on this phone from changing the music — "
+    "pair it with the household device token, or ask the admin"
+)
+
+# The guest's self-asserted device id, on every dashboard request and on
+# the web→core hop. Self-asserted like the body's ``device_id``: it is
+# what a guest ban and the guests-seen list match on, never a credential.
+GUEST_DEVICE_HEADER = "X-Domovoi-Device-Id"
+
+# The caller's User-Agent as the web hop received it. The hop's own client
+# sends its own, so the original rides here, and — like X-Forwarded-For —
+# is believed only from a peer in TRUSTED_PROXIES.
+FORWARDED_UA_HEADER = "X-Forwarded-User-Agent"
+
+
+def guest_device_id(request: Any) -> str | None:
+    """The device id a guest says it is, from :data:`GUEST_DEVICE_HEADER`."""
+    value = (request.headers.get(GUEST_DEVICE_HEADER.lower()) or "").strip()
+    return value or None
+
+
+def request_user_agent(request: Any) -> str | None:
+    """The caller's user agent: the web hop's forwarded one when the peer
+    is a trusted proxy (the same rule as :func:`request_source`), else the
+    request's own."""
+    peer = request.client.host if getattr(request, "client", None) else "unknown"
+    if peer in TRUSTED_PROXIES:
+        forwarded = (request.headers.get(FORWARDED_UA_HEADER.lower()) or "").strip()
+        if forwarded:
+            return forwarded
+    return (request.headers.get("user-agent") or "").strip() or None
+
+
+def presents_household_credential(request: Any, *, read: bool = False) -> bool:
+    """True when the request carries ANY credential the device tier reads:
+    ``X-Device-Token``, an ``Authorization`` Bearer, the dashboard cookie,
+    or — on a read only — ``?device_token=``. Valid or not: a caller that
+    presents one is judged on it exactly as before the guest rule, so a
+    stale token is still a 401 (and still charged), never a guest."""
+    if device_token_from_request(request) or bearer_token(request) or cookie_token(request):
+        return True
+    if read:
+        return bool((request.query_params.get(DEVICE_TOKEN_QUERY) or "").strip())
+    return False
+
+
+async def check_queue_guest(
+    request: Any, *, read: bool, guests_allowed: bool
+) -> bool:
+    """Classify a caller of a room-queue route. Returns False for a
+    HOUSEHOLD caller — it passed :func:`require_device` (or, for a read,
+    :func:`require_device_read`), or the pre-setup grace applies: exactly
+    the gate these routes wore before — and True for a GUEST: no credential
+    at all, after setup, with the household switch on.
+
+    Anything else gets the device tier's own refusal, unchanged: a stale
+    token, a cookie-only write, a throttled source, and a guest while
+    ``guests_allowed`` is False (the switch off is today's behaviour, to
+    the word). Which room, and whether it is playing, is not decided here:
+    the caller does that (the core with MPD in hand; the web hop never
+    can, so it passes the guest through)."""
+    if presents_household_credential(request, read=read):
+        if read:
+            await require_device_read(request)
+        else:
+            await require_device(request)
+        return False
+    result = await check_admin_request(request)
+    if result == "pre-setup":
+        return False
+    if result == "no-auth" and guests_allowed:
+        return True
+    # "no-auth" with the switch off, or "invalid" (the DB did not answer):
+    # what require_device says to a request carrying nothing.
+    raise HTTPException(
+        status_code=401,
+        detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
+    )
+
+
+def charge_guest_queue_edit(request: Any) -> None:
+    """Spend one of this source's guest actions, or raise 429 with a
+    ``Retry-After``. Keyed on :func:`request_source`, so a dashboard
+    guest behind the web hop is counted by its own address on the core
+    (loopback's ``X-Forwarded-For`` is trusted) rather than lumped in
+    with every other caller of the web process."""
+    if GUEST_QUEUE_LIMITER.allow(request_source(request)):
+        return
+    raise HTTPException(
+        status_code=429,
+        detail=(
+            "too many changes to the music from this address — wait a minute "
+            "and try again"
+        ),
+        headers={"Retry-After": str(int(GUEST_QUEUE_WINDOW_SEC))},
+    )

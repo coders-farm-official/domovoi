@@ -165,7 +165,15 @@ def auth_forward_headers(request: Any) -> dict[str, str]:
     same way so a core route on that tier sees the caller's token.
     ``X-Forwarded-For`` carries the real client for the core's
     per-source rate limiting — otherwise every proxied request would
-    look like localhost."""
+    look like localhost.
+
+    Two more ride along for a GUEST (no credential) on a playing room
+    (``domovoi/guest_queue.py``): the self-asserted
+    ``X-Domovoi-Device-Id`` the dashboard sends, and the caller's own
+    User-Agent as ``X-Forwarded-User-Agent`` — what the core matches a
+    guest ban on and shows an admin under "guests seen recently". Neither
+    is a credential. Nothing here ever ADDS one: a caller that sent none
+    reaches the core with none."""
     headers: dict[str, str] = {}
     auth = request.headers.get("authorization")
     if auth:
@@ -176,6 +184,12 @@ def auth_forward_headers(request: Any) -> dict[str, str]:
     device_token = request.headers.get("x-device-token")
     if device_token:
         headers["X-Device-Token"] = device_token
+    guest_device = (request.headers.get("x-domovoi-device-id") or "").strip()
+    if guest_device:
+        headers["X-Domovoi-Device-Id"] = guest_device
+    user_agent = (request.headers.get("user-agent") or "").strip()
+    if user_agent:
+        headers["X-Forwarded-User-Agent"] = user_agent
     if request.client is not None:
         headers["X-Forwarded-For"] = request.client.host
     return headers

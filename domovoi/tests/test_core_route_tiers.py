@@ -6,7 +6,10 @@ The core used to answer every one of these to anyone who could reach port
 
 * the **device tier** (``require_device``) covers the ordinary household
   actions — a turn, an announcement, playback, the room queue — and takes
-  the household ``X-Device-Token`` or an admin Bearer;
+  the household ``X-Device-Token`` or an admin Bearer. The transport row
+  and the queue's add / remove / move also take a GUEST on a playing room
+  (owner decisions 2026-10-10, ``domovoi/guest_queue.py``), so they wear
+  that gate, with the device tier inside it (:data:`GUEST_TIER`);
 * the **admin tier** (``require_admin_mutation``) covers the
   code-adjacent and physical-effect ones — the git pull, a Pi restart or
   config rewrite, wake recording/push, clip re-renders, library sweeps —
@@ -64,15 +67,24 @@ DEVICE_TIER = [
     ("POST", "/v1/admin/music/play-tracks"),
     ("POST", "/v1/admin/music/play-playlist"),
     ("POST", "/v1/admin/music/add-by-query"),
-    ("POST", "/v1/admin/music/{action}/{room_id}"),
     # F-A017: the MPD half of a post-write refresh, on its own. No caller
     # input, no library sweep — the sweep below stays admin.
     ("POST", "/v1/admin/music/mpd-rescan"),
-    # ADD-3: the queue routes the device blocks are about.
+    # ADD-3: the queue route the device blocks are about. Clear stops the
+    # room, so it is never a guest's.
+    ("POST", "/v1/admin/music/queue/{room_id}/clear"),
+]
+
+# The device tier AND a guest on a playing room (owner decisions
+# 2026-10-10, domovoi/guest_queue.py): the queue edits beside clear and the
+# transport row (whose stop stays the household's inside the gate).
+# test_guest_queue.py pins what a guest gets; here they hold the device
+# tier's half — a household token or an admin Bearer, never the cookie.
+GUEST_TIER = [
+    ("POST", "/v1/admin/music/{action}/{room_id}"),
     ("POST", "/v1/admin/music/queue/{room_id}/add"),
     ("POST", "/v1/admin/music/queue/{room_id}/remove"),
     ("POST", "/v1/admin/music/queue/{room_id}/move"),
-    ("POST", "/v1/admin/music/queue/{room_id}/clear"),
 ]
 
 ADMIN_TIER = [
@@ -133,6 +145,19 @@ def test_ordinary_actions_are_on_the_device_tier(method, path) -> None:
     never the dashboard cookie alone, and never nothing."""
     gates = _gates_for(method, path)
     assert admin_auth.require_device in gates
+    assert admin_auth.require_admin_mutation not in gates
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), GUEST_TIER, ids=[f"{m} {p}" for m, p in GUEST_TIER]
+)
+def test_guest_capable_actions_wear_the_guest_gate(method, path) -> None:
+    """The device tier runs INSIDE the guest gate (check_queue_guest), so
+    the route wears that gate and not require_device itself."""
+    from domovoi import guest_queue
+
+    gates = _gates_for(method, path)
+    assert guest_queue.require_device_or_active_room_guest in gates
     assert admin_auth.require_admin_mutation not in gates
 
 
@@ -217,6 +242,11 @@ BODIES: dict[str, dict[str, Any]] = {
 }
 
 GATED_POSTS = DEVICE_TIER + ADMIN_TIER + LIVE_MIC_TIER
+# Without a credential these answer as the guest rule says (403 for a room
+# that isn't playing — test_guest_queue.py), so they sit out the 401 test
+# and join the credentialed ones.
+CREDENTIALED_POSTS = GATED_POSTS + GUEST_TIER
+HOUSEHOLD_POSTS = DEVICE_TIER + GUEST_TIER
 
 
 @pytest.mark.asyncio
@@ -240,7 +270,7 @@ async def test_gated_route_refuses_a_caller_with_no_credential(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "path"), GATED_POSTS, ids=[f"{m} {p}" for m, p in GATED_POSTS]
+    ("method", "path"), CREDENTIALED_POSTS, ids=[f"{m} {p}" for m, p in CREDENTIALED_POSTS]
 )
 async def test_gated_route_lets_an_admin_bearer_through(
     method, path, monkeypatch
@@ -262,7 +292,7 @@ async def test_gated_route_lets_an_admin_bearer_through(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "path"), DEVICE_TIER, ids=[f"{m} {p}" for m, p in DEVICE_TIER]
+    ("method", "path"), HOUSEHOLD_POSTS, ids=[f"{m} {p}" for m, p in HOUSEHOLD_POSTS]
 )
 async def test_device_tier_route_accepts_the_household_token(
     method, path, monkeypatch
@@ -316,7 +346,7 @@ async def test_the_whole_gated_surface_still_answers_before_setup(monkeypatch) -
     works before anyone claims admin."""
     install_fake_db(monkeypatch, admin=False)
     async with _client() as c:
-        for _method, path in DEVICE_TIER + ADMIN_TIER:
+        for _method, path in DEVICE_TIER + GUEST_TIER + ADMIN_TIER:
             r = await c.post(_sample_path(path), json=BODIES.get(path, {}))
             assert r.status_code not in (401, 403, 501), f"{path}: {r.status_code}"
 

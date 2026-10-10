@@ -384,6 +384,22 @@ class Settings(BaseSettings):
                      HOME_PROBLEMS_VISIBILITY_UNKNOWN)
         return HOME_PROBLEMS_VISIBILITY_UNKNOWN
 
+    # Guests on a playing room (owner decisions 2026-10-10): a phone or
+    # browser holding NO household credential may read the queue of a room
+    # that is playing (MPD play or pause, with a current song), add to it,
+    # remove from it and reorder it, and pause / resume / skip / go back —
+    # never clear or stop, never remove the song playing now, never touch
+    # an idle room, never start a room's player, and not at all once an
+    # admin bans that guest (Settings -> Devices). The per-device queue
+    # blocks still apply, and a guest's actions are throttled per address.
+    # On by default, the owner's call. Off = a room's queue and transport
+    # answer to the household device token or an admin only, as they did
+    # from the October security round. Read per request by the core
+    # (domovoi/guest_queue.py); the web hop reads the live value from the
+    # core's snapshot. Editable live in Settings -> Configuration
+    # (Security).
+    guest_queue_editing: bool = True
+
     # ─── WebSocket keep-alives ─────────────────────────────────────────
     # Without periodic pings, a Pi's WS can go silently dead under flaky
     # wifi — the core believes the session is alive (it's still

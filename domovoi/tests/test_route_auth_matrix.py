@@ -26,7 +26,12 @@ router level, directly or through another dependency):
   token OR an admin Bearer;
 * :func:`domovoi.admin_auth.require_chat_callback` — the per-boot secret
   the chat agent's generated proxy tools carry (the one machine-to-machine
-  caller that can hold neither tier's credential).
+  caller that can hold neither tier's credential);
+* :func:`domovoi.guest_queue.require_device_or_active_room_guest` (core)
+  and :func:`web.backend.api.music_queue.require_device_or_guest` (web) —
+  the device tier, run inside, or a GUEST on a playing room (owner
+  decisions 2026-10-10): the queue's add / remove / move and the
+  transport row. The guest half is pinned by ``test_guest_queue.py``.
 
 ``require_admin_read`` deliberately does NOT count for a mutating route:
 the dashboard cookie renders GET state and never authorizes a change.
@@ -59,10 +64,11 @@ from typing import Any, Iterator, get_args
 import pytest
 from fastapi import FastAPI
 
-from domovoi import admin_auth
+from domovoi import admin_auth, guest_queue
 from domovoi.auth import require_admin
 from domovoi.main import app as core_app
 from domovoi.tests.route_walk import iter_route_contexts
+from web.backend.api import music_queue
 from web.backend.main import app as web_app
 from web.backend.schemas import ConversationTurn, Favorite, Memory, VoiceNote
 
@@ -74,6 +80,8 @@ AUTH_GATES: tuple[Any, ...] = (
     admin_auth.require_device,
     admin_auth.require_chat_callback,
     require_admin,
+    guest_queue.require_device_or_active_room_guest,
+    music_queue.require_device_or_guest,
 )
 
 _KIOSK = "kiosk transport row — FE-3 keeps it open by design (display.jsx)"

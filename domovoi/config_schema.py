@@ -821,6 +821,21 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "link. Takes effect after a restart.",
         "float", section="advanced", tier="restart", min=1, max=60, unit="sec",
     ),
+    # 'hot' holds for the web process too: it reads the live value from the
+    # core's /v1/admin/snapshot, like home_problems_visibility above.
+    FieldSpec(
+        "guest_queue_editing", "Guests can change the music in a playing room", "Security",
+        "Let a phone or browser that hasn't been paired (a guest on your "
+        "Wi-Fi) see the queue of a room that is playing, add songs to it, "
+        "remove and reorder them, and pause, resume, skip or go back. A "
+        "guest can't clear a queue or stop a room, can't remove the song "
+        "that's playing, and can't see or change a room that isn't playing. "
+        "Device blocks still apply, a guest's changes are rate-limited, and "
+        "you can ban a guest in Settings → Devices. Off = only paired "
+        "devices and the admin can see or change a room's queue or its "
+        "playback. Applies immediately.",
+        "bool", tier="hot",
+    ),
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
