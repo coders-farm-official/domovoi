@@ -1222,7 +1222,11 @@ do_media() {
   done
   for name in "${MEDIA_NAMES[@]}"; do
     mp=$MEDIA_BASE/$name
-    if ! mountpoint -q "$mp" && ! mount "$mp"; then
+    # mount's status alone is not enough: on WSL 3.0.1, `mount <point>`
+    # of a drvfs line whose Windows folder is gone exits 0 and mounts
+    # nothing (mount.drvfs is WSL's /init); the same line fails with 32
+    # at boot. So the mount point itself says whether it worked.
+    if ! mountpoint -q "$mp" && ! { mount "$mp" && mountpoint -q "$mp"; }; then
       # A folder this box has had all along (its line is unchanged) that is
       # missing now, a USB drive unplugged say, doesn't stop a repair run:
       # the server runs without it, and it mounts again at the distro's

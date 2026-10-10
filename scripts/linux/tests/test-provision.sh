@@ -481,10 +481,14 @@ SH
 grep -qx -- "${!#}" "$SHIM_STATE/mounts" 2>/dev/null
 SH
 
+  # mount-fail: exits 32. mount-silent-fail: exits 0 and mounts nothing,
+  # which is what WSL 3.0.1's mount.drvfs does for a Windows folder that
+  # is gone (seen in domovoi-t5, 2026-10-09).
   cat >"$bin/mount" <<'SH'
 #!/usr/bin/env bash
 echo "mount $*" >>"$SHIM_STATE/calls.log"
 [ ! -f "$SHIM_STATE/mount-fail" ] || { echo "mount: fixture: No such file or directory" >&2; exit 32; }
+[ ! -f "$SHIM_STATE/mount-silent-fail" ] || exit 0
 echo "${!#}" >>"$SHIM_STATE/mounts"
 SH
 
@@ -1446,6 +1450,12 @@ case_media_missing_on_a_rerun_warns() {
   check "in the final line's warnings" eq "$(final_field warnings)" 1
   check "result ok" eq "$(final_field result)" '"ok"'
   check "nothing restarted" not_called "systemctl restart"
+  # WSL's own way: mount exits 0 and mounts nothing. Still a warning.
+  rm -f "$STATE/mount-fail"; touch "$STATE/mount-silent-fail"
+  run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'pictures=C:\P'
+  check "silent mount failure: exit 0" eq "$RC" 0
+  check "silent mount failure: warned" said 'could not mount C:\M at /srv/media/music'
+  check "silent mount failure: in the warnings" eq "$(final_field warnings)" 1
   run_prov "${wsl_args[@]}" --skip-models --media 'music=C:\M' --media 'pictures=C:\P' --media 'documents=C:\D'
   check "a new folder that can't mount: exit 1" eq "$RC" 1
   check "media failed" eq "$(state_of media)" fail
