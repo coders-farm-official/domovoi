@@ -1110,7 +1110,7 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
                    onDrop={() => onDrop(idx)}
                    style={{ background: item.playing ? 'var(--brand-soft)' : 'transparent',
                             cursor: editable ? 'grab' : 'default' }}>
-                <span className="rq-grip" style={{ color: 'var(--fg-faint)', display: 'inline-flex' }}>
+                <span className="rq-grip">
                   <Icon name={editable ? 'grip-vertical' : 'minus'} size={13}/>
                 </span>
                 <span className="rq-num">
@@ -1717,8 +1717,16 @@ const MusicPage = () => {
     setQueueAsk((n) => n + 1);
   }, []);
   React.useEffect(() => {
-    if (!queueAsk || !tabsRef.current) return;
-    try { tabsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
+    if (!queueAsk) return undefined;
+    const go = () => {
+      try { if (tabsRef.current) tabsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch {}
+    };
+    go();
+    // Again once the room's queue has arrived: the first scroll stops short
+    // when the tab is still a one-line "loading queue…" and the page isn't
+    // yet tall enough to bring the tabs to the top.
+    const again = setTimeout(go, 450);
+    return () => clearTimeout(again);
   }, [queueAsk]);
   React.useEffect(() => {
     if (typeof RoomQueueIntent === 'undefined') return undefined;
@@ -2113,7 +2121,8 @@ const MusicPage = () => {
 
       {/* [2] Lower tabbed section */}
       {/* A wrapper for the ref: Card forwards no extra props. */}
-      <div ref={tabsRef} style={{ scrollMarginTop: 8 }}>
+      <div ref={tabsRef} className={tab === 'queue' ? 'music-tabs-queue' : undefined}
+           style={{ scrollMarginTop: 8 }}>
       <Card>
         <div style={{ padding: '0 8px' }}><Tabs tabs={tabs} value={tab} onChange={setTab}/></div>
         {tab === 'library'   && <LibraryTab   lib={lib} libraryTotal={libraryTotal} sourceOptions={sourceOptions} onSelect={setSelected} onToggleFavorite={onToggleFavorite} onAddToPlaylist={setAddToPlaylistTrack} playlists={playlists} onBulkAddToPlaylist={onBulkAddToPlaylist} onBrowserPlay={onBrowserPlay} onQueueTrack={onQueueTrack} onPlayNextTrack={onPlayNextTrack} fire={fire}/>}
