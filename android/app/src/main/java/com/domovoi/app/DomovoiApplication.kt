@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import android.os.StrictMode
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import com.domovoi.app.alerts.IncidentNotifier
 import com.domovoi.app.alerts.TimerNotifier
 import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.net.DeviceDownloads
@@ -20,6 +21,7 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         Diagnostics.install(this)
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) watchMainThreadIo()
         TimerNotifier.createChannel(this)
+        IncidentNotifier.createChannel(this)
         container = AppContainer(this)
         // A new network — a different default, the Wi-Fi under a VPN, new
         // addresses on the same one — means the saved server proves itself
@@ -31,6 +33,7 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         DeviceDownloads.atStart(this)
         container.bus.start()
         container.alerts.start()
+        container.containerAlerts.start()
         // Earlier crashes and Android's exit history, read off the main thread.
         Diagnostics.onLaunch(this)
     }

@@ -3,6 +3,7 @@ package com.domovoi.app
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
+import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
@@ -58,8 +59,14 @@ class AppContainer(context: Context) {
      *  mirror (alerts/TimerAlerts.kt). Started by DomovoiApplication. */
     val alerts = TimerAlerts(context, api, bus, prefs)
 
+    /** The container guard: the shell's banner, the Containers screen and
+     *  one notification per incident (alerts/IncidentAlerts.kt). Started by
+     *  DomovoiApplication. */
+    val containerAlerts = IncidentAlerts(context, api, bus, prefs)
+
     /** A screen something outside the UI asked for ("home" from a timer
-     *  alert's tap); AppShell navigates there and clears it. */
+     *  alert's tap, "containers" from a container incident's); AppShell
+     *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
 
     /** App-lifetime scope for fire-and-forget work that must outlive a

@@ -65,6 +65,8 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.alerts.CONTAINERS_ROUTE
+import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.net.IdentityGate
@@ -245,11 +247,17 @@ private fun ShellContent() {
         route = backStack.removeAt(backStack.lastIndex)
     }
     // A screen asked for from outside the UI: a timer or reminder alert's
-    // tap lands on Home, where the timers and their "done" lines are.
+    // tap lands on Home, where the timers and their "done" lines are; a
+    // container incident's on the Containers screen.
     val pendingRoute by app.pendingRoute.collectAsState()
     LaunchedEffect(pendingRoute) {
-        if (pendingRoute == "home") {
-            navigate(Route.Home)
+        val target = when (pendingRoute) {
+            "home" -> Route.Home
+            CONTAINERS_ROUTE -> Route.Containers
+            else -> null
+        }
+        if (target != null) {
+            navigate(target)
             app.pendingRoute.value = null
         }
     }
@@ -290,6 +298,17 @@ private fun ShellContent() {
                     registerDevice(app)
                 }
                 delay(REASK_EVERY_MS)
+            }
+        }
+    }
+    // The container guard's banner: while the app is on screen with the live
+    // socket down (an unpaired phone's is refused for good), re-read every
+    // 30 s, as the web does; with it up, `containers.changed` says.
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(IncidentAlerts.POLL_WHILE_DOWN_MS)
+                if (!app.bus.connected.value) app.containerAlerts.refresh()
             }
         }
     }
@@ -637,8 +656,9 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
             }
         },
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
-            ScreenRouter(route, navigate, counts)
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            ContainerGuardBanner(route, navigate)
+            Box(Modifier.weight(1f).fillMaxWidth()) { ScreenRouter(route, navigate, counts) }
         }
     }
 }
@@ -677,6 +697,7 @@ private fun RailShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCo
         }
         Column(Modifier.weight(1f)) {
             TopChrome { Topbar(route, navigate) }
+            ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
             BottomChromeColumn()
         }
@@ -733,6 +754,7 @@ private fun DrawerShell(route: Route, navigate: (Route) -> Unit, counts: Sidebar
         }
         Column(Modifier.weight(1f)) {
             TopChrome { Topbar(route, navigate) }
+            ContainerGuardBanner(route, navigate)
             Box(Modifier.weight(1f)) { ScreenRouter(route, navigate, counts) }
             BottomChromeColumn()
         }

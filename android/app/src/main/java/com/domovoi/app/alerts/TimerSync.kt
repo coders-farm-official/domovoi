@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import com.domovoi.app.DomovoiApplication
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -414,6 +415,11 @@ class AndroidSyncAlarm(context: Context) : SyncAlarm {
 /**
  * The chain's tick. Not exported: only AlarmManager, holding this app's own
  * immutable PendingIntent, can reach it.
+ *
+ * The same wake-up reads the container guard's incidents beside the timers
+ * (IncidentAlerts.onBackgroundTick, its own Wi-Fi, notifications and
+ * freshness checks), side by side so both fit Doze's 10 s network window.
+ * The chain itself stays the timers': this only rides on it.
  */
 class TimerSyncReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -422,8 +428,15 @@ class TimerSyncReceiver : BroadcastReceiver() {
         val pending = goAsync()
         receiverScope.launch {
             try {
-                val result = app.container.alerts.sync.onTick()
-                Log.i(TAG, "background sync: ${result.name.lowercase()}")
+                coroutineScope {
+                    // Never throws, so it can't cancel the timers' tick beside it.
+                    launch {
+                        val incidents = app.container.containerAlerts.onBackgroundTick()
+                        Log.i(TAG, "container incidents: ${incidents.name.lowercase()}")
+                    }
+                    val result = app.container.alerts.sync.onTick()
+                    Log.i(TAG, "background sync: ${result.name.lowercase()}")
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "background sync failed: ${e.message}")
             } finally {

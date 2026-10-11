@@ -13,6 +13,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.EXTRA_ROUTE
 import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.ui.shell.AppShell
@@ -24,6 +25,7 @@ class MainActivity : ComponentActivity() {
             // Granted or not, the timer alerts re-check (and re-arm or disarm
             // the alarm mirror) — the answer arrives while the app is resumed.
             (application as DomovoiApplication).container.alerts.onAppResumed()
+            (application as DomovoiApplication).container.containerAlerts.onAppResumed()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -39,8 +41,9 @@ class MainActivity : ComponentActivity() {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         val container = (application as DomovoiApplication).container
-        // A timer alert's tap opens Home. Only on a fresh start: a recreated
-        // activity (rotation) already went where the tap asked.
+        // A timer alert's tap opens Home, a container incident's the
+        // Containers screen. Only on a fresh start: a recreated activity
+        // (rotation) already went where the tap asked.
         if (savedInstanceState == null) routeFrom(intent)
         setContent {
             val themeMode by container.prefs.themeMode.collectAsState()
@@ -78,12 +81,21 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         (application as DomovoiApplication).container.alerts.onAppResumed()
+        // The container guard re-reads on every return: an incident may have
+        // opened or closed off screen, and its banner should say so now.
+        (application as DomovoiApplication).container.containerAlerts.onAppResumed()
     }
 
     private fun routeFrom(intent: Intent?) {
         val route = intent?.getStringExtra(EXTRA_ROUTE) ?: return
-        if (route == "home") (application as DomovoiApplication).container.pendingRoute.value = route
+        if (route in ROUTES_FROM_OUTSIDE) (application as DomovoiApplication).container.pendingRoute.value = route
         // Consumed: a later recreation must not navigate again.
         intent.removeExtra(EXTRA_ROUTE)
+    }
+
+    private companion object {
+        /** What a notification may ask for: Home (a timer alert) and the
+         *  Containers screen (a container incident). Anything else is ignored. */
+        val ROUTES_FROM_OUTSIDE = setOf("home", CONTAINERS_ROUTE)
     }
 }
