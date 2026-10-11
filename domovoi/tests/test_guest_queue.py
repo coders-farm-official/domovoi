@@ -1258,7 +1258,9 @@ def test_v023_is_the_next_core_migration_and_splits_cleanly() -> None:
     migrations = V023.parent
     versions = sorted(int(p.name[1:4]) for p in migrations.glob("V*__*.sql"))
     assert versions == list(range(1, len(versions) + 1))
-    assert versions[-1] == 23
+    # V023 is guest access and nothing else claims 23; V024 (the container
+    # guard's incidents, merged after it on 2026-10-11) may follow.
+    assert [p.name for p in migrations.glob("V023__*.sql")] == [V023.name]
     statements = v023_statements()
     assert len(statements) == 8
     assert all("IF NOT EXISTS" in st for st in statements)
