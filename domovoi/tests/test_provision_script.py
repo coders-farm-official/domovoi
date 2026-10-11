@@ -29,18 +29,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "linux" / "provision.sh"
 MANIFEST = REPO_ROOT / "scripts" / "linux" / "provision-manifest.conf"
 HARNESS = REPO_ROOT / "scripts" / "linux" / "tests" / "test-provision.sh"
+OS_JOBS = REPO_ROOT / "scripts" / "linux" / "os-jobs.sh"
+APPLY_UPDATE = REPO_ROOT / "scripts" / "linux" / "apply-update.sh"
 LINUX_HOST = REPO_ROOT / "docs" / "LINUX_HOST.md"
 
 
 def test_files_are_lf_only():
     """A CRLF in a bash script is a syntax error on the Linux host."""
-    for path in (SCRIPT, MANIFEST, HARNESS):
+    for path in (SCRIPT, MANIFEST, HARNESS, OS_JOBS):
         assert b"\r\n" not in path.read_bytes(), f"{path.name} has CRLF line endings"
 
 
 @requires_bash
 def test_scripts_parse():
-    for path in (SCRIPT, HARNESS):
+    for path in (SCRIPT, HARNESS, OS_JOBS):
         proc = subprocess.run([BASH, "-n", str(path)], capture_output=True, text=True)
         assert proc.returncode == 0, f"{path.name}: {proc.stderr}"
 
@@ -187,6 +189,65 @@ def test_the_docs_build_tools_are_the_locks():
     )
     assert m, "the build-tools awk line is gone from LINUX_HOST.md"
     assert set(m.group(1).split("|")) == _lock_closure({"setuptools", "wheel"})
+
+
+def _lock_closure_awk(path: Path) -> str:
+    m = re.search(r"^LOCK_CLOSURE_AWK='(.*?)'$", path.read_text(encoding="utf-8"), re.M | re.S)
+    assert m, f"LOCK_CLOSURE_AWK not found in {path.name}"
+    return m.group(1)
+
+
+def test_install_and_update_install_the_build_tools_alike():
+    """provision.sh installs the build tools from the lock's own stanzas
+    (pip 25.1 takes no hashes from a constraints file), and so does the
+    update unit's locked re-sync (owner decision 2026-10-11). The program
+    that picks those stanzas lives in both scripts, never in a file of its
+    own: a rollback re-syncs against the previous checkout, which may not
+    have that file. So the two copies must be the same, character for
+    character, and neither script may go back to "-c <lock> setuptools
+    wheel"."""
+    assert _lock_closure_awk(SCRIPT) == _lock_closure_awk(APPLY_UPDATE)
+    for path in (SCRIPT, APPLY_UPDATE):
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"pip\S* install --require-hashes -c ", text), path.name
+        assert 'roots="setuptools wheel"' in text or "lock_stanzas setuptools wheel" in text, path.name
+
+
+def test_provisioned_boxes_update_from_the_lock():
+    """A box provision.sh installs from the lock re-syncs from it on every
+    update too: DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update. The
+    update unit's own default stays off (the Beelink is not provisioned)."""
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "UPDATE_DEFAULTS=$ROOT/etc/default/domovoi-update" in script
+    assert re.search(r'^    "DOMOVOI_USE_LOCK=1"$', script, re.M)
+    assert "USE_LOCK=${DOMOVOI_USE_LOCK:-0}" in APPLY_UPDATE.read_text(encoding="utf-8")
+
+
+def _os_jobs_never_units() -> list[str]:
+    m = re.search(r"^NEVER_UNITS=\((.*?)\)$", OS_JOBS.read_text(encoding="utf-8"), re.M | re.S)
+    assert m, "NEVER_UNITS not found in os-jobs.sh"
+    return m.group(1).split()
+
+
+def test_os_jobs_masks_what_the_owner_named():
+    """Owner decision 2026-10-11, under "No": apt-daily, apt-daily-upgrade
+    (and unattended-upgrades), motd-news, ua-timer, apport's auto-report
+    units and snapd.snap-repair. The doc names every one."""
+    units = _os_jobs_never_units()
+    for unit in ("apt-daily.timer", "apt-daily-upgrade.timer", "unattended-upgrades.service",
+                 "motd-news.timer", "ua-timer.timer", "snapd.snap-repair.timer"):
+        assert unit in units, unit
+    assert any(u.startswith("apport-autoreport.") for u in units)
+    doc = LINUX_HOST.read_text(encoding="utf-8")
+    for unit in units:
+        assert unit in doc, f"LINUX_HOST.md does not name {unit}"
+
+
+def test_both_scripts_run_the_same_helper():
+    """The jobs follow the answer wherever the box re-applies its config:
+    provision.sh's os-jobs step and the update unit both run os-jobs.sh."""
+    assert "scripts/linux/os-jobs.sh" in SCRIPT.read_text(encoding="utf-8")
+    assert "OS_JOBS=$SCRIPT_DIR/os-jobs.sh" in APPLY_UPDATE.read_text(encoding="utf-8")
 
 
 def test_restart_grant_is_the_docs_rule():

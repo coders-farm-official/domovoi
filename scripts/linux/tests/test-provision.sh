@@ -5,7 +5,7 @@
 # through DOMOVOI_PROVISION_ROOT (/etc, /proc, /var/lib, /usr/local, the
 # service user's home), clones a throwaway origin repository that carries
 # just the files the script reads (the pin manifest, docs/LINUX_HOST.md's
-# Ollama pin, the shipped units, a lock header, a stub
+# Ollama pin, the shipped units, the real os-jobs.sh, a lock header, a stub
 # install-update-unit.sh), and puts PATH shims in front of everything that
 # would touch the machine: apt-get, dpkg-query, apt-mark, curl, gpg,
 # systemctl, docker, useradd, usermod, passwd, id, getent, runuser, install,
@@ -107,9 +107,14 @@ build_origin() {
   sed "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
     "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
   cp "$REAL_REPO"/scripts/linux/units/*.service "$o/scripts/linux/units/"
+  # The real helper: provision.sh runs it from the checkout, under the
+  # same harness root.
+  cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
   cat >"$o/scripts/linux/install-update-unit.sh" <<'SH'
 #!/usr/bin/env bash
 echo "install-update-unit $*" >>"$SHIM_STATE/calls.log"
+# What the installer's pre-flight would report about the lock.
+cp "$SHIM_ROOT/etc/default/domovoi-update" "$SHIM_STATE/update-defaults-seen" 2>/dev/null || :
 mkdir -p "$SHIM_ROOT/etc/systemd/system" "$SHIM_ROOT/etc/sudoers.d"
 echo unit >"$SHIM_ROOT/etc/systemd/system/domovoi-update.service"
 echo grant >"$SHIM_ROOT/etc/sudoers.d/domovoi-update"
@@ -340,7 +345,11 @@ case $cmd in
   is-active)
     if [ -f "$SHIM_STATE/active/${units[0]}" ]; then [ "$quiet" = 1 ] || echo active; exit 0; fi
     [ "$quiet" = 1 ] || echo inactive; exit 3 ;;
+  is-enabled)
+    if [ -f "$SHIM_STATE/enabled/${units[0]}" ]; then echo enabled; exit 0; fi
+    echo disabled; exit 1 ;;
   enable) for u in "${units[@]}"; do touch "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || touch "$SHIM_STATE/active/$u"; done ;;
+  disable) for u in "${units[@]}"; do rm -f "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || rm -f "$SHIM_STATE/active/$u"; done ;;
   start|restart)
     for u in "${units[@]}"; do
       if [ -f "$SHIM_STATE/start-fail" ]; then echo "Job for $u failed" >&2; exit 1; fi
@@ -647,6 +656,13 @@ SH
 
 # ─── per case ────────────────────────────────────────────────────────────
 
+NEVER_UNITS=(apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer
+  ua-timer.timer apport-autoreport.path apport-autoreport.timer snapd.snap-repair.timer)
+SNAPD_UNITS=(snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer)
+VENDOR_UNITS=(apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer
+  ua-timer.timer apport-autoreport.path apport-autoreport.timer snapd.snap-repair.timer
+  snapd.service snapd.socket snapd.seeded.service wsl-pro.service)
+
 # new_case NAME [--bare]: a fake root for a WSL box (or bare metal), 64 GB.
 new_case() {
   CASE_NAME=$1
@@ -674,6 +690,10 @@ new_case() {
   echo Etc/UTC >"$ROOT/etc/timezone"
   echo /usr/share/zoneinfo/Etc/UTC >"$ROOT/etc/localtime.harness-link"
   printf '#!/bin/sh\n' >"$ROOT/usr/bin/docker"; chmod +x "$ROOT/usr/bin/docker"
+  # Ubuntu's own units os-jobs.sh decides about, as the stock image ships
+  # them (wsl-pro only matters on WSL, and is left alone elsewhere).
+  mkdir -p "$ROOT/usr/lib/systemd/system"
+  for u in "${VENDOR_UNITS[@]}"; do : >"$ROOT/usr/lib/systemd/system/$u"; done
   write_shims "$CASE/bin"
   : >"$STATE/calls.log"; : >"$STATE/dpkg"; : >"$STATE/ollama-models"; : >"$STATE/users"; : >"$STATE/mounts"
   echo 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 >"$STATE/docker-fpr"
@@ -699,7 +719,9 @@ run_prov() {
     bash "$SCRIPT" --repo-url "$ORIGIN" --checkout-dir "$CHECKOUT" "$@" >"$CASE/output.log" 2>&1 || RC=$?
   grep '^@@DOMOVOI ' "$CASE/output.log" | sed 's/^@@DOMOVOI //' >"$CASE/progress.jsonl" || true
 }
-wsl_args=(--internet always --timezone America/New_York)
+# No --timezone: on WSL the zone follows Windows (owner decision
+# 2026-10-11), and the option is ignored there with a warning.
+wsl_args=(--internet always)
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
@@ -708,6 +730,8 @@ not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
 eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
 has_line() { grep -qxF -- "$2" "$1" 2>/dev/null || { echo "      no line [$2] in $1"; return 1; }; }
 absent() { [ ! -e "$1" ]; }
+masked() { [ "$("$SHIM_REAL_READLINK" "$ROOT/etc/systemd/system/$1" 2>/dev/null)" = /dev/null ]; }
+not_masked() { ! masked "$1"; }
 marker() { [ -s "$ROOT/var/lib/domovoi-provision/steps/$1" ]; }
 no_marker() { [ ! -e "$ROOT/var/lib/domovoi-provision/steps/$1" ]; }
 
@@ -720,7 +744,7 @@ final_field() { grep '"final":true' "$CASE/progress.jsonl" | tail -n 1 | sed -n 
 progress_ok() {
   [ -s "$CASE/progress.jsonl" ] || { echo "      no progress lines"; return 1; }
   if [ -z "$JSON_PY" ]; then
-    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":20,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
+    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":21,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
       && { echo "      a progress line does not match the protocol"; return 1; }
     return 0
   fi
@@ -733,7 +757,7 @@ for n, l in enumerate(lines, 1):
     o = json.loads(l)
     for k in ("v", "step", "index", "total", "state", "percent", "message"):
         assert k in o, "line %d lacks %s: %s" % (n, k, l)
-    assert o["v"] == 1 and o["total"] == 20, l
+    assert o["v"] == 1 and o["total"] == 21, l
     assert o["state"] in ("start", "progress", "done", "skip", "fail", "plan"), l
     assert 0 <= o["percent"] <= 100, l
     if o["state"] != "fail" and not o.get("final"):
@@ -744,9 +768,10 @@ for n, l in enumerate(lines, 1):
     if o.get("final"):
         finals += 1
         assert n == len(lines), "the final line is not the last"
-        for k in ("result", "restart_required", "exit_code", "failed_step"):
+        for k in ("result", "restart_required", "exit_code", "failed_step", "gpu"):
             assert k in o, "final lacks " + k
         assert isinstance(o["restart_required"], bool)
+        assert isinstance(o["gpu"], list) and all(isinstance(g, str) and g for g in o["gpu"]), l
 assert finals == 1, "%d final lines" % finals
 PY
 }
@@ -766,7 +791,7 @@ end_case() {
   fi
 }
 
-STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng units timezone start update-unit)
+STEPS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit)
 
 # ─── cases ───────────────────────────────────────────────────────────────
 
@@ -832,7 +857,7 @@ case_dry_run_changes_nothing() {
   check "plans MUSIC_DIR (manifest beside the script)" said "MUSIC_DIR=/srv/media/music"
   check "plans the standard tier from 64 GB" said "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
-  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 18
+  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 19
   check "the preflight runs for real" eq "$(state_of preflight)" done
   check "result dry_run" eq "$(final_field result)" '"dry_run"'
   check "progress format" progress_ok
@@ -844,12 +869,28 @@ case_full_run_wsl() {
   # As if the core had written its setup code: it must never be printed.
   mkdir -p "$ROOT/home/domovoi/.domovoi"
   echo SENTINEL-SETUP-CODE >"$ROOT/home/domovoi/.domovoi/setup-code.txt"
+  # Ollama's journal on a box with two NVIDIA cards (the dev box's lines of
+  # 2026-10-09), after an earlier start that found only the CPU.
+  printf '%s\n' \
+    'time=2026-10-09T18:10:00.000-04:00 level=INFO source=routes.go:2005 msg="server config" env="map[CUDA_VISIBLE_DEVICES:]"' \
+    'time=2026-10-09T18:10:01.000-04:00 level=INFO source=types.go:32 msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu total="62.5 GiB"' \
+    'time=2026-10-09T18:20:11.627-04:00 level=INFO source=routes.go:2005 msg="server config" env="map[CUDA_VISIBLE_DEVICES:]"' \
+    'time=2026-10-09T18:20:13.987-04:00 level=INFO source=types.go:32 msg="inference compute" id=0 filter_id=0 library=CUDA compute=8.9 name=CUDA0 description="NVIDIA GeForce RTX 4070 Ti SUPER" libdirs=ollama,cuda_v13 driver=13.1 pci_id=0000:01:00.0 type=discrete total="16.0 GiB" available="14.7 GiB"' \
+    'time=2026-10-09T18:20:13.987-04:00 level=INFO source=types.go:32 msg="inference compute" id=1 filter_id=1 library=CUDA compute=8.9 name=CUDA1 description="NVIDIA GeForce RTX 4070 Ti SUPER" libdirs=ollama,cuda_v13 driver=13.1 pci_id=0000:06:00.0 type=discrete total="16.0 GiB" available="14.7 GiB"' \
+    >"$STATE/journal"
   run_prov "${wsl_args[@]}" --media 'music=C:\Users\Public\Domovoi\My Music' --media 'videos=D:\Videos' --lan-ip 192.168.1.50
   check "exit 0" eq "$RC" 0
   check "progress format" progress_ok
   check "result ok" eq "$(final_field result)" '"ok"'
   check "restart required (wsl.conf changed)" eq "$(final_field restart_required)" true
   check "100% at the end" eq "$(final_field percent)" 100
+  check "one warning" eq "$(final_field warnings)" 1
+  check "the one warning: signed updates not enforced" said "signed updates are not enforced"
+  # GPU: what Ollama found at its last start, for the installer to show.
+  check "both GPUs in the final line" grep -qF '"gpu":["NVIDIA GeForce RTX 4070 Ti SUPER","NVIDIA GeForce RTX 4070 Ti SUPER"]' "$CASE/progress.jsonl"
+  check "and in result.json" grep -qF '"gpu":["NVIDIA GeForce RTX 4070 Ti SUPER","NVIDIA GeForce RTX 4070 Ti SUPER"]' "$ROOT/var/lib/domovoi-provision/result.json"
+  check "said what Ollama runs on" said "Ollama runs on: NVIDIA GeForce RTX 4070 Ti SUPER, NVIDIA GeForce RTX 4070 Ti SUPER"
+  check "no GPU pinned away from Ollama" eq "$(grep -c CUDA_VISIBLE_DEVICES "$ROOT/etc/systemd/system/ollama.service")" 0
   local s
   for s in "${STEPS[@]}"; do
     check "step $s done" eq "$(state_of "$s")" done
@@ -875,7 +916,7 @@ case_full_run_wsl() {
   check "one block" eq "$(grep -c '^# BEGIN Domovoi media folders' "$ROOT/etc/fstab")" 1
   check "mount points made" test -d "$ROOT/srv/media/music"
   check "mounted now" called "mount /srv/media/music"
-  check "videos has no setting: warned" said "no Domovoi setting reads a 'videos' folder"
+  check "videos has a setting now: no warning" not_said "no Domovoi setting reads a 'videos' folder"
   # checkout
   check "cloned" test -d "$CHECKOUT/.git"
   check "on main, tracking origin/main" eq "$(git -C "$CHECKOUT" rev-parse --abbrev-ref '@{u}')" origin/main
@@ -913,7 +954,8 @@ case_full_run_wsl() {
   check ".env: no USB adoption on WSL" has_line "$envf" "SATELLITE_ADOPTION_ENABLED=false"
   check ".env: MPD_HTTP_BASE" has_line "$envf" "MPD_HTTP_BASE=http://192.168.1.50"
   check ".env: MUSIC_DIR" has_line "$envf" "MUSIC_DIR=/srv/media/music"
-  check ".env: no videos key" eq "$(grep -ci videos "$envf")" 0
+  check ".env: VIDEOS_DIR (the core's Videos library)" has_line "$envf" "VIDEOS_DIR=/srv/media/videos"
+  check ".env: VIDEOS_DIR recorded as the script's" has_line "$ROOT/var/lib/domovoi-provision/env-written" "VIDEOS_DIR=/srv/media/videos"
   check ".env: what the script wrote, recorded" has_line "$ROOT/var/lib/domovoi-provision/env-written" "OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M"
   check ".env: the record holds no secret" eq "$(grep -c -e PASSWORD -e TOKEN -e SECRET "$ROOT/var/lib/domovoi-provision/env-written")" 0
   # ollama, models, whisper, piper
@@ -932,6 +974,14 @@ case_full_run_wsl() {
   check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
   check "MPD image built as the core does" called "docker build --progress=plain -t domovoi-mpd:latest -f $CHECKOUT/domovoi/Dockerfile.mpd $CHECKOUT/domovoi"
   check "search helper up (always)" called "docker compose up -d --no-deps searxng"
+  # Ubuntu's own jobs: WSL turns wsl-pro and snapd off whatever the answer;
+  # under always the updaters run as shipped.
+  for u in wsl-pro.service "${SNAPD_UNITS[@]}"; do check "$u masked (WSL)" masked "$u"; done
+  check "wsl-pro and snapd disabled and stopped first" called "systemctl disable --now wsl-pro.service"
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer ua-timer.timer apport-autoreport.path apport-autoreport.timer; do
+    check "$u runs as shipped (always)" not_masked "$u"
+  done
+  check "nothing written down for never" absent "$ROOT/var/lib/domovoi-os-jobs/masked"
   # units
   local u
   for u in domovoi-db.service domovoi-core.service domovoi-web.service; do
@@ -945,13 +995,16 @@ case_full_run_wsl() {
   check "restart grant" has_line "$ROOT/etc/sudoers.d/domovoi-restart" \
     "domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-core.service domovoi-web.service"
   check "grant checked by visudo first" called "visudo -cf"
-  # zone, start, updater
-  check "time zone set" called "timedatectl set-timezone America/New_York"
-  check "/etc/timezone follows (the core reads it first)" eq "$(cat "$ROOT/etc/timezone")" America/New_York
+  # zone (WSL: Windows'), start, updater
+  check "timezone step ran" eq "$(state_of timezone)" done
+  check "no zone set on WSL" not_called "timedatectl"
+  check "/etc/timezone as WSL wrote it" eq "$(cat "$ROOT/etc/timezone")" Etc/UTC
   check "units started" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service"
   check "nothing restarted on a first run" not_called "systemctl restart domovoi"
   check "update unit installed" called "install-update-unit --repo $CHECKOUT --user domovoi"
-  check "update defaults left as the doc has them" absent "$ROOT/etc/default/domovoi-update"
+  check "updates re-sync from the lock" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=1"
+  check "set before the installer's pre-flight read it" has_line "$STATE/update-defaults-seen" "DOMOVOI_USE_LOCK=1"
+  check "said so" said "updates re-sync from the lock: DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update"
   check "build tools from the lock's stanzas, with their deps" eq "$(sed -n 's/==.*//p' "$STATE/pip-build-tools" | sort | tr '\n' ' ')" "packaging setuptools wheel "
   check "build tools hash-checked" grep -q -- '--hash=sha256:' "$STATE/pip-build-tools"
   check "nothing but the build tools in that file" eq "$(grep -c '==' "$STATE/pip-build-tools")" 3
@@ -1215,6 +1268,158 @@ case_internet_never_keeps_searxng_off() {
   check "whisper skipped" eq "$(state_of whisper)" skip
   check "no pull" not_called "/api/pull"
   check "the voice is still fetched ahead" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-lessac-medium.onnx"
+  # No internet quiets Ubuntu's own jobs (owner decision 2026-10-11).
+  local u
+  for u in "${NEVER_UNITS[@]}"; do check "$u masked (never)" masked "$u"; done
+  for u in wsl-pro.service "${SNAPD_UNITS[@]}"; do check "$u masked (WSL)" masked "$u"; done
+  check "the running timers stopped" called "systemctl stop apt-daily.timer"
+  check "a service is left to finish" not_called "systemctl stop unattended-upgrades.service"
+  check "what never masked is written down" has_line "$ROOT/var/lib/domovoi-os-jobs/masked" "apt-daily.timer"
+  check "snapd's timer is WSL's, not never's" eq "$(grep -c snapd "$ROOT/var/lib/domovoi-os-jobs/masked")" 0
+  check "os-jobs done" eq "$(state_of os-jobs)" done
+  # The household answers Yes in Settings later (the .env writer), then the
+  # box re-applies its configuration: here a provision run (the update
+  # unit's runs are test-apply-update.sh's).
+  touch "$STATE/enabled/apt-daily.timer"
+  sed -i 's/^INTERNET_ACCESS=.*/INTERNET_ACCESS=always/' "$CHECKOUT/domovoi/.env"
+  run_prov --internet never --skip-models
+  check "re-run exit 0" eq "$RC" 0
+  check "os-jobs re-ran: the answer changed" eq "$(state_of os-jobs)" done
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer ua-timer.timer apport-autoreport.path apport-autoreport.timer; do
+    check "$u unmasked (always)" not_masked "$u"
+  done
+  check "snapd stays off on WSL" masked snapd.snap-repair.timer
+  check "wsl-pro stays off" masked wsl-pro.service
+  check "an enabled timer starts again" called "systemctl start apt-daily.timer"
+  check "a disabled one does not" not_called "systemctl start motd-news.timer"
+  check "nothing left written down" absent "$ROOT/var/lib/domovoi-os-jobs/masked"
+  check "the search helper follows too" called "docker compose up -d --no-deps searxng"
+  run_prov --internet never --skip-models
+  check "third run exit 0" eq "$RC" 0
+  check "os-jobs skipped: as the answer wants" eq "$(state_of os-jobs)" skip
+  end_case
+}
+
+# Bare metal: never masks the same jobs; wsl-pro and snapd are the
+# administrator's. A unit file of their own where a mask would go is left
+# alone, every run, without failing the step.
+case_os_jobs_on_bare_metal() {
+  new_case os_jobs_on_bare_metal --bare
+  printf '[Unit]\nDescription=the admin'"'"'s own motd-news\n' >"$ROOT/etc/systemd/system/motd-news.timer"
+  run_prov --internet never --skip-models
+  check "exit 0" eq "$RC" 0
+  check "os-jobs done" eq "$(state_of os-jobs)" done
+  local u
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service ua-timer.timer apport-autoreport.path apport-autoreport.timer snapd.snap-repair.timer; do
+    check "$u masked (never)" masked "$u"
+  done
+  check "the admin's own motd-news.timer left as it is" grep -q "the admin's own motd-news" "$ROOT/etc/systemd/system/motd-news.timer"
+  check "and said so" said "left alone, a unit file of their own in /etc/systemd/system: motd-news.timer"
+  for u in wsl-pro.service snapd.service snapd.socket snapd.seeded.service; do check "$u left alone (bare metal)" not_masked "$u"; done
+  check "nothing disabled" not_called "systemctl disable"
+  run_prov --internet never --skip-models
+  check "second run exit 0" eq "$RC" 0
+  check "second run: os-jobs skipped" eq "$(state_of os-jobs)" skip
+  end_case
+}
+
+# Owner decision 2026-10-11: on WSL the zone follows Windows. --timezone
+# is ignored with a warning; the step only makes /etc/timezone agree with
+# /etc/localtime, restarting core and web when it has to.
+case_wsl_zone_follows_windows() {
+  new_case wsl_zone_follows_windows
+  run_prov --internet always --skip-models --timezone America/New_York
+  check "exit 0" eq "$RC" 0
+  check "warned that --timezone is ignored" said "--timezone America/New_York is ignored on WSL"
+  check "counted" eq "$(final_field warnings)" 2
+  check "no zone set" not_called "timedatectl"
+  check "/etc/localtime as WSL left it" eq "$(cat "$ROOT/etc/localtime.harness-link")" /usr/share/zoneinfo/Etc/UTC
+  check "/etc/timezone as WSL left it" eq "$(cat "$ROOT/etc/timezone")" Etc/UTC
+  check "timezone step done" eq "$(state_of timezone)" done
+  # Windows moves to New York and the distro restarts: WSL rewrites both
+  # files. A re-run changes and restarts nothing for that.
+  echo /usr/share/zoneinfo/America/New_York >"$ROOT/etc/localtime.harness-link"
+  echo America/New_York >"$ROOT/etc/timezone"
+  echo "1 (systemd) S 0 1 1 0 -1 4194560 1 1 0 0 1 1 0 0 20 0 1 0 2222 1 1" >"$ROOT/proc/1/stat"
+  run_prov --internet always --skip-models
+  check "after Windows' change: exit 0" eq "$RC" 0
+  check "after Windows' change: timezone skipped" eq "$(state_of timezone)" skip
+  check "after Windows' change: start skipped" eq "$(state_of start)" skip
+  check "after Windows' change: nothing restarted" not_called "systemctl restart"
+  # Someone runs timedatectl inside the distro: /etc/localtime moves,
+  # /etc/timezone (which the core reads first) stays behind.
+  echo /usr/share/zoneinfo/Etc/UTC >"$ROOT/etc/localtime.harness-link"
+  run_prov --internet always --skip-models
+  check "mismatch: exit 0" eq "$RC" 0
+  check "mismatch: timezone re-ran" eq "$(state_of timezone)" done
+  check "mismatch: /etc/timezone follows /etc/localtime" eq "$(cat "$ROOT/etc/timezone")" Etc/UTC
+  check "mismatch: said so" said "/etc/timezone said America/New_York and /etc/localtime Etc/UTC"
+  check "mismatch: core and web restarted" called "systemctl restart domovoi-core.service domovoi-web.service"
+  check "mismatch: the database left alone" not_called "systemctl restart domovoi-db"
+  check "mismatch: still no zone set" not_called "timedatectl"
+  end_case
+}
+
+# Bare metal keeps --timezone as built.
+case_bare_metal_sets_the_zone() {
+  new_case bare_metal_sets_the_zone --bare
+  run_prov --internet sometimes --skip-models --timezone America/New_York
+  check "exit 0" eq "$RC" 0
+  check "no warning about the zone" not_said "is ignored on WSL"
+  check "time zone set" called "timedatectl set-timezone America/New_York"
+  check "/etc/timezone follows (the core reads it first)" eq "$(cat "$ROOT/etc/timezone")" America/New_York
+  run_prov --internet sometimes --skip-models --timezone America/New_York
+  check "second run: timezone skipped" eq "$(state_of timezone)" skip
+  run_prov --internet sometimes --skip-models --timezone Etc/UTC
+  check "another zone: exit 0" eq "$RC" 0
+  check "another zone: set" called "timedatectl set-timezone Etc/UTC"
+  check "another zone: core and web restarted" called "systemctl restart domovoi-core.service domovoi-web.service"
+  end_case
+}
+
+# A box with a CPU only: the final line's gpu list is empty.
+case_cpu_only_box_reports_no_gpu() {
+  new_case cpu_only_box_reports_no_gpu
+  printf '%s\n' \
+    'time=2026-10-11T10:00:00.000-04:00 level=INFO source=routes.go:2005 msg="server config" env="map[]"' \
+    'time=2026-10-11T10:00:01.000-04:00 level=INFO source=types.go:32 msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu total="15.5 GiB"' \
+    >"$STATE/journal"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "an empty gpu list" grep -qF '"gpu":[]' "$CASE/progress.jsonl"
+  check "said so" said "Ollama found no GPU: it runs on the CPU"
+  # A re-run that skips the ollama step still reports it.
+  run_prov "${wsl_args[@]}" --skip-models
+  check "re-run: ollama skipped" eq "$(state_of ollama)" skip
+  check "re-run: still an empty list" grep -qF '"gpu":[]' "$CASE/progress.jsonl"
+  end_case
+}
+
+# Decision 6: a provisioned box's updates re-sync from the lock; an
+# administrator's own setting stays.
+case_update_defaults_opt_into_the_lock() {
+  new_case update_defaults_opt_into_the_lock --bare
+  mkdir -p "$ROOT/etc/default"
+  printf '# mine\nDOMOVOI_UPDATE_KEEP_BACKUPS=9\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov --internet always --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the admin's line kept" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_UPDATE_KEEP_BACKUPS=9"
+  check "the lock line added" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=1"
+  check "once" eq "$(grep -c '^DOMOVOI_USE_LOCK=' "$ROOT/etc/default/domovoi-update")" 1
+  run_prov --internet always --skip-models
+  check "second run: update-unit skipped" eq "$(state_of update-unit)" skip
+  check "still once" eq "$(grep -c '^DOMOVOI_USE_LOCK=' "$ROOT/etc/default/domovoi-update")" 1
+  # The administrator turns it off; a repair run (the installer changed)
+  # leaves that alone and says so.
+  sed -i 's/^DOMOVOI_USE_LOCK=1$/DOMOVOI_USE_LOCK=0/' "$ROOT/etc/default/domovoi-update"
+  echo "# changed" >>"$CHECKOUT/scripts/linux/install-update-unit.sh"
+  run_prov --internet always --skip-models
+  check "repair: exit 0" eq "$RC" 0
+  check "repair: update-unit re-ran" eq "$(state_of update-unit)" done
+  check "repair: the admin's 0 kept" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=0"
+  check "repair: no 1 added" eq "$(grep -c '^DOMOVOI_USE_LOCK=1' "$ROOT/etc/default/domovoi-update")" 0
+  check "repair: warned" said "sets DOMOVOI_USE_LOCK=0, left as it is"
   end_case
 }
 
@@ -1608,6 +1813,11 @@ CASES=(
   case_children_do_not_hold_the_lock
   case_wsl_conf_restart_note_comes_first
   case_bare_metal_media_paths
+  case_os_jobs_on_bare_metal
+  case_wsl_zone_follows_windows
+  case_bare_metal_sets_the_zone
+  case_cpu_only_box_reports_no_gpu
+  case_update_defaults_opt_into_the_lock
 )
 
 for c in "${CASES[@]}"; do
