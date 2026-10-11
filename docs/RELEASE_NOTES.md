@@ -45,7 +45,12 @@ exactly the answers it got before, on every room.
   that room's queue. A track's details gain **add to *room*'s queue**
   (append, not replace). Opening the Room queue tab no longer pops the pair
   prompt; a guest on a room that isn't playing sees "isn't playing" and a
-  **pair this phone** button. A guest never sees Clear, Stop or favorite.
+  **pair this phone** button. A guest never sees Clear, Stop or favorite,
+  and is never met with the pairing prompt for something it can't do:
+  starting a quiet room says it takes a paired phone (with a **pair**
+  button), and a refusal (the room stopped meanwhile, a ban) is said in
+  words. With no live updates (those take a household credential), a
+  guest's Music page re-reads the rooms every 15 s.
   Home shows a guest the rooms that are playing (with pause / resume and a
   queue link) instead of "couldn't load rooms". The shell fits the screen
   a phone browser really shows, so the tab strip is visible.
