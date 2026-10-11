@@ -40,6 +40,10 @@ interface IncidentSink {
     fun shared(): Boolean
 
     fun post(serverKey: String, content: IncidentContent)
+
+    /** Take back the notification posted for [incidentId], if it is still
+     *  in the shade (it resolved, or an admin cleared it). */
+    fun withdraw(serverKey: String, incidentId: Long)
 }
 
 /** The web backend's reads, as paths (the tests pin them). */
@@ -89,12 +93,21 @@ class IncidentStore(private val ds: DataStore<Preferences>) {
     constructor(context: Context) : this(context.applicationContext.incidentsDataStore)
 
     private val kNotified = stringPreferencesKey("notified")
+    private val kWithdrawn = stringPreferencesKey("withdrawn")
 
     suspend fun notified(serverKey: String): List<String> =
         decodeNotified(ds.data.first()[kNotified])[serverKey].orEmpty()
 
     suspend fun setNotified(serverKey: String, book: List<String>) {
         ds.edit { p -> p[kNotified] = encodeNotified(decodeNotified(p[kNotified]) + (serverKey to book)) }
+    }
+
+    /** The posted incidents whose notification was taken back (planWithdrawals). */
+    suspend fun withdrawn(serverKey: String): List<String> =
+        decodeNotified(ds.data.first()[kWithdrawn])[serverKey].orEmpty()
+
+    suspend fun setWithdrawn(serverKey: String, marks: List<String>) {
+        ds.edit { p -> p[kWithdrawn] = encodeNotified(decodeNotified(p[kWithdrawn]) + (serverKey to marks)) }
     }
 }
 
@@ -153,11 +166,18 @@ class IncidentEngine(
     }
 
     /**
-     * Post what [planNotifications] says. With notifications off nothing
-     * posts and nothing is remembered: an incident still open when they come
-     * back on posts then (the next read: coming back to the app re-reads).
+     * Withdraw what [planWithdrawals] says — whether or not notifications
+     * are on (taking one back needs no permission) — then post what
+     * [planNotifications] says. With notifications off nothing posts and
+     * nothing is remembered: an incident still open when they come back on
+     * posts then (the next read: coming back to the app re-reads).
      */
     private suspend fun notify(key: String, incidents: List<ContainerIncident>) {
+        val gone = planWithdrawals(incidents, store.notified(key), store.withdrawn(key))
+        if (gone.withdraw.isNotEmpty()) {
+            store.setWithdrawn(key, gone.withdrawn)
+            gone.withdraw.forEach { sink.withdraw(key, it) }
+        }
         if (!sink.canPost()) return
         val plan = planNotifications(incidents, store.notified(key))
         if (plan.post.isEmpty()) return

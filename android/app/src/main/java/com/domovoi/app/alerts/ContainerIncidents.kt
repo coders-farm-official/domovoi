@@ -415,6 +415,44 @@ fun planNotifications(incidents: List<ContainerIncident>, notified: List<String>
     return NotifyPlan(post, (notified + post.map { incidentMark(it) }).takeLast(NOTIFIED_MAX))
 }
 
+/** The incident id a book mark ([incidentMark]) names, or null. */
+internal fun markId(mark: String): Long? = mark.substringBefore('|').toLongOrNull()
+
+/** What to withdraw now, and the server's withdrawn marks afterwards. */
+data class WithdrawPlan(val withdraw: List<Long>, val withdrawn: List<String>)
+
+/**
+ * Which posted notifications to take back, given the household list
+ * ([incidents]: every open incident, and those resolved in the last day),
+ * the marks posted for THIS server ([notified]) and those already taken
+ * back ([withdrawn]).
+ *
+ *  * A posted incident that is no longer open — it resolved, or an admin
+ *    cleared it — is withdrawn from the shade, once.
+ *  * One the list no longer carries at all (resolved over a day ago, or a
+ *    rebuilt database) is withdrawn the same way.
+ *  * An open incident keeps its notification, acknowledged or not.
+ *  * Its mark stays in the book, so a read that started before the
+ *    incident resolved and lands after the push that said so can't post it
+ *    a second time.
+ *
+ * Only the household list can say this: the open summary names no
+ * incident, so it never withdraws anything.
+ */
+fun planWithdrawals(
+    incidents: List<ContainerIncident>,
+    notified: List<String>,
+    withdrawn: List<String>,
+): WithdrawPlan {
+    val openMarks = incidents.filter { it.open }.map { incidentMark(it) }.toHashSet()
+    val already = withdrawn.toHashSet()
+    val now = notified.filter { it !in openMarks && it !in already }.distinct()
+    // Only marks still in the book are worth remembering as withdrawn.
+    val inBook = notified.toHashSet()
+    val kept = (withdrawn + now).filter { it in inBook }.distinct()
+    return WithdrawPlan(now.mapNotNull { markId(it) }.distinct(), kept)
+}
+
 private val notifiedSerializer = MapSerializer(String.serializer(), ListSerializer(String.serializer()))
 
 /** Never throws: a corrupt or absent blob is an empty book. */

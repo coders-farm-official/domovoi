@@ -251,7 +251,9 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
 
     val line = statusLine(if (sats.data != null) rooms else null, coreDown, tv.active)
     val checking = listOf(health, sats, plugins, acq, cfg).any { !it.answered() }
-    val rows = attentionRows(health.data, rooms, plugins.data, acq.data)
+    // The container guard's incidents, from the shell's one read (alerts/IncidentAlerts.kt).
+    val guard by app.containerAlerts.state.collectAsState()
+    val rows = attentionRows(health.data, rooms, plugins.data, acq.data, guard)
     val attention = attentionView(rows, cfg.data?.home_problems_visibility, shared, cfg.answered())
 
     // First run: a house with nothing in it yet gets one hint, taken from

@@ -1,5 +1,9 @@
 package com.domovoi.app.ui.screens.home
 
+import com.domovoi.app.alerts.BannerTone
+import com.domovoi.app.alerts.IncidentState
+import com.domovoi.app.alerts.IncidentTier
+import com.domovoi.app.alerts.shellBanner
 import com.domovoi.app.net.Capabilities
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
@@ -569,8 +573,13 @@ internal fun attentionRows(
     rooms: List<HomeRoom>?,
     plugins: HomePlugins?,
     acq: HomeAcquisitions?,
+    guard: IncidentState? = null,
 ): List<AttentionRow> {
     val rows = mutableListOf<AttentionRow>()
+    // The container guard: the same incidents the shell's banner shows, as
+    // one row leading to the Containers screen (web HomeGuardRow). A phone
+    // that only reads the open summary says only that an admin is needed.
+    guard?.let { guardRow(it) }?.let { rows += it }
     val dbDown = health?.db_reachable == false
     val coreDown = health?.domovoi_reachable == false
     if (dbDown) {
@@ -652,6 +661,33 @@ internal fun attentionRows(
     }
     // err before warn; otherwise the order they were found in (stable sort).
     return rows.sortedBy { if (it.tone == Tone.Err) 0 else 1 }
+}
+
+/**
+ * The container guard's problem row, or null (web home.jsx HomeGuardRow):
+ * one tampering incident or more reads "signs of tampering in a Domovoi
+ * container · risky changes are paused"; several failures, "N Domovoi
+ * containers need attention"; one, its own words. Red for tampering and a
+ * required container's failure, amber for an optional one's.
+ */
+internal fun guardRow(state: IncidentState): AttentionRow? {
+    val banner = shellBanner(state, shared = false)
+    if (!banner.show) return null
+    val tone = if (banner.tone == BannerTone.WARN) Tone.Warn else Tone.Err
+    val text = when {
+        state.tier != IncidentTier.HOUSEHOLD -> "something needs an admin's attention"
+        banner.tone == BannerTone.TAMPER -> "signs of tampering in a Domovoi container · risky changes are paused"
+        else -> {
+            val ids = state.payload?.banner?.incidentIds.orEmpty()
+            if (ids.size > 1) "${ids.size} Domovoi containers need attention"
+            else {
+                val only = state.incidents.firstOrNull { it.id == ids.firstOrNull() }
+                val words = (only?.summary ?: "a Domovoi container needs attention").trimEnd('.')
+                words.replaceFirstChar { it.lowercase() }
+            }
+        }
+    }
+    return AttentionRow("containers", tone, text, HomeTarget.Screen(Route.Containers))
 }
 
 /** What the "needs attention" card shows. */

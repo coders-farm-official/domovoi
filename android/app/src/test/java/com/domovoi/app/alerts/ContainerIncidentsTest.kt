@@ -16,6 +16,25 @@ import java.time.Instant
  * what a notification says, and which incidents a phone notifies about.
  */
 class ContainerIncidentsTest {
+    private fun bookIncident(id: Long, open: Boolean = true) = ContainerIncident(
+        id = id, openedAt = "2026-10-11T14:00:0${id % 10}+00:00", open = open,
+    )
+
+    @Test fun planWithdrawalsTakesBackWhatIsNoLongerOpenOnce() {
+        val book = listOf(bookIncident(1), bookIncident(2), bookIncident(3)).map { incidentMark(it) }
+        val plan = planWithdrawals(listOf(bookIncident(1), bookIncident(2, open = false)), book, emptyList())
+        assertEquals(listOf(2L, 3L), plan.withdraw)
+        assertEquals(book.drop(1), plan.withdrawn)
+        // Withdrawn already: not again, even when a stale list shows it open.
+        val again = planWithdrawals(listOf(bookIncident(1), bookIncident(2, open = false)), book, plan.withdrawn)
+        assertEquals(emptyList<Long>(), again.withdraw)
+        assertEquals(plan.withdrawn, again.withdrawn)
+        // A mark that left the book is forgotten as withdrawn too.
+        assertEquals(listOf(book[2]), planWithdrawals(emptyList(), book.drop(2), plan.withdrawn).withdrawn)
+        assertEquals(7L, markId("7|123"))
+        assertEquals(null, markId("garbage"))
+    }
+
 
     private fun json(text: String): JsonElement = DomovoiJson.parseToJsonElement(text)
 

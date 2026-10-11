@@ -187,6 +187,53 @@ class IncidentEngineTest {
         assertEquals("the push is the newest word", listOf(5L), engine.state.value.resolved.map { it.id })
     }
 
+    // ---- withdrawn when it resolves or is cleared -------------------------------
+
+    private fun withdrawnIds() = sink.withdrawn.map { it.second }
+
+    @Test fun aResolvedOrClearedIncidentIsWithdrawnOnce() = runBlocking {
+        a.list(payload(incident(12, cls = "tamper"), incident(10)))
+        engine.refresh()
+        assertEquals(listOf(10L, 12L), postedIds())
+        // An admin cleared the tampering; the failure is still open.
+        push(payload(incident(12, cls = "tamper", open = false), incident(10)))
+        assertEquals(listOf(12L), withdrawnIds())
+        assertEquals(serverKey(a.url), sink.withdrawn.single().first)
+        // The failure resolved: withdrawn too, and nothing posts again.
+        push(payload(incident(12, cls = "tamper", open = false), incident(10, open = false)))
+        assertEquals(listOf(12L, 10L), withdrawnIds())
+        push(payload(incident(12, cls = "tamper", open = false), incident(10, open = false)))
+        engine.refresh()
+        assertEquals("withdrawn once, never re-posted", listOf(12L, 10L), withdrawnIds())
+        assertEquals(listOf(10L, 12L), postedIds())
+    }
+
+    @Test fun anIncidentNoLongerListedIsWithdrawnAndAnOpenOneIsKept() = runBlocking {
+        a.list(payload(incident(12, cls = "tamper"), incident(10)))
+        engine.refresh()
+        // 10 acknowledged but open: kept. 12 gone from the list (resolved
+        // over a day ago): withdrawn.
+        push(payload(incident(10, acknowledged = true)))
+        assertEquals(listOf(12L), withdrawnIds())
+    }
+
+    @Test fun withdrawingNeedsNoNotificationPermission() = runBlocking {
+        a.list(payload(incident(12, cls = "tamper")))
+        engine.refresh()
+        sink.enabled = false
+        push(payload(incident(12, cls = "tamper", open = false)))
+        assertEquals(listOf(12L), withdrawnIds())
+    }
+
+    @Test fun theOpenSummaryWithdrawsNothing() = runBlocking {
+        a.list(payload(incident(12, cls = "tamper")))
+        engine.refresh()
+        a.answer(IncidentsApi.INCIDENTS_PATH, refusal, code = 401)
+        a.answer(IncidentsApi.SUMMARY_PATH, """{"attention":false,"tone":null,"text":""}""")
+        engine.refresh()
+        assertEquals(emptyList<Long>(), withdrawnIds())
+    }
+
     @Test fun aRestartOfTheAppDoesNotRePost() = runBlocking {
         a.list(payload(incident(12, cls = "tamper"), incident(10)))
         engine.refresh()
@@ -370,10 +417,14 @@ class IncidentEngineTest {
         var enabled = true
         var sharedScreen = false
         val posts = CopyOnWriteArrayList<Post>()
+        val withdrawn = CopyOnWriteArrayList<Pair<String, Long>>()
         override fun canPost() = enabled
         override fun shared() = sharedScreen
         override fun post(serverKey: String, content: IncidentContent) {
             posts += Post(serverKey, content)
+        }
+        override fun withdraw(serverKey: String, incidentId: Long) {
+            withdrawn += serverKey to incidentId
         }
     }
 }

@@ -104,6 +104,14 @@ class IncidentNotifier(context: Context, private val prefs: Prefs) : IncidentSin
                 setShowWhen(content.whenMs != null)
             }
 
+    override fun withdraw(serverKey: String, incidentId: Long) {
+        try {
+            NotificationManagerCompat.from(ctx).cancel(incidentTag(serverKey), incidentId.toInt())
+        } catch (e: RuntimeException) {
+            Log.i(TAG, "container incident not withdrawn: ${e.message}")
+        }
+    }
+
     @SuppressLint("MissingPermission") // canPost() is checked first; a revoke in between is caught
     override fun post(serverKey: String, content: IncidentContent) {
         if (!canPost()) return
