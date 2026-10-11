@@ -38,6 +38,7 @@ from web.backend.api import captures as captures_api
 from web.backend.api import capabilities as capabilities_api
 from web.backend.api import chat as chat_api
 from web.backend.api import config as config_api
+from web.backend.api import containers as containers_api
 from web.backend.api import denylist as denylist_api
 from web.backend.api import devices as devices_api
 from web.backend.api import audiobooks as audiobooks_api
@@ -364,6 +365,8 @@ app.include_router(denylist_api.router)
 # Media-prep BEFORE satellites: its /api/satellites/media/* paths must
 # never be captured by the satellites router's /{room_id} parameters.
 app.include_router(satellite_media_api.router)
+# The container guard: the banner's reads and the admin actions (docs/CONTAINER_GUARD.md).
+app.include_router(containers_api.router)
 app.include_router(satellites_api.router)
 app.include_router(satellites_api.timers_router)
 app.include_router(calendar_api.router)

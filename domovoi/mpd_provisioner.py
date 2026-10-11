@@ -117,6 +117,35 @@ async def _image_exists(tag: str) -> bool:
     return rc == 0
 
 
+async def _image_id(tag: str) -> str | None:
+    """The local image ID ``tag`` points at (``sha256:…``), or None."""
+    rc, out, _ = await _run_docker("image", "inspect", "-f", "{{.Id}}", tag, timeout=10.0)
+    return (out.strip() or None) if rc == 0 else None
+
+
+async def _note_image_for_guard(*, built: bool) -> None:
+    """Tell the container guard which music player image the rooms run
+    (docs/CONTAINER_GUARD.md): the one the core just built, or the one it
+    found. Best effort — never stops provisioning."""
+    try:
+        from domovoi.container_guard.engine import note_mpd_image
+
+        outcome = await note_mpd_image(await _image_id(settings.mpd_image_tag), built=built)
+        log.info("music player image recorded for the container guard: %s", outcome)
+    except Exception as e:  # noqa: BLE001
+        log.warning("music player image not recorded for the container guard: %s", e)
+
+
+def _room_hold(room_id: str, what: str):
+    """Hold this room's music player for the container guard while it is
+    being started, warmed or retired, and for a minute after."""
+    from domovoi.container_guard import holds
+
+    return holds.holding(
+        f"room:{room_id}", f"the music player for {room_id} is {what}", settle_sec=60.0,
+    )
+
+
 async def _build_image(tag: str) -> None:
     log.info("building MPD image %s (first run; cached on subsequent starts)", tag)
     rc, _, err = await _run_docker(
@@ -390,6 +419,7 @@ async def ensure_image() -> None:
     build does, so the caller's handling is unchanged.
     """
     if await _image_exists(settings.mpd_image_tag):
+        await _note_image_for_guard(built=False)
         return
     if egress.internet_turned_off():
         msg = (
@@ -398,8 +428,12 @@ async def ensure_image() -> None:
         )
         log.warning(msg)
         raise RuntimeError(msg)
-    await _build_image(settings.mpd_image_tag)
+    from domovoi.container_guard import holds
+
+    with holds.holding("mpd-image", "the music player image is being built", settle_sec=60.0):
+        await _build_image(settings.mpd_image_tag)
     log.info("MPD image build complete")
+    await _note_image_for_guard(built=True)
 
 
 async def warm_known_rooms() -> int:
@@ -430,14 +464,15 @@ async def warm_known_rooms() -> int:
     for room_id, ctrl, http, container in rows:
         mpd_module._room_ports[room_id] = (int(ctrl), int(http))
         try:
-            await _ensure_container(
-                name=container,
-                image=settings.mpd_image_tag,
-                control_port=int(ctrl),
-                http_port=int(http),
-                music_dir=settings.music_dir,
-                volume_name=_volume_name(room_id),
-            )
+            with _room_hold(room_id, "starting"):
+                await _ensure_container(
+                    name=container,
+                    image=settings.mpd_image_tag,
+                    control_port=int(ctrl),
+                    http_port=int(http),
+                    music_dir=settings.music_dir,
+                    volume_name=_volume_name(room_id),
+                )
             rooms_warmed += 1
         except Exception as e:
             log.warning("failed to warm MPD for room=%s: %s", room_id, e)
@@ -465,19 +500,20 @@ async def remove_room(room_id: str) -> dict[str, bool]:
 
     removed_container = False
     name = _container_name(room_id)
-    try:
-        state = await _container_state(name)
-        if state is not None:
-            await _run_docker("rm", "-f", name)
-            removed_container = True
-    except Exception as e:  # noqa: BLE001 - see docstring
-        log.warning("mpd: could not remove container for room %s: %s", room_id, e)
+    with _room_hold(room_id, "being removed"):
+        try:
+            state = await _container_state(name)
+            if state is not None:
+                await _run_docker("rm", "-f", name)
+                removed_container = True
+        except Exception as e:  # noqa: BLE001 - see docstring
+            log.warning("mpd: could not remove container for room %s: %s", room_id, e)
 
-    async with session_scope() as s:
-        result = await s.execute(
-            text("DELETE FROM mpd_rooms WHERE room_id = :r"), {"r": room_id}
-        )
-        removed_row = bool(result.rowcount)
+        async with session_scope() as s:
+            result = await s.execute(
+                text("DELETE FROM mpd_rooms WHERE room_id = :r"), {"r": room_id}
+            )
+            removed_row = bool(result.rowcount)
     log.info(
         "mpd: retired room=%s (container=%s row=%s)",
         room_id, removed_container, removed_row,
@@ -486,6 +522,13 @@ async def remove_room(room_id: str) -> dict[str, bool]:
 
 
 async def ensure_room(room_id: str) -> tuple[int, int]:
+    """Provision (or reuse) the MPD daemon for ``room_id`` — see
+    :func:`_ensure_room`; held for the container guard while it runs."""
+    with _room_hold(room_id, "starting"):
+        return await _ensure_room(room_id)
+
+
+async def _ensure_room(room_id: str) -> tuple[int, int]:
     """Provision (or reuse) the MPD daemon for ``room_id``.
 
     Returns ``(control_port, http_port)``. Idempotent — concurrent calls for

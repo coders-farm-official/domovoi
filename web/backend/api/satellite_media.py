@@ -30,6 +30,7 @@ from sqlalchemy import text
 
 from domovoi import egress
 from domovoi.admin_auth import require_admin_mutation, require_admin_read
+from domovoi.container_guard import freeze as container_freeze
 from domovoi.host_kind import host_kind
 from domovoi.satellite_media import builder, cache, fetchers, overlay
 from domovoi.satellite_media.boards import BOARDS, MIC_PROFILES, PI02W
@@ -215,7 +216,10 @@ async def media_targets() -> list[dict[str, Any]]:
 
 @router.post("/prepare", dependencies=[Depends(require_admin_mutation)])
 async def media_prepare(body: PrepareRequest, request: Request) -> dict[str, Any]:
-    """Start (or attach to) a build. One live build per target."""
+    """Start (or attach to) a build. One live build per target. 423 while
+    the container guard has an open tamper incident: the build writes the
+    code a new satellite will run as root (docs/CONTAINER_GUARD.md)."""
+    await container_freeze.require_unfrozen("satellite_media", session_scope=session_scope)
     board = BOARDS.get(body.board)
     if board is None or not board.supported:
         raise HTTPException(status_code=422, detail=f"unsupported board {body.board!r}")
@@ -450,7 +454,9 @@ async def media_cache_refresh() -> dict[str, Any]:
     can take minutes on a cold cache — the card shows a spinner).
 
     409 under ``INTERNET_ACCESS=never``: every bucket downloads. Preparing
-    a card (``/prepare``) stays allowed and uses what is cached."""
+    a card (``/prepare``) stays allowed and uses what is cached. 423 while
+    the container guard's freeze is on (it fills what a build copies)."""
+    await container_freeze.require_unfrozen("satellite_media", session_scope=session_scope)
     if egress.internet_turned_off():
         raise egress.http_exception("satellite cache refresh")
     from domovoi.config import settings as core_settings

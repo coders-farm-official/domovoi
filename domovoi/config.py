@@ -723,6 +723,30 @@ class Settings(BaseSettings):
     # first once it is exceeded. One command is about 32 KB per second.
     command_capture_max_mb: int = 500
 
+    # ─── Container guard (docs/CONTAINER_GUARD.md) ─────────────────────
+    # The core checks the Docker containers it expects — the compose stack,
+    # each room's music player, every plugin's declared containers — every
+    # interval. A failure alerts on the dashboard banner and paired phones;
+    # signs of tampering also freeze plugin installs/upgrades/enables,
+    # satellite code and payload pushes, satellite media prep and updates
+    # until an admin clears the incident. Off: nothing is checked and
+    # nothing freezes (open incidents stay until cleared or resolved).
+    container_guard_enabled: bool = True
+    container_guard_interval_sec: float = 30.0
+    # Nothing is judged this long after the core starts (the update unit and
+    # a reboot start everything at once).
+    container_guard_boot_grace_sec: float = 180.0
+    # A failure must last this long (and two checks) before it alerts, so a
+    # restart never pages anyone; Docker itself not answering, longer.
+    container_guard_failure_grace_sec: float = 120.0
+    container_guard_daemon_grace_sec: float = 300.0
+    # A tamper finding must be seen on two checks at least this far apart.
+    container_guard_tamper_confirm_sec: float = 25.0
+    # Whether this install runs domovoi/docker-compose.yml (postgres,
+    # flyway, searxng, letta): "auto" = yes when DATABASE_URL is the compose
+    # Postgres's published address (loopback port 6432); "on" / "off" say so.
+    container_guard_compose: str = "auto"
+
     # ─── Satellite logs retained on the server ─────────────────────────
     # A satellite's log ring is RAM and dies with its process; from
     # 2026-10-09 a satellite pushes its lines (`log_push`: the spool it

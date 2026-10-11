@@ -33,6 +33,10 @@ Checks:
    and collides with neither a core dashboard route nor another enabled
    plugin's page (F-026 — the shell resolves core-first, so a colliding
    page got a nav item that silently opened the core page).
+8. Containers (SDK 1.5): every ``ctx.add_container`` id is a
+   ``[[containers]]`` id in the manifest (the trust screen lists the
+   manifest, so a container it doesn't name can't be watched), and no
+   declared container name belongs to another enabled plugin.
 """
 
 from __future__ import annotations
@@ -514,6 +518,32 @@ def check_route_tiers(
         )
 
 
+def check_containers(
+    slug: str,
+    manifest: PluginManifest,
+    container_ids: list[str],
+    foreign_names: list[tuple[str, str]],
+    report: ContractReport,
+) -> None:
+    """Check 8 — ``ctx.add_container`` ids against ``[[containers]]``, and
+    container names against every other enabled plugin's."""
+    declared = {c.id for c in manifest.containers}
+    for cid in container_ids:
+        if cid not in declared:
+            report.errors.append(
+                f"register() added container {cid!r}, which the manifest's "
+                f"[[containers]] does not declare (declare it: the install "
+                f"trust screen lists the manifest)"
+            )
+    for decl in manifest.containers:
+        for other_name, other_slug in foreign_names:
+            if other_name == decl.name and other_slug != slug:
+                report.errors.append(
+                    f"container {decl.name!r} is already declared by the "
+                    f"enabled plugin {other_slug!r} — pick another name"
+                )
+
+
 def run_contract_checks(
     *,
     slug: str,
@@ -529,6 +559,8 @@ def run_contract_checks(
     cuda_initialized: bool = False,
     routers: list[Any] | None = None,
     package_dir: Path | None = None,
+    container_ids: list[str] | None = None,
+    foreign_container_names: list[tuple[str, str]] | None = None,
 ) -> ContractReport:
     """Run every §13.2 check; returns a report (caller raises
     :class:`ContractError` / sets ``load_error`` on ``errors``)."""
@@ -541,6 +573,10 @@ def run_contract_checks(
         capability_names, report,
     )
     check_web_routes(slug, manifest, list(foreign_web_routes or []), report)
+    check_containers(
+        slug, manifest, list(container_ids or []),
+        list(foreign_container_names or []), report,
+    )
     # The plugin's own declared corpus phrases must route to their owning
     # handler too — "canonical utterances this handler must win" (§2.2).
     own_corpus = [

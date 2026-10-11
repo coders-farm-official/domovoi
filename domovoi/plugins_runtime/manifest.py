@@ -4,7 +4,8 @@ Everything an installable plugin declares lives here: identity, entry
 points, capabilities, pinned requirements (+ hashed lockfile), handler
 and worker cross-check declarations, config env prefix, the permission
 trust-warning surface, web pages/scripts/player sources, realtime
-NOTIFY wiring, Android capability strings, and asset dir overrides.
+NOTIFY wiring, the Docker containers it runs (``[[containers]]``, for the
+container guard), Android capability strings, and asset dir overrides.
 
 Two layers:
 
@@ -245,6 +246,25 @@ class SatelliteDecl:
 
 
 @dataclass(frozen=True)
+class ContainerDecl:
+    """A ``[[containers]]`` entry (SDK 1.5): one Docker container the plugin
+    runs, for the core's container guard (docs/CONTAINER_GUARD.md) and the
+    install trust screen. ``name`` / ``image`` are the defaults; the
+    plugin's ``ctx.add_container`` resolver reports the live values."""
+
+    id: str
+    name: str
+    image: str
+    required: bool = True
+    label: str = ""
+    allow: tuple[str, ...] = ()
+
+    @property
+    def pinned(self) -> bool:
+        return "@sha256:" in self.image
+
+
+@dataclass(frozen=True)
 class PluginManifest:
     # [plugin]
     slug: str
@@ -284,6 +304,8 @@ class PluginManifest:
     media_libraries: tuple[MediaLibraryDecl, ...] = ()
     # [satellite]
     satellite: SatelliteDecl | None = None
+    # [[containers]] (SDK 1.5)
+    containers: tuple[ContainerDecl, ...] = ()
     # [android]
     android_capabilities: tuple[str, ...] = ()
     # [assets]
@@ -662,6 +684,8 @@ def parse_manifest(toml_text: str) -> PluginManifest:
             max_payload_mb=max_mb,
         )
 
+    containers = _parse_containers(data.get("containers", []), warnings)
+
     android = data.get("android", {})
     if not isinstance(android, dict):
         raise ManifestError("[android] must be a table")
@@ -703,11 +727,93 @@ def parse_manifest(toml_text: str) -> PluginManifest:
         realtime=tuple(realtime),
         media_libraries=tuple(media_libraries),
         satellite=satellite,
+        containers=containers,
         android_capabilities=android_caps,
         migrations_dir=migrations_dir,
         sounds_dir=sounds_dir,
         raw=data,
     )
+
+
+# [[containers]] (SDK 1.5): id charset, and the image reference shape.
+CONTAINER_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+_IMAGE_REF_RE = re.compile(
+    r"^[a-z0-9][A-Za-z0-9._/:-]{0,254}(@sha256:[0-9a-f]{64})?$"
+)
+
+
+def _parse_containers(raw: Any, warnings: tuple[str, ...]) -> tuple[ContainerDecl, ...]:
+    """``[[containers]]``: each Docker container the plugin runs. A plugin
+    that runs none leaves the table out; one that runs containers and
+    declares none still loads, and simply isn't watched."""
+    from domovoi.container_guard.model import (
+        ALLOWANCES,
+        CONTAINER_NAME_RE,
+        RESERVED_CONTAINER_NAMES,
+        RESERVED_CONTAINER_PREFIXES,
+    )
+
+    if not isinstance(raw, list):
+        raise ManifestError("[[containers]] must be an array of tables")
+    out: list[ContainerDecl] = []
+    ids: set[str] = set()
+    names: set[str] = set()
+    for c in raw:
+        if not isinstance(c, dict):
+            raise ManifestError("each [[containers]] entry must be a table")
+        cid = _req_str(c, "id", "containers")
+        if not CONTAINER_ID_RE.match(cid):
+            raise ManifestError(
+                f"containers.id {cid!r} must match ^[a-z][a-z0-9_]{{0,31}}$"
+            )
+        if cid in ids:
+            raise ManifestError(f"containers.id {cid!r} is declared more than once")
+        ids.add(cid)
+        name = _req_str(c, "name", f"containers.{cid}")
+        if not CONTAINER_NAME_RE.match(name):
+            raise ManifestError(
+                f"containers.{cid}.name {name!r} is not a Docker container name"
+            )
+        if name in RESERVED_CONTAINER_NAMES or name.startswith(RESERVED_CONTAINER_PREFIXES):
+            raise ManifestError(
+                f"containers.{cid}.name {name!r} is a name the Domovoi core's own "
+                f"containers use; pick another"
+            )
+        if name in names:
+            raise ManifestError(f"containers.{cid}.name {name!r} is declared more than once")
+        names.add(name)
+        image = _req_str(c, "image", f"containers.{cid}")
+        if not _IMAGE_REF_RE.match(image):
+            raise ManifestError(
+                f"containers.{cid}.image {image!r} is not an image reference "
+                f"(repo[:tag], optionally pinned with @sha256:<64 hex>)"
+            )
+        required = c.get("required", True)
+        if not isinstance(required, bool):
+            raise ManifestError(f"containers.{cid}.required must be a boolean")
+        label = c.get("label", "")
+        if not isinstance(label, str) or len(label) > 80:
+            raise ManifestError(f"containers.{cid}.label must be a string of at most 80 characters")
+        allow = _str_list(c, "allow", f"containers.{cid}")
+        unknown = sorted(set(allow) - ALLOWANCES)
+        if unknown:
+            raise ManifestError(
+                f"containers.{cid}.allow names {unknown}; allowed values are "
+                f"{sorted(ALLOWANCES)}"
+            )
+        if allow and not warnings:
+            raise ManifestError(
+                f"containers.{cid}.allow lets the container run {sorted(allow)}, "
+                f"which requires at least one permissions.warnings entry "
+                f"explaining why"
+            )
+        out.append(
+            ContainerDecl(
+                id=cid, name=name, image=image, required=required,
+                label=label.strip(), allow=tuple(sorted(set(allow))),
+            )
+        )
+    return tuple(out)
 
 
 def _bad_table(where: str) -> bool:
