@@ -1,13 +1,16 @@
 package com.domovoi.app.ui.screens.videos
 
+import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * The swipe feed's pure rules: which list it plays, where each video
- * starts, how the queue shifts when a video is dropped, and the arithmetic
- * that puts the video you ended on back in the middle of the list.
+ * starts, how the queue shifts when a video is dropped, the arithmetic
+ * that puts the video you ended on back in the middle of the list, and
+ * what leaving the app and the screen timeout do to a playing video.
  */
 class FeedModelsTest {
 
@@ -73,6 +76,62 @@ class FeedModelsTest {
     @Test fun aViewportWithContentPaddingCentresOnItsOwnMiddle() {
         // A grid with top padding reports a negative viewport start.
         assertEquals(-300, centerScrollDelta(itemOffset = 0, itemSize = 200, viewportStart = -100, viewportEnd = 900))
+    }
+
+    // ---- feedKeepsScreenOn --------------------------------------------------
+
+    @Test fun aPlayingVideoKeepsTheScreenOn() {
+        assertTrue(feedKeepsScreenOn(playWhenReady = true, playbackState = Player.STATE_READY, failed = false))
+    }
+
+    @Test fun aStallToBufferMidVideoKeepsTheScreenOn() {
+        assertTrue(feedKeepsScreenOn(playWhenReady = true, playbackState = Player.STATE_BUFFERING, failed = false))
+    }
+
+    @Test fun aPausedVideoLetsTheScreenTimeOut() {
+        assertFalse(feedKeepsScreenOn(playWhenReady = false, playbackState = Player.STATE_READY, failed = false))
+    }
+
+    @Test fun aFailedVideoLetsTheScreenTimeOut() {
+        assertFalse(feedKeepsScreenOn(playWhenReady = true, playbackState = Player.STATE_IDLE, failed = true))
+    }
+
+    @Test fun anIdleOrEndedPlayerLetsTheScreenTimeOut() {
+        assertFalse(feedKeepsScreenOn(playWhenReady = true, playbackState = Player.STATE_IDLE, failed = false))
+        assertFalse(feedKeepsScreenOn(playWhenReady = true, playbackState = Player.STATE_ENDED, failed = false))
+    }
+
+    // ---- BackgroundPause ----------------------------------------------------
+
+    @Test fun leavingTheAppWhilePlayingPausesAndComingBackResumes() {
+        val away = BackgroundPause()
+        assertTrue(away.onLeave(playing = true))
+        assertTrue(away.onReturn())
+    }
+
+    @Test fun aVideoPausedBeforeLeavingStaysPausedOnReturn() {
+        val away = BackgroundPause()
+        assertFalse(away.onLeave(playing = false))
+        assertFalse(away.onReturn())
+    }
+
+    @Test fun theResumeIsSpentByOneReturn() {
+        val away = BackgroundPause()
+        away.onLeave(playing = true)
+        away.onReturn()
+        assertFalse(away.onReturn())
+    }
+
+    @Test fun theFirstStartBeforeAnyLeaveDoesNotPlay() {
+        // Adding the observer replays ON_START at once; that must not start a video.
+        assertFalse(BackgroundPause().onReturn())
+    }
+
+    @Test fun theLastLeaveDecidesWhetherToResume() {
+        val away = BackgroundPause()
+        away.onLeave(playing = true)
+        away.onLeave(playing = false)
+        assertFalse(away.onReturn())
     }
 
     // ---- videoGridEntries / gridFeedOrder ----------------------------------

@@ -85,6 +85,9 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import android.os.Build
 import android.view.WindowManager
 import androidx.media3.common.C
@@ -150,6 +153,7 @@ fun VideoFeedPlayer(
     var current by remember { mutableIntStateOf(startIndex.coerceIn(0, (videos.size - 1).coerceAtLeast(0))) }
     var resumeUsed by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
+    var keepScreenOn by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var failedKey by remember { mutableStateOf<String?>(null) }
@@ -208,6 +212,10 @@ fun VideoFeedPlayer(
                 isPlaying = playing
             }
 
+            override fun onEvents(p: Player, events: Player.Events) {
+                keepScreenOn = feedKeepsScreenOn(p.playWhenReady, p.playbackState, p.playerError != null)
+            }
+
             override fun onPositionDiscontinuity(
                 oldPosition: Player.PositionInfo,
                 newPosition: Player.PositionInfo,
@@ -232,6 +240,28 @@ fun VideoFeedPlayer(
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    // The feed's own player isn't the music service's, so nothing else stops
+    // it when the app goes out of sight. Pause it there, saving the position
+    // (the process may not survive the background), and play on at return
+    // only if it was playing. Declared after the player's effect, so the
+    // observer goes before the player is released.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, player) {
+        val away = BackgroundPause()
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (away.onLeave(player.playWhenReady)) player.pause()
+                    persist(loaded, ended = false)
+                }
+                Lifecycle.Event.ON_START -> if (away.onReturn()) player.play()
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 
     // Scrubber + periodic resume saves.
@@ -288,7 +318,7 @@ fun VideoFeedPlayer(
                 // rebuilt. A surface per page was torn down and re-attached on
                 // every swipe, and a swipe that changed the aspect ratio
                 // (landscape into portrait) could leave the new one black.
-                FeedSurface(player)
+                FeedSurface(player, keepScreenOn)
 
                 VerticalPager(state = pagerState, modifier = Modifier.fillMaxSize(), key = { queue[it].key }) { page ->
                     val video = queue[page]
@@ -485,7 +515,7 @@ private fun EdgeToEdgeDialogWindow() {
 
 @AndroidxOptIn(UnstableApi::class)
 @Composable
-private fun FeedSurface(player: ExoPlayer) {
+private fun FeedSurface(player: ExoPlayer, keepScreenOn: Boolean) {
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
@@ -494,7 +524,11 @@ private fun FeedSurface(player: ExoPlayer) {
                 setBackgroundColor(android.graphics.Color.BLACK)
             }
         },
-        update = { it.player = player },
+        update = {
+            it.player = player
+            // Holds the feed dialog's window awake while a video plays.
+            it.keepScreenOn = keepScreenOn
+        },
         onRelease = { it.player = null },
         modifier = Modifier.fillMaxSize(),
     )
