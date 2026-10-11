@@ -2609,6 +2609,25 @@ const ContainerGuardBanner = () => {
   const [fire, toastNode] = useToast();
   const [busy, setBusy] = React.useState(false);
   const b = containerGuardBanner(s, { shared });
+  // The banner sticks to the top of .main, the scroller every page shares,
+  // so whatever a page scrolls into view (Music's queue button brings the
+  // Room queue tab to the top of a phone's screen) must stop BELOW it, not
+  // under it: its height goes to .main's scroll-padding-top (styles.css).
+  const bannerRef = React.useRef(null);
+  const measureBanner = () => {
+    const el = bannerRef.current;
+    if (el) document.documentElement.style.setProperty('--guard-banner-h', `${el.offsetHeight}px`);
+  };
+  // Every render (its words may have changed), and while it shows, every
+  // resize (a phone turned); unset once it's gone.
+  React.useLayoutEffect(measureBanner);
+  React.useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (!bannerRef.current) { root.style.removeProperty('--guard-banner-h'); return undefined; }
+    let ro = null;
+    try { ro = new ResizeObserver(measureBanner); ro.observe(bannerRef.current); } catch { /* renders still measure */ }
+    return () => { if (ro) ro.disconnect(); root.style.removeProperty('--guard-banner-h'); };
+  }, [b.show]);
   if (!b.show) return toastNode || null;
   const red = b.tone !== 'warn';
   const onlyFailures = b.failures.length > 0 && b.failures.length === b.ids.length;
@@ -2627,7 +2646,7 @@ const ContainerGuardBanner = () => {
   };
   return (
     <>
-      <div className={`guard-banner ${red ? 'guard-banner-err' : 'guard-banner-warn'}`}
+      <div ref={bannerRef} className={`guard-banner ${red ? 'guard-banner-err' : 'guard-banner-warn'}`}
            role="alert" data-tone={b.tone}>
         <StatusDot tone={red ? 'err' : 'warn'} live/>
         <span className="guard-banner-text">{b.text}</span>

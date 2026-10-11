@@ -171,6 +171,10 @@
 .guard-banner-actions { display: flex; align-items: center; gap: 12px; flex: none; }
 .guard-banner-link { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 .guard-banner-ack { padding: 2px 8px; font-size: 12px; }
+/* What a page scrolls into view lands below the sticky banner, not under
+   it (ContainerGuardBanner keeps --guard-banner-h at its height; unset
+   while no banner shows). */
+.main { scroll-padding-top: var(--guard-banner-h, 0px); }
 /* (Its phone rules sit in the shell's 760px block below, beside .main's
    16px padding they follow.) */
 
