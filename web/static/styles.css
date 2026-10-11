@@ -161,10 +161,8 @@
 .guard-banner-actions { display: flex; align-items: center; gap: 12px; flex: none; }
 .guard-banner-link { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 .guard-banner-ack { padding: 2px 8px; font-size: 12px; }
-@media (max-width: 760px) {
-  .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
-  .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
-}
+/* (Its phone rules sit in the shell's 760px block below, beside .main's
+   16px padding they follow.) */
 
 /* The Containers page (containers.jsx). */
 .ctr-incident { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
@@ -397,6 +395,9 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-item.more-active .ico { color: var(--brand); }
   .sidebar .nav-item .badge { display: none; }
   .main { padding: 16px; padding-bottom: 88px; min-width: 0; }
+  /* The container guard's banner follows .main's 16px padding. */
+  .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
+  .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
   /* A page's header actions wrap under its title instead of running off
      the right edge (Music's upload · rescan · enrich did at 375px, with
      the title squeezed into a column beside them). Home's header already

@@ -591,7 +591,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   library_alias_fetch → lyrics_scan → lyrics_fetch → container_guard.
+    #   container_guard → library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -628,6 +628,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # The container guard's checks (domovoi/container_guard/): failures and
+    # signs of tampering in the containers Domovoi expects.
+    from domovoi.workers.container_guard import ContainerGuardWorker
+
+    WORKERS.add_worker(ContainerGuardWorker(), owner="core")
     # Opt-in (off by default) MusicBrainz "also called" names for the
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
@@ -640,11 +645,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     WORKERS.add_worker(LyricsScanner(), owner="core")
     WORKERS.add_worker(LyricsFetcher(), owner="core")
-    # The container guard's checks (domovoi/container_guard/): failures and
-    # signs of tampering in the containers Domovoi expects.
-    from domovoi.workers.container_guard import ContainerGuardWorker
-
-    WORKERS.add_worker(ContainerGuardWorker(), owner="core")
     # (The former office-suite stale-lock sweeper is gone with the
     # OnlyOffice/Collabora engines — the homegrown editors don't lock.)
 
