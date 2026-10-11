@@ -1518,10 +1518,16 @@ case_searxng_opt_out_and_an_older_checkout() {
   new_case searxng_opt_out_and_an_older_checkout
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   echo always >"$STATE/internet-policy"
-  MANAGE_SEARXNG=0 run_update
+  # Ubuntu's jobs (os-jobs.sh) read the same answer: opted out of both,
+  # nothing reads it.
+  MANAGE_SEARXNG=0 MANAGE_OS_JOBS=0 run_update
   check "opted out: status ok" eq "$(field status)" '"ok"'
   check "opted out: no compose" not_called "docker compose"
-  check "opted out: the answer isn't even read" not_called "domovoi.egress"
+  check "opted out of both: the answer isn't even read" not_called "domovoi.egress"
+  MANAGE_SEARXNG=0 run_update
+  check "only the search helper opted out: status ok" eq "$(field status)" '"ok"'
+  check "only the search helper opted out: still no compose" not_called "docker compose"
+  check "only the search helper opted out: os-jobs reads the answer" called "domovoi.egress --print-policy"
   : >"$STATE/egress-missing"
   run_update
   check "older checkout: status ok" eq "$(field status)" '"ok"'
