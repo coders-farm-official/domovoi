@@ -224,8 +224,12 @@ startup, so your first boot is slower than every subsequent one.
 
 ## Step 3 — Claim admin and configure for your hardware
 
-On first boot the core prints an **8-word setup code** to its console and
-writes it to `~/.domovoi/setup-code.txt`.
+On first boot the core writes an **8-word setup code** to
+`~/.domovoi/setup-code.txt` in the home of the user it runs as. Read it
+there (`cat ~/.domovoi/setup-code.txt` as that user). The core also prints
+it when you started it in a terminal; run as a service, it never prints
+the code, so it stays out of the journal. The journal gets one line
+saying where the file is.
 
 In the dashboard: **Settings → Configuration → Admin → "set up admin"**.
 Enter the code, choose a password. The code file is deleted the instant
@@ -240,7 +244,9 @@ surface: plugin installs, configuration, credentials. Locked out later?
 python -m domovoi.main --reset-admin
 ```
 
-That clears the password and prints a fresh setup code.
+That clears the password and writes a fresh setup code to the same file.
+It prints the code too when you run it in a terminal; with its output
+redirected it prints only where the file is.
 
 ### Now tune for your server
 

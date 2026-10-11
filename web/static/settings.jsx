@@ -499,8 +499,9 @@ const AdminSection = () => {
                 : <Pill tone="idle">signed out</Pill>}
         {needsSetup && (
           <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            Enter the setup code from the Domovoi server console (also in{' '}
-            <code>~/.domovoi/setup-code.txt</code>) and choose an admin password.
+            Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
+            the Domovoi server (the core also prints it when it runs in a
+            terminal) and choose an admin password.
           </span>
         )}
         {viewOnly && (

@@ -23,7 +23,10 @@ sequenceDiagram
     C->>PG: any admin_auth row?
     alt unclaimed
         C->>FS: write 8-word setup code (reused across restarts)
-        C->>C: print the code to the console banner
+        opt stdout is a terminal
+            C->>C: print the code in the console banner
+        end
+        C->>C: log where the file is (never the code)
     else claimed
         C->>FS: delete any stale code file
     end

@@ -21,12 +21,17 @@ are distinguishable from proxy results (502 = gate passed, hop dead).
 from __future__ import annotations
 
 import asyncio
+import io
+import logging
+import sys
+from contextlib import asynccontextmanager
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+import domovoi.main as core_main
 from domovoi import admin_auth
 from domovoi.acquisitions import ACQUISITIONS
 from domovoi.db.session import engine
@@ -193,6 +198,118 @@ async def test_reset_admin_clears_credential_and_sessions() -> None:
         # with 501 pre-setup, so probe via the web status endpoint).
         r = await client.get("/api/auth/status", headers=_bearer(token))
         assert r.json() == {"setup_complete": False, "authenticated": False}
+
+
+# ─── The setup code stays out of the logs (owner decision, 2026-10-11) ─────
+# Printed only when stdout is a terminal. Under systemd stdout IS the
+# journal, and the journal travels with every log bundle, so there the core
+# says where the code is and never what it is. DB-free: the boot hook's
+# "is it claimed?" read is stubbed.
+
+# Not a real code — a sentinel nothing else in the process would print.
+FAKE_CODE = "fake-sentinel-code-never-real-test-only-words-here"
+
+
+class _Stdout(io.StringIO):
+    """A stdout stand-in that answers ``isatty`` as told."""
+
+    def __init__(self, tty: bool) -> None:
+        super().__init__()
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+@pytest.fixture
+def _unclaimed_no_db(monkeypatch):
+    @asynccontextmanager
+    async def _no_db():
+        yield None
+
+    async def _no_admin(_session) -> bool:
+        return False
+
+    monkeypatch.setattr(admin_auth, "session_scope", _no_db)
+    monkeypatch.setattr(admin_auth, "has_admin_auth", _no_admin)
+    # A fresh file inside its window: the hook reuses it, so the code under
+    # test is the sentinel, never a generated one.
+    admin_auth.write_setup_code(FAKE_CODE)
+
+
+def test_stdout_is_terminal_is_false_whenever_in_doubt(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "stdout", None)
+    assert admin_auth.stdout_is_terminal() is False
+    closed = io.StringIO()
+    closed.close()  # isatty() on a closed stream raises ValueError
+    monkeypatch.setattr(sys, "stdout", closed)
+    assert admin_auth.stdout_is_terminal() is False
+
+    class _Raises:
+        def isatty(self) -> bool:
+            raise OSError("stdout went away")
+
+    monkeypatch.setattr(sys, "stdout", _Raises())
+    assert admin_auth.stdout_is_terminal() is False
+    monkeypatch.setattr(sys, "stdout", _Stdout(tty=False))
+    assert admin_auth.stdout_is_terminal() is False
+    monkeypatch.setattr(sys, "stdout", _Stdout(tty=True))
+    assert admin_auth.stdout_is_terminal() is True
+
+
+@pytest.mark.asyncio
+async def test_boot_hook_on_a_terminal_prints_the_banner_with_the_code(
+    _unclaimed_no_db, monkeypatch, caplog
+) -> None:
+    out = _Stdout(tty=True)
+    monkeypatch.setattr(sys, "stdout", out)
+    with caplog.at_level(logging.DEBUG):
+        assert await admin_auth.ensure_setup_code_if_unclaimed() == FAKE_CODE
+    assert f"Setup code: {FAKE_CODE}" in out.getvalue()
+    # Even here the LOG line carries the path, not the code.
+    assert FAKE_CODE not in caplog.text
+    assert str(admin_auth.setup_code_path()) in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_boot_hook_off_a_terminal_logs_where_the_code_is_never_the_code(
+    _unclaimed_no_db, monkeypatch, caplog
+) -> None:
+    out = _Stdout(tty=False)
+    monkeypatch.setattr(sys, "stdout", out)
+    with caplog.at_level(logging.DEBUG):
+        assert await admin_auth.ensure_setup_code_if_unclaimed() == FAKE_CODE
+    assert out.getvalue() == ""  # no banner at all
+    assert FAKE_CODE not in caplog.text
+    lines = [r.getMessage() for r in caplog.records if r.name == admin_auth.__name__]
+    assert len(lines) == 1, lines
+    assert str(admin_auth.setup_code_path()) in lines[0]
+    assert "dashboard" in lines[0] and "set up admin" in lines[0]
+    # The file itself still holds the code: that is where it is read from.
+    assert admin_auth.read_setup_code() == FAKE_CODE
+
+
+def test_reset_admin_cli_prints_the_code_only_on_a_terminal(monkeypatch, caplog) -> None:
+    async def _fake_reset() -> str:
+        return FAKE_CODE
+
+    monkeypatch.setattr(admin_auth, "reset_admin", _fake_reset)
+
+    on_tty = _Stdout(tty=True)
+    monkeypatch.setattr(sys, "stdout", on_tty)
+    core_main._reset_admin_cli()
+    assert f"new setup code: {FAKE_CODE}" in on_tty.getvalue()
+
+    redirected = _Stdout(tty=False)
+    monkeypatch.setattr(sys, "stdout", redirected)
+    with caplog.at_level(logging.DEBUG):
+        core_main._reset_admin_cli()
+    said = redirected.getvalue()
+    assert FAKE_CODE not in said
+    assert FAKE_CODE not in caplog.text
+    assert "admin credential and all sessions cleared." in said
+    assert str(admin_auth.setup_code_path()) in said
+    assert "dashboard" in said
 
 
 # ─── Login + backoff (§7.3) ────────────────────────────────────────────────

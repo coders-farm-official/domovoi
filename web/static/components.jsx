@@ -1806,8 +1806,9 @@ const LoginModal = ({ onClose }) => {
           {needsSetup ? (
             <>
               <div className="hint">
-                Enter the setup code from the Domovoi server console (also in
-                <code>~/.domovoi/setup-code.txt</code>) and choose an admin password.
+                Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
+                the Domovoi server (the core also prints it when it runs in a
+                terminal) and choose an admin password.
               </div>
               <div className="field">
                 <label>setup code</label>

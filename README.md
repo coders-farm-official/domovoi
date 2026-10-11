@@ -178,8 +178,11 @@ python -m web.backend.main           # web dashboard on :6369
 
 ### 2. Claim the admin account
 
-On first boot the core service prints an 8-word **setup code** to its console
-(and writes it to `~/.domovoi/setup-code.txt`). Open the dashboard at
+On first boot the core service writes an 8-word **setup code** to
+`~/.domovoi/setup-code.txt` on the server (in the home of the user it runs
+as) and prints it to its console when it runs in a terminal. Run as a
+service, it never prints the code, so it stays out of the journal: read
+the file. Open the dashboard at
 `http://<server>:6369`, go to **Settings → Configuration → Admin → "set up
 admin"**, enter the setup code, and choose an admin password. (The same
 prompt also appears automatically the first time you attempt any
@@ -193,8 +196,8 @@ risky operations (plugin installs, configuration, credentials). The
 household **device token** in `~/.domovoi/device-token.txt` (also shown in
 the dashboard once you are logged in) is what your phones and dashboards
 will present for ordinary actions. Forgot the password? Run
-`python -m domovoi.main --reset-admin` on the server to clear it and print a
-fresh setup code.
+`python -m domovoi.main --reset-admin` on the server to clear it and write a
+fresh setup code to the same file (printed too, in a terminal).
 
 Right after the admin account is set up, the dashboard asks whether this
 Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
@@ -236,7 +239,7 @@ Three things hold your state:
 Then start the stack as in [First install](#first-install) — migrations bring
 a restored database up to the current schema automatically. Your admin
 password rides along in the database; if you restored `~/.domovoi` without
-the database, first boot simply prints a new setup code.
+the database, first boot simply writes a new setup code.
 
 **Satellites** don't need reflashing: if the new server keeps the old
 hostname/IP, they reconnect on their own; otherwise edit `domovoi_url` in
