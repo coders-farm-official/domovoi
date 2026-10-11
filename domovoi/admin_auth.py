@@ -371,7 +371,7 @@ async def ensure_setup_code_if_unclaimed() -> str | None:
         )
         print(banner, flush=True)
     # Never the code: this line reaches the journal either way.
-    log.info("admin setup pending - %s", setup_code_whereabouts())
+    log.warning("admin setup pending - %s", setup_code_whereabouts())
     return code
 
 

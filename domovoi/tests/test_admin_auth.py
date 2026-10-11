@@ -259,21 +259,24 @@ def test_stdout_is_terminal_is_false_whenever_in_doubt(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_boot_hook_on_a_terminal_prints_the_banner_with_the_code(
-    _unclaimed_no_db, monkeypatch, caplog
+    _unclaimed_no_db, monkeypatch, caplog, capfd
 ) -> None:
     out = _Stdout(tty=True)
     monkeypatch.setattr(sys, "stdout", out)
     with caplog.at_level(logging.DEBUG):
         assert await admin_auth.ensure_setup_code_if_unclaimed() == FAKE_CODE
     assert f"Setup code: {FAKE_CODE}" in out.getvalue()
-    # Even here the LOG line carries the path, not the code.
+    # Even here the LOG line carries the path, not the code, and nothing
+    # else (stderr, the real descriptors) does.
     assert FAKE_CODE not in caplog.text
     assert str(admin_auth.setup_code_path()) in caplog.text
+    fd_out, fd_err = capfd.readouterr()
+    assert FAKE_CODE not in fd_out + fd_err
 
 
 @pytest.mark.asyncio
 async def test_boot_hook_off_a_terminal_logs_where_the_code_is_never_the_code(
-    _unclaimed_no_db, monkeypatch, caplog
+    _unclaimed_no_db, monkeypatch, caplog, capfd
 ) -> None:
     out = _Stdout(tty=False)
     monkeypatch.setattr(sys, "stdout", out)
@@ -281,15 +284,22 @@ async def test_boot_hook_off_a_terminal_logs_where_the_code_is_never_the_code(
         assert await admin_auth.ensure_setup_code_if_unclaimed() == FAKE_CODE
     assert out.getvalue() == ""  # no banner at all
     assert FAKE_CODE not in caplog.text
-    lines = [r.getMessage() for r in caplog.records if r.name == admin_auth.__name__]
+    # Not on stderr either, nor written past sys.stdout to the descriptors:
+    # under systemd both streams are the journal.
+    fd_out, fd_err = capfd.readouterr()
+    assert FAKE_CODE not in fd_out + fd_err
+    records = [r for r in caplog.records if r.name == admin_auth.__name__]
+    lines = [r.getMessage() for r in records]
     assert len(lines) == 1, lines
+    # A warning, so LOG_LEVEL=WARNING still says where the code is.
+    assert records[0].levelno == logging.WARNING
     assert str(admin_auth.setup_code_path()) in lines[0]
     assert "dashboard" in lines[0] and "set up admin" in lines[0]
     # The file itself still holds the code: that is where it is read from.
     assert admin_auth.read_setup_code() == FAKE_CODE
 
 
-def test_reset_admin_cli_prints_the_code_only_on_a_terminal(monkeypatch, caplog) -> None:
+def test_reset_admin_cli_prints_the_code_only_on_a_terminal(monkeypatch, caplog, capfd) -> None:
     async def _fake_reset() -> str:
         return FAKE_CODE
 
@@ -300,6 +310,7 @@ def test_reset_admin_cli_prints_the_code_only_on_a_terminal(monkeypatch, caplog)
     core_main._reset_admin_cli()
     assert f"new setup code: {FAKE_CODE}" in on_tty.getvalue()
 
+    capfd.readouterr()  # the terminal run's output is not this check's
     redirected = _Stdout(tty=False)
     monkeypatch.setattr(sys, "stdout", redirected)
     with caplog.at_level(logging.DEBUG):
@@ -307,6 +318,8 @@ def test_reset_admin_cli_prints_the_code_only_on_a_terminal(monkeypatch, caplog)
     said = redirected.getvalue()
     assert FAKE_CODE not in said
     assert FAKE_CODE not in caplog.text
+    fd_out, fd_err = capfd.readouterr()
+    assert FAKE_CODE not in fd_out + fd_err
     assert "admin credential and all sessions cleared." in said
     assert str(admin_auth.setup_code_path()) in said
     assert "dashboard" in said
