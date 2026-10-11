@@ -22,15 +22,18 @@ from domovoi.container_guard.model import TAMPER, Finding
 
 NOTIFY_CHANNEL = "container_incidents_changed"
 
-# How long a cleared tamper incident keeps "accepting" the same finding:
-# while the admin-reviewed condition persists it doesn't reopen, and once
-# it has been gone this long and comes back it is news again.
-ACCEPT_WINDOW_SEC = 3600
+# A failure that comes back this soon after resolving reopens its own row
+# (no new incident, no new notification): a flapping container is one
+# problem (L6).
+REOPEN_WINDOW_SEC = 15 * 60
+# Resolved incidents are kept this long, then pruned (open ones and cleared
+# findings still accepted are kept whatever their age).
+RETENTION_DAYS = 90
 
 _COLUMNS = (
     "id, incident_key, class, kind, severity, container, owner, label, summary, "
     "expected, found, opened_at, last_seen_at, resolved_at, resolution, "
-    "acknowledged_at, acknowledged_by, cleared_at, cleared_by, clear_note"
+    "acknowledged_at, acknowledged_by, cleared_at, cleared_by, clear_note, accepted"
 )
 
 
@@ -120,7 +123,29 @@ def _params(f: Finding) -> dict[str, Any]:
 
 async def open_incident(s: AsyncSession, f: Finding) -> tuple[int, bool]:
     """``(id, created)``: a new open incident for ``f.key``, or the one
-    already open for it."""
+    already open for it. A FAILURE whose same problem recovered less than
+    :data:`REOPEN_WINDOW_SEC` ago reopens that row instead (``created`` is
+    False then: one flapping container, one incident, one notification)."""
+    if f.cls != TAMPER:
+        reopened = (
+            await s.execute(
+                text(
+                    "UPDATE container_incidents SET resolved_at = NULL, resolution = NULL, "
+                    "last_seen_at = now(), kind = :kind, severity = :sev, summary = :s, "
+                    "found = CAST(:f AS JSONB) "
+                    "WHERE id = (SELECT id FROM container_incidents WHERE incident_key = :k "
+                    "AND resolution IN ('recovered', 'no_longer_expected') "
+                    "AND resolved_at > now() - make_interval(secs => :w) "
+                    "AND NOT EXISTS (SELECT 1 FROM container_incidents o "
+                    "WHERE o.incident_key = :k AND o.resolved_at IS NULL) "
+                    "ORDER BY resolved_at DESC LIMIT 1) RETURNING id"
+                ),
+                {**_params(f), "w": REOPEN_WINDOW_SEC},
+            )
+        ).first()
+        if reopened is not None:
+            await notify(s, f"reopened:{reopened[0]}")
+            return int(reopened[0]), False
     row = (
         await s.execute(
             text(
@@ -210,9 +235,10 @@ async def acknowledge(s: AsyncSession, incident_id: int, by: str) -> dict[str, A
 
 
 async def clear(s: AsyncSession, incident_id: int, by: str, note: str | None) -> dict[str, Any]:
-    """Close an open TAMPER incident after an admin's review (recorded). If
-    the condition is still there, the same finding stays accepted rather
-    than reopening (ACCEPT_WINDOW_SEC); anything different opens anew."""
+    """Close an open TAMPER incident after an admin's review (recorded).
+    The finding stays ACCEPTED — it doesn't reopen while it persists, a box
+    switched off overnight included — until the guard itself sees it gone
+    (:func:`release_acceptance`); anything different opens anew."""
     inc = await get_incident(s, incident_id)
     if inc is None:
         raise IncidentError(f"no incident #{incident_id}", status=404)
@@ -226,7 +252,7 @@ async def clear(s: AsyncSession, incident_id: int, by: str, note: str | None) ->
     await s.execute(
         text(
             "UPDATE container_incidents SET resolved_at = now(), resolution = 'cleared', "
-            "cleared_at = now(), cleared_by = :b, clear_note = :n WHERE id = :i"
+            "cleared_at = now(), cleared_by = :b, clear_note = :n, accepted = true WHERE id = :i"
         ),
         {"i": int(incident_id), "b": by[:200], "n": (note or "").strip()[:500] or None},
     )
@@ -234,31 +260,47 @@ async def clear(s: AsyncSession, incident_id: int, by: str, note: str | None) ->
     return await get_incident(s, incident_id)  # type: ignore[return-value]
 
 
-async def accepted_keys(s: AsyncSession, keys: list[str]) -> set[str]:
-    """Which of ``keys`` an admin cleared while the condition was still
-    being seen (within the window): those don't reopen."""
-    if not keys:
-        return set()
+async def accepted(s: AsyncSession) -> list[tuple[str, str | None]]:
+    """``[(incident_key, container)]``: the cleared findings still accepted."""
     rows = await s.execute(
-        text(
-            "SELECT DISTINCT incident_key FROM container_incidents "
-            "WHERE incident_key = ANY(:ks) AND resolution = 'cleared' "
-            "AND last_seen_at > now() - make_interval(secs => :w)"
-        ),
-        {"ks": list(keys), "w": ACCEPT_WINDOW_SEC},
+        text("SELECT DISTINCT incident_key, container FROM container_incidents WHERE accepted")
     )
-    return {r[0] for r in rows}
+    return [(r[0], r[1]) for r in rows]
 
 
 async def touch_accepted(s: AsyncSession, keys: list[str]) -> None:
+    """The accepted finding is still there (for the record's last-seen)."""
     if keys:
         await s.execute(
             text(
                 "UPDATE container_incidents SET last_seen_at = now() "
-                "WHERE incident_key = ANY(:ks) AND resolution = 'cleared'"
+                "WHERE incident_key = ANY(:ks) AND accepted"
             ),
             {"ks": list(keys)},
         )
+
+
+async def release_acceptance(s: AsyncSession, keys: list[str]) -> None:
+    """The guard looked and the accepted finding is gone: if it ever comes
+    back, it is news again (M3)."""
+    if keys:
+        await s.execute(
+            text("UPDATE container_incidents SET accepted = false WHERE incident_key = ANY(:ks) AND accepted"),
+            {"ks": list(keys)},
+        )
+
+
+async def prune(s: AsyncSession, *, days: int = RETENTION_DAYS) -> int:
+    """Delete resolved incidents older than ``days``, keeping every open
+    one and every still-accepted clear. Returns how many went."""
+    result = await s.execute(
+        text(
+            "DELETE FROM container_incidents WHERE resolved_at IS NOT NULL AND NOT accepted "
+            "AND resolved_at < now() - make_interval(days => :d)"
+        ),
+        {"d": int(days)},
+    )
+    return int(result.rowcount or 0)
 
 
 async def get_baseline(s: AsyncSession, key: str) -> dict[str, Any] | None:

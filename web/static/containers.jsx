@@ -25,7 +25,7 @@ const CTR_FREEZE_LIST = [
 const CtrKindWords = {
   missing: 'missing', stopped: 'stopped', restarting: 'restarting', unhealthy: 'unhealthy',
   oneshot_failed: 'failed', daemon: 'docker down', image: 'different image',
-  unknown: 'unknown container', config: 'risky settings',
+  unknown: 'unknown container', config: 'risky settings', outdated: 'older image',
 };
 
 const ctrTone = (inc) => {
@@ -160,7 +160,8 @@ const CtrStatus = ({ status, onCheck, checking }) => {
               <span className="mono ctr-watch-meta">
                 {w.state === 'running' ? 'must run' : w.state === 'oneshot' ? 'one-shot' : w.state === 'stopped' ? 'stopped on purpose' : 'known'}
                 {' · '}{o.status || '—'}
-                {' · '}{w.pin === 'digest' ? 'pinned by digest' : w.pin === 'id' ? 'built here' : w.pin === 'tag' ? 'tag only' : 'no image'}
+                {' · '}{w.pin === 'digest' ? 'pinned by digest' : w.pin === 'id' ? 'built here'
+                  : w.pin === 'repository' ? 'its repository' : w.pin === 'tag' ? 'tag only' : 'no image'}
                 {w.hold ? ` · waiting: ${w.hold}` : ''}
               </span>
             </div>
@@ -176,6 +177,12 @@ const CtrStatus = ({ status, onCheck, checking }) => {
           look like Domovoi's, claimed by nothing here (not watched, never an incident): {g.unrecognized.join(', ')}
         </div>
       )}
+      {(g.failing_resolvers || []).length > 0 && (
+        <div className="ctr-hint ctr-pad">
+          not watched · resolver failing (the plugin can't say what it expects, so only its image's repository and settings are checked): {g.failing_resolvers.map((r) => `${r.slug}/${r.container}`).join(', ')}
+        </div>
+      )}
+      {g.mpd_image && <div className="ctr-hint ctr-pad">music player image at this start: {g.mpd_image}</div>}
       {(g.unwatched_plugins || []).length > 0 && (
         <div className="ctr-hint ctr-pad">
           plugins that run containers without declaring them, so they aren't watched: {g.unwatched_plugins.join(', ')}
@@ -187,7 +194,10 @@ const CtrStatus = ({ status, onCheck, checking }) => {
 
 const ContainersPage = () => {
   const s = useContainerGuard();
-  const admin = useAdminSignedIn();
+  const shared = useSharedScreen();
+  // A shared screen (the kitchen tablet) is a guest here whatever it holds:
+  // the banner's "details" lead to the guest line, never to containers.
+  const admin = useAdminSignedIn() && !shared;
   const [fire, toastNode] = useToast();
   const [status, setStatus] = React.useState(null);
   const [checking, setChecking] = React.useState(false);
@@ -216,7 +226,9 @@ const ContainersPage = () => {
     }
   };
 
-  const household = s.loaded && s.tier === 'household' && s.data;
+  const household = !shared && s.loaded && s.tier === 'household' && s.data;
+  const guestView = s.loaded && (shared || s.tier === 'open');
+  const attention = s.loaded && s.data && (s.tier === 'open' ? s.data.attention : !!(s.data.banner && s.data.banner.show));
   const incidents = household ? (s.data.incidents || []) : [];
   const open = incidents.filter((i) => i.open);
   const closed = incidents.filter((i) => !i.open);
@@ -226,15 +238,21 @@ const ContainersPage = () => {
     <div className="page ctr-page">
       <PageHeader title="Containers" sub="what Domovoi watches on this box, and anything that went wrong"/>
       {!s.loaded && <Empty title="reading…" sub=""/>}
-      {s.loaded && s.tier === 'open' && (
+      {guestView && (
         <Card padded>
           <div className="ctr-guest">
-            {s.data && s.data.attention ? CONTAINER_GUARD_GUEST_TEXT : 'nothing needs attention'}
+            {attention ? CONTAINER_GUARD_GUEST_TEXT : 'nothing needs attention'}
           </div>
-          <div className="ctr-hint">pair this browser or sign in to see what Domovoi watches</div>
-          <div style={{ marginTop: 10 }}>
-            <Button onClick={() => { try { Auth.requestLogin(); } catch { /* no auth module */ } }}>sign in</Button>
-          </div>
+          {shared ? (
+            <div className="ctr-hint">this is a shared screen · an admin sees the details on their own device</div>
+          ) : (
+            <>
+              <div className="ctr-hint">pair this browser or sign in to see what Domovoi watches</div>
+              <div style={{ marginTop: 10 }}>
+                <Button onClick={() => { try { Auth.requestLogin(); } catch { /* no auth module */ } }}>sign in</Button>
+              </div>
+            </>
+          )}
         </Card>
       )}
       {household && frozen && (

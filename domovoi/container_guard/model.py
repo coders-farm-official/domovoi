@@ -7,6 +7,7 @@ said about one, and a :class:`Finding` is one problem the rules found.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -50,11 +51,26 @@ CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _REF_DIGEST_RE = re.compile(r"@(sha256:[0-9a-f]{64})$")
-# A bind mount of the host's whole filesystem: "/" on Linux, a drive root
-# on Windows, and the forms Docker Desktop reports those as.
-_HOST_ROOT_RE = re.compile(
-    r"^(/|[a-z]:/?|/run/desktop/mnt/host/[a-z]/?|/host_mnt/?|/mnt/host/[a-z]/?)$"
-)
+
+
+def is_host_root(source: str, system_drive: str | None = None) -> bool:
+    r"""A bind mount of the host's whole filesystem: ``/``, or on Windows the
+    SYSTEM drive's root in any of the forms Docker Desktop reports it as
+    (``C:\``, ``C:/``, ``/run/desktop/mnt/host/c``). Another drive's root
+    is not: a music library at ``E:\`` is a household's own choice."""
+    raw = (source or "").strip()
+    if raw in ("/", "\\"):
+        return True
+    src = raw.replace("\\", "/").lower().rstrip("/")
+    if src == "":
+        return False
+    drive = (system_drive or os.environ.get("SystemDrive") or "C:").strip()[:1].lower() or "c"
+    return src in (
+        f"{drive}:",
+        f"/run/desktop/mnt/host/{drive}",
+        f"/mnt/host/{drive}",
+        f"/host_mnt/{drive}",
+    )
 
 
 def ref_digest(ref: str | None) -> str | None:
@@ -79,6 +95,17 @@ def normalize_ref(ref: str | None) -> str:
     if value and ":" not in last:
         value = f"{value}:latest"
     return value
+
+
+def ref_repository(ref: str | None) -> str:
+    """The repository an image reference names, without tag or digest:
+    ``postgres:16@sha256:…`` and ``docker.io/library/postgres`` are both
+    ``postgres``; ``localhost:5000/x:1`` is ``localhost:5000/x``."""
+    value = normalize_ref(ref)
+    head, slash, last = value.rpartition("/")
+    if ":" in last:
+        last = last.split(":", 1)[0]
+    return f"{head}{slash}{last}"
 
 
 def capitalized(text: str) -> str:
@@ -107,14 +134,22 @@ class Expected:
     # plugin upgrading or recreating it). None: it is checked.
     hold: str | None = None
     compose_service: str | None = None
+    # Compare the repository only (and that it came from a registry): a
+    # disabled plugin's container, whose applied tag Domovoi can't know
+    # while the plugin's code isn't loaded.
+    repo_only: bool = False
 
     @property
     def pin(self) -> str:
-        """``id`` (exact local image), ``digest``, ``tag`` or ``none``."""
+        """``id`` (exact local image), ``digest``, ``repository`` (any tag of
+        the declared repository: a disabled plugin's container, a resolver
+        that keeps failing), ``tag`` or ``none``."""
         if self.image_id:
             return "id"
         if self.image_digests:
             return "digest"
+        if self.repo_only and self.image_ref:
+            return "repository"
         if self.image_ref:
             return "tag"
         return "none"
@@ -178,7 +213,7 @@ class Observed:
             dst = (dest or "").strip().replace("\\", "/").lower()
             if src.endswith("docker.sock") or dst.endswith("docker.sock") or "docker_engine" in src:
                 socket = True
-            if _HOST_ROOT_RE.match(src):
+            if is_host_root(source):
                 root = True
         if socket:
             out.append("docker_socket")
@@ -225,6 +260,8 @@ class DockerView:
     repo_digests: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # image reference -> the local image ID it resolves to (None: absent)
     tag_ids: dict[str, str | None] = field(default_factory=dict)
+    # image IDs whose repo digests couldn't be read this look (no data)
+    unknown_images: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True)

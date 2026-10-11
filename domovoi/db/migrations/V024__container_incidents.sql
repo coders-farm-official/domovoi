@@ -15,8 +15,12 @@
 -- clears it, and the clear is recorded (cleared_at / cleared_by / note).
 --
 -- One OPEN row per incident_key (the partial unique index); resolved rows
--- are history. Container names, image references and IDs only: nothing
--- about a person.
+-- are history, kept 90 days (the guard prunes older ones), except a cleared
+-- tamper finding that is still ACCEPTED: it stays until the guard has seen
+-- the finding gone, however long the box was off. A failure that comes
+-- back within 15 minutes of resolving reopens its row instead of opening a
+-- new one (a flapping container, one incident). Container names, image
+-- references and IDs only: nothing about a person.
 --
 -- IF NOT EXISTS throughout, so a test lane patched by hand takes it again
 -- cleanly. No semicolon or double dash inside a statement: the test kits
@@ -43,6 +47,7 @@ CREATE TABLE IF NOT EXISTS container_incidents (
     cleared_at       TIMESTAMPTZ,
     cleared_by       TEXT,
     clear_note       TEXT,
+    accepted         BOOLEAN      NOT NULL DEFAULT false,
     CONSTRAINT container_incidents_class_chk CHECK (class IN ('failure', 'tamper')),
     CONSTRAINT container_incidents_severity_chk CHECK (severity IN ('error', 'warn')),
     CONSTRAINT container_incidents_key_chk CHECK (char_length(incident_key) BETWEEN 1 AND 400),
@@ -57,6 +62,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_container_incidents_open_key
 
 CREATE INDEX IF NOT EXISTS idx_container_incidents_opened
     ON container_incidents (opened_at DESC);
+
+-- The dashboard's list (open, plus resolved in the last day) and the prune.
+CREATE INDEX IF NOT EXISTS idx_container_incidents_resolved
+    ON container_incidents (resolved_at DESC) WHERE resolved_at IS NOT NULL;
+
+-- The cleared tamper findings still accepted (looked up every check).
+CREATE INDEX IF NOT EXISTS idx_container_incidents_accepted
+    ON container_incidents (incident_key) WHERE accepted;
 
 CREATE TABLE IF NOT EXISTS container_guard_baselines (
     key          TEXT         PRIMARY KEY,

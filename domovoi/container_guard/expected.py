@@ -31,7 +31,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 from urllib.parse import urlsplit
 
 from domovoi.container_guard import holds
@@ -60,6 +60,9 @@ _LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # A plugin that says it is busy is believed this long, then checked anyway.
 PLUGIN_BUSY_MAX_SEC = 30 * 60.0
+# ...and past that while the image it is moving to is still being pulled,
+# up to this long in all: a pull that never finishes doesn't hold forever.
+PLUGIN_PULL_MAX_SEC = 6 * 3600.0
 # How long a plugin's resolver may take before the guard holds its
 # container instead ("the plugin couldn't say").
 RESOLVER_TIMEOUT_SEC = 5.0
@@ -268,6 +271,23 @@ def needs_docker(manifest: dict[str, Any] | None) -> bool:
 
 # (slug, container id) -> monotonic time the plugin first said "busy"
 _BUSY_SINCE: dict[tuple[str, str], float] = {}
+# (slug, container id) -> monotonic time its resolver started failing
+_FAILING_SINCE: dict[tuple[str, str], float] = {}
+
+# A resolver that keeps raising this long stops holding its container: the
+# container is shown as "not watched: its resolver keeps failing" and only
+# its repository and settings are checked (L5: every hold ends on its own).
+RESOLVER_FAIL_MAX_SEC = 30 * 60.0
+
+
+def failing_resolvers(now: float | None = None) -> list[dict[str, Any]]:
+    """``[{slug, container, for_sec}]``: resolvers past the bound (status)."""
+    now = time.monotonic() if now is None else now
+    return [
+        {"slug": slug, "container": cid, "for_sec": round(now - since)}
+        for (slug, cid), since in sorted(_FAILING_SINCE.items())
+        if now - since >= RESOLVER_FAIL_MAX_SEC
+    ]
 
 
 def plugin_expectation(
@@ -277,18 +297,42 @@ def plugin_expectation(
     reported: Any,
     *,
     resolver_failed: bool = False,
+    pending_restart: bool = False,
+    image_pulling: bool = False,
     now: float | None = None,
 ) -> Expected | None:
     """The :class:`Expected` for one declared container of a LOADED plugin,
     given what its resolver reported (a ContainerExpectation, or None for
     "no resolver: the manifest's values"). None when the plugin says it
-    doesn't manage the container right now."""
+    doesn't manage the container right now.
+
+    * ``pending_restart`` — the plugin was upgraded and its new code loads
+      at the next restart; the manifest the registry holds is already the
+      new one while the old code runs, so nothing is judged until then (M2).
+    * ``image_pulling`` — the image it is moving to isn't local yet: a busy
+      plugin is believed past the 30-minute cap while the pull goes on, up
+      to 6 hours in all (L4).
+    * a resolver that fails holds its container for 30 minutes, then the
+      container is known but not expected: "not watched" on the status (L5).
+    """
     now = time.monotonic() if now is None else now
+    key = (slug, decl.id)
     name, image, state, busy, reason = decl.name, decl.image, RUNNING, False, None
+    if resolver_failed:
+        since = _FAILING_SINCE.setdefault(key, now)
+        if now - since >= RESOLVER_FAIL_MAX_SEC:
+            return Expected(
+                name=decl.name, owner=f"plugin:{slug}", role="plugin",
+                label=decl.label or f"the {plugin_name} container",
+                state=KNOWN, required=decl.required, image_ref=decl.image,
+                allow=decl.allow, repo_only=True,
+            )
+    else:
+        _FAILING_SINCE.pop(key, None)
     if reported is not None:
         rstate = getattr(reported, "state", RUNNING)
         if rstate == "unmanaged":
-            _BUSY_SINCE.pop((slug, decl.id), None)
+            _BUSY_SINCE.pop(key, None)
             return None
         name = getattr(reported, "name", None) or decl.name
         image = getattr(reported, "image", None) or decl.image
@@ -296,12 +340,13 @@ def plugin_expectation(
         busy = bool(getattr(reported, "busy", False))
         reason = getattr(reported, "reason", None)
     hold = holds.held(f"plugin:{slug}")
+    if pending_restart:
+        hold = hold or f"the {plugin_name} plugin's upgrade waits for a restart"
     if resolver_failed:
         hold = hold or f"the {plugin_name} plugin couldn't say what it expects"
-    key = (slug, decl.id)
     if busy:
         since = _BUSY_SINCE.setdefault(key, now)
-        if now - since < PLUGIN_BUSY_MAX_SEC:
+        if now - since < PLUGIN_BUSY_MAX_SEC or (image_pulling and now - since < PLUGIN_PULL_MAX_SEC):
             hold = hold or reason or f"the {plugin_name} plugin is working on it"
     else:
         _BUSY_SINCE.pop(key, None)
@@ -333,18 +378,27 @@ async def _resolve(resolver: Any) -> tuple[Any, bool]:
         return None, True
 
 
+ImagePresent = Callable[[str], Awaitable["bool | None"]]
+
+
 async def plugin_expectations(
     rows: Iterable[Any],
     loaded: dict[str, Any],
+    *,
+    pending_restart: Iterable[str] = (),
+    image_present: ImagePresent | None = None,
 ) -> tuple[list[Expected], frozenset[str], tuple[str, ...]]:
     """``(expected, every declared name, unwatched slugs)``.
 
     ``rows`` are registry records (``slug``, ``name``, ``enabled``,
     ``status``, ``manifest``); ``loaded`` maps a slug to its loaded
-    plugin (``.context.containers``)."""
+    plugin (``.context.containers``); ``pending_restart`` the slugs whose
+    upgrade waits for a restart; ``image_present`` answers whether an
+    image is local yet (asked only for a busy plugin past its cap)."""
     expected: list[Expected] = []
     names: set[str] = set()
     unwatched: list[str] = []
+    pending = set(pending_restart)
     for row in rows:
         manifest = getattr(row, "manifest", None) or {}
         decls = declared_containers(manifest)
@@ -358,23 +412,40 @@ async def plugin_expectations(
         if lp is None:
             # Disabled, failed to load or uninstalled: its containers are
             # Domovoi's (a disabled plugin leaves its server running on
-            # purpose) but nothing is expected of them.
+            # purpose) but nothing is expected of them. If one runs, it runs
+            # the declared repository (its tag was the plugin's to choose).
             for d in decls:
                 expected.append(
                     Expected(
                         name=d.name, owner=f"plugin:{row.slug}", role="plugin",
                         label=d.label or f"the {getattr(row, 'name', row.slug)} container",
                         state=KNOWN, required=d.required, image_ref=d.image,
-                        allow=d.allow,
+                        allow=d.allow, repo_only=True,
                     )
                 )
             continue
         resolvers = getattr(getattr(lp, "context", None), "containers", {}) or {}
+        plugin_name = getattr(row, "name", row.slug)
         for d in decls:
             reported, failed = await _resolve(resolvers.get(d.id))
+            pulling = False
+            busy_since = _BUSY_SINCE.get((row.slug, d.id))
+            if (
+                image_present is not None and reported is not None
+                and getattr(reported, "busy", False) and busy_since is not None
+                and time.monotonic() - busy_since >= PLUGIN_BUSY_MAX_SEC
+            ):
+                # The image it is moving to (SDK 1.5 ``pulling``), else
+                # the one it reports: still absent means still pulling.
+                ref = getattr(reported, "pulling", None) or getattr(reported, "image", None) or d.image
+                try:
+                    pulling = (await image_present(ref)) is False
+                except Exception:  # noqa: BLE001 — can't tell: the cap applies
+                    pulling = False
             exp = plugin_expectation(
-                row.slug, getattr(row, "name", row.slug), d, reported,
-                resolver_failed=failed,
+                row.slug, plugin_name, d, reported,
+                resolver_failed=failed, pending_restart=row.slug in pending,
+                image_pulling=pulling,
             )
             if exp is not None:
                 names.add(exp.name)

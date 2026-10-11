@@ -34,19 +34,21 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from domovoi.container_guard import holds, store
-from domovoi.container_guard.compose import ComposeService, project_name, read_services
+from domovoi.container_guard.compose import ComposeService, parse_services, project_name, read_services
 from domovoi.container_guard.detect import DOCKER_KEY, Detection, RestartMemory, detect
 from domovoi.container_guard.docker_cli import Claimer, DockerCli
 from domovoi.container_guard.expected import (
     ExpectedSet,
     compose_expectations,
     compose_is_ours,
+    failing_resolvers,
     mpd_expectations,
     plugin_expectations,
 )
@@ -56,6 +58,9 @@ log = logging.getLogger(__name__)
 
 MPD_BASELINE_KEY = "mpd_image_id"
 MAX_BACKOFF_SEC = 300.0
+# Resolved incidents past the retention are pruned about once a day.
+PRUNE_EVERY_SEC = 24 * 3600.0
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 @dataclass(frozen=True)
@@ -156,6 +161,13 @@ class Debouncer:
                 continue
             if not det.daemon_ok:
                 continue
+            if row.get("kind") == "outdated":
+                # An older image on a container that may not be expected at
+                # all (M4): it resolves when the guard has looked and the
+                # container is gone, stopped or recreated on the pin.
+                if row.get("container") in det.image_evaluated:
+                    self._count_clean(iid, plan, "recovered")
+                continue
             e = expected.containers.get(row.get("container") or "")
             if e is None or e.state not in (RUNNING, ONESHOT):
                 plan.to_resolve.append((iid, "no_longer_expected"))
@@ -236,7 +248,12 @@ class ContainerGuard:
         self.memory = RestartMemory()
         self.compose_boot: dict[str, ComposeService] | None = None
         self._compose_now: tuple[float, dict[str, ComposeService]] | None = None
+        self._git_cache: tuple[str, dict[str, ComposeService]] | None = None
+        self._last_prune: float | None = None
+        # What the boot found about the music player image (H1), for the status.
+        self.mpd_note: str | None = None
         self._docker_was_ok = True
+        self._last_listed: set[str] = set()
         self._fail_streak = 0
         self._next_due = 0.0
         self._lock: asyncio.Lock | None = None
@@ -268,6 +285,19 @@ class ContainerGuard:
         return Path(settings.repo_dir) / "domovoi" / "docker-compose.yml"
 
     def compose_services(self) -> tuple[dict[str, ComposeService], dict[str, ComposeService]]:
+        """``(at boot, now)``: the compose file's services as COMMITTED —
+        ``git show HEAD:domovoi/docker-compose.yml`` when this process
+        started, and at HEAD now (a pull moves HEAD before the update unit
+        recreates the containers, so both are accepted). An uncommitted
+        edit of the file is ignored: editing a pin on disk and running
+        ``compose up`` must not make another image look right (M5). Without
+        git (a checkout that isn't a clone), the file on disk is all there
+        is. Blocking (git): callers on the event loop use a thread."""
+        committed = self._git_compose()
+        if committed is not None:
+            if self.compose_boot is None:
+                self.compose_boot = committed
+            return self.compose_boot, committed
         path = self.compose_file()
         if self.compose_boot is None:
             self.compose_boot = read_services(path)
@@ -278,6 +308,33 @@ class ContainerGuard:
         if self._compose_now is None or self._compose_now[0] != mtime:
             self._compose_now = (mtime, read_services(path))
         return self.compose_boot, self._compose_now[1]
+
+    def _git_compose(self) -> dict[str, ComposeService] | None:
+        """The compose file's services at HEAD, cached per HEAD; None when
+        git can't say (no git, not a clone, the file not committed)."""
+        repo = self.compose_file().parent.parent
+        try:
+            head = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=10, check=False, creationflags=_NO_WINDOW,
+            )
+            if head.returncode != 0 or not head.stdout.strip():
+                return None
+            sha = head.stdout.strip()
+            if self._git_cache is not None and self._git_cache[0] == sha:
+                return self._git_cache[1]
+            show = subprocess.run(
+                ["git", "-C", str(repo), "show", "HEAD:./domovoi/docker-compose.yml"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=10, check=False, creationflags=_NO_WINDOW,
+            )
+            if show.returncode != 0 or not show.stdout.strip():
+                return None
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        services = parse_services(show.stdout)
+        self._git_cache = (sha, services)
+        return services
 
     # ── one check ──
 
@@ -311,6 +368,7 @@ class ContainerGuard:
             ),
             image_refs=expected.image_refs(),
         )
+        self._last_listed = set(view.listed) if view.ok else self._last_listed
         if view.ok and not self._docker_was_ok:
             holds.hold("docker", cfg.docker_recover_sec, "Docker just came back")
         self._docker_was_ok = view.ok or view.cli_missing
@@ -328,7 +386,7 @@ class ContainerGuard:
             self.debouncer.pending.clear()
         else:
             det = detect(expected, view, now_wall=self.wall(), boot_wall=self.started_wall,
-                         memory=self.memory)
+                         memory=self.memory, now_mono=self.clock())
 
         written: dict[str, Any] = {"opened": [], "resolved": []}
         if hold is None and db_ok:
@@ -360,9 +418,22 @@ class ContainerGuard:
                 await store.set_baseline(s, MPD_BASELINE_KEY, *self.pending_baseline)
                 self.pending_baseline = None
             open_rows = await store.open_incidents(s)
-            tamper_keys = [f.key for f in det.findings if f.cls == TAMPER]
-            accepted = await store.accepted_keys(s, tamper_keys)
+            accepted_rows = await store.accepted(s)
+            accepted = {k for k, _ in accepted_rows}
             plan = self.debouncer.plan(det, open_rows, expected, now, accepted)
+            # A cleared finding stays accepted until the guard has looked and
+            # it is gone (M3): the container judged without it, or not there
+            # at all; the music player tag judged without it.
+            present = {f.key for f in det.findings}
+            release = [
+                key for key, container in accepted_rows
+                if key not in present and det.daemon_ok and (
+                    (container is None and det.tag_evaluated)
+                    or (container is not None and (container in det.image_evaluated
+                                                   or container not in self._last_listed))
+                )
+            ]
+            await store.release_acceptance(s, release)
             for f in plan.to_open:
                 iid, created = await store.open_incident(s, f)
                 if created:
@@ -378,6 +449,11 @@ class ContainerGuard:
                     resolved.append(iid)
                     log.info("container guard: incident #%s resolved (%s)", iid, resolution)
             await store.touch_accepted(s, plan.accepted)
+            if self._last_prune is None or now - self._last_prune >= PRUNE_EVERY_SEC:
+                pruned = await store.prune(s)
+                self._last_prune = now
+                if pruned:
+                    log.info("container guard: pruned %d resolved incidents", pruned)
         return {"opened": opened, "resolved": resolved}
 
     def _status(self, cfg: GuardConfig, expected: ExpectedSet, view: Any, det: Detection,
@@ -413,6 +489,11 @@ class ContainerGuard:
             "held": det.held,
             "unrecognized": det.unrecognized,
             "unwatched_plugins": list(expected.unwatched_plugins),
+            # L5: a plugin resolver that kept failing: its container is known,
+            # not watched, until the resolver answers again.
+            "failing_resolvers": failing_resolvers(),
+            # H1: how the boot placed the music player image.
+            "mpd_image": self.mpd_note,
             "pending": [
                 {"key": k, "class": p.finding.cls, "kind": p.finding.kind,
                  "container": p.finding.container, "seen": p.count,
@@ -455,9 +536,13 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
 
     exp = ExpectedSet()
     if compose_is_ours(cfg.compose, settings.database_url):
-        boot, now = guard.compose_services()
+        boot, now = await asyncio.to_thread(guard.compose_services)
         project = project_name(guard.compose_file())
         searxng_hold = holds.held("core:searxng")
+        if searxng_hold is None and await asyncio.to_thread(_transient_unit_active, SEARXNG_START_UNIT):
+            # The update unit hands a first SearXNG start (a pull) to a
+            # transient unit and doesn't wait for it (apply-update.sh).
+            searxng_hold = "the update is starting the web search helper"
         try:
             status = searxng_service.status()
             if status.get("state") in ("starting", "stopping"):
@@ -499,7 +584,11 @@ async def gather_expected(guard: ContainerGuard, cfg: GuardConfig, *, with_db: b
         )
     )
     plugin_rows = await reg.list_plugins()
-    expected, names, unwatched = await plugin_expectations(plugin_rows, dict(LOADER.loaded))
+    expected, names, unwatched = await plugin_expectations(
+        plugin_rows, dict(LOADER.loaded),
+        pending_restart=set(LOADER.pending_restart),
+        image_present=getattr(guard.docker, "image_present", None),
+    )
     exp.add(expected)
     exp.plugin_names = names
     exp.unwatched_plugins = unwatched
@@ -514,10 +603,11 @@ async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
     Called by ``mpd_provisioner.ensure_image`` at boot. ``built``: the core
     just built it, so it is the baseline. Otherwise the existing image is
     adopted when there is no baseline yet (the first boot with the guard),
-    or when the update unit's last run rebuilt it (``mpd_changed``) after
-    the baseline was recorded. Any other change is left for the guard's
-    check to report: the image under the tag is not the one Domovoi built.
-    Returns what it did ("built", "adopted", "same", "update", "changed",
+    or when the update unit rebuilt it (:func:`mpd_rebuild_evidence`: its
+    record says so, or on an update-unit host the record can't be read).
+    Any other change is left for the guard's check to report: the image
+    under the tag is not the one Domovoi built. Returns what it did
+    ("built", "adopted", "same", "update", "unverified", "changed",
     "unrecorded")."""
     if not image_id:
         return "unrecorded"
@@ -533,9 +623,21 @@ async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
                 return "adopted"
             if current["value"] == image_id:
                 return "same"
-            if _update_unit_rebuilt_after(current.get("recorded_at")):
-                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, "update-unit")
+            evidence = await asyncio.to_thread(mpd_rebuild_evidence, current.get("recorded_at"))
+            if evidence in ("finished", "in-flight"):
+                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, f"update-unit:{evidence}")
+                guard.mpd_note = f"rebuilt by the update unit ({evidence}); adopted"
                 return "update"
+            if evidence is not None:
+                await store.set_baseline(s, MPD_BASELINE_KEY, image_id, f"unverified:{evidence}")
+                guard.mpd_note = (
+                    "changed while the core was down; the update unit's record of the "
+                    f"run can't be read ({evidence}), so it was adopted unverified"
+                )
+                log.warning("container guard: music player image %s adopted unverified (%s)",
+                            image_id[:19], evidence)
+                return "unverified"
+            guard.mpd_note = "changed outside Domovoi (reported)"
             log.error(
                 "container guard: the music player image (%s) is not the one Domovoi "
                 "built (%s); the next check reports it", image_id[:19], str(current["value"])[:19],
@@ -548,31 +650,100 @@ async def note_mpd_image(image_id: str | None, *, built: bool) -> str:
         return "unrecorded"
 
 
-def _update_unit_rebuilt_after(recorded_at: Any) -> bool:
+_UNIT_BUSY = frozenset({"activating", "active", "deactivating", "reloading"})
+
+
+def mpd_rebuild_evidence(recorded_at: Any) -> str | None:
+    """Blocking. Why a changed music player image is the update unit's own
+    rebuild, or None (no evidence: the guard reports it).
+
+    * ``finished`` — the unit's record of a finished run says it rebuilt
+      the image (``mpd_changed``) after the baseline was recorded;
+    * ``in-flight`` — the record of the run under way (``status: running``,
+      which the unit writes before it rebuilds and starts the core) says
+      ``mpd_changed`` and names the SHA this core runs: ``to_sha`` for the
+      update itself, ``from_sha`` for its rollback (rollback-mpd rebuilds
+      the old image and the core starts on the previous SHA);
+    * ``record-missing:<why>`` (``unit-running`` when systemd says the unit
+      is running) — this host has the update unit but its record can't be
+      read. Adopted without paging, and said so on the status. This opens
+      no hole an attacker without root has: the record lives in the
+      root-owned /var/lib/domovoi-update, so only root can remove or spoil
+      it, and replacing the image needs Docker access, which is root's
+      equal and outside what the guard can stop anyway; a change while the
+      core runs is still caught by the tag and per-room checks.
+
+    A READABLE record that doesn't say so is no evidence: an update that
+    didn't touch the music player never vouches for a new image."""
     from datetime import datetime, timezone
 
-    from domovoi import git_version
+    from domovoi import git_version, self_restart
 
     try:
-        last = git_version.read_last_update()
+        last, problem = git_version.load_last_update()
     except Exception:  # noqa: BLE001
+        last, problem = None, "unreadable"
+    if isinstance(last, dict):
+        if not last.get("mpd_changed"):
+            return None
+        if last.get("status") == "running":
+            running = git_version.boot_sha().removesuffix("-dirty")
+            if running and running != "unknown":
+                for sha in (last.get("to_sha"), last.get("from_sha")):
+                    if isinstance(sha, str) and sha.startswith(running):
+                        return "in-flight"
+            return None
+        finished = last.get("finished_at")
+        if not isinstance(finished, str):
+            return None
+        try:
+            when = datetime.strptime(finished, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        if recorded_at is None:
+            return "finished"
+        if isinstance(recorded_at, datetime):
+            if recorded_at.tzinfo is None:
+                recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+            return "finished" if when >= recorded_at else None
+        return None
+    try:
+        installed = self_restart.update_unit_installed()
+    except Exception:  # noqa: BLE001
+        installed = False
+    if not installed:
+        return None
+    try:
+        state = self_restart.update_unit_state()
+    except Exception:  # noqa: BLE001
+        state = None
+    if state in _UNIT_BUSY:
+        return "record-missing:unit-running"
+    return f"record-missing:{problem or 'unreadable'}"
+
+
+SEARXNG_START_UNIT = "domovoi-searxng-start.service"
+
+
+def _transient_unit_active(unit: str) -> bool:
+    """Blocking. Whether a systemd unit is running (a plain read, no sudo);
+    False without systemd."""
+    import shutil
+    import sys
+
+    if sys.platform == "win32":
         return False
-    if not isinstance(last, dict) or not last.get("mpd_changed") or last.get("status") == "running":
-        return False
-    finished = last.get("finished_at")
-    if not isinstance(finished, str):
+    systemctl = shutil.which("systemctl")
+    if systemctl is None:
         return False
     try:
-        when = datetime.strptime(finished, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except ValueError:
+        proc = subprocess.run(
+            [systemctl, "show", "--property=ActiveState", "--value", unit],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return False
-    if recorded_at is None:
-        return True
-    if isinstance(recorded_at, datetime):
-        if recorded_at.tzinfo is None:
-            recorded_at = recorded_at.replace(tzinfo=timezone.utc)
-        return when >= recorded_at
-    return False
+    return proc.returncode == 0 and proc.stdout.strip() in _UNIT_BUSY
 
 
 _GUARD: ContainerGuard | None = None

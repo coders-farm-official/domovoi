@@ -27,12 +27,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.alerts.ADMIN_ATTENTION_TEXT
+import com.domovoi.app.alerts.BannerTone
 import com.domovoi.app.alerts.ContainerIncident
+import com.domovoi.app.alerts.ContainersView
 import com.domovoi.app.alerts.FREEZE_LIST
 import com.domovoi.app.alerts.IncidentState
-import com.domovoi.app.alerts.IncidentTier
+import com.domovoi.app.alerts.ShellBanner
+import com.domovoi.app.alerts.containersView
 import com.domovoi.app.alerts.incidentMeta
 import com.domovoi.app.alerts.kindWords
+import com.domovoi.app.alerts.shellBanner
+import com.domovoi.app.net.LocalSharedScreen
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.LoadingState
@@ -61,6 +66,9 @@ import kotlinx.coroutines.delay
 fun ContainersScreen() {
     val app = LocalApp.current
     val state by app.containerAlerts.state.collectAsState()
+    // A shared screen (the kitchen tablet) is a guest here whatever it
+    // holds: it shows only whether something needs an admin.
+    val shared = LocalSharedScreen.current
     // A fresh read on the way in; the live push keeps it current after.
     LaunchedEffect(Unit) { app.containerAlerts.refresh() }
     // "opened 2m ago" moves on while the screen is open.
@@ -80,10 +88,12 @@ fun ContainersScreen() {
         item(key = "header") {
             PageHeader("Containers", "what Domovoi watches on this box, and anything that went wrong")
         }
-        when (state.tier) {
-            IncidentTier.HOUSEHOLD -> household(state, tick)
-            IncidentTier.OPEN -> item(key = "guest") { GuestCard(state) }
-            IncidentTier.NONE -> item(key = "none") {
+        when (containersView(state.tier, shared)) {
+            ContainersView.GUEST -> item(key = "guest") {
+                GuestCard(attention = shellBanner(state, shared = shared), sharedScreen = shared)
+            }
+            ContainersView.HOUSEHOLD -> household(state, tick)
+            ContainersView.NONE -> item(key = "none") {
                 if (!state.loaded) {
                     LoadingState()
                 } else {
@@ -212,26 +222,30 @@ private fun IncidentRow(inc: ContainerIncident) {
 
 /** Not paired: the open summary, and nothing about what failed. */
 @Composable
-private fun GuestCard(state: IncidentState) {
-    val attention = state.summary?.attention == true
+private fun GuestCard(attention: ShellBanner, sharedScreen: Boolean) {
+    val needed = attention.show
     DomovoiCard(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatusDot(
                 when {
-                    !attention -> Tone.Ok
-                    state.summary?.tone == "warn" -> Tone.Warn
+                    !needed -> Tone.Ok
+                    attention.tone == BannerTone.WARN -> Tone.Warn
                     else -> Tone.Err
                 },
-                live = attention,
+                live = needed,
             )
             Text(
-                if (attention) ADMIN_ATTENTION_TEXT else "nothing needs attention",
+                if (needed) ADMIN_ATTENTION_TEXT else "nothing needs attention",
                 style = MaterialTheme.typography.titleSmall,
                 color = Domovoi.colors.fg,
             )
         }
         Text(
-            if (attention) "pair this phone to see what" else "pair this phone to see what Domovoi watches",
+            when {
+                sharedScreen -> "this is a shared screen · an admin sees the details on their own device"
+                needed -> "pair this phone to see what"
+                else -> "pair this phone to see what Domovoi watches"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = Domovoi.colors.fgSubtle,
             modifier = Modifier.padding(top = 6.dp),

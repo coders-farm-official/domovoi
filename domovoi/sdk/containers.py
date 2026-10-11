@@ -49,8 +49,11 @@ class ContainerExpectation:
     plugin recreates it, the old container runs the old image, and the
     guard reads a mismatch as tampering. ``busy``: the plugin is creating,
     pulling or recreating the container this minute; the guard waits
-    (30 minutes at most) instead of reporting it missing or swapped.
-    ``reason`` is shown on the guard's status while busy or unmanaged.
+    (30 minutes) instead of reporting it missing or swapped. ``pulling``:
+    while busy, the image the plugin is moving the container TO; past the
+    30 minutes the guard keeps waiting as long as that image isn't on the
+    host yet (a long pull), then judges. ``reason`` is shown on the
+    guard's status while busy or unmanaged.
     """
 
     name: str | None = None
@@ -58,6 +61,7 @@ class ContainerExpectation:
     state: str = RUNNING
     busy: bool = False
     reason: str | None = None
+    pulling: str | None = None
 
     def __post_init__(self) -> None:
         if self.state not in CONTAINER_STATES:

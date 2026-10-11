@@ -458,9 +458,10 @@ async def test_the_music_player_image_baseline(guard_env, monkeypatch) -> None:
         assert await cg_engine.note_mpd_image(img_a, built=False) == "adopted"
         assert await cg_engine.note_mpd_image(img_a, built=False) == "same"
         # Rebuilt outside the core with no update-unit record: reported.
+        monkeypatch.setattr(cg_engine, "mpd_rebuild_evidence", lambda _at: None)
         assert await cg_engine.note_mpd_image(img_b, built=False) == "changed"
         # The update unit rebuilt it after the baseline: adopted.
-        monkeypatch.setattr(cg_engine, "_update_unit_rebuilt_after", lambda _at: True)
+        monkeypatch.setattr(cg_engine, "mpd_rebuild_evidence", lambda _at: "finished")
         assert await cg_engine.note_mpd_image(img_b, built=False) == "update"
         assert await cg_engine.note_mpd_image(img_a, built=True) == "built"
         async with session_scope() as s:
@@ -473,16 +474,28 @@ async def test_the_music_player_image_baseline(guard_env, monkeypatch) -> None:
 def test_the_update_unit_record_is_read_strictly(monkeypatch) -> None:
     from datetime import datetime, timezone
 
-    from domovoi import git_version
+    from domovoi import git_version, self_restart
 
     at = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(git_version, "boot_sha", lambda: "abc1234")
+    monkeypatch.setattr(self_restart, "update_unit_installed", lambda: False)
+    full = "abc1234" + "0" * 33
+    other = "fff9999" + "0" * 33
     cases = [
-        ({"status": "ok", "mpd_changed": True, "finished_at": "2026-10-02T00:00:00Z"}, True),
-        ({"status": "ok", "mpd_changed": True, "finished_at": "2026-09-30T00:00:00Z"}, False),
-        ({"status": "ok", "mpd_changed": False, "finished_at": "2026-10-02T00:00:00Z"}, False),
-        ({"status": "running", "mpd_changed": True, "finished_at": "2026-10-02T00:00:00Z"}, False),
-        (None, False),
+        ({"status": "ok", "mpd_changed": True, "finished_at": "2026-10-02T00:00:00Z"}, "finished"),
+        ({"status": "ok", "mpd_changed": True, "finished_at": "2026-09-30T00:00:00Z"}, None),
+        ({"status": "ok", "mpd_changed": False, "finished_at": "2026-10-02T00:00:00Z"}, None),
+        # The run under way (H1): the core it started runs the update's SHA...
+        ({"status": "running", "mpd_changed": True, "to_sha": full, "from_sha": other}, "in-flight"),
+        # ...or, rolled back, the previous one.
+        ({"status": "running", "mpd_changed": True, "to_sha": other, "from_sha": full}, "in-flight"),
+        # A run that names neither, or didn't touch the music player: no.
+        ({"status": "running", "mpd_changed": True, "to_sha": other, "from_sha": other}, None),
+        ({"status": "running", "mpd_changed": False, "to_sha": full}, None),
+        # No record and no update unit: nothing vouches.
+        (None, None),
     ]
     for last, want in cases:
-        monkeypatch.setattr(git_version, "read_last_update", lambda last=last: last)
-        assert cg_engine._update_unit_rebuilt_after(at) is want, last
+        problem = None if last is not None else "missing"
+        monkeypatch.setattr(git_version, "load_last_update", lambda last=last, p=problem: (last, p))
+        assert cg_engine.mpd_rebuild_evidence(at) == want, last

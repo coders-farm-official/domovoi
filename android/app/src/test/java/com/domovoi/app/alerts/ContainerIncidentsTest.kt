@@ -264,6 +264,7 @@ class ContainerIncidentsTest {
         assertEquals("different image", kindWords("image"))
         assertEquals("unknown container", kindWords("unknown"))
         assertEquals("risky settings", kindWords("config"))
+        assertEquals("older image", kindWords("outdated"))
         assertEquals("brand new", kindWords("brand_new"))
         assertEquals("problem", kindWords(null))
     }
@@ -280,6 +281,19 @@ class ContainerIncidentsTest {
         assertEquals(Instant.parse("2026-10-11T14:02:03.123456Z").toEpochMilli(), c.whenMs)
         assertEquals(12L, c.incidentId)
         assertEquals("A container failed", incidentContent(inc(3), shared = false).title)
+        // An older image of its own repository: a failure that needs recreating.
+        assertEquals("A container needs recreating", incidentContent(inc(5).copy(kind = "outdated"), shared = false).title)
+    }
+
+    // ---- the Containers screen (review L1) ----------------------------------------
+
+    @Test fun aSharedScreenGetsOnlyTheGuestLineOnTheContainersScreen() {
+        assertEquals(ContainersView.GUEST, containersView(IncidentTier.HOUSEHOLD, shared = true))
+        assertEquals(ContainersView.GUEST, containersView(IncidentTier.OPEN, shared = true))
+        assertEquals(ContainersView.NONE, containersView(IncidentTier.NONE, shared = true))
+        assertEquals(ContainersView.HOUSEHOLD, containersView(IncidentTier.HOUSEHOLD, shared = false))
+        assertEquals(ContainersView.GUEST, containersView(IncidentTier.OPEN, shared = false))
+        assertEquals(ContainersView.NONE, containersView(IncidentTier.NONE, shared = false))
     }
 
     @Test fun aSharedScreensNotificationIsThePublicOne() {

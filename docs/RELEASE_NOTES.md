@@ -20,9 +20,10 @@ every plugin's declared containers — and checks them every 30 seconds
 2. **Nothing alerts in the first 3 minutes** after the core starts, and a
    failure must last 2 minutes before it does. If a banner appears after
    the update, read it: it is about a container that really is down or
-   different (an old `domovoi-searxng` on an image from before the pins,
-   for example — `docker compose up -d searxng` from `domovoi/` puts it on
-   the pin).
+   different. An amber "running an older … image than the one Domovoi
+   pins: recreate it" is a container that hasn't followed a pin bump (an
+   old `domovoi-searxng` from before the pins, for example) —
+   `docker compose up -d <service>` from `domovoi/` puts it on the pin.
 3. **Plugins:** Jellyfin, RomM and Kiwix 1.1.0 declare their containers
    (SDK 1.5) and are watched; older versions keep working and are marked
    "containers not watched". Upgrade them from the Plugins page (they
@@ -38,17 +39,26 @@ every plugin's declared containers — and checks them every 30 seconds
   "Something needs an admin's attention." Home's problems list gets a row;
   the new **Containers** page (`#containers`) has the details, and the
   admin's acknowledge and clear.
-* **A failure** (missing, stopped, crash-looping, unhealthy, Docker down)
-  alerts and resolves by itself. **Tampering** (a different image than the
-  pin or the one the core built, an unknown container under Domovoi's
-  compose project or music player names, privileged or host settings)
+* **A failure** (missing, stopped, crash-looping, unhealthy, an older
+  image of its own repository than the pin, Docker down) alerts and
+  resolves by itself; one that keeps coming back within 15 minutes stays
+  one incident. **Tampering** (an image from another repository than the
+  pin or without registry provenance, a music player image the core
+  didn't build, an unknown container under Domovoi's compose project or
+  music player names, privileged or host settings)
   alerts and **freezes plugin installs, upgrades and enables, satellite
   code and payload pushes, satellite media preparation, and updates**
   (`423`) until an admin clears it after review. Everything else keeps
   working.
 * **Android**: one notification per incident on paired phones (taken
   back when it resolves or is cleared), the same banner, and a row in the
-  app's Home problems; tapping opens the details.
+  app's Home problems; tapping opens the details. At once while the app is
+  on screen; otherwise with its background sync, about every 15 minutes
+  and only on Wi-Fi or Ethernet.
+* **When Docker is down on a compose install**, the database container is
+  down with it, so no incident can be recorded: Home's "the database isn't
+  answering" row is the alert (docs/CONTAINER_GUARD.md).
+* Resolved incidents are kept 90 days.
 * **SDK 1.5** for plugin authors: `[[containers]]` in the manifest and
   `ctx.add_container(id, resolve)` (docs/PLUGIN_DEVELOPMENT.md). The
   install trust screen lists a plugin's containers.

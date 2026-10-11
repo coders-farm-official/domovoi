@@ -123,11 +123,30 @@ class DockerCli:
                         _DIGEST_CACHE.clear()
                     _DIGEST_CACHE[image_id.strip()] = values
         for image_id in image_ids:
-            view.repo_digests[image_id] = _DIGEST_CACHE.get(image_id, ())
+            if image_id in _DIGEST_CACHE:
+                view.repo_digests[image_id] = _DIGEST_CACHE[image_id]
+            else:
+                # The lookup failed (docker hiccup, image pruned under us):
+                # no data, never "no repo digests" — the rules skip it.
+                view.unknown_images.add(image_id)
         for ref in sorted(set(image_refs)):
             rc, out, _ = await self._call(["image", "inspect", "--format", "{{.Id}}", ref])
             view.tag_ids[ref] = (out.strip() or None) if rc == 0 else None
         return view
+
+
+    async def image_present(self, ref: str) -> bool | None:
+        """Whether ``ref`` is a local image yet (a pull still running says
+        no); None when Docker can't say."""
+        if shutil.which(self.exe) is None:
+            return None
+        rc, out, err = await self._call(["image", "inspect", "--format", "{{.Id}}", ref])
+        if rc == 0 and out.strip():
+            return True
+        text = (err or "").lower()
+        if "no such image" in text or "not found" in text:
+            return False
+        return None
 
 
 class Claimer:

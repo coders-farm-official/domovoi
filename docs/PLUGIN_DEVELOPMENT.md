@@ -706,7 +706,7 @@ label = "the Jellyfin server"       # plain words for the banner
 |---|---|
 | `id` | `^[a-z][a-z0-9_]{0,31}$`, unique in the plugin. |
 | `name` | A Docker container name, unique in the plugin; never one of the core's own (`domovoi-postgres`, `domovoi-flyway`, `domovoi-flyway-test`, `domovoi-searxng`, `domovoi-letta`, anything starting `domovoi-mpd-`), and never one another enabled plugin declares (contract check 8). |
-| `image` | An image reference. **Pin by digest** (`@sha256:` + 64 hex) and the guard checks the container runs exactly that image. A **tag only** gets a weaker check: the container must have been created from that repository and tag; a different image retagged under the same name isn't detected. |
+| `image` | An image reference. **Pin by digest** (`@sha256:` + 64 hex) and the guard checks the container runs exactly that image. A **tag only** gets a weaker check: the container must have been created from that repository and tag; a different image retagged under the same name isn't detected. Either way, another image of the same repository pulled from a registry is reported as **outdated** (a failure: recreate it), another repository as tampering. While the plugin is disabled (or failed to load) a running container is checked against the repository only, any tag. |
 | `required` | Default `true`. |
 | `label` | Up to 80 characters; default `the <plugin name> container`. |
 | `allow` | Security settings this container may run with: `privileged`, `host_network`, `host_pid`, `docker_socket`, `root_mount`. Each is otherwise tampering. Declaring any needs a `permissions.warnings` entry saying why. |
@@ -1438,6 +1438,7 @@ async def _server_container():
         image=row["image_tag"],
         state="stopped" if row["desired_state"] == "stopped" else "running",
         busy=server.reconciling(),            # recreating it right now
+        pulling=cfg.image_tag,                # the image it is moving to
     )
 
 if hasattr(ctx, "add_container"):             # an older core: not watched
@@ -1452,17 +1453,26 @@ never call Docker. It returns a `ContainerExpectation`:
 |---|---|
 | `name`, `image` | What you **last created** the container with (None: the manifest's values). Not a setting the household just changed: until your watchdog recreates the container it still runs the old image, and the guard would read the difference as a swapped image. |
 | `state` | `"running"` (must exist and run — every failure rule applies), `"stopped"` (you stopped it on purpose; it may be stopped or gone, and if it runs it must run your image), or `"unmanaged"` (`ContainerExpectation.unmanaged()`: you don't manage it right now; not watched at all). |
-| `busy` | You are creating, pulling or recreating it this minute. The guard waits instead of reporting it missing or swapped — for 30 minutes at most, then it checks anyway, so a container you can never bring up still alerts. |
+| `busy` | You are creating, pulling or recreating it this minute. The guard waits instead of reporting it missing or swapped — for 30 minutes, then it checks anyway, so a container you can never bring up still alerts. |
+| `pulling` | While `busy`: the image you are moving the container TO. Past the 30 minutes the guard keeps waiting while that image isn't on the host yet (a long pull), up to 6 hours in all. |
 | `reason` | Shown on the guard's status while busy or unmanaged. |
 
 No resolver: the manifest's name and image, expected to run whenever the
 plugin is enabled — fine for a container whose shape never changes.
 The guard also holds your containers on its own while the plugin is being
 installed, upgraded, enabled, disabled or uninstalled, and for 5 minutes
-after. A resolver that raises holds them too (and is logged).
+after, and while an upgrade waits for a restart (the registry already has
+the new manifest while your old code still runs the old container). A
+`busy` past 30 minutes is still believed while the image you report in
+`pulling` (else `image`) isn't on the host yet — a long pull — up to 6
+hours in all. A resolver that raises holds them for
+30 minutes (and is logged); after that the container shows as "not
+watched · resolver failing" on the Containers page and only its
+repository and settings are checked, until the resolver answers again.
 
 A disabled plugin's containers are known but not expected (stopping a
-server on disable is your call; the bundled ones leave it running). The
+server on disable is your call; the bundled ones leave it running); one
+that runs must still run your declared repository. The
 three Coders Farm Docker plugins (Jellyfin, RomM, Kiwix, 1.1.0 and later)
 are worked examples: each has a `guard.py`.
 

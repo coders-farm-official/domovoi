@@ -228,6 +228,18 @@ fun parseSummary(el: JsonElement?): IncidentSummary? {
  *  nothing (not read yet, no server, or a server older than the guard). */
 enum class IncidentTier { NONE, OPEN, HOUSEHOLD }
 
+/** What the Containers screen shows: the guest line, the household list, or nothing yet. */
+enum class ContainersView { GUEST, HOUSEHOLD, NONE }
+
+/** A [shared] screen (the kitchen tablet) gets the guest line whatever it
+ *  holds — like the banner, never what failed (review L1). */
+fun containersView(tier: IncidentTier, shared: Boolean): ContainersView = when {
+    shared && tier != IncidentTier.NONE -> ContainersView.GUEST
+    tier == IncidentTier.HOUSEHOLD -> ContainersView.HOUSEHOLD
+    tier == IncidentTier.OPEN -> ContainersView.GUEST
+    else -> ContainersView.NONE
+}
+
 /** What the shell's banner and the Containers screen read
  *  (IncidentAlerts.state). */
 data class IncidentState(
@@ -310,6 +322,7 @@ fun kindWords(kind: String?): String = when (kind) {
     "image" -> "different image"
     "unknown" -> "unknown container"
     "config" -> "risky settings"
+    "outdated" -> "older image"
     null -> "problem"
     else -> kind.replace('_', ' ')
 }
@@ -357,7 +370,11 @@ data class IncidentContent(
     val whenMs: Long? = null,
 )
 
-fun incidentTitle(inc: ContainerIncident): String = if (inc.tamper) "Signs of tampering" else "A container failed"
+fun incidentTitle(inc: ContainerIncident): String = when {
+    inc.tamper -> "Signs of tampering"
+    inc.kind == "outdated" -> "A container needs recreating"
+    else -> "A container failed"
+}
 
 /** On a [shared] screen (the kitchen tablet) the private version is the
  *  public one: no container, no words, locked or not. */

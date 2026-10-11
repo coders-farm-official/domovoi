@@ -231,8 +231,10 @@ def test_t1_the_pin_matches_through_repo_digests_on_the_classic_store() -> None:
 def test_t1_a_stopped_expectation_still_checks_a_running_container() -> None:
     det = run(expected(pg(state=STOPPED)), view(obs(image_id=D_OTHER)))
     assert kinds(det) == [(TAMPER, "image", "domovoi-postgres")]
-    # ...but a known one (nothing expected of it) does not.
-    assert run(expected(pg(state=KNOWN)), view(obs(image_id=D_OTHER))).findings == []
+    # ...and a known one too (M4): nothing expected of it is no licence to
+    # run another image.
+    assert kinds(run(expected(pg(state=KNOWN)), view(obs(image_id=D_OTHER)))) == [
+        (TAMPER, "image", "domovoi-postgres")]
 
 
 def test_t1_a_stopped_container_s_image_is_not_judged() -> None:
