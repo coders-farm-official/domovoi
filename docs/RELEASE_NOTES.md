@@ -4,6 +4,84 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — The update unit: "No internet" quiets Ubuntu too, and the lock works on Ubuntu 26.04
+
+Two changes to `domovoi-update.service` (`scripts/linux/apply-update.sh`)
+on Linux servers.
+
+* **Ubuntu's own background jobs follow the internet answer.** After every
+  healthy restart or update the unit runs, the new
+  `scripts/linux/os-jobs.sh` sets them to the answer in Settings →
+  Internet. Under **No** it masks `apt-daily.timer`,
+  `apt-daily-upgrade.timer`, `unattended-upgrades.service`,
+  `motd-news.timer`, `ua-timer.timer`, `apport-autoreport.path` /
+  `.timer` and `snapd.snap-repair.timer` (only those installed and not
+  masked already; it writes down what it masked in
+  `/var/lib/domovoi-os-jobs/masked`). Under **Yes, always** or
+  **Sometimes** it unmasks exactly those again. Not answered: nothing
+  changes. A box answered **No** stops checking for Ubuntu updates at its
+  next **Restart Domovoi**: update it by hand (`sudo apt update && sudo
+  apt upgrade`) on a day it is online, or switch the answer. To keep
+  managing those timers yourself, set `DOMOVOI_MANAGE_OS_JOBS=0` in
+  `/etc/default/domovoi-update`. In the Windows installer's WSL distro it
+  also turns `wsl-pro` and snapd off; on any other Linux box they are left
+  alone. When it changed something the last update shows an `os-jobs`
+  step saying what (docs/LINUX_HOST.md, "Internet or not").
+* **The hash-pinned lock now works on Ubuntu 26.04.** Opted in
+  (`DOMOVOI_USE_LOCK=1`), the re-sync installed the build tools with
+  `pip install --require-hashes -c <lock> setuptools wheel`, which the pip
+  in Ubuntu 26.04's venv (25.1) refuses, so every update that changed the
+  dependencies rolled back. It now installs them the way the manual
+  install does. Boxes set up by `scripts/linux/provision.sh` are opted in
+  (`DOMOVOI_USE_LOCK=1` in `/etc/default/domovoi-update`); every other box
+  keeps the default, off.
+
+No action needed unless you answered **No** and want Ubuntu's updates to
+keep running (set `DOMOVOI_MANAGE_OS_JOBS=0`).
+
+## 2026-10-11 — The setup code is no longer written to the journal
+
+The first-run setup code used to be printed in a banner on every boot
+until the admin was claimed, and under systemd that banner went into the
+journal and into any log bundle exported from it. Now the core prints the
+code only when its stdout is a terminal.
+
+* Run as a service, the core logs one line instead: where the code file
+  is and that you enter it on the dashboard (Settings → Configuration →
+  Admin → "set up admin"). The code itself is not in
+  `journalctl -u domovoi-core` any more.
+* Read it from the file, as the user the core runs as:
+  `cat ~/.domovoi/setup-code.txt`. On a box set up by
+  `scripts/linux/provision.sh` that user is `domovoi`:
+  `sudo cat /home/domovoi/.domovoi/setup-code.txt`.
+* Started by hand in a terminal, the core still prints the banner with the
+  code, as before.
+* `python -m domovoi.main --reset-admin` follows the same rule: it prints
+  the new code in a terminal, and only where the file is when its output
+  is redirected.
+* The dashboard's setup prompt and the `403` from `POST /api/auth/setup`
+  now point at the file first.
+
+No action needed. If you read the code from the journal, read the file
+instead.
+
+## 2026-10-11 — A Videos library
+
+There is now a core Videos library, `core:videos`, read from the new
+setting `VIDEOS_DIR` (default `~/Videos`).
+
+* Like the other media folders, it is created at the first boot after the
+  update when it is inside the home of the user the dashboard runs as. A
+  folder elsewhere (an external drive) is never created for you; make it
+  yourself.
+* It shows in Files as **Videos**, and the Videos tab lists what is in it.
+  The Videos tab still finds videos in every other library too.
+* Set it in Settings → Configuration → Advanced → Paths → **Videos
+  directory** (signed in as admin), or as `VIDEOS_DIR` in `domovoi/.env`.
+  A change takes effect after a restart.
+
+Nothing to do unless you keep your videos somewhere other than `~/Videos`.
+
 ## 2026-10-09 — One restart at a time
 
 Pressing **Restart to apply changes** and then reloading the dashboard
