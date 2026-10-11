@@ -67,6 +67,15 @@
 #      handed to a transient unit (domovoi-searxng-start), so a first start's
 #      image download never holds the update open; without systemd it is
 #      bounded by DOMOVOI_UPDATE_SEARXNG_TIMEOUT seconds (a `warn` when hit).
+#  10. Ubuntu's own background jobs follow the internet answer too
+#      (reconcile_os_jobs, scripts/linux/os-jobs.sh): for never the
+#      updaters, news and crash-report timers are masked, for always and
+#      sometimes what an earlier never masked is unmasked, and on WSL
+#      wsl-pro and snapd stay off whatever the answer. Never fatal; a step
+#      is recorded only when something changed (ok) or the helper failed
+#      (warn). A healthy plain restart ends with it too, so an answer changed
+#      in Settings takes effect at the next Restart. DOMOVOI_MANAGE_OS_JOBS=0
+#      leaves the jobs alone.
 #   Under INTERNET_ACCESS=never (read once, at the start) an update that
 #   would go online is refused before anything is touched: a dependency
 #   change (pip would download) or a Dockerfile.mpd change (docker build
@@ -165,6 +174,12 @@ MANAGE_SEARXNG=${DOMOVOI_MANAGE_SEARXNG:-1}
 SEARXNG_DETACH=${DOMOVOI_UPDATE_SEARXNG_DETACH:-auto}
 SEARXNG_TIMEOUT=${DOMOVOI_UPDATE_SEARXNG_TIMEOUT:-300}
 SEARXNG_START_UNIT=domovoi-searxng-start
+
+# Ubuntu's own background jobs (scripts/linux/os-jobs.sh, beside this
+# script). DOMOVOI_MANAGE_OS_JOBS=0 (or false/no/off) leaves them alone,
+# for an administrator who manages apt's timers themselves.
+MANAGE_OS_JOBS=${DOMOVOI_MANAGE_OS_JOBS:-1}
+OS_JOBS=$SCRIPT_DIR/os-jobs.sh
 
 # Signed updates (docs/LINUX_HOST.md, "Signed updates"). While the
 # allowed-signers file exists, HEAD must carry an SSH signature by one of
@@ -1297,17 +1312,77 @@ extras_beyond_lock() {
   printf '%s' "${out[*]}"
 }
 
-# From the lock, as docs/LINUX_HOST.md "Install" does it by hand: the build
-# tools first, hash-checked against the lock (a constraints file's hashes
-# bind); then every pin with --require-hashes, the sdist-only ones built
-# against those tools rather than in an isolated build env that would fetch
-# an unchecked setuptools; then the checkout itself, adding nothing. The
-# lock names its own CPU torch index, so there is no torch step. Extras the
-# lock does not cover (DOMOVOI_PIP_EXTRAS beyond LOCK_EXTRAS: cuda,
-# fastlane, ...) go through the resolver afterwards, and the step says so.
+# The lock's requirement lines (name==version and every --hash) for the
+# packages named in roots= and everything they need, found through
+# pip-compile's "# via" lines to a fixed point (wheel needs packaging, for
+# one). The same program as provision.sh's, character for character
+# (domovoi/tests/test_provision_script.py holds the two together): kept
+# here rather than in a file of its own, because a rollback's re-sync runs
+# against the previous checkout, which may not have that file, while this
+# script is already read whole.
+LOCK_CLOSURE_AWK='
+function flush() { if (cur != "") { body[cur] = buf; vias[cur] = via } cur = "" }
+/^[A-Za-z0-9]/ {
+  flush()
+  cur = tolower($1); sub(/[=<>!~;\[ ].*/, "", cur)
+  buf = $0 "\n"; via = " "; invia = 0
+  next
+}
+cur != "" && /^[ \t]+--hash/ { buf = buf $0 "\n"; next }
+cur != "" && /^[ \t]+# via/ {
+  invia = 1
+  rest = $0; sub(/^[ \t]+# via[ \t]*/, "", rest)
+  if (rest != "") { sub(/[ \t].*/, "", rest); via = via tolower(rest) " " }
+  next
+}
+cur != "" && invia && /^[ \t]+#[ \t]+[^ \t]/ {
+  v = $0; sub(/^[ \t]+#[ \t]+/, "", v); sub(/[ \t\[].*/, "", v)
+  via = via tolower(v) " "
+  next
+}
+/^#/ || /^[ \t]*$/ { flush(); next }
+END {
+  flush()
+  n = split(roots, r, " ")
+  for (i = 1; i <= n; i++) sel[tolower(r[i])] = 1
+  changed = 1
+  while (changed) {
+    changed = 0
+    for (p in vias) {
+      if (p in sel) continue
+      for (s in sel) if (index(vias[p], " " s " ")) { sel[p] = 1; changed = 1; break }
+    }
+  }
+  for (p in sel) if (p in body) printf "%s", body[p]
+}'
+
+# From the lock, as docs/LINUX_HOST.md "Install" does it by hand and
+# provision.sh's venv step does it: the build tools first, as the lock's
+# own stanzas for setuptools, wheel and what they need, each with its
+# hashes, in a requirements file (-r). Not "-c <lock> setuptools wheel":
+# the pip that Ubuntu 26.04's venv ships (25.1) takes no hashes from a
+# constraints file and refuses that. The file is root's, in the update
+# dir, readable by the service user who runs pip (the lock itself is read
+# as that user). Then every pin with --require-hashes, the sdist-only ones
+# built against those tools rather than in an isolated build env that
+# would fetch an unchecked setuptools; then the checkout itself, adding
+# nothing. The lock names its own CPU torch index, so there is no torch
+# step. Extras the lock does not cover (DOMOVOI_PIP_EXTRAS beyond
+# LOCK_EXTRAS: cuda, fastlane, ...) go through the resolver afterwards, and
+# the step says so.
 sync_deps_locked() {
-  local lock=$REPO_DIR/$DEPS_LOCK beyond
-  (cd "$REPO_DIR" && pip_as install --require-hashes -c "$lock" setuptools wheel) || return 1
+  local lock=$REPO_DIR/$DEPS_LOCK beyond tools reqs rc=0
+  tools=$(as_user awk -v roots="setuptools wheel" "$LOCK_CLOSURE_AWK" "$lock") || tools=""
+  if [[ $'\n'$tools != *$'\n'setuptools==* || $'\n'$tools != *$'\n'wheel==* || $tools != *--hash=sha256:* ]]; then
+    echo "$DEPS_LOCK has no hash-pinned setuptools and wheel to build with"
+    return 1
+  fi
+  echo "build tools from $DEPS_LOCK: $(printf '%s\n' "$tools" | sed -n 's/^\([A-Za-z0-9._-]*==[^ ]*\).*/\1/p' | tr '\n' ' ')"
+  reqs=$(mktemp "$UPDATE_DIR/build-tools.XXXXXX") || return 1
+  if ! { printf '%s\n' "$tools" >"$reqs" && chmod 0644 "$reqs"; }; then rm -f "$reqs"; return 1; fi
+  (cd "$REPO_DIR" && pip_as install --require-hashes -r "$reqs") || rc=$?
+  rm -f "$reqs"
+  [ "$rc" -eq 0 ] || return 1
   (cd "$REPO_DIR" && pip_as install --require-hashes --no-build-isolation -r "$lock") || return 1
   (cd "$REPO_DIR" && pip_as install --no-deps --no-build-isolation -e .) || return 1
   DEPS_FROM_LOCK=1
@@ -1482,6 +1557,44 @@ reconcile_searxng() {
   esac
 }
 
+# Ubuntu's own background jobs, set to the internet answer by
+# scripts/linux/os-jobs.sh (the helper provision.sh runs too): for never
+# the updaters, news and crash-report timers are masked; for always and
+# sometimes what an earlier never masked is unmasked; on WSL wsl-pro and
+# snapd stay off. So an answer changed in Settings takes effect at the
+# next healthy restart or update. It never fails the run, and records a
+# step only when the helper changed something (ok) or failed (warn); a
+# run with nothing to change adds nothing to the result.
+reconcile_os_jobs() {
+  local policy t0 out rc=0 summary
+  case "$(printf '%s' "$MANAGE_OS_JOBS" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Ubuntu's background jobs left alone (DOMOVOI_MANAGE_OS_JOBS=$MANAGE_OS_JOBS)"; return 0 ;;
+  esac
+  if [ ! -f "$OS_JOBS" ]; then
+    log "no $OS_JOBS: Ubuntu's background jobs left as they are"
+    return 0
+  fi
+  if ! policy=$(internet_policy); then
+    log "this checkout can't say the internet answer: Ubuntu's background jobs left as they are"
+    return 0
+  fi
+  t0=$(now_ms)
+  log "step os-jobs"
+  set +e
+  out=$(bash "$OS_JOBS" --internet "$policy" 2>&1)
+  rc=$?
+  set -e
+  if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
+  summary=$(printf '%s\n' "$out" | sed -n 's/^os-jobs: //p' | tail -n 1)
+  if [ "$rc" -ne 0 ]; then
+    add_step os-jobs warn "$t0" "$(trunc "$out" 600)"
+    log "step os-jobs failed (exit $rc); not fatal, the run goes on"
+  elif [[ $summary != "nothing to change"* ]]; then
+    add_step os-jobs ok "$t0" "$(trunc "$summary" 600)"
+  fi
+  return 0
+}
+
 migrations_grew() {
   [[ $MIGRATIONS_BEFORE =~ ^[0-9]+$ ]] && [[ $MIGRATIONS_AFTER =~ ^[0-9]+$ ]] \
     && [ "$MIGRATIONS_AFTER" -gt "$MIGRATIONS_BEFORE" ]
@@ -1521,6 +1634,7 @@ plain_restart() {
     write_atomic "$APPLIED_FILE" "$HEAD_SHA"$'\n'
     APPLIED_OK=1
     run_soft_step searxng reconcile_searxng
+    reconcile_os_jobs
     finish ok
   else
     finish failed "$LAST_ERROR"
@@ -1618,6 +1732,7 @@ full_update() {
     BAD_SHA=""
     APPLIED_OK=1
     run_soft_step searxng reconcile_searxng
+    reconcile_os_jobs
     finish ok
     return
   fi
