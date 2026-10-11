@@ -592,18 +592,25 @@ may, for a room that is **actively playing**:
 
 "Playing" is MPD `play` or `pause` with a current song, decided by the
 **core** at the moment of each request (`domovoi/guest_queue.py`): only the
-core can see MPD. A room paused for any length of time counts — a guest can
-resume a room someone paused yesterday. A guest has no clear and no stop
-(each ends the room's session), may not remove the entry playing now (that
-would be a skip by the back door), and gets nothing at all on a room that
-isn't playing — `403` with a sentence that names the device token, the same
-answer for an idle room and for one that doesn't exist. That is softer than
-"never clear, never stop" sounds: a guest can still empty a queue one entry
-at a time and then skip off the last song, which ends the room's playing;
-the per-call caps and the throttle below bound how fast, not whether.
-Deciding "playing" never starts anything: a room with no running player is
-simply not playing, and the queue routes skip their self-healing restart
-of a room's player for a guest.
+core can see MPD. Two choices here are the owner's (2026-10-11), kept
+knowingly after the security review raised them:
+
+* **A room paused for any length of time counts as playing.** A guest can
+  resume a room someone paused yesterday, as long as a song is loaded.
+* **A guest may remove any entry except the one playing now**, one per
+  call — not only the entries guests added. Removing the playing entry
+  would be a skip by the back door, so that one is refused (`403`).
+
+A guest has no clear and no stop (each ends the room's session) and gets
+nothing at all on a room that isn't playing — `403` with a sentence that
+names the device token, the same answer for an idle room and for one that
+doesn't exist. That is softer than "never clear, never stop" sounds: a
+guest can still empty a queue one entry at a time and then skip off the
+last song, which ends the room's playing; the per-call caps and the
+throttle below bound how fast, not whether. Deciding "playing" never
+starts anything: a room with no running player is simply not playing, and
+the queue routes skip their self-healing restart of a room's player for a
+guest.
 
 | Route | Guest | Household token / admin |
 |---|---|---|
