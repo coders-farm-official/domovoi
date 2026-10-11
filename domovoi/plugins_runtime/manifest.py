@@ -65,7 +65,7 @@ RESERVED_SLUGS = frozenset(
 
 # Routes the dashboard shell owns: the keys of window.DomovoiCore.pages in
 # web/static/index.html (the sidebar's CORE_NAV plus the un-navigated
-# "manual"). The shell resolves a route core-first, so a plugin page
+# "manual" and "containers"). The shell resolves a route core-first, so a plugin page
 # declared on one of these loads, gets a nav item, and never renders
 # (F-026) — the contract check refuses it at install / enable / boot.
 # test_plugin_web_routes.py pins this set to index.html and plugin_host.
@@ -73,7 +73,7 @@ CORE_WEB_ROUTES = frozenset(
     {
         "home", "chat", "music", "podcasts", "audiobooks", "videos", "news",
         "people", "satellites", "calendar", "files", "plugins", "settings",
-        "manual",
+        "manual", "containers",
     }
 )
 # A page route becomes the URL hash (#<route>): lowercase slug charset only.

@@ -2490,6 +2490,160 @@ const TimerFireAlerts = () => {
   );
 };
 
+/* ---- the container guard (docs/CONTAINER_GUARD.md) ----------------
+ * ONE shared read for the whole page, the way useInternetPolicy is: the
+ * household list (/api/containers/incidents — plain words, the banner,
+ * the freeze) when this browser holds a household credential, else the
+ * open summary (/api/containers/summary — only "something needs an
+ * admin's attention"). Live through `containers.changed` on the state
+ * socket; re-read every 30 s while the socket is down (an unpaired
+ * browser's socket is refused for good) and on every credential change.
+ * The banner, Home's problems row and the Containers page all read it. */
+const CONTAINER_GUARD_POLL_MS = 30 * 1000;
+const CONTAINER_GUARD_EVENT = 'containers.changed';
+const CONTAINER_GUARD_GUEST_TEXT = "Something needs an admin's attention.";
+
+const ContainerGuardStore = (() => {
+  // tier: 'household' (the list) | 'open' (the summary) | null (not read yet)
+  let state = { loaded: false, tier: null, data: null };
+  const subs = new Set();
+  let started = false;
+  let busy = false;
+  let again = false;
+  const emit = () => subs.forEach((fn) => { try { fn(state); } catch { /* one bad subscriber */ } });
+  const set = (next) => { state = next; emit(); };
+  const refresh = async () => {
+    if (busy) { again = true; return; }
+    busy = true;
+    try {
+      let got = null;
+      let tier = 'household';
+      try { got = await apiGet('/api/containers/incidents', { quiet: true }); } catch { got = null; }
+      if (!got || !Array.isArray(got.incidents)) {
+        tier = 'open';
+        try { got = await apiGet('/api/containers/summary', { quiet: true }); } catch { got = null; }
+      }
+      // An older server has neither: nothing to show, nothing broken.
+      if (got) set({ loaded: true, tier, data: got });
+    } finally {
+      busy = false;
+      if (again) { again = false; refresh(); }
+    }
+  };
+  const start = () => {
+    if (started) return;
+    started = true;
+    refresh();
+    try {
+      stateBus.subscribe((ev) => {
+        if (ev.type === CONTAINER_GUARD_EVENT && ev.data && Array.isArray(ev.data.incidents)) {
+          set({ loaded: true, tier: 'household', data: ev.data });
+        } else if (ev.type === '_status' && ev.connected) {
+          refresh();
+        }
+      });
+    } catch { /* no socket at all: the poll below covers it */ }
+    try {
+      if (typeof Auth !== 'undefined' && Auth.subscribe) {
+        let seen = Auth.credentialVersion;
+        Auth.subscribe(() => {
+          if (Auth.credentialVersion === seen) return;
+          seen = Auth.credentialVersion;
+          refresh();
+        });
+      }
+    } catch { /* no auth module */ }
+    setInterval(() => {
+      let away = false;
+      try { away = !!document.hidden; } catch { away = false; }
+      let live = false;
+      try { live = !!stateBus.connected && state.tier === 'household'; } catch { live = false; }
+      if (!away && !live) refresh();
+    }, CONTAINER_GUARD_POLL_MS);
+  };
+  return {
+    get: () => state,
+    refresh,
+    subscribe(fn) {
+      subs.add(fn);
+      start();
+      return () => subs.delete(fn);
+    },
+  };
+})();
+
+const useContainerGuard = () => {
+  const [s, setS] = React.useState(() => ContainerGuardStore.get());
+  React.useEffect(() => ContainerGuardStore.subscribe(setS), []);
+  return s;
+};
+
+/* What the banner shows, from the store: `{show, tone, text, ids,
+ * failures}`. tone: 'tamper' | 'error' | 'warn'. A shared screen (the
+ * kitchen tablet) says only the guest line, like Home's problems. */
+const containerGuardBanner = (s, { shared = false } = {}) => {
+  const none = { show: false, tone: null, text: '', ids: [], failures: [] };
+  if (!s || !s.loaded || !s.data) return none;
+  if (s.tier === 'household') {
+    const b = s.data.banner || {};
+    if (!b.show) return none;
+    const shown = new Set(b.incident_ids || []);
+    const failures = (s.data.incidents || []).filter((i) => shown.has(i.id) && i.can_acknowledge);
+    return { show: true, tone: b.tone || 'error', text: shared ? CONTAINER_GUARD_GUEST_TEXT : b.text,
+             ids: [...shown], failures: shared ? [] : failures, frozen: !!b.frozen };
+  }
+  if (!s.data.attention) return none;
+  return { show: true, tone: s.data.tone === 'warn' ? 'warn' : 'error',
+           text: s.data.text || CONTAINER_GUARD_GUEST_TEXT, ids: [], failures: [] };
+};
+
+/* The banner on EVERY page (rendered by the shell, index.html), while
+ * anything is open: red for tampering and a required container's
+ * failure, amber for an optional one's. An admin may acknowledge the
+ * failures it shows (hidden until something new happens); a tamper
+ * incident is cleared on the Containers page, after review. */
+const ContainerGuardBanner = () => {
+  const s = useContainerGuard();
+  const shared = useSharedScreen();
+  const admin = useAdminSignedIn();
+  const [fire, toastNode] = useToast();
+  const [busy, setBusy] = React.useState(false);
+  const b = containerGuardBanner(s, { shared });
+  if (!b.show) return toastNode || null;
+  const red = b.tone !== 'warn';
+  const onlyFailures = b.failures.length > 0 && b.failures.length === b.ids.length;
+  const acknowledge = async () => {
+    setBusy(true);
+    try {
+      for (const f of b.failures) {
+        await apiPost(`/api/containers/incidents/${f.id}/acknowledge`, {});
+      }
+      await ContainerGuardStore.refresh();
+    } catch (e) {
+      reportMutationFailure(fire, 'acknowledge', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <div className={`guard-banner ${red ? 'guard-banner-err' : 'guard-banner-warn'}`}
+           role="alert" data-tone={b.tone}>
+        <StatusDot tone={red ? 'err' : 'warn'} live/>
+        <span className="guard-banner-text">{b.text}</span>
+        <span className="guard-banner-actions">
+          <a className="guard-banner-link mono" href="#containers">details</a>
+          {admin && onlyFailures && (
+            <button type="button" className="btn btn-ghost guard-banner-ack mono" disabled={busy}
+                    onClick={acknowledge}>{busy ? 'acknowledging…' : 'acknowledge'}</button>
+          )}
+        </span>
+      </div>
+      {toastNode}
+    </>
+  );
+};
+
 /* expose to other Babel scripts */
 Object.assign(window, {
   Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
@@ -2501,4 +2655,6 @@ Object.assign(window, {
   CaptureChip, useAdminSignedIn,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses,
+  ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,
+  CONTAINER_GUARD_GUEST_TEXT,
 });

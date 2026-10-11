@@ -62,6 +62,7 @@
   <script type="text/babel" data-presets="react" src="models.jsx"></script>
   <script type="text/babel" data-presets="react" src="news.jsx"></script>
   <script type="text/babel" data-presets="react" src="manual.jsx"></script>
+  <script type="text/babel" data-presets="react" src="containers.jsx"></script>
   <!-- Home is the default page. Loaded LAST of the core pages so every
        helper another page puts on window (satellites.jsx, calendar.jsx,
        manual.jsx) already exists when it evaluates. -->
@@ -95,6 +96,9 @@
       plugins: () => window.PluginsPage,
       settings: () => window.SettingsPage,
       manual: () => window.UserManualPage,
+      // The container guard's details (containers.jsx): reached from the
+      // banner, Home's problems row and a phone's notification, not the nav.
+      containers: () => window.ContainersPage,
     };
 
     // Browser-side plugin error pipeline. Two sources feed it — script
@@ -337,6 +341,9 @@
                   usePluginBadges results, handed down so Home's
                   "everything" grid can badge its tiles without repeating
                   the sidebar's fetches. Other pages ignore them. */}
+              {/* The container guard's banner, on every page while an
+                  incident is open (components.jsx). */}
+              <ContainerGuardBanner/>
               <PluginErrorBoundary slug={pageSlug} routeKey={route}><Page counts={counts} badges={badges}/></PluginErrorBoundary>
             </main>
             <AuthModalHost/>

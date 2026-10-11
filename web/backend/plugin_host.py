@@ -85,12 +85,13 @@ CORE_NAV: dict[str, int] = {
 }
 
 # Every route the shell resolves itself (CORE_NAV plus the un-navigated
-# manual page) — window.DomovoiCore.pages in web/static/index.html. The
+# manual and containers pages) — window.DomovoiCore.pages in
+# web/static/index.html. The
 # core refuses a plugin page on one of these at install / enable / boot
 # (plugins_runtime.contracts check 7, F-026); this host drops such a page
 # from the frontend manifest too, so a row written before that check
 # existed never puts a nav item on screen that opens the wrong page.
-CORE_ROUTES: frozenset[str] = frozenset(CORE_NAV) | {"manual"}
+CORE_ROUTES: frozenset[str] = frozenset(CORE_NAV) | {"manual", "containers"}
 
 
 def web_route_collision_message(route: str, page: str | None) -> str:
