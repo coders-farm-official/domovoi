@@ -1566,7 +1566,7 @@ reconcile_searxng() {
 # step only when the helper changed something (ok) or failed (warn); a
 # run with nothing to change adds nothing to the result.
 reconcile_os_jobs() {
-  local policy t0 out rc=0 summary
+  local policy t0 out rc=0 summary line detail=""
   case "$(printf '%s' "$MANAGE_OS_JOBS" | tr '[:upper:]' '[:lower:]')" in
     0|false|no|off) log "Ubuntu's background jobs left alone (DOMOVOI_MANAGE_OS_JOBS=$MANAGE_OS_JOBS)"; return 0 ;;
   esac
@@ -1587,7 +1587,13 @@ reconcile_os_jobs() {
   if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
   summary=$(printf '%s\n' "$out" | sed -n 's/^os-jobs: //p' | tail -n 1)
   if [ "$rc" -ne 0 ]; then
-    add_step os-jobs warn "$t0" "$(trunc "$out" 600)"
+    # The core shows this detail on the Version card (git_version
+    # _WARN_DETAIL_STEPS), so it is built from the helper's own lines
+    # ("could not mask X", its summary), never a tool's raw output.
+    while IFS= read -r line; do
+      case $line in "could not "*|"os-jobs: "*) detail+="${detail:+; }${line#os-jobs: }" ;; esac
+    done <<<"$out"
+    add_step os-jobs warn "$t0" "$(trunc "Ubuntu's background jobs: ${detail:-the helper stopped (exit $rc)}" 600)"
     log "step os-jobs failed (exit $rc); not fatal, the run goes on"
   elif [[ $summary != "nothing to change"* ]]; then
     add_step os-jobs ok "$t0" "$(trunc "$summary" 600)"
@@ -1675,7 +1681,7 @@ full_update() {
     if [ "${#what[@]}" -eq 2 ]; then why="$why and ${what[1]}"; fi
     if [ "${#what[@]}" -eq 3 ]; then why="$why, ${what[1]} and ${what[2]}"; fi
     add_step preflight refused "$t0" "$why; internet access is turned off for this box"
-    finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No (docs/INTERNET.md)."
+    finish aborted "$why, and internet access is turned off for this box (Settings > Internet), so nothing was changed. Switch the answer to Sometimes, restart again, then switch it back to No and restart once more, so Ubuntu's own updaters are masked again (docs/INTERNET.md)."
     return
   fi
   if [ "$DEPS_CHANGED" = 1 ] && ! why=$(venv_writable); then
