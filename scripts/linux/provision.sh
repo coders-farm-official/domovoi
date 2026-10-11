@@ -100,7 +100,8 @@
 # `wsl --terminate <distro>`; this script never restarts the distro itself),
 # "exit_code", "failed_step", "message" (why, for anything but ok) and
 # "gpu": the names of the GPUs Ollama found at its last start, a JSON list,
-# empty when it runs on the CPU (or hasn't started yet).
+# [] when it runs on the CPU alone, null when that is unknown (no Ollama
+# start in this boot's journal yet, or a run that stopped before it).
 # Only a SIGKILL leaves no final line. Everything else on stdout and stderr
 # is for people. A run that got past the run lock keeps the same final
 # object in /var/lib/domovoi-provision/result.json (a refused one leaves
@@ -209,8 +210,9 @@ DRY_RUN=0
 WSL=0
 TIER_EFF=""
 HEAD_SHA=""
-# The GPUs Ollama found (detect_gpus), as a JSON list.
-GPU_JSON="[]"
+# The GPUs Ollama found (detect_gpus): a JSON list of names, [] for the
+# CPU alone, null while unknown.
+GPU_JSON=null
 # 1 once this run is past its checks and holds the run lock: only then is
 # result.json its to write, and the restart question worth asking.
 STARTED=0
@@ -377,6 +379,10 @@ UNITS_CHANGED_FILE=$STATE_DIR/units-changed
 ENV_RECORD=$STATE_DIR/env-written
 ENV_STAMP=$STATE_DIR/env-stamp
 ENV_CREATING=$STATE_DIR/env-creating
+# The settings domovoi-update.service reads (docs/LINUX_HOST.md, Updates
+# from the dashboard): this script writes DOMOVOI_USE_LOCK there and reads
+# DOMOVOI_MANAGE_OS_JOBS.
+UPDATE_DEFAULTS=$ROOT/etc/default/domovoi-update
 CACHE_DIR=$ROOT/var/cache/domovoi-provision
 PROC=$ROOT/proc
 OS_RELEASE=$ROOT/etc/os-release
@@ -1911,31 +1917,43 @@ do_ollama() {
   STEP_DONE_MSG="Ollama $v"
 }
 
-# The GPUs Ollama found at its last start this boot, one name per line.
-# Ollama logs one "inference compute" line per device when it starts (a
-# "server config" line opens each start); library=cpu is the CPU itself.
-# It uses every GPU it finds, inside WSL too (WSL hands NVIDIA cards
+# What Ollama found to run on at its last start this boot. Ollama logs one
+# "inference compute" line per device when it starts (a "server config"
+# line opens each start); library=cpu is the CPU itself. Prints "devices N"
+# (every device of that start, the CPU included), then one GPU name per
+# line. N is 0 when this boot's journal has no such start (Ollama not
+# started yet, or its lines rotated away): then nothing is known.
+# Ollama uses every GPU it finds, inside WSL too (WSL hands NVIDIA cards
 # through: two RTX 4070 Ti SUPERs on the dev box, 2026-10-09), and the CPU
 # without one (owner decision 2026-10-11: no CUDA_VISIBLE_DEVICES pin).
 OLLAMA_GPU_AWK='
-/msg="server config"/ { n = 0; next }
+/msg="server config"/ { n = 0; devices = 0; next }
 /msg="inference compute"/ {
+  devices++
   if ($0 ~ /library=[Cc][Pp][Uu]([ \t]|$)/) next
   d = ""
   if (match($0, /description="[^"]*"/)) d = substr($0, RSTART + 13, RLENGTH - 14)
   else if (match($0, /name=("[^"]*"|[^ \t]+)/)) { d = substr($0, RSTART + 5, RLENGTH - 5); gsub(/"/, "", d) }
   if (d != "") gpus[++n] = d
 }
-END { for (i = 1; i <= n; i++) print gpus[i] }'
+END { print "devices " devices + 0; for (i = 1; i <= n; i++) print gpus[i] }'
 ollama_gpus() {
   journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | awk "$OLLAMA_GPU_AWK" || true
 }
 
-# detect_gpus: GPU_JSON from ollama_gpus, and a line saying what Ollama
-# runs on.
+# detect_gpus: GPU_JSON from ollama_gpus (a list of names, [] for the CPU
+# alone, null when unknown), and a line saying which.
 detect_gpus() {
-  local names name json="" sep=""
-  names=$(ollama_gpus) || names=""
+  local out devices names="" name json="" sep=""
+  out=$(ollama_gpus) || out=""
+  devices=$(printf '%s\n' "$out" | sed -n 's/^devices \([0-9][0-9]*\)$/\1/p')
+  [ -n "$devices" ] || devices=0
+  if [ "$devices" = 0 ]; then
+    GPU_JSON=null
+    log "what Ollama runs on is unknown: this boot's journal has no Ollama start to read it from"
+    return 0
+  fi
+  names=$(printf '%s\n' "$out" | sed '/^devices [0-9]*$/d')
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     json+="$sep$(json_str "$name")"
@@ -2207,6 +2225,24 @@ do_searxng() {
 # are disabled and masked whatever the answer. Run from the checkout, as
 # install-update-unit.sh is.
 os_jobs_script() { printf '%s' "$CHECKOUT/scripts/linux/os-jobs.sh"; }
+
+# update_default KEY: the last KEY= value in /etc/default/domovoi-update,
+# quotes and blanks stripped; nothing when the file or the key is missing.
+update_default() {
+  [ -f "$UPDATE_DEFAULTS" ] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$UPDATE_DEFAULTS" | tail -n 1 | tr -d '\r"'"'"'[:space:]'
+}
+
+# DOMOVOI_MANAGE_OS_JOBS=0 (or false/no/off) in /etc/default/domovoi-update
+# leaves Ubuntu's jobs to the administrator, here as in the update unit.
+skip_os_jobs() {
+  local v
+  v=$(update_default DOMOVOI_MANAGE_OS_JOBS)
+  case ${v,,} in
+    0|false|no|off) echo "DOMOVOI_MANAGE_OS_JOBS=$v in /etc/default/domovoi-update: Ubuntu's background jobs are left to the administrator" ;;
+    *) return 1 ;;
+  esac
+}
 os_jobs() { bash "$(os_jobs_script)" --internet "$1" --wsl "$([ "$WSL" = 1 ] && echo yes || echo no)" "${@:2}"; }
 
 inputs_os_jobs() { internet_policy || echo unknown; echo "wsl=$WSL"; file_sig "$(os_jobs_script)"; }
@@ -2473,11 +2509,13 @@ do_start() {
 # it; a DOMOVOI_USE_LOCK the administrator set to something else is theirs
 # and stays, with a warning. A box this script did not install (the
 # Beelink) keeps the doc's default, off.
-UPDATE_DEFAULTS=$ROOT/etc/default/domovoi-update
-defaults_use_lock() {
-  [ -f "$UPDATE_DEFAULTS" ] || return 1
-  sed -n 's/^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=[[:space:]]*//p' "$UPDATE_DEFAULTS" | tail -n 1 | tr -d '\r"'"'"
-}
+#
+# The file is changed in place: the lines are added to what it holds, by
+# rename from a temp file that takes the file's own mode and owner (an
+# administrator's 0600 file stays 0600). A symlink there is left alone,
+# with a warning: this script does not write through a link into a file
+# somewhere else; add the line to the file it points at yourself.
+use_lock_set() { grep -q '^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null; }
 use_lock_lines() {
   printf '%s\n' "# Written by scripts/linux/provision.sh: this box was installed from the" \
     "# hash-pinned lock, so its updates re-sync from it too (docs/LINUX_HOST.md," \
@@ -2491,20 +2529,38 @@ inputs_update_unit() {
 }
 check_update_unit() {
   [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ] \
-    && grep -q '^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null
+    && { [ -L "$UPDATE_DEFAULTS" ] || use_lock_set; }
 }
 plan_update_unit() {
   echo "DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update (unless it sets DOMOVOI_USE_LOCK already)"
   echo "bash scripts/linux/install-update-unit.sh --repo $CHECKOUT --user $SVC_USER"
 }
 do_update_unit() {
-  local have
+  local have mode owner tmp
   # Before the installer, so that its pre-flight reports the lock as on.
-  if ! grep -q '^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null; then
-    write_if_changed "$UPDATE_DEFAULTS" 0644 < <(if [ -f "$UPDATE_DEFAULTS" ]; then cat "$UPDATE_DEFAULTS"; echo; fi; use_lock_lines) || true
+  if [ -L "$UPDATE_DEFAULTS" ]; then
+    have=""
+    if use_lock_set; then have=$(update_default DOMOVOI_USE_LOCK); fi
+    if [ "$have" != 1 ]; then
+      warn "/etc/default/domovoi-update is a symlink, left as it is: this script does not write through it, so updates re-sync through pip's resolver unless the file it points to says DOMOVOI_USE_LOCK=1 (docs/LINUX_HOST.md, The hash-pinned lock)"
+    fi
+  elif ! use_lock_set; then
+    if [ -f "$UPDATE_DEFAULTS" ]; then
+      # The administrator's file: their lines kept, and its mode and owner.
+      mode=$(stat -c %a "$UPDATE_DEFAULTS") && owner=$(stat -c %u:%g "$UPDATE_DEFAULTS") \
+        || die "can't read the mode and owner of /etc/default/domovoi-update"
+      tmp=$(mktemp "$(dirname "$UPDATE_DEFAULTS")/.domovoi-update.XXXXXX") || die "can't write in $(dirname "$UPDATE_DEFAULTS")"
+      if ! { { cat "$UPDATE_DEFAULTS"; echo; use_lock_lines; } >"$tmp" && chmod "$mode" "$tmp" \
+             && chown "$owner" "$tmp" && mv -f "$tmp" "$UPDATE_DEFAULTS"; }; then
+        rm -f "$tmp"
+        die "can't add DOMOVOI_USE_LOCK=1 to /etc/default/domovoi-update"
+      fi
+    else
+      write_if_changed "$UPDATE_DEFAULTS" 0644 < <(use_lock_lines) || true
+    fi
     log "updates re-sync from the lock: DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update"
   else
-    have=$(defaults_use_lock) || have=""
+    have=$(update_default DOMOVOI_USE_LOCK)
     if [ "$have" = 1 ]; then log "updates re-sync from the lock (DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update)"
     else warn "/etc/default/domovoi-update sets DOMOVOI_USE_LOCK=$have, left as it is: updates re-sync through pip's resolver, which checks no hashes, though this box was installed from the lock"; fi
   fi
