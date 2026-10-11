@@ -18,9 +18,10 @@ for the room queue and the transport controls only, by owner decision. A
 *guest* is a request carrying no credential at all (no household token, no
 sign-in) on a box past first-run setup. For a room that is playing (MPD
 `play` or `pause` with a current song), a guest may read its queue, add,
-remove and move entries, and pause, resume, skip and go back. Never clear,
-never stop, never remove the song playing now, nothing on a room that
-isn't playing, and nothing it does starts a room's player. The core decides
+remove and move entries, and pause, resume, skip and go back. No clear
+and no stop route, never the song playing now, nothing on a room that
+isn't playing, and nothing it does starts a room's player (a guest can
+still empty a queue one song at a time; the limits below bound how fast). The core decides
 "playing" at the moment of each request; a paired device or an admin gets
 exactly the answers it got before, on every room.
 
@@ -37,8 +38,14 @@ exactly the answers it got before, on every room.
   queue and transport alike, and matches the guest's browser id or its
   address. It never affects a paired device or an admin. Household policy,
   not a security boundary: a determined guest comes back as a new one.
-* **Throttle.** A guest's queue edits and transport presses share 30 a
-  minute per address (`429` beyond).
+* **Limits.** A guest's queue edits and transport presses share 30 a
+  minute per address, its queue reads 120 (`429` beyond); an add takes at
+  most 50 tracks and never takes a queue past 500 entries; a remove takes
+  one song. A guest request must come from the dashboard (a custom header),
+  so a page on another site can't press skip through a LAN browser. The
+  per-address limits and address bans assume one address per guest
+  (SECURITY_PRIVACY.md says when that fails). Recorded guests are kept 30
+  days at most, 10 per address.
 * **Dashboard on a phone.** Each Room queue row has **play next**, **up**
   and **down** buttons (44 px; drag still works with a mouse). Every
   now-playing card with something on it has a **queue** button that opens

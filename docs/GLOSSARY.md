@@ -40,7 +40,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Flyway** — the migration tool that owns the database schema. Core migrations are append-only SQL files under `domovoi/db/migrations/`; you run them with `docker compose run --rm flyway`.
 
-**Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove, reorder — never clear or remove the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
+**Guest** — a phone or browser holding no household credential (not paired, not signed in) on a box that has finished setup. Since 2026-10-10 a guest may change the *room queue* of a room that is playing (add, remove one at a time, reorder — no clear, and never the song playing now) and pause, resume, skip or go back there (never stop), throttled per address, until an admin bans it (a *guest ban*). `GUEST_QUEUE_EDITING` turns it off.
 
 **Guest ban** — an admin rule barring a *guest* from changing the music in every room, queue and playback alike. Matches the guest's self-asserted browser id OR its network address, and never applies to a paired device or an admin. Household policy, not a security boundary, like a *queue block*. Managed in Settings → Devices → Guests, from the guests the core recorded acting this week.
 

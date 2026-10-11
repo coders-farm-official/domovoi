@@ -185,10 +185,12 @@ Yes, in a room that is **playing**, until you say otherwise. A friend's phone
 on your Wi-Fi that was never paired can open the dashboard, see what each room
 is playing, and for a room that's playing (or paused on a song): see its
 queue, add songs (a track's details → **add to *room*'s queue**), reorder them,
-play one next, remove one, and pause, resume, skip or go back. A guest can't
-clear a queue or stop a room, can't remove the song that's playing (it can
-skip it), and can't touch a room that isn't playing — starting music in a quiet
-room still needs a paired device. A guest's songs show "added by a guest", and
+play one next, remove one, and pause, resume, skip or go back. A guest has no
+clear and no stop button, can't remove the song that's playing (it can skip
+it), adds at most 50 songs at a time and removes one at a time, and can't
+touch a room that isn't playing — starting music in a quiet room still needs
+a paired device. (A determined guest could still empty a queue song by song;
+that's what bans and the off switch are for.) A guest's songs show "added by a guest", and
 a guest isn't shown the names of the household's devices.
 
 To stop one guest, sign in as admin and open **Settings → Devices → Guests**:
