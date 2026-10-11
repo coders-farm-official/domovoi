@@ -435,7 +435,7 @@ const ChatPage = () => {
   );
 
   return (
-    <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - var(--topbar-h) - 48px)',
+    <div style={{ display: 'flex', gap: 16, height: 'calc(var(--app-h) - var(--topbar-h) - 48px)',
                   minHeight: 380 }}>
       {/* thread rail */}
       {railOpen && (

@@ -1520,7 +1520,7 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.18)', backdropFilter: 'blur(2px)', zIndex: 60 }}/>
-      <aside style={{ position: 'fixed', top: 0, right: 0, height: '100vh', width: 560, maxWidth: '100%',
+      <aside style={{ position: 'fixed', top: 0, right: 0, height: 'var(--app-h)', width: 560, maxWidth: '100%',
                       background: 'var(--card)', borderLeft: '1px solid var(--border)',
                       boxShadow: 'var(--shadow-md)', zIndex: 61,
                       display: 'flex', flexDirection: 'column' }}>

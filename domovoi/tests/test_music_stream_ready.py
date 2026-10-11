@@ -757,8 +757,13 @@ async def test_queue_add_to_an_idle_room_leaves_mpd_paused_on_the_first_track(mo
     monkeypatch.setattr(app.state, "current_playlist", {}, raising=False)
     monkeypatch.setattr(app.state, "pending_music_start", {}, raising=False)
 
+    from starlette.requests import Request
+
+    # A household caller's request: the gate left no guest finding on it
+    # (domovoi/guest_queue.py), so the idle room is started as before.
+    household = Request({"type": "http", "headers": [], "client": ("127.0.0.1", 1)})
     result = await main_module.admin_music_queue_add(
-        ROOM, main_module._AdminQueueAddBody(track_ids=[7]),
+        ROOM, main_module._AdminQueueAddBody(track_ids=[7]), household,
     )
     try:
         assert result["started"] is True

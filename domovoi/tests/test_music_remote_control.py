@@ -818,8 +818,11 @@ async def test_the_web_proxies_previous(monkeypatch) -> None:
 
 
 def test_the_web_previous_is_on_the_device_tier() -> None:
-    from domovoi import admin_auth
+    """The device tier, now inside the guest gate (owner decision
+    2026-10-10): a guest may go back on a PLAYING room, which the core
+    decides (test_guest_queue.py)."""
     from domovoi.tests.route_walk import iter_route_contexts
+    from web.backend.api import music_queue
     from web.backend.main import app as web_app
 
     def _calls(dependant):
@@ -830,7 +833,7 @@ def test_the_web_previous_is_on_the_device_tier() -> None:
 
     for rc in iter_route_contexts(web_app.routes):
         if getattr(rc, "path", None) == "/api/music/previous/{room_id}" and "POST" in (rc.methods or set()):
-            assert admin_auth.require_device in list(_calls(rc.dependant))
+            assert music_queue.require_device_or_guest in list(_calls(rc.dependant))
             return
     raise AssertionError("POST /api/music/previous/{room_id} is missing from the web app")
 

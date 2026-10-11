@@ -32,6 +32,7 @@ from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi import server_identity  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
+    GUEST_PLAYING_ENTRY_DETAIL,
     SlidingWindowLimiter,
     check_admin_request,
     check_outbound_fetch,
@@ -54,6 +55,14 @@ from domovoi.db.repositories import (  # noqa: E402
 )
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi import satellite_health  # noqa: E402
+from domovoi.guest_queue import (  # noqa: E402
+    GUEST_ADD_MAX_TRACKS,
+    GUEST_QUEUE_MAX_ENTRIES,
+    GUEST_REMOVE_MAX_IDS,
+    guest_activity,
+    require_device_or_active_room_guest,
+    require_device_read_or_active_room_guest,
+)
 from domovoi.clients.ollama import get_ollama_client  # noqa: E402
 from domovoi.clients.tts import get_tts_client  # noqa: E402
 from domovoi.clients.whisper import load_whisper_client, stt_status  # noqa: E402
@@ -581,7 +590,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   library_alias_fetch → lyrics_scan → lyrics_fetch.
+    #   guests_seen_pruner → library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -618,6 +627,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # Guests seen (V023): a guest's id, address and user agent, deleted 30
+    # days after its last action (domovoi/workers/guests_seen_pruner.py).
+    from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
+
+    WORKERS.add_worker(GuestsSeenPruner(), owner="core")
     # Opt-in (off by default) MusicBrainz "also called" names for the
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
@@ -1471,6 +1485,11 @@ async def admin_snapshot() -> dict[str, Any]:
         # its 1.5 s poll, so the change reaches every open page without a
         # restart. Carries nothing else from the config.
         "home_problems_visibility": settings.home_problems_visibility,
+        # Whether a guest (no household credential) may use a playing
+        # room's queue and transport (domovoi/guest_queue.py). Live here for the same
+        # reason: the web hop refuses a guest itself while it is off, and
+        # its own settings copy goes stale the moment Settings saves it.
+        "guest_queue_editing": bool(settings.guest_queue_editing),
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
@@ -3580,6 +3599,21 @@ async def admin_music_play_tracks(body: _AdminPlayTracksBody) -> dict[str, Any]:
 # Provenance ("added by <device>") and the device blocklist live in the WEB
 # process, which owns both tables and is the surface clients actually talk
 # to. These endpoints are the mechanics; they don't know about devices.
+#
+# Guests (owner decisions 2026-10-10, domovoi/guest_queue.py): the read,
+# add, remove and move take a caller with NO household credential too,
+# while the room is playing and unless an admin banned it — decided here,
+# at the moment of the request, because only this process sees MPD. Clear
+# stays on the device tier. (The transport row below takes guests too.)
+
+
+async def _ensure_room_mpd_unless_guest(request: Request, room_id: str) -> None:
+    """``_ensure_room_mpd`` for a household caller; nothing for a guest.
+    A guest got this far only because the room's player is running and
+    playing (the gate looked), and nothing a guest does may provision or
+    start a room's player — not even the self-healing restart."""
+    if guest_activity(request) is None:
+        await _ensure_room_mpd(room_id)
 
 
 class _AdminQueueAddBody(BaseModel):
@@ -3650,20 +3684,23 @@ async def _log_queue_edit(room_id: str, what: str) -> None:
 
 @app.get(
     "/v1/admin/music/queue/{room_id}",
-    # CORE-13: the device tier's READ half, like the four queue edits beside
-    # it are on the device tier. It was the one music route with no gate,
-    # and it starts a room's player first. The web hop forwards the
-    # caller's token and cookie.
-    dependencies=[Depends(require_device_read)],
+    # CORE-13: the device tier's READ half, like the queue edits beside it
+    # are on the device tier. It was the one music route with no gate, and
+    # it starts a room's player first. The web hop forwards the caller's
+    # token and cookie. A guest reads it only while the room is playing,
+    # and then nothing is started (domovoi/guest_queue.py).
+    dependencies=[Depends(require_device_read_or_active_room_guest)],
 )
-async def admin_music_queue(room_id: str) -> dict[str, Any]:
+async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
     """The room's live MPD queue, in order, plus which entry is playing.
 
     404 for a room the house does not have (``_ensure_room_mpd``): reading
-    a queue never creates one."""
+    a queue never creates one. A guest asking after an idle or unknown
+    room has already been refused (403) by the gate, which never says
+    which of the two it was."""
     from domovoi.clients.mpd import get_mpd_client_for
 
-    await _ensure_room_mpd(room_id)
+    await _ensure_room_mpd_unless_guest(request, room_id)
     mpd = get_mpd_client_for(room_id)
     try:
         entries = await mpd.queue_list()
@@ -3674,6 +3711,10 @@ async def admin_music_queue(room_id: str) -> dict[str, Any]:
         "room_id": room_id,
         "items": [_queue_entry_dict(e) for e in entries],
         "current_song_id": await _current_song_id(mpd),
+        # Who this answer was given to: the web hop shows a guest's view
+        # whenever the core says so (review finding 2) — it cannot tell
+        # from what it forwarded alone.
+        "guest": guest_activity(request) is not None,
     }
 
 
@@ -3681,18 +3722,29 @@ async def admin_music_queue(room_id: str) -> dict[str, Any]:
     "/v1/admin/music/queue/{room_id}/add",
     # Device tier (ADD-3): the household device blocks are enforced
     # on the dashboard hop, so the core route needs a credential of
-    # its own or a blocked device just calls :6370 instead.
-    dependencies=[Depends(require_device)],
+    # its own or a blocked device just calls :6370 instead. A guest
+    # (no credential) adds only while the room is playing, throttled
+    # per address (domovoi/guest_queue.py).
+    dependencies=[Depends(require_device_or_active_room_guest)],
 )
 async def admin_music_queue_add(
-    room_id: str, body: _AdminQueueAddBody
+    room_id: str, body: _AdminQueueAddBody, request: Request
 ) -> dict[str, Any]:
     """APPEND library tracks to the room's queue without disturbing what's
     playing. If the room was idle with an empty queue, playback starts (and
     the satellite gets its music_start frame) — otherwise adding to a quiet
-    room would look like nothing happened."""
+    room would look like nothing happened. Never for a guest: a guest only
+    reaches a room that is playing, and if it stopped in the meantime the
+    tracks are queued and the room stays as it is."""
     from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
     from domovoi.handlers.shared.play_history import record_media_play
+
+    guest = guest_activity(request) is not None
+    if guest and len(body.track_ids) > GUEST_ADD_MAX_TRACKS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"a guest adds at most {GUEST_ADD_MAX_TRACKS} tracks at a time",
+        )
 
     async with session_scope() as s:
         rows = await s.execute(
@@ -3717,11 +3769,24 @@ async def admin_music_queue_add(
         for r in ordered
     ]
 
-    await _ensure_room_mpd(room_id)
+    await _ensure_room_mpd_unless_guest(request, room_id)
     mpd = get_mpd_client_for(room_id)
     try:
-        was_empty = len(await mpd.queue_list()) == 0
+        queue_length = len(await mpd.queue_list())
         state_before = await mpd.state()
+    except Exception as e:
+        log.warning("admin queue add MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    was_empty = queue_length == 0
+    if guest and queue_length + len(specs) > GUEST_QUEUE_MAX_ENTRIES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{room_id}'s queue is full for a guest ({GUEST_QUEUE_MAX_ENTRIES} "
+                "songs) — pair this phone to add more"
+            ),
+        )
+    try:
         queued = await mpd.queue_add_tracks(specs)
     except Exception as e:
         log.warning("admin queue add MPD raised: %s", e)
@@ -3737,7 +3802,7 @@ async def admin_music_queue_add(
         )
 
     started = False
-    if was_empty and state_before == "stop":
+    if was_empty and state_before == "stop" and not guest:
         try:
             # Paused on the first added track, as every start path leaves
             # MPD: the music_start below opens the stream and the satellite's
@@ -3781,18 +3846,36 @@ async def admin_music_queue_add(
 
 @app.post(
     "/v1/admin/music/queue/{room_id}/remove",
-    # Device tier (ADD-3), like queue add.
-    dependencies=[Depends(require_device)],
+    # Device tier (ADD-3), like queue add — and a guest the same way.
+    dependencies=[Depends(require_device_or_active_room_guest)],
 )
 async def admin_music_queue_remove(
-    room_id: str, body: _AdminQueueRemoveBody
+    room_id: str, body: _AdminQueueRemoveBody, request: Request
 ) -> dict[str, Any]:
     """Drop entries by songid. Ids MPD no longer has are reported as skipped
     rather than failing the request — two people pruning the same queue
-    shouldn't hand either of them an error they can act on."""
+    shouldn't hand either of them an error they can act on.
+
+    A guest may not drop the entry that is playing now: MPD would move on
+    to the next one — a skip by the back door, past the transport route's
+    own gate (the guest has the skip button for that). The whole request
+    is refused (403) rather than trimmed, so nothing a guest asked for
+    happens behind their back."""
     from domovoi.clients.mpd import get_mpd_client_for
 
-    await _ensure_room_mpd(room_id)
+    activity = guest_activity(request)
+    if activity is not None and len(body.song_ids) > GUEST_REMOVE_MAX_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"a guest removes {GUEST_REMOVE_MAX_IDS} song at a time",
+        )
+    if (
+        activity is not None
+        and activity.song_id is not None
+        and activity.song_id in set(body.song_ids)
+    ):
+        raise HTTPException(status_code=403, detail=GUEST_PLAYING_ENTRY_DETAIL)
+    await _ensure_room_mpd_unless_guest(request, room_id)
     mpd = get_mpd_client_for(room_id)
     try:
         removed = await mpd.queue_remove(body.song_ids)
@@ -3808,16 +3891,18 @@ async def admin_music_queue_remove(
 
 @app.post(
     "/v1/admin/music/queue/{room_id}/move",
-    # Device tier (ADD-3), like queue add.
-    dependencies=[Depends(require_device)],
+    # Device tier (ADD-3), like queue add — and a guest the same way.
+    dependencies=[Depends(require_device_or_active_room_guest)],
 )
 async def admin_music_queue_move(
-    room_id: str, body: _AdminQueueMoveBody
+    room_id: str, body: _AdminQueueMoveBody, request: Request
 ) -> dict[str, Any]:
-    """Reorder: move ``song_id`` to absolute position ``to_position``."""
+    """Reorder: move ``song_id`` to absolute position ``to_position``.
+    Moving an entry never changes what is playing, so a guest may move
+    any of them, the one playing now included."""
     from domovoi.clients.mpd import get_mpd_client_for
 
-    await _ensure_room_mpd(room_id)
+    await _ensure_room_mpd_unless_guest(request, room_id)
     mpd = get_mpd_client_for(room_id)
     try:
         moved = await mpd.queue_move(body.song_id, body.to_position)
@@ -3838,7 +3923,8 @@ async def admin_music_queue_move(
 
 @app.post(
     "/v1/admin/music/queue/{room_id}/clear",
-    # Device tier (ADD-3), like queue add.
+    # Device tier (ADD-3), like queue add. NOT a guest's: clearing stops
+    # the room (domovoi/guest_queue.py).
     dependencies=[Depends(require_device)],
 )
 async def admin_music_queue_clear(room_id: str) -> dict[str, Any]:
@@ -4896,8 +4982,11 @@ def _music_failure_detail(failure: str, room_id: str, response: Response) -> str
 
 @app.post(
     "/v1/admin/music/{action}/{room_id}",
-    # Device tier: pause / resume / stop / skip in a room.
-    dependencies=[Depends(require_device)],
+    # Device tier: pause / resume / stop / skip in a room. A guest (no
+    # credential) may pause, resume, skip and go back while the room is
+    # playing — never stop — unless an admin banned it, throttled per
+    # address (domovoi/guest_queue.py).
+    dependencies=[Depends(require_device_or_active_room_guest)],
 )
 async def admin_music_action(action: str, room_id: str) -> dict[str, Any]:
     """A room's transport control (the dashboard's, the app's and the

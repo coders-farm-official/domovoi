@@ -288,10 +288,43 @@ SCENARIOS: dict[str, dict] = {}
 # Auth views ---------------------------------------------------------------
 SCENARIOS["unpaired"] = scenario(
     # /api/plugins refused: a landing read that 401s must still open nothing.
-    house(**{"GET /api/plugins": {"__status": 401, "__body": {"detail": "admin session required"}}}),
+    # The rooms read is a household read (2026-10-08), so an unpaired
+    # browser — a GUEST — is refused it, and Home shows it the rooms that
+    # are playing from the open now-playing read instead (2026-10-10).
+    house(**{"GET /api/plugins": {"__status": 401, "__body": {"detail": "admin session required"}},
+             "GET /api/satellites": {"__status": 401,
+                                     "__body": {"detail": "X-Device-Token or admin session required"}},
+             "GET /api/music/now-playing": [
+                 {"room_id": "kitchen", "state": "play", "song": song("Creep", "Radiohead"),
+                  "elapsed_sec": 30},
+                 {"room_id": "office", "state": "stop", "song": None},
+             ]}),
     "const before = w.__snap(h);"
     "await h.click({ type: 'button', text: 'pair this phone' });"
-    "return { before, pairAfterClick: w.__Auth.pairModalOpen };",
+    "const pairAfterClick = w.__Auth.pairModalOpen;"
+    "await h.click({ type: 'button', title: \"kitchen's queue\" });"
+    "return { before, pairAfterClick, hash: w.location.hash,"
+    " queueRoom: w.RoomQueueIntent ? w.RoomQueueIntent.take() : null };",
+)
+# A guest presses pause on the playing room just as it stopped: the
+# server refuses (the core's idle sentence names the device token, which
+# would open the pairing prompt on an ordinary write), and the guest is
+# told in words instead.
+_GUEST_HOUSE = {
+    "GET /api/satellites": {"__status": 401,
+                            "__body": {"detail": "X-Device-Token or admin session required"}},
+    "GET /api/music/now-playing": [
+        {"room_id": "kitchen", "state": "play", "song": song("Creep", "Radiohead"), "elapsed_sec": 30},
+    ],
+    "POST /api/music/pause/kitchen": {"__status": 403, "__body": {
+        "detail": "that room isn't playing, so a guest can't use its queue — pair this phone "
+                  "with the household device token, or sign in as an admin"}},
+}
+SCENARIOS["guest_pause_refused"] = scenario(
+    house(**_GUEST_HOUSE),
+    "await h.click({ type: 'button', title: 'pause kitchen' }); await w.__flush(h);"
+    "return { after: w.__snap(h), posts: w.__fetches.filter((f) => f.method === 'POST')"
+    ".map((f) => f.path) };",
 )
 SCENARIOS["paired"] = scenario(
     house(**{"GET /api/calendar/events": EVENTS}),
@@ -915,13 +948,26 @@ def test_unpaired_sees_the_house_and_a_way_to_pair(driven) -> None:
     snap = out["before"]
     assert any("pair this phone for live updates and controls" in b["text"] for b in snap["buttons"])
     assert snap["live"] == "not live · updates every 30s"
-    assert [r["room"] for r in snap["rooms"]] == ["kitchen", "office"]
+    # A guest: the rooms that are PLAYING, from now-playing — not
+    # "couldn't load rooms" for the household read it was refused.
+    assert [r["room"] for r in snap["rooms"]] == ["kitchen"]
+    assert "Creep" in snap["rooms"][0]["text"]
+    assert "couldn't load rooms" not in snap["text"]
+    assert "/api/music/now-playing" in _fetched(snap)
     assert any(t["id"] == 5 for t in snap["timers"])
-    # The rows a household member can notice, each linking to its page.
-    assert [(r["key"], r["href"]) for r in snap["attention"]] == [("offline", "#satellites")]
-    assert "sign in for approvals and system checks" in " ".join(b["text"] for b in snap["buttons"])
+    # Pause, and the room's queue: what a guest may do there. Never stop.
+    titles = {b["title"] for b in snap["buttons"]}
+    assert {"pause kitchen", "kitchen's queue"} <= titles
+    assert "stop kitchen" not in titles
+    # The refused rooms read is not a problem to show a guest (and with no
+    # rows the household attention card, sign-in hint included, stays away).
+    assert snap["attention"] == []
+    assert "couldn't check" not in snap["text"]
     # The pair link is the only thing that opens the prompt.
     assert out["pairAfterClick"] is True
+    # The queue button opens Music's Room queue tab on that room.
+    assert out["hash"] == "music"
+    assert out["queueRoom"] == "kitchen"
 
 
 def test_paired_phone_is_live_with_no_pair_link_and_no_admin_rows(driven) -> None:
@@ -1603,3 +1649,11 @@ def test_every_home_read_is_quiet() -> None:
         assert "HOME_QUIET" in call or "quiet: true" in call, call
     # The cached reads go through one apiGet, quiet too; nothing else fetches.
     assert re.findall(r"\bapiGet\(([^)]*)\)", home) == ["path, HOME_QUIET"]
+
+
+def test_a_guests_refused_pause_is_said_not_prompted(driven) -> None:
+    out = driven["guest_pause_refused"]
+    assert out["posts"] == ["/api/music/pause/kitchen"]
+    after = out["after"]
+    assert after["modal"] is False and after["pair"] is False
+    assert "pause: that room isn't playing, so a guest can't use its queue" in " ".join(after["text"])

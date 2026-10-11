@@ -46,6 +46,11 @@ flowchart TB
         f1["Add media by URL without admin:<br/>URL must match an installed provider's<br/>allowlist + 10 requests/min per source"]
         f2["Every URL the server fetches:<br/>http(s) only, never an address<br/>inside the house or on the box"]
     end
+    subgraph guest["Guests — no credential, a PLAYING room only"]
+        g1["Read that room's queue, add, remove, move<br/>(never clear, never the song playing now)"]
+        g2["Pause, resume, skip, previous<br/>(never stop)"]
+        g3["Throttled per address, banned by an admin,<br/>off with GUEST_QUEUE_EDITING"]
+    end
     subgraph device["Device tier — X-Device-Token (or admin Bearer)"]
         v1["The household token every dashboard, phone<br/>and satellite presents"]
         v2["A turn (/v1/intent), announce,<br/>the drop-in WebSocket"]
@@ -68,7 +73,7 @@ flowchart TB
         a6["Chat-tool resync, session management"]
         a8["Opt-in command recordings: turn a room<br/>on or off, listen, label, delete<br/>(security tier, never the household token)"]
     end
-    daily --> fetch --> device --> admin
+    daily --> fetch --> guest --> device --> admin
 ```
 
 ### Device tier (the household token)
@@ -165,7 +170,9 @@ before setup.
 
 The ordinary actions now sit behind it: a text or voice turn
 (`POST /v1/intent`), announcements and drop-in, playback and the room
-queue, per-room volume, add-by-query. So do the media surfaces: reading
+queue, per-room volume, add-by-query. Two of those also take a **guest**
+while a room is playing — its queue and its pause / resume / skip /
+previous — see [Guests on a playing room](#guests-on-a-playing-room). So do the media surfaces: reading
 AND saving in the Documents folder — creating, uploading, and writing a
 document, a spreadsheet or a drawing, each editor limited to the kinds of
 file it actually opens so that a save can never quietly replace a PDF, a
@@ -571,6 +578,132 @@ still real — one shared household secret, no per-device identity, and
 anything holding it can do everything on that tier. Keep your Wi-Fi password good; use a
 guest VLAN for devices you don't trust.
 
+### Guests on a playing room
+
+**Owner decision, 2026-10-10, and a deliberate loosening of the October
+round's device tier.** A friend's phone on the Wi-Fi, holding no household
+token and no sign-in, could not find the music, let alone change it. Now a
+**guest** — a request carrying no credential at all (no `X-Device-Token`,
+no `Authorization`, no dashboard cookie) on a box that has finished setup —
+may, for a room that is **actively playing**:
+
+* read that room's queue, add to it, remove entries and move them;
+* pause, resume, skip and go back.
+
+"Playing" is MPD `play` or `pause` with a current song, decided by the
+**core** at the moment of each request (`domovoi/guest_queue.py`): only the
+core can see MPD. Two choices here are the owner's (2026-10-11), kept
+knowingly after the security review raised them:
+
+* **A room paused for any length of time counts as playing.** A guest can
+  resume a room someone paused yesterday, as long as a song is loaded.
+* **A guest may remove any entry except the one playing now**, one per
+  call — not only the entries guests added. Removing the playing entry
+  would be a skip by the back door, so that one is refused (`403`).
+
+A guest has no clear and no stop (each ends the room's session) and gets
+nothing at all on a room that isn't playing — `403` with a sentence that
+names the device token, the same answer for an idle room and for one that
+doesn't exist. That is softer than "never clear, never stop" sounds: a
+guest can still empty a queue one entry at a time and then skip off the
+last song, which ends the room's playing; the per-call caps and the
+throttle below bound how fast, not whether. Deciding "playing" never
+starts anything: a room with no running player is simply not playing, and
+the queue routes skip their self-healing restart of a room's player for a
+guest.
+
+| Route | Guest | Household token / admin |
+|---|---|---|
+| `GET /v1/admin/music/queue/{room}` (web: `GET /api/music/queue/{room}`) | Playing room only | Any room, as before |
+| `POST /v1/admin/music/queue/{room}/add` (web: `/api/music/queue/{room}/add`) | Playing room only; at most 50 tracks a call, never past 500 entries in the queue (`400` / `409`); never starts a stopped room | Any room, as before |
+| `POST /v1/admin/music/queue/{room}/remove` | Playing room only; one song a call (`400`); not the entry playing now (`403`) | Any room, as before |
+| `POST /v1/admin/music/queue/{room}/move` | Playing room only | Any room, as before |
+| `POST /v1/admin/music/queue/{room}/clear` | **No** (`401`) | As before |
+| `POST /v1/admin/music/{pause,resume,skip,next,previous}/{room}` (web: `/api/music/{verb}/{room}`) | Playing room only | Any room, as before |
+| `POST /v1/admin/music/stop/{room}` | **No** (`401`) | As before |
+
+Around that:
+
+* **The household switch.** `GUEST_QUEUE_EDITING` (default on, the owner's
+  call; Settings → Configuration → Security) turns it off, and off is the
+  old behaviour to the word: a guest gets the device tier's `401` at either
+  hop. The core reads it per request; the web hop reads the live value from
+  the core's snapshot.
+* **A credential is judged as before.** A request carrying one in a header
+  or the cookie — valid, stale, or a cookie on a write — gets exactly the
+  answer the device tier gave it (`401`, cookie-only `403`, throttled
+  `429`), never the guest rule. The pre-setup grace is unchanged. One
+  thing that looks like a credential is not: a `?device_token=` on the
+  dashboard's queue read (`GET /api/music/queue/{room}`) is not forwarded
+  to the core and never was, so that caller is a guest and gets the
+  guest's view.
+* **Not from another site.** A guest needs no credential, so a page on any
+  web site could otherwise make a browser on the LAN send a "simple"
+  cross-site `POST …/skip/{room}` (no custom header, so no CORS preflight)
+  and have it count. The core refuses a guest request that carries neither
+  `X-Requested-With` nor `X-Domovoi-Device-Id` (`403`); the dashboard sends
+  both on every call, the web hop forwards them, the kiosk sends the first.
+  A household request is not asked: its credential header already forces
+  the preflight.
+* **The web hop never upgrades a guest.** It forwards only what the caller
+  sent (`auth_forward_headers`: no credential means none on the core hop),
+  plus self-asserted hints: `X-Domovoi-Device-Id` (the dashboard's browser
+  id), `X-Requested-With`, and the caller's user agent as
+  `X-Forwarded-User-Agent`, which the core believes only from a trusted
+  proxy, like `X-Forwarded-For`.
+* **Throttles.** A guest's queue edits and transport presses share a budget
+  of 30 a minute per source address (`429` with `Retry-After` beyond it) at
+  the core, and the web hop keeps the same budget of its own for the routes
+  it gates (the queue edits and previous; the kiosk row's pause, resume
+  and skip stay open there and are counted at the core). A guest's queue
+  reads have a bucket of their own, 120 a minute per address, and reuse a
+  room's playing / not-playing answer for a second. A household credential
+  is never on either budget.
+* **Blocks and bans still apply.** A queue-device block matches a guest's
+  self-asserted `device_id` like anyone's, but a guest is told only that
+  an admin has stopped this phone changing the queue — never the block's
+  own message, which names the household device and carries the admin's
+  note. And an admin can **ban a guest** (below).
+* **What a guest sees.** A guest's own queue entries read "added by a
+  guest" — never a device name looked up from an id it merely claimed —
+  and a guest is shown no household device names, ids or times in the
+  queue (the now-playing read's rule). The web hop takes "guest" from the
+  core's answer as well as from what it saw itself, and either one gives
+  the guest's view. The dashboard answers a guest's look at an idle room
+  quietly ("Pair this phone to change a room that isn't playing"), with no
+  pairing prompt nobody asked for, and has no live push (that takes a
+  household credential): it re-reads every 15 s.
+* **One address per guest is assumed.** The throttles and an address ban
+  key on the request's source address. That holds on a LAN where each
+  phone has its own address and the web hop forwards it from loopback. It
+  does not hold behind anything that puts many callers on one address — a
+  reverse proxy, a NAT in front of the server, or the Windows installer's
+  WSL2 distro in NAT mode, where traffic can reach the core from the
+  loopback-trusted side: there every guest shares one bucket (and one
+  address ban), and a caller that reaches the core from a trusted proxy
+  address can choose its own `X-Forwarded-For`. Not an issue on a Linux
+  server on the LAN.
+
+**Guest bans — household policy, not a security boundary.** Guests never
+register (an unpaired browser can't), so the core records each guest
+action it lets through — the guest's self-asserted device id, its source
+address, its user agent, the room and the action — in `guests_seen`
+(V023; see *Data at rest*), and Settings → Devices → **Guests** lists the
+last week of them with a **ban** button; the Room queue tab gives an admin
+the same button on an entry a guest added. A ban (`guest_bans`) matches the
+guest's device id **or** its source address, on every room, for queue
+edits and transport alike, at both hops (the core checks it too, because a
+guest can call port 6370 directly), and is never consulted for a caller
+holding a household credential — a paired phone on the banned address is
+untouched. A ban check that can't reach the database refuses the guest
+(`503`). Read it as exactly what it is: the id is whatever the browser
+says (clearing the browser mints a new one) and the address is a DHCP
+lease (a new lease, or a second phone, is a new guest). It keeps a known
+phone out of the music; it does not stop someone determined. The household
+token is the real key, and turning `GUEST_QUEUE_EDITING` off closes the
+door entirely. Managing bans is admin-only (`GET /api/music/guests`,
+`GET`/`POST /api/music/guest-bans`, `DELETE /api/music/guest-bans/{id}`).
+
 The video satellite's kiosk page renders unattended, with no interactive
 login, so there is nobody in front of it to pair it — which is why it
 **pairs itself from its own URL**: open it as
@@ -589,12 +722,14 @@ the screen needs, named rather than implied:
 | `GET /display.html?room=<room_id>` | Open | The kiosk page itself. It is a page, not data — everything on it comes from the calls below. |
 | `GET /api/music/now-playing` | Open | What **every** room is playing right now: track, artist, album art path, elapsed seconds, and the room ids themselves. Not just the room in the query string. Not whose device queued it: `added_by` is `null` without a household credential. |
 | `GET /api/satellites/{room_id}` | Device read (2026-10-08) | The room's label and its idle mode. Unpaired, the kiosk shows the room id and the clock instead. |
-| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Open at the web hop; **device tier at the core hop** | Pauses, resumes, stops or skips that room's playback — the kiosk's transport row. The web route asks for nothing, but it forwards to `/v1/admin/music/{action}/{room_id}`, which takes the household token, so the buttons work only on a paired kiosk and a bare LAN request is `401`. |
+| `POST /api/music/pause/{room_id}` · `POST /api/music/resume/{room_id}` · `POST /api/music/stop/{room_id}` · `POST /api/music/skip/{room_id}` | Open at the web hop; **device tier at the core hop**, or a guest on a playing room | Pauses, resumes, stops or skips that room's playback — the kiosk's transport row. The web route asks for nothing, but it forwards to `/v1/admin/music/{action}/{room_id}`, which takes the household token — or, since 2026-10-10, a guest while that room is playing, for pause, resume and skip but never stop ([Guests on a playing room](#guests-on-a-playing-room)). A bare LAN request to an idle room is `403`, a stop `401`. |
 | `WS /ws/state` | Household credential on the handshake | The live push (below). An unpaired kiosk is refused, so after its first read its screen does not update. |
 
 That is the whole kiosk surface. What an unpaired client on your Wi-Fi can
-do with it is see what every room is playing; every pause, resume, stop
-and skip needs the household token. An unpaired kiosk is not a working
+do with it is see what every room is playing, and — as a guest, while a
+room is playing, until an admin bans it — pause, resume or skip that room;
+a stop, and anything on a room that isn't playing, needs the household
+token. An unpaired kiosk is not a working
 kiosk: it shows the first answer it got and then freezes, because the
 live push refuses it and nothing else refreshes it. All four verbs are writes, so they
 also need the `X-Requested-With` header like every other write, which
@@ -652,7 +787,10 @@ registration cookie, as the files door does; before, a blocked tablet had
 its "add to queue" refused and simply cast over the whole queue instead.
 The transport verbs (pause, resume, stop, skip, previous) are not covered,
 by decision: they move the playhead, not what is queued, and they are the
-kiosk's buttons. Binding a device id to a
+kiosk's buttons. A **guest** ban (2026-10-10) does cover a guest's
+transport presses as well as its queue edits; it is the same kind of
+household policy, keyed on the same self-asserted id plus the guest's
+address. Binding a device id to a
 per-device token belongs with the kiosk read tokens in the hardening
 backlog. The same goes for the chat's message details: "sent from" names the
 device id the sending client put on the message (kept only when it is a
@@ -867,6 +1005,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
 | **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Writes are Bearer-only; the cookie renders the list and the audio. The household token never reads these, unlike the rest of the household's speech. |
 | **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But the tablet is paired, so it can read everything Home hides that way — the calendar and the rooms are household reads (since 2026-10-08) it holds the credential for — and the rest is an **open read** that anyone on the network can fetch with no credential at all (`/api/health`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
+| **Guest bans** (takes a playing room's queue and transport away from a guest, every room — 2026-10-10) | Dashboard: `POST /api/music/guest-bans`, `DELETE /api/music/guest-bans/{id}`; reads via `GET /api/music/guest-bans` and `GET /api/music/guests` (the guests seen in the last week). | Pre-setup grace (there are no guests before setup). Gated so a ban can't be lifted by the guest it bans — not because a ban is a security boundary (it isn't; see [Guests on a playing room](#guests-on-a-playing-room)). |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
 | **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
@@ -1133,6 +1272,7 @@ All of it on hardware you own. Locations, verified against the code:
 | **`/var/lib/domovoi-update/` on the server** (Linux update unit only) | `backups/pre-<sha>-<UTC time>.dump` and `.test.dump`: a `pg_dump` of `domovoi` and `domovoi_test` taken before every full update, so **everything the database holds** — transcripts, voice embeddings, the admin password hash, session token hashes and the household device token, in plain text inside the dump. Directory 0700 and files 0600, root only; the newest 5 of each are kept (`DOMOVOI_UPDATE_KEEP_BACKUPS`). Also `last-result.json` (the last run's steps, with the tail of each failed command's output; mode 0640, readable by root and the service user's group, which is how the core reads it), `pip-freeze-pre.txt` (package versions) and the applied / bad commit SHAs. |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |
+| **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
 | **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
 | **`~/.domovoi/satellite-logs/` on the server** (`satellite_logs_dir`, 2026-10-09) | The log lines each satellite pushes (`log_push`): what it spooled while it was disconnected and the last 30 s of its ring every 30 s, one file per room (`<room>.log`, 1 MB plus one `.log.1` rotation; a room id that is not plain letters, digits, `.`, `_`, `-` — or a Windows device name — gets a hash of the full id in its file name, so the name never leaves the directory and two rooms never share a file), each line prefixed with the server's receive time, and written only from the room's own token-authenticated session. **The same content as the Pi's ring** — a `heard: <transcript>` line for every utterance and the text of every reply and announcement — so it is served only through the admin-read logs route, like the live ring, and nothing else reads the directory. Delete a room's file to forget it. |
 | **`~/.domovoi/` on each Pi** | `config.toml`, synced sound clips, synced wake models, small state sidecars (`voice`, `wake`, last-synced version, and the `pairing_token` WS-auth secret — mode 0600), a tarball backup of the previous satellite code kept for upgrade rollback, and since 2026-10-09 two small diagnostic files: `last-health.json` (the satellite's last health sample, the failed connects it saw while disconnected, the self-check actions it took and why it exited — written every 10 minutes and before anything it does to itself; carried to the core in its next `hello` and deleted once acknowledged) `log-spool.txt` (a 256 KB ring file of the log lines written while disconnected — transcripts included, as in the ring — pushed to the core on reconnect and cleared), and `self-restarts.json` (when the client last exited or rebooted itself for a self-check, and why: the restart budget, at most 3 an hour). Both stay on the SD card only while the unit is away from its core. |
@@ -1631,7 +1771,9 @@ play-tracks, play-playlist, the queue edits) answer `404` for a room the
 house has no `mpd_rooms`, pairing or inventory row for, and the queue read
 — which used to answer, and start a player for, any name with no
 credential at all (CORE-13) — is on the device tier's read half like the
-rest of the room's music.
+rest of the room's music. A guest (2026-10-10) reaches the queue only for
+a room whose player is already running and playing; for any other name,
+known or not, it gets the same `403` and nothing is started.
 
 **Approval gates the microphone — at boot.** A satellite that no core has
 ever accepted opens no capture stream, starts no mic thread, and never

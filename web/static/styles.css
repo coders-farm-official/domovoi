@@ -6,6 +6,16 @@
 * { box-sizing: border-box; }
 
 /* App shell ------------------------------------------------------ */
+/* The height of the screen the page can actually use. A phone browser's
+   100vh is the height with its address bar HIDDEN, but the page never
+   scrolls (.main does), so the bar never hides: the bottom of a 100vh
+   shell sat under it, and the phone's tab strip (home · music · …) was
+   not on screen at all in Chrome on Android (2026-10-10, a guest could
+   not find Music). 100dvh follows the bar. Full-height drawers and the
+   chat page use the same variable. */
+:root { --app-h: 100vh; }
+@supports (height: 100dvh) { :root { --app-h: 100dvh; } }
+
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
@@ -13,7 +23,7 @@
   grid-template-areas:
     "side top"
     "side main";
-  height: 100vh;
+  height: var(--app-h);
   overflow: hidden;
 }
 
@@ -619,6 +629,47 @@ button.lyr-line:hover { background: var(--brand-soft); }
     border-radius: var(--r-sm); color: #fff; background: oklch(0 0 0 / 0.3);
   }
   .lib-play:has([data-cover="none"]) .btn-icon { color: var(--fg-muted); background: transparent; }
+}
+
+/* --- Room queue tab (music.jsx QueueTab) ---
+   One row per entry. On a desktop everything sits on one line and drag
+   reorders; on a phone (where a finger can't drag) the grip goes, the
+   tap controls — play next, move up, move down, remove — take a line of
+   their own under the title, and every one is a 44px target, as are the
+   room chips above the list. */
+.rq-rooms { padding: 12px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rq-room {
+  font: inherit; font-size: 12px; cursor: pointer; padding: 4px 10px;
+  border-radius: var(--r-full); border: 1px solid var(--border);
+}
+.rq-row {
+  display: grid; grid-template-columns: auto 26px minmax(0, 1fr) auto auto;
+  grid-template-areas: "grip num main dur ctrls";
+  gap: 10px; align-items: center; padding: 9px 16px;
+  border-top: 1px solid var(--border-soft);
+}
+.rq-grip { grid-area: grip; display: inline-flex; color: var(--fg-faint); }
+.rq-num { grid-area: num; display: inline-flex; justify-content: flex-end; }
+.rq-main { grid-area: main; min-width: 0; }
+.rq-dur { grid-area: dur; }
+.rq-ctrls { grid-area: ctrls; display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+@media (max-width: 760px) {
+  .rq-rooms { padding: 8px 12px; }
+  .rq-room { min-height: 44px; padding: 0 14px; }
+  .rq-rooms .btn { min-height: 44px; }
+  .rq-row {
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    grid-template-areas: "num main dur" "ctrls ctrls ctrls";
+    row-gap: 2px; padding: 8px 12px;
+  }
+  .rq-grip { display: none; }
+  .rq-ctrls:empty { display: none; }
+  .rq-ctrls .btn-icon { width: 44px; height: 44px; }
+  /* A room card's queue button scrolls the tabs to the top of the screen.
+     While the queue is still loading the page may not be tall enough to
+     get there, so the queue tab is at least a screen tall on a phone. */
+  .music-tabs-queue { min-height: calc(var(--app-h) - var(--topbar-h) - var(--phone-nav-h) - 16px); }
+  .music-tabs-queue > .card { min-height: inherit; }
 }
 
 /* ================================================================
@@ -1323,7 +1374,7 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-menu-item:hover:not(:disabled) { background: var(--brand-soft); }
 .chat-menu-item:disabled { color: var(--fg-faint); cursor: default; }
 .chat-details-bg { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; padding: 20px; }
-.chat-details { width: min(520px, 100%); max-height: calc(100vh - 40px); display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md), var(--inner-highlight); overflow: hidden; }
+.chat-details { width: min(520px, 100%); max-height: calc(var(--app-h) - 40px); display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md), var(--inner-highlight); overflow: hidden; }
 .chat-details-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border-soft); font-size: 14px; }
 .chat-details-rows { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 0; padding: 14px 16px; overflow-y: auto; font-size: 13px; }
 .chat-details-rows dt { color: var(--fg-muted); }

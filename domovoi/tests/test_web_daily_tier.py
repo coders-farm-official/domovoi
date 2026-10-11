@@ -64,9 +64,8 @@ DEVICE_TIER = [
     ("POST", "/api/music/add-by-query"),
     ("POST", "/api/music/play-track"),
     ("POST", "/api/music/play-tracks"),
-    ("POST", "/api/music/queue/{room_id}/add"),
-    ("POST", "/api/music/queue/{room_id}/remove"),
-    ("POST", "/api/music/queue/{room_id}/move"),
+    # The queue's add / remove / move take a guest on a playing room too
+    # (GUEST_TIER below); clear stops the room and stays here.
     ("POST", "/api/music/queue/{room_id}/clear"),
     # devices: a client introducing itself, and renaming itself
     ("POST", "/api/devices/register"),
@@ -157,6 +156,18 @@ KIOSK_OPEN = [
     ("POST", "/api/music/skip/{room_id}"),
 ]
 
+# The device tier AND a guest on a playing room (owner decisions
+# 2026-10-10): music_queue.require_device_or_guest runs require_device
+# inside it for any caller holding a credential, and passes a guest
+# through to the core, which alone can see whether the room is playing.
+# test_guest_queue.py pins the guest half.
+GUEST_TIER = [
+    ("POST", "/api/music/queue/{room_id}/add"),
+    ("POST", "/api/music/queue/{room_id}/remove"),
+    ("POST", "/api/music/queue/{room_id}/move"),
+    ("POST", "/api/music/previous/{room_id}"),
+]
+
 _WEB_ROUTES = {(m, p): d for a, m, p, d in ROUTES if a == "web"}
 
 
@@ -174,6 +185,17 @@ def test_the_daily_mutations_are_on_the_device_tier(method, path) -> None:
         f"{method} {path} is an ordinary household action — it must depend on "
         f"require_device (the household token OR an admin Bearer)"
     )
+
+
+@pytest.mark.parametrize(
+    ("method", "path"), GUEST_TIER, ids=[f"{m} {p}" for m, p in GUEST_TIER]
+)
+def test_the_guest_capable_mutations_wear_the_guest_gate(method, path) -> None:
+    from web.backend.api import music_queue
+
+    calls = _gates(method, path)
+    assert music_queue.require_device_or_guest in calls
+    assert admin_auth.require_admin_mutation not in calls
 
 
 @pytest.mark.parametrize(
@@ -218,8 +240,10 @@ class Reached(BaseException):
 DEVICE_FAMILIES = {
     "music": ("POST", "/api/music/play", {"room_id": "kitchen", "query": "x"},
               "music", "post_admin"),
-    "music-queue": ("POST", "/api/music/queue/kitchen/add",
-                    {"track_ids": [1], "device_id": "browser-abc"},
+    # Clear: the queue verb a guest never gets (add / remove / move answer
+    # a credential-less caller as a guest — test_guest_queue.py).
+    "music-queue": ("POST", "/api/music/queue/kitchen/clear",
+                    {"device_id": "browser-abc"},
                     "music_queue", "session_scope"),
     "devices": ("POST", "/api/devices/register", {"device_id": "browser-abc"},
                 "devices", "session_scope"),

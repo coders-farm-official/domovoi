@@ -1660,7 +1660,7 @@
           "music"
         ],
         "summary": "Previous",
-        "description": "Back one song in the room's queue (MPD's previous; on the queue's\nfirst song it starts that song again). The app's and the dashboard's\nprevious while casting; before 2026-10-01 there was no such proxy, and\nthe dashboard's previous posted skip \u2014 moving the room FORWARD.\n\nDevice tier, not open like the four above: the kiosk has no previous\nbutton, so nothing unattended needs it (docs/SECURITY_PRIVACY.md).",
+        "description": "Back one song in the room's queue (MPD's previous; on the queue's\nfirst song it starts that song again). The app's and the dashboard's\nprevious while casting; before 2026-10-01 there was no such proxy, and\nthe dashboard's previous posted skip \u2014 moving the room FORWARD.\n\nDevice tier, not open like the four above: the kiosk has no previous\nbutton, so nothing unattended needs it (docs/SECURITY_PRIVACY.md). A\nguest (no credential) may go back on a PLAYING room unless an admin\nbanned it (owner decision 2026-10-10): this hop passes the guest\nthrough, and the core decides \u2014 it alone can see whether the room is\nplaying (domovoi/guest_queue.py).",
         "operationId": "previous_api_music_previous__room_id__post",
         "parameters": [
           {
@@ -2265,7 +2265,7 @@
           "music"
         ],
         "summary": "Read Queue",
-        "description": "The room's live queue with provenance joined on.\n\n``device_id`` is optional and only affects ``editable``/``blocked_reason``\n\u2014 reading a queue is never blocked, so a blocked device can still SEE\nwhat's playing and why it can't change it.",
+        "description": "The room's live queue with provenance joined on.\n\n``device_id`` is optional and only affects ``editable``/``blocked_reason``\n\u2014 reading a queue is never blocked, so a blocked device can still SEE\nwhat's playing and why it can't change it.\n\nA GUEST is passed through to the core with nothing but what it sent.\nFor a room that isn't playing the core refuses it\n(``GUEST_ROOM_IDLE_DETAIL``), and this read answers that QUIETLY \u2014 an\nempty, non-editable queue with :data:`GUEST_IDLE_REASON` \u2014 because a\nphone that merely opened the tab must not be met with a pairing prompt.\nA banned guest reads a playing room's queue with ``editable: false``.\nWith the household switch off the core's 401 passes through as before.\n\nWho is a guest is what the CORE says (``guest`` in its answer) as well\nas what this hop sees, and either one makes it the guest view: this\nhop forwards only headers, so a ``?device_token=`` here \u2014 never\nforwarded, never a credential on this route \u2014 must not buy the\nhousehold's view of who queued what (review finding 2).",
         "operationId": "read_queue_api_music_queue__room_id__get",
         "parameters": [
           {
@@ -2324,7 +2324,7 @@
           "music"
         ],
         "summary": "Add To Queue",
-        "description": "Append library tracks to the room's queue and stamp provenance.",
+        "description": "Append library tracks to the room's queue and stamp provenance.\nA guest's entries are stamped \"a guest\" with no device id \u2014 the name a\nclaimed id is registered under is not the guest's to borrow \u2014 and the\nid it sent and its address go in the guest columns, for an admin.",
         "operationId": "add_to_queue_api_music_queue__room_id__add_post",
         "parameters": [
           {
@@ -2375,6 +2375,7 @@
           "music"
         ],
         "summary": "Remove From Queue",
+        "description": "Drop entries. A guest is refused the entry playing now by the core,\nwhich is the one that knows which entry that is.",
         "operationId": "remove_from_queue_api_music_queue__room_id__remove_post",
         "parameters": [
           {
@@ -2476,6 +2477,7 @@
           "music"
         ],
         "summary": "Clear Queue",
+        "description": "Empty the queue (the core stops the room). Household only: a guest\nis refused here, before the block lookup or the hop, as before.",
         "operationId": "clear_queue_api_music_queue__room_id__clear_post",
         "parameters": [
           {
@@ -2600,6 +2602,133 @@
             "schema": {
               "type": "integer",
               "title": "Block Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/guests": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Guests Seen",
+        "description": "Guests that changed a room's music in the last\n:data:`GUESTS_SEEN_DAYS` days, most recent first, each with the ban\nthat covers it now (if any).",
+        "operationId": "list_guests_seen_api_music_guests_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GuestSeen"
+                  },
+                  "type": "array",
+                  "title": "Response List Guests Seen Api Music Guests Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/guest-bans": {
+      "get": {
+        "tags": [
+          "music"
+        ],
+        "summary": "List Guest Bans",
+        "operationId": "list_guest_bans_api_music_guest_bans_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GuestBan"
+                  },
+                  "type": "array",
+                  "title": "Response List Guest Bans Api Music Guest Bans Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Create Guest Ban",
+        "description": "Ban a guest from changing any room's music: by the device id it\nsends, its address, or both (what the Ban buttons send). Needs one of\nthe two; a duplicate is 409.",
+        "operationId": "create_guest_ban_api_music_guest_bans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuestBanCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GuestBan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/music/guest-bans/{ban_id}": {
+      "delete": {
+        "tags": [
+          "music"
+        ],
+        "summary": "Delete Guest Ban",
+        "description": "Unban.",
+        "operationId": "delete_guest_ban_api_music_guest_bans__ban_id__delete",
+        "parameters": [
+          {
+            "name": "ban_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Ban Id"
             }
           }
         ],
@@ -13523,6 +13652,171 @@
         "type": "object",
         "title": "GreetingPatch"
       },
+      "GuestBan": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "created_at": {
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "GuestBan"
+      },
+      "GuestBanCreate": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "title": "GuestBanCreate"
+      },
+      "GuestSeen": {
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "user_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Agent"
+          },
+          "room_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Room Id"
+          },
+          "last_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Action"
+          },
+          "first_seen": {
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "title": "Last Seen"
+          },
+          "ban_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ban Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source"
+        ],
+        "title": "GuestSeen"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -15984,6 +16278,28 @@
           "added_at": {
             "title": "Added At"
           },
+          "guest_device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guest Device Id"
+          },
+          "guest_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guest Source"
+          },
           "playing": {
             "type": "boolean",
             "title": "Playing",
@@ -16308,6 +16624,16 @@
               }
             ],
             "title": "Blocked Reason"
+          },
+          "guest": {
+            "type": "boolean",
+            "title": "Guest",
+            "default": false
+          },
+          "admin": {
+            "type": "boolean",
+            "title": "Admin",
+            "default": false
           }
         },
         "type": "object",

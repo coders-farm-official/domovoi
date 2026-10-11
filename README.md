@@ -337,7 +337,9 @@ The differences are deliberate:
   entry is tagged with the device that queued it. Devices name themselves in
   Settings, and an admin can take queue editing away from a named device —
   per room or everywhere — which is the answer to one household member
-  commandeering the kitchen.
+  commandeering the kitchen. A guest's phone that was never paired can
+  change the queue of a room that is playing, and pause or skip it, until
+  an admin bans that guest (or switches guest access off).
 - **The Android app** mirrors the dashboard plus a native music player. Its
   screens are **capability-gated**: it asks the server what's installed and
   only renders screens for capabilities that exist — install the radio

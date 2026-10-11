@@ -2233,6 +2233,151 @@ const QueueAccessCard = ({ fire, deviceList }) => {
   );
 };
 
+/* Guests: phones and browsers with no household credential (owner decision
+ * 2026-10-10). A guest may change the queue of a room that is playing and
+ * pause / resume / skip / go back there, "until they get banned by someone
+ * with admin privileges". Guests never register, so the server keeps its
+ * own short list of the guests that did something (the core records each
+ * guest action it lets through) and an admin bans from it. A ban covers
+ * the guest's device id OR its address, every room, queue and transport;
+ * it never touches a paired device or a signed-in admin. Every call here
+ * is admin-only on the server. */
+const GuestAccessCard = ({ fire }) => {
+  const { items: guests, loading: guestsLoading, refresh: refreshGuests } =
+    useApiList('/api/music/guests');
+  const { items: bans, loading: bansLoading, refresh: refreshBans } =
+    useApiList('/api/music/guest-bans');
+  const [busy, setBusy] = React.useState(null);   // the row mid-request
+
+  const refreshAll = () => { refreshGuests(); refreshBans(); };
+
+  const ban = async (g) => {
+    setBusy(`${g.device_id}|${g.source}`);
+    try {
+      await apiPost('/api/music/guest-bans', {
+        device_id: g.device_id || null, source: g.source || null,
+      });
+      fire('guest banned — no queue changes or playback controls in any room');
+      refreshAll();
+    } catch (e) {
+      if (e && e.status === 409) fire('that guest is already banned');
+      else reportMutationFailure(fire, 'ban', e);
+    } finally { setBusy(null); }
+  };
+
+  const unban = async (banId) => {
+    setBusy(`ban-${banId}`);
+    try {
+      await apiDelete(`/api/music/guest-bans/${banId}`);
+      fire('ban lifted');
+      refreshAll();
+    } catch (e) {
+      reportMutationFailure(fire, 'unban', e);
+    } finally { setBusy(null); }
+  };
+
+  const agent = (ua) => {
+    if (!ua) return '—';
+    const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox'
+      : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : null;
+    const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad|iPod/.test(ua) ? 'iOS'
+      : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS'
+      : /Linux/.test(ua) ? 'Linux' : null;
+    return browser || os ? [browser, os].filter(Boolean).join(' on ') : ua.slice(0, 40);
+  };
+
+  return (
+    <Card title="Guests"
+          sub="Phones and browsers that aren't paired can change the queue of a room that's playing, and pause, resume, skip or go back there. Ban one here.">
+      {/* Said plainly, like the queue blocks above: a guest is known only
+          by what its browser says and by its address on the Wi-Fi. */}
+      <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'flex-start',
+                    borderBottom: '1px solid var(--border-soft)', background: 'var(--sunken)' }}>
+        <Icon name="info" size={13}/>
+        <span style={{ fontSize: 11, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+          A ban matches the id the guest’s browser sends or its address on your
+          network, so it keeps a known phone out — a cleared browser is caught
+          by its address for as long as the network gives it the same one. It
+          isn’t a defence against someone determined: the household device
+          token is the real key. Paired devices and admins are never affected.
+          To turn guest access off altogether, use Configuration → Security.
+        </span>
+      </div>
+
+      <div className="label" style={{ padding: '12px 16px 4px' }}>seen in the last week</div>
+      {guestsLoading && guests.length === 0 ? (
+        <div style={{ padding: '4px 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+      ) : guests.length === 0 ? (
+        <div style={{ padding: '4px 16px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          No guest has changed the music this week.
+        </div>
+      ) : (
+        <table className="tbl">
+          <thead><tr>
+            <th>guest</th><th>browser</th><th>last did</th><th>seen</th><th className="actions"></th>
+          </tr></thead>
+          <tbody>
+            {guests.map((g) => {
+              const key = `${g.device_id}|${g.source}`;
+              return (
+                <tr key={key}>
+                  <td>
+                    <div className="mono" style={{ fontSize: 11 }}>{g.device_id || 'no id sent'}</div>
+                    <div className="mono" style={{ fontSize: 10, color: 'var(--fg-faint)' }}>{g.source}</div>
+                  </td>
+                  <td style={{ fontSize: 12, color: 'var(--fg-muted)' }} title={g.user_agent || ''}>
+                    {agent(g.user_agent)}
+                  </td>
+                  <td style={{ fontSize: 12 }}>
+                    {g.last_action || '—'}{g.room_id ? <span style={{ color: 'var(--fg-muted)' }}> · {g.room_id}</span> : null}
+                  </td>
+                  <td className="mono">{g.last_seen ? relTime(g.last_seen) : '—'}</td>
+                  <td className="actions">
+                    {g.ban_id != null
+                      ? <Button icon="undo-2" disabled={busy === `ban-${g.ban_id}`}
+                                onClick={() => unban(g.ban_id)}>unban</Button>
+                      : <Button icon="user-x" disabled={busy === key}
+                                onClick={() => ban(g)}>ban</Button>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      <div className="label" style={{ padding: '12px 16px 4px' }}>bans</div>
+      {bansLoading && bans.length === 0 ? (
+        <div style={{ padding: '4px 16px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>loading…</div>
+      ) : bans.length === 0 ? (
+        <div style={{ padding: '4px 16px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          No guest is banned.
+        </div>
+      ) : (
+        <table className="tbl">
+          <thead><tr>
+            <th>id</th><th>address</th><th>why</th><th>since</th><th className="actions"></th>
+          </tr></thead>
+          <tbody>
+            {bans.map((b) => (
+              <tr key={b.id}>
+                <td className="mono" style={{ fontSize: 11 }}>{b.device_id || '—'}</td>
+                <td className="mono" style={{ fontSize: 11 }}>{b.source || '—'}</td>
+                <td style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{b.note || '—'}</td>
+                <td className="mono">{b.created_at ? relTime(b.created_at) : '—'}</td>
+                <td className="actions">
+                  <Button icon="undo-2" disabled={busy === `ban-${b.id}`}
+                          onClick={() => unban(b.id)}>unban</Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+};
+
 /* Files access — the Files surface is open on the LAN (browse, download,
  * upload, move, import; only delete needs admin), so this is the control
  * that takes WRITES away from one device without making every phone sign
@@ -2623,6 +2768,7 @@ const DevicesPanel = () => {
       <ThisDeviceCard fire={fire} onRenamed={deviceList.refresh}/>
       <HouseholdTokenCard fire={fire}/>
       <QueueAccessCard fire={fire} deviceList={deviceList}/>
+      <GuestAccessCard fire={fire}/>
       <FilesAccessCard fire={fire} deviceList={deviceList}/>
       {toastNode}
     </>

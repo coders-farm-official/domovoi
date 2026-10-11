@@ -27,6 +27,24 @@ device it was applied to.
 A block matches on device id OR device name: the id survives a rename (the
 obvious way to slip a block) and the name survives a reinstall (new id, same
 household label). Creating a block from the roster fills both.
+
+**Guests** (owner decisions 2026-10-10): a phone or browser holding no
+household credential at all may read, add to, remove from and reorder the
+queue of a room that is PLAYING — never clear it — and use its pause /
+resume / skip / previous, until an admin bans that guest. This process
+cannot see MPD, so it passes a guest through to the core, which decides
+"playing" at the moment of the request and checks the ban again
+(``domovoi/guest_queue.py``); the hop forwards only what the caller itself
+sent (``auth_forward_headers``), so a guest reaches the core as a guest.
+What stays here: the household switch (refused at this hop too while it
+is off), the per-device blocks (a guest's self-asserted ``device_id`` is
+checked like anyone's), guest bans (``domovoi/guest_bans.py``), a
+per-address throttle on a guest's actions, and provenance — a guest's
+entries read "added by a guest", never a device name looked up from an id
+it merely claimed, and a guest is never shown which household device
+queued what (the open now-playing read's rule, ``api/music.py``). An admin
+sees which guest queued an entry, and bans from there or from the
+guests-seen list (:data:`guests_router`, :data:`guest_bans_router`).
 """
 
 from __future__ import annotations
@@ -39,16 +57,28 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from domovoi import guest_bans
 from domovoi.admin_auth import (
+    GUEST_BANNED_DETAIL,
+    GUEST_DEVICE_HEADER,
+    GUEST_ROOM_IDLE_DETAIL,
+    charge_guest_queue_edit,
+    check_admin_request,
+    check_queue_guest,
+    guest_device_id,
+    presents_household_credential,
+    request_source,
     require_admin_mutation,
     require_admin_read,
     require_device,
 )
+from domovoi.config import settings as core_settings
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
     bridge_response,
     get_admin,
+    get_cached_snapshot,
     post_admin,
 )
 
@@ -59,8 +89,102 @@ router = APIRouter(prefix="/api/music/queue", tags=["music"])
 # Editing a room's queue is an ordinary household action (REV-1): the
 # household device token or an admin Bearer, matching the core routes
 # these proxy to. The per-device block below still applies on top — it is
-# household policy WITHIN the credential, not a substitute for it.
+# household policy WITHIN the credential, not a substitute for it. Clear
+# stays here: it stops the room, so it is never a guest's.
 DEVICE = [Depends(require_device)]
+
+# How a guest's own entries are labelled. Stored as the row's device_name
+# with a NULL device_id, so the read's join to ``devices`` can never swap
+# in the name of a device whose id the guest claimed. Which guest it was
+# goes in the row's guest_device_id / guest_source (V023), for an admin.
+GUEST_ADDED_BY = "a guest"
+
+# ``blocked_reason`` for a guest reading a room that isn't playing, and
+# for a guest an admin banned.
+GUEST_IDLE_REASON = "Pair this phone to change a room that isn't playing"
+GUEST_BANNED_REASON = "An admin has stopped guests on this phone from changing the music"
+# A guest whose claimed device id is under a queue block: the same plain
+# words for the refusal and the read, never the block's own message.
+GUEST_BLOCKED_DETAIL = "an admin has stopped this phone from changing this queue"
+GUEST_BLOCKED_REASON = "An admin has stopped this phone from changing this queue"
+
+
+def guests_may_edit() -> bool:
+    """The live ``GUEST_QUEUE_EDITING``. Saved through the core (Settings →
+    Configuration, tier ``hot``), which mutates the CORE's settings; this
+    process's copy is whatever ``.env`` said at boot. So the value comes
+    from the core's snapshot (refreshed every 1.5 s), falling back to this
+    process's own copy only while the core has not answered. The core
+    re-checks its own value on every request either way: this hop refusing
+    early is what makes "off" read exactly as it did before."""
+    live = (get_cached_snapshot() or {}).get("guest_queue_editing")
+    if isinstance(live, bool):
+        return live
+    return bool(core_settings.guest_queue_editing)
+
+
+async def _guest_ban(request: Request, device_id: str | None) -> dict[str, Any] | None:
+    """The admin's ban on this guest — by ``device_id`` or its address —
+    or None. Fails CLOSED (503) when the table can't be read."""
+    try:
+        return await guest_bans.find_ban(device_id, request_source(request))
+    except Exception as e:  # noqa: BLE001 — the DB did not answer
+        log.warning("guest ban check failed: %s", e)
+        raise HTTPException(
+            status_code=503, detail="couldn't check guest access right now"
+        ) from e
+
+
+async def assert_guest_not_banned(request: Request, device_id: str | None) -> None:
+    """403 with :data:`GUEST_BANNED_DETAIL` for a banned guest."""
+    if await _guest_ban(request, device_id) is not None:
+        raise HTTPException(status_code=403, detail=GUEST_BANNED_DETAIL)
+
+
+async def require_device_or_guest(request: Request) -> None:
+    """Dependency for a guest-capable room action at this hop — the queue's
+    add / remove / move, and the previous button: :func:`require_device`,
+    exactly as before, for any request carrying a credential (and the
+    pre-setup grace); otherwise a GUEST, while the household switch is on,
+    charged against the per-address throttle, refused if an admin banned
+    the device id it sends (``X-Domovoi-Device-Id``) or its address, and
+    marked for the handler. Whether the room is playing is the core's to
+    say — this hop cannot see MPD."""
+    if await check_queue_guest(request, read=False, guests_allowed=guests_may_edit()):
+        charge_guest_queue_edit(request)
+        await assert_guest_not_banned(request, guest_device_id(request))
+        request.state.queue_guest = True
+
+
+GUEST_OR_DEVICE = [Depends(require_device_or_guest)]
+
+
+def _is_guest(request: Request) -> bool:
+    return bool(getattr(request.state, "queue_guest", False))
+
+
+async def _guest_hop_headers(request: Request, device_id: str) -> dict[str, str]:
+    """The core hop's headers for a queue edit. For a guest the body's
+    ``device_id`` is the one the core matches a ban on and records — and
+    if it differs from the header the dependency checked, it is checked
+    here too, so neither id slips a ban. A household caller's hop is
+    exactly what it was."""
+    headers = auth_forward_headers(request)
+    if _is_guest(request):
+        if device_id != guest_device_id(request):
+            await assert_guest_not_banned(request, device_id)
+        headers[GUEST_DEVICE_HEADER] = device_id
+    return headers
+
+
+async def _reads_as_guest(request: Request) -> bool:
+    """Whether a queue READ comes from a guest: no credential of any kind,
+    on a box that has finished setup. Deliberately not a gate — a caller
+    with a credential is judged by the core exactly as before, and nothing
+    here charges a token's backoff."""
+    if presents_household_credential(request, read=True):
+        return False
+    return await check_admin_request(request) == "no-auth"
 
 
 # ─── Schemas ───────────────────────────────────────────────────────────────
@@ -80,6 +204,11 @@ class QueueItem(BaseModel):
     added_by: str | None = None
     added_by_device_id: str | None = None
     added_at: Any = None
+    # For an entry a GUEST queued, and only in an answer to an admin: the
+    # device id the guest sent and its address, which is what a guest ban
+    # (POST /api/music/guest-bans) takes — the "ban this guest" button.
+    guest_device_id: str | None = None
+    guest_source: str | None = None
     # True for the entry MPD is currently on.
     playing: bool = False
 
@@ -92,6 +221,14 @@ class RoomQueue(BaseModel):
     # own controls from this rather than discovering the 403 on first click.
     editable: bool = True
     blocked_reason: str | None = None
+    # True when this answer was given to a GUEST (no household credential).
+    # A guest may add, remove and move on a playing room, but never clear,
+    # never remove the entry playing now, and sees no device names; the
+    # client leaves those controls out instead of discovering the refusal.
+    guest: bool = False
+    # True when the caller holds an ADMIN session: the entries a guest
+    # queued then carry guest_device_id / guest_source, for a ban.
+    admin: bool = False
 
 
 # `device_id` is REQUIRED on every edit, optional only on the read.
@@ -200,16 +337,23 @@ def _blocked_message(block: dict[str, Any], room_id: str) -> str:
     return f"{base} ({note})" if note else base
 
 
-async def _assert_can_edit(device_id: str, room_id: str) -> tuple[str, str | None]:
+async def _assert_can_edit(
+    device_id: str, room_id: str, *, guest: bool = False
+) -> tuple[str, str | None]:
     """Raise 403 when this device is blocked here; otherwise return
     ``(device_id, device_name)`` for provenance stamping. ``device_name`` is
     None for a device that has never registered — the id is still recorded, so
-    the entry shows no "added by" rather than a wrong one."""
+    the entry shows no "added by" rather than a wrong one.
+
+    A GUEST is refused with :data:`GUEST_BLOCKED_DETAIL`, never the block's
+    own message: that names the household device and carries the admin's
+    note, and a guest can claim any id to read it (review finding 3)."""
     async with session_scope() as s:
         device_name = await _device_name_for(s, device_id)
         block = await _block_for(s, device_id, device_name, room_id)
     if block is not None:
-        raise HTTPException(status_code=403, detail=_blocked_message(block, room_id))
+        detail = GUEST_BLOCKED_DETAIL if guest else _blocked_message(block, room_id)
+        raise HTTPException(status_code=403, detail=detail)
     return device_id, device_name
 
 
@@ -225,7 +369,22 @@ async def read_queue(
     ``device_id`` is optional and only affects ``editable``/``blocked_reason``
     — reading a queue is never blocked, so a blocked device can still SEE
     what's playing and why it can't change it.
+
+    A GUEST is passed through to the core with nothing but what it sent.
+    For a room that isn't playing the core refuses it
+    (``GUEST_ROOM_IDLE_DETAIL``), and this read answers that QUIETLY — an
+    empty, non-editable queue with :data:`GUEST_IDLE_REASON` — because a
+    phone that merely opened the tab must not be met with a pairing prompt.
+    A banned guest reads a playing room's queue with ``editable: false``.
+    With the household switch off the core's 401 passes through as before.
+
+    Who is a guest is what the CORE says (``guest`` in its answer) as well
+    as what this hop sees, and either one makes it the guest view: this
+    hop forwards only headers, so a ``?device_token=`` here — never
+    forwarded, never a credential on this route — must not buy the
+    household's view of who queued what (review finding 2).
     """
+    web_guest = await _reads_as_guest(request)
     status, payload = await get_admin(
         f"/v1/admin/music/queue/{room_id}", headers=auth_forward_headers(request)
     )
@@ -233,14 +392,29 @@ async def read_queue(
         raise HTTPException(
             status_code=502, detail="domovoi core unreachable; can't read the queue"
         )
+    # The core says the idle sentence to a guest and to nobody else.
+    if (
+        status == 403
+        and isinstance(payload, dict)
+        and payload.get("detail") == GUEST_ROOM_IDLE_DETAIL
+    ):
+        return RoomQueue(
+            room_id=room_id,
+            editable=False,
+            blocked_reason=GUEST_IDLE_REASON,
+            guest=True,
+        )
     if status != 200 or not isinstance(payload, dict):
         detail = payload.get("detail") if isinstance(payload, dict) else payload
         raise HTTPException(status_code=status or 502, detail=detail or "queue read failed")
 
+    guest = web_guest or payload.get("guest") is True
+    admin = (not guest) and await check_admin_request(request) in ("ok", "cookie-only")
     raw_items = payload.get("items") or []
     current = payload.get("current_song_id")
     song_ids = [int(i["song_id"]) for i in raw_items if i.get("song_id") is not None]
 
+    guest_ids: dict[int, tuple[str | None, str | None]] = {}
     async with session_scope() as s:
         # Prefer the device's CURRENT name (a rename relabels the queue) and
         # fall back to the snapshot taken at add time, which is all that's
@@ -279,10 +453,50 @@ async def read_queue(
         device_name = await _device_name_for(s, device_id)
         block = await _block_for(s, device_id, device_name, room_id)
 
+        # Which guest queued what — read only for an admin, and only when a
+        # guest queued something (V023's columns: nothing else reads them).
+        if admin and any(
+            dev is None and name == GUEST_ADDED_BY for name, dev, _at in provenance.values()
+        ):
+            found = await s.execute(
+                text(
+                    "SELECT song_id, guest_device_id, guest_source "
+                    "FROM room_queue_items WHERE room_id = :room_id "
+                    "AND device_id IS NULL AND device_name = :guest"
+                ),
+                {"room_id": room_id, "guest": GUEST_ADDED_BY},
+            )
+            guest_ids = {int(r[0]): (r[1], r[2]) for r in found.all()}
+
+    blocked_reason = _blocked_message(block, room_id) if block else None
+    if guest and block is not None:
+        blocked_reason = GUEST_BLOCKED_REASON   # never the block's own words
+    if guest and block is None:
+        # A read is never refused for this: a ban that can't be checked
+        # just leaves the queue read-only for the guest (edits fail closed).
+        try:
+            banned = await guest_bans.find_ban(
+                device_id or guest_device_id(request), request_source(request)
+            ) is not None
+        except Exception as e:  # noqa: BLE001 — the DB did not answer
+            log.warning("guest ban check failed on a read: %s", e)
+            banned = True
+        if banned:
+            blocked_reason = GUEST_BANNED_REASON
+
     items: list[QueueItem] = []
     for raw in raw_items:
         song_id = int(raw["song_id"])
         name, dev_id, added_at = provenance.get(song_id, (None, None, None))
+        if guest:
+            # A guest learns which entries guests added, and nothing about
+            # the household's devices: no names, no ids (the now-playing
+            # read names a device only to a household credential, too).
+            if not (dev_id is None and name == GUEST_ADDED_BY):
+                name = None
+                added_at = None   # nor when a household device queued it
+            dev_id = None
+        who_guest = guest_ids.get(song_id, (None, None))
         items.append(
             QueueItem(
                 song_id=song_id,
@@ -295,6 +509,8 @@ async def read_queue(
                 added_by=name,
                 added_by_device_id=dev_id,
                 added_at=added_at,
+                guest_device_id=who_guest[0],
+                guest_source=who_guest[1],
                 playing=current is not None and song_id == int(current),
             )
         )
@@ -302,70 +518,108 @@ async def read_queue(
         room_id=room_id,
         items=items,
         current_song_id=int(current) if current is not None else None,
-        editable=block is None,
-        blocked_reason=_blocked_message(block, room_id) if block else None,
+        editable=blocked_reason is None,
+        blocked_reason=blocked_reason,
+        guest=guest,
+        admin=admin,
     )
 
 
 # ─── Edits ─────────────────────────────────────────────────────────────────
 
 
-@router.post("/{room_id}/add", dependencies=DEVICE)
+@router.post("/{room_id}/add", dependencies=GUEST_OR_DEVICE)
 async def add_to_queue(room_id: str, request: Request, body: QueueAddRequest):
-    """Append library tracks to the room's queue and stamp provenance."""
-    device_id, device_name = await _assert_can_edit(body.device_id, room_id)
+    """Append library tracks to the room's queue and stamp provenance.
+    A guest's entries are stamped "a guest" with no device id — the name a
+    claimed id is registered under is not the guest's to borrow — and the
+    id it sent and its address go in the guest columns, for an admin."""
+    device_id, device_name = await _assert_can_edit(
+        body.device_id, room_id, guest=_is_guest(request)
+    )
+    guest: tuple[str, str] | None = None
+    if _is_guest(request):
+        guest = (body.device_id, request_source(request))
+        device_id, device_name = None, GUEST_ADDED_BY
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/add",
         {"track_ids": body.track_ids},
-        headers=auth_forward_headers(request),
+        headers=await _guest_hop_headers(request, body.device_id),
     )
     if status == 200 and isinstance(payload, dict):
         queued = payload.get("queued") or []
         song_ids = [int(q["song_id"]) for q in queued if q.get("song_id") is not None]
         if song_ids:
-            await _stamp_provenance(room_id, song_ids, device_id, device_name)
+            await _stamp_provenance(room_id, song_ids, device_id, device_name, guest=guest)
     return bridge_response(status, payload)
 
 
 async def _stamp_provenance(
     room_id: str,
     song_ids: list[int],
-    device_id: str,
+    device_id: str | None,
     device_name: str | None,
+    *,
+    guest: tuple[str, str] | None = None,
 ) -> None:
     """Record who added these songids. ON CONFLICT because MPD reuses a
     songid only after a very long wrap, but a provenance row for a songid
-    that has since been removed and re-issued must not collide."""
+    that has since been removed and re-issued must not collide. ``guest``
+    is (the device id it sent, its address) for a guest's entries; only
+    then are V023's guest columns written."""
     async with session_scope() as s:
         for song_id in song_ids:
+            params = {
+                "room_id": room_id,
+                "song_id": song_id,
+                "device_id": device_id,
+                "device_name": device_name,
+            }
+            if guest is None:
+                await s.execute(
+                    text(
+                        """
+                        INSERT INTO room_queue_items
+                            (room_id, song_id, device_id, device_name)
+                        VALUES (:room_id, :song_id, :device_id, :device_name)
+                        ON CONFLICT (room_id, song_id) DO UPDATE
+                        SET device_id   = EXCLUDED.device_id,
+                            device_name = EXCLUDED.device_name,
+                            added_at    = now()
+                        """
+                    ),
+                    params,
+                )
+                continue
             await s.execute(
                 text(
                     """
                     INSERT INTO room_queue_items
-                        (room_id, song_id, device_id, device_name)
-                    VALUES (:room_id, :song_id, :device_id, :device_name)
+                        (room_id, song_id, device_id, device_name,
+                         guest_device_id, guest_source)
+                    VALUES (:room_id, :song_id, :device_id, :device_name,
+                            :guest_device_id, :guest_source)
                     ON CONFLICT (room_id, song_id) DO UPDATE
-                    SET device_id   = EXCLUDED.device_id,
-                        device_name = EXCLUDED.device_name,
-                        added_at    = now()
+                    SET device_id       = EXCLUDED.device_id,
+                        device_name     = EXCLUDED.device_name,
+                        guest_device_id = EXCLUDED.guest_device_id,
+                        guest_source    = EXCLUDED.guest_source,
+                        added_at        = now()
                     """
                 ),
-                {
-                    "room_id": room_id,
-                    "song_id": song_id,
-                    "device_id": device_id,
-                    "device_name": device_name,
-                },
+                {**params, "guest_device_id": guest[0], "guest_source": guest[1]},
             )
 
 
-@router.post("/{room_id}/remove", dependencies=DEVICE)
+@router.post("/{room_id}/remove", dependencies=GUEST_OR_DEVICE)
 async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveRequest):
-    await _assert_can_edit(body.device_id, room_id)
+    """Drop entries. A guest is refused the entry playing now by the core,
+    which is the one that knows which entry that is."""
+    await _assert_can_edit(body.device_id, room_id, guest=_is_guest(request))
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/remove",
         {"song_ids": body.song_ids},
-        headers=auth_forward_headers(request),
+        headers=await _guest_hop_headers(request, body.device_id),
     )
     if status == 200 and isinstance(payload, dict):
         removed = [int(sid) for sid in (payload.get("removed") or [])]
@@ -381,21 +635,23 @@ async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveReq
     return bridge_response(status, payload)
 
 
-@router.post("/{room_id}/move", dependencies=DEVICE)
+@router.post("/{room_id}/move", dependencies=GUEST_OR_DEVICE)
 async def move_in_queue(room_id: str, request: Request, body: QueueMoveRequest):
     """Reorder. Provenance is keyed by songid, so a move needs no DB write —
     that's the reason for keying it that way."""
-    await _assert_can_edit(body.device_id, room_id)
+    await _assert_can_edit(body.device_id, room_id, guest=_is_guest(request))
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/move",
         {"song_id": body.song_id, "to_position": body.to_position},
-        headers=auth_forward_headers(request),
+        headers=await _guest_hop_headers(request, body.device_id),
     )
     return bridge_response(status, payload)
 
 
 @router.post("/{room_id}/clear", dependencies=DEVICE)
 async def clear_queue(room_id: str, request: Request, body: QueueClearRequest):
+    """Empty the queue (the core stops the room). Household only: a guest
+    is refused here, before the block lookup or the hop, as before."""
     await _assert_can_edit(body.device_id, room_id)
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/clear",
@@ -503,3 +759,157 @@ async def delete_block(block_id: int) -> None:
         )
     if (result.rowcount or 0) == 0:
         raise HTTPException(status_code=404, detail=f"block {block_id} not found")
+
+
+# ─── Guests seen, and guest bans (admin) ──────────────────────────────────
+#
+# Owner decision 2026-10-10: a guest may change a playing room's music
+# "until they get banned by someone with admin privileges". Guests never
+# register (an unpaired browser can't), so the core records each guest
+# action it lets through (domovoi/guest_bans.py, table guests_seen) and an
+# admin bans from that list — or from the queue row a guest added. A ban
+# matches the guest's device id OR its address, on every room, for queue
+# edits and transport alike, and never touches a household credential.
+#
+# Household policy, not a security boundary — the same honesty as the
+# queue blocks above: the device id is self-asserted and the address is
+# a DHCP lease. The dashboard says so where bans are managed.
+
+guests_router = APIRouter(prefix="/api/music/guests", tags=["music"])
+guest_bans_router = APIRouter(prefix="/api/music/guest-bans", tags=["music"])
+
+# How far back "guests seen recently" looks, and how many it lists.
+GUESTS_SEEN_DAYS = 7
+GUESTS_SEEN_LIMIT = 100
+
+
+class GuestSeen(BaseModel):
+    device_id: str | None = None
+    source: str
+    user_agent: str | None = None
+    room_id: str | None = None
+    last_action: str | None = None
+    first_seen: Any = None
+    last_seen: Any = None
+    # The ban that covers this guest now (by id or by address), if any.
+    ban_id: int | None = None
+
+
+class GuestBan(BaseModel):
+    id: int
+    device_id: str | None = None
+    source: str | None = None
+    note: str | None = None
+    created_at: Any = None
+
+
+class GuestBanCreate(BaseModel):
+    device_id: str | None = Field(default=None, max_length=64)
+    source: str | None = Field(default=None, max_length=64)
+    note: str | None = Field(default=None, max_length=200)
+
+
+_BAN_COLUMNS = "id, device_id, source, note, created_at"
+
+
+def _row_to_ban(r: Any) -> GuestBan:
+    return GuestBan(
+        id=int(r[0]), device_id=r[1], source=r[2], note=r[3], created_at=r[4]
+    )
+
+
+@guests_router.get(
+    "", response_model=list[GuestSeen], dependencies=[Depends(require_admin_read)]
+)
+async def list_guests_seen() -> list[GuestSeen]:
+    """Guests that changed a room's music in the last
+    :data:`GUESTS_SEEN_DAYS` days, most recent first, each with the ban
+    that covers it now (if any)."""
+    async with session_scope() as s:
+        rows = await s.execute(
+            text(
+                f"""
+                SELECT g.device_id, g.source, g.user_agent, g.room_id,
+                       g.last_action, g.first_seen, g.last_seen,
+                       (SELECT b.id FROM guest_bans b
+                         WHERE (b.device_id IS NOT NULL AND g.device_id <> ''
+                                AND b.device_id = g.device_id)
+                            OR (b.source IS NOT NULL AND b.source = g.source)
+                         ORDER BY b.id LIMIT 1) AS ban_id
+                FROM guests_seen g
+                WHERE g.last_seen > now() - interval '{GUESTS_SEEN_DAYS} days'
+                ORDER BY g.last_seen DESC
+                LIMIT {GUESTS_SEEN_LIMIT}
+                """
+            )
+        )
+        return [
+            GuestSeen(
+                device_id=r[0] or None, source=r[1], user_agent=r[2], room_id=r[3],
+                last_action=r[4], first_seen=r[5], last_seen=r[6],
+                ban_id=int(r[7]) if r[7] is not None else None,
+            )
+            for r in rows.all()
+        ]
+
+
+@guest_bans_router.get(
+    "", response_model=list[GuestBan], dependencies=[Depends(require_admin_read)]
+)
+async def list_guest_bans() -> list[GuestBan]:
+    async with session_scope() as s:
+        rows = await s.execute(
+            text(f"SELECT {_BAN_COLUMNS} FROM guest_bans ORDER BY id DESC")
+        )
+        return [_row_to_ban(r) for r in rows.all()]
+
+
+@guest_bans_router.post(
+    "",
+    response_model=GuestBan,
+    status_code=201,
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def create_guest_ban(payload: GuestBanCreate) -> GuestBan:
+    """Ban a guest from changing any room's music: by the device id it
+    sends, its address, or both (what the Ban buttons send). Needs one of
+    the two; a duplicate is 409."""
+    device_id = guest_bans.clean_device_id(payload.device_id)
+    source = (payload.source or "").strip() or None
+    if not device_id and not source:
+        raise HTTPException(
+            status_code=400, detail="a guest ban needs a device_id, a source, or both"
+        )
+    async with session_scope() as s:
+        try:
+            row = await s.execute(
+                text(
+                    f"""
+                    INSERT INTO guest_bans (device_id, source, note)
+                    VALUES (:device_id, :source, :note)
+                    RETURNING {_BAN_COLUMNS}
+                    """
+                ),
+                {"device_id": device_id, "source": source, "note": payload.note},
+            )
+        except IntegrityError as e:
+            raise HTTPException(
+                status_code=409, detail="that guest is already banned"
+            ) from e
+        result = row.first()
+    if result is None:  # pragma: no cover — RETURNING always yields on insert
+        raise HTTPException(status_code=500, detail="insert returned no row")
+    return _row_to_ban(result)
+
+
+@guest_bans_router.delete(
+    "/{ban_id}", status_code=204, dependencies=[Depends(require_admin_mutation)]
+)
+async def delete_guest_ban(ban_id: int) -> None:
+    """Unban."""
+    async with session_scope() as s:
+        result = await s.execute(
+            text("DELETE FROM guest_bans WHERE id = :id"), {"id": ban_id}
+        )
+    if (result.rowcount or 0) == 0:
+        raise HTTPException(status_code=404, detail=f"guest ban {ban_id} not found")

@@ -358,6 +358,8 @@ app.include_router(lyrics_api.router)
 # paths, and so the blocks sit on a prefix no room id can shadow.
 app.include_router(music_queue_api.router)
 app.include_router(music_queue_api.blocks_router)
+app.include_router(music_queue_api.guests_router)
+app.include_router(music_queue_api.guest_bans_router)
 app.include_router(devices_api.router)
 app.include_router(people_api.router)
 app.include_router(denylist_api.router)

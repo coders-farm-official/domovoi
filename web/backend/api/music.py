@@ -32,6 +32,9 @@ from sqlalchemy import text
 
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
+# The guest gate (owner decision 2026-10-10): the previous button takes a
+# guest on a playing room too, like the room queue.
+from web.backend.api.music_queue import GUEST_OR_DEVICE
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -1088,7 +1091,7 @@ async def skip(room_id: str, request: Request):
     return bridge_response(status, payload)
 
 
-@router.post("/previous/{room_id}", dependencies=DEVICE)
+@router.post("/previous/{room_id}", dependencies=GUEST_OR_DEVICE)
 async def previous(room_id: str, request: Request):
     """Back one song in the room's queue (MPD's previous; on the queue's
     first song it starts that song again). The app's and the dashboard's
@@ -1096,7 +1099,11 @@ async def previous(room_id: str, request: Request):
     the dashboard's previous posted skip — moving the room FORWARD.
 
     Device tier, not open like the four above: the kiosk has no previous
-    button, so nothing unattended needs it (docs/SECURITY_PRIVACY.md)."""
+    button, so nothing unattended needs it (docs/SECURITY_PRIVACY.md). A
+    guest (no credential) may go back on a PLAYING room unless an admin
+    banned it (owner decision 2026-10-10): this hop passes the guest
+    through, and the core decides — it alone can see whether the room is
+    playing (domovoi/guest_queue.py)."""
     status, payload = await post_admin(
         f"/v1/admin/music/previous/{room_id}", headers=auth_forward_headers(request)
     )
