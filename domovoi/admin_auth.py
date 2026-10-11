@@ -10,9 +10,12 @@ the plugin runtime (design §5.1).
 
 The model, in one paragraph: first boot writes an 8-word **setup code**
 to ``~/.domovoi/setup-code.txt`` (mode 0600, valid for
-:data:`SETUP_CODE_TTL_SEC`) and prints it to the core console — proof of
-possession of the server. ``POST /api/auth/setup`` requires that code,
-hashes the chosen password with **argon2id**, and deletes the code file.
+:data:`SETUP_CODE_TTL_SEC`) — proof of possession of the server. The code
+is printed only when the core's stdout is a terminal
+(:func:`stdout_is_terminal`); under a service manager stdout is the
+journal, so the log says where the code is, never what it is.
+``POST /api/auth/setup`` requires that code, hashes the chosen password
+with **argon2id**, and deletes the code file.
 ``POST /api/auth/login`` verifies the password (behind a per-source
 exponential backoff that counts the attempt BEFORE the verify) and mints
 a 256-bit bearer token of which only the sha256 is stored, with a
@@ -73,6 +76,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,10 +98,10 @@ SESSION_TTL_DAYS = 30
 # extends past ``created_at + SESSION_MAX_AGE_DAYS``.
 SESSION_MAX_AGE_DAYS = 90
 # The setup code is single-use AND time-boxed: a code file older than this
-# is refused by ``verify_setup_code`` and replaced (with a fresh console
-# banner) by the next core boot. Sized to the day the box was first booted —
-# regeneration happens only at boot, so a shorter window on a headless
-# server would just mean more restarts.
+# is refused by ``verify_setup_code`` and replaced by the next core boot
+# (with a fresh banner when the core runs in a terminal). Sized to the day
+# the box was first booted — regeneration happens only at boot, so a
+# shorter window on a headless server would just mean more restarts.
 SETUP_CODE_TTL_SEC = 24 * 3600.0
 # Failed-login backoff: 1 s doubling per failure, capped at 5 min (§7.3).
 BACKOFF_BASE_SEC = 1.0
@@ -304,13 +308,38 @@ def verify_setup_code(candidate: str) -> bool:
     return matched
 
 
+def stdout_is_terminal() -> bool:
+    """True when stdout is an interactive terminal — the only place the
+    setup code is printed. Under systemd (or any redirect) stdout is the
+    journal or a log file, and whatever lands there ends up in every log
+    bundle anyone exports. A missing or closed stdout, or one whose
+    ``isatty`` raises, counts as not a terminal."""
+    try:
+        out = sys.stdout
+        return out is not None and bool(out.isatty())
+    except Exception:
+        return False
+
+
+def setup_code_whereabouts() -> str:
+    """Where an admin finds the setup code, WITHOUT the code: safe for the
+    log. Plain ASCII, like the banner (Windows cp1252 consoles)."""
+    return (
+        f"the setup code is in {setup_code_path()} on the Domovoi server "
+        "(readable by the user the core runs as); open the dashboard, "
+        'Settings > Configuration > Admin > "set up admin", and enter it there'
+    )
+
+
 async def ensure_setup_code_if_unclaimed() -> str | None:
     """Core-boot hook (§7.2): when no admin credential exists yet, make
-    sure a setup code file exists and print the code to the console so
-    the operator can complete first-run setup. Reuses an existing file's
-    code while it is inside its window (a restart must not invalidate the
-    code the operator already read); an expired file is replaced. Returns
-    the active code, or None when setup is complete."""
+    sure a setup code file exists so the operator can complete first-run
+    setup. The code itself is printed only when stdout is a terminal
+    (:func:`stdout_is_terminal`); the one log line says where the file is,
+    never what is in it. Reuses an existing file's code while it is inside
+    its window (a restart must not invalidate the code the operator
+    already read); an expired file is replaced. Returns the active code,
+    or None when setup is complete."""
     try:
         async with session_scope() as s:
             if await has_admin_auth(s):
@@ -328,19 +357,21 @@ async def ensure_setup_code_if_unclaimed() -> str | None:
     if code is None:
         code = generate_setup_code()
         write_setup_code(code)
-    # Print AND log — the design requires the code on the console.
-    banner = (
-        "\n"
-        "============================================================\n"
-        " Domovoi first-run setup\n"
-        f" Setup code: {code}\n"
-        f" (also written to {setup_code_path()})\n"
-        " Open the dashboard and enter this code to choose the admin\n"
-        " password. The code is deleted once setup completes.\n"
-        "============================================================\n"
-    )
-    print(banner, flush=True)
-    log.info("admin setup pending — setup code written to %s", setup_code_path())
+    if stdout_is_terminal():
+        # Someone is watching this terminal: show them the code.
+        banner = (
+            "\n"
+            "============================================================\n"
+            " Domovoi first-run setup\n"
+            f" Setup code: {code}\n"
+            f" (also written to {setup_code_path()})\n"
+            " Open the dashboard and enter this code to choose the admin\n"
+            " password. The code is deleted once setup completes.\n"
+            "============================================================\n"
+        )
+        print(banner, flush=True)
+    # Never the code: this line reaches the journal either way.
+    log.warning("admin setup pending - %s", setup_code_whereabouts())
     return code
 
 
@@ -857,10 +888,10 @@ async def list_sessions(session: AsyncSession) -> list[dict[str, Any]]:
 async def reset_admin() -> str:
     """``--reset-admin`` (§7.2 password recovery): drop the credential
     and every session, regenerate + persist a fresh setup code. Returns
-    the new code (the CLI prints it). The install is back in the
-    pre-setup state: the daily surface keeps its LAN grace, the security
-    tier (:func:`require_admin_security`) stays closed until setup
-    completes again."""
+    the new code (the CLI prints it only to a terminal). The install is
+    back in the pre-setup state: the daily surface keeps its LAN grace,
+    the security tier (:func:`require_admin_security`) stays closed until
+    setup completes again."""
     async with session_scope() as s:
         await s.execute(text("DELETE FROM admin_sessions"))
         await s.execute(text("DELETE FROM admin_auth"))

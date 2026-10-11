@@ -463,6 +463,28 @@ def test_an_unused_opted_in_lock_reaches_the_version_card(stub_version_probes):
     ]
 
 
+def test_a_failed_os_jobs_step_reaches_the_version_card(stub_version_probes):
+    """2026-10-11: Ubuntu's own jobs follow the internet answer
+    (scripts/linux/os-jobs.sh). The step never fails a run, so a `warn` is
+    the only witness that the timers were not set as the answer says; the
+    script writes its detail from the helper's own lines, and it reaches the
+    card. Its `ok` note (what it changed) stays on the box."""
+    warn = ("Ubuntu's background jobs: could not mask apt-daily.timer; changed nothing "
+            "(internet: never; WSL: no)")
+    _write_result(_ok_run_with([
+        {"name": "searxng", "status": "ok", "duration_sec": 0.5},
+        {"name": "os-jobs", "status": "warn", "duration_sec": 0.3, "detail": warn},
+    ]))
+    steps = asyncio.run(git_version.version_state())["last_update"]["steps"]
+    assert steps[1] == {"name": "os-jobs", "status": "warn", "duration_sec": 0.3, "detail": warn}
+    _write_result(_ok_run_with([
+        {"name": "os-jobs", "status": "ok", "duration_sec": 0.3,
+         "detail": "masked apt-daily.timer (internet: never; WSL: no)"},
+    ]))
+    steps = asyncio.run(git_version.version_state())["last_update"]["steps"]
+    assert steps == [{"name": "os-jobs", "status": "ok", "duration_sec": 0.3}]
+
+
 @pytest.mark.parametrize("step", [
     # Raw output tails stay on the box, whatever the status.
     {"name": "searxng", "status": "warn", "duration_sec": 1.0,

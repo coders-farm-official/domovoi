@@ -290,9 +290,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await git_version.capture_boot_state()
 
     # First-run admin setup code (design §7.2): while no admin credential
-    # exists, write the 8-word code to ~/.domovoi/setup-code.txt and print
-    # it to this console — proof of possession of the server for
-    # POST /api/auth/setup. Deleted automatically once setup completes.
+    # exists, write the 8-word code to ~/.domovoi/setup-code.txt — proof of
+    # possession of the server for POST /api/auth/setup — and print it only
+    # when stdout is a terminal (never into the journal). Deleted
+    # automatically once setup completes.
     # Runs BEFORE any model loads: the admin claim is how a bad model
     # setting gets fixed from the dashboard, so nothing that can fail or
     # hang in a model load may stand between a fresh box and its code.
@@ -380,8 +381,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # walk — all before the first satellite connects. Host-owned dirs.
     # NOTE: this pair is core's own MPD-mount prerequisite and must hold even
     # in a core-only run. The FULL set of browsable media libraries (music,
-    # audiobooks, podcasts, documents, pictures) is created at boot by the web
-    # process from the CORE_LIBRARIES table — web/backend/api/files_security.py
+    # audiobooks, podcasts, documents, pictures, videos) is created at boot by
+    # the web process from the CORE_LIBRARIES table — web/backend/api/files_security.py
     # :func:`ensure_core_library_dirs`, called from web/backend/main.py's
     # lifespan. Core cannot drive it from here: core never imports web.
     for _spoken_dir in (settings.podcasts_dir, settings.audiobooks_dir):
@@ -5418,13 +5419,19 @@ def _reset_admin_cli() -> None:
     recovery): drop the admin credential + every bearer session, then
     regenerate the one-time setup code so the operator can run first-run
     setup again from the dashboard. Local CLI only — this never has an
-    HTTP surface."""
+    HTTP surface. The new code is printed only when stdout is a terminal,
+    the same rule as the boot banner: run under a service manager or
+    with its output captured, it says where the code is instead."""
     code = asyncio.run(admin_auth_mod.reset_admin())
     # Plain ASCII output — Windows consoles default to cp1252.
     print("admin credential and all sessions cleared.")
-    print(f"new setup code: {code}")
-    print(f"(also written to {admin_auth_mod.setup_code_path()})")
-    print("open the dashboard to choose a new admin password.")
+    if admin_auth_mod.stdout_is_terminal():
+        print(f"new setup code: {code}")
+        print(f"(also written to {admin_auth_mod.setup_code_path()})")
+        print("open the dashboard to choose a new admin password.")
+    else:
+        print("a new setup code was written (not shown: stdout is not a terminal).")
+        print(admin_auth_mod.setup_code_whereabouts() + ".")
 
 
 def main() -> None:

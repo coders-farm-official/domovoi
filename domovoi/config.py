@@ -885,6 +885,12 @@ class Settings(BaseSettings):
     # decision 2026-10-02). A COVER_ART_DIR left in an .env is ignored, and
     # an old ~/.domovoi/cover_art directory is safe to delete.
 
+    # ─── Videos library + Videos tab ────────────────────────────────────
+    # Host path exposed as the core:videos Files library and walked by the
+    # Videos tab (which walks every other Files library too). Created at
+    # boot like the other core library dirs.
+    videos_dir: str = os.path.expanduser("~/Videos")
+
     # ─── Video poster cache (browser/Android Videos tab) ────────────────
     # The web backend caches one ffmpeg-extracted poster frame per video
     # here, keyed by a hash of (library, path, mtime, size) with a

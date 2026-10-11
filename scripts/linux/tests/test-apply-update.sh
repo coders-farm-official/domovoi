@@ -426,6 +426,11 @@ new_case() {
   UPD=$CASE/update
   CORE_STATE=$CASE/core-state
   mkdir -p "$REPO/domovoi/db/migrations" "$STATE" "$CORE_STATE"
+  # The system root scripts/linux/os-jobs.sh sees (its test-root pair, set
+  # by run_update): empty unless a case puts Ubuntu's units in it, so the
+  # helper never looks at, let alone masks, the host's own units.
+  OSROOT=$CASE/osroot
+  mkdir -p "$OSROOT"
   write_shims "$CASE/bin"
   write_venv "$CASE/venv"
   : >"$STATE/calls.log"
@@ -462,7 +467,7 @@ new_case() {
 # the upstream pins.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=()
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=() osjobs_env=()
   local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
@@ -470,16 +475,19 @@ run_update() {
   if [ -n "${UPSTREAM_URL:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_URL="$UPSTREAM_URL"); fi
   if [ -n "${UPSTREAM_BRANCH:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_BRANCH="$UPSTREAM_BRANCH"); fi
   if [ -n "${USE_LOCK:-}" ]; then lock_env=(DOMOVOI_USE_LOCK="$USE_LOCK"); fi
+  if [ -n "${MANAGE_OS_JOBS:-}" ]; then osjobs_env=(DOMOVOI_MANAGE_OS_JOBS="$MANAGE_OS_JOBS"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
   env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
-    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK PATH="$path" \
+    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
+    DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
     ${manage_env[@]+"${manage_env[@]}"} \
     ${pin_env[@]+"${pin_env[@]}"} \
     ${lock_env[@]+"${lock_env[@]}"} \
+    ${osjobs_env[@]+"${osjobs_env[@]}"} \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
@@ -1510,10 +1518,16 @@ case_searxng_opt_out_and_an_older_checkout() {
   new_case searxng_opt_out_and_an_older_checkout
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   echo always >"$STATE/internet-policy"
-  MANAGE_SEARXNG=0 run_update
+  # Ubuntu's jobs (os-jobs.sh) read the same answer: opted out of both,
+  # nothing reads it.
+  MANAGE_SEARXNG=0 MANAGE_OS_JOBS=0 run_update
   check "opted out: status ok" eq "$(field status)" '"ok"'
   check "opted out: no compose" not_called "docker compose"
-  check "opted out: the answer isn't even read" not_called "domovoi.egress"
+  check "opted out of both: the answer isn't even read" not_called "domovoi.egress"
+  MANAGE_SEARXNG=0 run_update
+  check "only the search helper opted out: status ok" eq "$(field status)" '"ok"'
+  check "only the search helper opted out: still no compose" not_called "docker compose"
+  check "only the search helper opted out: os-jobs reads the answer" called "domovoi.egress --print-policy"
   : >"$STATE/egress-missing"
   run_update
   check "older checkout: status ok" eq "$(field status)" '"ok"'
@@ -1568,6 +1582,192 @@ case_searxng_start_detached_under_systemd() {
   check "the update did not run compose itself" eq "$(grep -c '^docker compose' "$STATE/calls.log")" 0
   check "a searxng step, ok" step_is searxng ok
   check "says it starts in the background" eq "$(grep -c 'in the background' "$RESULT")" 1
+  end_case
+}
+
+# ─── Ubuntu's own background jobs follow the internet answer ─────────────
+#
+# Owner decision 2026-10-11: under never the updaters, news and
+# crash-report timers are masked (scripts/linux/os-jobs.sh, which
+# provision.sh runs too), and they come back when the answer does; on WSL
+# wsl-pro and snapd stay off. The update unit re-applies it after every
+# healthy restart or update, so an answer changed in Settings takes effect
+# at the next Restart. A step is recorded only when something changed.
+
+# os_units [--wsl] UNIT...: Ubuntu's units in the helper's root, with
+# systemd as PID 1 (so the helper calls systemctl) and a bare-metal kernel,
+# or a WSL one.
+os_units() {
+  local kernel=6.8.0-45-generic
+  if [ "${1-}" = --wsl ]; then kernel=6.6.87.2-microsoft-standard-WSL2; shift; fi
+  mkdir -p "$OSROOT/usr/lib/systemd/system" "$OSROOT/etc/systemd/system" "$OSROOT/proc/1" "$OSROOT/proc/sys/kernel"
+  echo systemd >"$OSROOT/proc/1/comm"
+  echo "$kernel" >"$OSROOT/proc/sys/kernel/osrelease"
+  local u
+  for u in "$@"; do : >"$OSROOT/usr/lib/systemd/system/$u"; done
+}
+os_masked() { [ "$(readlink "$OSROOT/etc/systemd/system/$1" 2>/dev/null)" = /dev/null ]; }
+os_not_masked() { ! os_masked "$1"; }
+
+case_os_jobs_follow_the_answer_on_restarts() {
+  new_case os_jobs_follow_the_answer_on_restarts
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer snapd.service snapd.socket wsl-pro.service
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "never: status ok" eq "$(field status)" '"ok"'
+  check "never: a step after the search helper's" eq "$(step_names)" "signature stop-services start-services health searxng os-jobs"
+  check "never: an ok step" step_is os-jobs ok
+  check "never: it says what it masked" grep -qF '"detail": "masked apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer' "$RESULT"
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer; do check "never: $u masked" os_masked "$u"; done
+  check "never: snapd is the administrator's on bare metal" os_not_masked snapd.service
+  check "never: so is wsl-pro" os_not_masked wsl-pro.service
+  check "never: written down" grep -qx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  check "never: systemd told" called "systemctl daemon-reload"
+  check "never: the timer stopped" called "systemctl stop apt-daily.timer"
+  check "never: after health" before "curl http://127.0.0.1:6369/api/health" "systemctl daemon-reload"
+  # The household answers Yes in Settings, then presses Restart.
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "always: status ok" eq "$(field status)" '"ok"'
+  check "always: an ok step" step_is os-jobs ok
+  check "always: it says what it unmasked" grep -qF 'unmasked apt-daily-upgrade.timer apt-daily.timer motd-news.timer unattended-upgrades.service' "$RESULT"
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer; do check "always: $u unmasked" os_not_masked "$u"; done
+  check "always: nothing left written down" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  # Another restart: nothing to change, nothing recorded.
+  run_update
+  check "again: status ok" eq "$(field status)" '"ok"'
+  check "again: no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "again: the journal says so" grep -qF "os-jobs: nothing to change (internet: always; WSL: no)" "$CASE/output.log"
+  end_case
+}
+
+case_os_jobs_on_wsl_keep_snapd_off() {
+  new_case os_jobs_on_wsl_keep_snapd_off
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units --wsl apt-daily.timer snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer wsl-pro.service
+  echo sometimes >"$STATE/internet-policy"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "an ok step" step_is os-jobs ok
+  for u in wsl-pro.service snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer; do check "$u masked (WSL)" os_masked "$u"; done
+  check "disabled and stopped first" called "systemctl disable --now wsl-pro.service"
+  check "the updaters run as shipped (sometimes)" os_not_masked apt-daily.timer
+  end_case
+}
+
+case_os_jobs_opt_out_and_failure_never_fail_an_update() {
+  new_case os_jobs_opt_out_and_failure_never_fail_an_update
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer
+  echo never >"$STATE/internet-policy"
+  MANAGE_OS_JOBS=0 run_update
+  check "opted out: status ok" eq "$(field status)" '"ok"'
+  check "opted out: no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "opted out: nothing masked" os_not_masked apt-daily.timer
+  check "opted out: said so" grep -qF "Ubuntu's background jobs left alone (DOMOVOI_MANAGE_OS_JOBS=0)" "$CASE/output.log"
+  # A full update whose helper can't mask (here: no unit directory to write
+  # in): a warn step, and the update stays ok.
+  rm -rf "$OSROOT/etc/systemd/system"; : >"$OSROOT/etc/systemd/system"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  run_update
+  check "failure: exit 0" eq "$RC" 0
+  check "failure: status ok" eq "$(field status)" '"ok"'
+  check "failure: mode update" eq "$(field mode)" '"update"'
+  check "failure: a warn step" step_is os-jobs warn
+  check "failure: it says why" grep -qF "could not mask apt-daily.timer" "$RESULT"
+  # The detail is the helper's own lines (the Version card shows it), not
+  # mkdir's raw error.
+  check "failure: the detail the card shows" grep -qF '"detail": "Ubuntu'"'"'s background jobs: could not mask apt-daily.timer' "$RESULT"
+  check "failure: no raw tool output in it" eq "$(grep -c 'mkdir: cannot' "$RESULT")" 0
+  # Review 2026-10-11, finding 3: written down first, crossed off when the
+  # mask failed, so the record never names a unit that is not masked.
+  check "failure: nothing left written down" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  check "failure: no error on the run" eq "$(field error)" null
+  check "failure: no rollback" not_called "reset --keep"
+  check "failure: applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Review 2026-10-11, finding 1: a mask the administrator made before stays
+# through never and back to always; only what os-jobs.sh wrote down is
+# taken back. (A helper that unmasks every listed unit whatever its record
+# says fails this case.)
+case_os_jobs_an_admins_mask_stays_through_never_and_always() {
+  new_case os_jobs_an_admins_mask_stays_through_never_and_always
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer motd-news.timer ua-timer.timer
+  ln -s /dev/null "$OSROOT/etc/systemd/system/motd-news.timer"
+  check "set up: the admin's mask is there" os_masked motd-news.timer
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "never: status ok" eq "$(field status)" '"ok"'
+  check "never: apt-daily masked" os_masked apt-daily.timer
+  check "never: ua-timer masked" os_masked ua-timer.timer
+  check "never: the admin's mask not written down" eq "$(grep -cx motd-news.timer "$OSROOT/var/lib/domovoi-os-jobs/masked")" 0
+  check "never: what it masked is" grep -qx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "always: status ok" eq "$(field status)" '"ok"'
+  check "always: apt-daily unmasked" os_not_masked apt-daily.timer
+  check "always: ua-timer unmasked" os_not_masked ua-timer.timer
+  check "always: the admin's mask stays" os_masked motd-news.timer
+  check "always: the step names only its own" grep -qF '"detail": "unmasked apt-daily.timer ua-timer.timer (internet: always; WSL: no)"' "$RESULT"
+  echo sometimes >"$STATE/internet-policy"
+  run_update
+  check "again: the admin's mask still stays" os_masked motd-news.timer
+  check "again: no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+# Review 2026-10-11, finding 1: the Beelink's case. Bare metal, the
+# question unanswered, Ubuntu's units installed: nothing changes and the
+# result gains no step.
+case_os_jobs_unanswered_bare_metal_changes_nothing() {
+  new_case os_jobs_unanswered_bare_metal_changes_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer \
+    ua-timer.timer apport-autoreport.path apport-autoreport.timer snapd.snap-repair.timer \
+    snapd.service snapd.socket wsl-pro.service
+  local before; before=$(ls -A "$OSROOT/etc/systemd/system")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "said why" grep -qF "os-jobs: nothing to change (internet: unanswered; WSL: no)" "$CASE/output.log"
+  check "no unit file touched" eq "$(ls -A "$OSROOT/etc/systemd/system")" "$before"
+  check "nothing written down" test ! -e "$OSROOT/var/lib/domovoi-os-jobs"
+  check "systemd not even asked" not_called "systemctl daemon-reload"
+  end_case
+}
+
+# Review 2026-10-11, finding 3: os-jobs.sh writes a unit down before it
+# masks it. A run killed in between leaves it written down and not masked:
+# the next always run crosses it off without touching it, the next never
+# run masks it (written down once).
+case_os_jobs_a_kill_between_record_and_mask_heals() {
+  new_case os_jobs_a_kill_between_record_and_mask_heals
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer motd-news.timer
+  mkdir -p "$OSROOT/var/lib/domovoi-os-jobs"
+  echo apt-daily.timer >"$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "always: status ok" eq "$(field status)" '"ok"'
+  check "always: crossed off" grep -qF "crossed off apt-daily.timer" "$RESULT"
+  check "always: not masked, not unmasked" os_not_masked apt-daily.timer
+  check "always: the record is gone" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo apt-daily.timer >"$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "never: status ok" eq "$(field status)" '"ok"'
+  check "never: masked now" os_masked apt-daily.timer
+  check "never: written down once" eq "$(grep -cx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked")" 1
+  check "never: motd-news too" os_masked motd-news.timer
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "back to always: both unmasked" eq "$(ls -A "$OSROOT/etc/systemd/system" | grep -c .)" 0
   end_case
 }
 
@@ -1752,20 +1952,25 @@ case_unanswered_dependency_update_reads_the_answer_once() {
 
 # write_linux_lock [PIN...]: the checkout's requirements-linux-py314.lock,
 # with pip-compile's header (which names the Python it was compiled for)
-# and one hash line per pin.
+# and one hash line per pin (default: numpy and the build tools).
 write_linux_lock() {
-  local p
+  local p pins=("$@")
+  [ "${#pins[@]}" -gt 0 ] || pins=(numpy==2.4.6 setuptools==81.0.0 wheel==0.48.0)
   {
     printf '#\n# This file is autogenerated by pip-compile with Python 3.14\n'
     printf '# by the following command:\n#\n#    bash scripts/linux/compile-linux-lock.sh\n#\n'
     printf -- '--extra-index-url https://download.pytorch.org/whl/cpu\n\n'
-    for p in "${@:-numpy==2.4.6}"; do
+    for p in "${pins[@]}"; do
       printf '%s \\\n    --hash=sha256:%064d\n' "$p" 0
     done
   } >"$REPO/requirements-linux-py314.lock"
 }
 
 PIP_RUN="pip --disable-pip-version-check --no-input install"
+
+# The build tools' requirements file sync_deps_locked hands pip: what the
+# pip shim logged of it (one "pip-r-file:" line, the file's lines joined).
+build_tools_file() { grep '^pip-r-file: ' "$STATE/calls.log" | grep -F -e 'setuptools==' | head -n 1; }
 
 case_deps_from_the_hash_pinned_lock() {
   new_case deps_from_the_hash_pinned_lock
@@ -1778,12 +1983,19 @@ case_deps_from_the_hash_pinned_lock() {
   check "status ok" eq "$(field status)" '"ok"'
   check "a lock change is a dependency change" eq "$(field deps_changed)" true
   check "asks the venv which Python it runs" called "python -c import sys; print"
-  check "build tools first, hash-checked against the lock" \
-    called "$PIP_RUN --require-hashes -c $REPO/requirements-linux-py314.lock setuptools wheel"
+  check "build tools first, from a requirements file of the lock's own stanzas" \
+    called "$PIP_RUN --require-hashes -r $UPD/build-tools."
+  check "not the -c form Ubuntu 26.04's pip 25.1 refuses" not_called "-c $REPO/requirements-linux-py314.lock setuptools wheel"
+  check "the file holds setuptools and wheel, hash lines and all" \
+    eq "$(build_tools_file | grep -o '[a-z]*==[0-9.]*' | sort | tr '\n' ' ')" "setuptools==81.0.0 wheel==0.48.0 "
+  check "with their hashes" eq "$(build_tools_file | grep -o -- '--hash=sha256:' | wc -l | tr -d ' ')" 2
+  check "and nothing else of the lock" eq "$(build_tools_file | grep -c numpy)" 0
+  check "the lock read as the service user, never by root" called "runuser -u tester -- awk -v roots=setuptools wheel"
+  check "the temporary file removed" eq "$(ls "$UPD" | grep -c build-tools)" 0
   check "then every pin, hash-checked, no isolated build env" \
     called "$PIP_RUN --require-hashes --no-build-isolation -r $REPO/requirements-linux-py314.lock"
   check "then the checkout, adding nothing" called "$PIP_RUN --no-deps --no-build-isolation -e ."
-  check "tools before pins" before "setuptools wheel" "--no-build-isolation -r"
+  check "tools before pins" before "-r $UPD/build-tools." "--no-build-isolation -r"
   check "pins before the checkout" before "--no-build-isolation -r" "--no-deps --no-build-isolation -e ."
   check "pip still runs as the service user" called "runuser -u tester -- $CASE/venv/bin/python -m pip"
   check "the lock names its own torch index" not_called "install torch"
@@ -1791,6 +2003,71 @@ case_deps_from_the_hash_pinned_lock() {
   check "no dev extra" not_called "dev,"
   check "the step says so" grep -qF '"detail": "installed from requirements-linux-py314.lock, every package hash-checked"' "$RESULT"
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Owner decision 2026-10-11: the locked re-sync installs the build tools
+# the way provision.sh does (the lock's own stanzas, through pip-compile's
+# "# via" lines: wheel needs packaging), because pip 25.1 refuses
+# "-c <lock> setuptools wheel". A lock in pip-compile's real shape.
+case_locked_build_tools_take_what_they_need() {
+  new_case locked_build_tools_take_what_they_need
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  cat >"$REPO/requirements-linux-py314.lock" <<'LOCK'
+#
+# This file is autogenerated by pip-compile with Python 3.14
+# by the following command:
+#
+#    bash scripts/linux/compile-linux-lock.sh
+#
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+fastapi==1.0 \
+    --hash=sha256:00
+    # via -r requirements-linux-py314.in
+packaging==26.2 \
+    --hash=sha256:11 \
+    --hash=sha256:12
+    # via
+    #   fastapi
+    #   wheel
+wheel==0.48.0 \
+    --hash=sha256:22
+    # via -r requirements-linux-py314.in
+
+# The following packages are considered to be unsafe in a requirements file:
+setuptools==81.0.0 \
+    --hash=sha256:33
+    # via -r requirements-linux-py314.in
+LOCK
+  local sha_b; sha_b=$(commit_all "B: a lock in pip-compile's shape")
+  USE_LOCK=1 run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the build tools and what they need, nothing else" \
+    eq "$(build_tools_file | grep -o '[a-z]*==[0-9.]*' | sort | tr '\n' ' ')" "packaging==26.2 setuptools==81.0.0 wheel==0.48.0 "
+  check "every hash of each" eq "$(build_tools_file | grep -o -- '--hash=sha256:[0-9]*' | sort | tr '\n' ' ')" \
+    "--hash=sha256:11 --hash=sha256:12 --hash=sha256:22 --hash=sha256:33 "
+  check "the journal names them" grep -qF "build tools from requirements-linux-py314.lock: " "$CASE/output.log"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# A lock with no hash-pinned wheel to build with: the step fails before pip
+# runs, and the update rolls back.
+case_locked_resync_without_build_tools_rolls_back() {
+  new_case locked_resync_without_build_tools_rolls_back
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_linux_lock numpy==2.4.7 setuptools==81.0.0
+  local sha_b; sha_b=$(commit_all "B: a lock without wheel")
+  USE_LOCK=1 run_update
+  check "exit non-zero" test "$RC" -ne 0
+  check "status rolled_back" eq "$(field status)" '"rolled_back"'
+  check "failed at sync-deps" eq "$(field error | grep -c 'failed at sync-deps')" 1
+  check "says why" grep -qF "has no hash-pinned setuptools and wheel to build with" "$RESULT"
+  check "no hash-checked install of B's pins" not_called "-r $REPO/requirements-linux-py314.lock"
+  check "checkout back at A" eq "$(g rev-parse HEAD)" "$SHA_A"
+  check "bad_sha recorded" file_is "$UPD/bad_sha" "$sha_b"
   end_case
 }
 
@@ -2348,6 +2625,12 @@ CASES=(
   case_searxng_opt_out_and_an_older_checkout
   case_searxng_hung_start_is_bounded_and_the_update_stays_ok
   case_searxng_start_detached_under_systemd
+  case_os_jobs_follow_the_answer_on_restarts
+  case_os_jobs_on_wsl_keep_snapd_off
+  case_os_jobs_opt_out_and_failure_never_fail_an_update
+  case_os_jobs_an_admins_mask_stays_through_never_and_always
+  case_os_jobs_unanswered_bare_metal_changes_nothing
+  case_os_jobs_a_kill_between_record_and_mask_heals
   case_never_refuses_a_dependency_update
   case_never_refuses_a_music_image_change
   case_never_mpd_conf_only_keeps_the_image
@@ -2358,6 +2641,8 @@ CASES=(
   case_image_change_online_updates
   case_unanswered_dependency_update_reads_the_answer_once
   case_deps_from_the_hash_pinned_lock
+  case_locked_build_tools_take_what_they_need
+  case_locked_resync_without_build_tools_rolls_back
   case_lock_hash_mismatch_rolls_back
   case_lock_for_another_python_falls_back_loudly
   case_lock_missing_when_opted_in_is_a_warn

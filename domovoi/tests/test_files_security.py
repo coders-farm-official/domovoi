@@ -340,7 +340,7 @@ def test_build_core_libraries_excludes_missing_and_secrets(tmp_path, monkeypatch
 @pytest.fixture
 def media_env(tmp_path, monkeypatch):
     """A self-contained fake install: fake home, fake CONFIG_DIR, and a
-    ``core_settings`` stand-in carrying the five library paths (all missing)."""
+    ``core_settings`` stand-in carrying the six library paths (all missing)."""
     home = tmp_path / "home"
     home.mkdir()
     config_dir = home / ".domovoi"
@@ -350,6 +350,7 @@ def media_env(tmp_path, monkeypatch):
         podcasts_dir=str(config_dir / "podcasts"),
         documents_dir=str(home / "Documents"),
         pictures_dir=str(home / "Pictures"),
+        videos_dir=str(home / "Videos"),
     )
     monkeypatch.setattr(fs, "core_settings", fake_settings)
     monkeypatch.setattr(fs, "CONFIG_DIR", config_dir)
@@ -368,7 +369,7 @@ def _status(results, lib_id):
 
 def test_ensure_creates_every_missing_library_dir(media_env):
     for attr in ("music_dir", "audiobooks_dir", "podcasts_dir", "documents_dir",
-                 "pictures_dir"):
+                 "pictures_dir", "videos_dir"):
         assert not Path(getattr(media_env.settings, attr)).exists()
 
     results = fs.ensure_core_library_dirs()
@@ -530,6 +531,7 @@ def test_build_core_libraries_warns_when_a_library_is_skipped(media_env, caplog)
     for lib_id, env, path in (
         ("core:documents", "DOCUMENTS_DIR", media_env.settings.documents_dir),
         ("core:pictures", "PICTURES_DIR", media_env.settings.pictures_dir),
+        ("core:videos", "VIDEOS_DIR", media_env.settings.videos_dir),
     ):
         assert any(
             lib_id in m and env in m and str(Path(path).resolve()) in m
@@ -577,6 +579,41 @@ def test_ensure_then_build_restores_documents_and_pictures(media_env):
     assert {lib[0] for lib in fs.CORE_LIBRARIES} <= set(by_id)
     # doc_editing is what makes the "+ New document/spreadsheet/drawing" menu render
     assert by_id["core:documents"].doc_editing is True
+    assert "core:videos" in by_id
+
+
+# ─── core:videos — a real Videos library (owner decision, 2026-10-11) ───────
+def test_videos_dir_defaults_to_the_home_videos_folder():
+    from domovoi.config import Settings
+
+    assert Settings.model_fields["videos_dir"].default == os.path.expanduser("~/Videos")
+
+
+def test_core_videos_library_is_built_from_videos_dir(media_env):
+    videos = Path(media_env.settings.videos_dir)
+    videos.mkdir(parents=True)
+
+    by_id = {lib.id: lib for lib in fs.build_core_libraries(fs._allowed_under_config())}
+
+    lib = by_id["core:videos"]
+    assert lib.root_path == videos.resolve()
+    assert (lib.label, lib.kind, lib.icon) == ("Videos", "core", "clapperboard")
+    assert lib.editable and lib.importable and not lib.doc_editing
+    # A kind label like "pictures": the Videos tab walks the folder live, so
+    # there is no index for a write to refresh.
+    assert lib.reindex_kind == "videos"
+    assert lib.reindex_kind not in fs.INDEXED_KINDS
+
+
+def test_ensure_creates_the_videos_dir_at_boot(media_env):
+    videos = Path(media_env.settings.videos_dir)
+    assert not videos.exists()
+
+    results = fs.ensure_core_library_dirs()
+
+    row = _status(results, "core:videos")
+    assert (row.status, row.setting) == ("created", "videos_dir")
+    assert videos.is_dir()
 
 
 # ─── root_rejection: the reason strings validate_root used to swallow ───────

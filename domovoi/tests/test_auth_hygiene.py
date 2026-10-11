@@ -70,7 +70,9 @@ def test_setup_code_is_refused_after_its_window(tmp_path, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_boot_hook_replaces_an_expired_code(tmp_path, monkeypatch, capsys) -> None:
     """A restart inside the window keeps the code the operator already
-    read; a restart after it prints a fresh one."""
+    read; a restart after it writes a fresh one. Captured stdout is not a
+    terminal, so neither code is printed (test_admin_auth.py pins both
+    branches of that rule)."""
     monkeypatch.setattr(admin_auth, "CONFIG_DIR", tmp_path)
     install_fake_db(monkeypatch, admin=False)
     first = await admin_auth.ensure_setup_code_if_unclaimed()
@@ -81,7 +83,8 @@ async def test_boot_hook_replaces_an_expired_code(tmp_path, monkeypatch, capsys)
     assert fresh is not None and fresh != first
     assert admin_auth.read_setup_code() == fresh
     assert admin_auth.setup_code_expired() is False
-    assert fresh in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert fresh not in out and first not in out
 
 
 # ─── Backoff: the attempt is counted BEFORE the verify ────────────────────

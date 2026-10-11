@@ -163,7 +163,11 @@ def test_an_update_uses_the_lock_only_when_opted_in() -> None:
 
 def test_linux_install_docs_install_from_the_lock() -> None:
     doc = LINUX_HOST.read_text(encoding="utf-8")
-    assert "pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel" in doc
+    # The build tools from the lock's own entries, as a requirements file:
+    # the pip in Ubuntu 26.04's venv (25.1) takes no hashes from a
+    # constraints file, so "-c <lock> setuptools wheel" is refused there
+    # (test_provision_script holds the list of names to the lock).
+    assert "pip install --require-hashes -r /tmp/build-tools.txt" in doc
     assert "pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock" in doc
     assert "pip install --no-deps --no-build-isolation -e ." in doc
 

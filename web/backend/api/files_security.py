@@ -637,6 +637,7 @@ CORE_LIBRARIES: tuple[tuple[str, str, str, str, bool, bool, str, bool], ...] = (
     ("core:podcasts", "Podcasts", "podcast", "podcasts_dir", True, True, "podcasts", False),
     ("core:documents", "Documents", "file-text", "documents_dir", True, True, "documents", True),
     ("core:pictures", "Pictures", "image", "pictures_dir", True, True, "pictures", False),
+    ("core:videos", "Videos", "clapperboard", "videos_dir", True, True, "videos", False),
 )
 
 # The Documents library's id, named once. ``/api/files`` and

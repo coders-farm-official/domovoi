@@ -240,6 +240,88 @@ you're not using that.)
 
 ## Install
 
+### Or let the script do it
+
+On a fresh Ubuntu 26.04 box, `scripts/linux/provision.sh` runs this
+section, [Make it an appliance](#make-it-an-appliance) and the
+[update unit](#one-time-upgrade-for-existing-installs) for you,
+unattended. It is the same script the Windows installer runs inside its
+WSL distro. Read it, or ask it what it would do, before it changes
+anything:
+
+```bash
+git clone https://github.com/coders-farm-official/domovoi /tmp/domovoi
+sudo bash /tmp/domovoi/scripts/linux/provision.sh --dry-run --internet always --timezone America/New_York
+sudo bash /tmp/domovoi/scripts/linux/provision.sh --internet always --timezone America/New_York
+```
+
+It clones the repository again into `/opt/domovoi` as the `domovoi` user
+(an account it creates with no password login; an existing `--user` is
+used as it is, and one in `sudo`, `admin` or `wheel` is refused). On top
+of the manual steps it pre-downloads what the core would otherwise fetch
+at its first boot: the Ollama models for the box's memory (`--tier`), the
+Whisper model, the Piper voice and the room image. What it checks:
+
+- **Against a pin, stopping on a mismatch:** every Python package (the
+  lock's hashes), the Ollama release pinned under [By hand](#by-hand)
+  below (SHA-256), Docker's apt key (the fingerprint in
+  `scripts/linux/provision-manifest.conf`; that key alone is installed,
+  and apt checks the docker-ce packages against the index it signs), the
+  compose images and the room image's base (digests), each Ollama model
+  (the manifest's digests), Whisper's `model.bin` and the Piper voice
+  (SHA-256).
+- **Not hashed:** Ubuntu's own packages (apt checks them against Ubuntu's
+  signed archive, at whatever version it serves that day), what
+  `domovoi/Dockerfile.mpd` installs with apt inside the room image, and
+  Whisper's small files beside `model.bin` (`config.json`,
+  `tokenizer.json`, `vocabulary.*`), which come from the pinned Hugging
+  Face revision.
+- **Later:** docker-ce goes in at the manifest's versions on a box that
+  has none yet and is not held, so `apt upgrade` moves it like any other
+  package. The box's updates install from the lock too: the script puts
+  `DOMOVOI_USE_LOCK=1` in `/etc/default/domovoi-update` (unless that file
+  already sets it), so an update that changes the dependencies re-syncs
+  the venv hash-checked, the way it was installed
+  ([The hash-pinned lock](#the-hash-pinned-lock)).
+
+What else it settles, beyond the manual steps:
+
+- **GPU.** Ollama runs on every GPU it finds, and on the CPU without one;
+  the script pins nothing (no `CUDA_VISIBLE_DEVICES`). Inside the Windows
+  installer's WSL distro that includes the PC's NVIDIA cards, which WSL
+  hands through. The model tier still follows the box's memory alone.
+  The script's last progress line lists what Ollama found (`"gpu"`, empty
+  on a CPU-only box), and its log says it in words.
+- **Time zone.** On bare metal, `--timezone` sets it (`timedatectl`, and
+  `/etc/timezone`, which the core reads first). In WSL the distro's zone is
+  Windows': WSL rewrites `/etc/localtime` and `/etc/timezone` from it at
+  every distro start, so `--timezone` is ignored there with a warning; the
+  script only checks that the two files name the same zone, and if they
+  don't (someone ran `timedatectl` inside the distro) rewrites
+  `/etc/timezone` to match and restarts core and web. Change the zone in
+  Windows' settings; it applies at the distro's next start.
+- **Ubuntu's own background jobs** follow the internet answer: see
+  [Internet or not](#internet-or-not). On WSL, `wsl-pro.service` and snapd
+  are turned off whatever the answer (Domovoi uses neither); on bare metal
+  they are left as they are.
+- **Media folders.** `--media music=...` (and `pictures`, `documents`,
+  `audiobooks`, `podcasts`, `videos`) sets the matching `MUSIC_DIR`, ...,
+  `VIDEOS_DIR`.
+
+Run it again at any time: finished steps are skipped, a killed run picks
+up where it stopped (a clone cut short is made again), and nothing is
+restarted that didn't change. A re-run never undoes your own settings: in
+`domovoi/.env` it sets a key only if it is missing or still holds what
+the script last wrote there, and it warns about each one it leaves alone.
+A media folder it mounted before that is missing now (an unplugged drive)
+is a warning, not a failure. `--help` lists the options (`--media`,
+`--tier`, `--skip-models`, ...) and the exit codes.
+
+The steps below are the same install by hand, without the pre-downloads.
+Follow them instead if you prefer, or to see what a step changed.
+
+### By hand
+
 Prerequisites:
 
 ```bash
@@ -343,16 +425,26 @@ the repo root is the whole production set (the core, the dashboard, the
 `torch` from PyTorch's CPU index), every package at an exact version with
 its SHA-256s, so a substituted or tampered download fails the install
 instead of running. It was compiled for CPython 3.14 on x86_64, which is
-what Ubuntu 26.04's `python3` is (`python3 --version`). Three commands, in
+what Ubuntu 26.04's `python3` is (`python3 --version`). Three installs, in
 this order:
 
 ```bash
-pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel
+awk '/^(packaging|setuptools|wheel)==/ {p = 1} p {print} p && !/\\$/ {p = 0}' requirements-linux-py314.lock >/tmp/build-tools.txt
+pip install --require-hashes -r /tmp/build-tools.txt
 pip install --require-hashes --no-build-isolation -r requirements-linux-py314.lock
 pip install --no-deps --no-build-isolation -e .
 ```
 
-The first installs the build tools, checked against the lock's hashes.
+The first installs the build tools, checked against the lock's hashes:
+the `awk` line copies the lock's own entries for `setuptools`, `wheel`
+and `packaging` (which `wheel` needs), each `name==version` with all its
+`--hash` lines, into a requirements file for it. (The shorter
+`pip install --require-hashes -c requirements-linux-py314.lock setuptools wheel`
+is refused by the pip that Ubuntu 26.04's venv ships, 25.1: it takes no
+hashes from a constraints file. `provision.sh` and the update unit's
+locked re-sync both install the build tools the `awk` way.) If pip
+stops with *Hashes are required* for another package, a build tool
+gained a dependency in the lock: add its name to the `awk` pattern.
 The second installs everything else; `metaphone` and `webrtcvad` publish
 no wheels and are built here, with those checked tools rather than a
 fresh, unchecked `setuptools` that pip would otherwise download for each
@@ -475,7 +567,10 @@ says what each answer switches; on Linux it comes down to this:
   point `systemd-timesyncd` at a LAN time server if you have one). Then
   answer **No**: the server stops contacting anything outside your
   network, including the internet check, and sets `HF_HUB_OFFLINE=1` for
-  itself. No drop-in is needed.
+  itself. No drop-in is needed. With the [update unit](#updates-from-the-dashboard)
+  installed, the next **Restart Domovoi** also quiets Ubuntu's own jobs
+  that go online (package updates, login news, crash reports): see
+  [Internet or not](#internet-or-not).
 - Whatever the answer, leave `CONNECTIVITY_PROBE_TARGET` on an internet
   address: pointed at the router, the probe tells Domovoi it is online
   when it isn't.
@@ -596,7 +691,8 @@ Domovoi does; it bounds what a process gone wrong can reach directly:
   `/srv`; a missing one is skipped), and the service user's home, the only
   home the core and web can see at all (`ProtectHome=tmpfs` with
   `BindPaths=/home/domovoi`). The home holds `~/.domovoi/`, the model
-  caches and the default `~/Music`, `~/Pictures` and `~/Documents`.
+  caches and the default `~/Music`, `~/Pictures`, `~/Videos` and
+  `~/Documents`.
   `domovoi-db` sees homes read-only and writes only its own.
 - **Private `/tmp`** per unit, files the services create are not readable
   by other accounts (`UMask=0027`), and the control groups are read-only.
@@ -686,6 +782,55 @@ update, and under **No** the core sets `HF_HUB_OFFLINE=1` for itself (the
 `HF_HUB_OFFLINE` drop-in older versions of this guide suggested is no
 longer needed; leaving one in place does no harm). Whisper loads its model
 from the local cache first on every answer.
+
+**Ubuntu's own background jobs follow the answer too.** A stock Ubuntu
+box goes online by itself on timers that have nothing to do with Domovoi.
+Under **No**, [`scripts/linux/os-jobs.sh`](../scripts/linux/os-jobs.sh)
+masks them (`systemctl mask`, and stops the timers):
+
+| Unit | What it fetches |
+|---|---|
+| `apt-daily.timer`, `apt-daily-upgrade.timer`, `unattended-upgrades.service` | package lists and security updates |
+| `motd-news.timer` | the login banner's news |
+| `ua-timer.timer` | Ubuntu Pro status |
+| `apport-autoreport.path`, `apport-autoreport.timer` | crash reports |
+| `snapd.snap-repair.timer` | snap repair assertions |
+
+Only units that are installed and not masked already are touched, and
+each one it masks is written down in `/var/lib/domovoi-os-jobs/masked`.
+Under **Yes, always** or **Sometimes** it unmasks exactly those (a mask you
+made yourself stays) and starts the enabled ones again, so they run as
+Ubuntu ships them. Not answered yet: left as they are. A unit file of your
+own in `/etc/systemd/system` under one of those names is never replaced
+(the helper says it left it alone).
+
+When it takes effect: at once when `provision.sh` runs, and otherwise at
+the **next healthy restart or update the update unit runs**
+([Updates from the dashboard](#updates-from-the-dashboard), step 11):
+**Restart Domovoi** after you change the answer in Settings → Internet.
+Saving the answer alone doesn't change them: the core runs as the service
+user, which can't change systemd units. Without the update unit, run it
+yourself: `sudo bash /opt/domovoi/scripts/linux/os-jobs.sh --internet
+never` (or `always`, `sometimes`); `--check` and `--dry-run` change
+nothing. To manage those timers yourself, put
+`DOMOVOI_MANAGE_OS_JOBS=0` in `/etc/default/domovoi-update`: the update
+unit and `provision.sh` both leave them alone then.
+
+The helper writes a unit down before it masks it, and crosses it off when
+the mask fails, so a run killed half-way never leaves a mask it has not
+written down (one written down but not masked is masked by the next
+**No** run, or crossed off by the next Yes/Sometimes run).
+
+Taking an update that downloads on a box answered **No** is one restart
+longer: switch to **Sometimes**, restart, switch back to **No** and
+**restart once more**; the Sometimes restart unmasked the timers, the
+last one masks them again.
+
+In the Windows installer's WSL distro the same helper also disables and
+masks `wsl-pro.service` and snapd (`snapd.service`, `snapd.socket` and the
+other `snapd.*` services and timers) whatever the answer: Domovoi uses
+neither. On bare metal it leaves them alone, since your server may use
+snaps.
 
 **Pinning the answer in the unit**, so the dashboard can't change it (it
 then shows "set in the server's environment"): a drop-in for
@@ -836,6 +981,17 @@ does this:
    fail the update: a failure is recorded as a `warn` step with its
    output, and the result stays `ok`. `DOMOVOI_MANAGE_SEARXNG=0` in
    `/etc/default/domovoi-update` skips it.
+11. Keep Ubuntu's own background jobs in step with the same answer
+   (`scripts/linux/os-jobs.sh`, [Internet or not](#internet-or-not)):
+   `never` masks the updaters, news and crash-report timers, `always` or
+   `sometimes` unmasks what an earlier `never` masked, and in the Windows
+   installer's WSL distro `wsl-pro` and snapd stay off. This runs after a
+   healthy plain restart too, so a changed answer takes effect at the next
+   **Restart Domovoi**. It can't fail the update either: an `os-jobs` step
+   is recorded only when it changed something (`ok`; what it changed is
+   in the journal and in `last-result.json`) or failed (`warn`; Settings
+   → Version shows the reason under the last update, such as "could not
+   mask apt-daily.timer"). `DOMOVOI_MANAGE_OS_JOBS=0` skips it.
 
 Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
 update that would download is refused with status `aborted`, nothing
@@ -940,6 +1096,7 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_PIP_EXTRAS=real-clients,voice-profile
 # 1: the re-sync installs from the hash-pinned lock. Default: off, pip's resolver as before.
 # Re-seed the lock from this box's pip freeze first (The hash-pinned lock, below).
+# provision.sh sets it to 1 on the boxes it installs (they were installed from the lock).
 # DOMOVOI_USE_LOCK=1
 # The hash-pinned lock the re-sync installs from, relative to the checkout. Empty: never use one.
 # DOMOVOI_DEPS_LOCK=requirements-linux-py314.lock
@@ -972,6 +1129,8 @@ layout on this page, so you only need the file to change one:
 # The upstream the checkout must follow; a checkout on another remote or branch is refused. Default: not pinned.
 # DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
 # DOMOVOI_UPSTREAM_BRANCH=main
+# 0: leave Ubuntu's background jobs alone (step 11, Internet or not). Default: they follow the answer.
+# DOMOVOI_MANAGE_OS_JOBS=1
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,
@@ -1010,7 +1169,29 @@ its step says the lock is there. The reason is the first locked re-sync:
 it moves every package to the lock's version, and the lock in the
 repository is seeded from the test suite's set, not from what your box
 runs (torch, librosa, faster-whisper and the rest of the speech stack are
-the newest that resolved). Re-seed it from the box first:
+the newest that resolved).
+
+**A box `provision.sh` installed is opted in already.** It was installed
+from the lock (the three installs under [By hand](#by-hand)), so its venv
+holds the lock's versions and there is nothing to re-seed: the script
+writes `DOMOVOI_USE_LOCK=1` into `/etc/default/domovoi-update` (a file
+that already sets `DOMOVOI_USE_LOCK`, to anything, is left as it is, with
+a warning when that is not `1`), and its updates install the way it was
+installed. Set it to `0` to go back to the resolver. A box set up by hand
+from the resolver, like the first Linux servers, keeps the default, off,
+until you opt it in.
+
+The locked re-sync installs the build tools the way the manual install
+does: the lock's own entries for `setuptools`, `wheel` and what they need
+in the lock (found through its `# via` lines; today `packaging`), with
+their hashes, as a requirements file (`pip install --require-hashes -r`).
+Not `pip install --require-hashes -c <lock> setuptools wheel`: the pip in
+Ubuntu 26.04's venv (25.1) takes no hashes from a constraints file and
+refuses that, so before 2026-10-11 an opted-in Ubuntu 26.04 box rolled
+back every update that changed its dependencies.
+
+To opt in a box you installed by hand from the resolver, re-seed the lock
+from it first:
 
 1. On the box, write down what its venv runs:
 

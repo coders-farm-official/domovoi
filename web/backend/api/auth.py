@@ -5,7 +5,8 @@ The web process hosts the auth surface; the core process only
 ``admin_sessions`` tables via :mod:`domovoi.admin_auth`).
 
 Flow: the core boot wrote an 8-word setup code to
-``~/.domovoi/setup-code.txt`` + its console. ``POST /setup`` requires
+``~/.domovoi/setup-code.txt`` (and printed it, when its stdout is a
+terminal — never into the journal). ``POST /setup`` requires
 that code (proof of possession of the server — 403 without it, even
 though no admin row exists yet), stores the argon2id hash, deletes the
 code file, and returns a first session token. ``POST /login`` verifies
@@ -102,9 +103,10 @@ async def auth_setup(body: SetupRequest, request: Request) -> JSONResponse:
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "setup code required — read it from the Domovoi server "
-                    "console or ~/.domovoi/setup-code.txt (a code older than "
-                    "a day is replaced by restarting the core)"
+                    "setup code required — read it from "
+                    "~/.domovoi/setup-code.txt on the Domovoi server (the "
+                    "core also prints it when it runs in a terminal); a code "
+                    "older than a day is replaced by restarting the core"
                 ),
             )
         await admin_auth.set_password(s, body.password)

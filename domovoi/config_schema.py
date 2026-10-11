@@ -634,6 +634,15 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "str", section="advanced", tier="restart",
     ),
     FieldSpec(
+        "videos_dir", "Videos directory", "Paths",
+        "Folder the Videos tab and the Files page's Videos library show. "
+        "Created at startup when it is inside the home folder; a folder "
+        "anywhere else (an external drive) must already exist. Wrong path = "
+        "the Videos library disappears from Files. Takes effect after a "
+        "restart (the dashboard reads it when it starts).",
+        "str", section="advanced", tier="restart",
+    ),
+    FieldSpec(
         "sounds_dir", "Sounds directory", "Paths",
         "Where rendered greeting/notification clips are stored and served "
         "from. Takes effect after a restart.",

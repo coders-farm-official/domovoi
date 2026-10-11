@@ -1065,15 +1065,18 @@ reason, so a new route cannot quietly ship open.
 - **First run: the setup code.** On boot with no admin credential, the core
   writes an **8-word code** (256-word list, 64 bits of entropy) to
   `~/.domovoi/setup-code.txt` on the server (**mode 0600** — owner-readable
-  only) **and prints it to the server console** — before any model loads,
-  so a Whisper setting that can't load never keeps a fresh box from being
-  claimed and fixed. `POST /api/auth/setup` requires that code before it
+  only) — before any model loads, so a Whisper setting that can't load
+  never keeps a fresh box from being claimed and fixed. The code is
+  **printed only when the core's stdout is a terminal**. Run as a service,
+  stdout is the journal, and anything there travels with every log
+  export; so the core logs one line saying where the file is and how to
+  use it, never the code. `--reset-admin` follows the same rule. `POST /api/auth/setup` requires that code before it
   will accept your chosen admin password —
   this is **proof of possession of the server machine**, and it closes the
   race where some other LAN host claims the admin tier before you do. The
   code is **valid for 24 hours** from when it was written: a restart inside
   that window re-uses the same code rather than invalidating the one you
-  already wrote down; a restart after it prints a fresh one. The code file
+  already wrote down; a restart after it writes a fresh one. The code file
   is deleted the moment setup completes.
 - **The password** is hashed with **argon2id**; only the hash is stored (a
   single row in Postgres). Minimum 10 characters. **Changing it revokes

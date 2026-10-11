@@ -94,7 +94,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Session context** — the per-room short-term memory in the `sessions` table: recent turns, the pending confirmation, expectation state ("waiting for a name"). It's what makes "yes", "repeat that", and follow-up questions work.
 
-**Setup code** — the 8-word one-time code written to `~/.domovoi/setup-code.txt` (and printed to the core console) on first boot. Entering it on the dashboard proves you control the server and lets you set the admin password; the file is deleted once used. `python -m domovoi.main --reset-admin` regenerates it.
+**Setup code** — the 8-word one-time code written to `~/.domovoi/setup-code.txt` on first boot (and printed by the core only when it runs in a terminal, never into the journal). Entering it on the dashboard proves you control the server and lets you set the admin password; the file is deleted once used. `python -m domovoi.main --reset-admin` regenerates it.
 
 **Stub mode** — `USE_STUBS=true`: Whisper, Ollama, and TTS are replaced by deterministic fakes so the full test suite (and a hardware-less dev loop) runs without CUDA, models, or audio. The test config forces it on.
 
