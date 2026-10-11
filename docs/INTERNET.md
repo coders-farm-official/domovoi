@@ -392,7 +392,9 @@ answer is Sometimes, Sometimes is real:
 
 Switching back to **No** stops the search helper, the artist names and the
 lyrics lookups at once; the second restart turns the news worker off again
-and sets `HF_HUB_OFFLINE` back. To keep that window quiet, set
+and sets `HF_HUB_OFFLINE` back, and on a Linux server with the update unit
+it masks Ubuntu's own updaters again (the first restart, under Sometimes,
+unmasked them: [LINUX_HOST.md → Internet or not](LINUX_HOST.md#internet-or-not)). To keep that window quiet, set
 `MUSIC_ALIAS_FETCH_ENABLED=false` and `LYRICS_LRCLIB_ENABLED=false`
 (Settings → Configuration) before you switch; they then stay off whatever
 the answer says until you press **follow the answer again**.

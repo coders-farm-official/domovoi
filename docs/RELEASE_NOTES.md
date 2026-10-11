@@ -23,10 +23,18 @@ on Linux servers.
   next **Restart Domovoi**: update it by hand (`sudo apt update && sudo
   apt upgrade`) on a day it is online, or switch the answer. To keep
   managing those timers yourself, set `DOMOVOI_MANAGE_OS_JOBS=0` in
-  `/etc/default/domovoi-update`. In the Windows installer's WSL distro it
-  also turns `wsl-pro` and snapd off; on any other Linux box they are left
-  alone. When it changed something the last update shows an `os-jobs`
-  step saying what (docs/LINUX_HOST.md, "Internet or not").
+  `/etc/default/domovoi-update` (provision.sh honours it too). In the
+  Windows installer's WSL distro it also turns `wsl-pro` and snapd off;
+  on any other Linux box they are left alone. What it changed is in the
+  journal (`journalctl -u domovoi-update`), and the last update lists an
+  `os-jobs` step; when it could not set them (a unit it could not mask),
+  that step is a warning and Settings → Version shows why under the last
+  update (docs/LINUX_HOST.md, "Internet or not").
+* **Taking an update on a box answered No** (one that would download) now
+  needs one more restart than before: switch to **Sometimes**, restart,
+  switch back to **No**, and **restart once more**, or Ubuntu's updaters
+  stay unmasked from the Sometimes restart until the next one. The
+  refusal message says so.
 * **The hash-pinned lock now works on Ubuntu 26.04.** Opted in
   (`DOMOVOI_USE_LOCK=1`), the re-sync installed the build tools with
   `pip install --require-hashes -c <lock> setuptools wheel`, which the pip
@@ -46,10 +54,17 @@ until the admin was claimed, and under systemd that banner went into the
 journal and into any log bundle exported from it. Now the core prints the
 code only when its stdout is a terminal.
 
-* Run as a service, the core logs one line instead: where the code file
-  is and that you enter it on the dashboard (Settings → Configuration →
-  Admin → "set up admin"). The code itself is not in
-  `journalctl -u domovoi-core` any more.
+* Run as a service, the core logs one line instead, at WARNING (so it
+  shows at every `LOG_LEVEL`): where the code file is and that you enter
+  it on the dashboard (Settings → Configuration → Admin → "set up
+  admin"). The code itself is not in `journalctl -u domovoi-core` any
+  more.
+* **A code already in the journal stays valid** for the rest of its 24 h
+  window (a restart reuses the file's code while it is inside it), and
+  the old journal lines stay as long as the journal keeps them. If that
+  matters, claim the admin account now (the code is then deleted), or
+  delete `~/.domovoi/setup-code.txt` and restart the core for a fresh one;
+  `journalctl --vacuum-time=...` drops the old lines.
 * Read it from the file, as the user the core runs as:
   `cat ~/.domovoi/setup-code.txt`. On a box set up by
   `scripts/linux/provision.sh` that user is `domovoi`:

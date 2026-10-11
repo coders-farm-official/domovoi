@@ -813,7 +813,18 @@ user, which can't change systemd units. Without the update unit, run it
 yourself: `sudo bash /opt/domovoi/scripts/linux/os-jobs.sh --internet
 never` (or `always`, `sometimes`); `--check` and `--dry-run` change
 nothing. To manage those timers yourself, put
-`DOMOVOI_MANAGE_OS_JOBS=0` in `/etc/default/domovoi-update`.
+`DOMOVOI_MANAGE_OS_JOBS=0` in `/etc/default/domovoi-update`: the update
+unit and `provision.sh` both leave them alone then.
+
+The helper writes a unit down before it masks it, and crosses it off when
+the mask fails, so a run killed half-way never leaves a mask it has not
+written down (one written down but not masked is masked by the next
+**No** run, or crossed off by the next Yes/Sometimes run).
+
+Taking an update that downloads on a box answered **No** is one restart
+longer: switch to **Sometimes**, restart, switch back to **No** and
+**restart once more**; the Sometimes restart unmasked the timers, the
+last one masks them again.
 
 In the Windows installer's WSL distro the same helper also disables and
 masks `wsl-pro.service` and snapd (`snapd.service`, `snapd.socket` and the
@@ -977,8 +988,10 @@ does this:
    installer's WSL distro `wsl-pro` and snapd stay off. This runs after a
    healthy plain restart too, so a changed answer takes effect at the next
    **Restart Domovoi**. It can't fail the update either: an `os-jobs` step
-   is recorded only when it changed something (`ok`, saying what) or
-   failed (`warn`). `DOMOVOI_MANAGE_OS_JOBS=0` skips it.
+   is recorded only when it changed something (`ok`; what it changed is
+   in the journal and in `last-result.json`) or failed (`warn`; Settings
+   → Version shows the reason under the last update, such as "could not
+   mask apt-daily.timer"). `DOMOVOI_MANAGE_OS_JOBS=0` skips it.
 
 Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
 update that would download is refused with status `aborted`, nothing
