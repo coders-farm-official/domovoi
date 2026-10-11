@@ -4,8 +4,8 @@
 # procedure in docs/LINUX_HOST.md) and the private WSL2 distro the Windows
 # installer imports from Ubuntu's official .wsl image.
 #
-#   sudo bash provision.sh --internet always
-#   sudo bash provision.sh --internet never --timezone Europe/Berlin \
+#   sudo bash provision.sh --internet always --timezone Europe/Berlin   # bare metal
+#   sudo bash provision.sh --internet never \
 #       --media music='C:\Users\Public\Domovoi\Music'          # inside WSL
 #   sudo bash provision.sh --dry-run ...                      # say what it would do
 #
@@ -41,7 +41,11 @@
 #                /var/lib/domovoi-provision/env-written); one the household
 #                changed (Settings, or by hand) is left alone, with a warning
 #   ollama       the Ollama release LINUX_HOST.md pins (version and SHA-256
-#                read from that file), its systemd unit as the doc gives it
+#                read from that file), its systemd unit as the doc gives it.
+#                Ollama runs on every GPU it finds (inside WSL too: WSL
+#                hands NVIDIA cards through) and on the CPU without one; no
+#                CUDA_VISIBLE_DEVICES pin. The GPUs it found go in the final
+#                line ("gpu"); the tier stays a question of memory alone
 #   models       the tier's two Ollama models, each checked against the
 #                manifest digest after the pull            (--skip-models: no)
 #   whisper      the Whisper model at the manifest's Hugging Face revision,
@@ -52,14 +56,28 @@
 #   images       the database images the compose file pins, and docker build of
 #                domovoi-mpd exactly as the core builds it
 #   searxng      the search helper, started for always/sometimes, off for never
+#   os-jobs      Ubuntu's own background jobs follow the internet answer:
+#                scripts/linux/os-jobs.sh masks the updaters, news and
+#                crash-report timers for never and puts them back for
+#                always/sometimes; on WSL it disables and masks wsl-pro and
+#                snapd whatever the answer. The update unit runs the same
+#                helper after every healthy restart or update, so an answer
+#                changed later in Settings follows there
 #   units        the three shipped units from scripts/linux/units/, the
 #                restart sudoers grant, sleep targets masked
-#   timezone     --timezone, through timedatectl
+#   timezone     bare metal: --timezone, through timedatectl. WSL: the zone
+#                follows Windows (WSL rewrites /etc/localtime and
+#                /etc/timezone at every distro start), so --timezone is
+#                ignored with a warning; the step only checks that the two
+#                files name the same zone, and when they don't writes
+#                /etc/timezone from /etc/localtime and restarts core and web
 #   start        enable and start domovoi-db, domovoi-core, domovoi-web; wait
 #                for /v1/health and /api/health
 #   update-unit  scripts/linux/install-update-unit.sh (the dashboard's update
-#                button), with the doc's defaults
-#   finish       result, setup-code presence (never its content)
+#                button), with DOMOVOI_USE_LOCK=1 in
+#                /etc/default/domovoi-update: a box installed from the
+#                hash-pinned lock re-syncs from it on every update too
+#   finish       result, setup-code presence (never its content), the GPUs
 #
 # Idempotent and resumable. Each finished step leaves a marker in
 # /var/lib/domovoi-provision/steps/<id> holding a hash of that step's inputs
@@ -80,7 +98,9 @@
 # rerun_after_restart, dry_run, usage_error, busy or help),
 # "restart_required" (WSL: /etc/wsl.conf changed and takes effect only after
 # `wsl --terminate <distro>`; this script never restarts the distro itself),
-# "exit_code", "failed_step" and "message" (why, for anything but ok).
+# "exit_code", "failed_step", "message" (why, for anything but ok) and
+# "gpu": the names of the GPUs Ollama found at its last start, a JSON list,
+# empty when it runs on the CPU (or hasn't started yet).
 # Only a SIGKILL leaves no final line. Everything else on stdout and stderr
 # is for people. A run that got past the run lock keeps the same final
 # object in /var/lib/domovoi-provision/result.json (a refused one leaves
@@ -142,11 +162,11 @@ json_str() {
   printf '"%s"' "$s"
 }
 
-STEP_IDS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng units timezone start update-unit finish)
+STEP_IDS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit finish)
 declare -A STEP_WEIGHT=(
   [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6
-  [venv]=15 [env]=1 [ollama]=8 [models]=30 [whisper]=4 [piper]=1 [images]=6
-  [searxng]=4 [units]=1 [timezone]=1 [start]=6 [update-unit]=2 [finish]=2
+  [venv]=15 [env]=1 [ollama]=8 [models]=29 [whisper]=4 [piper]=1 [images]=6
+  [searxng]=4 [os-jobs]=1 [units]=1 [timezone]=1 [start]=6 [update-unit]=2 [finish]=2
 )
 declare -A STEP_TITLE=(
   [preflight]="Checking this machine"
@@ -164,6 +184,7 @@ declare -A STEP_TITLE=(
   [piper]="Downloading the voice"
   [images]="Getting the container images"
   [searxng]="Setting up the search helper"
+  [os-jobs]="Setting Ubuntu's background jobs"
   [units]="Installing the services"
   [timezone]="Setting the time zone"
   [start]="Starting Domovoi"
@@ -188,6 +209,8 @@ DRY_RUN=0
 WSL=0
 TIER_EFF=""
 HEAD_SHA=""
+# The GPUs Ollama found (detect_gpus), as a JSON list.
+GPU_JSON="[]"
 # 1 once this run is past its checks and holds the run lock: only then is
 # result.json its to write, and the restart question worth asking.
 STARTED=0
@@ -242,10 +265,10 @@ final_line() {
   [ "$result" != ok ] || pct=100
   STEP_ID=finish
   STEP_INDEX=$STEP_TOTAL
-  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"warnings":%d,"dashboard":"%s"}' \
+  obj=$(printf '{"v":1,"step":"finish","index":%d,"total":%d,"state":"%s","percent":%d,"message":%s,"final":true,"result":"%s","restart_required":%s,"exit_code":%d,"failed_step":%s,"head":%s,"tier":%s,"wsl":%s,"gpu":%s,"warnings":%d,"dashboard":"%s"}' \
     "$STEP_TOTAL" "$STEP_TOTAL" "$state" "$pct" "$(json_str "$msg")" "$result" \
     "$RESTART_REQUIRED" "$code" "$fs" "$head" "$(json_str "$TIER_EFF")" \
-    "$([ "$WSL" = 1 ] && echo true || echo false)" "$WARNINGS" "$DASHBOARD_URL")
+    "$([ "$WSL" = 1 ] && echo true || echo false)" "$GPU_JSON" "$WARNINGS" "$DASHBOARD_URL")
   printf '%s%s\n' "$PROGRESS_PREFIX" "$obj"
   FINAL_EMITTED=1
   if [ "$STARTED" = 1 ] && [ "$DRY_RUN" = 0 ] && [ -d "$STATE_DIR" ]; then
@@ -419,15 +442,19 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         domovoi.env_bootstrap --internet). Required on WSL.
   --tier TIER           auto | floor | standard: the hardware tier's models
                         (default: auto, from this box's MemTotal)
-  --timezone ZONE       an IANA zone (America/New_York) to set with timedatectl
+  --timezone ZONE       bare metal: an IANA zone (America/New_York) to set
+                        with timedatectl. Ignored on WSL, with a warning:
+                        there the zone follows Windows (WSL sets it at
+                        every distro start)
   --lan-ip IP           write MPD_HTTP_BASE=http://IP (default: the repo's
                         "auto", which finds this host's LAN address itself)
   --media NAME=PATH     a media folder (repeatable). On WSL PATH is a Windows
                         folder (C:\Users\Public\Domovoi\Music), mounted alone
                         at /srv/media/NAME through /etc/fstab; on bare metal a
                         Linux path outside other users' homes. music,
-                        pictures, documents, audiobooks and podcasts set
-                        MUSIC_DIR, PICTURES_DIR, ... in .env.
+                        pictures, documents, audiobooks, podcasts and
+                        videos set MUSIC_DIR, PICTURES_DIR, ... VIDEOS_DIR
+                        in .env.
                         The .env keys this script sets (models, Whisper,
                         MPD_HTTP_BASE, media folders) are written only while
                         they still hold what it last wrote: a value changed
@@ -529,10 +556,12 @@ svc_home() { getent passwd "$SVC_USER" 2>/dev/null | cut -d: -f6; }
 # sed_repl TEXT: TEXT as the right-hand side of a sed s#...#...# command.
 sed_repl() { printf '%s' "$1" | sed 's/[#&\\]/\\&/g'; }
 
-# Journal and log text this script prints: never the setup code. The core
-# prints it in its first-boot banner (domovoi/admin_auth.py, "Setup code:
-# <eight words joined by hyphens>"), so any line naming it goes, and
-# anything shaped like a code is hidden wherever it appears.
+# Journal and log text this script prints: never the setup code. Since
+# 2026-10-11 the core prints its first-boot banner (domovoi/admin_auth.py,
+# "Setup code: <eight words joined by hyphens>") only when its stdout is a
+# terminal, which under systemd it never is; an older checkout still put
+# it in the journal. So any line naming it still goes, and anything shaped
+# like a code is hidden wherever it appears.
 scrub_log() { LC_ALL=C sed -E -e '/setup[ _-]?code/Id' -e 's/[A-Za-z]+(-[A-Za-z]+){7,}/[hidden]/g'; }
 
 # Run a command as the service user with a clean environment. runuser
@@ -673,6 +702,15 @@ esac
 if [ "$WSL" = 1 ] && [ -z "$INTERNET" ] && [ "$DRY_RUN" = 0 ]; then
   usage_error "--internet is required on WSL (the Windows installer always has the household's answer)"
 fi
+# On WSL the zone is Windows' (owner decision 2026-10-11): WSL rewrites
+# /etc/localtime and /etc/timezone from it at every distro start
+# ([time] useWindowsTimezone, default on, seen with interop off too), so a
+# zone set here would only hold until then. Said once the run has started.
+TIMEZONE_IGNORED=""
+if [ "$WSL" = 1 ] && [ -n "$TIMEZONE" ]; then
+  TIMEZONE_IGNORED=$TIMEZONE
+  TIMEZONE=""
+fi
 
 # Media folders: NAME=PATH.
 MEDIA_NAMES=()
@@ -722,6 +760,7 @@ media_env_key() {
     documents) echo DOCUMENTS_DIR ;;
     audiobooks) echo AUDIOBOOKS_DIR ;;
     podcasts) echo PODCASTS_DIR ;;
+    videos) echo VIDEOS_DIR ;;
     *) echo "" ;;
   esac
 }
@@ -848,7 +887,7 @@ RERUN_REASON=""
 
 # Steps that read the checkout, and those that read the pin manifest: a
 # dry run before the clone plans them without their inputs.
-after_clone() { case " docker venv env ollama models whisper piper images searxng units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
+after_clone() { case " docker venv env ollama models whisper piper images searxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
 needs_manifest() { case " docker env models whisper " in *" $1 "*) return 0 ;; esac; return 1; }
 
 plan_details() {
@@ -1597,7 +1636,7 @@ env_keys() {
 # script's own, so a later run with another option still replaces it.
 ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE OLLAMA_URL OLLAMA_MODEL
   OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
-  MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR)
+  MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR VIDEOS_DIR)
 
 # What domovoi/.env assigns now to the keys in PROVISION_ENV_NAMES, as
 # KEY=VALUE lines, read the way the core reads it (env_bootstrap.env_values:
@@ -1867,12 +1906,44 @@ do_ollama() {
   [ -n "$v" ] || die "Ollama did not answer on $OLLAMA_API (journalctl -u ollama)"
   [ "$v" = "$OLLAMA_VERSION" ] || die "Ollama serves version $v, docs/LINUX_HOST.md pins $OLLAMA_VERSION"
   log "Ollama $v on $OLLAMA_API"
-  # What Ollama found to run on (it logs "inference compute" at start); v1 is
-  # CPU-only by plan, and a GPU WSL hands through is only recorded.
-  v=$(journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | grep -i 'inference compute' | tail -n 1 | cut -c1-240 | scrub_log) || v=""
-  [ -z "$v" ] || log "ollama: $v"
+  detect_gpus
   v=$OLLAMA_VERSION
   STEP_DONE_MSG="Ollama $v"
+}
+
+# The GPUs Ollama found at its last start this boot, one name per line.
+# Ollama logs one "inference compute" line per device when it starts (a
+# "server config" line opens each start); library=cpu is the CPU itself.
+# It uses every GPU it finds, inside WSL too (WSL hands NVIDIA cards
+# through: two RTX 4070 Ti SUPERs on the dev box, 2026-10-09), and the CPU
+# without one (owner decision 2026-10-11: no CUDA_VISIBLE_DEVICES pin).
+OLLAMA_GPU_AWK='
+/msg="server config"/ { n = 0; next }
+/msg="inference compute"/ {
+  if ($0 ~ /library=[Cc][Pp][Uu]([ \t]|$)/) next
+  d = ""
+  if (match($0, /description="[^"]*"/)) d = substr($0, RSTART + 13, RLENGTH - 14)
+  else if (match($0, /name=("[^"]*"|[^ \t]+)/)) { d = substr($0, RSTART + 5, RLENGTH - 5); gsub(/"/, "", d) }
+  if (d != "") gpus[++n] = d
+}
+END { for (i = 1; i <= n; i++) print gpus[i] }'
+ollama_gpus() {
+  journalctl -u ollama.service -b --no-pager -o cat 2>/dev/null | awk "$OLLAMA_GPU_AWK" || true
+}
+
+# detect_gpus: GPU_JSON from ollama_gpus, and a line saying what Ollama
+# runs on.
+detect_gpus() {
+  local names name json="" sep=""
+  names=$(ollama_gpus) || names=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    json+="$sep$(json_str "$name")"
+    sep=,
+  done <<<"$names"
+  GPU_JSON="[$json]"
+  if [ -n "$json" ]; then log "Ollama runs on: $(printf '%s\n' "$names" | grep . | tr '\n' ';' | sed 's/;$//; s/;/, /g')"
+  else log "Ollama found no GPU: it runs on the CPU"; fi
 }
 
 # ─── models ──────────────────────────────────────────────────────────────
@@ -2127,6 +2198,36 @@ do_searxng() {
   esac
 }
 
+# ─── os-jobs ─────────────────────────────────────────────────────────────
+
+# Ubuntu's own background jobs, set to the internet answer by the helper
+# the update unit runs too (scripts/linux/os-jobs.sh says what it masks and
+# when): for never, the updaters, news and crash-report timers are masked;
+# for always and sometimes they run as shipped; on WSL wsl-pro and snapd
+# are disabled and masked whatever the answer. Run from the checkout, as
+# install-update-unit.sh is.
+os_jobs_script() { printf '%s' "$CHECKOUT/scripts/linux/os-jobs.sh"; }
+os_jobs() { bash "$(os_jobs_script)" --internet "$1" --wsl "$([ "$WSL" = 1 ] && echo yes || echo no)" "${@:2}"; }
+
+inputs_os_jobs() { internet_policy || echo unknown; echo "wsl=$WSL"; file_sig "$(os_jobs_script)"; }
+check_os_jobs() { local p; p=$(internet_policy) || p=""; [ -f "$(os_jobs_script)" ] && os_jobs "$p" --check >/dev/null 2>&1; }
+plan_os_jobs() {
+  echo "never: mask apt-daily, apt-daily-upgrade, unattended-upgrades, motd-news, ua-timer, apport-autoreport, snapd.snap-repair"
+  echo "always/sometimes: unmask what an earlier never masked"
+  if [ "$WSL" = 1 ]; then echo "WSL, any answer: disable and mask wsl-pro.service and snapd"; fi
+}
+do_os_jobs() {
+  local policy
+  [ -f "$(os_jobs_script)" ] || die "the checkout has no scripts/linux/os-jobs.sh"
+  policy=$(internet_policy) || policy=""
+  os_jobs "$policy" || die "scripts/linux/os-jobs.sh stopped (its output above says why)"
+  case $policy in
+    never) STEP_DONE_MSG="Ubuntu's updaters and reports off (internet: never)" ;;
+    always|sometimes) STEP_DONE_MSG="Ubuntu's background jobs as shipped (internet: $policy)" ;;
+    *) STEP_DONE_MSG="Ubuntu's background jobs left as they are (internet unanswered)" ;;
+  esac
+}
+
 # ─── units ───────────────────────────────────────────────────────────────
 
 SHIPPED_UNITS=(domovoi-db.service domovoi-core.service domovoi-web.service)
@@ -2222,26 +2323,67 @@ do_units() {
 # ─── timezone ────────────────────────────────────────────────────────────
 
 current_tz() { readlink "$LOCALTIME" 2>/dev/null | sed 's#.*/zoneinfo/##'; }
-skip_timezone() { if [ -n "$TIMEZONE" ]; then return 1; fi; echo "no --timezone: the zone stays $(current_tz)"; }
-inputs_timezone() { echo "$TIMEZONE"; }
-etc_timezone_ok() { [ ! -e "$ROOT/etc/timezone" ] || [ "$(tr -d '[:space:]' <"$ROOT/etc/timezone")" = "$TIMEZONE" ]; }
-check_timezone() { [ "$(current_tz)" = "$TIMEZONE" ] && etc_timezone_ok; }
-plan_timezone() { echo "timedatectl set-timezone $TIMEZONE (now $(current_tz))"; }
-# On WSL the zone follows Windows anyway: WSL rewrites /etc/localtime and
-# /etc/timezone to Windows' zone at every distro start (wsl.conf [time]
-# useWindowsTimezone, default true; seen with interop off too), so there
-# --timezone holds until the next start, and the installer passes Windows'
-# own zone.
+etc_timezone() { tr -d '[:space:]' 2>/dev/null <"$ROOT/etc/timezone"; }
+# /etc/timezone is absent or names ZONE. systemd leaves that file alone,
+# and the core reads it before the /etc/localtime link
+# (domovoi/host_time.py): a stale one has /v1/time name the old zone with
+# the new offset (and satellites copy that name).
+etc_timezone_is() { [ ! -e "$ROOT/etc/timezone" ] || [ "$(etc_timezone)" = "$1" ]; }
+# WSL: the two files name the same zone (or /etc/localtime names none this
+# script could compare).
+zone_files_agree() { local z; z=$(current_tz); [ -z "$z" ] || etc_timezone_is "$z"; }
+
+# Bare metal sets --timezone. On WSL the zone follows Windows (owner
+# decision 2026-10-11): WSL rewrites /etc/localtime and /etc/timezone to
+# Windows' zone at every distro start (wsl.conf [time] useWindowsTimezone,
+# default true; seen with interop off too, 2026-10-09), so a zone set here
+# would hold only until then, and --timezone is ignored. What the step
+# still does there: when the two files disagree (someone ran timedatectl
+# inside the distro), /etc/timezone is written from /etc/localtime and
+# core and web, which take the zone at their start, restart.
+skip_timezone() {
+  if [ "$WSL" = 1 ] || [ -n "$TIMEZONE" ]; then return 1; fi
+  echo "no --timezone: the zone stays $(current_tz)"
+}
+inputs_timezone() { if [ "$WSL" = 1 ]; then echo "wsl: the zone follows Windows"; else echo "$TIMEZONE"; fi; }
+check_timezone() {
+  if [ "$WSL" = 1 ]; then zone_files_agree; else [ "$(current_tz)" = "$TIMEZONE" ] && etc_timezone_is "$TIMEZONE"; fi
+}
+plan_timezone() {
+  if [ "$WSL" = 1 ]; then echo "the zone follows Windows (now $(current_tz)); /etc/timezone made to agree with /etc/localtime if it doesn't"
+  else echo "timedatectl set-timezone $TIMEZONE (now $(current_tz))"; fi
+}
 do_timezone() {
+  local z old u restart=()
+  if [ "$WSL" = 1 ]; then
+    z=$(current_tz)
+    if [ -z "$z" ]; then
+      warn "/etc/localtime names no zone under /usr/share/zoneinfo: /etc/timezone left as it is"
+      STEP_DONE_MSG="Time zone as Windows set it"
+      return 0
+    fi
+    if ! etc_timezone_is "$z"; then
+      old=$(etc_timezone)
+      write_if_changed "$ROOT/etc/timezone" 0644 < <(printf '%s\n' "$z") || true
+      log "/etc/timezone said ${old:-nothing} and /etc/localtime $z: /etc/timezone now says $z"
+      for u in domovoi-core.service domovoi-web.service; do
+        if systemctl is-active --quiet "$u"; then restart+=("$u"); fi
+      done
+      if [ "${#restart[@]}" -gt 0 ]; then
+        log "restarting ${restart[*]}: they took the zone at their start"
+        systemctl restart "${restart[@]}"
+      fi
+    fi
+    zone_files_agree || die "/etc/timezone ($(etc_timezone)) still disagrees with /etc/localtime ($z)"
+    STEP_DONE_MSG="Time zone $z (Windows')"
+    return 0
+  fi
   [ -f "$ZONEINFO/$TIMEZONE" ] || die "unknown time zone $TIMEZONE (no /usr/share/zoneinfo/$TIMEZONE)"
   if ! timedatectl set-timezone "$TIMEZONE" 2>/dev/null; then
     ln -sfn "/usr/share/zoneinfo/$TIMEZONE" "$LOCALTIME"
   fi
-  # systemd leaves /etc/timezone alone, and the core reads it before the
-  # /etc/localtime link (domovoi/host_time.py): a stale one has /v1/time
-  # name the old zone with the new offset.
-  if ! etc_timezone_ok; then printf '%s\n' "$TIMEZONE" >"$ROOT/etc/timezone"; fi
-  [ "$(current_tz)" = "$TIMEZONE" ] && etc_timezone_ok || die "the time zone is $(current_tz) after setting $TIMEZONE"
+  if ! etc_timezone_is "$TIMEZONE"; then printf '%s\n' "$TIMEZONE" >"$ROOT/etc/timezone"; fi
+  [ "$(current_tz)" = "$TIMEZONE" ] && etc_timezone_is "$TIMEZONE" || die "the time zone is $(current_tz) after setting $TIMEZONE"
   STEP_DONE_MSG="Time zone $TIMEZONE"
 }
 
@@ -2288,8 +2430,11 @@ inputs_start() {
   # of the env step, and never the household's own edits.
   cat "$ENV_STAMP" 2>/dev/null || echo "none:env-stamp"
   # The zone in effect: Python takes the offset at the process's start, so
-  # a zone changed under a running core needs a restart.
-  echo "tz=$(current_tz) $(cat "$ROOT/etc/timezone" 2>/dev/null)"
+  # a zone changed under a running core needs a restart. Bare metal only:
+  # on WSL the zone changes with Windows' at a distro start, which starts
+  # core and web afresh anyway, and the timezone step restarts them itself
+  # when it has to mend /etc/timezone.
+  if [ "$WSL" = 0 ]; then echo "tz=$(current_tz) $(cat "$ROOT/etc/timezone" 2>/dev/null)"; fi
 }
 check_start() { all_active && healthy; }
 plan_start() { echo "systemctl enable --now ${SHIPPED_UNITS[*]}; wait for $CORE_HEALTH_URL and $WEB_HEALTH_URL"; }
@@ -2319,19 +2464,50 @@ do_start() {
 
 # ─── update-unit ─────────────────────────────────────────────────────────
 
-# The update unit's defaults are left as docs/LINUX_HOST.md has them: no
-# /etc/default/domovoi-update, so its venv re-sync uses pip's resolver.
-# Opting in (DOMOVOI_USE_LOCK=1) would fit a box installed from the lock,
-# but apply-update.sh's locked re-sync installs the build tools with
-# "-c <lock> setuptools wheel", which the pip Ubuntu 26.04's venv ships
-# (25.1) refuses; the do_venv comment says why.
+# This box was installed from the hash-pinned lock (the venv step), so its
+# updates re-sync from it too (owner decision 2026-10-11): DOMOVOI_USE_LOCK=1
+# in /etc/default/domovoi-update, the file domovoi-update.service reads
+# (docs/LINUX_HOST.md, The hash-pinned lock). apply-update.sh's locked
+# re-sync installs the build tools the way do_venv does, which the pip
+# Ubuntu 26.04's venv ships (25.1) takes. A file without the setting gets
+# it; a DOMOVOI_USE_LOCK the administrator set to something else is theirs
+# and stays, with a warning. A box this script did not install (the
+# Beelink) keeps the doc's default, off.
+UPDATE_DEFAULTS=$ROOT/etc/default/domovoi-update
+defaults_use_lock() {
+  [ -f "$UPDATE_DEFAULTS" ] || return 1
+  sed -n 's/^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=[[:space:]]*//p' "$UPDATE_DEFAULTS" | tail -n 1 | tr -d '\r"'"'"
+}
+use_lock_lines() {
+  printf '%s\n' "# Written by scripts/linux/provision.sh: this box was installed from the" \
+    "# hash-pinned lock, so its updates re-sync from it too (docs/LINUX_HOST.md," \
+    "# The hash-pinned lock). Set it to 0 to re-sync through pip's resolver." \
+    "DOMOVOI_USE_LOCK=1"
+}
 inputs_update_unit() {
   file_sig "$CHECKOUT/scripts/linux/install-update-unit.sh"
   echo "$CHECKOUT $SVC_USER"
+  use_lock_lines
 }
-check_update_unit() { [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ]; }
-plan_update_unit() { echo "bash scripts/linux/install-update-unit.sh --repo $CHECKOUT --user $SVC_USER"; }
+check_update_unit() {
+  [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ] \
+    && grep -q '^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null
+}
+plan_update_unit() {
+  echo "DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update (unless it sets DOMOVOI_USE_LOCK already)"
+  echo "bash scripts/linux/install-update-unit.sh --repo $CHECKOUT --user $SVC_USER"
+}
 do_update_unit() {
+  local have
+  # Before the installer, so that its pre-flight reports the lock as on.
+  if ! grep -q '^[[:space:]]*DOMOVOI_USE_LOCK[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null; then
+    write_if_changed "$UPDATE_DEFAULTS" 0644 < <(if [ -f "$UPDATE_DEFAULTS" ]; then cat "$UPDATE_DEFAULTS"; echo; fi; use_lock_lines) || true
+    log "updates re-sync from the lock: DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update"
+  else
+    have=$(defaults_use_lock) || have=""
+    if [ "$have" = 1 ]; then log "updates re-sync from the lock (DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update)"
+    else warn "/etc/default/domovoi-update sets DOMOVOI_USE_LOCK=$have, left as it is: updates re-sync through pip's resolver, which checks no hashes, though this box was installed from the lock"; fi
+  fi
   bash "$CHECKOUT/scripts/linux/install-update-unit.sh" --repo "$CHECKOUT" --user "$SVC_USER" \
     || die "scripts/linux/install-update-unit.sh stopped (its output above says why)"
   STEP_DONE_MSG="Updater installed"
@@ -2362,6 +2538,7 @@ do_finish() {
     log "no setup code file at $code_file: the admin is already claimed, or the core has not written it yet"
   fi
   log "dashboard: $DASHBOARD_URL (the core on :6370)"
+  detect_gpus
   if [ "$RESTART_REQUIRED" = true ]; then
     log "restart required: /etc/wsl.conf changed. Run 'wsl --terminate <this distro>' and start it again."
   fi
@@ -2413,6 +2590,9 @@ STARTED=1
 [ -z "$ROOT" ] || log "(test harness: system paths under $ROOT)"
 if dry; then log "dry run: nothing is changed"; fi
 log "repo $REPO_URL @ $REF -> $CHECKOUT as $SVC_USER; internet ${INTERNET:-unanswered}; tier $TIER; WSL $([ "$WSL" = 1 ] && echo yes || echo no)"
+if [ -n "$TIMEZONE_IGNORED" ]; then
+  warn "--timezone $TIMEZONE_IGNORED is ignored on WSL: the distro's zone follows Windows, which WSL sets at every distro start (change it in Windows' settings)"
+fi
 
 SVC_HOME=$(svc_home) || SVC_HOME=""
 [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER
