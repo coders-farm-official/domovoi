@@ -1473,7 +1473,7 @@ const _groupBy = (list) => {
 
 /* ---- Topbar ------------------------------------------------- */
 const Topbar = ({ route, setRoute, theme, setTheme }) => {
-  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', satellites: 'Satellites', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual' };
+  const labels = { home: 'Home', chat: 'Chat', music: 'Music', podcasts: 'Podcasts', audiobooks: 'Audiobooks', videos: 'Videos', news: 'News', people: 'People', satellites: 'Satellites', calendar: 'Calendar', plugins: 'Plugins', settings: 'Settings', files: 'Files', manual: 'User Manual', containers: 'Containers' };
   // Plugin routes take their crumb label from the manifest.
   if (!labels[route]) {
     const manifest = window.DomovoiPluginManifest || { plugins: [] };

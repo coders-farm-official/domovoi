@@ -92,9 +92,10 @@ def refusal_detail(operation: str, incidents: list[dict[str, Any]]) -> dict[str,
     opened = store.iso(first.get("opened_at"))
     more = f" and {len(incidents) - 1} more" if len(incidents) > 1 else ""
     what = OPERATIONS.get(operation, "This is")
+    summary = str(first.get("summary") or "see the Containers page").rstrip(". ")
     message = (
         f"{what} paused: the container guard found signs of tampering "
-        f"(incident #{first['id']}{more}: {first.get('summary') or 'see the Containers page'}). "
+        f"(incident #{first['id']}{more}: {summary}). "
         f"An admin must review and clear it on the Containers page first."
     )
     return {

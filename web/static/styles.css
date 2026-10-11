@@ -162,7 +162,7 @@
 .guard-banner-link { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
 .guard-banner-ack { padding: 2px 8px; font-size: 12px; }
 @media (max-width: 760px) {
-  .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; align-items: flex-start; }
+  .guard-banner { top: -16px; margin: -16px -16px 16px; padding: 10px 16px; }
   .guard-banner-actions { flex-direction: column; align-items: flex-end; gap: 4px; }
 }
 

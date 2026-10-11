@@ -224,7 +224,7 @@ const ContainersPage = () => {
 
   return (
     <div className="page ctr-page">
-      <PageHeader title="containers" sub="what Domovoi watches on this box, and anything that went wrong"/>
+      <PageHeader title="Containers" sub="what Domovoi watches on this box, and anything that went wrong"/>
       {!s.loaded && <Empty title="reading…" sub=""/>}
       {s.loaded && s.tier === 'open' && (
         <Card padded>
