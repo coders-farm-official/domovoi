@@ -68,4 +68,26 @@ class FileKindsTest {
         assertEquals("plugin:x", defaultHomeLibrary(FileEntry(name = "n.md", kind = "doc-text"), onlyPlugin))
         assertNull(defaultHomeLibrary(FileEntry(name = "n.md"), listOf(lib("core:music", editable = false))))
     }
+
+    private fun phoneEntry(name: String) = FileEntry(name = name, kind = fileKind(name, false))
+
+    @Test fun aPhoneVideoGoesToTheServersVideosLibrary() {
+        val libs = listOf(lib("core:music"), lib("core:documents"), lib("core:pictures"), lib("core:videos"))
+        for (name in listOf("clip.mkv", "clip.mov", "clip.webm", "clip.m4v", "VID_20261011_120000.mp4")) {
+            assertEquals(name, "core:videos", defaultHomeLibrary(phoneEntry(name), libs))
+        }
+        // Audio stays Music, .m4a included; only .mp4 is read as the camera's.
+        assertEquals("core:music", defaultHomeLibrary(phoneEntry("voice.m4a"), libs))
+        assertEquals("core:music", defaultHomeLibrary(phoneEntry("song.mp3"), libs))
+        assertEquals("core:pictures", defaultHomeLibrary(phoneEntry("p.jpg"), libs))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("n.md"), libs))
+    }
+
+    @Test fun aPhoneVideoFallsBackToDocumentsWithoutAVideosLibrary() {
+        val older = listOf(lib("core:music"), lib("core:documents"), lib("core:pictures"))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("clip.mkv"), older))
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("VID_1.mp4"), older))
+        val readOnlyVideos = older + lib("core:videos", editable = false)
+        assertEquals("core:documents", defaultHomeLibrary(phoneEntry("clip.mov"), readOnlyVideos))
+    }
 }

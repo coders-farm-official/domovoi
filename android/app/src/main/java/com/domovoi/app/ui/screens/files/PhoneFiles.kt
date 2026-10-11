@@ -234,17 +234,26 @@ internal fun ImageViewerOverlay(
 // Send to home: pick a library and folder on the server, then one upload.
 // ---------------------------------------------------------------------------
 
+/** The server's Videos library (`VIDEOS_DIR`, 2026-10-11). Older servers have none. */
+internal const val VIDEOS_LIBRARY_ID = "core:videos"
+
 /**
  * Where a phone file lands on the server by default: Pictures for an image,
- * Music for audio, Documents for the rest — whichever of those the server
- * offers as editable, else its first editable library. The sheet lets the
- * person pick any editable library and folder.
+ * Music for audio, Videos for a video, Documents for the rest — whichever of
+ * those the server offers as editable, else Documents, else its first
+ * editable library (so a video goes to Documents on a server without a
+ * Videos library, as it always did). The sheet lets the person pick any
+ * editable library and folder.
+ *
+ * A phone's .mp4 counts as a video here: it is what the camera records,
+ * though [fileKind] reads .mp4 as audio first, as the server's listing does.
  */
 internal fun defaultHomeLibrary(entry: FileEntry, libraries: List<FileLibrary>): String? {
     val editable = libraries.filter { it.editable }
-    val wanted = when (entry.kind) {
-        "image" -> "core:pictures"
-        "audio" -> "core:music"
+    val wanted = when {
+        entry.kind == "video" || extOf(entry.name) == "mp4" -> VIDEOS_LIBRARY_ID
+        entry.kind == "image" -> "core:pictures"
+        entry.kind == "audio" -> "core:music"
         else -> DOCUMENTS_LIBRARY_ID
     }
     return editable.firstOrNull { it.id == wanted }?.id
