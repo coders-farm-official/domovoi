@@ -145,6 +145,26 @@ SCENARIOS = {
             " return { before, after: snap(), hookCalls: h.hookCalls };"
         ),
     },
+    "page_guest_poll": {
+        "files": FILES, "component": "MusicPage",
+        "setup": ("globalThis.useGuestViewer = () => true; globalThis.__iv = [];"
+                  " globalThis.setInterval = (fn, ms) => { globalThis.__iv.push(ms); return 1; };"),
+        "api": {"GET /api/music/now-playing": OFFICE_NP, "GET /api/playlists": [],
+                "GET /api/music/library/stats": None, "GET /api/acquisitions?limit=100": None,
+                Q: queue(guest=True)},
+        "script": ("h.render(); await h.click({ type: 'button', text: 'Room queue' });"
+                   " return { iv: h.global('__iv') };"),
+    },
+    "page_household_poll": {
+        "files": FILES, "component": "MusicPage",
+        "setup": ("globalThis.useGuestViewer = () => false; globalThis.__iv = [];"
+                  " globalThis.setInterval = (fn, ms) => { globalThis.__iv.push(ms); return 1; };"),
+        "api": {"GET /api/music/now-playing": OFFICE_NP, "GET /api/playlists": [],
+                "GET /api/music/library/stats": None, "GET /api/acquisitions?limit=100": None,
+                Q: queue()},
+        "script": ("h.render(); await h.click({ type: 'button', text: 'Room queue' });"
+                   " return { iv: h.global('__iv') };"),
+    },
     "drawer_add_to_room_queue": {
         "files": FILES, "component": "Drawer",
         "props": {"track": {"id": 6, "title": "Warm Stones", "artist": "Hearth Ensemble",
@@ -278,3 +298,11 @@ def test_the_queue_read_is_quiet() -> None:
     start = src.index("const QueueTab = ")
     body = src[start:src.index("/* ---- Playlists tab")]
     assert "{ eventTypes: ['music.now_playing.changed'], quiet: true }" in body
+
+
+def test_a_guest_rereads_what_has_no_socket_to_push_it(driven) -> None:
+    """A guest has no live socket (/ws/state takes a credential): the page
+    re-reads now-playing, and the Room queue tab its queue, every 15 s. A
+    household browser keeps the socket and no such poll."""
+    assert driven["page_guest_poll"]["iv"].count(15000) == 2, driven["page_guest_poll"]
+    assert 15000 not in driven["page_household_poll"]["iv"], driven["page_household_poll"]

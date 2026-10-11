@@ -916,6 +916,10 @@ const guestSend = (path, body) => (typeof apiFetch === 'function'
   ? apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}), noPrompt: true })
   : apiPost(path, body));
 
+// How often a guest's Music page re-reads what the rooms are doing: it has
+// no live socket to be told.
+const GUEST_POLL_MS = 15000;
+
 // What a guest is told when the server refused one of its presses.
 const guestRefusalText = (verb, e) => {
   const status = e && e.status;
@@ -968,6 +972,18 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
            + `?device_id=${encodeURIComponent(deviceId)}` : null,
     { eventTypes: ['music.now_playing.changed'], quiet: true },
   );
+
+  // A guest's tab has no live socket to say the queue moved on: re-read it
+  // on the same 15 s beat as the page's now-playing (MusicPage).
+  const guestTab = !!queue?.guest;
+  React.useEffect(() => {
+    if (!guestTab) return undefined;
+    const t = setInterval(() => {
+      try { if (typeof document !== 'undefined' && document.hidden) return; } catch {}
+      refresh();
+    }, GUEST_POLL_MS);
+    return () => clearInterval(t);
+  }, [guestTab, room]);
 
   // Drop the optimistic order whenever the server's list changes underneath
   // us (a track advanced, or someone else edited) — otherwise a stale local
@@ -1776,6 +1792,18 @@ const MusicPage = () => {
     if (waiting) showRoomQueue(waiting);
     return RoomQueueIntent.subscribe((room) => { RoomQueueIntent.take(); showRoomQueue(room); });
   }, [showRoomQueue]);
+
+  // A guest has no live socket (/ws/state takes a household credential),
+  // so nothing pushes it a room starting, stopping or moving on: it
+  // re-reads the open now-playing every 15 s while the page is visible.
+  React.useEffect(() => {
+    if (!guest) return undefined;
+    const t = setInterval(() => {
+      try { if (typeof document !== 'undefined' && document.hidden) return; } catch {}
+      refreshNP();
+    }, GUEST_POLL_MS);
+    return () => clearInterval(t);
+  }, [guest]);
 
   // Tick once a second so the elapsed-time display advances
   // between WS pushes (domovoi only emits on play/pause/skip
