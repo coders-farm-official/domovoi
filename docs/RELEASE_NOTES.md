@@ -4,6 +4,57 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — The container guard: loud alerts for failed containers, a freeze on tampering
+
+The core now knows which Docker containers should be running — its
+database and the rest of the compose stack, each room's music player,
+every plugin's declared containers — and checks them every 30 seconds
+(docs/CONTAINER_GUARD.md). One Flyway step (V023).
+
+### Upgrading
+
+1. **Update the server** as usual; the update unit applies **V023**
+   (`container_incidents`, `container_guard_baselines`). Without it the
+   guard still checks and shows its findings on the Containers page, but
+   records no incidents and freezes nothing.
+2. **Nothing alerts in the first 3 minutes** after the core starts, and a
+   failure must last 2 minutes before it does. If a banner appears after
+   the update, read it: it is about a container that really is down or
+   different (an old `domovoi-searxng` on an image from before the pins,
+   for example — `docker compose up -d searxng` from `domovoi/` puts it on
+   the pin).
+3. **Plugins:** Jellyfin, RomM and Kiwix 1.1.0 declare their containers
+   (SDK 1.5) and are watched; older versions keep working and are marked
+   "containers not watched". Upgrade them from the Plugins page (they
+   still load on an older core).
+4. **Phones:** the new APK adds the notifications (a "Container problems"
+   channel) and the banner.
+
+### What changes
+
+* **A banner on every dashboard page** while something is open: red for
+  tampering and for a required container's failure, amber for an optional
+  one's (SearXNG, Letta, Flyway). Guests and shared screens see only
+  "Something needs an admin's attention." Home's problems list gets a row;
+  the new **Containers** page (`#containers`) has the details, and the
+  admin's acknowledge and clear.
+* **A failure** (missing, stopped, crash-looping, unhealthy, Docker down)
+  alerts and resolves by itself. **Tampering** (a different image than the
+  pin or the one the core built, an unknown container under Domovoi's
+  compose project or music player names, privileged or host settings)
+  alerts and **freezes plugin installs, upgrades and enables, satellite
+  code and payload pushes, satellite media preparation, and updates**
+  (`423`) until an admin clears it after review. Everything else keeps
+  working.
+* **Android**: one notification per incident on paired phones, and the
+  same banner; tapping opens the details.
+* **SDK 1.5** for plugin authors: `[[containers]]` in the manifest and
+  `ctx.add_container(id, resolve)` (docs/PLUGIN_DEVELOPMENT.md). The
+  install trust screen lists a plugin's containers.
+* Settings: `CONTAINER_GUARD_ENABLED`, `..._INTERVAL_SEC`,
+  `..._BOOT_GRACE_SEC`, `..._FAILURE_GRACE_SEC`, `..._DAEMON_GRACE_SEC`,
+  `..._TAMPER_CONFIRM_SEC`, `..._COMPOSE` (docs/CONTAINER_GUARD.md).
+
 ## 2026-10-09 — One restart at a time
 
 Pressing **Restart to apply changes** and then reloading the dashboard

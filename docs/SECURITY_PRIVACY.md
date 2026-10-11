@@ -1205,6 +1205,24 @@ migration V021 (`track_lyrics`, the `track_lyrics_shown` view,
 | **What LRCLIB receives** | Only while "Synced lyrics from LRCLIB" is on (its default follows the internet answer: on for **Yes** and **Sometimes**, off for **No** and while unanswered; a hand-set value wins) and the server is online: for songs that have no timed lyrics of their own, each song's title, artist credit and primary performer, album and length in seconds, to lrclib.net, about one request a second. Nothing else — no file, no path, no account, no listening history. See the table below. |
 | **What is written to your music folders** | With "Save lyrics as .lrc files" on (only while LRCLIB is), LRCLIB's TIMED lyrics are saved as a `.lrc` next to a song that has none, marked `[re:Domovoi]`. Domovoi never changes or deletes a `.lrc` it did not write — nor one it wrote that you have since edited or deleted — and never writes outside `MUSIC_DIR`. Plain-only lyrics stay in the database. |
 
+## The container guard (what it does and does not detect)
+
+Owner decision 2026-10-11: a container Domovoi expects that fails alerts
+loudly, and signs of tampering with Domovoi's containers also freeze the
+operations that change what code runs on the house's machines until an
+admin reviews them (docs/CONTAINER_GUARD.md). Migration V023
+(`container_incidents`, `container_guard_baselines`),
+`domovoi/container_guard/`.
+
+| | |
+|---|---|
+| **What it detects** | An expected container missing, stopped, crash-looping or unhealthy, and Docker not answering. A container running a different image than the digest Domovoi pins (compose services, plugins that pin), a different repository:tag (plugins that pin only a tag), or a different image ID than the music player image the core built. An unknown running container wearing the compose project's label or the music player prefix. Privileged mode, the host's network or process namespace, or a bind mount of the Docker socket or the host's root on any container that is Domovoi's, when its declaration allows none of it. |
+| **What it does not detect** | **Anything a root user on the host does.** The guard asks the Docker daemon what is running; root (or anyone in the `docker` group, which is root-equivalent) controls the daemon, the images, the database the incidents live in and the core itself, and can make all of them say whatever it likes. The guard is a tripwire for an unexpected change, not a defence against the host's own administrator. Nor does it see: a different image retagged under a tag a plugin pins by tag only; what happens INSIDE a container that runs the right image (a compromised process, changed files in a volume); a change made and undone between two checks (30 s); containers of plugins that declare none (older Jellyfin, RomM and Kiwix — their Plugins card says "containers not watched"); containers that only look like Domovoi's (`domovoi-…`) but nothing claims, which it lists and never alarms on; a host that doesn't run the compose stack (`CONTAINER_GUARD_COMPOSE`). The first music player image it sees is trusted (no record exists before it). |
+| **What freezes** | While a tamper incident is open: plugin install, upgrade and enable; satellite code upgrades and the code and plugin payload channels; satellite media preparation; the update pull, and a restart that would load new code. `423`, naming the incident to a caller who passed the route's own gate; the open satellite channels say only that they are paused. The freeze is in the database, so a restart doesn't lift it; turning the guard off doesn't either. |
+| **Who sees what** | Anyone (no credential): only "Something needs an admin's attention." and its colour, over the open `GET /api/containers/summary` — never a container, an image or what failed; a shared screen shows the same. The household tier: what failed in plain words, when, and whether it is acknowledged or cleared (the banner, Home, the Containers page, Android notifications, the `containers` realtime event). Admins: also the expected and found image references, digests and IDs, settings and exit codes, and who acknowledged or cleared what. |
+| **Who acts** | Acknowledging a failure and clearing a tamper incident are admin mutations (Bearer), recorded with the admin's source address and an optional note. A household device can do neither, nor can the Android app (it holds no admin credential). |
+| **What it stores** | Container names, image references and IDs, exit codes and timestamps — nothing about a person. Resolved incidents stay as history. |
+
 ## What leaves your network — and how to turn each thing off
 
 Local-first is the default posture: **Whisper (STT), Ollama (both LLMs),

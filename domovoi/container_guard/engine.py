@@ -242,7 +242,17 @@ class ContainerGuard:
         self._lock: asyncio.Lock | None = None
         self._lock_loop: asyncio.AbstractEventLoop | None = None
         self.pending_baseline: tuple[str, str] | None = None
+        self._warned: dict[str, str] = {}
         self.status: dict[str, Any] = {"state": "starting", "checked_at": None}
+
+    def _warn_once(self, what: str, message: str) -> None:
+        """A database that stays away (or V023 not applied yet) is logged
+        once, not every 30 seconds; the next success re-arms it."""
+        if self._warned.get(what) != message:
+            self._warned[what] = message
+            log.warning("%s", message)
+        else:
+            log.debug("%s", message)
 
     def _get_lock(self) -> asyncio.Lock:
         loop = asyncio.get_running_loop()
@@ -290,7 +300,7 @@ class ContainerGuard:
         try:
             expected = await self._gather(self, cfg)
         except Exception as e:  # noqa: BLE001 — the DB may be the thing that's down
-            log.warning("container guard: could not read what Domovoi expects: %s", e)
+            self._warn_once("read", f"container guard: could not read what Domovoi expects: {e}")
             db_ok = False
             expected = await gather_expected(self, cfg, with_db=False)
         view = await self.docker.observe(
@@ -328,8 +338,10 @@ class ContainerGuard:
             except Exception as e:  # noqa: BLE001 — try again next check
                 self.debouncer.restore(snap)
                 db_ok = False
-                log.warning("container guard: could not record incidents: %s", e)
+                self._warn_once("write", f"container guard: could not record incidents: {e}")
 
+        if db_ok:
+            self._warned.clear()
         if not view.ok and not view.cli_missing:
             self._fail_streak += 1
             self._next_due = now + min(cfg.interval_sec * (2 ** self._fail_streak), MAX_BACKOFF_SEC)
