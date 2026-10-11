@@ -24,7 +24,7 @@ details}}}``), naming the incident. The check runs AFTER the route's own
 credential gate, so a caller without one learns nothing here.
 
 Fail-open on a database it can't read: with no ``container_incidents``
-table (V023 not applied) or no database at all, the guard can't have
+table (V024 not applied) or no database at all, the guard can't have
 recorded anything, and every frozen operation needs the database anyway.
 """
 

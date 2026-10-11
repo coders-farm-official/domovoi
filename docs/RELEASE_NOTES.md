@@ -9,11 +9,11 @@ a way that would otherwise get reported as a bug.
 The core now knows which Docker containers should be running — its
 database and the rest of the compose stack, each room's music player,
 every plugin's declared containers — and checks them every 30 seconds
-(docs/CONTAINER_GUARD.md). One Flyway step (V023).
+(docs/CONTAINER_GUARD.md). One Flyway step (V024).
 
 ### Upgrading
 
-1. **Update the server** as usual; the update unit applies **V023**
+1. **Update the server** as usual; the update unit applies **V024**
    (`container_incidents`, `container_guard_baselines`). Without it the
    guard still checks and shows its findings on the Containers page, but
    records no incidents and freezes nothing.
@@ -46,8 +46,9 @@ every plugin's declared containers — and checks them every 30 seconds
   code and payload pushes, satellite media preparation, and updates**
   (`423`) until an admin clears it after review. Everything else keeps
   working.
-* **Android**: one notification per incident on paired phones, and the
-  same banner; tapping opens the details.
+* **Android**: one notification per incident on paired phones (taken
+  back when it resolves or is cleared), the same banner, and a row in the
+  app's Home problems; tapping opens the details.
 * **SDK 1.5** for plugin authors: `[[containers]]` in the manifest and
   `ctx.add_container(id, resolve)` (docs/PLUGIN_DEVELOPMENT.md). The
   install trust screen lists a plugin's containers.

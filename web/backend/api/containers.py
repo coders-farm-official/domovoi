@@ -45,7 +45,7 @@ router = APIRouter(prefix="/api/containers", tags=["containers"])
 
 
 async def _rows() -> list[dict[str, Any]]:
-    """Open + recent incidents; [] when they can't be read (V023 not yet
+    """Open + recent incidents; [] when they can't be read (V024 not yet
     applied, the database away) — the guard can't have recorded any."""
     try:
         async with session_scope() as s:

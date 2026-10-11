@@ -319,7 +319,7 @@ the container guard (`container_guard`, `domovoi/container_guard/`): every
 30 s it compares the Docker containers the core expects — the compose
 stack, each room's music player, every plugin's declared containers —
 against what Docker reports, records failures and signs of tampering in
-`container_incidents` (V023), and while a tamper incident is open freezes
+`container_incidents` (V024), and while a tamper incident is open freezes
 plugin installs, satellite upgrades and updates. See
 [CONTAINER_GUARD.md](CONTAINER_GUARD.md).
 

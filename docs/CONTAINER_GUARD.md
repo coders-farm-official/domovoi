@@ -28,7 +28,7 @@ the satellite LEDs don't change.
 
 Code: `domovoi/container_guard/` (one module per part, listed in its
 `__init__.py`), the `container_guard` core worker
-(`domovoi/workers/container_guard.py`), the V023 tables, the web routes in
+(`domovoi/workers/container_guard.py`), the V024 tables, the web routes in
 `web/backend/api/containers.py`, the dashboard banner and page
 (`web/static/components.jsx`, `web/static/containers.jsx`) and the Android
 alerts (`android/app/src/main/java/com/domovoi/app/alerts/`).
@@ -178,7 +178,7 @@ whatever else runs on the host, so it is cheap on a Pi-class box.
 
 ## Incidents
 
-Each distinct problem is one row in `container_incidents` (V023): its
+Each distinct problem is one row in `container_incidents` (V024): its
 class, kind, container, what was expected and what was found, when it
 opened, was last seen and was resolved, and who acknowledged or cleared it
 and when. One open incident per problem: a failure is one per container
@@ -239,8 +239,10 @@ docs/SECURITY_PRIVACY.md).
   which plugins aren't watched, and "check now".
 * **Home's problems row**, linking to the Containers page.
 * **Android**: a notification on every paired phone when an incident
-  opens — one per incident, on its own "Container problems" channel — and
-  the same banner in the app; tapping either opens the details. The app
+  opens — one per incident, on its own "Container problems" channel,
+  taken back when the incident resolves or is cleared — the same banner in
+  the app, and a row in the app's Home problems; tapping any of them opens
+  the details. The app
   has no admin sign-in, so acknowledging and clearing happen on the
   dashboard.
 

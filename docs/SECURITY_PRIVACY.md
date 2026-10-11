@@ -1210,7 +1210,7 @@ migration V021 (`track_lyrics`, the `track_lyrics_shown` view,
 Owner decision 2026-10-11: a container Domovoi expects that fails alerts
 loudly, and signs of tampering with Domovoi's containers also freeze the
 operations that change what code runs on the house's machines until an
-admin reviews them (docs/CONTAINER_GUARD.md). Migration V023
+admin reviews them (docs/CONTAINER_GUARD.md). Migration V024
 (`container_incidents`, `container_guard_baselines`),
 `domovoi/container_guard/`.
 

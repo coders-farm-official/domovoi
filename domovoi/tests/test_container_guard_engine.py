@@ -4,7 +4,7 @@
 The debounce half is pure. The lifecycle half drives a real
 :class:`ContainerGuard` — a fake Docker, a fixed clock and its own
 expected set — against the test database's ``container_incidents``
-(V023), so open / touch / resolve / acknowledge / clear and the NOTIFY
+(V024), so open / touch / resolve / acknowledge / clear and the NOTIFY
 are the real SQL.
 """
 

@@ -400,7 +400,7 @@ posture; the specifically dangerous ones carry the Bearer gate.
 ### 2.6a Admin: the container guard
 
 The guard runs in the core and is the only writer of `container_incidents`
-(V023); docs/CONTAINER_GUARD.md says what it watches and why. The web
+(V024); docs/CONTAINER_GUARD.md says what it watches and why. The web
 dashboard reads the incidents itself and proxies these.
 
 | Method & path | Auth | Request | Response / purpose |
@@ -928,7 +928,7 @@ with the caller's credential forwarded and the same gate at both hops.
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
 | `GET /api/containers/summary` | Open | — | `{attention, tone: "err"\|"warn"\|null, text}` — for a browser with no household credential: whether something needs an admin's attention (`text` is "Something needs an admin's attention.") and the banner's colour. Never which container or what failed. |
-| `GET /api/containers/incidents` | **Device read** | — | `{incidents, banner, frozen, attention}`. `incidents`: every open incident and those resolved in the last 24 h, open first then newest: `{id, class: failure\|tamper, kind: missing\|stopped\|restarting\|unhealthy\|oneshot_failed\|daemon\|image\|unknown\|config, severity: error\|warn, label, summary, owner, container, opened_at, last_seen_at, resolved_at, resolution: recovered\|no_longer_expected\|cleared\|null, acknowledged, acknowledged_at, cleared_at, open, freezes, can_acknowledge, can_clear}`; an admin caller (Bearer or cookie) also gets `expected`, `found`, `acknowledged_by`, `cleared_by`, `clear_note`. `banner`: `{show, tone: tamper\|error\|warn\|null, text, count, incident_ids, frozen}` — shown while a tamper incident is open or a failure is open and unacknowledged. `[]` / no banner when V023 is missing. Live on the `containers` channel (§1.5). |
+| `GET /api/containers/incidents` | **Device read** | — | `{incidents, banner, frozen, attention}`. `incidents`: every open incident and those resolved in the last 24 h, open first then newest: `{id, class: failure\|tamper, kind: missing\|stopped\|restarting\|unhealthy\|oneshot_failed\|daemon\|image\|unknown\|config, severity: error\|warn, label, summary, owner, container, opened_at, last_seen_at, resolved_at, resolution: recovered\|no_longer_expected\|cleared\|null, acknowledged, acknowledged_at, cleared_at, open, freezes, can_acknowledge, can_clear}`; an admin caller (Bearer or cookie) also gets `expected`, `found`, `acknowledged_by`, `cleared_by`, `clear_note`. `banner`: `{show, tone: tamper\|error\|warn\|null, text, count, incident_ids, frozen}` — shown while a tamper incident is open or a failure is open and unacknowledged. `[]` / no banner when V024 is missing. Live on the `containers` channel (§1.5). |
 | `GET /api/containers/status` | **Admin read** | — | Proxy → core `GET /v1/admin/containers`. |
 | `POST /api/containers/check` | **Admin (Bearer)** | — | Proxy → core check. |
 | `POST /api/containers/incidents/{id}/acknowledge` | **Admin (Bearer)** | — | Proxy → core acknowledge. |

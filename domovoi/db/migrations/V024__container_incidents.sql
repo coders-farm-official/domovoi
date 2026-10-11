@@ -1,4 +1,4 @@
--- V023 — the container guard's incidents and baselines (2026-10-11).
+-- V024 — the container guard's incidents and baselines (2026-10-11).
 --
 -- The core's container guard (domovoi/container_guard/, docs/CONTAINER_GUARD.md)
 -- compares the Docker containers Domovoi expects (the compose stack, each

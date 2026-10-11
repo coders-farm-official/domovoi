@@ -1,4 +1,4 @@
-"""The guard's database half: incidents (V023 ``container_incidents``) and
+"""The guard's database half: incidents (V024 ``container_incidents``) and
 baselines (``container_guard_baselines``).
 
 Every function takes an open ``AsyncSession`` so both processes use one

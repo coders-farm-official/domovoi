@@ -1920,7 +1920,7 @@ def _incident_actor(request: Request) -> str:
 
 
 async def _guard_incidents() -> tuple[list[dict[str, Any]], bool]:
-    """``(open + recent incidents, readable)``. Unreadable (V023 not yet
+    """``(open + recent incidents, readable)``. Unreadable (V024 not yet
     applied, the database away) reads as none."""
     from domovoi.container_guard import store as cg_store
 

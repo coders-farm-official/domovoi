@@ -246,7 +246,7 @@ class ContainerGuard:
         self.status: dict[str, Any] = {"state": "starting", "checked_at": None}
 
     def _warn_once(self, what: str, message: str) -> None:
-        """A database that stays away (or V023 not applied yet) is logged
+        """A database that stays away (or V024 not applied yet) is logged
         once, not every 30 seconds; the next success re-arms it."""
         if self._warned.get(what) != message:
             self._warned[what] = message

@@ -42,7 +42,7 @@ Channels emitted (core; enabled plugins add their own via manifest
   ``web.backend.api.satellites._READS_FIRE_LEDGER``)
 * ``containers`` — the container guard's open and recent incidents in
   plain words, the banner every page shows and whether the freeze is on
-  (V023, docs/CONTAINER_GUARD.md); fires on every incident write
+  (V024, docs/CONTAINER_GUARD.md); fires on every incident write
 * ``lyrics`` — a digest of the lyrics tables (V021): counts, the newest
   ``updated_at`` and the lyrics workers' states. Never a title or a lyric:
   the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
@@ -179,7 +179,7 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # the resulting `timer_fires.changed` event; Android's live
     # notifications too.
     "timer_fires_changed": "timer_fires",
-    # The container guard (V023, docs/CONTAINER_GUARD.md). The core fires
+    # The container guard (V024, docs/CONTAINER_GUARD.md). The core fires
     # `container_incidents_changed` when an incident opens, changes,
     # resolves, is acknowledged or cleared. Every page's banner, Home's
     # problems row and Android's notifications ride the resulting
