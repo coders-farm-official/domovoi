@@ -18,8 +18,10 @@
 #   never              masks the units below that are installed, are not
 #                      masked yet, and have no unit file of the
 #                      administrator's in /etc/systemd/system, then stops
-#                      them; each one it masks is written down in
-#                      /var/lib/domovoi-os-jobs/masked
+#                      them; each one is written down in
+#                      /var/lib/domovoi-os-jobs/masked BEFORE it is masked
+#                      (and crossed off again if the mask fails), so a
+#                      killed run never leaves a mask nobody wrote down
 #                        apt-daily.timer apt-daily-upgrade.timer
 #                        unattended-upgrades.service  (package updates)
 #                        motd-news.timer               (login news)
@@ -235,7 +237,7 @@ if [ -z "$ROOT" ] && [ "$(id -u)" != 0 ]; then
 fi
 
 FAILED=0
-DONE_WSL=() DONE_MASKED=() DONE_UNMASKED=()
+DONE_WSL=() DONE_MASKED=() DONE_UNMASKED=() NOT_MASKED=()
 
 mask_unit() {
   mkdir -p "$UNIT_DIR" && ln -s /dev/null "$UNIT_DIR/$1" && return 0
@@ -244,8 +246,45 @@ mask_unit() {
   return 1
 }
 
+# The record: what this script masked for "never" and has not put back.
+# record_with ADD... -- GONE...: the record's units plus ADD, less GONE,
+# sorted, one per line.
+record_with() {
+  local add=() gone=" "
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do add+=("$1"); shift; done
+  [ $# -eq 0 ] || shift
+  gone+="$* "
+  { if [ -f "$RECORD" ]; then cat "$RECORD"; fi; printf '%s\n' "${add[@]}"; } \
+    | awk -v gone="$gone" 'NF && index(gone, " " $0 " ") == 0' | LC_ALL=C sort -u
+}
+# write_record CONTENT: the record by rename (none at all when empty);
+# status 1 when it could not be written.
+write_record() {
+  local tmp
+  if [ -z "$1" ]; then rm -f "$RECORD"; return; fi
+  mkdir -p "$STATE_DIR" && tmp=$(mktemp "$STATE_DIR/.masked.XXXXXX") || return 1
+  if ! { printf '%s\n' "$1" >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$RECORD"; }; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# never: written down FIRST, masked after. A run killed in between leaves a
+# unit written down and not masked, which the next run masks (never) or
+# crosses off (always); the other order could leave a mask nobody wrote
+# down, which "always" would then never take back. Nothing written down,
+# nothing masked.
+if [ "${#WANT_MASKED[@]}" -gt 0 ]; then
+  if ! write_record "$(record_with "${WANT_MASKED[@]}" -- "${DROP[@]}")"; then
+    echo "could not write $RECORD: nothing masked, so nothing goes unrecorded"
+    FAILED=1
+    WANT_MASKED=()
+  fi
+fi
+
 # WSL: off whatever the answer. Disabled first (its install links go), and
-# stopped, while systemd can still load it.
+# stopped, while systemd can still load it. Never written down: no answer
+# takes these back.
 if [ "${#WSL_TODO[@]}" -gt 0 ]; then
   if systemd_running; then systemctl disable --now "${WSL_TODO[@]}" >/dev/null 2>&1 || true; fi
   for u in "${WSL_TODO[@]}"; do
@@ -253,9 +292,8 @@ if [ "${#WSL_TODO[@]}" -gt 0 ]; then
   done
 fi
 
-# never: mask, and write it down.
 for u in "${WANT_MASKED[@]}"; do
-  if mask_unit "$u"; then DONE_MASKED+=("$u"); echo "masked $u (internet: never)"; fi
+  if mask_unit "$u"; then DONE_MASKED+=("$u"); echo "masked $u (internet: never)"; else NOT_MASKED+=("$u"); fi
 done
 
 # always / sometimes: unmask what was written down (systemctl unmask
@@ -265,18 +303,12 @@ for u in "${WANT_UNMASKED[@]}"; do
   else echo "could not unmask $u"; FAILED=1; fi
 done
 
-# The record: what this script masked for "never" and has not put back.
-if [ "${#DONE_MASKED[@]}" -gt 0 ] || [ "${#DONE_UNMASKED[@]}" -gt 0 ] || [ "${#DROP[@]}" -gt 0 ]; then
-  rec=$( { if [ -f "$RECORD" ]; then cat "$RECORD"; fi; printf '%s\n' "${DONE_MASKED[@]}"; } \
-    | awk -v gone=" ${DONE_UNMASKED[*]} ${DROP[*]} " 'NF && index(gone, " " $0 " ") == 0' | LC_ALL=C sort -u)
-  if [ -n "$rec" ]; then
-    if ! { mkdir -p "$STATE_DIR" && tmp=$(mktemp "$STATE_DIR/.masked.XXXXXX") \
-           && printf '%s\n' "$rec" >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$RECORD"; }; then
-      echo "could not write $RECORD"
-      FAILED=1
-    fi
-  else
-    rm -f "$RECORD"
+# Then the record drops what is no longer masked by this script: what was
+# unmasked, crossed off, or could not be masked after all.
+if [ $(( ${#DONE_UNMASKED[@]} + ${#DROP[@]} + ${#NOT_MASKED[@]} )) -gt 0 ]; then
+  if ! write_record "$(record_with -- "${DONE_UNMASKED[@]}" "${DROP[@]}" "${NOT_MASKED[@]}")"; then
+    echo "could not write $RECORD"
+    FAILED=1
   fi
 fi
 
