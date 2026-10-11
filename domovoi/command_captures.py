@@ -204,6 +204,7 @@ _SERVED_SETTINGS = (
     "music_dir",
     "documents_dir",
     "pictures_dir",
+    "videos_dir",
     "podcasts_dir",
     "audiobooks_dir",
     "video_posters_dir",

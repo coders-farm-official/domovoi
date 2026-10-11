@@ -233,13 +233,15 @@ All on machines you own:
 | Music | `MUSIC_DIR` (default `~/Music`) |
 | Documents (office pages) | `DOCUMENTS_DIR` (default `~/Documents`) |
 | Pictures (Images tab) | `PICTURES_DIR` (default `~/Pictures`) |
+| Videos (Videos tab) | `VIDEOS_DIR` (default `~/Videos`) |
 | Podcasts, audiobooks | `PODCASTS_DIR` / `AUDIOBOOKS_DIR` (default `~/.domovoi/podcasts`, `~/.domovoi/audiobooks`) |
 | Satellite config & caches | `~/.domovoi/` on each Pi |
 
 **These directories are created for you on first boot.** Every media library
 above is created (`mkdir -p`, ordinary permissions) when the dashboard starts,
-so a fresh headless server gets a working Documents and Pictures library even
-though a server account has no desktop `~/Documents` or `~/Pictures` folder.
+so a fresh headless server gets a working Documents, Pictures and Videos
+library even though a server account has no desktop `~/Documents`,
+`~/Pictures` or `~/Videos` folder.
 Nothing is overwritten: a directory that already exists is left exactly as it
 is, contents and permissions untouched.
 

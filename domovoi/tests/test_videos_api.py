@@ -101,6 +101,38 @@ def test_list_walks_all_libraries_and_filters(registry, roots):
     assert night["size"] == 64
 
 
+@requires_db
+def test_list_walks_the_core_videos_library(tmp_path, monkeypatch):
+    """A video dropped into VIDEOS_DIR shows on the Videos tab as core:videos.
+    The registry here is the REAL core-library builder (only the plugin and
+    removable halves are left out), so this pins the whole path from the
+    setting to the list."""
+    from web.backend.api import files_security as fs
+
+    videos = tmp_path / "Videos"
+    videos.mkdir()
+    for attr in ("music_dir", "audiobooks_dir", "podcasts_dir", "documents_dir",
+                 "pictures_dir"):
+        monkeypatch.setattr(fs.core_settings, attr, str(tmp_path / "elsewhere" / attr))
+    monkeypatch.setattr(fs.core_settings, "videos_dir", str(videos))
+
+    async def _core_libraries():
+        return fs.build_core_libraries(fs._allowed_under_config())
+
+    monkeypatch.setattr(videos_api, "build_libraries", _core_libraries)
+    _mkvideo(videos, "Holidays/beach.mp4")
+    _mkvideo(videos, "notes.txt")  # not a video
+
+    with _client() as c:
+        r = c.get("/api/videos/list")
+    assert r.status_code == 200
+    vids = r.json()["videos"]
+    assert {(v["library_id"], v["rel"]) for v in vids} == {
+        ("core:videos", "Holidays/beach.mp4")
+    }
+    assert vids[0]["library_label"] == "Videos"
+
+
 # ─── GET /stream ────────────────────────────────────────────────────────────
 @requires_db
 def test_stream_full_and_range_and_mime(registry, roots):

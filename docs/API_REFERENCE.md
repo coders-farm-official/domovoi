@@ -27,7 +27,8 @@ Domovoi's v1 posture is LAN trust with two credentials layered on top: a
 per-household **device token** for ordinary actions and an **admin
 password** for destructive / code-adjacent ones. First boot writes an 8-word
 **setup code** to `~/.domovoi/setup-code.txt` (mode 0600, valid for 24 h —
-a restart after that prints a fresh one) and prints it on the core console;
+a restart after that writes a fresh one); the core prints it only when its
+stdout is a terminal, and its log carries the file's path, never the code;
 `POST /api/auth/setup` exchanges that code + a chosen password for the admin
 credential (argon2id hash) and a session token. Tokens are 256-bit bearer
 values — only their sha256 is stored — with a 30-day sliding expiry under a
@@ -1014,8 +1015,11 @@ controls and say why.
 
 This is the generic surface behind the **Files** tab: one router browses/
 downloads/uploads/deletes/imports across every root the dashboard exposes —
-the core media dirs (music / audiobooks / podcasts / documents),
-enabled-plugin `[[media_libraries]]` roots, and present removable drives. It
+the core media dirs (`core:music` / `core:audiobooks` / `core:podcasts` /
+`core:documents` / `core:pictures` / `core:videos`, from `MUSIC_DIR`,
+`AUDIOBOOKS_DIR`, `PODCASTS_DIR`, `DOCUMENTS_DIR`, `PICTURES_DIR` and
+`VIDEOS_DIR`), enabled-plugin `[[media_libraries]]` roots, and present
+removable drives. It
 is **additive** and does not touch `/api/documents/*` (§3.14), which the
 Files page still calls for the Documents library's in-place editing.
 
@@ -1187,6 +1191,9 @@ workers; audio is served by this process.
 Videos are discovered live from the same media-library registry the Files
 tab uses — any video file (`.mp4` `.m4v` `.mov` `.webm` `.mkv`) inside any
 core / plugin / removable library appears, keyed by `(library_id, rel_path)`.
+The core library meant for them is `core:videos` (`VIDEOS_DIR`, default
+`~/Videos`, created at first boot like the other core media dirs), but a
+video in Music, Pictures or a plugin library shows up just the same.
 Nothing is indexed into the DB except resume positions (`video_positions`,
 per device × person, like the podcasts store). All **device tier**: the
 file-content endpoints serve the same libraries the Files surface (§3.13)

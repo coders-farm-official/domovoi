@@ -242,6 +242,19 @@ def test_the_default_directory_is_safe_and_a_served_one_is_refused(monkeypatch, 
     assert cc.root_problem()
 
 
+def test_every_files_library_dir_counts_as_served(monkeypatch, tmp_path) -> None:
+    """Each core Files library folder is on the network by definition, so
+    recordings may not live in one — including core:videos (VIDEOS_DIR)."""
+    from web.backend.api.files_security import CORE_LIBRARIES
+
+    for _id, _label, _icon, attr, *_rest in CORE_LIBRARIES:
+        assert attr in cc._SERVED_SETTINGS, f"{attr} ({_id}) is not in _SERVED_SETTINGS"
+    videos = tmp_path / "Videos"
+    monkeypatch.setattr(settings, "videos_dir", str(videos))
+    monkeypatch.setattr(settings, "command_captures_dir", str(videos / "captures"))
+    assert "videos_dir" in (cc.root_problem() or "")
+
+
 def test_an_unsafe_directory_is_never_written_or_swept(monkeypatch, tmp_path) -> None:
     music = tmp_path / "Music"
     (music / "kitchen").mkdir(parents=True)
