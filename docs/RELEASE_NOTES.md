@@ -4,6 +4,23 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
+
+New Android build; nothing to do on the server beyond the usual update.
+
+* **The video feed pauses when the app leaves the screen** (the home
+  button, another app, the screen turning off) and picks up where it was
+  when you come back, if it was playing then; a video you paused stays
+  paused. It used to keep playing out of sight. This is the swipe feed
+  for both the server's Videos tab and the phone's own videos.
+* **The screen stays on while a feed video plays** (buffering included);
+  paused or stopped, it times out as usual.
+* **Send to home puts a video in the server's Videos library** by default
+  (the new `core:videos`, see "A Videos library" below). It used to
+  default to Documents, and an `.mp4` to Music; a phone's `.mp4` now counts
+  as a video. A server without that library gets videos in Documents; the
+  sheet still lets you pick any library.
+
 ## 2026-10-11 — The update unit: "No internet" quiets Ubuntu too, and the lock works on Ubuntu 26.04
 
 Two changes to `domovoi-update.service` (`scripts/linux/apply-update.sh`)
