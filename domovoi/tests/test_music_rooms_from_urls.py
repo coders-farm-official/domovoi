@@ -90,18 +90,35 @@ def _known(monkeypatch, rooms: set[str]) -> list[str]:
 
 
 def test_the_queue_read_is_on_the_device_read_tier() -> None:
+    """The device tier's read half, now inside the guest gate (owner
+    decision 2026-10-10, domovoi/guest_queue.py): a caller with no
+    credential may read a room that is PLAYING, and nothing else."""
+    from domovoi import guest_queue
+
     gates = _gates("GET", "/v1/admin/music/queue/{room_id}")
-    assert admin_auth.require_device_read in gates
+    assert guest_queue.require_device_read_or_active_room_guest in gates
 
 
 @pytest.mark.asyncio
 async def test_the_queue_read_refuses_a_caller_with_no_credential(
     monkeypatch, provisioning
 ) -> None:
-    """The audit's request, after setup: no header at all. Refused at the
-    gate, so nothing is looked up and nothing is started."""
+    """The audit's request, after setup: no header at all, for a name the
+    house doesn't have. That caller is a guest now, and a guest reads only
+    a room whose player is already running and playing — so it is refused
+    (403, the same sentence an idle room gets) at the gate, with nothing
+    looked up and nothing started. With guests switched off it is the
+    device tier's 401, as before."""
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN}, device_token=DEVICE_TOKEN)
     asked = _known(monkeypatch, set())
+    monkeypatch.setattr(settings, "guest_queue_editing", True)
+    async with _client() as c:
+        r = await c.get(QUEUE)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == admin_auth.GUEST_ROOM_IDLE_DETAIL
+    assert asked == [] and provisioning == []
+
+    monkeypatch.setattr(settings, "guest_queue_editing", False)
     async with _client() as c:
         r = await c.get(QUEUE)
     assert r.status_code == 401, r.text
