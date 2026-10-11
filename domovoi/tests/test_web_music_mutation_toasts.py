@@ -73,15 +73,20 @@ globalThis.Auth = {
   paired: !!globalThis.__PAIRED,
   credentialVersion: 0,
   status: { setup_complete: true, authenticated: false },
+  // __STALE: the browser holds a household token the server no longer
+  // takes (rotated). It is judged on that token — refused, prompted to
+  // pair — where a browser holding NOTHING is a guest (2026-10-10), whose
+  // presses are never answered with the prompt.
   headers() {
     const h = {};
     if (this.paired) h['X-Device-Token'] = 'household-token';
+    else if (globalThis.__STALE) h['X-Device-Token'] = 'stale-token';
     if (this.token) h.Authorization = 'Bearer ' + this.token;
     return h;
   },
-  deviceToken() { return this.paired ? 'household-token' : null; },
+  deviceToken() { return this.paired ? 'household-token' : (globalThis.__STALE ? 'stale-token' : null); },
   isLoggedIn() { return !!this.token; },
-  isPaired() { return this.paired; },
+  isPaired() { return this.paired || !!globalThis.__STALE; },
   subscribe() { return () => {}; },
   requestLogin() { globalThis.__prompts.login += 1; },
   requestPairing() { globalThis.__prompts.pair += 1; },
@@ -140,7 +145,7 @@ globalThis.fetch = async (url, opts) => {
   if (globalThis.__BLOCKED) return __resp(403, JSON.stringify({ detail: BLOCK_REASON }));
   if (ADMIN_PATHS.includes(path)) {
     if (!headers.Authorization) return __resp(401, JSON.stringify({ detail: 'admin session required' }));
-  } else if (!headers['X-Device-Token'] && !headers.Authorization) {
+  } else if (headers['X-Device-Token'] !== 'household-token' && !headers.Authorization) {
     return __resp(401, JSON.stringify({ detail: 'X-Device-Token or admin session required' }));
   }
   return __resp(200, '{"ok":true}');
@@ -205,9 +210,10 @@ BULK_ADD = (
 
 def _scenario(act: str, *, taps: int = 1, answer: bool = False, paired: bool = False,
               server_error: bool = False, library: bool = False,
-              blocked: bool = False) -> dict:
+              blocked: bool = False, stale: bool = False) -> dict:
     setup = (f"globalThis.__ANSWER = {json.dumps(answer)};\n"
              f"globalThis.__PAIRED = {json.dumps(paired)};\n"
+             f"globalThis.__STALE = {json.dumps(stale)};\n"
              f"globalThis.__SERVER_ERROR = {json.dumps(server_error)};\n"
              f"globalThis.__LIBRARY = {json.dumps(library)};\n"
              f"globalThis.__BLOCKED = {json.dumps(blocked)};\n" + SETUP)
@@ -220,24 +226,33 @@ def _scenario(act: str, *, taps: int = 1, answer: bool = False, paired: bool = F
 
 
 SCENARIOS = {
-    # An unpaired phone double-taps "play something"; the prompt is dismissed.
-    "double_tap_dismissed": _scenario(PLAY_SOMETHING, taps=2),
+    # A phone holding a rotated (stale) token double-taps "play something";
+    # the prompt is dismissed. (A phone holding nothing is a guest: below.)
+    "double_tap_dismissed": _scenario(PLAY_SOMETHING, taps=2, stale=True),
     # The same double tap, and the prompt answered with the household token.
-    "double_tap_paired": _scenario(PLAY_SOMETHING, taps=2, answer=True),
+    "double_tap_paired": _scenario(PLAY_SOMETHING, taps=2, answer=True, stale=True),
     # A paired browser starts two different rooms in the same instant.
     "two_rooms": _scenario(PLAY_IN_TWO_ROOMS, paired=True),
     # A server that is simply broken.
     "server_error": _scenario(PLAY_SOMETHING, paired=True, server_error=True),
     # The transport row, refused and dismissed.
-    "pause_dismissed": _scenario(PAUSE_OFFICE),
+    "pause_dismissed": _scenario(PAUSE_OFFICE, stale=True),
     # An admin-tier action: the admin sign-in is what is asked for.
     "rescan_dismissed": _scenario(RESCAN),
     # The Playlists tab's row play, double-tapped on a paired browser.
     "playlist_double_tap": _scenario(PLAYLIST_ROW_PLAY, paired=True),
     # A different choice for a room whose first play has not settled.
     "same_room_two_plays": _scenario(SAME_ROOM_TWO_PLAYS, paired=True),
-    # Bulk add on an unpaired browser; the pair prompt is dismissed.
-    "bulk_add_dismissed": _scenario(BULK_ADD, library=True),
+    # Bulk add on a stale-token browser; the pair prompt is dismissed.
+    "bulk_add_dismissed": _scenario(BULK_ADD, library=True, stale=True),
+    # A GUEST (no credential at all): its pause refused by the server is
+    # told in words, with no prompt; a quiet room offers pairing instead
+    # of "play something"; a playlist play is not even sent.
+    "guest_pause_refused": _scenario(PAUSE_OFFICE),
+    "guest_quiet_room": _scenario("return [];"),
+    "guest_playlist_play": _scenario(
+        "await h.click({ type: 'button', text: 'Playlists' });"
+        " return tap(h.find({ type: 'button', title: 'play' }));"),
     # Bulk add from a device an admin has blocked.
     "bulk_add_blocked": _scenario(BULK_ADD, library=True, paired=True, blocked=True),
 }
@@ -286,9 +301,9 @@ def test_no_toast_carries_the_raw_refusal(outcomes) -> None:
 def test_pairing_at_the_prompt_replays_one_play(outcomes) -> None:
     o = outcomes["double_tap_paired"]
     plays = _posts(o, "/api/music/play")
-    # The refused attempt, then its one replay carrying the household token
-    # — not a second random track from the second tap.
-    assert [c["deviceToken"] for c in plays] == [None, "household-token"], plays
+    # The refused attempt (the stale token), then its one replay carrying
+    # the household token — not a second random track from the second tap.
+    assert [c["deviceToken"] for c in plays] == ["stale-token", "household-token"], plays
     assert o["toastTexts"] == ["shuffle requested in kitchen…"], o["toastTexts"]
 
 
@@ -370,3 +385,30 @@ def test_no_music_mutation_toasts_a_raw_exception() -> None:
     assert re.findall(r"fire\(`[^`]*failed: \$\{apiErrorText\(e\)", code) == []
     assert code.count("e.message") == 1
     assert code.count("reportMutationFailure(fire, ") >= 20
+
+
+# ─── a guest (no credential at all), 2026-10-10 ──────────────────────────
+
+NO_PROMPTS = {"pair": 0, "login": 0, "ensurePair": 0, "ensureLogin": 0}
+
+
+def test_a_guests_refused_press_is_told_in_words_not_prompted(outcomes) -> None:
+    o = outcomes["guest_pause_refused"]
+    assert len(_posts(o, "/api/music/pause/office")) == 1, o["net"]
+    assert o["prompts"] == NO_PROMPTS, o["prompts"]
+    assert o["toastTexts"] == [
+        "pause: guests can only change a room that's playing — pair this phone to do more",
+    ], o["toastTexts"]
+
+
+def test_a_guest_is_offered_pairing_not_play_something_on_a_quiet_room(outcomes) -> None:
+    o = outcomes["guest_quiet_room"]
+    assert o["net"] == [] and o["toastTexts"] == []
+    assert o["prompts"] == NO_PROMPTS
+
+
+def test_a_guests_playlist_play_is_not_sent(outcomes) -> None:
+    o = outcomes["guest_playlist_play"]
+    assert o["net"] == [], o["net"]
+    assert o["prompts"] == NO_PROMPTS
+    assert len(o["toastTexts"]) == 1 and "paired phone" in o["toastTexts"][0], o["toastTexts"]

@@ -95,6 +95,17 @@ SCENARIOS = {
             " return { before, pairBefore, pairAfter: h.global('__pair') };"
         ),
     },
+    "guest_room_stopped_meanwhile": {
+        "files": FILES, "component": "QueueTab", "props": QUEUE_PROPS, "fnProps": ["fire"],
+        "api": {Q: queue(guest=True),
+                "POST /api/music/queue/office/move": {"__error": {
+                    "status": 403, "message": "403 Forbidden",
+                    "detail": {"detail": "that room isn't playing, so a guest can't use its queue"}}}},
+        "script": (
+            "h.render(); await h.click({ type: 'button', title: 'move up', nth: 2 });"
+            " return { fnCalls: h.fnCalls };"
+        ),
+    },
     "household": {
         "files": FILES, "component": "QueueTab", "props": QUEUE_PROPS, "fnProps": ["fire"],
         "api": {Q: queue()},
@@ -238,10 +249,19 @@ def test_a_rooms_queue_button_opens_the_tab_on_that_room(driven) -> None:
 
 
 def test_a_guests_room_card_has_no_stop_and_no_favorite(driven) -> None:
-    titles = driven["page_queue_button"]["before"]["titles"]
-    buttons = driven["page_queue_button"]["before"]["buttons"]
-    assert not any(t and t.startswith("favorite") for t in titles)
-    assert "queue" in buttons
+    before = driven["page_queue_button"]["before"]
+    assert not any(t and t.startswith("favorite") for t in before["titles"])
+    assert "queue" in before["buttons"]
+    # The quiet den offers pairing, not a "play something" that could only
+    # be answered with the pairing prompt.
+    assert "play something" not in before["buttons"]
+    assert "pair this phone to start music here" in before["text"]
+
+
+def test_a_guests_refusal_is_said_in_words_and_the_queue_reread(driven) -> None:
+    calls = driven["guest_room_stopped_meanwhile"]["fnCalls"]
+    assert [c["name"] for c in calls] == ["fire"], calls
+    assert calls[0]["args"] == ["move: that room isn't playing, so a guest can't use its queue"]
 
 
 def test_the_drawer_adds_to_a_rooms_queue(driven) -> None:

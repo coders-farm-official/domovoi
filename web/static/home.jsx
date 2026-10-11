@@ -934,6 +934,17 @@ const HomeRooms = ({ rooms, answered, failed, dbDown, stale, fetchedAt, timerLef
  * the open now-playing read, each with pause / resume and a link to that
  * room's queue — the guest may change a playing room's queue. Nothing
  * else: no offline rooms, no timers, no stop. */
+// What a guest is told when the server refused a press (the room stopped
+// meanwhile, an admin's ban): words in a toast, never the pairing prompt.
+const HomeGuestRefusal = (verb, e) => {
+  if (e && e.status === 429) return `${verb}: too many changes from this phone — try again in a minute`;
+  const said = e && e.detail && typeof e.detail.detail === 'string' ? e.detail.detail : null;
+  if ((e && e.status === 401) || (said && /x-device-token|admin session required/i.test(said))) {
+    return `${verb}: guests can only change a room that's playing — pair this phone to do more`;
+  }
+  return `${verb}: ${said || apiErrorText(e)}`;
+};
+
 // data.js's openRoomQueue: Music, on that room's queue tab.
 const HomeOpenQueue = (room) => {
   if (typeof openRoomQueue === 'function') openRoomQueue(room);
@@ -1339,6 +1350,21 @@ const HomePage = ({ counts, badges }) => {
     }
   };
 
+  // A guest's pause / resume (HomeGuestRooms): sent without the pairing
+  // prompt — the server decides, and a refusal is said in words.
+  const onGuestAct = async (room, verb) => {
+    setRoomBusy(room, true);
+    try {
+      await apiFetch(`/api/music/${verb}/${encodeURIComponent(room)}`,
+                     { method: 'POST', body: '{}', noPrompt: true });
+    } catch (e) {
+      fire(HomeGuestRefusal(verb, e));
+    } finally {
+      setRoomBusy(room, false);
+      guestNp.refresh();
+    }
+  };
+
   // Every room in the batch is busy until the whole batch settles, so no
   // pause or stop can land in the middle of it and "stop all" can't fire twice.
   const onStopAll = async (list) => {
@@ -1400,8 +1426,7 @@ const HomePage = ({ counts, badges }) => {
       <div className="home-cols">
         <div className="home-col">
           {guest ? (
-            <HomeGuestRooms np={guestNp} busy={busy}
-                            onAct={(room, verb) => { onAct(room, verb).finally(() => guestNp.refresh()); }}/>
+            <HomeGuestRooms np={guestNp} busy={busy} onAct={onGuestAct}/>
           ) : (
             <HomeRooms rooms={rooms} answered={HomeAnswered(sats)} failed={HomeAnswered(sats) && !HomeOk(sats)}
                        dbDown={dbDown} stale={coreDown} fetchedAt={satsAt} timerLeftByRoom={timerLeftByRoom}

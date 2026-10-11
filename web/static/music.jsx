@@ -124,8 +124,9 @@ const useLibraryPage = ({ pageSize = 12 } = {}) => {
 /* ---- Now Playing card ------------------------------------- */
 // `guest` (data.js isGuestViewer): a browser with no household credential.
 // It may pause, resume and skip a room that is playing and change its
-// queue (owner decision 2026-10-10), but not stop it or favorite for the
-// household, so those two buttons are left off rather than offered and
+// queue (owner decision 2026-10-10), but not stop it, favorite for the
+// household or start a quiet room, so those buttons are left off — a
+// quiet room says pairing is how to start it — rather than offered and
 // answered with a pairing prompt. `onQueue` opens the Room queue tab on
 // this room.
 const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onStop, onFavorite, onQueue }) => {
@@ -215,6 +216,14 @@ const NPCard = ({ np, tick, guest, onPlayRandom, onPause, onResume, onSkip, onSt
                       title={`${np.room_id}'s queue`}>queue</Button>
             )}
           </div>
+        </div>
+      ) : guest ? (
+        /* Starting a quiet room takes a paired phone. Said, with the way to
+           pair one press away — not a button whose answer is a prompt. */
+        <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 8,
+                      justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>pair this phone to start music here</span>
+          <Button icon="link" onClick={() => { try { Auth.requestPairing(); } catch {} }}>pair</Button>
         </div>
       ) : (
         <div style={{ padding: '0 16px 14px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -895,6 +904,30 @@ const fmtQueueDur = (sec) => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
+/* A GUEST's presses never open the pair prompt (owner, 2026-10-10). What a
+ * guest may do — change a playing room's queue, pause / resume / skip /
+ * go back there — is decided by the server, and a refusal of something a
+ * guest can't do (the room stopped meanwhile, an admin's ban, the
+ * household switched guests off) is told in words where the button was,
+ * like the idle room's panel, never by a modal the guest didn't ask for.
+ * Pairing stays one press away on the panels that offer it. Outside data.js
+ * (a test harness) this is plain apiPost. */
+const guestSend = (path, body) => (typeof apiFetch === 'function'
+  ? apiFetch(path, { method: 'POST', body: JSON.stringify(body || {}), noPrompt: true })
+  : apiPost(path, body));
+
+// What a guest is told when the server refused one of its presses.
+const guestRefusalText = (verb, e) => {
+  const status = e && e.status;
+  if (status === 429) return `${verb}: too many changes from this phone — try again in a minute`;
+  const nested = e && e.detail && e.detail.detail;
+  const said = typeof nested === 'string' ? nested : null;
+  if (status === 401 || (said && /x-device-token|admin session required/i.test(said))) {
+    return `${verb}: guests can only change a room that's playing — pair this phone to do more`;
+  }
+  return `${verb}: ${said || apiErrorText(e)}`;
+};
+
 /* Where a tap moves an entry, by finger (phone browsers don't drag). `idx`
  * is the entry's place in the list, `cur` the playing entry's (or -1).
  * The move route takes the place the entry lands at after it has been
@@ -961,6 +994,15 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
   const guest = !!queue?.guest;
   const admin = !!queue?.admin;
   const cur = items.findIndex(i => i.playing);
+  // A guest's refusal (the room stopped meanwhile, a ban) is said in words
+  // and the queue re-read — which then shows the "isn't playing" panel —
+  // never a pairing prompt (guestSend).
+  const send = (path, body) => (guest ? guestSend(path, body) : apiPost(path, body));
+  const refused = (verb, e) => {
+    if (!guest) { reportMutationFailure(fire, verb, e); return; }
+    fire(guestRefusalText(verb, e));
+    refresh();
+  };
 
   const moveTo = async (from, toIdx) => {
     if (from == null || toIdx == null || from === toIdx || !editable || busy) return;
@@ -969,13 +1011,13 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
     next.splice(toIdx, 0, moved);
     setOrder(next);                       // optimistic
     try {
-      await apiPost(`/api/music/queue/${encodeURIComponent(room)}/move`, {
+      await send(`/api/music/queue/${encodeURIComponent(room)}/move`, {
         song_id: moved.song_id, to_position: toIdx, device_id: deviceId,
       });
       refresh();
     } catch (e) {
       setOrder(null);                     // revert to the server's truth
-      reportMutationFailure(fire, 'move', e);
+      refused('move', e);
     }
   };
 
@@ -988,13 +1030,13 @@ const QueueTab = ({ rooms, nowPlaying, npError, fire, room: pickedRoom, onRoom }
   const removeItem = async (item) => {
     setBusy(true);
     try {
-      await apiPost(`/api/music/queue/${encodeURIComponent(room)}/remove`, {
+      await send(`/api/music/queue/${encodeURIComponent(room)}/remove`, {
         song_ids: [item.song_id], device_id: deviceId,
       });
       fire(`removed "${item.title || 'track'}"`);
       refresh();
     } catch (e) {
-      reportMutationFailure(fire, 'remove', e);
+      refused('remove', e);
     } finally { setBusy(false); }
   };
 
@@ -1766,7 +1808,17 @@ const MusicPage = () => {
   // than vanishing behind a drawer that already closed, and so does
   // another room's play.
   const playsInFlight = React.useRef(new Set());
+  // Rooms a guest may act on: playing, or paused on a song (the server's
+  // rule, read off now-playing so a guest is told before anything is sent).
+  const activeRooms = new Set(nowPlaying
+    .filter(np => np.song && (np.state === 'play' || np.state === 'pause'))
+    .map(np => np.room_id));
+  const GUEST_START_HINT = 'starting music in a room takes a paired phone — '
+    + 'a guest can change the queue of a room that is already playing';
   const playInRoom = async (room_id, what, verb, startedMsg, send) => {
+    // Starting (or replacing) what a room plays is never a guest's: say so
+    // here rather than send it and get the pairing prompt back.
+    if (guest) { fire(GUEST_START_HINT); return; }
     const key = `${room_id}|${what}`;
     if (playsInFlight.current.has(key)) return;
     playsInFlight.current.add(key);
@@ -1792,19 +1844,30 @@ const MusicPage = () => {
   // replacing it — the one way a guest adds a song (owner decision
   // 2026-10-10: a guest may change a PLAYING room's queue).
   const onQueueInRoom = async (track, room_id) => {
+    if (guest && !activeRooms.has(room_id)) {
+      fire(`${room_id} isn't playing — pair this phone to start music there`);
+      return;
+    }
     try {
-      await apiPost(`/api/music/queue/${encodeURIComponent(room_id)}/add`, {
-        track_ids: [track.id], device_id: DeviceIdentity.id(),
-      });
+      const body = { track_ids: [track.id], device_id: DeviceIdentity.id() };
+      const path = `/api/music/queue/${encodeURIComponent(room_id)}/add`;
+      await (guest ? guestSend(path, body) : apiPost(path, body));
       fire(`added "${track.title || 'track'}" to ${room_id}'s queue`);
       refreshNP();
     } catch (e) {
-      reportMutationFailure(fire, 'add', e);
+      if (guest) fire(guestRefusalText('add', e));
+      else reportMutationFailure(fire, 'add', e);
     }
   };
   const transport = (verb) => async (room_id) => {
-    try { await apiPost(`/api/music/${verb}/${room_id}`); refreshNP(); }
-    catch (e) { reportMutationFailure(fire, verb, e); }
+    try {
+      const path = `/api/music/${verb}/${room_id}`;
+      await (guest ? guestSend(path) : apiPost(path));
+      refreshNP();
+    } catch (e) {
+      if (guest) { fire(guestRefusalText(verb, e)); refreshNP(); }
+      else reportMutationFailure(fire, verb, e);
+    }
   };
   const onPause = transport('pause');
   const onResume = transport('resume');
