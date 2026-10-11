@@ -111,8 +111,36 @@ def test_every_lazy_core_import_in_the_web_backend_survives_the_guard():
     So: parse every module under ``web/backend``, collect each
     ``domovoi.*`` import written INSIDE a function body, and require it
     to resolve with the guard installed. A new lazy import that nobody
-    allowlisted fails here instead of in production.
+    allowlisted fails here instead of in production. (In THIS process a
+    module some other test already imported resolves from sys.modules
+    whatever the list says; the fresh-process test below closes that.)
     """
+    lazy = _lazy_core_imports()
+
+    assert "domovoi.workers.library_indexer" in lazy, (
+        "this test has stopped seeing the upload's post-write index — "
+        "if the import moved, point the scan at where it lives now"
+    )
+
+    install_import_guard()
+    try:
+        refused = {}
+        for mod, where in sorted(lazy.items()):
+            try:
+                importlib.import_module(mod)
+            except ImportError as e:
+                refused[mod] = f"{sorted(where)}: {e}"
+    finally:
+        remove_import_guard()
+    assert not refused, (
+        "lazy core imports the web process cannot actually perform — add "
+        "each to plugin_host._WEB_BACKEND_CORE_IMPORTS: " + repr(refused)
+    )
+
+
+def _lazy_core_imports() -> dict[str, set[str]]:
+    """Every ``domovoi.*`` module imported inside a function body under
+    ``web/backend``, with the files that do it."""
     import ast
     from pathlib import Path
 
@@ -144,26 +172,51 @@ def test_every_lazy_core_import_in_the_web_backend_survives_the_guard():
                     # "domovoi" itself is never refused, only its children.
                     if name.split(".")[0] == "domovoi" and name != "domovoi":
                         lazy.setdefault(name, set()).add(path.name)
+    return lazy
 
-    assert "domovoi.workers.library_indexer" in lazy, (
-        "this test has stopped seeing the upload's post-write index — "
-        "if the import moved, point the scan at where it lives now"
+
+def test_every_lazy_core_import_survives_the_guard_in_a_fresh_web_process():
+    """The test above, in a process holding only what the web dashboard
+    holds. In the suite's own process ``domovoi.main`` (and everything it
+    pulls in) is already in sys.modules, and a cached module never meets
+    the guard, so a lazy import nobody allowlisted can pass there and
+    still 500 in production. That is how ``GET /api/plugins`` failed for
+    every caller once the plugins list began reading each manifest's
+    declared containers through ``domovoi.container_guard.expected``
+    (found 2026-10-11 by loading the merged dashboard)."""
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    mods = sorted(_lazy_core_imports())
+    script = (
+        "import importlib, json, sys\n"
+        "import web.backend.main\n"
+        "from web.backend.plugin_host import install_import_guard\n"
+        "assert 'domovoi.main' not in sys.modules, 'the web process now imports the core app'\n"
+        "install_import_guard()\n"
+        "refused = {}\n"
+        "for m in json.loads(sys.argv[1]):\n"
+        "    try:\n"
+        "        importlib.import_module(m)\n"
+        "    except ImportError as e:\n"
+        "        refused[m] = str(e)\n"
+        "print('REFUSED=' + json.dumps(refused))\n"
     )
-
-    install_import_guard()
-    try:
-        refused = {}
-        for mod, where in sorted(lazy.items()):
-            try:
-                importlib.import_module(mod)
-            except ImportError as e:
-                refused[mod] = f"{sorted(where)}: {e}"
-    finally:
-        remove_import_guard()
+    proc = subprocess.run(
+        [sys.executable, "-c", script, json.dumps(mods)],
+        cwd=repo, capture_output=True, text=True, timeout=300,
+    )
+    lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("REFUSED=")]
+    assert proc.returncode == 0 and lines, proc.stdout[-2000:] + proc.stderr[-4000:]
+    refused = json.loads(lines[-1][len("REFUSED="):])
     assert not refused, (
         "lazy core imports the web process cannot actually perform — add "
         "each to plugin_host._WEB_BACKEND_CORE_IMPORTS: " + repr(refused)
     )
+
 
 def test_the_outbound_allowlist_is_readable_under_the_guard(monkeypatch):
     """``net_safety`` reads ``OUTBOUND_ALLOW_HOSTS`` through a lazy

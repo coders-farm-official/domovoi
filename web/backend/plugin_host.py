@@ -145,6 +145,10 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # boot error.
     "domovoi.server_identity",
     "domovoi._ed25519",
+    # The container guard's expected set: the plugins list
+    # (web/backend/api/plugins.py) reads each manifest's declared
+    # containers through it, lazily, on every GET /api/plugins.
+    "domovoi.container_guard.expected",
     # Capabilities, Files and the satellite surfaces ask what kind of host
     # this is (WSL sees no removable drives).
     "domovoi.host_kind",
