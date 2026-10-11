@@ -13,11 +13,18 @@ session) may, for a room that is **actively playing** — MPD state
 * pause, resume, skip and go back (``/v1/admin/music/{action}/{room_id}``
   with an action in :data:`GUEST_TRANSPORT_ACTIONS`).
 
-Not clear and not stop (each ends the room's session), not removing the
-entry playing now (a skip by the back door — the skip button is right
-there), and nothing at all on an idle room. A guest an admin banned
+No clear route and no stop (each ends the room's session), not removing
+the entry playing now (a skip by the back door — the skip button is right
+there), and nothing at all on an idle room. That is softer than it reads:
+a guest can still empty a queue one entry at a time, and a skip on the
+last song ends it — the per-call caps (:data:`GUEST_ADD_MAX_TRACKS`,
+:data:`GUEST_QUEUE_MAX_ENTRIES`, :data:`GUEST_REMOVE_MAX_IDS`) and the
+throttle bound how fast, not whether. A guest an admin banned
 (``domovoi/guest_bans.py``: by device id or source address, every room)
-may not act at all, and a guest's actions are throttled per address.
+may not act at all; a guest's actions are throttled per address, its reads
+on a larger bucket of their own; and a guest request must carry a custom
+header (:func:`admin_auth.assert_guest_same_site`) so a page on another
+site cannot make a LAN browser press anything.
 
 The core is AUTHORITATIVE: it is the only process that can see MPD, so it
 decides "playing" at the moment of each request, and it checks the ban
@@ -52,6 +59,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,6 +83,20 @@ GUEST_TRANSPORT_ACTIONS = frozenset({"pause", "resume", "skip", "next", "previou
 # is up answers in milliseconds; one that is wedged must not hold a
 # guest's request (or a worker) open.
 ACTIVITY_TIMEOUT_SEC = 2.0
+
+# A guest READ may reuse a room's activity this fresh (review finding 5):
+# every read is otherwise two more MPD connections. Actions always look
+# again — "playing" is decided at the moment of a change.
+ACTIVITY_READ_CACHE_SEC = 1.0
+_activity_cache: dict[str, tuple[float, "RoomActivity"]] = {}
+
+# What one guest call may do to a queue (review finding 4, the
+# orchestrator's defaults; the owner may move them). Adding is capped per
+# call and by the queue's length, so a script cannot flood MPD's queue;
+# removing is one entry per call, as the dashboard removes them.
+GUEST_ADD_MAX_TRACKS = 50
+GUEST_QUEUE_MAX_ENTRIES = 500
+GUEST_REMOVE_MAX_IDS = 1
 
 # Where the gate leaves its finding for the handler (request.state).
 _STATE_ATTR = "domovoi_queue_guest"
@@ -136,6 +158,26 @@ async def room_activity(room_id: str) -> RoomActivity:
     return RoomActivity(active=True, song_id=song_id)
 
 
+async def room_activity_for_read(room_id: str) -> RoomActivity:
+    """:func:`room_activity`, reused for :data:`ACTIVITY_READ_CACHE_SEC`.
+    For guest reads only."""
+    now = time.monotonic()
+    hit = _activity_cache.get(room_id)
+    if hit is not None and now - hit[0] < ACTIVITY_READ_CACHE_SEC:
+        return hit[1]
+    activity = await room_activity(room_id)
+    _activity_cache[room_id] = (time.monotonic(), activity)
+    if len(_activity_cache) > 256:   # rooms are few; names in URLs are not
+        for key in [k for k, (t, _a) in _activity_cache.items() if now - t >= ACTIVITY_READ_CACHE_SEC]:
+            _activity_cache.pop(key, None)
+    return activity
+
+
+def clear_activity_cache() -> None:
+    """Forget every cached activity (tests)."""
+    _activity_cache.clear()
+
+
 def _refused_as_before() -> HTTPException:
     """What the device tier says to a request carrying nothing — the answer
     a guest gets for anything that is not a guest's to do."""
@@ -181,12 +223,19 @@ async def _gate(request: Request, room_id: str, *, read: bool) -> None:
     if action is not None and action not in GUEST_TRANSPORT_ACTIONS:
         # stop (and anything that isn't a transport verb): the household's.
         raise _refused_as_before()
-    if not read:
+    # A request another site's page made a LAN browser send carries no
+    # custom header; a guest needs no credential, so this is what keeps a
+    # web page from pressing skip (review finding 1).
+    admin_auth.assert_guest_same_site(request)
+    if read:
+        admin_auth.charge_guest_queue_read(request)
+        activity = await room_activity_for_read(room_id)
+    else:
         # Before the database and the MPD look: an idle room hammered by
         # a script costs the script its budget, not the room a status read.
         admin_auth.charge_guest_queue_edit(request)
         await assert_guest_not_banned(request)
-    activity = await room_activity(room_id)
+        activity = await room_activity(room_id)
     if not activity.active:
         raise HTTPException(status_code=403, detail=admin_auth.GUEST_ROOM_IDLE_DETAIL)
     setattr(request.state, _STATE_ATTR, activity)

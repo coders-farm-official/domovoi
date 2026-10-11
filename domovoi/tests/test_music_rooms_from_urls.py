@@ -113,7 +113,13 @@ async def test_the_queue_read_refuses_a_caller_with_no_credential(
     asked = _known(monkeypatch, set())
     monkeypatch.setattr(settings, "guest_queue_editing", True)
     async with _client() as c:
+        # No header at all: refused before the room is even considered
+        # (a guest's request needs a custom header, review finding 1)...
         r = await c.get(QUEUE)
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"] == admin_auth.GUEST_CROSS_SITE_DETAIL
+        # ...and as the dashboard sends it: the idle answer.
+        r = await c.get(QUEUE, headers={"X-Requested-With": "XMLHttpRequest"})
     assert r.status_code == 403, r.text
     assert r.json()["detail"] == admin_auth.GUEST_ROOM_IDLE_DETAIL
     assert asked == [] and provisioning == []

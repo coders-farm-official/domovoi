@@ -388,7 +388,7 @@ class Settings(BaseSettings):
     # browser holding NO household credential may read the queue of a room
     # that is playing (MPD play or pause, with a current song), add to it,
     # remove from it and reorder it, and pause / resume / skip / go back —
-    # never clear or stop, never remove the song playing now, never touch
+    # no clear or stop route, never remove the song playing now, never touch
     # an idle room, never start a room's player, and not at all once an
     # admin bans that guest (Settings -> Devices). The per-device queue
     # blocks still apply, and a guest's actions are throttled per address.
@@ -752,6 +752,9 @@ class Settings(BaseSettings):
     # How often the core's pruner deletes expired recordings, enforces the
     # cap and removes anything left for a room that is no longer opted in.
     command_capture_pruner_interval_sec: float = 3600.0
+    # How often the core deletes guests (V023 guests_seen: a guest's
+    # self-asserted id, address and user agent) not seen for 30 days.
+    guests_seen_pruner_interval_sec: float = 3600.0
 
     # ─── MPD (lazy per-room provisioning) ──────────────────────────────
     # An MPD daemon per voice-satellite room keeps playback queues / current

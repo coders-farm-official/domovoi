@@ -1563,8 +1563,8 @@ async def check_outbound_fetch(
 # Wi-Fi — may read a room's queue and add to it, remove from it and
 # reorder it, and pause / resume / skip / go back, but only while that room
 # is playing (MPD ``play`` or ``pause`` with a current song), and until an
-# admin bans that guest (``domovoi/guest_bans.py``). Never clear or stop,
-# never an idle room, never the song that is playing now. This
+# admin bans that guest (``domovoi/guest_bans.py``). No clear or stop
+# route, never an idle room, never the song that is playing now. This
 # deliberately loosens the device tier the October security round put on
 # the room queue and the transport controls, and only there; the household
 # switch is ``Settings.guest_queue_editing`` (default on).
@@ -1582,6 +1582,28 @@ GUEST_QUEUE_WINDOW_SEC = 60.0
 GUEST_QUEUE_MAX_PER_WINDOW = 30
 GUEST_QUEUE_LIMITER = SlidingWindowLimiter(
     max_per_window=GUEST_QUEUE_MAX_PER_WINDOW, window_sec=GUEST_QUEUE_WINDOW_SEC
+)
+
+# A guest's queue READS, on a bucket of their own: larger, because the
+# dashboard re-reads on every now-playing change and every 15 s, but there,
+# because each read is an MPD status / currentsong / playlist look.
+GUEST_READ_WINDOW_SEC = 60.0
+GUEST_READ_MAX_PER_WINDOW = 120
+GUEST_READ_LIMITER = SlidingWindowLimiter(
+    max_per_window=GUEST_READ_MAX_PER_WINDOW, window_sec=GUEST_READ_WINDOW_SEC
+)
+
+# The header a guest's request must carry (review finding 1, 2026-10-11).
+# A page on any web site can make a browser on the LAN send a "simple"
+# cross-site POST — no custom header, so no CORS preflight — and a guest
+# needs no credential, so without this a skip could ride on any page the
+# household opens. A custom header forces the preflight a foreign origin
+# fails. The dashboard sends X-Requested-With (WEB-6) and its device id on
+# every call, the web hop forwards both, the kiosk sends X-Requested-With.
+GUEST_SAME_SITE_HEADERS = ("x-requested-with", "x-domovoi-device-id")
+GUEST_CROSS_SITE_DETAIL = (
+    "a guest's request has to come from the dashboard (X-Requested-With) — "
+    "a request another site's page made this browser send is refused"
 )
 
 # What a guest is told when the room is not playing. It names the device
@@ -1683,6 +1705,27 @@ async def check_queue_guest(
     raise HTTPException(
         status_code=401,
         detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
+    )
+
+
+def assert_guest_same_site(request: Any) -> None:
+    """403 for a guest request carrying none of
+    :data:`GUEST_SAME_SITE_HEADERS` — what a cross-site "simple" request
+    looks like. A household caller's request is never asked: its
+    credential header already forces the preflight."""
+    if any((request.headers.get(h) or "").strip() for h in GUEST_SAME_SITE_HEADERS):
+        return
+    raise HTTPException(status_code=403, detail=GUEST_CROSS_SITE_DETAIL)
+
+
+def charge_guest_queue_read(request: Any) -> None:
+    """Spend one of this source's guest queue reads, or raise 429."""
+    if GUEST_READ_LIMITER.allow(request_source(request)):
+        return
+    raise HTTPException(
+        status_code=429,
+        detail="too many queue reads from this address — wait a minute and try again",
+        headers={"Retry-After": str(int(GUEST_READ_WINDOW_SEC))},
     )
 
 

@@ -7,8 +7,10 @@ the table work behind that sentence:
 
 * :func:`record_guest` — the core notes every guest action it lets
   through: the guest's self-asserted device id, its source address, its
-  user agent, the room and the action. An admin reads the list in
-  Settings and bans from it.
+  user agent, the room and the action, at most
+  :data:`GUESTS_SEEN_PER_SOURCE` rows per address. An admin reads the list
+  in Settings and bans from it; :func:`prune_guests_seen` (the
+  ``guests_seen_pruner`` worker, hourly) drops what is 30 days old.
 * :func:`find_ban` — a ban matches the guest's device id OR its source
   address, on every room, for queue edits and transport alike. Both hops
   ask: the web hop so the dashboard gets the refusal before anything is
@@ -39,8 +41,14 @@ from domovoi.db.session import session_scope
 
 log = logging.getLogger(__name__)
 
-# How long a guest stays in the "seen recently" list after its last action.
+# How long a guest's row is kept after its last action; the
+# guests_seen_pruner worker deletes older ones every hour.
 GUESTS_SEEN_RETENTION_DAYS = 30
+
+# Rows kept per source address, newest first (review finding 7): a script
+# rotating its device id from one address keeps at most this many, so it
+# cannot push the real guests out of the admin's list.
+GUESTS_SEEN_PER_SOURCE = 10
 
 # Caps on what a guest gets to write into the table. The device id and the
 # user agent are the guest's own words; nothing here trusts them, but
@@ -99,10 +107,11 @@ async def record_guest(
     room_id: str | None,
     action: str,
 ) -> None:
-    """Note one guest action (upsert on device id + address) and prune
-    rows older than :data:`GUESTS_SEEN_RETENTION_DAYS`. Never raises: a
-    record that fails is logged, and the guest's action goes ahead — this
-    is the admin's view of who was here, not a gate."""
+    """Note one guest action (upsert on device id + address) and keep at
+    most :data:`GUESTS_SEEN_PER_SOURCE` rows for that address, newest
+    first. Never raises: a record that fails is logged, and the guest's
+    action goes ahead — this is the admin's view of who was here, not a
+    gate. Age-based retention is the pruner's (:func:`prune_guests_seen`)."""
     try:
         async with session_scope() as s:
             await s.execute(
@@ -128,9 +137,34 @@ async def record_guest(
             )
             await s.execute(
                 text(
-                    "DELETE FROM guests_seen WHERE last_seen < now() - "
-                    f"interval '{GUESTS_SEEN_RETENTION_DAYS} days'"
-                )
+                    """
+                    DELETE FROM guests_seen
+                    WHERE source = :source
+                      AND device_id NOT IN (
+                          SELECT device_id FROM guests_seen
+                          WHERE source = :source
+                          ORDER BY last_seen DESC
+                          LIMIT :keep)
+                    """
+                ),
+                {"source": source, "keep": GUESTS_SEEN_PER_SOURCE},
             )
     except Exception as e:  # noqa: BLE001 — bookkeeping, never a gate
         log.warning("could not record a guest action (%s in %s): %s", action, room_id, e)
+
+
+async def prune_guests_seen() -> int:
+    """Delete guests not seen for :data:`GUESTS_SEEN_RETENTION_DAYS`.
+    Returns how many rows went. Raises when the table can't be reached
+    (the worker runner logs it and tries again next tick)."""
+    async with session_scope() as s:
+        result = await s.execute(
+            text(
+                "DELETE FROM guests_seen WHERE last_seen < now() - "
+                f"interval '{GUESTS_SEEN_RETENTION_DAYS} days'"
+            )
+        )
+    pruned = result.rowcount or 0
+    if pruned:
+        log.info("guests_seen pruner: deleted %d row%s", pruned, "" if pruned == 1 else "s")
+    return pruned

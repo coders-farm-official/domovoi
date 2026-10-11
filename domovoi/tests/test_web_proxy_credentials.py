@@ -240,6 +240,9 @@ async def test_a_clip_rerender_carries_the_editing_admins_session(
             {
                 "Authorization": f"Bearer {ADMIN_TOKEN}",
                 admin_auth.DEVICE_TOKEN_HEADER: DEVICE_TOKEN,
+                # The caller's own preflight header rides along too (a
+                # guest needs it at the core; it is no credential).
+                "X-Requested-With": "domovoi-tests",
                 "X-Forwarded-For": "192.168.1.50",
             },
         )

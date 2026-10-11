@@ -56,6 +56,9 @@ from domovoi.db.repositories import (  # noqa: E402
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi import satellite_health  # noqa: E402
 from domovoi.guest_queue import (  # noqa: E402
+    GUEST_ADD_MAX_TRACKS,
+    GUEST_QUEUE_MAX_ENTRIES,
+    GUEST_REMOVE_MAX_IDS,
     guest_activity,
     require_device_or_active_room_guest,
     require_device_read_or_active_room_guest,
@@ -587,7 +590,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   library_alias_fetch → lyrics_scan → lyrics_fetch.
+    #   guests_seen_pruner → library_alias_fetch → lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -624,6 +627,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Opt-in command recordings: 14-day retention, the disk cap, and the
     # sweep of rooms no longer opted in (domovoi/command_captures.py).
     WORKERS.add_worker(CommandCapturePruner(), owner="core")
+    # Guests seen (V023): a guest's id, address and user agent, deleted 30
+    # days after its last action (domovoi/workers/guests_seen_pruner.py).
+    from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
+
+    WORKERS.add_worker(GuestsSeenPruner(), owner="core")
     # Opt-in (off by default) MusicBrainz "also called" names for the
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
@@ -3703,6 +3711,10 @@ async def admin_music_queue(room_id: str, request: Request) -> dict[str, Any]:
         "room_id": room_id,
         "items": [_queue_entry_dict(e) for e in entries],
         "current_song_id": await _current_song_id(mpd),
+        # Who this answer was given to: the web hop shows a guest's view
+        # whenever the core says so (review finding 2) — it cannot tell
+        # from what it forwarded alone.
+        "guest": guest_activity(request) is not None,
     }
 
 
@@ -3728,6 +3740,11 @@ async def admin_music_queue_add(
     from domovoi.handlers.shared.play_history import record_media_play
 
     guest = guest_activity(request) is not None
+    if guest and len(body.track_ids) > GUEST_ADD_MAX_TRACKS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"a guest adds at most {GUEST_ADD_MAX_TRACKS} tracks at a time",
+        )
 
     async with session_scope() as s:
         rows = await s.execute(
@@ -3755,8 +3772,21 @@ async def admin_music_queue_add(
     await _ensure_room_mpd_unless_guest(request, room_id)
     mpd = get_mpd_client_for(room_id)
     try:
-        was_empty = len(await mpd.queue_list()) == 0
+        queue_length = len(await mpd.queue_list())
         state_before = await mpd.state()
+    except Exception as e:
+        log.warning("admin queue add MPD raised: %s", e)
+        raise HTTPException(status_code=502, detail=f"MPD error: {e}") from e
+    was_empty = queue_length == 0
+    if guest and queue_length + len(specs) > GUEST_QUEUE_MAX_ENTRIES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{room_id}'s queue is full for a guest ({GUEST_QUEUE_MAX_ENTRIES} "
+                "songs) — pair this phone to add more"
+            ),
+        )
+    try:
         queued = await mpd.queue_add_tracks(specs)
     except Exception as e:
         log.warning("admin queue add MPD raised: %s", e)
@@ -3834,6 +3864,11 @@ async def admin_music_queue_remove(
     from domovoi.clients.mpd import get_mpd_client_for
 
     activity = guest_activity(request)
+    if activity is not None and len(body.song_ids) > GUEST_REMOVE_MAX_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"a guest removes {GUEST_REMOVE_MAX_IDS} song at a time",
+        )
     if (
         activity is not None
         and activity.song_id is not None

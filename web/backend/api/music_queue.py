@@ -103,6 +103,10 @@ GUEST_ADDED_BY = "a guest"
 # for a guest an admin banned.
 GUEST_IDLE_REASON = "Pair this phone to change a room that isn't playing"
 GUEST_BANNED_REASON = "An admin has stopped guests on this phone from changing the music"
+# A guest whose claimed device id is under a queue block: the same plain
+# words for the refusal and the read, never the block's own message.
+GUEST_BLOCKED_DETAIL = "an admin has stopped this phone from changing this queue"
+GUEST_BLOCKED_REASON = "An admin has stopped this phone from changing this queue"
 
 
 def guests_may_edit() -> bool:
@@ -333,16 +337,23 @@ def _blocked_message(block: dict[str, Any], room_id: str) -> str:
     return f"{base} ({note})" if note else base
 
 
-async def _assert_can_edit(device_id: str, room_id: str) -> tuple[str, str | None]:
+async def _assert_can_edit(
+    device_id: str, room_id: str, *, guest: bool = False
+) -> tuple[str, str | None]:
     """Raise 403 when this device is blocked here; otherwise return
     ``(device_id, device_name)`` for provenance stamping. ``device_name`` is
     None for a device that has never registered — the id is still recorded, so
-    the entry shows no "added by" rather than a wrong one."""
+    the entry shows no "added by" rather than a wrong one.
+
+    A GUEST is refused with :data:`GUEST_BLOCKED_DETAIL`, never the block's
+    own message: that names the household device and carries the admin's
+    note, and a guest can claim any id to read it (review finding 3)."""
     async with session_scope() as s:
         device_name = await _device_name_for(s, device_id)
         block = await _block_for(s, device_id, device_name, room_id)
     if block is not None:
-        raise HTTPException(status_code=403, detail=_blocked_message(block, room_id))
+        detail = GUEST_BLOCKED_DETAIL if guest else _blocked_message(block, room_id)
+        raise HTTPException(status_code=403, detail=detail)
     return device_id, device_name
 
 
@@ -366,9 +377,14 @@ async def read_queue(
     phone that merely opened the tab must not be met with a pairing prompt.
     A banned guest reads a playing room's queue with ``editable: false``.
     With the household switch off the core's 401 passes through as before.
+
+    Who is a guest is what the CORE says (``guest`` in its answer) as well
+    as what this hop sees, and either one makes it the guest view: this
+    hop forwards only headers, so a ``?device_token=`` here — never
+    forwarded, never a credential on this route — must not buy the
+    household's view of who queued what (review finding 2).
     """
-    guest = await _reads_as_guest(request)
-    admin = (not guest) and await check_admin_request(request) in ("ok", "cookie-only")
+    web_guest = await _reads_as_guest(request)
     status, payload = await get_admin(
         f"/v1/admin/music/queue/{room_id}", headers=auth_forward_headers(request)
     )
@@ -376,9 +392,9 @@ async def read_queue(
         raise HTTPException(
             status_code=502, detail="domovoi core unreachable; can't read the queue"
         )
+    # The core says the idle sentence to a guest and to nobody else.
     if (
-        guest
-        and status == 403
+        status == 403
         and isinstance(payload, dict)
         and payload.get("detail") == GUEST_ROOM_IDLE_DETAIL
     ):
@@ -392,6 +408,8 @@ async def read_queue(
         detail = payload.get("detail") if isinstance(payload, dict) else payload
         raise HTTPException(status_code=status or 502, detail=detail or "queue read failed")
 
+    guest = web_guest or payload.get("guest") is True
+    admin = (not guest) and await check_admin_request(request) in ("ok", "cookie-only")
     raw_items = payload.get("items") or []
     current = payload.get("current_song_id")
     song_ids = [int(i["song_id"]) for i in raw_items if i.get("song_id") is not None]
@@ -451,6 +469,8 @@ async def read_queue(
             guest_ids = {int(r[0]): (r[1], r[2]) for r in found.all()}
 
     blocked_reason = _blocked_message(block, room_id) if block else None
+    if guest and block is not None:
+        blocked_reason = GUEST_BLOCKED_REASON   # never the block's own words
     if guest and block is None:
         # A read is never refused for this: a ban that can't be checked
         # just leaves the queue read-only for the guest (edits fail closed).
@@ -474,6 +494,7 @@ async def read_queue(
             # read names a device only to a household credential, too).
             if not (dev_id is None and name == GUEST_ADDED_BY):
                 name = None
+                added_at = None   # nor when a household device queued it
             dev_id = None
         who_guest = guest_ids.get(song_id, (None, None))
         items.append(
@@ -513,7 +534,9 @@ async def add_to_queue(room_id: str, request: Request, body: QueueAddRequest):
     A guest's entries are stamped "a guest" with no device id — the name a
     claimed id is registered under is not the guest's to borrow — and the
     id it sent and its address go in the guest columns, for an admin."""
-    device_id, device_name = await _assert_can_edit(body.device_id, room_id)
+    device_id, device_name = await _assert_can_edit(
+        body.device_id, room_id, guest=_is_guest(request)
+    )
     guest: tuple[str, str] | None = None
     if _is_guest(request):
         guest = (body.device_id, request_source(request))
@@ -592,7 +615,7 @@ async def _stamp_provenance(
 async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveRequest):
     """Drop entries. A guest is refused the entry playing now by the core,
     which is the one that knows which entry that is."""
-    await _assert_can_edit(body.device_id, room_id)
+    await _assert_can_edit(body.device_id, room_id, guest=_is_guest(request))
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/remove",
         {"song_ids": body.song_ids},
@@ -616,7 +639,7 @@ async def remove_from_queue(room_id: str, request: Request, body: QueueRemoveReq
 async def move_in_queue(room_id: str, request: Request, body: QueueMoveRequest):
     """Reorder. Provenance is keyed by songid, so a move needs no DB write —
     that's the reason for keying it that way."""
-    await _assert_can_edit(body.device_id, room_id)
+    await _assert_can_edit(body.device_id, room_id, guest=_is_guest(request))
     status, payload = await post_admin(
         f"/v1/admin/music/queue/{room_id}/move",
         {"song_id": body.song_id, "to_position": body.to_position},

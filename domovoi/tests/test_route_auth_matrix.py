@@ -26,12 +26,15 @@ router level, directly or through another dependency):
   token OR an admin Bearer;
 * :func:`domovoi.admin_auth.require_chat_callback` — the per-boot secret
   the chat agent's generated proxy tools carry (the one machine-to-machine
-  caller that can hold neither tier's credential);
-* :func:`domovoi.guest_queue.require_device_or_active_room_guest` (core)
-  and :func:`web.backend.api.music_queue.require_device_or_guest` (web) —
-  the device tier, run inside, or a GUEST on a playing room (owner
-  decisions 2026-10-10): the queue's add / remove / move and the
-  transport row. The guest half is pinned by ``test_guest_queue.py``.
+  caller that can hold neither tier's credential).
+
+The guest gates (``domovoi.guest_queue.require_device_or_active_room_guest``
+on the core, ``web.backend.api.music_queue.require_device_or_guest`` on the
+web, owner decisions 2026-10-10) do NOT count: they let a caller with no
+credential through, so each route that wears one is named in the
+ALLOWLIST with its reason, like the kiosk row (review finding 6), and
+pinned to that gate by ``test_core_route_tiers.py`` /
+``test_web_daily_tier.py``; the guest rule itself by ``test_guest_queue.py``.
 
 ``require_admin_read`` deliberately does NOT count for a mutating route:
 the dashboard cookie renders GET state and never authorizes a change.
@@ -64,11 +67,10 @@ from typing import Any, Iterator, get_args
 import pytest
 from fastapi import FastAPI
 
-from domovoi import admin_auth, guest_queue
+from domovoi import admin_auth
 from domovoi.auth import require_admin
 from domovoi.main import app as core_app
 from domovoi.tests.route_walk import iter_route_contexts
-from web.backend.api import music_queue
 from web.backend.main import app as web_app
 from web.backend.schemas import ConversationTurn, Favorite, Memory, VoiceNote
 
@@ -80,11 +82,14 @@ AUTH_GATES: tuple[Any, ...] = (
     admin_auth.require_device,
     admin_auth.require_chat_callback,
     require_admin,
-    guest_queue.require_device_or_active_room_guest,
-    music_queue.require_device_or_guest,
 )
 
 _KIOSK = "kiosk transport row — FE-3 keeps it open by design (display.jsx)"
+_GUEST = (
+    "device tier OR a guest on a PLAYING room (owner decisions 2026-10-10): "
+    "domovoi/guest_queue.py decides at the core — custom header, throttle, "
+    "ban, never an idle room; pinned in test_guest_queue.py"
+)
 
 # (app, method, path) -> why it is open. Every entry is a route that has
 # NO gate today; the reason says which tier owns it and, where known,
@@ -95,6 +100,15 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # the ordinary household actions take require_device, the
     # code-adjacent and physical-effect ones take require_admin_mutation,
     # and the chat agent's callback takes its per-boot secret.
+    # ── core + web: the guest rule (a credential-less caller, playing room) ─
+    ("core", "POST", "/v1/admin/music/{action}/{room_id}"): _GUEST + " (never stop)",
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/add"): _GUEST,
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/remove"): _GUEST,
+    ("core", "POST", "/v1/admin/music/queue/{room_id}/move"): _GUEST,
+    ("web", "POST", "/api/music/queue/{room_id}/add"): _GUEST + "; blocks/bans/switch at this hop",
+    ("web", "POST", "/api/music/queue/{room_id}/remove"): _GUEST + "; blocks/bans/switch at this hop",
+    ("web", "POST", "/api/music/queue/{room_id}/move"): _GUEST + "; blocks/bans/switch at this hop",
+    ("web", "POST", "/api/music/previous/{room_id}"): _GUEST + "; bans/switch at this hop",
     ("core", "POST", "/v1/admin/music/add-by-url"): (
         "outbound-fetch tier — check_outbound_fetch inside the handler (admin "
         "OR provider allowlist + per-source rate limit)"

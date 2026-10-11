@@ -81,8 +81,12 @@ def _stub(*titles: str, state: str = "stop") -> MPDStubClient:
 @pytest.fixture(autouse=True)
 def _fresh_throttle():
     admin_auth.GUEST_QUEUE_LIMITER.reset()
+    admin_auth.GUEST_READ_LIMITER.reset()
+    guest_queue.clear_activity_cache()
     yield
     admin_auth.GUEST_QUEUE_LIMITER.reset()
+    admin_auth.GUEST_READ_LIMITER.reset()
+    guest_queue.clear_activity_cache()
 
 
 class FakeBans:
@@ -212,11 +216,16 @@ def claimed(monkeypatch):
     )
 
 
-def _core(**headers) -> AsyncClient:
+def _core(*, cross_site: bool = False, **headers) -> AsyncClient:
+    """The core app, spoken to the way the web hop and the dashboard speak
+    to it: with ``X-Requested-With`` (a guest's request needs a custom
+    header). ``cross_site=True`` drops it — what a page on another site can
+    make a LAN browser send."""
+    base = {} if cross_site else {"X-Requested-With": "XMLHttpRequest"}
     return AsyncClient(
         transport=ASGITransport(app=core_app, raise_app_exceptions=False),
         base_url="http://test",
-        headers=headers,
+        headers={**base, **headers},
     )
 
 
@@ -334,11 +343,11 @@ async def test_core_guest_may_move_but_not_remove_the_entry_playing_now(
     before = _ids(stub)
     async with _core() as c:
         r = await c.post(
-            f"/v1/admin/music/queue/{ACTIVE}/remove", json={"song_ids": [before[-1], current]}
+            f"/v1/admin/music/queue/{ACTIVE}/remove", json={"song_ids": [current]}
         )
         assert r.status_code == 403, r.text
         assert r.json()["detail"] == admin_auth.GUEST_PLAYING_ENTRY_DETAIL
-        assert _ids(stub) == before   # refused whole, not trimmed
+        assert _ids(stub) == before
 
         r = await c.post(
             f"/v1/admin/music/queue/{ACTIVE}/move", json={"song_id": current, "to_position": 2}
@@ -856,6 +865,7 @@ async def test_web_guest_edits_pass_through_to_the_core_as_a_guest(web_side) -> 
         sent = {k.lower() for k in headers}
         assert not sent & set(_CREDENTIAL_HEADERS), headers   # never upgraded
         assert "x-forwarded-for" in sent                     # its own address
+        assert "x-requested-with" in sent                    # not cross-site
 
 
 async def test_web_guest_read_carries_no_credential_either(web_side) -> None:
@@ -909,14 +919,16 @@ async def test_web_guest_read_of_an_idle_room_is_quiet_and_not_editable(web_side
     assert body["guest"] is True
 
 
-async def test_web_household_read_never_gets_the_quiet_idle_answer(web_side) -> None:
-    """The idle mapping is for guests only; a household read is whatever
-    the core said, exactly as before."""
+async def test_web_household_read_carries_its_token_and_gets_no_guest_flags(web_side) -> None:
+    """A household read is forwarded with its token and answered as the
+    core answered it. (The core's idle sentence is said to guests only, so
+    the web maps it to the quiet answer whoever it thought was asking.)"""
     core, _db = web_side
-    core.read_answer = (403, {"detail": admin_auth.GUEST_ROOM_IDLE_DETAIL})
+    core.read_answer = (200, {"items": [{"song_id": 1, "pos": 0, "file": "a.mp3"}],
+                              "current_song_id": 1})
     async with _web(**{HEADER: DEVICE_TOKEN}) as c:
-        r = await c.get(f"/api/music/queue/{IDLE}")
-    assert r.status_code == 403
+        body = (await c.get(f"/api/music/queue/{ACTIVE}")).json()
+    assert body["guest"] is False and body["editable"] is True
     assert core.calls[0][3].get("X-Device-Token") == DEVICE_TOKEN
 
 
@@ -985,10 +997,12 @@ async def test_web_a_block_by_id_stops_a_guest(web_side) -> None:
         for verb, body in _EDITS:
             r = await c.post(f"/api/music/queue/{ACTIVE}/{verb}", json=body)
             assert r.status_code == 403, f"{verb}: {r.text}"
-            assert "party's over" in r.json()["detail"]
+            # Generic for a guest: never the block's own words (finding 3).
+            assert r.json()["detail"] == queue_api.GUEST_BLOCKED_DETAIL
         core.read_answer = (200, {"items": [], "current_song_id": None})
         read = (await c.get(f"/api/music/queue/{ACTIVE}?device_id=browser-guest1")).json()
-    assert read["editable"] is False and "party's over" in read["blocked_reason"]
+    assert read["editable"] is False
+    assert read["blocked_reason"] == queue_api.GUEST_BLOCKED_REASON
     assert [c_ for c_ in core.calls if c_[0] == "POST"] == []
 
 
@@ -1338,9 +1352,10 @@ async def test_db_a_block_by_id_still_applies_to_a_guest(real_web_side) -> None:
         r = await guest.post(f"/api/music/queue/{ACTIVE}/add",
                              json={"track_ids": [1], "device_id": "browser-party"})
         assert r.status_code == 403, r.text
-        assert "party's over" in r.json()["detail"]
+        assert r.json()["detail"] == queue_api.GUEST_BLOCKED_DETAIL
         read = (await guest.get(f"/api/music/queue/{ACTIVE}?device_id=browser-party")).json()
         assert read["editable"] is False
+        assert "party's over" not in (read["blocked_reason"] or "")
         # Another guest id is not blocked.
         r = await guest.post(f"/api/music/queue/{ACTIVE}/add",
                              json={"track_ids": [1], "device_id": "browser-other"})
@@ -1429,3 +1444,215 @@ async def test_db_the_core_records_guests_and_an_admin_bans_from_the_list(
         assert (await admin.delete(f"/api/music/guest-bans/{ban_id}")).status_code == 204
     async with _core(**phone) as c:
         assert (await c.post(f"/v1/admin/music/pause/{ACTIVE}")).status_code == 200
+
+
+# ─── The independent review's findings (2026-10-11), as tests ─────────────
+
+
+async def test_r2_a_cross_site_post_is_refused_for_a_guest(
+    rooms, claimed, transport, no_player_starts
+) -> None:
+    """Finding 1. What a page on any site can make a LAN browser send to
+    the core: a POST with no custom header, a foreign Origin, no body. A
+    guest needs no credential, so the header is what tells it apart."""
+    async with _core(cross_site=True, Origin="https://evil.example") as c:
+        r = await c.post(f"/v1/admin/music/skip/{ACTIVE}")
+        assert r.status_code == 403, r.text
+        assert r.json()["detail"] == admin_auth.GUEST_CROSS_SITE_DETAIL
+        r = await c.get(f"/v1/admin/music/queue/{ACTIVE}")
+        assert r.status_code == 403, r.text
+    assert transport == []
+    # The dashboard's way: X-Requested-With, or its device id header.
+    async with _core() as c:
+        assert (await c.post(f"/v1/admin/music/skip/{ACTIVE}")).status_code == 200
+    async with _core(cross_site=True, **{admin_auth.GUEST_DEVICE_HEADER: "browser-x"}) as c:
+        assert (await c.post(f"/v1/admin/music/pause/{ACTIVE}")).status_code == 200
+    # A household credential is a header of its own; never asked.
+    async with _core(cross_site=True, **{HEADER: DEVICE_TOKEN}) as c:
+        assert (await c.post(f"/v1/admin/music/resume/{ACTIVE}")).status_code == 200
+
+
+async def test_r2_the_dashboard_path_through_the_web_hop_still_works(
+    rooms, claimed, transport, no_player_starts, fake_bans, monkeypatch
+) -> None:
+    """The web hop forwards the dashboard's X-Requested-With, so a guest's
+    skip through :6369 reaches the real core gate and passes."""
+    import web.backend.api.music as music_api
+
+    async def _to_core(path, body=None, timeout=30.0, headers=None):
+        async with AsyncClient(transport=ASGITransport(app=core_app, raise_app_exceptions=False),
+                               base_url="http://test", headers=headers or {}) as c:
+            r = await c.post(path, json=body)
+        return r.status_code, r.json()
+
+    monkeypatch.setattr(music_api, "post_admin", _to_core)
+    async with _web() as c:
+        r = await c.post(f"/api/music/skip/{ACTIVE}")
+    assert r.status_code == 200, r.text
+    assert [room for _t, room in transport] == [ACTIVE]
+
+
+async def test_r1_a_junk_query_token_on_the_web_read_gets_the_guest_view(
+    monkeypatch, rooms, claimed, fake_bans
+) -> None:
+    """Finding 2, the reviewer's exact request: no credential but a junk
+    ?device_token=. The web hop doesn't forward the query, the core
+    answers a guest and says so, and the web shows the guest view: no
+    household device name, id or time."""
+    db = FakeWebDb()
+    stub = rooms[ACTIVE]
+    first = int(stub._queue[0]["id"])
+    db.provenance = [(first, "Kamron's Pixel", "android-kamron-1234", "2026-10-11T10:00:00Z")]
+    monkeypatch.setattr(queue_api, "session_scope", db.scope())
+    monkeypatch.setattr(queue_api, "get_cached_snapshot", lambda: {"guest_queue_editing": True})
+    sent: list[dict] = []
+
+    async def _real_core_get(path, timeout=10.0, headers=None):
+        sent.append(dict(headers or {}))
+        async with AsyncClient(transport=ASGITransport(app=core_app, raise_app_exceptions=False),
+                               base_url="http://test", headers=headers or {}) as c:
+            r = await c.get(path)
+        return r.status_code, r.json()
+
+    monkeypatch.setattr(queue_api, "get_admin", _real_core_get)
+    async with _web() as c:
+        plain = await c.get(f"/api/music/queue/{ACTIVE}")
+        junk = await c.get(f"/api/music/queue/{ACTIVE}?device_token=nonsense")
+    for r in (plain, junk):
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["guest"] is True and body["admin"] is False
+        assert body["items"][0]["added_by"] is None
+        assert body["items"][0]["added_by_device_id"] is None
+        assert body["items"][0]["added_at"] is None
+    assert not {k.lower() for k in sent[-1]} & set(_CREDENTIAL_HEADERS)
+
+
+async def test_r3_a_guest_call_is_capped(rooms, claimed, core_db, no_player_starts, monkeypatch) -> None:
+    """Finding 4 (the orchestrator's defaults): at most 50 tracks per add,
+    no add past 500 entries, one song per remove. A household caller is
+    not capped."""
+    stub = rooms[ACTIVE]
+    async with _core() as c:
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/add",
+                         json={"track_ids": list(range(1, 52))})
+        assert r.status_code == 400, r.text
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/add",
+                         json={"track_ids": list(range(1, 51))})
+        assert r.status_code == 200, r.text
+        assert len(_ids(stub)) == 3 + 50
+        monkeypatch.setattr(guest_queue, "GUEST_QUEUE_MAX_ENTRIES", 60)
+        monkeypatch.setattr(core_main, "GUEST_QUEUE_MAX_ENTRIES", 60)
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/add",
+                         json={"track_ids": list(range(1, 9))})
+        assert r.status_code == 409, r.text
+        assert len(_ids(stub)) == 53
+        current = int((await stub.current_song())["id"])
+        others = [i for i in _ids(stub) if i != current]
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/remove", json={"song_ids": others[:2]})
+        assert r.status_code == 400, r.text
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/remove", json={"song_ids": others[:1]})
+        assert r.status_code == 200, r.text
+    async with _core(**{HEADER: DEVICE_TOKEN}) as c:
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/add",
+                         json={"track_ids": list(range(1, 101))})
+        assert r.status_code == 200, r.text
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/remove", json={"song_ids": others[1:20]})
+        assert r.status_code == 200, r.text
+
+
+async def test_r6_a_guest_probing_a_device_id_learns_nothing(web_side) -> None:
+    """Finding 3, the reviewer's request: a guest claiming a blocked
+    household device's id, for any room name, gets the generic refusal —
+    not the device's name or the admin's note."""
+    core, db = web_side
+    db.devices["android-kitchen"] = "Kitchen iPad"
+    db.block = (1, "android-kitchen", "Kitchen iPad", None, "kids at bedtime")
+    async with _web() as c:
+        r = await c.post("/api/music/queue/any-room-at-all/add",
+                         json={"track_ids": [1], "device_id": "android-kitchen"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == queue_api.GUEST_BLOCKED_DETAIL
+    assert "Kitchen iPad" not in r.text and "bedtime" not in r.text
+    assert core.calls == []
+    # A household caller with that id still gets the block's own message.
+    async with _web(**{HEADER: DEVICE_TOKEN}) as c:
+        r = await c.post("/api/music/queue/any-room-at-all/add",
+                         json={"track_ids": [1], "device_id": "android-kitchen"})
+    assert "kids at bedtime" in r.json()["detail"]
+
+
+async def test_guest_reads_have_their_own_bucket(rooms, claimed, monkeypatch) -> None:
+    """Finding 5: a guest's reads are throttled per address on a larger
+    bucket of their own; a household read never is."""
+    monkeypatch.setattr(admin_auth.GUEST_READ_LIMITER, "max_per_window", 2)
+    async with _core() as c:
+        for _ in range(2):
+            assert (await c.get(f"/v1/admin/music/queue/{ACTIVE}")).status_code == 200
+        r = await c.get(f"/v1/admin/music/queue/{ACTIVE}")
+        assert r.status_code == 429 and r.headers.get("retry-after")
+        # The edit budget is separate.
+        r = await c.post(f"/v1/admin/music/queue/{ACTIVE}/move",
+                         json={"song_id": _ids(rooms[ACTIVE])[-1], "to_position": 1})
+        assert r.status_code == 200, r.text
+    async with _core(**{HEADER: DEVICE_TOKEN}) as c:
+        for _ in range(3):
+            assert (await c.get(f"/v1/admin/music/queue/{ACTIVE}")).status_code == 200
+
+
+async def test_guest_reads_reuse_the_activity_for_a_second(rooms, monkeypatch) -> None:
+    """Finding 5: a read reuses a room's activity for ~1 s; an action
+    always looks again."""
+    asked = []
+    stub = rooms[ACTIVE]
+    real_state = stub.state
+
+    async def counting_state():
+        asked.append(1)
+        return await real_state()
+
+    monkeypatch.setattr(stub, "state", counting_state)
+    await guest_queue.room_activity_for_read(ACTIVE)
+    await guest_queue.room_activity_for_read(ACTIVE)
+    assert len(asked) == 1
+    await guest_queue.room_activity(ACTIVE)
+    assert len(asked) == 2
+    monkeypatch.setattr(guest_queue, "ACTIVITY_READ_CACHE_SEC", 0.0)
+    await guest_queue.room_activity_for_read(ACTIVE)
+    assert len(asked) == 3
+
+
+def test_the_guests_seen_pruner_runs_on_a_timer() -> None:
+    """Finding 7: retention does not wait for the next guest."""
+    from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
+
+    src = (Path(core_main.__file__)).read_text(encoding="utf-8")
+    assert 'WORKERS.add_worker(GuestsSeenPruner(), owner="core")' in src
+    assert GuestsSeenPruner.stub_suppressed is False
+    assert settings.guests_seen_pruner_interval_sec <= 3600
+
+
+@requires_db
+async def test_db_guests_seen_is_pruned_and_capped_per_address(clean_queue_tables) -> None:
+    """Finding 7, on the real table: a script rotating ids from one address
+    keeps GUESTS_SEEN_PER_SOURCE rows; the pruner drops a row 31 days old;
+    another address's guest is untouched."""
+    from sqlalchemy import text as sql
+
+    from domovoi.db.session import engine
+
+    for i in range(guest_bans.GUESTS_SEEN_PER_SOURCE + 5):
+        await _REAL_RECORD_GUEST(device_id=f"browser-rot{i}", source="192.168.1.66",
+                                 user_agent="script", room_id=ACTIVE, action="skip")
+    await _REAL_RECORD_GUEST(device_id="browser-friend", source="192.168.1.20",
+                             user_agent="Phone", room_id=ACTIVE, action="queue add")
+    async with engine.begin() as conn:
+        per = dict((await conn.execute(sql(
+            "SELECT source, count(*) FROM guests_seen GROUP BY source"))).all())
+        await conn.execute(sql("UPDATE guests_seen SET last_seen = now() - interval '31 days' "
+                               "WHERE device_id = 'browser-friend'"))
+    assert per == {"192.168.1.66": guest_bans.GUESTS_SEEN_PER_SOURCE, "192.168.1.20": 1}
+    assert await guest_bans.prune_guests_seen() == 1
+    async with engine.begin() as conn:
+        left = (await conn.execute(sql("SELECT count(*) FROM guests_seen"))).scalar_one()
+    assert left == guest_bans.GUESTS_SEEN_PER_SOURCE

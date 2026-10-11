@@ -2233,10 +2233,6 @@ const QueueAccessCard = ({ fire, deviceList }) => {
   );
 };
 
-/* Files access — the Files surface is open on the LAN (browse, download,
- * upload, move, import; only delete needs admin), so this is the control
- * that takes WRITES away from one device without making every phone sign
- * in. Same device model and the same honesty note as the queue blocks. */
 /* Guests: phones and browsers with no household credential (owner decision
  * 2026-10-10). A guest may change the queue of a room that is playing and
  * pause / resume / skip / go back there, "until they get banned by someone
@@ -2382,6 +2378,10 @@ const GuestAccessCard = ({ fire }) => {
   );
 };
 
+/* Files access — the Files surface is open on the LAN (browse, download,
+ * upload, move, import; only delete needs admin), so this is the control
+ * that takes WRITES away from one device without making every phone sign
+ * in. Same device model and the same honesty note as the queue blocks. */
 const FilesAccessCard = ({ fire, deviceList }) => {
   const { items: devices, loading: devicesLoading } = deviceList;
   const { items: blocks, loading: blocksLoading, refresh: refreshBlocks } =
