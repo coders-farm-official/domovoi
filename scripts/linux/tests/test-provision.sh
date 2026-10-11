@@ -771,7 +771,8 @@ for n, l in enumerate(lines, 1):
         for k in ("result", "restart_required", "exit_code", "failed_step", "gpu"):
             assert k in o, "final lacks " + k
         assert isinstance(o["restart_required"], bool)
-        assert isinstance(o["gpu"], list) and all(isinstance(g, str) and g for g in o["gpu"]), l
+        # A list of names ([] = the CPU alone), or null while unknown.
+        assert o["gpu"] is None or (isinstance(o["gpu"], list) and all(isinstance(g, str) and g for g in o["gpu"])), l
 assert finals == 1, "%d final lines" % finals
 PY
 }
@@ -1377,9 +1378,17 @@ case_bare_metal_sets_the_zone() {
   end_case
 }
 
-# A box with a CPU only: the final line's gpu list is empty.
+# A box with a CPU only: the final line's gpu list is empty. Before that,
+# with no Ollama start in this boot's journal, it is unknown (null), not
+# "no GPU" (review 2026-10-11, finding 8).
 case_cpu_only_box_reports_no_gpu() {
   new_case cpu_only_box_reports_no_gpu
+  run_prov "${wsl_args[@]}" --skip-models
+  check "no journal: exit 0" eq "$RC" 0
+  check "no journal: progress format" progress_ok
+  check "no journal: gpu unknown (null), not an empty list" grep -qF '"gpu":null' "$CASE/progress.jsonl"
+  check "no journal: said unknown" said "what Ollama runs on is unknown"
+  check "no journal: not said to be the CPU" not_said "Ollama found no GPU"
   printf '%s\n' \
     'time=2026-10-11T10:00:00.000-04:00 level=INFO source=routes.go:2005 msg="server config" env="map[]"' \
     'time=2026-10-11T10:00:01.000-04:00 level=INFO source=types.go:32 msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu total="15.5 GiB"' \
@@ -1401,12 +1410,21 @@ case_cpu_only_box_reports_no_gpu() {
 case_update_defaults_opt_into_the_lock() {
   new_case update_defaults_opt_into_the_lock --bare
   mkdir -p "$ROOT/etc/default"
-  printf '# mine\nDOMOVOI_UPDATE_KEEP_BACKUPS=9\n' >"$ROOT/etc/default/domovoi-update"
+  local f=$ROOT/etc/default/domovoi-update owner posix=0
+  printf '# mine\nDOMOVOI_UPDATE_KEEP_BACKUPS=9\n' >"$f"
+  chmod 0600 "$f"
+  [ "$(stat -c %a "$f")" = 600 ] && posix=1   # not on Git for Windows' NTFS view
+  owner=$(stat -c %u:%g "$f")
   run_prov --internet always --skip-models
   check "exit 0" eq "$RC" 0
-  check "the admin's line kept" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_UPDATE_KEEP_BACKUPS=9"
-  check "the lock line added" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=1"
-  check "once" eq "$(grep -c '^DOMOVOI_USE_LOCK=' "$ROOT/etc/default/domovoi-update")" 1
+  check "the admin's line kept" has_line "$f" "DOMOVOI_UPDATE_KEEP_BACKUPS=9"
+  check "the lock line added" has_line "$f" "DOMOVOI_USE_LOCK=1"
+  check "once" eq "$(grep -c '^DOMOVOI_USE_LOCK=' "$f")" 1
+  # Review 2026-10-11, finding 9: the file keeps its owner and mode.
+  check "the file's owner given to the new copy" called "chown $owner $ROOT/etc/default/.domovoi-update."
+  check "not handed to root:root" not_called "chown root:root $ROOT/etc/default/.domovoi-update."
+  if [ "$posix" = 1 ]; then check "its mode kept (0600)" eq "$(stat -c %a "$f")" 600; fi
+  check "still a plain file" test ! -L "$f"
   run_prov --internet always --skip-models
   check "second run: update-unit skipped" eq "$(state_of update-unit)" skip
   check "still once" eq "$(grep -c '^DOMOVOI_USE_LOCK=' "$ROOT/etc/default/domovoi-update")" 1
@@ -1420,6 +1438,47 @@ case_update_defaults_opt_into_the_lock() {
   check "repair: the admin's 0 kept" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=0"
   check "repair: no 1 added" eq "$(grep -c '^DOMOVOI_USE_LOCK=1' "$ROOT/etc/default/domovoi-update")" 0
   check "repair: warned" said "sets DOMOVOI_USE_LOCK=0, left as it is"
+  # A symlink there (configuration management, say) is left alone, with a
+  # warning; the file it points to is not written through it.
+  mkdir -p "$CASE/managed"
+  printf 'DOMOVOI_UPDATE_KEEP_BACKUPS=3\n' >"$CASE/managed/domovoi-update"
+  rm -f "$f"; ln -s "$CASE/managed/domovoi-update" "$f" 2>/dev/null || true
+  if [ ! -L "$f" ]; then
+    echo "    (no symlinks on this file system: the symlink part is not run)"
+    end_case
+    return
+  fi
+  echo "# changed again" >>"$CHECKOUT/scripts/linux/install-update-unit.sh"
+  run_prov --internet always --skip-models
+  check "symlink: exit 0" eq "$RC" 0
+  check "symlink: still a link" test -L "$f"
+  check "symlink: the file it points to untouched" eq "$(cat "$CASE/managed/domovoi-update")" "DOMOVOI_UPDATE_KEEP_BACKUPS=3"
+  check "symlink: warned" said "/etc/default/domovoi-update is a symlink, left as it is"
+  run_prov --internet always --skip-models
+  check "symlink: the next run skips update-unit" eq "$(state_of update-unit)" skip
+  end_case
+}
+
+# Review 2026-10-11, finding 4: DOMOVOI_MANAGE_OS_JOBS=0 in
+# /etc/default/domovoi-update leaves Ubuntu's jobs alone on a provision
+# run too, as it does in the update unit (WSL's wsl-pro and snapd included).
+case_os_jobs_opt_out_is_honoured() {
+  new_case os_jobs_opt_out_is_honoured
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_OS_JOBS=0\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov --internet never --skip-models
+  check "exit 0" eq "$RC" 0
+  check "os-jobs skipped" eq "$(state_of os-jobs)" skip
+  check "says why" said "DOMOVOI_MANAGE_OS_JOBS=0 in /etc/default/domovoi-update: Ubuntu's background jobs are left to the administrator"
+  local u
+  for u in apt-daily.timer motd-news.timer wsl-pro.service snapd.service; do check "$u left alone" not_masked "$u"; done
+  check "nothing written down" absent "$ROOT/var/lib/domovoi-os-jobs/masked"
+  check "the opt-out line kept" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_MANAGE_OS_JOBS=0"
+  # The administrator takes the opt-out back: the next run sets the jobs.
+  sed -i '/^DOMOVOI_MANAGE_OS_JOBS=/d' "$ROOT/etc/default/domovoi-update"
+  run_prov --internet never --skip-models
+  check "opted in again: os-jobs done" eq "$(state_of os-jobs)" done
+  check "opted in again: apt-daily masked" masked apt-daily.timer
   end_case
 }
 
@@ -1818,6 +1877,7 @@ CASES=(
   case_bare_metal_sets_the_zone
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
+  case_os_jobs_opt_out_is_honoured
 )
 
 for c in "${CASES[@]}"; do

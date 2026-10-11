@@ -1677,9 +1677,97 @@ case_os_jobs_opt_out_and_failure_never_fail_an_update() {
   check "failure: mode update" eq "$(field mode)" '"update"'
   check "failure: a warn step" step_is os-jobs warn
   check "failure: it says why" grep -qF "could not mask apt-daily.timer" "$RESULT"
+  # The detail is the helper's own lines (the Version card shows it), not
+  # mkdir's raw error.
+  check "failure: the detail the card shows" grep -qF '"detail": "Ubuntu'"'"'s background jobs: could not mask apt-daily.timer' "$RESULT"
+  check "failure: no raw tool output in it" eq "$(grep -c 'mkdir: cannot' "$RESULT")" 0
+  # Review 2026-10-11, finding 3: written down first, crossed off when the
+  # mask failed, so the record never names a unit that is not masked.
+  check "failure: nothing left written down" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
   check "failure: no error on the run" eq "$(field error)" null
   check "failure: no rollback" not_called "reset --keep"
   check "failure: applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Review 2026-10-11, finding 1: a mask the administrator made before stays
+# through never and back to always; only what os-jobs.sh wrote down is
+# taken back. (A helper that unmasks every listed unit whatever its record
+# says fails this case.)
+case_os_jobs_an_admins_mask_stays_through_never_and_always() {
+  new_case os_jobs_an_admins_mask_stays_through_never_and_always
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer motd-news.timer ua-timer.timer
+  ln -s /dev/null "$OSROOT/etc/systemd/system/motd-news.timer"
+  check "set up: the admin's mask is there" os_masked motd-news.timer
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "never: status ok" eq "$(field status)" '"ok"'
+  check "never: apt-daily masked" os_masked apt-daily.timer
+  check "never: ua-timer masked" os_masked ua-timer.timer
+  check "never: the admin's mask not written down" eq "$(grep -cx motd-news.timer "$OSROOT/var/lib/domovoi-os-jobs/masked")" 0
+  check "never: what it masked is" grep -qx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "always: status ok" eq "$(field status)" '"ok"'
+  check "always: apt-daily unmasked" os_not_masked apt-daily.timer
+  check "always: ua-timer unmasked" os_not_masked ua-timer.timer
+  check "always: the admin's mask stays" os_masked motd-news.timer
+  check "always: the step names only its own" grep -qF '"detail": "unmasked apt-daily.timer ua-timer.timer (internet: always; WSL: no)"' "$RESULT"
+  echo sometimes >"$STATE/internet-policy"
+  run_update
+  check "again: the admin's mask still stays" os_masked motd-news.timer
+  check "again: no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  end_case
+}
+
+# Review 2026-10-11, finding 1: the Beelink's case. Bare metal, the
+# question unanswered, Ubuntu's units installed: nothing changes and the
+# result gains no step.
+case_os_jobs_unanswered_bare_metal_changes_nothing() {
+  new_case os_jobs_unanswered_bare_metal_changes_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer \
+    ua-timer.timer apport-autoreport.path apport-autoreport.timer snapd.snap-repair.timer \
+    snapd.service snapd.socket wsl-pro.service
+  local before; before=$(ls -A "$OSROOT/etc/systemd/system")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "said why" grep -qF "os-jobs: nothing to change (internet: unanswered; WSL: no)" "$CASE/output.log"
+  check "no unit file touched" eq "$(ls -A "$OSROOT/etc/systemd/system")" "$before"
+  check "nothing written down" test ! -e "$OSROOT/var/lib/domovoi-os-jobs"
+  check "systemd not even asked" not_called "systemctl daemon-reload"
+  end_case
+}
+
+# Review 2026-10-11, finding 3: os-jobs.sh writes a unit down before it
+# masks it. A run killed in between leaves it written down and not masked:
+# the next always run crosses it off without touching it, the next never
+# run masks it (written down once).
+case_os_jobs_a_kill_between_record_and_mask_heals() {
+  new_case os_jobs_a_kill_between_record_and_mask_heals
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  os_units apt-daily.timer motd-news.timer
+  mkdir -p "$OSROOT/var/lib/domovoi-os-jobs"
+  echo apt-daily.timer >"$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "always: status ok" eq "$(field status)" '"ok"'
+  check "always: crossed off" grep -qF "crossed off apt-daily.timer" "$RESULT"
+  check "always: not masked, not unmasked" os_not_masked apt-daily.timer
+  check "always: the record is gone" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo apt-daily.timer >"$OSROOT/var/lib/domovoi-os-jobs/masked"
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "never: status ok" eq "$(field status)" '"ok"'
+  check "never: masked now" os_masked apt-daily.timer
+  check "never: written down once" eq "$(grep -cx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked")" 1
+  check "never: motd-news too" os_masked motd-news.timer
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "back to always: both unmasked" eq "$(ls -A "$OSROOT/etc/systemd/system" | grep -c .)" 0
   end_case
 }
 
@@ -2540,6 +2628,9 @@ CASES=(
   case_os_jobs_follow_the_answer_on_restarts
   case_os_jobs_on_wsl_keep_snapd_off
   case_os_jobs_opt_out_and_failure_never_fail_an_update
+  case_os_jobs_an_admins_mask_stays_through_never_and_always
+  case_os_jobs_unanswered_bare_metal_changes_nothing
+  case_os_jobs_a_kill_between_record_and_mask_heals
   case_never_refuses_a_dependency_update
   case_never_refuses_a_music_image_change
   case_never_mpd_conf_only_keeps_the_image
