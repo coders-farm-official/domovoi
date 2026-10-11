@@ -140,9 +140,35 @@ async def list_installed() -> dict[str, Any]:
                     "capabilities"
                 ) or [],
                 "web_load_error": HOST.load_errors.get(slug),
+                # The container guard (SDK 1.5): what the plugin declares it
+                # runs, and whether a plugin that needs Docker declared
+                # nothing — it still works, it just isn't watched.
+                **_container_fields(m),
             }
         )
     return {"plugins": plugins}
+
+
+def _container_fields(manifest: dict[str, Any]) -> dict[str, Any]:
+    from domovoi.container_guard.expected import declared_containers, needs_docker
+
+    declared = declared_containers(manifest)
+    return {
+        "containers": [
+            {
+                "id": d.id,
+                "name": d.name,
+                "image": d.image,
+                "pinned": "@sha256:" in d.image,
+                "required": d.required,
+                "label": d.label,
+                "allow": sorted(d.allow),
+            }
+            for d in declared
+        ],
+        "containers_watched": bool(declared),
+        "containers_unwatched": not declared and needs_docker(manifest),
+    }
 
 
 @router.get("/{slug}/purge-preview")

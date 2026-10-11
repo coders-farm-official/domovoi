@@ -24,7 +24,10 @@ from __future__ import annotations
 # 1.4.0: added egress (the internet-access policy gate),
 #        connectivity.policy / .reason / .internet_allowed; sdk.http refuses
 #        non-local requests when the answer is never.
-API_VERSION = "1.4.0"
+# 1.5.0: added containers: the manifest's [[containers]] table and
+#        ctx.add_container(id, resolve) -> ContainerExpectation, so the
+#        core's container guard watches the Docker containers a plugin runs.
+API_VERSION = "1.5.0"
 
 from domovoi.capabilities import (  # noqa: E402,F401
     CAPABILITIES,
@@ -40,6 +43,10 @@ from domovoi import net_safety  # noqa: E402,F401
 from domovoi import egress  # noqa: E402,F401
 from domovoi.models import Context, Intent, Response  # noqa: E402,F401
 from domovoi.sdk.assets import AssetAPI, CannedSound  # noqa: E402,F401
+from domovoi.sdk.containers import (  # noqa: E402,F401
+    ContainerExpectation,
+    ContainerResolver,
+)
 from domovoi.sdk.coreconfig import CoreConfigView  # noqa: E402,F401
 from domovoi.sdk.facade import (  # noqa: E402,F401
     AcquisitionView,
@@ -77,6 +84,8 @@ __all__ = [
     "CAPABILITIES",
     "CannedSound",
     "ConnectivityView",
+    "ContainerExpectation",
+    "ContainerResolver",
     "Context",
     "CoreConfigView",
     "EventsView",

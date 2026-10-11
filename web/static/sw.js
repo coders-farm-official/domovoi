@@ -87,6 +87,8 @@ const SHELL_ASSETS = [
   // Home is the default page (the manifest's start_url), so an offline
   // launch of the installed app needs it more than any other page.
   '/home.jsx',
+  // The container guard's page: a banner's "details" must open offline too.
+  '/containers.jsx',
   '/manifest.webmanifest',
 ];
 

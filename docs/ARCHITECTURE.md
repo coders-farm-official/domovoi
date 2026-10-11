@@ -313,8 +313,15 @@ exactly one process and one loop that mutate them.
 Core's own workers live in `domovoi/workers/`: the timer watcher, library
 indexer + enricher, playback-state sweeper, media-plays pruner, news fetcher,
 podcast feed poller, audiobook indexer, memory extractor, wake-word trainer,
-document lock sweeper, the MusicBrainz alias fetch, and the three lyrics
-workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics").
+document lock sweeper, the MusicBrainz alias fetch, the three lyrics
+workers (`lyrics_scan`, `lyrics_fetch`, `lyrics_index` — §6 "Lyrics"), and
+the container guard (`container_guard`, `domovoi/container_guard/`): every
+30 s it compares the Docker containers the core expects — the compose
+stack, each room's music player, every plugin's declared containers —
+against what Docker reports, records failures and signs of tampering in
+`container_incidents` (V024), and while a tamper incident is open freezes
+plugin installs, satellite upgrades and updates. See
+[CONTAINER_GUARD.md](CONTAINER_GUARD.md).
 
 ---
 

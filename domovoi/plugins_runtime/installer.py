@@ -914,6 +914,18 @@ async def stage_zip(
             # size of the file payload — its own panel on the trust screen,
             # never folded into a permission flag.
             "satellite": satellite,
+            # The Docker containers the plugin says it runs (SDK 1.5): the
+            # container guard watches these, and a pin by digest is what
+            # lets it tell a swapped image from the real one. A plugin
+            # that needs Docker and declares none is not watched.
+            "containers": [
+                {"id": c.id, "name": c.name, "image": c.image, "pinned": c.pinned,
+                 "required": c.required, "label": c.label, "allow": list(c.allow)}
+                for c in manifest.containers
+            ],
+            "containers_unwatched": not manifest.containers and any(
+                r.tool.lower() == "docker" for r in manifest.system_requirements
+            ),
             "trust_statement": TRUST_STATEMENT,
         }
         staged = StagedInstall(
@@ -1614,6 +1626,35 @@ def _install_error_response(e: InstallError) -> HTTPException:
     )
 
 
+# ─── the container guard: the freeze, and "being worked on" ─────────────────
+#
+# While the guard has an open tamper incident, installs, upgrades and
+# enables refuse with 423 naming it (domovoi/container_guard/freeze.py);
+# disable and uninstall stay available. Every lifecycle step holds the
+# plugin's containers (holds.py) while it runs and for a settle time after,
+# because the plugin's own watchdog creates or recreates them in the
+# minutes that follow: that is never an incident.
+
+_LIFECYCLE_SETTLE_SEC = 300.0
+
+
+def _holding_plugin(slug: str | None, what: str):
+    from domovoi.container_guard import holds
+
+    if not slug:
+        return contextlib.nullcontext()
+    return holds.holding(
+        f"plugin:{slug}", f"the {slug} plugin is being {what}",
+        settle_sec=_LIFECYCLE_SETTLE_SEC,
+    )
+
+
+async def _require_unfrozen(operation: str) -> None:
+    from domovoi.container_guard import freeze
+
+    await freeze.require_unfrozen(operation)
+
+
 async def _read_install_body(
     request: Request,
 ) -> tuple[bytes | None, str | None, str | None, bool]:
@@ -1642,7 +1683,9 @@ async def _read_install_body(
 )
 async def api_install(request: Request) -> dict:
     """Phase A — stage & validate a zip upload (multipart field ``file``)
-    or a GitHub URL (JSON body ``{"github_url": ...}``)."""
+    or a GitHub URL (JSON body ``{"github_url": ...}``). 423 while the
+    container guard's freeze is on."""
+    await _require_unfrozen("plugin_install")
     try:
         data, source_ref, github_url, _force = await _read_install_body(request)
         if data is not None:
@@ -1668,11 +1711,15 @@ async def api_install(request: Request) -> dict:
     dependencies=[Depends(require_admin)],
 )
 async def api_confirm(staged_id: str) -> dict:
+    staged = _STAGED.get(staged_id)
+    upgrade = staged is not None and bool(staged.upgrade_of)
+    await _require_unfrozen("plugin_upgrade" if upgrade else "plugin_install")
+    slug = staged.manifest.slug if staged is not None else None
     try:
-        staged = _STAGED.get(staged_id)
-        if staged is not None and staged.upgrade_of:
-            return await confirm_upgrade(staged_id)
-        return await confirm_install(staged_id)
+        with _holding_plugin(slug, "upgraded" if upgrade else "installed"):
+            if upgrade:
+                return await confirm_upgrade(staged_id)
+            return await confirm_install(staged_id)
     except InstallError as e:
         raise _install_error_response(e)
 
@@ -1681,8 +1728,10 @@ async def api_confirm(staged_id: str) -> dict:
     "/v1/plugins/{slug}/enable", dependencies=[Depends(require_admin)]
 )
 async def api_enable(slug: str) -> dict:
+    await _require_unfrozen("plugin_enable")
     try:
-        return await enable_plugin(slug)
+        with _holding_plugin(slug, "enabled"):
+            return await enable_plugin(slug)
     except InstallError as e:
         raise _install_error_response(e)
 
@@ -1692,7 +1741,8 @@ async def api_enable(slug: str) -> dict:
 )
 async def api_disable(slug: str) -> dict:
     try:
-        return await disable_plugin(slug)
+        with _holding_plugin(slug, "disabled"):
+            return await disable_plugin(slug)
     except InstallError as e:
         raise _install_error_response(e)
 
@@ -1702,7 +1752,8 @@ async def api_disable(slug: str) -> dict:
 )
 async def api_uninstall(slug: str, body: dict | None = None) -> dict:
     try:
-        return await uninstall_plugin(slug, data=(body or {}).get("data", "keep"))
+        with _holding_plugin(slug, "uninstalled"):
+            return await uninstall_plugin(slug, data=(body or {}).get("data", "keep"))
     except InstallError as e:
         raise _install_error_response(e)
 
@@ -1713,7 +1764,9 @@ async def api_uninstall(slug: str, body: dict | None = None) -> dict:
 async def api_upgrade(request: Request, slug: str) -> dict:
     """Stage an upgrade (same two-phase flow: returns staged_id + preview;
     confirm via the shared confirm endpoint). A dev-mode plugin refuses
-    (just restart), and so does a bundled one: it updates with the core."""
+    (just restart), and so does a bundled one: it updates with the core.
+    423 while the container guard's freeze is on."""
+    await _require_unfrozen("plugin_upgrade")
     try:
         row = await reg.get_plugin(slug)
         if row is None:

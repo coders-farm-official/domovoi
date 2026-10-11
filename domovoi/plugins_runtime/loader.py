@@ -91,6 +91,8 @@ class PluginContext:
         self.routers: list[Any] = []
         self.capabilities: list[str] = []
         self.disable_callbacks: list[Callable[[], Awaitable[None]]] = []
+        # [[containers]] id -> resolver (SDK 1.5; read by the container guard).
+        self.containers: dict[str, Any] = {}
         self._config_registered = False
 
     # ── voice plane ─────────────────────────────────────────────────────────
@@ -127,6 +129,23 @@ class PluginContext:
         """Queued; mounted at ``/v1/plugins/<slug>`` (behind the enable +
         default-DENY auth gates, §4.11) once the loader has an app."""
         self.routers.append(router)
+
+    # ── containers (SDK 1.5) ────────────────────────────────────────────────
+
+    def add_container(self, container_id: str, resolve: Any = None) -> None:
+        """Tell the core's container guard how to see one of this plugin's
+        Docker containers right now (docs/CONTAINER_GUARD.md).
+        ``container_id`` is a ``[[containers]]`` id from the manifest;
+        ``resolve`` is a sync or async callable returning a
+        :class:`domovoi.sdk.ContainerExpectation` (None: the manifest's
+        values, expected to run while the plugin is enabled)."""
+        if not isinstance(container_id, str) or not container_id:
+            raise ValueError("add_container needs the [[containers]] id")
+        if container_id in self.containers:
+            raise ValueError(f"container {container_id!r} registered twice")
+        if resolve is not None and not callable(resolve):
+            raise TypeError("add_container's resolve must be callable")
+        self.containers[container_id] = resolve
 
     # ── capabilities ────────────────────────────────────────────────────────
 
@@ -318,6 +337,8 @@ class PluginLoader:
             cuda_initialized=cuda_initialized,
             routers=ctx.routers,
             package_dir=install_dir / manifest.package_name,
+            container_ids=list(ctx.containers),
+            foreign_container_names=await self._foreign_container_names(exclude=slug),
         )
         for warning in report.warnings:
             log.warning("plugin %s: %s", slug, warning)
@@ -635,6 +656,22 @@ class PluginLoader:
         except Exception as e:  # noqa: BLE001 — DB-less unit contexts
             log.debug("foreign web routes unavailable: %s", e)
         return routes
+
+    async def _foreign_container_names(self, *, exclude: str) -> list[tuple[str, str]]:
+        """``(container name, slug)`` for every ``[[containers]]`` entry of
+        every ENABLED plugin except the candidate: two plugins may not
+        claim one container."""
+        names: list[tuple[str, str]] = []
+        try:
+            for row in await reg.list_plugins():
+                if row.slug == exclude or not row.enabled:
+                    continue
+                for decl in row.manifest.get("containers", []) or []:
+                    if isinstance(decl, dict) and isinstance(decl.get("name"), str):
+                        names.append((decl["name"], row.slug))
+        except Exception as e:  # noqa: BLE001 — DB-less unit contexts
+            log.debug("foreign container names unavailable: %s", e)
+        return names
 
     async def _foreign_corpus(self, *, exclude: str) -> list[tuple[str, str]]:
         """Manifest-declared corpus phrases of every ENABLED plugin except

@@ -228,7 +228,9 @@ class ApiClient(
         cont.invokeOnCancellation { runCatching { cancel() } }
     }
 
-    suspend fun raw(method: String, path: String, body: RequestBody? = null): String =
+    /** [trackPairing] false: the answer neither raises nor clears
+     *  [pairingRequired] ([getUntracked]). */
+    suspend fun raw(method: String, path: String, body: RequestBody? = null, trackPairing: Boolean = true): String =
         withContext(Dispatchers.IO) {
             if (baseUrl.isBlank()) throw IOException("no server configured")
             val req = Request.Builder()
@@ -244,13 +246,13 @@ class ApiClient(
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     val pairing = isPairingRefusalFromOurServer(resp.code, text)
-                    if (pairing) _pairingRequired.value = true
+                    if (pairing && trackPairing) _pairingRequired.value = true
                     throw ApiException(
                         resp.code, "${resp.code} ${resp.message}: ${text.take(200)}", pairing,
                         body = text.take(4096),
                     )
                 }
-                if (_pairingRequired.value) _pairingRequired.value = false
+                if (trackPairing && _pairingRequired.value) _pairingRequired.value = false
                 text
             }
         }
@@ -259,6 +261,15 @@ class ApiClient(
         (body ?: JsonObject(emptyMap())).toString().toRequestBody("application/json".toMediaType())
 
     suspend fun get(path: String): JsonElement = parse(raw("GET", path))
+
+    /**
+     * A GET whose answer says nothing about pairing: a background read that
+     * falls back to an OPEN endpoint (the container guard's summary) would
+     * otherwise clear the pairing screen with its 200 the moment its
+     * household read had raised it with a 401, and the shell would flicker
+     * between the two. Errors still throw as from [get].
+     */
+    suspend fun getUntracked(path: String): JsonElement = parse(raw("GET", path, trackPairing = false))
     suspend fun post(path: String, body: JsonElement? = null): JsonElement =
         parse(raw("POST", path, jsonBody(body)))
     suspend fun patch(path: String, body: JsonElement? = null): JsonElement =

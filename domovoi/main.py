@@ -31,6 +31,7 @@ from domovoi import admin_auth as admin_auth_mod  # noqa: E402
 from domovoi import git_version  # noqa: E402
 from domovoi import self_restart  # noqa: E402
 from domovoi import server_identity  # noqa: E402
+from domovoi.container_guard import freeze as container_freeze  # noqa: E402
 from domovoi.admin_auth import (  # noqa: E402
     GUEST_PLAYING_ENTRY_DETAIL,
     SlidingWindowLimiter,
@@ -410,6 +411,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception as e:
             log.warning("canned sound regeneration raised: %s", e)
 
+    # The container guard (docs/CONTAINER_GUARD.md): one per process, made
+    # now so its boot grace counts from here and it reads the compose file
+    # the containers were started from. ensure_image below records the
+    # music player image with it; the worker below runs its checks.
+    from domovoi.container_guard import engine as container_guard_engine
+
+    container_guard_engine.reset_guard(container_guard_engine.ContainerGuard())
+    container_guard_engine.get_guard().compose_services()
+
     # MPD: ensure the image exists and restart any rooms provisioned
     # in past runs so a Pi reconnect doesn't have to wait for a fresh
     # `docker run`. Stub mode skips both — tests don't drive docker.
@@ -590,7 +600,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     #   timer_watcher → playback_state_sweeper → media_plays_pruner →
     #   memory_extractor → lyrics_index → news_fetcher → wake_word_trainer →
     #   podcast_feed_poller → audiobook_indexer → command_capture_pruner →
-    #   guests_seen_pruner → library_alias_fetch → lyrics_scan → lyrics_fetch.
+    #   guests_seen_pruner → container_guard → library_alias_fetch →
+    #   lyrics_scan → lyrics_fetch.
     #
     # Per-worker rationale lives on each class (workers/*.py); the radio
     # feature (stations, passive detection, SDR/FM, FCC import) is a
@@ -632,6 +643,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from domovoi.workers.guests_seen_pruner import GuestsSeenPruner
 
     WORKERS.add_worker(GuestsSeenPruner(), owner="core")
+    # The container guard's checks (domovoi/container_guard/): failures and
+    # signs of tampering in the containers Domovoi expects.
+    from domovoi.workers.container_guard import ContainerGuardWorker
+
+    WORKERS.add_worker(ContainerGuardWorker(), owner="core")
     # Opt-in (off by default) MusicBrainz "also called" names for the
     # library's artists; self-gated per tick on music_alias_fetch_enabled
     # and the connectivity probe (domovoi/workers/library_alias_fetch.py).
@@ -1212,7 +1228,9 @@ def _is_allowed_satellite_code(p: Path) -> bool:
 async def satellite_code_manifest() -> dict[str, str]:
     """`{relative_path: sha256}` for every allowlisted file under satellite/.
     Keys are POSIX-relative to satellite/ so the Pi can mirror them straight
-    into its own checkout. Empty if the tree is missing (non-clone deploy)."""
+    into its own checkout. Empty if the tree is missing (non-clone deploy).
+    423 while the container guard's freeze is on (docs/CONTAINER_GUARD.md)."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
     manifest: dict[str, str] = {}
     if SATELLITE_CODE_DIR.is_dir():
         for p in SATELLITE_CODE_DIR.rglob("*"):
@@ -1253,7 +1271,8 @@ async def satellite_code_file(path: str) -> FileResponse:
     """Serve one allowlisted file from satellite/. Guarded against
     path-traversal and the denylist (no __pycache__, .bak, .pyc, .env). The
     extension/denylist check runs before the traversal check, mirroring
-    sounds_file."""
+    sounds_file. 423 while the container guard's freeze is on."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
     root = SATELLITE_CODE_DIR.resolve()
     target = (root / path).resolve()
     if not _is_allowed_satellite_code(target) or not target.is_file():
@@ -1282,8 +1301,11 @@ async def satellite_plugins_manifest() -> dict[str, Any]:
     apt_packages, pip_requirements, pip_lockfile, post_install}}}`` for
     every enabled plugin declaring a [satellite] payload. Under
     ``INTERNET_ACCESS=never`` each slug also carries ``"offline": true``:
-    the satellite installs its apt packages from local caches only."""
+    the satellite installs its apt packages from local caches only.
+    423 while the container guard's freeze is on (docs/CONTAINER_GUARD.md)."""
     from domovoi.satellite_payload import build_channel_manifest
+
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
 
     return await build_channel_manifest()
 
@@ -1304,8 +1326,11 @@ async def satellite_plugins_manifest_signed() -> dict[str, Any]:
 async def satellite_plugins_file(path: str) -> FileResponse:
     """Serve one payload file by its ``<slug>/<rel>`` channel path. Only
     enabled plugins' current payload sets resolve (the exact enumeration
-    the manifest uses), so traversal/symlink escapes have no side door."""
+    the manifest uses), so traversal/symlink escapes have no side door.
+    423 while the container guard's freeze is on."""
     from domovoi.satellite_payload import resolve_channel_file
+
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
 
     target = await resolve_channel_file(path)
     if target is None or not target.is_file():
@@ -1851,7 +1876,11 @@ async def admin_version_check() -> dict[str, Any]:
 async def admin_version_pull() -> dict[str, Any]:
     """`git pull --ff-only` — a deliberate, separate action (never invoked by
     the check). A dirty or diverged tree returns pulled=False plus the git
-    stderr; we never force. The core process is NOT restarted here."""
+    stderr; we never force. The core process is NOT restarted here.
+
+    423 while the container guard has an open tamper incident (the freeze,
+    docs/CONTAINER_GUARD.md)."""
+    await container_freeze.require_unfrozen("update_pull")
     return await git_version.pull()
 
 
@@ -1868,8 +1897,146 @@ async def admin_version_restart() -> dict[str, Any]:
     Returns immediately; the restart fires a beat later so this response
     reaches the client before systemd kills the process. A host without the
     sudoers grant gets ``ok: false`` and the reason — never a prompt, never a
-    half-restart."""
+    half-restart.
+
+    While the container guard has an open tamper incident, a restart that
+    would LOAD something new — pulled code, a staged plugin upgrade — is
+    the update's apply step and answers 423 (docs/CONTAINER_GUARD.md); a
+    plain restart with nothing new to load still goes ahead."""
+    if await container_freeze.is_frozen() and await _restart_would_apply():
+        await container_freeze.require_unfrozen("update_apply")
     return await self_restart.restart()
+
+
+async def _restart_would_apply() -> bool:
+    """Whether a restart now would load code that isn't running yet: a pull
+    since boot, or a plugin upgrade staged for the restart."""
+    from domovoi.plugins_runtime.loader import LOADER
+
+    if LOADER.pending_restarts():
+        return True
+    running = git_version.boot_sha()
+    checkout = await git_version.current_sha()
+    if "unknown" in (running, checkout):
+        # Can't tell: treat it as an apply (the freeze errs toward paused).
+        return True
+    return running.removesuffix("-dirty") != checkout.removesuffix("-dirty")
+
+
+# ─── Container guard (docs/CONTAINER_GUARD.md) ────────────────────────────
+# The guard runs in this process (its worker, domovoi/workers/
+# container_guard.py) and is the only writer of container_incidents; the
+# web reads them straight from Postgres and proxies these admin actions.
+
+
+class _ClearIncidentBody(BaseModel):
+    note: str | None = Field(default=None, max_length=500)
+
+
+def _incident_actor(request: Request) -> str:
+    """Who acknowledged or cleared an incident, as recorded: the admin tier
+    has one password, so the record is the tier and where it came from."""
+    return f"admin via {admin_auth_mod.request_source(request)}"
+
+
+async def _guard_incidents() -> tuple[list[dict[str, Any]], bool]:
+    """``(open + recent incidents, readable)``. Unreadable (V024 not yet
+    applied, the database away) reads as none."""
+    from domovoi.container_guard import store as cg_store
+
+    try:
+        async with session_scope() as s:
+            return await cg_store.recent_incidents(s), True
+    except Exception as e:  # noqa: BLE001
+        log.warning("container guard: incidents unreadable: %s", e)
+        return [], False
+
+
+@app.get(
+    "/v1/admin/containers",
+    # Admin READ: image references, digests, mounts and exit codes are an
+    # operator's business; the household tier reads the plain-words list
+    # from the web (/api/containers/incidents).
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_containers() -> dict[str, Any]:
+    """The guard's last check — what it expects, what Docker showed, what
+    it holds and why, what it couldn't place — plus the open and recent
+    incidents in full and whether the freeze is on."""
+    from domovoi.container_guard import engine as cg_engine
+    from domovoi.container_guard import views as cg_views
+
+    rows, readable = await _guard_incidents()
+    return {
+        "guard": cg_engine.get_guard().status,
+        "incidents_readable": readable,
+        "freeze_operations": sorted(container_freeze.OPERATIONS),
+        **cg_views.household_payload(rows, admin=True),
+    }
+
+
+@app.post(
+    "/v1/admin/containers/check",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_containers_check() -> dict[str, Any]:
+    """Run a check now instead of waiting for the next one (the debounce
+    still applies: one check never opens an incident on its own)."""
+    from domovoi.container_guard import engine as cg_engine
+
+    return {"guard": await cg_engine.get_guard().check(force=True)}
+
+
+@app.post(
+    "/v1/admin/containers/incidents/{incident_id}/acknowledge",
+    # The brief's tier for both actions: admin, Bearer-only.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_container_incident_acknowledge(incident_id: int, request: Request) -> dict[str, Any]:
+    """Acknowledge an open FAILURE: the banner hides it until something new
+    happens (another incident, or this one turning into a different
+    problem). It still resolves by itself when the container recovers.
+    409 for a tamper incident (clear it after review) or a resolved one."""
+    from domovoi.container_guard import store as cg_store
+    from domovoi.container_guard import views as cg_views
+
+    actor = _incident_actor(request)
+    try:
+        async with session_scope() as s:
+            row = await cg_store.acknowledge(s, incident_id, actor)
+    except cg_store.IncidentError as e:
+        raise HTTPException(status_code=e.status, detail=str(e)) from e
+    log.warning("container guard: incident #%s acknowledged by %s", incident_id, actor)
+    return {"incident": cg_views.incident_view(row, admin=True)}
+
+
+@app.post(
+    "/v1/admin/containers/incidents/{incident_id}/clear",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_container_incident_clear(
+    incident_id: int, request: Request, body: _ClearIncidentBody | None = None,
+) -> dict[str, Any]:
+    """Clear an open TAMPER incident after review, with an optional note.
+    Recorded (who, when, the note). When every open tamper incident is
+    cleared the freeze lifts. If the condition is still there it stays
+    accepted (it doesn't reopen); anything different opens a new incident.
+    409 for a failure (it resolves by itself) or one already cleared."""
+    from domovoi.container_guard import store as cg_store
+    from domovoi.container_guard import views as cg_views
+
+    actor = _incident_actor(request)
+    try:
+        async with session_scope() as s:
+            row = await cg_store.clear(s, incident_id, actor, body.note if body else None)
+    except cg_store.IncidentError as e:
+        raise HTTPException(status_code=e.status, detail=str(e)) from e
+    container_freeze.forget()
+    log.warning("container guard: tamper incident #%s cleared by %s", incident_id, actor)
+    return {
+        "incident": cg_views.incident_view(row, admin=True),
+        "frozen": await container_freeze.is_frozen(),
+    }
 
 
 class _AdminSatelliteUpgradeBody(BaseModel):
@@ -1890,11 +2057,14 @@ async def admin_satellite_upgrade(
     /v1/satellite-code manifest (verifying each file's sha256), records the
     new synced SHA, then restarts — rolling back from the tarball if it
     doesn't reconnect within the deadline. 503 when nothing is connected,
-    404 when this room isn't."""
+    404 when this room isn't. 423 while the container guard has an open
+    tamper incident (docs/CONTAINER_GUARD.md): the upgrade also pushes the
+    plugin payloads that run as root on the Pi."""
     import time
 
     from domovoi.db.repositories import IntentLogRepository
 
+    await container_freeze.require_unfrozen("satellite_upgrade")
     sessions: dict[str, Any] = app.state.active_sessions
     if not sessions:
         raise HTTPException(status_code=503, detail="no satellites connected")

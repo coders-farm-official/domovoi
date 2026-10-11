@@ -194,6 +194,32 @@ const TrustConfirmModal = ({ stagedId, preview, sourceLabel, verb, onDone, onCan
             </div>
           )}
 
+          {/* The Docker containers the plugin says it runs (SDK 1.5): the
+            * core's container guard watches these. A digest pin is what
+            * lets it tell a swapped image from the real one; a tag-only
+            * image is checked by name. One that needs Docker and declares
+            * none still works, and simply isn't watched. */}
+          {(Array.isArray(p.containers) && p.containers.length > 0) && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-sm)',
+                          padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, marginBottom: 4 }}>
+                <Icon name="box" size={13}/> containers it runs (watched by the container guard)
+              </div>
+              {p.containers.map((c) => (
+                <div key={c.id} className="mono">
+                  {c.name} · {c.image} · {c.pinned ? 'pinned by digest' : 'tag only'}{c.required ? '' : ' · optional'}
+                  {(c.allow || []).length > 0 ? ` · allowed: ${c.allow.join(', ')}` : ''}
+                </div>
+              ))}
+            </div>
+          )}
+          {p.containers_unwatched && (
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+              This plugin runs Docker containers but doesn't declare them, so the container guard
+              won't watch them.
+            </div>
+          )}
+
           {/* Routes the plugin opted out of the admin gate: anyone on the
             * network can call these without signing in. */}
           {openEndpoints.length > 0 && (
@@ -577,6 +603,11 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
             <Pill tone={pill.tone}>{pill.label}</Pill>
             {!p.enabled && p.status !== 'uninstalled' && <Pill tone="idle">disabled</Pill>}
             {restartPending && <Pill tone="warn">restart to finish the upgrade</Pill>}
+            {p.containers_unwatched && p.status !== 'uninstalled' && (
+              <span title="it runs Docker containers but declares none (SDK 1.5 [[containers]]), so the container guard can't watch them">
+                <Pill tone="idle">containers not watched</Pill>
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
             {p.publisher || 'unknown publisher'} · {p.license || 'no license'}
@@ -644,6 +675,13 @@ const PluginRow = ({ p, restartPending, onEnable, onDisable, onUninstall, onUpgr
             {(p.android_capabilities || []).length > 0 && (<>
               <div className="label">android</div>
               <div className="mono">{p.android_capabilities.join(', ')}</div>
+            </>)}
+            {(p.containers || []).length > 0 && (<>
+              <div className="label">containers</div>
+              <div className="mono">
+                {p.containers.map((c) => `${c.name} (${c.pinned ? 'pinned by digest' : 'tag only'})`).join(', ')}
+                {' · watched by the container guard'}
+              </div>
             </>)}
           </div>
           {(perms.warnings || []).length > 0 && (

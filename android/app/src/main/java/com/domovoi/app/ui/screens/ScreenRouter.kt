@@ -11,6 +11,7 @@ import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
 import com.domovoi.app.ui.screens.chat.ChatScreen
+import com.domovoi.app.ui.screens.containers.ContainersScreen
 import com.domovoi.app.ui.screens.files.FilesScreen
 import com.domovoi.app.ui.screens.home.HomeScreen
 import com.domovoi.app.ui.screens.manual.ManualScreen
@@ -59,5 +60,6 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Files -> FilesScreen()
         Route.Settings -> SettingsScreen(navigate)
         Route.Manual -> ManualScreen()
+        Route.Containers -> ContainersScreen()
     }
 }

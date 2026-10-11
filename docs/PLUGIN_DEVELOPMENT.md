@@ -370,7 +370,7 @@ runs in `domovoi plugin dev`, `pack`, and the install pipeline.
 | `publisher` | Shown on the install preview. Bundled radio declares `"Coders Farm"`. |
 | `license` | SPDX-style string. |
 | `description` | One or two sentences — shown on the install preview. |
-| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.4.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
+| `domovoi_api` | A comma-separated specifier set evaluated against the core SDK version (currently `1.5.0`). Supported operators: `>=`, `<=`, `==`, `!=`, `>`, `<`, `~=`. An unsatisfiable range fails the parse with a "targets a different Domovoi release" message. Recommended: `">=1.0,<2.0"`. |
 | `homepage` | Optional URL. |
 
 ### `[entry_points]`
@@ -683,6 +683,39 @@ verify. Nothing changes for you as a plugin author: the core signs the
 manifest it already built. It does mean a payload only ever reaches a
 device from the core that prepared it.
 
+### `[[containers]]` — the Docker containers the plugin runs (SDK 1.5)
+
+One table per container your plugin creates, so the core's **container
+guard** (docs/CONTAINER_GUARD.md) can watch it: a container that goes
+missing, stops or crash-loops alerts the dashboard and paired phones, and
+one that runs a different image or with privileged/host settings is
+treated as tampering (it freezes plugin installs, satellite upgrades and
+updates until an admin clears it). The install trust screen lists them.
+
+```toml
+[[containers]]
+id = "server"                       # stable id; ctx.add_container uses it
+name = "domovoi-jellyfin"           # the container name you create
+image = "jellyfin/jellyfin:latest"  # or "repo:tag@sha256:<64 hex>"
+required = true                     # a failure is red; false: amber
+label = "the Jellyfin server"       # plain words for the banner
+# allow = ["host_network"]          # rare; see below
+```
+
+| Key | Rules |
+|---|---|
+| `id` | `^[a-z][a-z0-9_]{0,31}$`, unique in the plugin. |
+| `name` | A Docker container name, unique in the plugin; never one of the core's own (`domovoi-postgres`, `domovoi-flyway`, `domovoi-flyway-test`, `domovoi-searxng`, `domovoi-letta`, anything starting `domovoi-mpd-`), and never one another enabled plugin declares (contract check 8). |
+| `image` | An image reference. **Pin by digest** (`@sha256:` + 64 hex) and the guard checks the container runs exactly that image. A **tag only** gets a weaker check: the container must have been created from that repository and tag; a different image retagged under the same name isn't detected. Either way, another image of the same repository pulled from a registry is reported as **outdated** (a failure: recreate it), another repository as tampering. While the plugin is disabled (or failed to load) a running container is checked against the repository only, any tag. |
+| `required` | Default `true`. |
+| `label` | Up to 80 characters; default `the <plugin name> container`. |
+| `allow` | Security settings this container may run with: `privileged`, `host_network`, `host_pid`, `docker_socket`, `root_mount`. Each is otherwise tampering. Declaring any needs a `permissions.warnings` entry saying why. |
+
+A plugin that needs Docker (a `docker` system requirement) and declares no
+containers still installs and runs; it simply isn't watched, and its card
+on the Plugins page says "containers not watched". A core older than SDK
+1.5 ignores the table.
+
 ### `[android]`
 
 `capabilities = ["stations"]` — free-form strings the Android app gates
@@ -720,12 +753,15 @@ from domovoi.sdk import (
 
 `PluginSDK` instances are **injected** — your `register(ctx)` receives a
 `PluginContext` whose `ctx.sdk` is your facade. You never construct one.
-`domovoi.sdk.API_VERSION` (currently `"1.4.0"` — 1.3 added
+`domovoi.sdk.API_VERSION` (currently `"1.5.0"` — 1.3 added
 `device_endpoint`; 1.4 added `egress`, the internet-access gate, and
 `connectivity.policy` / `.reason` / `.internet_allowed`, and made
-`sdk.http` refuse non-local requests when the answer is `never`) is the
-semver your `domovoi_api` range is checked against. Ask for `">=1.4"` if you
-use the 1.4 names.
+`sdk.http` refuse non-local requests when the answer is `never`; 1.5 added
+the `[[containers]]` table and `ctx.add_container` /
+`ContainerExpectation`, §4.18) is the semver your `domovoi_api` range is
+checked against. Ask for `">=1.4"` if you use the 1.4 names; for 1.5's,
+either ask for `">=1.5"` or call `ctx.add_container` only
+`if hasattr(ctx, "add_container")` so an older core still loads you.
 
 ### 4.1 `register(ctx)` — the PluginContext
 
@@ -744,6 +780,7 @@ what makes disable/uninstall a clean teardown:
 | `ctx.on_disable(cb)` | Async teardown callback, the first plugin code run on disable/uninstall (by then the plugin's routes already answer 404). |
 | `ctx.add_canned_sounds(sounds)` | Shortcut for `sdk.assets.add_canned_sounds`. |
 | `ctx.add_context_provider(key, fn)` | Contribute a key to the per-turn Context extras (keys are exclusive across plugins). |
+| `ctx.add_container(id, resolve=None)` | SDK 1.5: tell the container guard how to see one of your `[[containers]]` right now (§4.18). |
 
 `register` may be sync or async. Do **not** import heavy libraries at module
 import time — there's a 10-second import budget, and initializing CUDA during
@@ -1385,6 +1422,59 @@ announcement interrupts the household; reserve it for things a person
 asked for or needs to know now.
 
 ---
+
+### 4.18 Containers — `ctx.add_container` (SDK 1.5)
+
+```python
+from domovoi.sdk import ContainerExpectation
+
+async def _server_container():
+    cfg = sdk.config
+    if not cfg.manage_server:
+        return ContainerExpectation.unmanaged("the household runs its own")
+    row = await server.read_row(sdk)          # what reconcile last CREATED
+    return ContainerExpectation(
+        name=row["container_name"],
+        image=row["image_tag"],
+        state="stopped" if row["desired_state"] == "stopped" else "running",
+        busy=server.reconciling(),            # recreating it right now
+        pulling=cfg.image_tag,                # the image it is moving to
+    )
+
+if hasattr(ctx, "add_container"):             # an older core: not watched
+    ctx.add_container("server", _server_container)
+```
+
+The guard calls `resolve` (sync or async) once per check, about every 30
+seconds, with a 5-second budget: read settings and your own state row,
+never call Docker. It returns a `ContainerExpectation`:
+
+| Field | Meaning |
+|---|---|
+| `name`, `image` | What you **last created** the container with (None: the manifest's values). Not a setting the household just changed: until your watchdog recreates the container it still runs the old image, and the guard would read the difference as a swapped image. |
+| `state` | `"running"` (must exist and run — every failure rule applies), `"stopped"` (you stopped it on purpose; it may be stopped or gone, and if it runs it must run your image), or `"unmanaged"` (`ContainerExpectation.unmanaged()`: you don't manage it right now; not watched at all). |
+| `busy` | You are creating, pulling or recreating it this minute. The guard waits instead of reporting it missing or swapped — for 30 minutes, then it checks anyway, so a container you can never bring up still alerts. |
+| `pulling` | While `busy`: the image you are moving the container TO. Past the 30 minutes the guard keeps waiting while that image isn't on the host yet (a long pull), up to 6 hours in all. |
+| `reason` | Shown on the guard's status while busy or unmanaged. |
+
+No resolver: the manifest's name and image, expected to run whenever the
+plugin is enabled — fine for a container whose shape never changes.
+The guard also holds your containers on its own while the plugin is being
+installed, upgraded, enabled, disabled or uninstalled, and for 5 minutes
+after, and while an upgrade waits for a restart (the registry already has
+the new manifest while your old code still runs the old container). A
+`busy` past 30 minutes is still believed while the image you report in
+`pulling` (else `image`) isn't on the host yet — a long pull — up to 6
+hours in all. A resolver that raises holds them for
+30 minutes (and is logged); after that the container shows as "not
+watched · resolver failing" on the Containers page and only its
+repository and settings are checked, until the resolver answers again.
+
+A disabled plugin's containers are known but not expected (stopping a
+server on disable is your call; the bundled ones leave it running); one
+that runs must still run your declared repository. The
+three Coders Farm Docker plugins (Jellyfin, RomM, Kiwix, 1.1.0 and later)
+are worked examples: each has a `guard.py`.
 
 ## 5. Worked example — the bundled radio plugin
 

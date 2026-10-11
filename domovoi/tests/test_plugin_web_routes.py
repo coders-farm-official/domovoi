@@ -230,7 +230,7 @@ def test_reserved_routes_match_the_shell_and_the_web_host():
     shell_routes = set(re.findall(r"^\s*([a-z]+):\s*\(\)", block, re.M))
     assert shell_routes == set(CORE_WEB_ROUTES)
     assert set(plugin_host.CORE_ROUTES) == set(CORE_WEB_ROUTES)
-    assert set(plugin_host.CORE_NAV) | {"manual"} == set(CORE_WEB_ROUTES)
+    assert set(plugin_host.CORE_NAV) | {"manual", "containers"} == set(CORE_WEB_ROUTES)
     components = (STATIC / "components.jsx").read_text(encoding="utf-8")
     nav_block = re.search(r"const CORE_NAV_ITEMS = \[(.*?)\];", components, re.S).group(1)
     assert set(re.findall(r"route: '([a-z]+)'", nav_block)) <= set(CORE_WEB_ROUTES)

@@ -3889,7 +3889,7 @@
           "satellite-media"
         ],
         "summary": "Media Prepare",
-        "description": "Start (or attach to) a build. One live build per target.",
+        "description": "Start (or attach to) a build. One live build per target. 423 while\nthe container guard has an open tamper incident: the build writes the\ncode a new satellite will run as root (docs/CONTAINER_GUARD.md).",
         "operationId": "media_prepare_api_satellites_media_prepare_post",
         "requestBody": {
           "content": {
@@ -4112,7 +4112,7 @@
           "satellite-media"
         ],
         "summary": "Media Cache Refresh",
-        "description": "Synchronous-ish cache refresh (wheels are the slow part; the call\ncan take minutes on a cold cache \u2014 the card shows a spinner).\n\n409 under ``INTERNET_ACCESS=never``: every bucket downloads. Preparing\na card (``/prepare``) stays allowed and uses what is cached.",
+        "description": "Synchronous-ish cache refresh (wheels are the slow part; the call\ncan take minutes on a cold cache \u2014 the card shows a spinner).\n\n409 under ``INTERNET_ACCESS=never``: every bucket downloads. Preparing\na card (``/prepare``) stays allowed and uses what is cached. 423 while\nthe container guard's freeze is on (it fills what a build copies).",
         "operationId": "media_cache_refresh_api_satellites_media_cache_refresh_post",
         "responses": {
           "200": {
@@ -4123,6 +4123,193 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Media Cache Refresh Api Satellites Media Cache Refresh Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/containers/summary": {
+      "get": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Summary",
+        "description": "OPEN. ``{attention, tone, text}`` \u2014 for a browser with no household\ncredential: \"Something needs an admin's attention\", in red or amber,\nand nothing more.",
+        "operationId": "containers_summary_api_containers_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Containers Summary Api Containers Summary Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/containers/incidents": {
+      "get": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Incidents",
+        "description": "Household READ. ``{incidents, banner, frozen, attention}``: every\nopen incident and those resolved in the last 24 hours, newest first,\nin plain words; an admin caller also gets ``expected`` / ``found``.",
+        "operationId": "containers_incidents_api_containers_incidents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Containers Incidents Api Containers Incidents Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/containers/status": {
+      "get": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Status",
+        "description": "Admin READ: the core guard's last check, proxied.",
+        "operationId": "containers_status_api_containers_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/containers/check": {
+      "post": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Check",
+        "description": "Run a check now (admin).",
+        "operationId": "containers_check_api_containers_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/containers/incidents/{incident_id}/acknowledge": {
+      "post": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Acknowledge",
+        "description": "Acknowledge an open failure (admin): the banner hides it until\nsomething new happens.",
+        "operationId": "containers_acknowledge_api_containers_incidents__incident_id__acknowledge_post",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Incident Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/containers/incidents/{incident_id}/clear": {
+      "post": {
+        "tags": [
+          "containers"
+        ],
+        "summary": "Containers Clear",
+        "description": "Clear a tamper incident after review (admin), with an optional note.\nThe freeze lifts when no tamper incident is open.",
+        "operationId": "containers_clear_api_containers_incidents__incident_id__clear_post",
+        "parameters": [
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Incident Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ClearBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -12627,6 +12814,24 @@
         ],
         "title": "CastTracksRequest",
         "description": "Cast an arbitrary ordered queue of library tracks into a room.\n\nThe browser music player owns the queue order (it's whatever the user\nbuilt locally), so unlike ``PlayPlaylistRequest`` this ships the exact\n``track_id`` list rather than a playlist id. Proxied to the\nDomovoi server's ``/v1/admin/music/play-tracks``.\n\nThe room starts on the first id: a client sends its CURRENT track first\n(not the top of its queue), with ``start_sec`` = how far into it the\nlistener is, so the hand-off carries on where the listener was.\n``start_paused``: the listener had it paused, so the room waits there,\npaused, until someone presses play."
+      },
+      "ClearBody": {
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "title": "ClearBody"
       },
       "ClipMetrics": {
         "properties": {

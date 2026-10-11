@@ -403,7 +403,8 @@ def test_unanswered_net_safety_is_unchanged(monkeypatch) -> None:
 def test_sdk_and_webkit_reexport_egress() -> None:
     from domovoi import sdk, webkit
 
-    assert sdk.API_VERSION == "1.4.0"
+    # 1.4 brought egress; later minors keep it.
+    assert tuple(int(p) for p in sdk.API_VERSION.split(".")) >= (1, 4, 0)
     assert sdk.egress is egress
     assert webkit.egress is egress
     assert "egress" in sdk.__all__ and "egress" in webkit.__all__

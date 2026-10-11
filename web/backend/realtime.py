@@ -40,6 +40,9 @@ Channels emitted (core; enabled plugins add their own via manifest
   lands. Unmasked and whole, like ``timers``: this socket admits exactly
   the tier that reads the whole ledger over HTTP (rule F1,
   ``web.backend.api.satellites._READS_FIRE_LEDGER``)
+* ``containers`` — the container guard's open and recent incidents in
+  plain words, the banner every page shows and whether the freeze is on
+  (V024, docs/CONTAINER_GUARD.md); fires on every incident write
 * ``lyrics`` — a digest of the lyrics tables (V021): counts, the newest
   ``updated_at`` and the lyrics workers' states. Never a title or a lyric:
   the words are household-tier HTTP reads (web/backend/api/lyrics.py); this
@@ -176,6 +179,13 @@ NOTIFY_CHANNEL_TO_REALTIME: dict[str, str] = {
     # the resulting `timer_fires.changed` event; Android's live
     # notifications too.
     "timer_fires_changed": "timer_fires",
+    # The container guard (V024, docs/CONTAINER_GUARD.md). The core fires
+    # `container_incidents_changed` when an incident opens, changes,
+    # resolves, is acknowledged or cleared. Every page's banner, Home's
+    # problems row and Android's notifications ride the resulting
+    # `containers.changed` event (the household view: plain words, no
+    # image references — an admin reads those over HTTP).
+    "container_incidents_changed": "containers",
 }
 
 # Plugin NOTIFY → realtime channel entries, replaced wholesale on every
@@ -892,6 +902,13 @@ async def _snapshot_timers() -> list[dict[str, Any]]:
         ]
 
 
+async def _snapshot_containers() -> dict[str, Any]:
+    """The container guard's household view (``containers.changed``)."""
+    from web.backend.api.containers import snapshot
+
+    return await snapshot()
+
+
 # The fires `timer_fires.changed` carries: the last hour, newest first.
 TIMER_FIRES_PUSH_WINDOW_SEC = 3600
 TIMER_FIRES_PUSH_MAX = 20
@@ -951,6 +968,9 @@ StatePollLoop._CHANNEL_HELPERS = {
     "satellites.pending": satellite_adoption.snapshot_pending,
     # Satellite media-prep build jobs (progress bar on the prepare card).
     "satellites.media": _snapshot_media_jobs,
+    # The container guard's open and recent incidents, the banner and the
+    # freeze state (web/backend/api/containers.py: the household view).
+    "containers": _snapshot_containers,
 }
 
 # The core realtime channels, frozen BEFORE any plugin mutates the helper

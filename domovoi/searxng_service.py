@@ -214,26 +214,34 @@ async def reconcile(answer: str | None = None) -> SearxngAction:
         if not managed():
             result = SearxngAction("skipped", True, f"{MANAGE_ENV} opts out")
         else:
+            from domovoi.container_guard import holds
+
             async with _lock():
                 policy = egress.policy() if answer is None else egress.normalize_policy(answer)
-                try:
-                    if policy in ("always", "sometimes"):
-                        _IN_PROGRESS = "start"
-                        result = await _start()
-                        # The answer became never while the image was
-                        # downloading: don't leave the helper running.
-                        if result.ok and answer is None and egress.policy() == "never":
+                # The container guard waits while this starts (a first start
+                # pulls the image) or stops it, and two minutes after.
+                with holds.holding(
+                    "core:searxng", "the web search helper is being started or stopped",
+                    settle_sec=120.0,
+                ):
+                    try:
+                        if policy in ("always", "sometimes"):
+                            _IN_PROGRESS = "start"
+                            result = await _start()
+                            # The answer became never while the image was
+                            # downloading: don't leave the helper running.
+                            if result.ok and answer is None and egress.policy() == "never":
+                                _IN_PROGRESS = "stop"
+                                result = await _stop()
+                        elif policy == "never":
                             _IN_PROGRESS = "stop"
                             result = await _stop()
-                    elif policy == "never":
-                        _IN_PROGRESS = "stop"
-                        result = await _stop()
-                    else:
-                        result = SearxngAction(
-                            "none", True, "internet access is not answered; left as it is"
-                        )
-                finally:
-                    _IN_PROGRESS = ""
+                        else:
+                            result = SearxngAction(
+                                "none", True, "internet access is not answered; left as it is"
+                            )
+                    finally:
+                        _IN_PROGRESS = ""
     except Exception as e:  # noqa: BLE001 — best effort, never raises
         result = SearxngAction("none", False, f"{type(e).__name__}: {e}")
     _record(result)

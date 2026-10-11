@@ -47,7 +47,7 @@ class RoutesTest {
             CompactRoutes,
         )
         val reachable = (CompactRoutes + EverythingRoutes).toSet()
-        assertEquals(Route.entries.toSet(), reachable)
+        assertEquals(Route.entries.toSet() - LauncherlessRoutes, reachable)
         assertEquals(CompactRoutes.size + EverythingRoutes.size, reachable.size) // no duplicates
         // Settings and the manual have no tab, so the grid must carry them.
         assertTrue(EverythingRoutes.contains(Route.Settings))
@@ -59,6 +59,18 @@ class RoutesTest {
         assertFalse(WorkspaceRoutes.contains(Route.Manual))
         assertEquals(Route.Chat, WorkspaceRoutes.first())
         assertEquals(Route.Files, WorkspaceRoutes.last())
+    }
+
+    @Test fun theContainersScreenIsOnNoLauncher() {
+        // Reached from the banner and from an incident's notification only,
+        // like the web's #containers, which is not in the nav.
+        assertEquals(setOf(Route.Containers), LauncherlessRoutes)
+        assertFalse(Route.Containers in CompactRoutes)
+        assertFalse(Route.Containers in EverythingRoutes)
+        assertFalse(Route.Containers in WorkspaceRoutes)
+        // Never gated: the banner's "details" must always land somewhere.
+        assertNull(Route.Containers.requiredCapability())
+        assertTrue(Route.Containers.visibleOn(Capabilities.EMPTY, shared = true))
     }
 
     @Test fun sharedScreenLeavesPersonalScreensOffEveryLauncher() {

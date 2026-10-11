@@ -335,9 +335,15 @@ const HomeHooks = (() => {
  * just repeat it, so they wait. Home never fixes anything itself — each
  * row links to the page that does. */
 const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
-                             approvals, pending, version, hardware, config }) => {
+                             approvals, pending, version, hardware, config, guard }) => {
   const rows = [];
   const add = (r) => rows.push(r);
+  // The container guard (docs/CONTAINER_GUARD.md): the same open
+  // incidents the banner on every page shows, as one row. Words follow
+  // the reader's tier: a browser with no household credential gets only
+  // "something needs an admin's attention".
+  const guardRow = HomeGuardRow(guard);
+  if (guardRow) add(guardRow);
   if (viewer.unclaimed) {
     add({ key: 'claim', tone: 'err', scope: 'setup', claim: true,
           text: "this box isn't claimed yet · anyone on the network can change settings" });
@@ -483,6 +489,26 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
   return rows
     .map((r, i) => ({ ...r, i }))
     .sort((a, b) => (rank[a.tone] - rank[b.tone]) || (a.i - b.i));
+};
+
+/* The container guard's row: none, or one row linking to #containers. */
+const HomeGuardRow = (guard) => {
+  const b = (typeof containerGuardBanner === 'function') ? containerGuardBanner(guard) : null;
+  if (!b || !b.show) return null;
+  const tone = b.tone === 'warn' ? 'warn' : 'err';
+  let text = "something needs an admin's attention";
+  if (guard.tier === 'household') {
+    if (b.tone === 'tamper') {
+      text = 'signs of tampering in a Domovoi container · risky changes are paused';
+    } else if (b.ids.length > 1) {
+      text = `${b.ids.length} Domovoi containers need attention`;
+    } else {
+      const only = (guard.data.incidents || []).find((i) => i.id === b.ids[0]);
+      const summary = String((only && only.summary) || 'a Domovoi container needs attention').replace(/\.$/, '');
+      text = summary.charAt(0).toLowerCase() + summary.slice(1);
+    }
+  }
+  return { key: 'containers', tone, scope: 'open', href: '#containers', text };
 };
 
 /* Who sees which of those rows (HOME_PROBLEMS_VISIBILITY, admin-set):
@@ -1245,6 +1271,10 @@ const HomePage = ({ counts, badges }) => {
     return pe.subscribe(bumpPluginErrors);
   }, []);
 
+  // The container guard's open incidents (components.jsx: one shared read
+  // for the whole page, the banner's too).
+  const guard = useContainerGuard();
+
   // ── derived ──
   const coreDown = !!(health.data && health.data.domovoi_reachable === false);
   const dbDown = !!(health.data && health.data.db_reachable === false);
@@ -1306,6 +1336,7 @@ const HomePage = ({ counts, badges }) => {
     pluginErrors: (window.DomovoiPluginErrors && window.DomovoiPluginErrors._bySlug) || {},
     acq: acq.data, approvals: approvals.data, pending: pending.data,
     version: version.data, hardware: hardware.data, config: cfg.data,
+    guard,
   });
   const visibility = (cfg.data && cfg.data.home_problems_visibility) || 'everyone';
   // A household member's rows wait for the setting that decides them, so

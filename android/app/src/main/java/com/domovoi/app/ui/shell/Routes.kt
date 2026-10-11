@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Newspaper
 import androidx.compose.material.icons.filled.Podcasts
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.domovoi.app.net.CAP_IMAGEGEN
@@ -49,6 +50,11 @@ enum class Route(val label: String, val icon: ImageVector) {
     Files("Files", Icons.Filled.Folder),
     Settings("Settings", Icons.Filled.Settings),
     Manual("Manual", Icons.Filled.HelpOutline),
+
+    /** The container guard's details (the web's #containers): reached from
+     *  the banner the shell shows while an incident is open and from an
+     *  incident's notification, never from a launcher ([LauncherlessRoutes]). */
+    Containers("Containers", Icons.Filled.Shield),
 }
 
 /** Where the app opens, and where it lands when a route stops existing. */
@@ -82,6 +88,11 @@ val SharedScreenHidden: Set<Route> = setOf(Route.People, Route.Chat, Route.Files
  *  allows it and, on a shared screen, it is not somebody's own page. */
 fun Route.visibleOn(caps: Capabilities, shared: Boolean): Boolean =
     visibleWith(caps) && !(shared && this in SharedScreenHidden)
+
+/** Routes no launcher offers (not the bottom bar, the rail, the drawer or
+ *  Home's grid): the Containers screen, which the banner and a container
+ *  incident's notification open, as the web's banner opens #containers. */
+val LauncherlessRoutes: Set<Route> = setOf(Route.Containers)
 
 /** Everything shown in the web sidebar "workspace" section, in order.
  *  Home is not in it: in the drawer, as on the web desktop, the brand row
