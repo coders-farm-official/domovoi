@@ -1442,7 +1442,9 @@ case_update_defaults_opt_into_the_lock() {
   # warning; the file it points to is not written through it.
   mkdir -p "$CASE/managed"
   printf 'DOMOVOI_UPDATE_KEEP_BACKUPS=3\n' >"$CASE/managed/domovoi-update"
-  rm -f "$f"; ln -s "$CASE/managed/domovoi-update" "$f" 2>/dev/null || true
+  # winsymlinks:sys: Git Bash's own symlink kind (a plain ln -s copies the
+  # file there); ignored on Linux.
+  rm -f "$f"; MSYS=winsymlinks:sys ln -s "$CASE/managed/domovoi-update" "$f" 2>/dev/null || true
   if [ ! -L "$f" ]; then
     echo "    (no symlinks on this file system: the symlink part is not run)"
     end_case
