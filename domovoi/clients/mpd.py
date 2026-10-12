@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from domovoi import egress, lan_address
 from domovoi.config import settings
+from domovoi.models import is_phone_room
 
 log = logging.getLogger(__name__)
 
@@ -1024,6 +1025,12 @@ def _resolve_room(room_id: str | None) -> str | None:
     """
     if room_id and room_id in _room_ports:
         return room_id
+    if is_phone_room(room_id):
+        # A phone's turn (the chat mic) is not a room's: falling back to
+        # the first room would replace that room's queue and play it
+        # there, from someone holding a phone somewhere else. A phone
+        # plays on itself (Response.device_actions).
+        return None
     if not _room_ports:
         return None
     return next(iter(_room_ports.keys()))
@@ -1073,6 +1080,9 @@ def get_mpd_client_for(room_id: str | None) -> MPDClient:
         cached = _clients.get(key)
         if cached is not None:
             return cached
+        if is_phone_room(room_id):
+            # As in production (_resolve_room): a phone has no player here.
+            raise MPDNotProvisioned(f"{room_id} is a phone, not a room with a music player")
         client: MPDClient = MPDStubClient()
         _clients[key] = client
         return client

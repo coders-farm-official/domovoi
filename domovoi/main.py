@@ -21,7 +21,17 @@ bootstrap.register_nvidia_dlls()
 
 from pathlib import Path  # noqa: E402
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket  # noqa: E402
+from fastapi import (  # noqa: E402
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+)
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from fastapi.responses import Response as FastAPIResponse  # noqa: E402
@@ -864,6 +874,40 @@ async def post_intent(intent: Intent):
     return FastAPIResponse(
         content=audio_bytes, media_type="audio/wav", headers=headers
     )
+
+
+@app.post(
+    "/v1/phone/voice",
+    # Device tier without the pre-setup grace — the drop-in socket's gate
+    # (check_live_mic_websocket) for a request: the household token or an
+    # admin Bearer, 501 before an admin exists. A recording of someone in
+    # the house, answered as any room would be.
+    dependencies=[Depends(admin_auth_mod.require_device_after_setup)],
+)
+async def phone_voice_turn(
+    audio: UploadFile = File(..., description="16 kHz mono PCM16, raw or as a WAV file"),
+    phone_id: str = Form(..., max_length=64),
+    thread_id: int = Form(...),
+    player: str | None = Form(None, max_length=2048),
+) -> Any:
+    """One push-to-talk turn from the app's chat mic: speech-to-text, voice
+    identification, the router satellites use, text-to-speech, and both
+    turns written into chat thread ``thread_id``. Never registers a
+    satellite session. See ``domovoi/phone_voice.py`` for the request and
+    the answer."""
+    from domovoi import phone_voice
+
+    data = await audio.read(phone_voice.MAX_CLIP_BYTES + 4096)
+    try:
+        return await phone_voice.run_phone_turn(
+            app,
+            phone_id=phone_id,
+            thread_id=thread_id,
+            audio=data,
+            player=phone_voice.parse_player(player),
+        )
+    except phone_voice.PhoneTurnRefused as e:
+        return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
 
 
 # Said once per process: an unbound challenge means a satellite still on

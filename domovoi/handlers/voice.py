@@ -35,7 +35,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi import egress
 from domovoi.db.repositories import VoicesRepository
-from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.base import (
+    FastPath,
+    Handler,
+    HandlerDisplay,
+    satellite_setting_refusal,
+)
 from domovoi.models import Context, Intent, Response
 
 log = logging.getLogger(__name__)
@@ -237,6 +242,11 @@ class VoiceHandler(Handler):
         )
 
     async def _switch_response(self, name: str, ctx: Context, session: AsyncSession) -> Response:
+        if ctx.from_phone:
+            # The voice a satellite speaks in is kept on that satellite
+            # (pi_action set_voice); a phone has none to switch. Listing,
+            # "what voice" and a sample still work from a phone.
+            return satellite_setting_refusal(self.name, ctx)
         voice = await self._lookup(name, session)
         if voice is None:
             return await self._unknown_voice(name, ctx, session)

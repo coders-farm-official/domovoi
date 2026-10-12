@@ -1297,6 +1297,90 @@ async def resolve_voice(voice_name: str | None) -> tuple[str | None, str | None]
     return (v["engine"], v["model_ref"])
 
 
+async def run_voice_profile_hooks(
+    s: Any,
+    *,
+    response: Any,
+    ctx: Context,
+    ident: Any,
+    person_id: int | None,
+    transcript: str,
+    audio_seconds: float,
+) -> None:
+    """The voice-profile hooks that run in the transaction that records
+    a turn: after route() for a whole reply, after the answer has been
+    said for a streamed one (the conversation_log row they may rewrite
+    exists only then). Shared by a satellite's turn
+    (``StreamSession._voice_profile_hooks``) and a phone's
+    (domovoi/phone_voice.py)."""
+    # Third-party intro hybrid hook. Two mutually-exclusive
+    # paths run in the same transaction as routing so the
+    # post-state is consistent:
+    #   * unknown voice + active expectation → buffer this
+    #     turn into the expectation's candidate clusters.
+    #   * introducer voice + buffered clusters → maybe
+    #     append "By the way, was that <name>?" to the
+    #     response and park pending_confirmation.
+    # The hooks no-op cleanly when no expectation is parked.
+    from domovoi.handlers.voice_profile import (
+        buffer_unknown_voice_turn,
+        maybe_inject_third_party_ask,
+    )
+    ctx_with_session = ctx.model_copy(
+        update={"session_id": response.session_id}
+    )
+    if (
+        person_id is None
+        and ident is not None
+        and ident.embedding is not None
+        # Respect the opt-out: a denylisted ("never save my voice")
+        # speaker must not be buffered into a third-party enrollment
+        # cluster, or someone else's introduction could re-enroll
+        # them without consent.
+        and not ident.denylisted
+        # A voice too close to two known people to name is still
+        # someone known, not the newcomer being introduced.
+        and not ident.ambiguous
+    ):
+        await buffer_unknown_voice_turn(
+            s,
+            session_id=response.session_id,
+            transcript=transcript,
+            embedding=ident.embedding,
+            audio_seconds=audio_seconds,
+        )
+    elif person_id is not None:
+        injected = await maybe_inject_third_party_ask(
+            s,
+            ctx=ctx_with_session,
+            response=response,
+        )
+        if injected:
+            # The conversation_log row for this turn was
+            # written by route() with the *pre-injection*
+            # text. Update it so the audit trail matches
+            # what the user actually hears. Targets the
+            # most recent row for this session — safe
+            # because we're inside the same transaction
+            # and no concurrent turn can interleave.
+            from sqlalchemy import text as sql_text
+            await s.execute(
+                sql_text(
+                    """
+                    UPDATE conversation_log
+                    SET assistant_text = :t
+                    WHERE id = (
+                        SELECT id FROM conversation_log
+                        WHERE session_id = :sid
+                        ORDER BY id DESC
+                        LIMIT 1
+                    )
+                    """
+                ),
+                {"t": response.text, "sid": str(response.session_id)},
+            )
+
+
 class _InterimSpeech:
     """A short line spoken as the opening of a turn's reply while the rest
     of the turn is still being worked out — the router's "Just a moment,
@@ -4135,76 +4219,11 @@ class StreamSession:
         transcript: str,
         audio_seconds: float,
     ) -> None:
-        """The voice-profile hooks that run in the transaction that records
-        a turn: after route() for a whole reply, after the answer has been
-        said for a streamed one (the conversation_log row they may rewrite
-        exists only then)."""
-        # Third-party intro hybrid hook. Two mutually-exclusive
-        # paths run in the same transaction as routing so the
-        # post-state is consistent:
-        #   * unknown voice + active expectation → buffer this
-        #     turn into the expectation's candidate clusters.
-        #   * introducer voice + buffered clusters → maybe
-        #     append "By the way, was that <name>?" to the
-        #     response and park pending_confirmation.
-        # The hooks no-op cleanly when no expectation is parked.
-        from domovoi.handlers.voice_profile import (
-            buffer_unknown_voice_turn,
-            maybe_inject_third_party_ask,
+        """:func:`run_voice_profile_hooks`, for this room's turn."""
+        await run_voice_profile_hooks(
+            s, response=response, ctx=ctx, ident=ident, person_id=person_id,
+            transcript=transcript, audio_seconds=audio_seconds,
         )
-        ctx_with_session = ctx.model_copy(
-            update={"session_id": response.session_id}
-        )
-        if (
-            person_id is None
-            and ident is not None
-            and ident.embedding is not None
-            # Respect the opt-out: a denylisted ("never save my voice")
-            # speaker must not be buffered into a third-party enrollment
-            # cluster, or someone else's introduction could re-enroll
-            # them without consent.
-            and not ident.denylisted
-            # A voice too close to two known people to name is still
-            # someone known, not the newcomer being introduced.
-            and not ident.ambiguous
-        ):
-            await buffer_unknown_voice_turn(
-                s,
-                session_id=response.session_id,
-                transcript=transcript,
-                embedding=ident.embedding,
-                audio_seconds=audio_seconds,
-            )
-        elif person_id is not None:
-            injected = await maybe_inject_third_party_ask(
-                s,
-                ctx=ctx_with_session,
-                response=response,
-            )
-            if injected:
-                # The conversation_log row for this turn was
-                # written by route() with the *pre-injection*
-                # text. Update it so the audit trail matches
-                # what the user actually hears. Targets the
-                # most recent row for this session — safe
-                # because we're inside the same transaction
-                # and no concurrent turn can interleave.
-                from sqlalchemy import text as sql_text
-                await s.execute(
-                    sql_text(
-                        """
-                        UPDATE conversation_log
-                        SET assistant_text = :t
-                        WHERE id = (
-                            SELECT id FROM conversation_log
-                            WHERE session_id = :sid
-                            ORDER BY id DESC
-                            LIMIT 1
-                        )
-                        """
-                    ),
-                    {"t": response.text, "sid": str(response.session_id)},
-                )
 
     async def _speak_response(
         self,

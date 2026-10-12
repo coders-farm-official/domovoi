@@ -234,6 +234,20 @@ opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
 security tier. Nothing needed to finish setting a box up listens to a
 room (CORE-14).
 
+**The chat mic.** A push-to-talk turn from the app's chat screen
+(`POST /v1/phone/voice`, reached through the dashboard's
+`POST /api/chat/threads/{id}/voice` on the server the phone is paired
+with) carries a recording of someone in the house and is answered as any
+room's turn, so it takes the same rule as the drop-in socket: the
+household token or an admin Bearer, and **no pre-setup grace** (`501`
+before an admin exists). The recording is kept only in memory for the
+turn — transcribed, matched against the household's voice profiles, then
+dropped; the transcript and the reply are written into the chat thread
+(with who voice identification heard), and the turn is logged like a
+room's under `phone-<device id>`. A confident match on a phone may save
+one voice sample for that phone, as a room's does after a run of
+confident matches (the rules are in `domovoi/voice_identifier.py`).
+
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
 microphone as soon as a call is placed, `confirm` asks first when the call

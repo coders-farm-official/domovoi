@@ -46,6 +46,15 @@ anything anybody said. Mutations fire
 ``chat_changed`` NOTIFY → the ``chat.changed`` WS event so a second open
 dashboard's thread list stays fresh.
 
+Voice turns (V025): the app's chat mic sends a recording to
+``POST /threads/{id}/voice``, which this process hands to the core's
+``POST /v1/phone/voice`` (domovoi/phone_voice.py) with the caller's
+credentials — the core answers it like a satellite turn and writes both
+rows itself, ``source = 'voice'``, the user row carrying who voice
+identification heard (``speaker_person_id`` / ``speaker_confidence``).
+Every row read out says its ``source``; a voice row adds the speaker's
+name and whether the match was clear (``speaker_confident``).
+
 Message details (V017): an assistant row keeps ``stats`` — Ollama's token
 counts and durations for the reply, the server's own first-token and wall
 times, how much of the thread was sent as context and which model setting
@@ -71,16 +80,18 @@ from typing import Any, AsyncIterator, Optional
 
 import anyio
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
+from domovoi.voice_identifier import speaker_is_confident
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
+from web.backend.domovoi_client import auth_forward_headers, domovoi_url
 
 log = logging.getLogger(__name__)
 
@@ -235,7 +246,10 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
 
 
 # ─── Messages ───────────────────────────────────────────────────────────────
-_MSG_COLUMNS = "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id"
+_MSG_COLUMNS = (
+    "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id, "
+    "m.source, m.speaker_person_id, m.speaker_confidence"
+)
 
 
 def _msg_dict(r: Any) -> dict[str, Any]:
@@ -243,6 +257,13 @@ def _msg_dict(r: Any) -> dict[str, Any]:
     d["created_at"] = d["created_at"].isoformat()
     if isinstance(d.get("stats"), str):
         d["stats"] = json.loads(d["stats"])
+    if d.get("speaker_confidence") is not None:
+        d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
+    # The same judgement the core made when the turn came in
+    # (domovoi/phone_voice.py), so a message reads back drawn as it arrived.
+    d["speaker_confident"] = d.get("speaker_person_id") is not None and speaker_is_confident(
+        d.get("speaker_confidence")
+    )
     stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
     if d.get("role") == "assistant" and d.get("error") and not stats.get("error_code"):
         # A row from before the plain answers kept the exception's own
@@ -431,9 +452,10 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
             await s.execute(
                 text(
                     """
-                    SELECT {cols}, d.name AS device_name
+                    SELECT {cols}, d.name AS device_name, p.name AS speaker_name
                       FROM chat_messages m
                       LEFT JOIN devices d ON d.device_id = m.device_id
+                      LEFT JOIN people p ON p.id = m.speaker_person_id
                      WHERE m.thread_id = :id ORDER BY m.id
                     """.format(cols=_MSG_COLUMNS)
                 ),
@@ -708,7 +730,7 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                         """
                         INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
                         VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB))
-                        RETURNING {cols}, NULL::text AS device_name
+                        RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                         """.format(cols=_MSG_COLUMNS)
                     ),
                     {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
@@ -730,6 +752,71 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ─── Voice turns (the app's chat mic) ───────────────────────────────────────
+# How long the hop to the core may take: speech-to-text, the router (a cold
+# language model is ~54 s on an all-CPU host) and text-to-speech.
+_VOICE_TIMEOUT_SEC = 180.0
+# The longest recording the core takes (phone_voice.MAX_CLIP_SEC at 16 kHz
+# PCM16), plus room for a WAV header; read no further than this.
+_VOICE_MAX_BYTES = 30 * 32000 + 4096
+
+
+def _core_client() -> httpx.AsyncClient:
+    """The client for the hop to the core (a seam: the tests hand the real
+    core app in its place)."""
+    return httpx.AsyncClient(timeout=_VOICE_TIMEOUT_SEC)
+
+
+@router.post("/threads/{thread_id}/voice", dependencies=DEVICE)
+async def send_voice(
+    thread_id: int,
+    request: Request,
+    audio: UploadFile = File(..., description="16 kHz mono PCM16, raw or as a WAV file"),
+    phone_id: str = Form(..., max_length=64),
+    player: Optional[str] = Form(None, max_length=2048),
+):
+    """One push-to-talk turn from the app's chat mic, answered in this
+    thread: forwarded with the caller's credentials to the core's
+    ``POST /v1/phone/voice`` (domovoi/phone_voice.py), which transcribes
+    it, identifies the speaker, routes it like a satellite turn, speaks
+    the reply and writes both rows. The core's answer (transcript, reply,
+    base64 WAV, speaker, device actions, the two rows) or refusal comes
+    back as it was given; 502 / 504 when the core can't be reached or took
+    too long."""
+    data = await audio.read(_VOICE_MAX_BYTES + 1)
+    if len(data) > _VOICE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
+    form = {"phone_id": phone_id, "thread_id": str(thread_id)}
+    if player:
+        form["player"] = player
+    files = {
+        "audio": (
+            audio.filename or "turn.pcm", data, audio.content_type or "application/octet-stream",
+        ),
+    }
+    url = f"{domovoi_url().rstrip('/')}/v1/phone/voice"
+    try:
+        async with _core_client() as client:
+            r = await client.post(url, data=form, files=files, headers=auth_forward_headers(request))
+    except httpx.TimeoutException:
+        log.warning("chat voice: the core took longer than %.0f s (thread %s)", _VOICE_TIMEOUT_SEC, thread_id)
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Domovoi took too long to answer. Try again.", "code": "core_timeout"},
+        )
+    except Exception as e:  # noqa: BLE001 — the core is down or restarting
+        log.warning("chat voice: the core is unreachable: %s: %s", type(e).__name__, e)
+        return JSONResponse(
+            status_code=502,
+            content={"detail": "Domovoi's voice service isn't answering.", "code": "core_unreachable"},
+        )
+    try:
+        payload = r.json()
+    except ValueError:
+        payload = {"detail": r.text[:500]}
+    return JSONResponse(status_code=r.status_code, content=payload)
 
 
 # ─── Uploads ────────────────────────────────────────────────────────────────
