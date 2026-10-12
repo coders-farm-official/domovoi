@@ -4,11 +4,50 @@ A complete sentence that introduces the bot and shares a random fun fact —
 long enough to actually judge how a voice sounds, and a little fun. Synthed
 live on demand in the selected voice (see the /v1/admin/voices/sample
 endpoint), so each click picks a fresh fact.
+
+Before a shipped voice is downloaded it can't speak live, so its button
+plays the voice's built-in clip instead (:func:`shipped_clip`): a few
+seconds of that voice, made by scripts/voice_clips/make_clips.py with the
+repo's own TTS and kept in ``domovoi/voice_clips/`` (the phone ships the
+same files). A button that has neither is not shown.
 """
 
 from __future__ import annotations
 
 import random
+from pathlib import Path
+
+# The built-in clips, <model_ref>.ogg (Ogg Opus), with their SHA256SUMS.
+CLIP_DIR = Path(__file__).resolve().parent / "voice_clips"
+CLIP_MEDIA_TYPE = "audio/ogg"
+
+
+def clip_line(voice_name: str) -> str:
+    """What a voice's built-in clip says."""
+    return f"Hi, I'm {voice_name}. This is how Domovoi sounds."
+
+
+def shipped_clip(model_ref: str) -> Path | None:
+    """The built-in clip of a shipped voice, or None (not a shipped voice,
+    or no clip for it)."""
+    from domovoi.clients.tts import PIPER_PINS
+
+    if model_ref not in PIPER_PINS:
+        return None
+    path = CLIP_DIR / f"{model_ref}.ogg"
+    return path if path.is_file() else None
+
+
+def piper_sample_source(model_ref: str) -> str | None:
+    """What a Piper voice's "play a sample" button can play: "voice" (it
+    speaks live: on disk, and on a phoneme set the converter writes),
+    "clip" (a shipped voice not downloaded yet: its built-in clip), or
+    None (nothing that is really that voice: no button)."""
+    from domovoi.clients.tts import piper_voice_on_disk, piper_voice_problem
+
+    if piper_voice_on_disk(model_ref):
+        return "voice" if piper_voice_problem(model_ref) is None else None
+    return "clip" if shipped_clip(model_ref) is not None else None
 
 # Clean, TTS-friendly one-liners (no symbols/abbreviations that read badly).
 FUN_FACTS: list[str] = [

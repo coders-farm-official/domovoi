@@ -127,7 +127,7 @@ def fake_piper(monkeypatch, tmp_path):
             return np.full(2205, 500, dtype=np.int16).tobytes()
 
     monkeypatch.setattr(tts_mod, "PiperVoice", PiperVoice)
-    monkeypatch.setattr(tts_mod, "_phonemize", lambda text: ["ˈəʊkˈeɪ."])
+    monkeypatch.setattr(tts_mod, "_phonemize", lambda text, dialect="en": ["ˈəʊkˈeɪ."])
     monkeypatch.setattr(tts_mod, "_piper_voice_cache", {})
     monkeypatch.setattr(tts_mod, "_piper_voice_path", lambda ref: tmp_path / f"{ref}.onnx")
     monkeypatch.setattr(speech_warmup, "_voice_tasks", {})

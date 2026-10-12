@@ -172,7 +172,7 @@ const GreetingsPanel = () => {
  * pings the server to re-render clips and push them to satellites.
  *
  * Data:
- *   GET    /api/voices            · the registry
+ *   GET    /api/voices            · the registry (each row's `sample` and `problem`)
  *   POST   /api/voices/edge       · register an Edge voice {name, voice_id, set_default}
  *   POST   /api/voices/piper      · upload a Piper model (multipart)
  *   PATCH  /api/voices/{id}       · rename / set default
@@ -183,6 +183,15 @@ const _voiceFieldStyle = {
   font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
   border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
 };
+
+// A play button plays the voice it names, or is not shown (owner,
+// 2026-10-12). The server says what each voice can play: "voice" (it
+// speaks live), "clip" (a shipped voice not downloaded yet: its built-in
+// Ogg Opus clip, which this browser must be able to play) or null.
+const VOICE_CLIP_PLAYABLE = (() => {
+  try { return !!new Audio().canPlayType('audio/ogg; codecs=opus'); } catch { return false; }
+})();
+const voiceSamplePlayable = (source) => source === 'voice' || (source === 'clip' && VOICE_CLIP_PLAYABLE);
 
 const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, internetOff = false }) => {
   const [editing, setEditing] = React.useState(false);
@@ -198,18 +207,30 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, inter
     setEditing(false);
   };
 
+  // A voice that can't speak here keeps no play button (the system voice
+  // would answer), and says why instead.
+  const playable = v.sample === undefined || voiceSamplePlayable(v.sample);
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
-                  borderBottom: '1px solid var(--border-soft)' }}>
-      <IconButton name={sampling ? 'loader' : 'play'}
-                  title={cloudOff ? NEEDS_INTERNET_TEXT : (sampling ? 'Synthesizing…' : 'Play a sample')}
-                  disabled={sampling || cloudOff} onClick={() => onPlay(v)}/>
+                  borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+      {playable
+        ? <IconButton name={sampling ? 'loader' : 'play'}
+                      title={cloudOff ? NEEDS_INTERNET_TEXT : (sampling ? 'Synthesizing…' : 'Play a sample')}
+                      disabled={sampling || cloudOff} onClick={() => onPlay(v)}/>
+        : <span style={{ width: 28, flex: 'none' }} aria-hidden="true"/>}
       {editing ? (
         <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
                onKeyDown={(e) => e.key === 'Enter' && save()}
                style={{ ..._voiceFieldStyle, flex: 1 }}/>
       ) : (
-        <div style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{v.name}</div>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
+          {v.problem && (
+            <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+              Can’t speak here: {v.problem}. Rooms set to it speak with the system voice.
+            </div>
+          )}
+        </div>
       )}
       <Pill tone={v.engine === 'piper' ? 'idle' : 'live'}>
         {v.engine === 'piper' ? 'local' : 'cloud'}
@@ -324,6 +345,8 @@ const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters. Split the s
 
 const VoiceSettingsCards = ({ fire }) => {
   const { data, loading, error, refresh } = useApiObject('/api/voice');
+  // What each voice's play button can play (live, its clip, or nothing).
+  const { data: sampleInfo } = useApiObject('/api/voice/samples', { quiet: true });
   const admin = useAdminSignedIn();
   const [current, setCurrent] = React.useState(null);
   const [busy, setBusy] = React.useState(null);      // what is playing / saving
@@ -421,8 +444,13 @@ const VoiceSettingsCards = ({ fire }) => {
           return (
             <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
                                      borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
-              <IconButton name={busy === `play:${v.id}` ? 'loader' : 'play'} title="Play a sample"
-                          disabled={!!busy} onClick={() => playFrom(`play:${v.id}`, `/api/voice/sample/${v.id}`)}/>
+              {voiceSamplePlayable(sampleInfo?.samples?.[v.id])
+                ? <IconButton name={busy === `play:${v.id}` ? 'loader' : 'play'}
+                              title={sampleInfo.samples[v.id] === 'clip'
+                                ? 'Play a sample (a short built-in clip: the voice isn’t downloaded yet)'
+                                : 'Play a sample'}
+                              disabled={!!busy} onClick={() => playFrom(`play:${v.id}`, `/api/voice/sample/${v.id}`)}/>
+                : <span style={{ width: 28, flex: 'none' }} aria-hidden="true"/>}
               <div style={{ flex: 1, minWidth: 140 }}>
                 <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
                 <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{v.sex} · {v.id}</div>
@@ -530,7 +558,14 @@ const VoicesPanel = () => {
     fd.append('name', name);
     fd.append('onnx', onnx);
     fd.append('config', json);
-    return guard(() => apiUpload('/api/voices/piper', fd), 'voice uploaded');
+    // Uploaded either way; one Domovoi can't speak says why, once, here.
+    return guard(async () => {
+      const v = await apiUpload('/api/voices/piper', fd);
+      fire(v && v.problem
+        ? `${v.name} is uploaded but can’t speak here: ${v.problem}. Rooms set to it speak with the system voice.`
+        : 'voice uploaded');
+      return v;
+    }, null);
   };
 
   const rename = (v, name) =>
@@ -557,7 +592,7 @@ const VoicesPanel = () => {
       </Card>
 
       <Card title="Upload a local voice"
-            sub="A Piper model (.onnx) and its config (.onnx.json), trained on espeak’s British English (“en”) phonemes, the set Domovoi’s converter writes. Fully offline once uploaded.">
+            sub="A Piper model (.onnx) and its config (.onnx.json), trained on espeak’s English phonemes: American (“en-us”, what most Piper voices people train use) or British (“en”). Its config says which; Domovoi’s converter writes both. Fully offline once uploaded.">
         <UploadPiper onUpload={uploadPiper}/>
       </Card>
 

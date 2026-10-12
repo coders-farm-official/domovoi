@@ -6910,7 +6910,7 @@
           "voices"
         ],
         "summary": "Sample Voice",
-        "description": "Stream a freshly-synthesized sample (intro + random fun fact) for a\nvoice, for the play button. Proxies the Domovoi server's TTS \u2014 the web\nprocess has none of its own. 502 if the Domovoi server is unreachable.",
+        "description": "Stream a freshly-synthesized sample (intro + random fun fact) for a\nvoice, for the play button. Proxies the Domovoi server's TTS \u2014 the web\nprocess has none of its own. 502 if the Domovoi server is unreachable.\nA shipped voice not downloaded yet plays its built-in clip instead; a\nPiper voice that can't speak here is 409 with the reason (its button\nis hidden: the system voice would answer, not this one).",
         "operationId": "sample_voice_api_voices__voice_id__sample_get",
         "parameters": [
           {
@@ -7136,13 +7136,35 @@
         }
       }
     },
+    "/api/voice/samples": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Sample Sources",
+        "description": "What each voice's play button plays: ``\"voice\"`` (synthesized live,\nthe voice is on this server), ``\"clip\"`` (its built-in clip: not\ndownloaded yet) or null (nothing that is really that voice: no\nbutton).",
+        "operationId": "sample_sources_api_voice_samples_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SampleSources"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/voice/sample/{voice_id}": {
       "get": {
         "tags": [
           "voice"
         ],
         "summary": "Sample Voice",
-        "description": "A freshly synthesized sample (intro + a fun fact) in one of the three\nvoices, for the play buttons beside them.",
+        "description": "A sample in one of the three voices, for the play buttons beside\nthem: synthesized fresh (intro + a fun fact) when the voice is on this\nserver, else its built-in clip (``X-Sample-Source`` says which).",
         "operationId": "sample_voice_api_voice_sample__voice_id__get",
         "parameters": [
           {
@@ -18089,6 +18111,29 @@
         ],
         "title": "RoomState"
       },
+      "SampleSources": {
+        "properties": {
+          "samples": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Samples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "samples"
+        ],
+        "title": "SampleSources"
+      },
       "Satellite": {
         "properties": {
           "room_id": {
@@ -19596,6 +19641,28 @@
           "is_default": {
             "type": "boolean",
             "title": "Is Default"
+          },
+          "sample": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
           }
         },
         "type": "object",

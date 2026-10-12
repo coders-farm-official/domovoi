@@ -283,14 +283,15 @@ def _recorded_text_hash(sidecar: Path) -> str | None:
 def _voice_can_render(engine: str, model_ref: str, *, edge_ok: bool) -> bool:
     """Whether a voice's own engine can render right now, judged without
     trying: an Edge voice needs Edge usable; a Piper voice needs its model
-    on disk, or the internet usable to fetch it (the same test as Edge)."""
+    on disk, or the internet usable to fetch it (the same test as Edge),
+    and a phoneme set the converter writes ("en" or "en-us")."""
     eng = (engine or "").strip().lower()
     if eng == "edge":
         return edge_ok
     if eng == "piper":
-        from domovoi.clients.tts import piper_voice_on_disk
+        from domovoi.clients.tts import piper_voice_on_disk, piper_voice_problem
 
-        return edge_ok or piper_voice_on_disk(model_ref)
+        return (edge_ok or piper_voice_on_disk(model_ref)) and piper_voice_problem(model_ref) is None
     return True
 
 

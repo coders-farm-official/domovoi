@@ -4,6 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Your own American-English voices speak again
+
+* **An uploaded Piper voice trained on American English now speaks.**
+  Most voices people train (and most `en_US` voices) use espeak's
+  `"en-us"` phonemes; since the update below they fell through to the
+  robotic system voice. Domovoi's converter now writes that set too, picked
+  per voice from its `.onnx.json` (`"espeak": {"voice": "en-us"}`), so such
+  a voice sounds like itself again with nothing to do. A voice trained on
+  another set (not English) still can't speak and falls through to the
+  system voice, but Settings → Voices now says so beside it, and at upload.
+* **Play buttons play the voice they name.** A voice not downloaded yet
+  plays a short built-in clip of itself (web and phone); a voice with
+  neither shows no play button.
+
 ## 2026-10-12 — A new voice, and words it says the way you tell it
 
 A server update (it adds migration **V027**; the update runs it, and its
@@ -21,9 +35,9 @@ dependency change needs the internet once).
   against its pinned SHA-256). The greetings and clips re-render in it. A
   server already set to one of the three keeps it, and so does one set to
   the old catalog's Cori (public domain too, no longer offered); your own
-  uploaded voices stay (one trained on other than British-English "en"
-  phonemes, such as most `en_US` voices, now falls through to the system
-  voice: the new converter writes only that set).
+  uploaded voices stay (one trained on American-English "en-us"
+  phonemes, such as most `en_US` voices, fell through to the system voice
+  until the next entry above: the converter writes that set too now).
 * **To pick another:** Settings → Voices → **Domovoi's voice**, with a play
   button for each. The phone app offers the same three, so the house and
   the phone can sound alike.

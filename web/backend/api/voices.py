@@ -15,6 +15,14 @@ Uploaded Piper models land in ``settings.voice_models_dir`` (the same dir
 ``tts.py`` resolves voices from), named ``<slug>.onnx`` / ``<slug>.onnx.json``
 where ``slug`` is the filesystem-safe form of the voice name; the row's
 ``model_ref`` is that slug so the synth path finds the model.
+
+Domovoi speaks a Piper voice trained on espeak's English phonemes, British
+``"en"`` or American ``"en-us"`` (what most voices people train use). A
+voice trained on any other set is still kept, but can't speak here: rooms
+set to it fall back to the system voice. Each row says so (``problem``,
+in words for the owner, also in the upload's answer), and its play button
+is hidden (``sample`` is null): a button plays the voice it names, or a
+shipped voice's built-in clip before it is downloaded, or is not shown.
 """
 
 from __future__ import annotations
@@ -32,6 +40,8 @@ from domovoi.admin_auth import require_admin_mutation
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
 from domovoi.db.repositories import VoicesRepository
+from domovoi.voice_sample import piper_sample_source
+from web.backend.api.voice import clip_response
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -102,6 +112,13 @@ class Voice(BaseModel):
     engine: str
     model_ref: str
     is_default: bool
+    # What the play button plays: "voice" (synthesized live), "clip" (a
+    # shipped voice's built-in clip, before it is downloaded) or None (no
+    # button: nothing that is really this voice).
+    sample: str | None = None
+    # Why a Piper voice can't speak here (rooms set to it use the system
+    # voice), in words for the owner; None when it can.
+    problem: str | None = None
 
 
 class EdgeVoiceCreate(BaseModel):
@@ -138,10 +155,22 @@ async def _trigger_rerender(request: Request) -> None:
         )
 
 
+def _speakability(engine: str, model_ref: str) -> tuple[str | None, str | None]:
+    """(sample, problem) for a registry row; reads a Piper voice's config
+    from disk, never its model."""
+    if engine != "piper":
+        return "voice", None
+    from domovoi.clients.tts import piper_voice_problem
+
+    return piper_sample_source(model_ref), piper_voice_problem(model_ref)
+
+
 def _to_model(row: dict) -> Voice:
+    sample, problem = _speakability(row["engine"], row["model_ref"])
     return Voice(
         id=row["id"], name=row["name"], engine=row["engine"],
         model_ref=row["model_ref"], is_default=row["is_default"],
+        sample=sample, problem=problem,
     )
 
 
@@ -156,12 +185,25 @@ async def list_voices() -> list[Voice]:
 async def sample_voice(voice_id: int, request: Request) -> Response:
     """Stream a freshly-synthesized sample (intro + random fun fact) for a
     voice, for the play button. Proxies the Domovoi server's TTS — the web
-    process has none of its own. 502 if the Domovoi server is unreachable."""
+    process has none of its own. 502 if the Domovoi server is unreachable.
+    A shipped voice not downloaded yet plays its built-in clip instead; a
+    Piper voice that can't speak here is 409 with the reason (its button
+    is hidden: the system voice would answer, not this one)."""
     async with session_scope() as s:
         rows = await VoicesRepository(s).all()
     voice = next((v for v in rows if v["id"] == voice_id), None)
     if voice is None:
         raise HTTPException(status_code=404, detail=f"voice {voice_id} not found")
+    if voice["engine"] == "piper":
+        sample, problem = _speakability("piper", voice["model_ref"])
+        if sample == "clip":
+            return clip_response(voice["model_ref"])
+        if sample is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{voice['name']} can't speak here: {problem}" if problem
+                else f"{voice['name']} is not on this server",
+            )
     # A Microsoft Edge voice is synthesized by Microsoft: under
     # INTERNET_ACCESS=never the sample is refused here, before the core is
     # asked (it would otherwise answer in a Piper stand-in voice).
@@ -287,7 +329,11 @@ async def upload_piper_voice(
         raise HTTPException(status_code=500, detail=f"could not save model: {e}") from e
 
     await _trigger_rerender(request)
-    return Voice(id=new_id, name=name, engine="piper", model_ref=slug, is_default=set_default)
+    sample, problem = _speakability("piper", slug)
+    if problem:
+        log.info("uploaded voice %r can't speak here: %s", name, problem)
+    return Voice(id=new_id, name=name, engine="piper", model_ref=slug, is_default=set_default,
+                 sample=sample, problem=problem)
 
 
 @router.patch("/{voice_id}", response_model=Voice, dependencies=[Depends(require_admin_mutation)])

@@ -450,7 +450,7 @@ const UserManualPage = () => {
     ['How do I add features?', 'Install plugins from the Plugins page — upload a zip or point at a GitHub repo. Plugins can add voice commands, background workers, dashboard pages and Android screens. Only install plugins from publishers you trust: they run with full access to your server.'],
     ['Is my data private?', 'Everything runs on your own hardware. There’s no cloud account and nothing leaves the house unless a network feature asks for it.'],
     ['Can I change the wake word?', 'Yes. Record a handful of clips on a satellite and train a custom model — Settings → Wake Words. (Training is Linux-only, so it runs off-box.)'],
-    ['Can I add my own voice?', <>Pick one of the three public-domain voices, upload a Piper <span className="mono">.onnx</span> trained on British-English (“en”) phonemes, or register a Microsoft Edge neural voice — Settings → Voices.</>],
+    ['Can I add my own voice?', <>Pick one of the three public-domain voices, upload a Piper <span className="mono">.onnx</span> trained on English phonemes (American “en-us”, what most voices people train use, or British “en”), or register a Microsoft Edge neural voice — Settings → Voices.</>],
     ['It says a name wrong. Can I fix it?', <>Yes: Settings → Voices → <b>Say it like</b>. Type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN), and press play to hear it first.</>],
     ['Why two different LLMs?', 'A small fast model handles open questions; a stronger model routes tool calls, where strict schema adherence matters more than speed.'],
     ['How do rooms play different music?', 'Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time.'],

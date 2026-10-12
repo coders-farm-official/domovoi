@@ -6,12 +6,19 @@ a word ("Nguyen" = "win"). The phone runs the same converter and voices, so
 it reads the server's choice and list here.
 
   GET    /api/voice                         · the voices, the server's voice, the list (device tier)
-  GET    /api/voice/sample/{voice_id}       · a sample sentence in one of the voices (device tier)
+  GET    /api/voice/samples                 · what each voice's play button can play (device tier)
+  GET    /api/voice/sample/{voice_id}       · a sample in one of the voices (device tier)
   PUT    /api/voice/server                  · {voice}: the server's voice (admin)
   POST   /api/voice/pronunciations          · {word, say_like}: add or change an entry (admin)
   DELETE /api/voice/pronunciations/{word}   · take an entry off the list (admin)
   POST   /api/voice/pronunciations/defaults · put the shipped entries back (admin)
   POST   /api/voice/pronunciations/preview  · {word, say_like, voice?}: hear an entry, unsaved (device tier)
+
+A play button plays the voice it names or is not shown (owner, 2026-10-12):
+a voice on this server is synthesized live; one not downloaded yet plays
+its built-in clip (``domovoi/voice_clips/``, Ogg Opus, the same files the
+phone ships); ``/api/voice/samples`` says which, so the page can hide a
+button with neither.
 
 Every write answers with the same body as ``GET /api/voice``, then asks the
 core to reload the list (``/v1/admin/pronunciations/reload``) or re-render
@@ -35,6 +42,7 @@ from domovoi.admin_auth import require_admin_mutation, require_device
 from domovoi.clients.tts import PIPER_PINS, SHIPPED_VOICES
 from domovoi.db.repositories import PronunciationsRepository, VoicesRepository
 from domovoi.phonemizer import Phonemizer, PronunciationError, pronunciation_key
+from domovoi.voice_sample import CLIP_MEDIA_TYPE, clip_line, piper_sample_source, shipped_clip
 from domovoi.voice_settings import (
     MAX_PRONUNCIATIONS,
     default_keys,
@@ -131,12 +139,42 @@ async def get_voice() -> dict:
     return await _payload()
 
 
+class SampleSources(BaseModel):
+    samples: dict[str, str | None]
+
+
+@router.get("/samples", response_model=SampleSources, dependencies=DEVICE)
+async def sample_sources() -> dict:
+    """What each voice's play button plays: ``"voice"`` (synthesized live,
+    the voice is on this server), ``"clip"`` (its built-in clip: not
+    downloaded yet) or null (nothing that is really that voice: no
+    button)."""
+    return {"samples": {v.model_ref: await asyncio.to_thread(piper_sample_source, v.model_ref)
+                        for v in SHIPPED_VOICES}}
+
+
+def clip_response(model_ref: str) -> Response:
+    """A shipped voice's built-in clip (Ogg Opus), with what it says."""
+    from urllib.parse import quote
+
+    path = shipped_clip(model_ref)
+    if path is None:
+        raise HTTPException(status_code=409, detail=f"{model_ref} has no sample to play")
+    name = next(v.name for v in SHIPPED_VOICES if v.model_ref == model_ref)
+    return Response(content=path.read_bytes(), media_type=CLIP_MEDIA_TYPE,
+                    headers={"X-Sample-Text": quote(clip_line(name), safe=""), "X-Sample-Source": "clip"})
+
+
 @router.get("/sample/{voice_id}", dependencies=DEVICE)
 async def sample_voice(voice_id: str, request: Request) -> Response:
-    """A freshly synthesized sample (intro + a fun fact) in one of the three
-    voices, for the play buttons beside them."""
+    """A sample in one of the three voices, for the play buttons beside
+    them: synthesized fresh (intro + a fun fact) when the voice is on this
+    server, else its built-in clip (``X-Sample-Source`` says which)."""
     if voice_id not in PIPER_PINS:
         raise HTTPException(status_code=404, detail=f"{voice_id!r} is not one of the voices")
+    source = await asyncio.to_thread(piper_sample_source, voice_id)
+    if source != "voice":
+        return clip_response(voice_id)
     async with session_scope() as s:
         rows = await VoicesRepository(s).all()
     row = next((r for r in rows if r["engine"] == "piper" and r["model_ref"] == voice_id), None)
@@ -151,6 +189,7 @@ async def sample_voice(voice_id: str, request: Request) -> Response:
     if status != 200 or not audio:
         raise HTTPException(status_code=502, detail="voice sample synthesis failed")
     out = {"X-Sample-Text": headers["x-sample-text"]} if headers.get("x-sample-text") else {}
+    out["X-Sample-Source"] = "voice"
     return Response(content=audio, media_type="audio/wav", headers=out)
 
 
