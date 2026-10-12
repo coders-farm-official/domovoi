@@ -53,7 +53,7 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
         listOf("phonemizer/cmudict/LICENSE"),
     ),
     OpenSourcePart(
-        "Piper voices Norman, Kristin and LJ Speech", "public domain", "brycebeattie.com/files/tts",
+        "Piper voices Norman, Kristin and Linda (LJ Speech)", "public domain", "brycebeattie.com/files/tts",
         "By Bryce Beattie, trained from scratch on public-domain recordings (LibriVox; the LJ Speech " +
             "dataset) and released into the public domain; distributed through rhasspy/piper-voices (MIT). " +
             "Downloaded, one at a time, from Settings → Voice.",

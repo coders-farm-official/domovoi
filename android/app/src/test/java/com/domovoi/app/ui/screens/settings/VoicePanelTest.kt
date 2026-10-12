@@ -15,7 +15,7 @@ class VoicePanelTest {
     @Test fun theMenuNamesWhatEachChoiceComesTo() {
         assertEquals("Norman (male)", voiceLabel("en_US-norman-medium"))
         assertEquals("Kristin (female)", voiceLabel("en_US-kristin-medium"))
-        assertEquals("LJ Speech (female)", voiceLabel("en_US-ljspeech-medium"))
+        assertEquals("Linda (female)", voiceLabel("en_US-ljspeech-medium"))
         assertEquals("Same as the server (Kristin)", voiceChoiceLabel(same, PhoneVoiceUi(serverVoice = "en_US-kristin-medium")))
         assertEquals("Same as the server", voiceChoiceLabel(same, PhoneVoiceUi(serverVoice = null)))
         assertEquals("Kristin (female)", voiceChoiceLabel("en_US-kristin-medium", PhoneVoiceUi()))

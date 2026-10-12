@@ -156,7 +156,7 @@ object ModelCatalog {
         4_968, "6c2db7f558a4a8deb9fe822583c1c5105f6c4e834dd0f9de8ad17a888ee9fe1d")
     val kristin = piperVoice("kristin", "Kristin", "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4",
         4_968, "5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c")
-    val ljspeech = piperVoice("ljspeech", "LJ Speech", "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22",
+    val ljspeech = piperVoice("ljspeech", "Linda", "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22",
         4_972, "141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860")
 
     /** The phone's voices, the server's three; Norman is the default. */

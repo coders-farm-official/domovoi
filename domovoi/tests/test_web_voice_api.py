@@ -10,7 +10,10 @@ core recorded instead of made.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -265,3 +268,66 @@ async def test_the_cap_counts_the_owners_words(_db, fresh_lists, core_hops, monk
         await c.delete("/api/voice/pronunciations/Cc", headers=h)
         r = await c.post("/api/voice/pronunciations", json={"word": "Dd", "say_like": "dee"}, headers=h)
         assert r.status_code == 200                         # removing one makes room
+
+
+# ─── The shared fixture the phone's parser is held to ─────────────────────
+#
+# docs/uml/voice-api-fixture.json is what GET /api/voice serves on a fresh
+# install (updated_at aside). This file checks that the route serves exactly
+# it; android/.../voice/VoiceApiContractTest.kt decodes the same file with
+# the phone's VoiceInfo, strictly, and checks the phone's voice catalog
+# against it. A change to the response is a change to that file, which the
+# phone's test then has to accept. Rewrite it with
+# DOMOVOI_WRITE_FIXTURES=1 (a DB-backed run), then run the phone's tests.
+
+VOICE_API_FIXTURE = Path(__file__).resolve().parents[2] / "docs" / "uml" / "voice-api-fixture.json"
+FIXTURE_UPDATED_AT = "2026-10-12T00:00:00Z"
+
+
+def _fixture() -> dict:
+    return json.loads(VOICE_API_FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_the_phone_fixture_has_the_response_models_fields():
+    """DB-free: every key in the fixture is a field of the route's response
+    model, and every field is there."""
+    body = _fixture()["response"]
+    assert set(body) == set(voice_api.VoiceSettings.model_fields)
+    assert body["voices"] and body["pronunciations"]
+    for v in body["voices"]:
+        assert set(v) == set(voice_api.VoiceInfo.model_fields), v
+    for p in body["pronunciations"]:
+        assert set(p) == set(voice_api.PronunciationEntry.model_fields), p
+    assert voice_api.VoiceSettings.model_validate(body).model_dump() == body
+    from domovoi.voice_settings import default_pronunciations, shipped_voices
+
+    assert body["voices"] == shipped_voices()
+    assert body["pronunciations"] == [{"word": w, "say_like": s} for w, s in default_pronunciations()]
+    assert body["updated_at"] == FIXTURE_UPDATED_AT
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_route_serves_the_phone_fixture(_db, fresh_lists, core_hops):  # noqa: F811
+    async with web_client() as c:
+        await claim_admin(c)
+        r = await c.get("/api/voice", headers={HEADER: await db_device_token()})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", body["updated_at"])
+    body["updated_at"] = FIXTURE_UPDATED_AT
+    if os.environ.get("DOMOVOI_WRITE_FIXTURES") == "1":
+        doc = {
+            "about": [
+                "GET /api/voice (web/backend/api/voice.py) on a fresh install: the body the phone's",
+                "VoiceInfo parses (android/app/src/main/java/com/domovoi/app/voice/PhoneVoice.kt).",
+                "updated_at is a placeholder; the route's is the time the list or the voice last changed.",
+                "Held to the route by domovoi/tests/test_web_voice_api.py and to the phone's parser and",
+                "voice catalog by android/app/src/test/java/com/domovoi/app/voice/VoiceApiContractTest.kt.",
+                "Regenerate: DOMOVOI_WRITE_FIXTURES=1 python -m pytest domovoi/tests/test_web_voice_api.py",
+            ],
+            "fixture_version": 1,
+            "response": body,
+        }
+        VOICE_API_FIXTURE.write_bytes((json.dumps(doc, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))
+    assert body == _fixture()["response"]

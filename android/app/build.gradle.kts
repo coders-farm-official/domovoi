@@ -62,6 +62,11 @@ android {
             test.systemProperty("domovoi.phonemizer.dir", phonemizer.absolutePath)
             test.inputs.file(File(phonemizer, "golden.json")).withPathSensitivity(PathSensitivity.RELATIVE)
             test.inputs.dir(File(phonemizer, "data")).withPathSensitivity(PathSensitivity.RELATIVE)
+            // GET /api/voice as the server serves it (docs/uml/voice-api-fixture.json),
+            // read by voice/VoiceApiContractTest.kt.
+            val voiceApi = rootProject.file("../docs/uml/voice-api-fixture.json")
+            test.systemProperty("domovoi.voice_api.fixture", voiceApi.absolutePath)
+            test.inputs.file(voiceApi).withPathSensitivity(PathSensitivity.RELATIVE)
         }
     }
 }
