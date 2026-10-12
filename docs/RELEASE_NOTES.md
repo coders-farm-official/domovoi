@@ -43,6 +43,13 @@ A server update and a new Android build.
   paused** — the mic pauses the phone's music while you hold the button,
   and the turn reported it then. It now reports the player as it was
   when you pressed. (App.)
+* **Connecting the app to a different Domovoi clears the phone's player.**
+  What was queued from the old server (its songs, stations, episodes,
+  books) stops and leaves the mini player, and a cast to one of its rooms
+  ends on the phone; nothing of it is asked of the new server. Servers are
+  told apart by the identity the app pinned, so the same Domovoi at a new
+  address, a reconnect, or switching between this phone and the server
+  keeps everything playing. Songs saved on the phone stay. (App.)
 * Not a bug: when a request picks one song, that song is the phone's
   whole queue, so the mini player shows its play button once the song
   ends. Music playing before a turn pauses while you hold the button,

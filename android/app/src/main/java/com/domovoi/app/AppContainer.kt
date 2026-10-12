@@ -18,10 +18,14 @@ import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.player.ServerScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
@@ -81,6 +85,19 @@ class AppContainer(context: Context) {
     /** App-lifetime scope for fire-and-forget work that must outlive a
      *  composable (e.g. the video position save on player dispose). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    init {
+        // What the phone queued from a server belongs to that server
+        // (player/ServerScope.kt): the player hears which server the app
+        // talks to — by its pinned identity, else its address — now, and on
+        // every change, and clears the old one's media on a move to another.
+        player.serverChanged(ServerScope.of(prefs.serverUrl.value, prefs.pinForServer(prefs.serverUrl.value)))
+        scope.launch {
+            combine(prefs.serverUrl, prefs.identityPins) { url, pins ->
+                ServerScope.of(url, IdentityGate.pinKey(url)?.let { pins[it] })
+            }.distinctUntilChanged().collect { player.serverChanged(it) }
+        }
+    }
 
     /** The on-device assistant's benchmark (Settings → About; M0 of the
      *  phone assistant). Built on first use. Its only network use is the
