@@ -12,6 +12,9 @@
     from Maven Central; the SHA-1s match the .sha1 files Maven Central
     publishes beside them. android/native/sherpa-onnx/ builds the speech
     library against this same AAR (same SHA-256).
+  - ONNX Runtime 1.28.0 for the JVM (com.microsoft.onnxruntime:onnxruntime,
+    MIT), unit tests only, recorded 2026-10-12 the same way (SHA-1s match
+    Maven Central's .sha1 files; it publishes no .module for it).
   sherpa-onnx itself is not a Maven dependency: its JNI library is built
   from source, with text to speech left out, by android/native/sherpa-onnx/.
   A version bump updates the version in gradle/libs.versions.toml AND the
@@ -43,6 +46,14 @@
          </artifact>
          <artifact name="onnxruntime-android-1.28.0.pom">
             <sha256 value="0e575ec392a5ab9220924db266214459ae8912fec2427cf826c650b70f6a2947" origin="Maven Central, 2026-10-12"/>
+         </artifact>
+      </component>
+      <component group="com.microsoft.onnxruntime" name="onnxruntime" version="1.28.0">
+         <artifact name="onnxruntime-1.28.0.jar">
+            <sha256 value="3a9dc00bed7ee467ded8a257f99fc216570d385f8b06053570d33e9b5d7c7a37" origin="Maven Central, 2026-10-12"/>
+         </artifact>
+         <artifact name="onnxruntime-1.28.0.pom">
+            <sha256 value="7436b3b70d9ed328dfc181d6a2ba0bcda0c79f5a763f15e69d6715ce9ae59fe9" origin="Maven Central, 2026-10-12"/>
          </artifact>
       </component>
    </components>
