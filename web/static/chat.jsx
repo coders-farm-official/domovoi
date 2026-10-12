@@ -75,8 +75,7 @@ const chatSendStream = async (threadId, body, onDelta) => {
 
 /* "open Settings → Models", for an admin, where a model is the fix. */
 const ChatModelsLink = () => (
-  <a href="#settings" className="chat-note-link"
-     onClick={(e) => { e.preventDefault(); openSettingsTab('models'); }}>
+  <a href="#settings/models" className="chat-note-link">
     open Settings → Models
   </a>
 );

@@ -976,8 +976,9 @@ def test_unpaired_sees_the_house_and_a_way_to_pair(driven) -> None:
     assert "couldn't check" not in snap["text"]
     # The pair link is the only thing that opens the prompt.
     assert out["pairAfterClick"] is True
-    # The queue button opens Music's Room queue tab on that room.
-    assert out["hash"] == "music"
+    # The queue button opens Music's Room queue tab (its own address since
+    # 2026-10-12) on that room.
+    assert out["hash"] == "music/queue"
     assert out["queueRoom"] == "kitchen"
 
 

@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Every tab has its own address
+
+A dashboard-only change (reload open tabs once).
+
+* **The address bar follows the tabs.** Settings' tabs are
+  `#settings/about`, `greetings`, `voices`, `wake-words`, `recordings`,
+  `devices`, `phone-bar`, `satellites`, `models`, `internet` and
+  `configuration`; Music's are `#music/library`, `player`, `queue`,
+  `playlists`, `stats` and `jobs`; Calendar's views are `#calendar/month`,
+  `week` and `day`. Clicking a tab changes the address, Back goes to the
+  tab before, and a bookmark or link opens its tab. Old addresses keep
+  working: `#settings` is Settings on Greetings, `#satellites` is
+  `#settings/satellites`, and a tab a page doesn't have opens its first
+  one.
+* **`#settings/configuration/setup`** is where the Windows installer's
+  "Open Domovoi" goes. On a box nobody has claimed, Settings →
+  Configuration now opens the **first-run admin setup** by itself (at
+  this address and at `#settings/configuration`), with the setup code
+  field ready for a paste; on a claimed box it only says the admin
+  account is already set up.
+* **Where the setup code is** is now said for the kind of server: on a
+  Windows install, the installer's last page (run the installer again for
+  a fresh code); on a Linux server, `~/.domovoi/setup-code.txt`.
+
 ## 2026-10-12 — A new voice, and words it says the way you tell it
 
 A server update (it adds migration **V027**; the update runs it, and its

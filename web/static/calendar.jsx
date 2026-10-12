@@ -461,8 +461,12 @@ const EventModal = ({ open, draft, onClose, onSave }) => {
 };
 
 /* ---- Page ------------------------------------------------------- */
+// The view toggle's views, by address: #calendar/month|week|day
+// (useRouteTab, components.jsx). The day a view shows is not in it.
+const CAL_VIEWS = [{ id: 'month' }, { id: 'week' }, { id: 'day' }];
+
 const CalendarPage = () => {
-  const [view, setView]         = React.useState('month');
+  const [view, setView]         = useRouteTab('calendar', CAL_VIEWS, 'month');
   const [anchor, setAnchor]     = React.useState(() => new Date());
   const [selectedId, setSelId]  = React.useState(null);
   const [modalOpen, setModalOp] = React.useState(false);

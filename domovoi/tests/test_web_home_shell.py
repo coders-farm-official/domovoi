@@ -246,8 +246,10 @@ def test_the_default_and_fallback_routes_are_home() -> None:
     assert "shownRoute = window.DomovoiCore.pages.home() ? 'home' : 'music';" in html
     assert "<Topbar route={shownRoute}" in html and "<Sidebar route={shownRoute}" in html
     # Deep links still resolve core-first: the route map is consulted
-    # before any fallback, so #music opens Music.
-    assert "const coreGetter = window.DomovoiCore.pages[route];" in html
+    # before any fallback, so #music opens Music. The page is the address's
+    # first segment (#settings/configuration opens Settings).
+    assert "const page = routePage(route);" in html
+    assert "const coreGetter = window.DomovoiCore.pages[page];" in html
 
 
 def test_home_script_loads_after_the_pages_it_borrows_from() -> None:
@@ -488,11 +490,13 @@ def test_a_page_header_wraps_on_a_phone() -> None:
 
 def test_a_new_page_starts_at_its_top() -> None:
     """.main is the one scroller every page shares: a tab tapped from a
-    page scrolled 600px down opened the next page 865px down."""
+    page scrolled 600px down opened the next page 865px down. A tab of the
+    same page (#music/queue, since the tabs have addresses) keeps the
+    scroll: it is keyed on the page, not the whole address."""
     html = _src("index.html")
     assert '<main className="main" ref={mainRef}>' in html
     effect = re.search(r"React\.useLayoutEffect\(\(\) => \{(.*?)\}, \[(\w+)\]\);", html, re.S)
-    assert effect and effect.group(2) == "route"
+    assert effect and effect.group(2) == "page"
     assert "mainRef.current.scrollTop = 0" in effect.group(1)
 
 
