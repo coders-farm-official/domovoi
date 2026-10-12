@@ -404,7 +404,7 @@ namespace Domovoi.Windows.Helper
             if (failed.Count > 0)
             {
                 o.Kv("internet_unreachable", string.Join(",", failed.ToArray()));
-                o.Kv("fatal", "Setup needs the internet to download Domovoi (about 10-13 GB). It could not reach " + string.Join(", ", failed.ToArray()) + ". Connect this PC and run Setup again.");
+                o.Kv("fatal", "Setup needs the internet to download Domovoi (about 11-14 GB). It could not reach " + string.Join(", ", failed.ToArray()) + ". Connect this PC and run Setup again.");
             }
             // The core's connectivity probe dials 1.1.1.1:443 by default
             // (domovoi/config.py); some networks block it.

@@ -29,7 +29,7 @@ asks) · [Security & privacy](SECURITY_PRIVACY.md)
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Whisper always runs on the CPU. |
-| Internet | Needed during setup (about 10-13 GB, most of it the AI models) | Afterwards Domovoi works with or without it, as you answer in Setup. |
+| Internet | Needed during setup (about 11-14 GB, most of it the AI models and voices) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
 
@@ -85,9 +85,12 @@ that:
    its AppData isn't), anything holding one of those, and links (junctions)
    are refused, because Domovoi's account and its Linux system can write
    there.
-5. **Downloads** `provision.sh` from the pinned commit and Ubuntu 26.04.1's
-   official WSL image, each checked against a pinned SHA-256
-   (`windows/installer/pins.iss`).
+5. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
+   from the pinned commit, each checked against a pinned SHA-256
+   (`windows/installer/pins.iss`). A build whose `provision.sh` is ahead of
+   the pinned commit (`ProvisionBundled` in `pins.iss`) carries the script
+   inside `DomovoiSetup.exe` instead; it is checked against its pin the
+   same way, and it still installs the pinned commit's code.
 6. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.

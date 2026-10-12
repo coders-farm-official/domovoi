@@ -90,7 +90,34 @@ def test_pins_are_well_formed():
     assert p["UbuntuName"] == "ubuntu-26.04.1-wsl-amd64.wsl"
 
 
+def _provision_bundled() -> bool:
+    return re.search(r"^#define ProvisionBundled\s*$", PINS.read_text(encoding="ascii"), re.M) is not None
+
+
+def test_provision_pin_is_the_file_setup_ships_or_fetches():
+    """Bundled: the pin is this tree's scripts/linux/provision.sh, packed
+    into Setup (and fetched from nowhere). Not bundled: the file at the
+    pinned commit, downloaded."""
+    s = SCRIPT.read_text(encoding="ascii")
+    if not _provision_bundled():
+        pytest.skip("provision.sh is fetched from the pinned commit (the next test)")
+    assert _pins()["ProvisionSource"] == "..\\..\\scripts\\linux\\provision.sh"
+    shipped = (WIN / "installer" / _pins()["ProvisionSource"].replace("\\", "/")).resolve()
+    assert shipped == (REPO_ROOT / "scripts" / "linux" / "provision.sh").resolve()
+    data = shipped.read_bytes()
+    assert b"\r" not in data, "provision.sh must ship with LF endings"
+    assert hashlib.sha256(data).hexdigest() == _pins()["ProvisionSha256"], "pins.iss ProvisionSha256 is not this tree's provision.sh"
+    assert '#ifdef ProvisionBundled\nSource: "{#ProvisionSource}"; Flags: dontcopy\n#endif' in s.replace(
+        "; provision.sh shipped inside Setup (pins.iss), extracted to {tmp} before\n; the downloads and handed to DomovoiHost by the helper's job step.\n", "")
+    assert "ExtractTemporaryFile('provision.sh');" in s
+    # The installer's fixes need these; the pinned commit alone may not have them.
+    text = data.decode("utf-8")
+    assert "\n  --stop-before STEP " in text and "start_diagnostics()" in text
+
+
 def test_provision_pin_is_the_file_at_the_pinned_commit():
+    if _provision_bundled():
+        pytest.skip("provision.sh ships inside Setup (the test above)")
     commit = _pins()["DomovoiCommit"]
     git = shutil.which("git")
     if not git:
