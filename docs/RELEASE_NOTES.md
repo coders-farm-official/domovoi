@@ -26,6 +26,12 @@ New Android build; nothing to do on the server.
   reason; so does a read-only Music library. Uploads use the same doors
   as the dashboard's (`/api/music/library/upload`, `/api/files/upload`), so
   nothing changes in who may write where.
+* **A spell in the background no longer drops the app to local media.**
+  Coming back after ~30 s away (the system folder picker is enough) used
+  to land on the phone's media next to a healthy server, and the page you
+  were on lost its place. Only time the app spends on screen trying the
+  server now counts toward the 10 s fallback, with a fresh check on the
+  way back; out of the house the fallback works as before.
 
 ## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
 
