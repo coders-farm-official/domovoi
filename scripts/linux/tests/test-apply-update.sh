@@ -1624,7 +1624,17 @@ case_os_jobs_follow_the_answer_on_restarts() {
   check "never: so is wsl-pro" os_not_masked wsl-pro.service
   check "never: written down" grep -qx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked"
   check "never: systemd told" called "systemctl daemon-reload"
-  check "never: the timer stopped" called "systemctl stop apt-daily.timer"
+  # Real WSL run 2026-10-11: a masked timer still running at the reload
+  # fails ("Unit to trigger vanished") and the box reports degraded. Each
+  # is stopped before the reload, and every unit masked has its failed
+  # mark cleared after it; the shutdown helper is left running.
+  for u in apt-daily.timer apt-daily-upgrade.timer motd-news.timer; do
+    check "never: $u stopped before systemd reloads" before "systemctl stop $u" "systemctl daemon-reload"
+  done
+  check "never: the shutdown helper left running" not_called "systemctl stop unattended-upgrades.service"
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer; do
+    check "never: $u's failed mark cleared after the reload" before "systemctl daemon-reload" "systemctl reset-failed $u"
+  done
   check "never: after health" before "curl http://127.0.0.1:6369/api/health" "systemctl daemon-reload"
   # The household answers Yes in Settings, then presses Restart.
   echo always >"$STATE/internet-policy"
@@ -1634,11 +1644,13 @@ case_os_jobs_follow_the_answer_on_restarts() {
   check "always: it says what it unmasked" grep -qF 'unmasked apt-daily-upgrade.timer apt-daily.timer motd-news.timer unattended-upgrades.service' "$RESULT"
   for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer; do check "always: $u unmasked" os_not_masked "$u"; done
   check "always: nothing left written down" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  check "always: failed marks cleared again" eq "$(grep -cxF "systemctl reset-failed apt-daily.timer" "$STATE/calls.log")" 2
   # Another restart: nothing to change, nothing recorded.
   run_update
   check "again: status ok" eq "$(field status)" '"ok"'
   check "again: no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "again: the journal says so" grep -qF "os-jobs: nothing to change (internet: always; WSL: no)" "$CASE/output.log"
+  check "again: nothing reset" eq "$(grep -cxF "systemctl reset-failed apt-daily.timer" "$STATE/calls.log")" 2
   end_case
 }
 
@@ -1652,6 +1664,10 @@ case_os_jobs_on_wsl_keep_snapd_off() {
   check "an ok step" step_is os-jobs ok
   for u in wsl-pro.service snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer; do check "$u masked (WSL)" os_masked "$u"; done
   check "disabled and stopped first" called "systemctl disable --now wsl-pro.service"
+  check "before systemd reloads" before "systemctl disable --now wsl-pro.service" "systemctl daemon-reload"
+  for u in wsl-pro.service snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer; do
+    check "$u's failed mark cleared after the reload" before "systemctl daemon-reload" "systemctl reset-failed $u"
+  done
   check "the updaters run as shipped (sometimes)" os_not_masked apt-daily.timer
   end_case
 }
