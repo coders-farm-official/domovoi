@@ -368,8 +368,7 @@ case $cmd in
   status)
     for u in "${units[@]}"; do
       st=inactive; [ ! -f "$SHIM_STATE/active/$u" ] || st=active; [ ! -f "$SHIM_STATE/failed/$u" ] || st=failed
-      printf '%s
-' "x $u - fixture unit" "     Active: $st (fixture)"
+      printf '%s\n' "x $u - fixture unit" "     Active: $st (fixture)"
     done
     exit 3 ;;
   stop) for u in "${units[@]}"; do rm -f "$SHIM_STATE/active/$u"; done ;;
@@ -1868,8 +1867,10 @@ case_setup_code_kept_out_of_the_journal_it_prints() {
 case_failed_start_logs_status_and_journal() {
   new_case failed_start_logs_status_and_journal
   echo domovoi-db.service >"$STATE/start-fail"
-  printf '%s
-' "Oct 12 docker[90]: Error starting userland proxy: listen tcp4 127.0.0.1:6432: bind: address already in use"     "Oct 12 domovoi-core[71]:  Setup code: acorn-apple-arrow-autumn-badge-baker-basil-beach"     "Oct 12 domovoi-core[71]: connecting to postgresql://domovoi:s3cret-Pass@127.0.0.1:6432/domovoi"     "Oct 12 domovoi-web[72]: an ordinary line" >"$STATE/journal"
+  printf '%s\n' "Oct 12 docker[90]: Error starting userland proxy: listen tcp4 127.0.0.1:6432: bind: address already in use" \
+    "Oct 12 domovoi-core[71]:  Setup code: acorn-apple-arrow-autumn-badge-baker-basil-beach" \
+    "Oct 12 domovoi-core[71]: connecting to postgresql://domovoi:s3cret-Pass@127.0.0.1:6432/domovoi" \
+    "Oct 12 domovoi-web[72]: an ordinary line" >"$STATE/journal"
   run_prov "${wsl_args[@]}" --skip-models
   check "exit 1" eq "$RC" 1
   check "start failed" eq "$(state_of start)" fail
@@ -1894,8 +1895,7 @@ case_failed_start_logs_status_and_journal() {
 case_unhealthy_start_logs_all_three_units() {
   new_case unhealthy_start_logs_all_three_units
   touch "$STATE/core-unhealthy"
-  printf '%s
-' "Oct 12 domovoi-core[71]: alembic: migration failed" >"$STATE/journal"
+  printf '%s\n' "Oct 12 domovoi-core[71]: alembic: migration failed" >"$STATE/journal"
   run_prov "${wsl_args[@]}" --skip-models --health-timeout 10
   check "exit 1" eq "$RC" 1
   check "status of all three" called "systemctl status --no-pager --full --lines=0 domovoi-db.service domovoi-core.service domovoi-web.service"
