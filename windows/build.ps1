@@ -64,8 +64,10 @@ function Invoke-Csc([string]$OutFile, [string[]]$Sources, [string[]]$ExtraArgs) 
 }
 
 $manifestArg = '/win32manifest:' + $manifest
-Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg)
-Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg)
+# Domovoi's icon (installer\art\make_art.py makes it from docs/assets/domovoi-icon.png).
+$iconArg = '/win32icon:' + (Join-Path $here 'installer\art\domovoi.ico')
+Invoke-Csc (Join-Path $bin 'DomovoiHost.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg, $iconArg)
+Invoke-Csc (Join-Path $bin 'DomovoiSetupHelper.exe') ($common + @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })) @($manifestArg, $iconArg)
 Write-Output "built $bin\DomovoiHost.exe and $bin\DomovoiSetupHelper.exe"
 
 if (-not $SkipTests) {
