@@ -40,6 +40,21 @@ model (below) unless you already picked one.
   keys (a value the household set is kept), and pulls it: **+1.9 GB**.
   `--no-vision-model` leaves the pull out.
 
+## 2026-10-11 — Ubuntu's jobs, switched off, no longer leave the box "degraded"
+
+A server update; nothing to do.
+
+* **`systemctl --failed` stays empty after `os-jobs.sh` masks Ubuntu's
+  background jobs.** Under **No**, timers that were running when they were
+  masked (`apt-daily`, `apt-daily-upgrade`, `motd-news`) showed as failed
+  ("Unit to trigger vanished") and the box reported "degraded" until the
+  next start. Each one is now stopped before systemd reloads, and every
+  unit the helper masks, disables or unmasks has its failed mark cleared,
+  marks an earlier version left included, at the next **Restart
+  Domovoi**. `unattended-upgrades.service` keeps running until the next
+  boot, as before, so an upgrade already under way is never cut short
+  (docs/LINUX_HOST.md, "Internet or not").
+
 ## 2026-10-11 — Chat: pictures say what they need, and failures read in plain words
 
 New Android build and a server update; nothing else to do, unless you want
