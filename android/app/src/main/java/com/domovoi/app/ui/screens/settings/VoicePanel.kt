@@ -37,6 +37,7 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.assistant.CatalogModel
 import com.domovoi.app.assistant.ModelCatalog
+import com.domovoi.app.assistant.SampleSource
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
@@ -180,7 +181,12 @@ internal fun VoiceCard() {
             )
             if (!ui.effectiveInstalled) {
                 Text(
-                    "Until it is downloaded, the phone's own text-to-speech voice speaks.",
+                    "Until it is downloaded, what the phone says on its own comes in its own text-to-speech voice" +
+                        if (ui.effectiveSample == SampleSource.CLIP) {
+                            "; \"play a sample\" plays a short built-in clip of this voice."
+                        } else {
+                            "."
+                        },
                     style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgMuted,
                 )
