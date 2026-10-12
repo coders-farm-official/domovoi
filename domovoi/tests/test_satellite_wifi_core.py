@@ -117,3 +117,31 @@ async def test_how_is_the_wifi_answers_by_signal():
                   wifi_status={"rx_mbits": 54.0, "ssid": "home", "signal_dbm": -78})
     r = await WifiHandler()._status_from_match(m, ctx, None)
     assert "weak signal" in r.text and "closer" in r.text
+
+
+@pytest.mark.parametrize("dbm, shown", [
+    (-67, -67.0), (0, 0.0), (-120, -120.0),
+    (1, None), (-121, None), (12, None), (True, None), ("strong", None), (None, None),
+    (float("nan"), None),
+])
+async def test_the_web_roster_passes_only_a_real_signal(monkeypatch, dbm, shown):
+    """The dashboard colours by this number, so the web hop holds it to the
+    range a radio can report, whatever the snapshot carried."""
+    from web.backend.api import satellites as web_sats
+
+    row = {"room_id": "kitchen", "control_port": None, "http_port": None, "last_connected_at": None}
+    snapshot = {"active_rooms": ["kitchen"], "wifi_status": {"kitchen": {
+        "rx_mbits": 1.0, "tx_mbits": 72.2, "ssid": "home", "signal_dbm": dbm, "mode": "managed"}}}
+    sat = await web_sats._satellite_for(row, snapshot, {}, {}, {})
+    assert sat.wifi.signal_dbm == shown
+    assert sat.wifi.mode == "managed"
+    assert sat.wifi.rx_mbits == 1.0
+
+
+async def test_the_web_roster_cuts_a_long_mode():
+    from web.backend.api import satellites as web_sats
+
+    row = {"room_id": "kitchen", "control_port": None, "http_port": None, "last_connected_at": None}
+    snapshot = {"wifi_status": {"kitchen": {"rx_mbits": None, "mode": "x" * 50}}}
+    sat = await web_sats._satellite_for(row, snapshot, {}, {}, {})
+    assert sat.wifi.mode == "x" * 16
