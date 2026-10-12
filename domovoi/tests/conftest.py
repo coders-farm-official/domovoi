@@ -61,6 +61,33 @@ if not _dbname.endswith("_test"):
         f"DATABASE_URL."
     )
 
+
+def _tcp_reachable(url: str) -> bool:
+    """The same cheap probe as ``_db_reachable`` below, on a URL string
+    (settings aren't built yet here)."""
+    try:
+        host_port = url.split("@", 1)[1].split("/", 1)[0]
+        host, _, port_s = host_port.rpartition(":")
+        with socket.create_connection((host, int(port_s)), timeout=1.0):
+            return True
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+# Under pytest-xdist (`pytest -n N`) every worker runs on its own copy of
+# the lane resolved above — `domovoi8_test` becomes `domovoi8_gw3_test` for
+# worker gw3 — made from it on demand and reused (domovoi/tests/xdist_db.py).
+# A serial run never gets here: it uses the lane itself, as it always has.
+from domovoi.tests import xdist_db as _xdist_db  # noqa: E402  (imports nothing of domovoi)
+
+if _xdist_db.worker_id() is not None:
+    os.environ["DATABASE_URL"] = _xdist_db.worker_database_url(
+        _resolved_db, create=_tcp_reachable(_resolved_db)
+    )
+    _resolved_db = os.environ["DATABASE_URL"]
+    _dbname = _resolved_db.rsplit("/", 1)[-1].partition("?")[0]
+    assert _dbname.endswith("_test"), _dbname  # worker copies keep the suffix
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
@@ -281,3 +308,112 @@ async def db_session():
     async with SessionLocal() as s:
         yield s
         await s.rollback()
+
+
+# ─── pytest -n (pytest-xdist) and the known-failures summary ────────────────
+#
+# `pytest -n N` runs the suite on N worker processes, each on its own copy of
+# the lane database (above, and domovoi/tests/xdist_db.py). What a database
+# per worker can't separate is marked in the test modules:
+#
+#   bash_harness  a whole bash harness (scripts/linux/tests/test-*.sh) run
+#                 under Git Bash: 15-70 minutes on one worker, which would
+#                 set the wall time of the whole parallel run. Deselected
+#                 under -n; scripts/dev/run-linux-harness.sh runs them in a
+#                 Linux container in a minute or two (beside the pytest run).
+#   xdist_group   tests that share something outside their process and so
+#                 must not overlap each other run on one worker, in turn:
+#                 "pg-roles" — the modules that create or drop plugin roles
+#                 (roles belong to the Postgres server, not to a database);
+#                 "tmp-domovoi-req-core" — the two tests of the satellite
+#                 image's requirements filter, which uses a fixed /tmp file.
+#                 Groups need --dist loadgroup, so that is what -n means
+#                 here unless --dist is given.
+#
+# A serial run (no -n) runs everything, exactly as before.
+
+
+# The bash_harness tests a worker left out, for the controller's summary.
+_HARNESS_DESELECTED = pytest.StashKey[list]()
+
+
+def pytest_collection_modifyitems(config, items):
+    if _xdist_db.worker_id() is None:
+        return
+    drop = [item for item in items if item.get_closest_marker("bash_harness")]
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = [item for item in items if not item.get_closest_marker("bash_harness")]
+    config.stash[_HARNESS_DESELECTED] = [item.nodeid for item in drop]
+
+
+def pytest_sessionfinish(session):
+    # A worker tells the controller what it left out (xdist's workeroutput);
+    # every worker leaves out the same tests.
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput["domovoi_harness_deselected"] = session.config.stash.get(_HARNESS_DESELECTED, [])
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    got = getattr(node, "workeroutput", {}).get("domovoi_harness_deselected")
+    if got:
+        node.config.stash[_HARNESS_DESELECTED] = got
+
+
+def pytest_configure(config):
+    if _xdist_db.worker_id() is not None:
+        # The controller chose loadgroup below; a worker reads --dist from the
+        # command line, so it is told (it tags each grouped test's id with its
+        # group, which is what the controller schedules by).
+        if getattr(config, "workerinput", {}).get("domovoi_loadgroup"):
+            config.option.loadgroup = True
+        return
+    # A broken known-failures list stops the run before it starts, rather
+    # than after the last test.
+    from domovoi.tests import known_failures
+
+    try:
+        known_failures.load()
+    except (ValueError, OSError) as exc:  # tomllib.TOMLDecodeError is a ValueError
+        raise pytest.UsageError(f"domovoi/tests/known_failures.toml: {exc}") from None
+    # `-n` alone gives xdist's `load`, which ignores xdist_group; `loadgroup`
+    # is `load` that keeps each group on one worker. An explicit --dist wins.
+    explicit = any(a == "--dist" or a.startswith("--dist=") for a in config.invocation_params.args)
+    if getattr(config.option, "numprocesses", None) and getattr(config.option, "dist", None) == "load" and not explicit:
+        config.option.dist = "loadgroup"
+
+
+def pytest_sessionstart(session):
+    # Before any worker starts: will N workers fit in the server's
+    # connections? (Postgres is shared with every other run on the box.)
+    workers = getattr(session.config.option, "numprocesses", None)
+    if _xdist_db.worker_id() is not None or not workers or workers < 2 or not _DB_OK:
+        return
+    warning = _xdist_db.connection_warning(os.environ["DATABASE_URL"], workers)
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if warning and reporter is not None:
+        reporter.write_line(warning, yellow=True, bold=True)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node):
+    if node.config.getvalue("dist") == "loadgroup":
+        node.workerinput["domovoi_loadgroup"] = True
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if _xdist_db.worker_id() is not None:
+        return
+    from domovoi.tests import known_failures
+
+    known_failures.summarize(terminalreporter)
+    left_out = config.stash.get(_HARNESS_DESELECTED, [])
+    if left_out:
+        terminalreporter.write_line(
+            f"pytest -n left out {len(left_out)} bash_harness test(s) "
+            f"({', '.join(n.rsplit('::', 1)[-1] for n in left_out)}): run the harnesses "
+            f"with scripts/dev/run-linux-harness.sh all",
+            yellow=True,
+        )
