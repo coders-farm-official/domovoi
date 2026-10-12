@@ -4,6 +4,71 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Satellites stay on the Wi-Fi (upgrade each satellite, then reboot it once)
+
+Server, dashboard, satellite and Android update; no migration. The router
+kept counting the satellites as new devices and they kept dropping off the
+server. What changes:
+
+* **A server restart no longer knocks the satellites off the Wi-Fi.** A
+  satellite used to read the server's "connection refused" during a restart
+  as a dead network, and drop and rejoin the house Wi-Fi (a fresh DHCP
+  exchange every time, and again every 5 minutes while the server stayed
+  down). It now touches the Wi-Fi only when neither the server's machine
+  nor the router answers.
+* **A satellite never falls back onto its own setup hotspot.** Wi-Fi
+  recovery brings back the house network's profile by name; the setup
+  hotspot's saved profile (`domovoi-setup`) is deleted once setup is over.
+  A satellite found hosting its setup network anyway says so (the room's
+  Health card: **setup hotspot on**), recovers, and reboots after 15
+  minutes if nothing else works.
+* **Wi-Fi power saving is off** on the satellites, and the server waits
+  20 s instead of 5 s for a satellite's keep-alive answer before dropping
+  it (`WS_PING_TIMEOUT_SEC`; a dead connection is still noticed within
+  about 30 s).
+* **Each satellite is named after its room**: host name `domovoi-<room>`,
+  in the router's client list instead of a row of `raspberrypi`, and
+  `domovoi-<room>.local` over mDNS. A host name you chose yourself is left
+  alone.
+* **A satellite finds the server by name first** (`domovoi.local`, or the
+  name the server tells it), then at the address that worked last time,
+  and sweeps the network only as a last resort; it saves what worked. So a
+  server whose router hands it a new address keeps its satellites. Every
+  candidate must prove it holds the server key the satellite is paired
+  with, so a name cannot hand a satellite to another machine. A DHCP
+  reservation on the router is now optional, for the server and the
+  satellites alike; never give a satellite a static address on the Pi
+  itself.
+* **The dashboard shows Wi-Fi by signal strength.** The number on each
+  satellite card is the signal at the satellite, in dBm, coloured green at
+  -60 dBm or better, amber from -60 to -70, red below -70 (move the
+  satellite or the router closer). The Mbit/s rate is shown next to it but
+  no longer colours anything: an idle link reads the 1 Mbit/s beacon rate,
+  which is why every idle satellite used to look red. A satellite that has
+  not been upgraded keeps the old display until it is. The Android app's
+  Satellites and Home screens follow the same rule. "How's your wifi?"
+  answers with the signal too.
+
+**What to do, in order:**
+
+1. Update the server (Settings → Version → Update) — it serves the new
+   satellite code.
+2. Upgrade each satellite: Settings → Satellites → the room → **Upgrade
+   satellite**. It restarts in a few seconds; from then on it leaves the
+   Wi-Fi alone through server restarts, never recovers onto its hotspot,
+   finds the server by name, and reports its signal.
+3. **Reboot each satellite once** (unplug it for a few seconds and plug it
+   back in). The upgrade restarts only the satellite program; the three
+   settings that need root (hotspot profile gone, power saving off, host
+   name) are applied at boot. Until it has rebooted, its Health card says
+   **reboot needed**. What the reboot changed is in the room's retained log
+   (`network settings (applied as root at boot): changed: …`).
+
+A newly prepared card has all of this from its first boot; nothing to do.
+A hand-built satellite without `domovoi-provisioning.service` applies the
+three settings with `sudo ~/satellite-venv/bin/python -m
+satellite.net_settings` (satellite/PROVISIONING.md §8.4).
+
 ## 2026-10-12 — Satellites: ready for spare devices (nothing changes for a Pi)
 
 Server and dashboard update; no migration, no satellite upgrade needed.

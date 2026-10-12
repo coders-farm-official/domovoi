@@ -89,10 +89,17 @@ Two details that are load-bearing rather than cosmetic:
   can never enumerate. USB-adopted units get the overlay and now remove it
   themselves once adoption succeeds.
 
-The server address is found automatically: the satellite sweeps its own /24
-for `/v1/health` at first start and saves what answers. Deliberately not
-mDNS — multicast over Wi-Fi is exactly what fails at 3 a.m. Type an address
-into the portal to skip discovery: `ws://192.168.1.20:6370` or
+The server address is found automatically, in this order: the server's
+name (`domovoi.local`, and any name the server has told the satellite
+since), then the address that worked last time, then — only as a last
+resort — a sweep of the satellite's own /24 for `/v1/health`. Every
+candidate must sign a fresh challenge for the exact address dialled with
+the server key the card was prepared with, so a name cannot redirect a
+satellite to another machine, and mDNS is never load-bearing: a name that
+does not resolve (multicast over Wi-Fi is what fails at 3 a.m.) falls
+through to the next step. What worked is saved, and the search runs again
+when the server stays unreachable, so a server that moves to a new address
+keeps its satellites. Type an address into the portal to start from it instead of a sweep: `ws://192.168.1.20:6370` or
 `ws://domovoi.local:6370` (a bare host gets `ws://` and the port). The
 portal accepts a `ws://` or `wss://` address on a private range (RFC 1918)
 or a `.local` name and nothing else, refuses a form body over 8 KB without
@@ -280,9 +287,11 @@ Three finishing moves, all from PROVISIONING.md:
      and Pi OS boots in Europe/London.
    - *(XVF3800 only)* a further entry for the `xvf_host` LED binary
      ([Appendix §E](../satellite/PROVISIONING.md)).
-3. **DHCP reservation** ([§7](../satellite/PROVISIONING.md)) and a
-   physical label (hostname, room, IP, board + HAT version). Future you
-   says thanks.
+3. A physical label (hostname, room, board + HAT version). Future you
+   says thanks. A **DHCP reservation** on the router is optional
+   ([§7](../satellite/PROVISIONING.md)): the satellite is `domovoi-<room>`
+   on the network and finds the server by name; never set a static
+   address on the Pi itself.
 
 Everyday operation is plain systemd:
 

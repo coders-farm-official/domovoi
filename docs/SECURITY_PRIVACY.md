@@ -944,6 +944,15 @@ Everything that executes code or rewrites configuration. Details next.
 
 ### What the server publishes to the LAN
 
+The core also tells each satellite that has finished its handshake the
+name this host answers to on the LAN (`server_names` in `ready`:
+`<hostname>.local`), so the satellite can find it again by name when its
+address moves; a satellite announces itself as `domovoi-<room>.local`
+over mDNS (avahi on Pi OS), which is also its host name and what the
+router lists. Neither is new exposure: avahi publishes both host names on
+any stock install, and a name is only ever a hint the identity check
+settles (see *Server identity*).
+
 Only three kinds of port face the LAN: the core (`6370`), the dashboard
 (`6369`) and each room's MPD **stream** port (`8050`, `8051`, …) that the
 satellites fetch audio from. Everything else the stack runs — Postgres
@@ -1550,7 +1559,7 @@ its own by editing one line.
 
 | Moment | Check |
 |---|---|
-| discovery sweep | a host is only a candidate if it signs a nonce this probe just invented — and the `host:port` the probe dialed — with the key that hashes to the pinned fingerprint |
+| finding the server (its name, then the last-known address, then the sweep) | a host is only a candidate if it signs a nonce this probe just invented — and the `host:port` the probe dialed — with the key that hashes to the pinned fingerprint. A name (`domovoi.local`, or one the core listed in its `ready`) is resolved **on the satellite** and only the addresses it resolves to are dialled and challenged, so the proof binds to an address and a name answered by an impostor over mDNS gets nowhere; a unit with nothing pinned and an address someone typed never looks a name up at all |
 | before each connect | the same challenge, again — an address written down months ago can be answered by something else today |
 | code upgrade | `/v1/satellite-code/manifest.sig`, verified before a single body is fetched; a bad signature writes nothing, and so does a list whose serial is behind the last one this device accepted |
 | plugin payloads | `/v1/satellite-plugins/manifest.sig`, same rule — these are the files whose `post_install` runs as root. The verified envelope is saved beside the mirror, and the root helper verifies it again itself (see below) before it stages or runs anything |
@@ -1924,8 +1933,11 @@ design and named honestly. Treat "installed a plugin with
 from media prep, the account the client runs as (`domovoi`) is **not in the
 `sudo` group**, Pi OS's `010_pi-nopasswd` drop-in is masked by the
 bootstrap, and its root access is exactly the lines in
-`/etc/sudoers.d/domovoi-satellite`: `wpa_cli … reassociate`, `nmcli device
-connect wlan0`, `systemctl --no-block restart` of its own two units,
+`/etc/sudoers.d/domovoi-satellite`: `wpa_cli … reassociate`, `nmcli
+connection up id domovoi-home` (the house network's profile, by name, since
+2026-10-12; cards prepared before then have `nmcli device connect wlan0`
+instead, which the client runs only where it cannot raise the setup
+hotspot), `systemctl --no-block restart` of its own two units,
 `domovoi-apply-payload`, `domovoi-sync-time` and `xvf_host`. Every one of
 those targets is a root-owned path the account cannot edit, and every
 script root runs on the device (stage 1, stage 2 as
@@ -1954,10 +1966,23 @@ into `config.toml` is ignored when the pin exists), and the payload helper
 verifies the signed list against that pin itself before it stages or runs
 anything, so the account cannot route root code to itself by choosing the
 server either — see *Root checks the list itself* under Server identity.
-And `domovoi-provisioning.service` (root, every boot until the unit is
-adopted, a no-op afterwards) still starts `python -m
-satellite.provisioning_mode` from the account's own venv and code tree;
-moving that onto a root-owned copy is the remaining item. The console
+And `domovoi-provisioning.service` (root, every boot) still starts
+`python -m satellite.provisioning_mode` from the account's own venv and
+code tree; moving that onto a root-owned copy is the remaining item. Since
+2026-10-12 that root path does real work on every provisioned boot, not
+only until adoption: it applies three network settings
+(`satellite/net_settings.py`) — it deletes the `domovoi-setup` hotspot
+profile (by that name only), turns Wi-Fi power saving off on the house
+profile and the radio, and sets the host name to `domovoi-<room>` (with
+`/etc/hosts`' `127.0.1.1` line, restarting avahi when it runs), then
+records what it changed in `~/.domovoi/net-settings.json`. This is how a
+satellite prepared before those settings gets them: the satellite upgrade
+replaces the code this root service runs, and the next boot applies it.
+The owner accepted that on 2026-10-12, knowing it widens what the
+root-runs-updatable-code path carries; the step touches nothing beyond
+those three settings and the record, and the record is the satellite
+user's to read, not an input to root. The account can still edit the code
+this service runs, exactly as before — the same remaining item. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only
