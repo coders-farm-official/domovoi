@@ -1622,7 +1622,7 @@ class VoicesRepository:
 
 class PronunciationsRepository:
     """The owner's changes to the "say it like" list (table
-    ``pronunciations``, V026): one row per word, keyed by the converter's
+    ``pronunciations``, V027): one row per word, keyed by the converter's
     normalized form. ``say_like`` None marks a shipped default the owner
     removed. Rows are upserted, never deleted, so the newest ``updated_at``
     is when the list last changed. The effective list (defaults + these

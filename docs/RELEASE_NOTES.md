@@ -6,7 +6,7 @@ a way that would otherwise get reported as a bug.
 
 ## 2026-10-12 — A new voice, and words it says the way you tell it
 
-A server update (it adds migration **V026**; the update runs it, and its
+A server update (it adds migration **V027**; the update runs it, and its
 dependency change needs the internet once).
 
 * **Domovoi sounds different after this update.** It now speaks with one
@@ -32,7 +32,7 @@ dependency change needs the internet once).
   stressed syllable in capitals (`Siobhan` = `shiv-AWN`); play it before
   you save. Three entries ship and can be changed or removed: Domovoi =
   `DOH-moe-voy`, Domo = `DOH-moe`, Nguyen = `win`. The list is stored in
-  the database (V026) and read by the phone (`GET /api/voice`).
+  the database (V027) and read by the phone (`GET /api/voice`).
 * **Why:** the old voice engine, `piper-tts`, is GPL-3.0 and carries
   espeak-ng (GPL-3.0), and the old voices' licences don't allow every use.
   Domovoi now turns text into speech sounds with its own converter

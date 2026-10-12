@@ -4,7 +4,7 @@ reads to sound the same.
 
 DB-FREE: the gates (device tier to read, an admin Bearer to change).
 DB-BACKED (``requires_db``): the contract the phone builds to, and every
-write through the real routes, against V026's table, with the hops to the
+write through the real routes, against V027's table, with the hops to the
 core recorded instead of made.
 """
 

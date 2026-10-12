@@ -9,7 +9,7 @@ and the web backend (``/api/voice``, which the phone reads too).
   ``TTS_PIPER_VOICE``.
 * **The pronunciation list**: the shipped defaults
   (domovoi/phonemizer/data/pronunciations_default.txt) overlaid with the
-  owner's changes in the ``pronunciations`` table (V026): a row with
+  owner's changes in the ``pronunciations`` table (V027): a row with
   ``say_like`` sets or changes a word, a row without one removes a default.
   The core loads the effective list into the converter at boot and again
   when the web backend says it changed (``POST

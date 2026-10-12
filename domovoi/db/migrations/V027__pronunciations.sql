@@ -1,4 +1,4 @@
--- V026 — the owner's "say it like" list (2026-10-12, the permissive voice).
+-- V027 — the owner's "say it like" list (2026-10-12, the permissive voice).
 --
 -- Domovoi's voices are fed by its own text-to-phoneme converter
 -- (domovoi/phonemizer). An owner can tell it how to say a word: a respelling

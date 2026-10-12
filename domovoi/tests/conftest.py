@@ -125,7 +125,7 @@ from domovoi.db.session import SessionLocal, engine
 #     plugin registration, not by individual tests.
 TABLES_TO_TRUNCATE = [
     "timers",
-    # The owner's "say it like" changes (V026); the defaults are a data file.
+    # The owner's "say it like" changes (V027); the defaults are a data file.
     "pronunciations",
     "library_tracks",
     # Generic media-acquisition queue.
