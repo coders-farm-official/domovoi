@@ -16,14 +16,20 @@ What is pinned here:
   next press resumes the question the last one parked;
 * a phone is its own device: it never reaches a room's music player,
   timers it sets are house-wide, and a satellite's settings are refused;
+* a leading wake phrase ("Hey Domovoit, …") is taken off before routing,
+  so "play suicide boys" reaches the music fast path as on a satellite,
+  and the thread keeps what was said;
 * the gate: device tier, closed before setup (as the drop-in socket).
 """
 
 from __future__ import annotations
 
 import io
+import json
+import os
 import uuid
 import wave
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,6 +40,7 @@ from sqlalchemy import text
 
 from domovoi import admin_auth, phone_voice
 from domovoi.clients import mpd as mpd_mod
+from domovoi.clients.ollama import OllamaStubClient
 from domovoi.db.session import SessionLocal
 from domovoi.handlers.base import SATELLITE_SETTING_TEXT
 from domovoi.main import app as core_app
@@ -481,6 +488,196 @@ async def test_music_from_a_phone_never_touches_a_rooms_player(
         body = (await _turn(c, tid)).json()
     assert body["matched_handler"] == "music"
     assert calls == []
+
+
+# ─── The wake phrase ──────────────────────────────────────────────────────
+# People say "Hey Domovoi" into the phone's push-to-talk; a satellite's
+# transcript never holds it. On 2026-10-12 a phone's "Hey Domovoit, play
+# Suicide Boys." missed every fast path, went to the tool model with the
+# name buried in it, and played a random song.
+
+
+@pytest.mark.parametrize(
+    ("said", "routed"),
+    [
+        # As speech-to-text spelled them on Kamron's phone, 2026-10-12.
+        ("Hey Domovoit, play Suicide Boys.", "play Suicide Boys."),
+        ("Hey Domavoy, what time is it?", "what time is it?"),
+        ("Hey Domovoi, turn it down.", "turn it down."),
+        ("OK Domovoi play jazz", "play jazz"),
+        ("Hi Domovoy. Next song.", "Next song."),
+        ("Hello Domo, what's the weather?", "what's the weather?"),
+        ("hey domo play the album strange engines", "play the album strange engines"),
+        ("hey doma voy, pause", "pause"),
+        ("hey domo voi stop", "stop"),
+        ("hey tomovoi, stop", "stop"),
+        ("Um, hey Domovoi, stop", "stop"),
+        ("Domovoi, what time is it?", "what time is it?"),
+        ("Domovoit, stop.", "stop."),
+        ("Hey Domovoi. Hey Domovoi, play jazz.", "play jazz."),
+    ],
+)
+def test_a_leading_wake_phrase_is_taken_off(said, routed) -> None:
+    assert phone_voice.strip_wake_phrase(said) == routed
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "play Suicide Boys.",
+        # A greeting without the name is the router's own filler to drop.
+        "Hey, what time is it?",
+        "Hey there, play jazz",
+        "hey dominic, play jazz",
+        # Without a greeting only a near-exact name counts.
+        "Domino, play jazz",
+        "Do more of that",
+        "today is monday",
+        # Nothing but the wake phrase: there is no request to route instead.
+        "Hey Domovoi.",
+        "Hey Domovoi",
+    ],
+)
+def test_anything_else_is_routed_as_it_was_said(said) -> None:
+    assert phone_voice.strip_wake_phrase(said) == said
+
+
+def test_the_households_own_name_for_the_assistant_counts_too(monkeypatch) -> None:
+    from domovoi.config import settings
+
+    monkeypatch.setattr(settings, "bot_name", "Jarvis")
+    assert phone_voice.strip_wake_phrase("Hey Jarvis, play jazz.") == "play jazz."
+    assert phone_voice.strip_wake_phrase("Hey Domovoi, play jazz.") == "play jazz."
+
+
+class _ToolModelThatLosesTheName(OllamaStubClient):
+    """A tool model that answers "Hey Domovoit, play Suicide Boys." with
+    music/play and no name — what the live turn's random song looks like.
+    (The stub's own tool model answers nothing, which would send the turn
+    to the Q&A model instead.) Records what it was asked."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def route(self, transcript: str, tool_schemas: list[dict]) -> dict:  # type: ignore[override]
+        self.calls.append(transcript)
+        return {"handler": "music", "args": {"action": "play"}}
+
+
+@pytest.fixture
+def resolver(monkeypatch):
+    """The spoken-name resolver on, its process-wide index rebuilt from
+    the library each test seeds."""
+    from domovoi.config import settings
+    from domovoi.handlers.shared import library_match
+
+    monkeypatch.setattr(settings, "music_match_enabled", True)
+    library_match.reset_for_tests()
+    yield
+    library_match.reset_for_tests()
+
+
+async def _seed_library(tracks: list[dict[str, Any]]) -> None:
+    async with SessionLocal() as s:
+        for t in tracks:
+            await s.execute(
+                text(
+                    "INSERT INTO library_tracks (id, file_path, title, artist, album) "
+                    "VALUES (:id, :fp, :title, :artist, :album)"
+                ),
+                {"id": t["id"], "fp": t["file_path"], "title": t["title"],
+                 "artist": t["artist"], "album": t["album"]},
+            )
+        await s.commit()
+
+
+async def _hey_domovoi_play_suicide_boys(
+    tracks: list[dict[str, Any]], whisper, monkeypatch,
+) -> tuple[dict[str, Any], _ToolModelThatLosesTheName, int]:
+    import domovoi.router as router_mod
+
+    tool = _ToolModelThatLosesTheName()
+    monkeypatch.setattr(router_mod, "get_ollama_client", lambda: tool)
+    await _seed_library(tracks)
+    whisper.texts = ["Hey Domovoit, play Suicide Boys."]
+    tid = await _thread()
+    async with _client() as c:
+        r = await _turn(c, tid)
+    assert r.status_code == 200, r.text
+    return r.json(), tool, tid
+
+
+def _played_ids(body: dict[str, Any]) -> set[int]:
+    plays = [a for a in body["actions"] if a["type"] == "play"]
+    assert len(plays) == 1, body
+    return {int(item["id"]) for item in plays[0]["items"]}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_hey_domovoi_play_suicide_boys_plays_suicide_boys_on_the_phone(
+    db_session, open_gate, whisper, heard_as, resolver, monkeypatch,
+) -> None:
+    """The turn takes the music fast path a satellite's "play suicide boys"
+    takes — the spoken-name resolver, $uicideboy$ shuffled — and the tool
+    model is never asked."""
+    fixture = Path(__file__).parent / "fixtures" / "spoken_match_library.json"
+    tracks = json.loads(fixture.read_text(encoding="utf-8"))["tracks"]
+    body, tool, tid = await _hey_domovoi_play_suicide_boys(tracks, whisper, monkeypatch)
+
+    assert tool.calls == []
+    assert (body["matched_handler"], body["matched_path"]) == ("music", "fast")
+    assert body["reply"] == "Playing Suicide Boys, shuffled."
+    assert _played_ids(body) == {1, 2, 3, 4}
+    # The thread (and the answer) keep what was said; the intent is what
+    # was routed.
+    assert body["transcript"] == "Hey Domovoit, play Suicide Boys."
+    user, _ = await _rows(tid)
+    assert user["content"] == "Hey Domovoit, play Suicide Boys."
+    async with SessionLocal() as s:
+        logged = (await s.execute(text("SELECT transcript FROM intents_log"))).scalars().all()
+    assert logged == ["play Suicide Boys."]
+
+
+@requires_db
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.environ.get("DOMOVOI_SPOKEN_GATE_DIR"),
+    reason="household library NOT RUN (set DOMOVOI_SPOKEN_GATE_DIR)",
+)
+async def test_hey_domovoi_play_suicide_boys_on_the_household_library(
+    db_session, open_gate, whisper, heard_as, resolver, monkeypatch,
+) -> None:
+    """The same turn on the library it failed on (the spoken gate's
+    library.json, household data kept outside the repo): every
+    $uicideboy$ row plays, nothing else."""
+    rows = json.loads(
+        (Path(os.environ["DOMOVOI_SPOKEN_GATE_DIR"]) / "library.json").read_text(encoding="utf-8")
+    )
+    rows = rows["items"] if isinstance(rows, dict) else rows
+    expected = {int(r["id"]) for r in rows if "$uicideboy$" in (r.get("artist") or "").lower()}
+    assert expected, "the household library has no $uicideboy$ rows"
+    body, tool, _ = await _hey_domovoi_play_suicide_boys(rows, whisper, monkeypatch)
+
+    assert tool.calls == []
+    assert (body["matched_handler"], body["matched_path"]) == ("music", "fast")
+    assert body["reply"] == "Playing Suicide Boys, shuffled."
+    assert _played_ids(body) == expected
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_only_the_wake_phrase_is_answered_as_it_was_said(
+    db_session, open_gate, whisper, heard_as,
+) -> None:
+    whisper.texts = ["Hey Domovoi."]
+    tid = await _thread()
+    async with _client() as c:
+        body = (await _turn(c, tid)).json()
+    assert body["heard"] is True and body["transcript"] == "Hey Domovoi."
+    async with SessionLocal() as s:
+        logged = (await s.execute(text("SELECT transcript FROM intents_log"))).scalars().all()
+    assert logged == ["Hey Domovoi."]
 
 
 # ─── The gate ─────────────────────────────────────────────────────────────
