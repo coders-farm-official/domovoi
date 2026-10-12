@@ -39,6 +39,21 @@ data class SatWifi(
     val mode: String? = null,
 )
 
+/** The slice of GET /api/satellites/{room}/health this screen reads: why
+ *  the satellite wants a reboot (it was upgraded, and the network settings
+ *  root applies at boot are not in place yet, or did not all apply). */
+@Serializable
+data class SatHealthSample(val reboot_needed: String? = null)
+
+@Serializable
+data class SatHealthLatest(val sample: SatHealthSample? = null)
+
+@Serializable
+data class SatHealthDoc(val latest: SatHealthLatest? = null)
+
+internal fun rebootNeeded(doc: SatHealthDoc?): String? =
+    doc?.latest?.sample?.reboot_needed?.takeIf { it.isNotBlank() }
+
 @Serializable
 data class SatMpdPorts(
     val control: Int? = null,
