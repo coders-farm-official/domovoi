@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,7 +46,12 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.DeviceDownloads
+import com.domovoi.app.net.Paging
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.toPage
+import com.domovoi.app.ui.components.LoadMoreNearEnd
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
 import com.domovoi.app.player.Chapter
@@ -107,9 +113,22 @@ fun AudiobooksScreen() {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
 
-    val books = rememberApi("audiobooks", eventTypes = setOf("podcasts.changed")) {
-        it.api.get("/api/audiobooks").decode<List<AudiobookRow>>()
+    // A page of books at a time as the grid scrolls (net/Paging.kt); the
+    // search is the server's, over every book.
+    var search by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    var needle by remember { mutableStateOf(search.trim()) }
+    LaunchedEffect(search) {
+        kotlinx.coroutines.delay(250)
+        needle = search.trim()
     }
+    val booksPath = "/api/audiobooks?sort=title" +
+        (if (needle.isNotEmpty()) "&q=" + android.net.Uri.encode(needle) else "")
+    val pager = rememberPager<AudiobookRow>(
+        booksPath, keyOf = { it.id }, eventTypes = setOf("podcasts.changed"),
+    ) { a, req -> a.api.get(Paging.path(booksPath, req)).toPage<AudiobookRow>(loadedBefore = req.offset) }
+    val books by pager.state.collectAsState()
+    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    LoadMoreNearEnd(gridState, pager)
 
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
@@ -141,7 +160,7 @@ fun AudiobooksScreen() {
                 .onSuccess { r ->
                     val scanned = r["scanned"]?.jsonPrimitive?.intOrNull ?: 0
                     toast("Indexed $scanned book(s)")
-                    books.refresh()
+                    pager.reload()
                 }
                 .onFailure { toast(failureText("Reindex", it)) }
             busy = false
@@ -159,13 +178,19 @@ fun AudiobooksScreen() {
             },
         )
         ListeningAsChip(Modifier.padding(top = 8.dp))
+        androidx.compose.material3.OutlinedTextField(
+            value = search, onValueChange = { search = it },
+            placeholder = { Text("search books…") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        )
         Spacer(Modifier.height(12.dp))
 
         when {
-            books.data == null && books.loading -> LoadingState()
-            books.data == null && books.error != null ->
-                ErrorState(books.error ?: "request failed", books.refresh)
-            books.data.isNullOrEmpty() -> EmptyState(
+            books.items.isEmpty() && books.loading -> LoadingState()
+            books.items.isEmpty() && books.error != null ->
+                ErrorState(books.error ?: "request failed", pager::retry)
+            books.items.isEmpty() && needle.isNotEmpty() -> EmptyState("no books match", "search = \"$needle\"")
+            books.items.isEmpty() -> EmptyState(
                 "no audiobooks yet",
                 "drop .m4b files or per-chapter folders into your audiobooks dir, then reindex",
                 action = {
@@ -173,16 +198,20 @@ fun AudiobooksScreen() {
                 },
             )
             else -> LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Adaptive(260.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.weight(1f),
             ) {
-                items(books.data.orEmpty(), key = { it.id }) { book ->
+                items(books.items, key = { it.id }) { book ->
                     BookCard(
                         book,
                         onSave = { saveToDevice(book) },
                     ) { playBook(app, scope, book) { resume = it } }
+                }
+                item(key = "books-footer", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                    PagedFooter(books, "books", onRetry = pager::retry, onLoadMore = pager::loadMore)
                 }
             }
         }

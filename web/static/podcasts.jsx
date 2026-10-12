@@ -6,6 +6,8 @@
  * Data sources:
  *   * GET  /api/podcasts/subscriptions            — subscribed shows + counts
  *   * GET  /api/podcasts/subscriptions/{id}/episodes
+ *     Both load one page at a time as they scroll (data.js usePagedList);
+ *     the searches are the server's, over every show / episode.
  *   * POST /api/podcasts/subscriptions            — subscribe (feed URL / name)
  *   * DELETE /api/podcasts/subscriptions/{id}
  *   * GET  /api/podcasts/discover?q=              — iTunes discovery (network)
@@ -55,9 +57,14 @@ const PodcastsPage = () => {
   const p = usePlayback();
   const net = usePodcastsInternet();
   const [fire, toastNode] = useToast();
-  const { items: subs, refresh } = useApiList('/api/podcasts/subscriptions', {
-    eventTypes: ['podcasts.changed'],
-  });
+  const [search, setSearch] = React.useState('');
+  const debSearch = useDebouncedValue(search, 250);
+  const needle = debSearch.trim();
+  const list = usePagedList(
+    '/api/podcasts/subscriptions' + (needle ? `?q=${encodeURIComponent(needle)}` : ''),
+    { eventTypes: ['podcasts.changed'] });
+  const subs = list.items;
+  const refresh = list.reload;
   const [selected, setSelected] = React.useState(null);   // subscription row
   const [showAdd, setShowAdd] = React.useState(false);
   const [resumePrompt, setResumePrompt] = React.useState(null); // {item, pos}
@@ -77,7 +84,12 @@ const PodcastsPage = () => {
     <>
       <PageHeader title="Podcasts" sub="subscriptions + episodes, played here or cast to a room"
                   actions={
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input type="text" placeholder="search shows…" value={search}
+                             onChange={(e) => setSearch(e.target.value)}
+                             style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 10px',
+                                      borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                                      background: 'var(--card)', color: 'var(--fg)', width: 160 }}/>
                       <ListeningAsSelector/>
                       <Button icon="refresh-cw" onClick={poll} disabled={polling || net.off}
                               title={podcastsNeedsInternetTitle(net.off)}>{polling ? 'polling…' : 'poll now'}</Button>
@@ -86,10 +98,13 @@ const PodcastsPage = () => {
                     </div>
                   }/>
 
-      {(!subs || subs.length === 0) ? (
-        <Empty glyph="headphones" title="no subscriptions yet"
-               sub="subscribe to a podcast by RSS URL or search by name"
-               action={<Button variant="primary" icon="plus" onClick={() => setShowAdd(true)}>subscribe</Button>}/>
+      {(!subs || subs.length === 0) && !list.loading && !list.error ? (
+        needle
+          ? <Empty glyph="headphones" title="no shows match" sub={`search = “${needle}”`}
+                   action={<Button icon="x" onClick={() => setSearch('')}>clear search</Button>}/>
+          : <Empty glyph="headphones" title="no subscriptions yet"
+                   sub="subscribe to a podcast by RSS URL or search by name"
+                   action={<Button variant="primary" icon="plus" onClick={() => setShowAdd(true)}>subscribe</Button>}/>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
           {subs.map((sub) => (
@@ -109,6 +124,7 @@ const PodcastsPage = () => {
           ))}
         </div>
       )}
+      <PagedListFooter list={list} noun="shows"/>
 
       {selected && (
         <EpisodeDrawer sub={selected} onClose={() => setSelected(null)}
@@ -148,9 +164,16 @@ const PodArt = ({ url, size = 48 }) => {
 };
 
 const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
-  const { items: episodes } = useApiList(`/api/podcasts/subscriptions/${sub.id}/episodes`, {
-    eventTypes: ['podcasts.changed', 'podcast_positions.changed'],
-  });
+  const [search, setSearch] = React.useState('');
+  const debSearch = useDebouncedValue(search, 250);
+  const needle = debSearch.trim();
+  // A long back catalogue arrives a page at a time as the drawer scrolls;
+  // the search runs on the server over every episode of the show.
+  const list = usePagedList(
+    `/api/podcasts/subscriptions/${sub.id}/episodes`
+      + (needle ? `?q=${encodeURIComponent(needle)}` : ''),
+    { eventTypes: ['podcasts.changed', 'podcast_positions.changed'] });
+  const episodes = list.items;
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'oklch(0 0 0 / 0.35)', zIndex: 50 }}/>
@@ -164,6 +187,10 @@ const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
           </div>
           <IconButton name="trash-2" onClick={onUnsub} title="unsubscribe"/>
           <IconButton name="x" onClick={onClose}/>
+        </div>
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid var(--border-soft)' }}>
+          <input type="text" placeholder="search episodes…" value={search}
+                 onChange={(e) => setSearch(e.target.value)} style={{ ..._inp, width: '100%', height: 30 }}/>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {(episodes || []).map((ep) => (
@@ -188,7 +215,12 @@ const EpisodeDrawer = ({ sub, onClose, onPlay, onUnsub }) => {
               )}
             </div>
           ))}
-          {(episodes || []).length === 0 && <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>no episodes yet — try "poll now"</div>}
+          {(episodes || []).length === 0 && !list.loading && !list.error && (
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
+              {needle ? `no episodes match “${needle}”` : 'no episodes yet — try "poll now"'}
+            </div>
+          )}
+          <PagedListFooter list={list} noun="episodes" compact/>
         </div>
       </div>
     </>

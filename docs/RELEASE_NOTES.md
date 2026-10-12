@@ -4,6 +4,77 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — Long lists load as you scroll
+
+New Android build; on the server, the usual update. Update the server
+first: the Android app already installed keeps working against it (it gets
+the answers it was built for), and the new app still works against a
+server that hasn't been updated (Music still pages there, by offset; the
+other lists arrive whole, as before).
+
+* **Music, Videos, Files, Audiobooks and Podcasts load a page at a time**,
+  on the dashboard and in the app. The first 50 rows show at once; the
+  next 50 load as you near the bottom, with "showing N of M" and a
+  **retry** when a page fails. Music's library loses its page arrows for
+  the same scrolling (web and app), and a page grew from 12 rows to 50.
+* **The app's video feed keeps going past the first page**: as you near
+  the end of what is loaded, the next page joins the feed.
+* **The phone's own lists page too** ("your device" and the offline app):
+  music, videos and photo albums are read a page at a time off the phone's
+  media index, and a picked folder builds its rows a page at a time.
+* **Every search, filter and sort runs on the server** and covers the
+  whole list. New: a search box on Audiobooks, Podcasts (shows, and the
+  episodes of one show) and in the Files list (this folder), on the web and
+  in the app, and sort choices on the web's Videos, Files and Audiobooks.
+* **Select all** on Music and Files selects the loaded rows; its tooltip
+  says how many.
+* **API:** every list behind those pages takes `limit` (default 50, max
+  200) and a `cursor` from the previous answer's `next_cursor`, and
+  answers with `total`, `has_more` and `next_cursor` (API_REFERENCE §1.7).
+  A client that sends no paging parameter gets the answer it always got:
+  the whole list for Videos, a Files folder, Audiobooks and Podcasts (the
+  bare array for those three), and Music's 50-row page with `offset`.
+* **Videos and Files listings are cached between pages** and re-read when
+  a folder changes, a write through the server lands, on **Rescan**, or
+  after five minutes. A cold read of a 10,000-entry folder fell from ~6 s
+  to ~0.13 s, and of 10,000 videos from ~2 s to ~0.1 s (Windows dev box);
+  later pages take ~25 ms.
+* **Videos reads every library whole.** The 2,000-videos and 2,000-folders
+  per library limits are gone. 50,000 videos show their first page in
+  ~1–1.5 s and every later page in ~50 ms. The one limit left is time: a
+  drive still being read after two minutes is listed as far as it got, and
+  the Videos page says so. An app from before this update still gets at
+  most 2,000 videos per library (the list it was built to hold).
+
+## 2026-10-11 — Android: "your device" on the Files, Music and Videos pages
+
+New Android build; nothing to do on the server.
+
+* **Files, Music and Videos have a switch at the top: the server, or
+  "your device".** "Your device" shows the phone's own folders and
+  photos, music and videos exactly as the app does with no server
+  connected; playing something there plays it on the phone. Switching back
+  shows the server's page where you left it, and each page remembers its
+  side until the app is closed.
+* **There, each row's Download is an Upload** that sends that file to the
+  server: a track to the Music library (indexed at once), a video to the
+  Videos library (Documents on a server without one), anything else
+  through the send-to-home sheet, where you pick the library and folder.
+  The row shows the progress; a toast says where it landed. The file
+  streams, so a long phone video uploads without running the app out of
+  memory.
+* **A device an admin blocked from changing files** (Settings → Devices)
+  sees why above the list and its Upload buttons refuse with the server's
+  reason; so does a read-only Music library. Uploads use the same doors
+  as the dashboard's (`/api/music/library/upload`, `/api/files/upload`), so
+  nothing changes in who may write where.
+* **A spell in the background no longer drops the app to local media.**
+  Coming back after ~30 s away (the system folder picker is enough) used
+  to land on the phone's media next to a healthy server, and the page you
+  were on lost its place. Only time the app spends on screen trying the
+  server now counts toward the 10 s fallback, with a fresh check on the
+  way back; out of the house the fallback works as before.
+
 ## 2026-10-11 — Satellites moves into Settings, a phone bar you pick, and stopped rooms read quiet
 
 Dashboard and Android build; nothing to do on the server beyond the usual

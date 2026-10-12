@@ -31,7 +31,9 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from domovoi.admin_auth import check_device_request, require_admin_mutation, require_device
+from web.backend.api import paging
 from web.backend.api.files_security import is_sensitive_name, unstorable_reason
+from web.backend.api.paging import SortKey
 # The guest gate (owner decision 2026-10-10): the previous button takes a
 # guest on a playing room too, like the room queue.
 from web.backend.api.music_queue import GUEST_OR_DEVICE
@@ -89,20 +91,29 @@ ADMIN = [Depends(require_admin_mutation)]
 # ─── Library ───────────────────────────────────────────────────────────────
 
 
-_SORT_CLAUSES: dict[str, str] = {
-    # Every clause ends with ``id`` as a stable tiebreaker so rows
-    # with equal sort keys keep a consistent order. Without this, a
-    # bulk-indexer batch that stamps the same ``added_at`` on every
-    # row leaves ties to MVCC heap order — and a single UPDATE on a
-    # tied row (favoriting it, say) rewrites its tuple at the end of
-    # the heap, which the next SELECT then renders as "the row jumped
-    # to the bottom of the page." The id tiebreaker pins the order.
-    "added_desc": "added_at DESC, id DESC",
-    "added_asc":  "added_at ASC, id ASC",
-    "title":      "LOWER(title) ASC NULLS LAST, added_at DESC, id DESC",
-    "artist":     "LOWER(artist) ASC NULLS LAST, added_at DESC, id DESC",
-    "duration":   "duration_sec DESC NULLS LAST, added_at DESC, id DESC",
+# Every sort ends with ``id`` as a stable tiebreaker so rows with equal
+# sort keys keep a consistent order. Without this, a bulk-indexer batch
+# that stamps the same ``added_at`` on every row leaves ties to MVCC heap
+# order — and a single UPDATE on a tied row (favoriting it, say) rewrites
+# its tuple at the end of the heap, which the next SELECT then renders as
+# "the row jumped to the bottom of the page." The id tiebreaker pins the
+# order — and makes the key unique, which is what lets a cursor name one
+# row (paging.keyset_where).
+_ADDED_DESC = [SortKey("added_at", desc=True, kind="ts"), SortKey("id", desc=True, kind="int")]
+_SORT_KEYS: dict[str, list[SortKey]] = {
+    "added_desc": _ADDED_DESC,
+    "added_asc": [SortKey("added_at", kind="ts"), SortKey("id", kind="int")],
+    # NULL titles / artists / durations go last, as they always did
+    # (``ASC NULLS LAST`` / ``DESC NULLS LAST``).
+    "title": [SortKey("LOWER(title)", nulls_last=True), *_ADDED_DESC],
+    "artist": [SortKey("LOWER(artist)", nulls_last=True), *_ADDED_DESC],
+    "duration": [SortKey("duration_sec", desc=True, nulls_last=True, kind="int"), *_ADDED_DESC],
 }
+
+_TRACK_COLUMNS = """id, file_path, title, artist, album, duration_sec,
+                       source, source_id, musicbrainz_recording_id,
+                       added_at, added_via, enriched_at, favorited"""
+_TRACK_COLUMN_COUNT = 13
 
 
 @router.get("/library", response_model=LibraryPage)
@@ -125,17 +136,25 @@ async def list_library(
                     "checkbox sends True or omits.",
     ),
     sort: Literal["added_desc", "added_asc", "title", "artist", "duration"] = Query(default="added_desc"),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=paging.DEFAULT_LIMIT, ge=1, le=paging.MAX_LIMIT,
+                       description=paging.LIMIT_DOC),
+    offset: int = Query(default=0, ge=0, description=paging.OFFSET_DOC),
+    cursor: str | None = paging.cursor_query(),
 ) -> LibraryPage:
     """One page of ``library_tracks`` plus the unbounded count that
-    matches the active ``q`` / ``source`` filters.
+    matches the active ``q`` / ``source`` / ``favorited`` filters.
+
+    Always paged (default 50, max 200), as it always was. ``cursor`` (from
+    the previous page's ``next_cursor``) pages by keyset — rows added,
+    removed or re-sorted while somebody scrolls are neither repeated nor
+    skipped — and is what both clients now send; ``offset`` still works
+    for the installed Android app (web/backend/api/paging.py).
 
     Sort options are whitelisted (the ORDER BY can't be user-supplied)
     so a malformed ``sort`` returns 422 rather than a SQL error.
     """
     where_parts: list[str] = []
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
     if q:
         # The path half of the search sees what a client is SHOWN (WEB-16):
         # matching the stored absolute path let an open caller recover the
@@ -156,7 +175,12 @@ async def list_library(
         params["favorited"] = favorited
     where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
-    order_by = _SORT_CLAUSES[sort]
+    keys = _SORT_KEYS[sort]
+    page_where = where
+    if cursor is not None:
+        after = paging.keyset_where(keys, cursor, sort, params)
+        page_where = f"{where} AND {after}" if where else f"WHERE {after}"
+        params["offset"] = 0
 
     async with session_scope() as s:
         total_row = await s.execute(
@@ -168,18 +192,23 @@ async def list_library(
         rows = await s.execute(
             text(
                 f"""
-                SELECT id, file_path, title, artist, album, duration_sec,
-                       source, source_id, musicbrainz_recording_id,
-                       added_at, added_via, enriched_at, favorited
+                SELECT {_TRACK_COLUMNS}, {paging.key_columns(keys)}
                 FROM library_tracks
-                {where}
-                ORDER BY {order_by}
+                {page_where}
+                ORDER BY {paging.order_sql(keys)}
                 LIMIT :limit OFFSET :offset
                 """
             ),
             params,
         )
-        return LibraryPage(total=total, items=[_row_to_track(r) for r in rows.all()])
+        page, has_more, next_cursor = paging.db_page(
+            rows.all(), keys, limit=limit, sort=sort, key_offset=_TRACK_COLUMN_COUNT,
+        )
+        return LibraryPage(
+            total=total, items=[_row_to_track(r) for r in page],
+            limit=limit, offset=None if cursor is not None else offset,
+            has_more=has_more, next_cursor=next_cursor,
+        )
 
 
 @router.get("/library/stats", response_model=LibraryStats)

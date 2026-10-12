@@ -114,6 +114,7 @@ from web.backend.api.files_security import (
     unstorable_reason,
 )
 from web.backend.api.inline_serve import disposition_for, inert_headers
+from web.backend.api import listing_cache
 
 log = logging.getLogger(__name__)
 
@@ -491,6 +492,14 @@ def _assert_sheet_editor_may_write(target: Path) -> None:
         )
 
 
+def _listing_changed() -> None:
+    """A write landed in the Documents folder: the Files page's cached
+    listing of it (listing_cache) is dropped, so the next page shows the new
+    size and time even when the save rewrote a file in place — which moves
+    no folder mtime."""
+    listing_cache.invalidate("core:documents")
+
+
 async def _assert_files_policy(request: Request, device_id: Optional[str]) -> None:
     """Run :mod:`web.backend.api.files`'s write policy for
     ``core:documents`` — the per-device block, the admin-write library
@@ -689,6 +698,7 @@ async def create_document(request: Request, req: CreateRequest) -> DocumentRow:
         _ensure_parent_dir(target)
         target.write_bytes(_blank_content(ext))
         st = target.stat()
+    _listing_changed()
     return DocumentRow(
         rel_path=target.name,
         name=target.stem,
@@ -721,6 +731,8 @@ async def delete_documents(req: DeleteRequest) -> DeleteResult:
                 failed.append(rp)
         except OSError:
             failed.append(rp)
+    if deleted:
+        _listing_changed()
     return DeleteResult(deleted=deleted, failed=failed)
 
 
@@ -811,6 +823,7 @@ async def write_text_file(
         _ensure_parent_dir(target)
         target.write_text(req.text, encoding="utf-8", newline="")
         st = target.stat()
+    _listing_changed()
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name,
@@ -1109,6 +1122,7 @@ async def write_sheet(
         _ensure_parent_dir(target)
         _write_sheet_grid(target, req.rows)
         st = target.stat()
+    _listing_changed()
     ext = target.suffix.lower()
     return DocumentRow(
         rel_path=target.name, name=target.stem, ext=ext,
@@ -1324,6 +1338,8 @@ async def upload_documents(
             continue
         saved.append(target.name)
 
+    if saved:
+        _listing_changed()
     if not saved:
         raise HTTPException(
             status_code=400,
@@ -1387,6 +1403,7 @@ async def write_drawing(request: Request, req: DrawingWriteRequest) -> DocumentR
         _ensure_parent_dir(target)
         target.write_text(req.content, encoding="utf-8")
         st = target.stat()
+    _listing_changed()
     return DocumentRow(
         rel_path=target.name,
         name=target.stem,

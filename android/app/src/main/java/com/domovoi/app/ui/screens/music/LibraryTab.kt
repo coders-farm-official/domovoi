@@ -15,8 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -39,25 +37,28 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
-import com.domovoi.app.net.ApiState
+import com.domovoi.app.net.PagedState
+import com.domovoi.app.net.Pager
 import com.domovoi.app.player.CoverArt
 import com.domovoi.app.ui.components.CoverImage
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
 import com.domovoi.app.ui.components.LoadingState
+import com.domovoi.app.ui.components.PagedFooter
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
 
-/** Library tab — server-paginated track list with filters, bulk selection
- *  and per-row actions. Mirrors web LibraryTab. */
+/** Library tab — the track list, loaded a page at a time as it scrolls
+ *  (MusicScreen's pager), with filters, bulk selection and per-row
+ *  actions. Mirrors web LibraryTab. */
 internal fun LazyListScope.libraryTab(
     ui: MusicUi,
-    lib: ApiState<LibraryPage>,
+    lib: PagedState<LibraryTrack>,
+    pager: Pager<LibraryTrack>,
     libraryTotal: Int?,
-    pages: Int,
     realPlaylists: List<Playlist>,
     onSelect: (LibraryTrack) -> Unit,
     onToggleFavorite: (LibraryTrack) -> Unit,
@@ -68,11 +69,11 @@ internal fun LazyListScope.libraryTab(
     onPlayNext: (LibraryTrack) -> Unit,
     onSaveToDevice: (LibraryTrack) -> Unit,
 ) {
-    val tracks = lib.data?.items.orEmpty()
-    val total = lib.data?.total ?: 0
+    val tracks = lib.items
+    val total = lib.total ?: 0
 
     item(key = "lib-filters") {
-        LibraryFilters(ui, tracks, total, libraryTotal)
+        LibraryFilters(ui, tracks, total, libraryTotal, more = lib.hasMore)
     }
     if (ui.selectedIds.isNotEmpty()) {
         item(key = "lib-bulk") { BulkBar(ui, realPlaylists, onBulkAdd) }
@@ -82,7 +83,7 @@ internal fun LazyListScope.libraryTab(
     when {
         lib.loading && tracks.isEmpty() -> item(key = "lib-loading") { LoadingState() }
         lib.error != null && tracks.isEmpty() -> item(key = "lib-error") {
-            ErrorState(lib.error ?: "request failed", lib.refresh)
+            ErrorState(lib.error ?: "request failed", pager::retry)
         }
         tracks.isEmpty() -> item(key = "lib-empty") {
             if (filtered) {
@@ -95,7 +96,7 @@ internal fun LazyListScope.libraryTab(
                     },
                     action = {
                         TextButton(onClick = {
-                            ui.q = ""; ui.source = "all"; ui.favoritedOnly = false; ui.page = 0
+                            ui.q = ""; ui.source = "all"; ui.favoritedOnly = false
                         }) { Text("clear filters", color = Domovoi.colors.brand) }
                     },
                 )
@@ -122,26 +123,9 @@ internal fun LazyListScope.libraryTab(
         }
     }
 
-    item(key = "lib-pager") {
-        Row(
-            Modifier.fillMaxWidth().padding(top = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "page ${ui.page + 1} of $pages",
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
-                color = Domovoi.colors.fgMuted,
-                modifier = Modifier.weight(1f),
-            )
-            SmallIconButton(
-                Icons.Filled.ChevronLeft, "previous page",
-                enabled = ui.page > 0,
-            ) { ui.page = (ui.page - 1).coerceAtLeast(0) }
-            SmallIconButton(
-                Icons.Filled.ChevronRight, "next page",
-                enabled = ui.page < pages - 1,
-            ) { ui.page = (ui.page + 1).coerceAtMost(pages - 1) }
+    if (tracks.isNotEmpty()) {
+        item(key = "lib-footer") {
+            PagedFooter(lib, "tracks", onRetry = pager::retry, onLoadMore = pager::loadMore)
         }
     }
 }
@@ -152,12 +136,13 @@ private fun LibraryFilters(
     pageTracks: List<LibraryTrack>,
     total: Int,
     libraryTotal: Int?,
+    more: Boolean,
 ) {
     val filtered = ui.q.isNotBlank() || ui.source != "all" || ui.favoritedOnly
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = ui.q,
-            onValueChange = { ui.q = it; ui.page = 0 },
+            onValueChange = { ui.q = it },
             placeholder = {
                 Text("search title, artist, album, path…", color = Domovoi.colors.fgSubtle)
             },
@@ -186,7 +171,7 @@ private fun LibraryFilters(
             SelectMenu(
                 "source", ui.source,
                 listOf("all" to "all") + sourceOptions.map { it to it },
-                onSelect = { ui.source = it; ui.page = 0 },
+                onSelect = { ui.source = it },
             )
             SelectMenu(
                 "sort", ui.sort,
@@ -194,12 +179,12 @@ private fun LibraryFilters(
                     "added_desc" to "newest", "added_asc" to "oldest",
                     "title" to "title", "artist" to "artist", "duration" to "longest",
                 ),
-                onSelect = { ui.sort = it; ui.page = 0 },
+                onSelect = { ui.sort = it },
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(
                     checked = ui.favoritedOnly,
-                    onCheckedChange = { ui.favoritedOnly = it; ui.page = 0 },
+                    onCheckedChange = { ui.favoritedOnly = it },
                 )
                 Text(
                     "favorites only",
@@ -223,8 +208,10 @@ private fun LibraryFilters(
                     }
                 },
             )
+            // "Select all" is the LOADED tracks — what this phone holds —
+            // never the ones further down, and the label says so.
             Text(
-                "select page",
+                "select the ${pageTracks.size} loaded" + if (more) " (more as you scroll)" else "",
                 style = MaterialTheme.typography.labelSmall,
                 color = Domovoi.colors.fgMuted,
                 modifier = Modifier.weight(1f),

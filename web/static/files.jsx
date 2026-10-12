@@ -20,7 +20,11 @@
  * Data sources:
  *   Files browser (all libraries):
  *     * GET  /api/files/libraries   — the library registry (root_path stripped).
- *     * GET  /api/files/browse      — one directory level inside a library.
+ *     * GET  /api/files/browse      — one directory level inside a library,
+ *                                     a page at a time as the list scrolls
+ *                                     (data.js usePagedList); the name
+ *                                     filter and the sort are the server's,
+ *                                     over the whole folder.
  *     * GET  /api/files/download    — file (attachment) or dir (zip).
  *     * POST /api/files/upload      — upload into the current dir.
  *     * POST /api/files/delete      — delete files / (recursive) folders.
@@ -764,9 +768,13 @@ const FilesPage = () => {
   const [libraries, setLibraries] = React.useState([]);
   const [libLoading, setLibLoading] = React.useState(true);
   const [activeId, setActiveId] = React.useState(null);
-  const [view, setView] = React.useState(null);      // browse response
-  const [path, setPath] = React.useState('');
-  const [browseLoading, setBrowseLoading] = React.useState(false);
+  // The folder belongs to a library: switching libraries is the root of
+  // the new one at once (no request for the old path inside the new one).
+  const [loc, setLoc] = React.useState({ libId: null, path: '' });
+  const path = loc.libId === activeId ? loc.path : '';
+  const [filter, setFilter] = React.useState('');
+  const debFilter = useDebouncedValue(filter, 250);
+  const [sort, setSort] = React.useState('name');
   const [selected, setSelected] = React.useState(() => new Set());  // rels
   const [docRel, setDocRel] = React.useState(null);     // markdown editor
   const [sheetRel, setSheetRel] = React.useState(null); // spreadsheet editor
@@ -803,41 +811,60 @@ const FilesPage = () => {
 
   React.useEffect(() => { loadLibraries(); }, [loadLibraries]);
 
-  const doBrowse = React.useCallback(async (libId, p) => {
-    if (!libId) { setView(null); return; }
-    setBrowseLoading(true);
-    try {
-      // device_id only affects `writable` / `blocked_reason` in the answer:
-      // reading is never blocked, but the page disables its own write
-      // controls from this rather than discovering the 403 on first drop.
-      const r = await apiGet(
-        `/api/files/browse?library_id=${encodeURIComponent(libId)}&path=${encodeURIComponent(p || '')}`
-        + `&device_id=${encodeURIComponent(DeviceIdentity.id())}`);
-      setView(r);
-      setPath(r.path || '');
-      setSelected(new Set());
-    } catch (e) {
-      const msg = String(e.message || e);
-      fire(`Couldn't open folder: ${msg.slice(0, 80)}`);
-      setView(null);
-      // Ejected removable (410) → drop it and rescan.
-      if (msg.startsWith('410')) loadLibraries();
-    } finally { setBrowseLoading(false); }
-  }, [loadLibraries]);
+  // One folder, a page at a time (data.js usePagedList). device_id only
+  // affects `writable` / `blocked_reason` in the answer: reading is never
+  // blocked, but the page disables its own write controls from this rather
+  // than discovering the 403 on first drop. The folder's own fields
+  // (breadcrumb, editable, writable…) ride on every page; `view` is the
+  // latest answer.
+  const needle = debFilter.trim();
+  // Read once: where storage is unavailable DeviceIdentity.id() mints a new
+  // id per call, and a new id per render would be a new list per render.
+  const deviceId = React.useRef(null);
+  if (deviceId.current == null) deviceId.current = DeviceIdentity.id();
+  const browsePath = activeId
+    ? `/api/files/browse?library_id=${encodeURIComponent(activeId)}&path=${encodeURIComponent(path || '')}`
+      + `&device_id=${encodeURIComponent(deviceId.current)}`
+      + (needle ? `&q=${encodeURIComponent(needle)}` : '')
+      + (sort !== 'name' ? `&sort=${encodeURIComponent(sort)}` : '')
+    : null;
+  const list = usePagedList(browsePath, { pick: (x) => x && x.entries, key: (e) => e.rel });
+  const view = list.extra;
+  const browseLoading = list.loading && list.items.length === 0;
 
-  // Browse the root whenever the active library changes.
-  React.useEffect(() => { if (activeId) doBrowse(activeId, ''); }, [activeId]);
+  // A new folder, library, filter or sort is a new list: nothing selected.
+  React.useEffect(() => { setSelected(new Set()); }, [browsePath]);
 
-  const navigate = (p) => doBrowse(activeId, p);
-  const refresh = () => doBrowse(activeId, path);
+  // A folder that could not be opened says so; an ejected removable (410)
+  // drops out of the registry.
+  React.useEffect(() => {
+    const e = list.error;
+    if (!e || list.items.length) return;
+    const msg = String(e.message || e);
+    fire(`Couldn't open folder: ${msg.slice(0, 80)}`);
+    if (e.status === 410 || msg.startsWith('410')) loadLibraries();
+  }, [list.error]);
+
+  // A filter typed in one library doesn't follow you into the next.
+  React.useEffect(() => { setFilter(''); }, [activeId]);
+
+  const navigate = (p) => { setFilter(''); setLoc({ libId: activeId, path: p || '' }); };
+  // Re-read the folder (what is loaded of it), keeping the scroll position.
+  const refresh = () => list.reload();
   const onSelectLibrary = (l) => { if (l.id !== activeId) setActiveId(l.id); };
+  // Rescan: the library registry AND this folder from disk, past the
+  // server's cached listing.
+  const rescan = () => { loadLibraries(); list.reload({ fresh: true }); };
 
   const toggleSelect = (rel) => setSelected((prev) => {
     const next = new Set(prev);
     next.has(rel) ? next.delete(rel) : next.add(rel);
     return next;
   });
-  const entries = view?.entries || [];
+  // Selection, "select all" and the bulk actions cover the LOADED rows —
+  // what is on screen — never entries further down that haven't been
+  // fetched; the checkbox's title says how many that is.
+  const entries = list.items;
   const allSelected = entries.length > 0 && selected.size === entries.length;
   const toggleSelectAll = () =>
     setSelected(allSelected ? new Set() : new Set(entries.map((e) => e.rel)));
@@ -1081,7 +1108,7 @@ const FilesPage = () => {
         </>}/>
 
       <LibrarySelector libraries={libraries} activeId={activeId}
-                       onSelect={onSelectLibrary} onRefresh={loadLibraries}
+                       onSelect={onSelectLibrary} onRefresh={rescan}
                        onDropMove={canWrite ? onDropIntoLibrary : null}/>
 
       {blocked && (
@@ -1106,7 +1133,9 @@ const FilesPage = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px',
                       borderBottom: '1px solid var(--border-soft)' }}>
           {entries.length > 0 && (
-            <input type="checkbox" checked={allSelected} title="select all"
+            <input type="checkbox" checked={allSelected}
+                   title={`select the ${entries.length} loaded item${entries.length === 1 ? '' : 's'}`
+                          + (list.hasMore ? ' (more load as you scroll)' : '')}
                    ref={(el) => { if (el) el.indeterminate = nSel > 0 && !allSelected; }}
                    onChange={toggleSelectAll}
                    style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
@@ -1130,9 +1159,28 @@ const FilesPage = () => {
               <Button icon="x" onClick={clearSelection}>Clear</Button>
             </>
           ) : (
-            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-              {entries.length} item{entries.length === 1 ? '' : 's'}
-            </span>
+            <>
+              <input type="text" placeholder="filter this folder…" value={filter}
+                     onChange={(e) => setFilter(e.target.value)} disabled={!activeLib}
+                     style={{ font: 'inherit', fontSize: 12, height: 26, padding: '0 8px', width: 150,
+                              borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                              background: 'var(--card)', color: 'var(--fg)' }}/>
+              <select value={sort} onChange={(e) => setSort(e.target.value)} title="sort (folders first)"
+                      disabled={!activeLib}
+                      style={{ font: 'inherit', fontSize: 12, height: 26, padding: '0 6px',
+                               borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                               background: 'var(--card)', color: 'var(--fg)' }}>
+                <option value="name">name</option>
+                <option value="newest">newest</option>
+                <option value="oldest">oldest</option>
+                <option value="largest">largest</option>
+              </select>
+              <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                {view && needle
+                  ? `${fmtCount(view.total)} of ${fmtCount(view.folder_total)}`
+                  : `${fmtCount(view ? view.total : entries.length)} item${(view ? view.total : entries.length) === 1 ? '' : 's'}`}
+              </span>
+            </>
           )}
         </div>
 
@@ -1149,9 +1197,12 @@ const FilesPage = () => {
           <div style={{ padding: 20, color: 'var(--fg-faint)', fontSize: 13 }}>Loading…</div>
         ) : !activeLib ? (
           <Empty title="no library selected" sub="pick a library above to browse it"/>
-        ) : entries.length === 0 ? (
-          <Empty title="empty folder"
-                 sub={canUpload ? 'upload files with New, or go back up' : 'nothing here'}/>
+        ) : entries.length === 0 && !list.error ? (
+          needle
+            ? <Empty title="nothing matches" sub={`filter = “${needle}”`}
+                     action={<Button icon="x" onClick={() => setFilter('')}>clear filter</Button>}/>
+            : <Empty title="empty folder"
+                     sub={canUpload ? 'upload files with New, or go back up' : 'nothing here'}/>
         ) : (
           entries.map((entry) => {
             if (!entry.is_dir && isDocuments && view.doc_editing) {
@@ -1179,6 +1230,7 @@ const FilesPage = () => {
             );
           })
         )}
+        {activeLib && <PagedListFooter list={list} noun="items" compact/>}
       </Card>
 
       {/* The page already asked the server whether THIS device may write

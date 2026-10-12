@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,6 +53,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +62,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,7 +75,13 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.data.LocalMedia
 import com.domovoi.app.data.PhoneFolders
 import com.domovoi.app.net.ApiException
+import com.domovoi.app.net.Page
+import com.domovoi.app.net.PageRequest
+import com.domovoi.app.net.SERVER_MAX_PAGE
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.components.LoadMoreNearEnd
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.net.uploadFiles
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
@@ -85,6 +95,13 @@ import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
+import com.domovoi.app.ui.screens.local.UploadButtonState
+import com.domovoi.app.ui.screens.local.UploadDest
+import com.domovoi.app.ui.screens.local.UploadKind
+import com.domovoi.app.ui.screens.local.UploadRefusedCard
+import com.domovoi.app.ui.screens.local.UploadRowButton
+import com.domovoi.app.ui.screens.local.fileUploadKey
+import com.domovoi.app.ui.screens.local.rememberDeviceUploader
 import com.domovoi.app.ui.shell.LocalServerChoice
 import com.domovoi.app.ui.shell.enabled
 import com.domovoi.app.ui.theme.Domovoi
@@ -106,6 +123,10 @@ import kotlinx.coroutines.launch
  *
  * The same browser serves the phone's own files in the local shell
  * ([LocalFilesScreen]); everything that differs lives behind [FileSource].
+ * In the workspace it serves them again under the page's "your device"
+ * switch (ui/screens/local/YourDevice.kt), where [uploadMode] turns each
+ * row's send-to-home into Upload: progress on the row, a refusal said up
+ * front when the server blocks this device.
  */
 @Composable
 fun FilesScreen() {
@@ -116,7 +137,7 @@ fun FilesScreen() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun FilesBrowser(source: FileSource) {
+internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
@@ -129,16 +150,20 @@ internal fun FilesBrowser(source: FileSource) {
     }
     val libraries = libs.data ?: emptyList()
 
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var path by remember { mutableStateOf("") }
+    // Saveable, so the folder survives the workspace going away and coming
+    // back (a spell in the background, the system folder picker).
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var path by rememberSaveable { mutableStateOf("") }
 
     // Auto-select the first library once loaded; re-select if the current one
-    // vanishes (e.g. a removable drive was ejected between refreshes).
-    LaunchedEffect(libraries) {
-        if (libraries.isEmpty()) {
+    // vanishes (e.g. a removable drive was ejected between refreshes). Not
+    // before the list has loaded: a restored folder must outlive the wait.
+    LaunchedEffect(libs.data) {
+        val loaded = libs.data ?: return@LaunchedEffect
+        if (loaded.isEmpty()) {
             selectedId = null
-        } else if (selectedId == null || libraries.none { it.id == selectedId }) {
-            selectedId = libraries.first().id
+        } else if (selectedId == null || loaded.none { it.id == selectedId }) {
+            selectedId = loaded.first().id
             path = ""
         }
     }
@@ -158,12 +183,41 @@ internal fun FilesBrowser(source: FileSource) {
         ActivityResultContracts.RequestPermission(),
     ) { permissionTick++ }
 
-    val browse = rememberApi(selectedId, path, source, permitted, eventTypes = source.browseEvents) {
-        val id = selectedId
-        if (id.isNullOrBlank() || !permitted) null
-        else source.browse(id, path)
+    // The folder, a page at a time as it scrolls (net/Paging.kt). The name
+    // filter is applied to the whole folder (the server's, or the phone
+    // source's); a new folder, library or filter is a new list.
+    var filter by rememberSaveable { mutableStateOf("") }
+    var needle by remember { mutableStateOf(filter.trim()) }
+    LaunchedEffect(filter) {
+        kotlinx.coroutines.delay(250)
+        needle = filter.trim()
     }
-    val data = browse.data?.takeIf { it.libraryId == selectedId || !source.onPhone }
+    /** The folder's own fields (breadcrumb, writable, grid…) from its latest page. */
+    var meta by remember { mutableStateOf<FileBrowse?>(null) }
+    val pager = rememberPager<FileEntry>(
+        selectedId, path, source, permitted, needle,
+        keyOf = { it.rel }, eventTypes = source.browseEvents,
+    ) { _, req ->
+        val id = selectedId
+        if (id.isNullOrBlank() || !permitted) {
+            Page(emptyList(), 0, false, null)
+        } else {
+            val fb = source.browsePage(id, path, req, needle)
+            meta = fb.copy(entries = emptyList())
+            Page(
+                fb.entries,
+                fb.total ?: if (fb.hasMore) null else req.offset + fb.entries.size,
+                fb.hasMore,
+                fb.nextCursor,
+            )
+        }
+    }
+    val listing by pager.state.collectAsState()
+    val data = meta?.takeIf { (it.libraryId == selectedId || !source.onPhone) && listing.loaded }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    LoadMoreNearEnd(listState, pager)
+    LoadMoreNearEnd(gridState, pager)
     // Two different "no": the LIBRARY is read-only (editable=false), or THIS
     // DEVICE has been blocked by an admin (writable=false). Upload / move /
     // import need both. Delete is admin-gated server-side and this app can't
@@ -173,6 +227,8 @@ internal fun FilesBrowser(source: FileSource) {
     // "Send to home" is offered only while the server can actually be used.
     val serverUsable = LocalServerChoice.current.enabled
     val canSendHome = source.onPhone && serverUsable
+    // "Your device" in the workspace: send-to-home is the row's Upload.
+    val uploader = if (uploadMode) rememberDeviceUploader(UploadKind.File) else null
 
     var textEditorRel by remember { mutableStateOf<String?>(null) }
     var sheetEditorRel by remember { mutableStateOf<String?>(null) }
@@ -183,6 +239,10 @@ internal fun FilesBrowser(source: FileSource) {
     var sendHomeEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmForget by remember { mutableStateOf<FileLibrary?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing | sending
+
+    fun askSendHome(e: FileEntry) {
+        if (uploader == null || uploader.gate()) sendHomeEntry = e
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
@@ -204,7 +264,7 @@ internal fun FilesBrowser(source: FileSource) {
                     if (r.skipped > 0) parts.append(" · ${r.skipped} skipped")
                     if (r.reindexTriggered) parts.append(" · indexing…")
                     toast(parts.toString())
-                    browse.refresh()
+                    pager.reload()
                 }
                 .onFailure { toast("${if (source.onPhone) "copy" else "upload"} failed: ${it.message}") }
             busy = null
@@ -228,6 +288,7 @@ internal fun FilesBrowser(source: FileSource) {
 
     fun onEntryPrimary(e: FileEntry) {
         if (e.isDir) {
+            filter = ""
             path = e.rel
             return
         }
@@ -256,7 +317,7 @@ internal fun FilesBrowser(source: FileSource) {
                         "deleted ${r.deleted}" +
                             if (r.failed > 0) " · ${r.failed} failed" else "",
                     )
-                    browse.refresh()
+                    pager.reload()
                 }
                 .onFailure {
                     // Delete is the one Files verb behind the admin password,
@@ -295,7 +356,7 @@ internal fun FilesBrowser(source: FileSource) {
                     // Name the reason — "1 failed" alone is useless when the
                     // cause is a collision the user can act on.
                     r.firstFailure?.let { toast(it.take(120)) }
-                    browse.refresh()
+                    pager.reload()
                 }
                 .onFailure { toast("move failed: ${it.message}") }
             busy = null
@@ -325,7 +386,13 @@ internal fun FilesBrowser(source: FileSource) {
         val id = selectedId ?: return
         val uri = source.contentUri(id, e.rel)
         if (uri == null) {
-            toast("send failed: can't read \"${e.name}\"")
+            toast("${if (uploader != null) "upload" else "send"} failed: can't read \"${e.name}\"")
+            return
+        }
+        if (uploader != null) {
+            // Streamed, with progress on the row, and it carries on if the
+            // page is left (DeviceUpload.kt).
+            uploader.upload(fileUploadKey(id, e.rel), uri, e.name, UploadDest.Library(target.id, target.label, targetPath))
             return
         }
         busy = "sending"
@@ -379,7 +446,9 @@ internal fun FilesBrowser(source: FileSource) {
                         // Picking the library already open re-lists it: the
                         // phone has no change events to say a folder moved on.
                         onSelect = {
-                            if (it == selectedId && path.isEmpty()) browse.refresh()
+                            // ...and past the server's cached listing too.
+                            if (it == selectedId && path.isEmpty()) pager.reload(fresh = true)
+                            if (it != selectedId) filter = ""
                             selectedId = it
                             path = ""
                         },
@@ -418,18 +487,33 @@ internal fun FilesBrowser(source: FileSource) {
                 }
                 Spacer(Modifier.height(10.dp))
             }
+            uploader?.refused?.let {
+                UploadRefusedCard(it)
+                Spacer(Modifier.height(10.dp))
+            }
 
             if (selectedId != null) {
                 Breadcrumb(
                     label = currentLib?.label ?: "root",
                     segments = data?.breadcrumb ?: emptyList(),
-                    onHome = { path = "" },
+                    onHome = { filter = ""; path = "" },
                     onSegment = { i ->
                         val crumbs = data?.breadcrumb ?: emptyList()
+                        filter = ""
                         path = data?.crumbPaths?.getOrNull(i) ?: crumbs.take(i + 1).joinToString("/")
                     },
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
+                if (permitted) {
+                    OutlinedTextField(
+                        value = filter,
+                        onValueChange = { filter = it },
+                        placeholder = { Text("filter this folder…", color = Domovoi.colors.fgSubtle) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
             }
 
             val errorTitle = if (source.onPhone) "couldn't open this folder" else "couldn't reach the server"
@@ -451,10 +535,19 @@ internal fun FilesBrowser(source: FileSource) {
                         }
                     },
                 )
-                data == null && browse.loading -> LoadingState()
-                data == null && browse.error != null ->
-                    ErrorState(browse.error ?: "request failed", browse.refresh, title = errorTitle)
-                data != null && data.entries.isEmpty() -> EmptyState(
+                listing.items.isEmpty() && listing.loading -> LoadingState()
+                listing.items.isEmpty() && listing.error != null ->
+                    ErrorState(listing.error ?: "request failed", pager::retry, title = errorTitle)
+                data != null && listing.items.isEmpty() && needle.isNotEmpty() -> EmptyState(
+                    "nothing matches",
+                    "filter = \"$needle\"",
+                    action = {
+                        androidx.compose.material3.TextButton(onClick = { filter = "" }) {
+                            Text("clear filter", color = Domovoi.colors.brand)
+                        }
+                    },
+                )
+                data != null && listing.items.isEmpty() -> EmptyState(
                     "empty folder",
                     when {
                         source.onPhone && canWrite -> "add files, or pick another folder"
@@ -464,28 +557,34 @@ internal fun FilesBrowser(source: FileSource) {
                     },
                 )
                 data != null && data.grid -> PhotoGrid(
-                    entries = data.entries,
+                    entries = listing.items,
                     model = { e -> source.imageModel(selectedId ?: "", e) },
                     onOpen = { e -> onEntryPrimary(e) },
                     modifier = Modifier.fillMaxWidth().weight(1f),
+                    state = gridState,
+                    footer = { PagedFooter(listing, "photos", onRetry = pager::retry, onLoadMore = pager::loadMore) },
                 )
                 data != null -> DomovoiCard(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     padding = 0,
                 ) {
-                    LazyColumn(Modifier.fillMaxWidth()) {
-                        items(data.entries, key = { it.rel }) { e ->
+                    LazyColumn(Modifier.fillMaxWidth(), state = listState) {
+                        items(listing.items, key = { it.rel }) { e ->
                             FileRow(
                                 entry = e,
                                 onOpen = { onEntryPrimary(e) },
                                 onImport = if (isRemovable && !blocked) ({ importEntry = e }) else null,
                                 onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e) }) else null,
-                                onSendHome = if (canSendHome && !e.isDir) ({ sendHomeEntry = e }) else null,
+                                onSendHome = if (canSendHome && !e.isDir) ({ askSendHome(e) }) else null,
+                                upload = uploader?.state(fileUploadKey(selectedId ?: "", e.rel)),
                                 // The web moves things by drag and drop; a phone
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
                                 onDelete = if (editable) ({ confirmDelete = e }) else null,
                             )
+                        }
+                        item(key = "files-footer") {
+                            PagedFooter(listing, "items", onRetry = pager::retry, onLoadMore = pager::loadMore)
                         }
                     }
                 }
@@ -496,13 +595,13 @@ internal fun FilesBrowser(source: FileSource) {
         textEditorRel?.let { rel ->
             TextEditorOverlay(source, selectedId ?: "", rel) {
                 textEditorRel = null
-                browse.refresh()
+                pager.reload()
             }
         }
         sheetEditorRel?.let { rel ->
             SheetEditorOverlay(source, selectedId ?: "", rel) {
                 sheetEditorRel = null
-                browse.refresh()
+                pager.reload()
             }
         }
         imageEntry?.let { e ->
@@ -510,7 +609,8 @@ internal fun FilesBrowser(source: FileSource) {
             ImageViewerOverlay(
                 name = e.name,
                 model = source.imageModel(id, e),
-                onSendHome = if (canSendHome) ({ sendHomeEntry = e }) else null,
+                onSendHome = if (canSendHome) ({ askSendHome(e) }) else null,
+                sendLabel = if (uploader != null) "upload" else "send to home",
                 onOpenWith = {
                     if (!source.openFile(ctx, id, e)) toast("no app on this phone opens \"${e.name}\"")
                 },
@@ -555,7 +655,8 @@ internal fun FilesBrowser(source: FileSource) {
             sourceLibraryId = selectedId ?: "",
             sourcePath = path,
             libraries = libraries,
-            browse = { id, p -> source.browse(id, p) },
+            // A destination's folders: one page of up to 200 (the sheet says when there are more).
+            browse = { id, p -> source.browsePage(id, p, PageRequest(null, 0, SERVER_MAX_PAGE), foldersOnly = true) },
             onMove = { targetLibraryId, targetPath ->
                 moveEntry = null
                 doMove(e, targetLibraryId, targetPath)
@@ -583,6 +684,7 @@ internal fun FilesBrowser(source: FileSource) {
                 doSendHome(e, target, targetPath)
             },
             onDismiss = { sendHomeEntry = null },
+            asUpload = uploader != null,
         )
     }
 }
@@ -706,6 +808,8 @@ private fun FileRow(
     onSendHome: (() -> Unit)?,
     onMove: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    /** Set in "your device" mode: [onSendHome] is shown as the Upload button, in this state. */
+    upload: UploadButtonState? = null,
 ) {
     Column {
         Row(
@@ -756,8 +860,12 @@ private fun FileRow(
                 }
             }
             onSendHome?.let {
-                IconButton(onClick = it) {
-                    Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
+                if (upload != null) {
+                    UploadRowButton(upload, it)
+                } else {
+                    IconButton(onClick = it) {
+                        Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
+                    }
                 }
             }
             onMove?.let {

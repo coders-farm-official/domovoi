@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -33,6 +33,8 @@ from web.backend.api.audio_serve import (
     safe_download_name,
     serve_audio_range,
 )
+from web.backend.api import paging
+from web.backend.api.paging import SortKey
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -75,23 +77,78 @@ class PositionSave(BaseModel):
 
 
 # ─── Books ──────────────────────────────────────────────────────────────
+AudiobookSort = Literal["title", "author", "newest"]
+# Each ends in ``id``: unique, so a cursor names one row (paging.py).
+_BOOK_SORT_KEYS: dict[str, list[SortKey]] = {
+    "title": [SortKey("LOWER(title)"), SortKey("id", kind="int")],
+    "author": [SortKey("LOWER(author)", nulls_last=True), SortKey("LOWER(title)"),
+               SortKey("id", kind="int")],
+    "newest": [SortKey("added_at", desc=True, kind="ts"), SortKey("id", desc=True, kind="int")],
+}
+_BOOK_COLUMNS = """id, title, author, narrator, artwork, chapters,
+                   is_folder, duration_sec, added_via, added_at, file_path"""
+
+
 @router.get("")
 @router.get("/")
-async def list_books() -> list[dict[str, Any]]:
+async def list_books(
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Case-insensitive substring of title, author or narrator"),
+    sort: AudiobookSort = Query("title", description="title (default) · author · newest"),
+    limit: Optional[int] = paging.limit_query(),
+    cursor: Optional[str] = paging.cursor_query(),
+    offset: Optional[int] = paging.offset_query(),
+) -> Any:
+    """The indexed books, sorted and searched here.
+
+    Paged when ``limit`` / ``cursor`` / ``offset`` is sent:
+    ``{items, total, limit, has_more, next_cursor}`` (web/backend/api/
+    paging.py). With none of them — an old client, the installed Android
+    app — the bare list it was built for, every match, as before."""
+    keys = _BOOK_SORT_KEYS[sort]
+    params: dict[str, Any] = {}
+    where_parts: list[str] = []
+    if q and q.strip():
+        where_parts.append("(title ILIKE :q OR author ILIKE :q OR narrator ILIKE :q)")
+        params["q"] = f"%{q.strip()}%"
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    if not paging.wants_page(limit, cursor, offset):
+        async with session_scope() as s:
+            rows = (
+                await s.execute(
+                    text(f"SELECT {_BOOK_COLUMNS} FROM audiobooks {where}"
+                         f" ORDER BY {paging.order_sql(keys)}"),
+                    params,
+                )
+            ).mappings().all()
+        return [_book_row(r) for r in rows]
+
+    lim = limit or paging.DEFAULT_LIMIT
+    page_where = where
+    if cursor is not None:
+        after = paging.keyset_where(keys, cursor, sort, params)
+        page_where = f"{where} AND {after}" if where else f"WHERE {after}"
+    params.update({"limit": lim + 1, "offset": 0 if cursor is not None else (offset or 0)})
     async with session_scope() as s:
+        total = int((await s.execute(
+            text(f"SELECT COUNT(*) FROM audiobooks {where}"), params)).scalar_one())
         rows = (
             await s.execute(
                 text(
-                    """
-                    SELECT id, title, author, narrator, artwork, chapters,
-                           is_folder, duration_sec, added_via, added_at, file_path
-                      FROM audiobooks
-                     ORDER BY LOWER(title)
-                    """
-                )
+                    f"SELECT {_BOOK_COLUMNS}, {paging.key_columns(keys)} FROM audiobooks"
+                    f" {page_where} ORDER BY {paging.order_sql(keys)}"
+                    " LIMIT :limit OFFSET :offset"
+                ),
+                params,
             )
         ).mappings().all()
-    return [_book_row(r) for r in rows]
+    page, has_more, nxt = paging.db_page_dicts(rows, keys, limit=lim, sort=sort)
+    return {
+        "items": [_book_row(r) for r in page],
+        **paging.page_fields(total=total, limit=lim, has_more=has_more, next_cursor=nxt,
+                             offset=None if cursor is not None else (offset or 0)),
+    }
 
 
 def _book_row(r: Any) -> dict[str, Any]:

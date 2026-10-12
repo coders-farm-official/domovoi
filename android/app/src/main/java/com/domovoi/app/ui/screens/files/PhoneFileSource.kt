@@ -16,6 +16,8 @@ import com.domovoi.app.data.PhoneFolders
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.DeleteResult
 import com.domovoi.app.net.MoveResult
+import com.domovoi.app.net.PageRequest
+import com.domovoi.app.net.Paging
 import com.domovoi.app.net.UploadResult
 import com.domovoi.app.ui.screens.documents.CsvSheet
 import com.domovoi.app.ui.screens.documents.SHEET_MAX_BYTES
@@ -165,6 +167,9 @@ internal class PhoneFileSource(
 
     private fun join(dir: String, name: String) = if (dir.isEmpty()) name else "$dir/$name"
 
+    /** [s] as a LIKE pattern body: its own %, _ and \\ taken literally. */
+    private fun likeEscape(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     private fun forget(tree: Uri, relPrefix: String) {
         val t = tree.toString()
         ids.keys.removeAll { k ->
@@ -175,13 +180,38 @@ internal class PhoneFileSource(
 
     // ── browse ──────────────────────────────────────────────────────────
 
-    override suspend fun browse(libraryId: String, path: String): FileBrowse = withContext(Dispatchers.IO) {
-        if (libraryId == PhoneFolders.PHOTOS_ID) return@withContext browsePhotos(path)
+    /**
+     * The folder last listed, kept for its later pages. A Storage Access
+     * Framework folder can't be read a page at a time, so page one reads
+     * the folder's names once (a few small fields per entry) and every
+     * later page is cut from that; only a page of rows is ever built for
+     * the screen. A folder asked for again from page one is read again.
+     */
+    private data class Listing(val tree: String, val path: String, val kids: List<Child>)
+
+    @Volatile private var listing: Listing? = null
+
+    override suspend fun browsePage(
+        libraryId: String,
+        path: String,
+        req: PageRequest,
+        q: String,
+        foldersOnly: Boolean,
+    ): FileBrowse = withContext(Dispatchers.IO) {
+        if (libraryId == PhoneFolders.PHOTOS_ID) return@withContext browsePhotos(path, req, q, foldersOnly)
         val tree = tree(libraryId)
-        val dirId = docId(tree, path)
-        val kids = children(tree, dirId)
         val t = tree.toString()
-        kids.forEach { ids[key(t, join(path, it.name))] = it.id }
+        val kids = listing?.takeIf { it.tree == t && it.path == path && req.offset > 0 }?.kids
+            ?: run {
+                val dirId = docId(tree, path)
+                val read = children(tree, dirId)
+                read.forEach { ids[key(t, join(path, it.name))] = it.id }
+                read.sortedWith(compareBy<Child>({ !it.isDir }, { it.name.lowercase() }))
+                    .also { listing = Listing(t, path, it) }
+            }
+        val needle = q.trim().lowercase()
+        val shown = kids.filter { (!foldersOnly || it.isDir) && (needle.isEmpty() || it.name.lowercase().contains(needle)) }
+        val page = Paging.slice(shown, req)
         val writable = resolver.persistedUriPermissions.any { it.uri.toString() == t && it.isWritePermission }
         FileBrowse(
             libraryId = libraryId,
@@ -189,25 +219,28 @@ internal class PhoneFileSource(
             editable = writable,
             docEditing = true,
             breadcrumb = path.split('/').filter { it.isNotEmpty() },
-            entries = kids
-                .sortedWith(compareBy<Child>({ !it.isDir }, { it.name.lowercase() }))
-                .map { k ->
-                    FileEntry(
-                        name = k.name,
-                        rel = join(path, k.name),
-                        isDir = k.isDir,
-                        size = if (k.isDir) null else k.size,
-                        mtime = k.mtimeMs?.div(1000.0),
-                        kind = fileKind(k.name, k.isDir),
-                    )
-                },
+            entries = page.items.map { k ->
+                FileEntry(
+                    name = k.name,
+                    rel = join(path, k.name),
+                    isDir = k.isDir,
+                    size = if (k.isDir) null else k.size,
+                    mtime = k.mtimeMs?.div(1000.0),
+                    kind = fileKind(k.name, k.isDir),
+                )
+            },
             writable = writable,
+            total = shown.size,
+            folderTotal = kids.size,
+            hasMore = page.hasMore,
         )
     }
 
-    private fun browsePhotos(path: String): FileBrowse {
+    private fun browsePhotos(path: String, req: PageRequest, q: String, foldersOnly: Boolean): FileBrowse {
         val images = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
         if (path.isEmpty()) {
+            // The albums: one pass over the images' bucket ids (no rows are
+            // built for the images themselves); albums are few.
             class Album(val id: String, var name: String, var count: Int, var latest: Long)
             val albums = LinkedHashMap<String, Album>()
             resolver.query(
@@ -225,39 +258,56 @@ internal class PhoneFileSource(
                     a.count++
                 }
             }
+            val needle = q.trim().lowercase()
+            val all = albums.values
+                .filter { needle.isEmpty() || it.name.lowercase().contains(needle) }
+                .map { a -> FileEntry(name = a.name, rel = a.id, isDir = true, mtime = a.latest.toDouble(), kind = "folder") }
+            val page = Paging.slice(all, req)
             return FileBrowse(
                 libraryId = PhoneFolders.PHOTOS_ID,
                 path = "",
-                entries = albums.values.map { a ->
-                    FileEntry(name = a.name, rel = a.id, isDir = true, mtime = a.latest.toDouble(), kind = "folder")
-                },
+                entries = page.items,
+                total = all.size,
+                folderTotal = albums.size,
+                hasMore = page.hasMore,
             )
         }
         val bucket = path.substringBefore('/')
         var albumName = "photos"
         val entries = mutableListOf<FileEntry>()
-        resolver.query(
-            images,
-            arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.SIZE,
-                MediaStore.Images.Media.DATE_MODIFIED,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-            ),
-            "${MediaStore.Images.Media.BUCKET_ID} = ?", arrayOf(bucket),
-            "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
-        )?.use { c ->
-            while (c.moveToNext()) {
-                albumName = c.getString(4) ?: albumName
-                val name = c.getString(1) ?: "image"
-                entries += FileEntry(
-                    name = name,
-                    rel = "$bucket/${c.getLong(0)}",
-                    size = c.getLong(2),
-                    mtime = c.getLong(3).toDouble(),
-                    kind = "image",
-                )
+        var total = 0
+        if (!foldersOnly) {
+            // One page read off MediaStore's cursor at a time: the cursor
+            // keeps its rows in the provider's window, never in this app.
+            val needle = q.trim()
+            val sel = "${MediaStore.Images.Media.BUCKET_ID} = ?" +
+                if (needle.isNotEmpty()) " AND ${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? ESCAPE '\\'" else ""
+            val args = if (needle.isNotEmpty()) arrayOf(bucket, "%" + likeEscape(needle) + "%") else arrayOf(bucket)
+            resolver.query(
+                images,
+                arrayOf(
+                    MediaStore.Images.Media._ID,
+                    MediaStore.Images.Media.DISPLAY_NAME,
+                    MediaStore.Images.Media.SIZE,
+                    MediaStore.Images.Media.DATE_MODIFIED,
+                    MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+                ),
+                sel, args,
+                "${MediaStore.Images.Media.DATE_MODIFIED} DESC, ${MediaStore.Images.Media._ID} DESC",
+            )?.use { c ->
+                total = c.count
+                if (c.moveToPosition(req.offset)) {
+                    do {
+                        albumName = c.getString(4) ?: albumName
+                        entries += FileEntry(
+                            name = c.getString(1) ?: "image",
+                            rel = "$bucket/${c.getLong(0)}",
+                            size = c.getLong(2),
+                            mtime = c.getLong(3).toDouble(),
+                            kind = "image",
+                        )
+                    } while (entries.size < req.limit && c.moveToNext())
+                }
             }
         }
         return FileBrowse(
@@ -267,6 +317,8 @@ internal class PhoneFileSource(
             crumbPaths = listOf(bucket),
             grid = true,
             entries = entries,
+            total = total,
+            hasMore = req.offset + entries.size < total,
         )
     }
 

@@ -11,6 +11,7 @@ import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.NetworkWatch
+import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
@@ -68,6 +69,10 @@ class AppContainer(context: Context) {
      *  alert's tap, "containers" from a container incident's); AppShell
      *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
+
+    /** Phone files on their way to the server ("Your device" → upload),
+     *  by row; they run in [scope], so leaving the page doesn't stop one. */
+    val uploads = PhoneUploads()
 
     /** App-lifetime scope for fire-and-forget work that must outlive a
      *  composable (e.g. the video position save on player dispose). */
