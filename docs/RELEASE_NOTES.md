@@ -4,6 +4,28 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Satellites: ready for spare devices (nothing changes for a Pi)
+
+Server and dashboard update; no migration, no satellite upgrade needed.
+Groundwork for running satellites on spare Linux laptops and Android
+phones later. **Pi satellites behave exactly as before.**
+
+* **A satellite may now say what it can do.** Its hello can carry a
+  `supports` list and a `board` (`linux_pc`, `android_room`). The server
+  then sends it only what it listed, and the dashboard offers only those
+  actions. A satellite that sends no list (every Pi) gets everything, as
+  before. The names and what each one unlocks are in
+  docs/uml/satellite-protocol.md ("Declared abilities").
+* **Settings → Satellites shows a board badge** ("Linux PC", "Android
+  room") on such a device's card. Restart, Upgrade, the Settings tab, the
+  live log, announcements and wake-word recording are greyed with a short
+  reason when the device didn't offer them. Pi cards look the same as
+  before.
+* **The health block can show a battery and "mic blocked"** for devices
+  that report them. A Pi doesn't.
+* **The Settings → Satellites sections have their spacing back.** The
+  Broadcast card no longer touches the satellite cards above it.
+
 ## 2026-10-12 — Phone voice profiles: "my name is …" from the chat mic
 
 A server update. It adds migration **V026** (the update runs it).

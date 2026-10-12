@@ -1495,8 +1495,21 @@ a.home-att-row:hover { background: var(--brand-soft); }
 }
 
 /* Settings → Satellites (satellites.jsx SatellitesPanel): the roster's
-   counts, where the old Satellites page had them in its header. */
-.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 14px 0; }
+   counts, where the old Satellites page had them in its header. The panel
+   is one child of the Settings `.page`, so it stacks its own sections
+   (approvals, the cards, Broadcast, satellite media) with the page's gap:
+   without it they sat flush against each other (2026-10-12). */
+.sat-panel { display: flex; flex-direction: column; gap: 20px; }
+.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 0; }
+/* Spare-device satellites (S0): the board badge on a card (a Linux PC, an
+   Android room; never on a Pi) and the one-line reason under an action a
+   device didn't offer. */
+.sat-board-badge {
+  display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+  font-size: 11px; color: var(--fg-muted); background: var(--sunken);
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 7px;
+}
+.sat-not-offered { font-size: 11px; color: var(--fg-faint); margin-bottom: 6px; }
 /* Settings → Phone bar (settings.jsx PhoneBarCard). */
 @media (max-width: 760px) {
   .phone-bar-edit .btn-icon { width: 44px; height: 44px; }

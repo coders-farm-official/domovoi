@@ -1667,6 +1667,10 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   // The chosen room defaults to the first online one if none picked yet.
   const roomFor = room || (rooms[0] && rooms[0].room_id) || '';
   const haveRooms = rooms.length > 0;
+  // What the chosen room's device declared (S0): a Pi takes both.
+  const chosen = rooms.find((r) => r.room_id === roomFor);
+  const canRecordHere = satCan(chosen, 'wake_clips');
+  const canPushHere = satCan(chosen, 'wake_models');
   const canTrain = w.status === 'recording' && w.clip_count >= minClips;
   const canPush = w.status === 'ready';
   const capturing = (recActive || capLive) && w.status === 'recording';
@@ -1737,7 +1741,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <RoomSelect value={roomFor} onChange={setRoom} rooms={rooms}/>
         <Button variant="secondary" icon="mic"
-                disabled={!haveRooms || w.status !== 'recording' || capturing}
+                disabled={!haveRooms || w.status !== 'recording' || capturing || !canRecordHere}
+                title={canRecordHere ? undefined : "this room's device doesn't record wake-word clips"}
                 onClick={startRec}>Record</Button>
         <Button variant="ghost" icon="square" disabled={!haveRooms}
                 onClick={stopRec}>Stop</Button>
@@ -1746,7 +1751,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                 onClick={() => onTrain(w)}>Train</Button>
         {internetOff && <NeedsInternetNote compact/>}
-        <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush}
+        <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush || !canPushHere}
+                title={canPushHere ? undefined : "this room's device doesn't take wake-word models"}
                 onClick={() => onPush(w, roomFor)}>Push to room</Button>
         {canPush && !w.is_default &&
           <Button variant="ghost" onClick={() => onSetDefault(w)}>make default</Button>}
@@ -1808,7 +1814,10 @@ const WakeWordsPanel = () => {
   const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
 
-  const rooms = (sats || []).filter((s) => s.status === 'online');
+  // A spare device that declared neither clip recording nor wake models
+  // (S0, satCan) has nothing here; a Pi always qualifies.
+  const rooms = (sats || []).filter((s) => s.status === 'online'
+    && (satCan(s, 'wake_clips') || satCan(s, 'wake_models')));
 
   const guard = async (fn, okMsg) => {
     try {
