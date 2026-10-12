@@ -34,3 +34,21 @@ since = "eb4a497"
 test = "domovoi/tests/test_library_alias_fetch.py::test_searches_and_lookups_share_one_pace"
 reason = "flaky on Windows (about 1 run in 12): asks for >= 0.14 s between paced calls, but asyncio may fire a timer up to one 15.6 ms clock tick early"
 since = "eb4a497"
+
+# Seen once in two full -n 4 runs at integration/1012d (the run with the
+# Linux-harness containers beside it); all 15 tests of the module pass alone,
+# 5 runs out of 5, on fb62fa4 and on the batch's head.
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_call_full_lifecycle"
+reason = "flaky under load: _run_phone gives the handshake 400 x 10 ms, and the best-effort audit-row write before dropin_start can take longer on a busy box"
+since = "fb62fa4"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_second_phone_refused_while_room_busy"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "fb62fa4"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_disconnect_tears_down_call"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "fb62fa4"
