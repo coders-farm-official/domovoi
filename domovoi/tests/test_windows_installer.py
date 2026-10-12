@@ -138,11 +138,101 @@ def test_the_script_uses_the_pins_and_the_ports():
     assert '#include "pins.iss"' in s
     # The dashboard the finish page opens: localhost, the AGENTS.md port,
     # with this build's mark so an old cache-first service worker can't
-    # answer it from its cache (owner fixes 2026-10-12, item 5).
+    # answer it from its cache (owner fixes 2026-10-12, item 5), and the
+    # page as a hash route (Settings > Configuration with the first-run
+    # admin setup, or Settings for a dashboard without tab addresses).
     assert "DashboardUrl = 'http://localhost:6369'" in s
-    assert "OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}'" in s
+    assert "OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}#{#DashboardRoute}'" in s
+    assert '#ifdef DashboardTabRoutes\n  #define DashboardRoute "settings/configuration/setup"\n#else\n  #define DashboardRoute "settings"\n#endif' in s
     assert "ShellExecAsOriginalUser('open', OpenUrl," in s and "ShellExecAsOriginalUser('open', DashboardUrl," not in s
     assert "PrivilegesRequired=admin" in s and "ArchitecturesAllowed=x64os" in s and "MinVersion=10.0.22621" in s
+
+
+def _tab_routes_pinned() -> bool:
+    return bool(re.search(r"^#define DashboardTabRoutes\s*$", PINS.read_text(encoding="ascii"), re.M))
+
+
+def test_the_tab_routes_pin_matches_the_pinned_commit():
+    """"Open Domovoi" goes to #settings/configuration/setup only when the
+    dashboard at the pinned commit has that address (SETUP_ROUTE, from
+    wf/settings-deeplinks); an older one would land on Home, so it gets
+    #settings. Owner, 2026-10-12: the link must land somewhere sensible
+    until the addresses are on main."""
+    commit = _pins()["DomovoiCommit"]
+    git = shutil.which("git")
+    if not git:
+        pytest.skip("no git")
+    proc = subprocess.run(
+        [git, "-C", str(REPO_ROOT), "cat-file", "-p", f"{commit}:web/static/components.jsx"],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"commit {commit[:7]} is not in this clone")
+    has_routes = b"const SETUP_ROUTE = 'settings/configuration/setup';" in proc.stdout
+    assert _tab_routes_pinned() == has_routes, (
+        f"pins.iss DashboardTabRoutes is {'on' if _tab_routes_pinned() else 'off'}, but the dashboard at "
+        f"{commit[:7]} {'has' if has_routes else 'does not have'} the tab addresses")
+
+
+def _finish_section() -> str:
+    s = SCRIPT.read_text(encoding="ascii")
+    return s[s.index("{ -- the finish page"):s.index("{ -- the install (after the files are copied)")]
+
+
+def test_the_finish_page_walks_through_the_admin_account_by_the_dashboards_labels():
+    """Owner, 2026-10-12: the last page says exactly what to do on the page
+    it opens. The labels are the dashboard's own (web/static/components.jsx
+    LoginModal, settings.jsx AdminSection; the dashboard's
+    test_web_settings_routes.py holds it to them)."""
+    f = _finish_section()
+    steps = f[f.index("function FinishSteps"):f.index("function GpuNames")]
+    for label in ('"first-run admin setup"', '"set up admin"', '"setup code"', '"confirm password"',
+                  '"set password"', "at least 10 characters", "Admin box", "Settings > Configuration",
+                  "the Configuration tab"):
+        assert label in steps, label
+    assert "CodeHint.Caption := FinishSteps;" in f
+    # "It copies the code": Open Domovoi does, before it opens the page.
+    click = f[f.index("procedure OpenDomovoiClick"):]
+    click = click[: click.index("\nend;")]
+    assert click.index("CopyCodeClick(Sender);") < click.index("ShellExecAsOriginalUser('open', OpenUrl,")
+    assert "shown only here; it works for 24 hours" in f
+
+
+def test_the_finish_page_claims_no_graphics_card_setup_did_not_find():
+    """The first install said "AI models run on: NVIDIA ..., NVIDIA ..."
+    while the core reported no GPUs. The line now says what runs where from
+    what Setup found, and never more: speech recognition is always on the
+    processor (provision.sh writes WHISPER_DEVICE=cpu), and an unknown
+    answer names no card."""
+    f = _finish_section()
+    assert "AI models run on" not in f
+    models = f[f.index("function ModelsText"):]
+    models = models[: models.index("\nend;")]
+    assert "Speech recognition runs on the processor." in models
+    assert "No NVIDIA graphics card found: chat, voice-command and speech recognition models all run on the processor." in models
+    assert "Setup could not check for an NVIDIA graphics card" in models
+    assert "ModelsText(GpuRaw, TierText)" in f
+    prov = (REPO_ROOT / "scripts" / "linux" / "provision.sh").read_text(encoding="utf-8")
+    assert 'echo "WHISPER_DEVICE=cpu"' in prov
+
+
+def test_uninstall_messages_are_plain_words():
+    """Owner, 2026-10-12: "a one-time startup task, DomovoiRemoveProfile,
+    deletes it ... (error 32)" was too technical for the final dialog. The
+    dialogs show the helper's notice_*= lines (UninstallMessages, unit
+    tested in Tests.cs); the technical lines stay in the list of steps and
+    the log."""
+    s = SCRIPT.read_text(encoding="ascii")
+    body = s[s.index("procedure CurUninstallStepChanged"):]
+    for key in ("notice_restart", "notice_left", "notice_still"):
+        assert f"KvValue(UninstLines, '{key}')" in body, key
+    assert "JoinLines(Left" not in body and "JoinLines(AtRestart" not in body
+    assert "DomovoiRemoveProfile" not in body and "there is nothing for you to do:" not in body
+    helper = (WIN / "helper" / "Uninstall.cs").read_text(encoding="ascii")
+    for key in ("notice_restart", "notice_left", "notice_still", "leftover_plain", "restart_plain"):
+        assert f'o.Kv("{key}"' in helper, key
+    # The list of steps still shows the details.
+    assert "AddDetail('At the next restart: '" in s and "AddDetail('Left over: '" in s
 
 
 def test_the_current_service_worker_takes_over_at_once():
@@ -215,7 +305,8 @@ def test_the_doc_names_every_machine_change():
         "Smart App Control", "VerifiedAndReputablePolicyState", "Windows protected your PC", "More info", "Run anyway",
         "every WSL VM on the PC", "Domovoi-kept-", "The **third** run",
         "Copy logs", "Documents\\Domovoi logs", "DomovoiRemoveProfile", "wsl --shutdown", "as `domovoi-svc`",
-        "?installed=", "--stop-before",
+        "?installed=", "--stop-before", "#settings/configuration/setup", "DashboardTabRoutes",
+        "first-run admin setup", "set up admin", "set password",
     ):
         assert needle in doc, needle
 

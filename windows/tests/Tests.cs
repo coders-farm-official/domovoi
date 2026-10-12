@@ -1487,5 +1487,42 @@ static class Tests
                 True(how.IndexOf("uninstaller again", StringComparison.OrdinalIgnoreCase) < 0 && how.IndexOf("run the uninstaller", StringComparison.OrdinalIgnoreCase) < 0, k + ": " + how);
             }
         });
+        Run("uninstall messages: plain words, the details stay in the log (owner 2026-10-12)", delegate
+        {
+            var profile = new RestartNote(@"the profile C:\Users\domovoi-svc: Windows still had it open (error 32), so a one-time startup task, DomovoiRemoveProfile, deletes it at the next restart and then deletes itself", UninstallMessages.ProfilePlain);
+            Eq("A leftover folder from Domovoi's hidden account will be removed automatically the next time Windows restarts. There's nothing for you to do.",
+                UninstallMessages.AtRestart(new[] { profile }), "the profile alone");
+            var files = new RestartNote(@"C:\ProgramData\Domovoi: 3 file(s) and folder(s) Windows still had open (in use); Windows deletes them at the next restart", UninstallMessages.ProgramDataPlain);
+            Eq("A leftover folder from Domovoi's hidden account and a few of Domovoi's files that Windows still had open will be removed automatically the next time Windows restarts. There's nothing for you to do.",
+                UninstallMessages.AtRestart(new[] { profile, files, profile }), "both, each once");
+            True(UninstallMessages.AtRestart(new RestartNote[0]) == null, "nothing at the restart: no message");
+            Eq("a, b and c", UninstallMessages.Join(new[] { "a", "b", "", "a", "c" }), "join");
+
+            var left = new List<UninstallLeftover>
+            {
+                new UninstallLeftover(new UninstallStep(UninstallKind.DeleteService, Paths.ServiceName), "the DomovoiHost service is marked for deletion; it goes at the next restart"),
+                new UninstallLeftover(new UninstallStep(UninstallKind.RemoveFirewallRules, "Domovoi-*"), "firewall rules Domovoi-Dashboard-6369"),
+            };
+            Eq("A few things could not be removed: Domovoi's background service and Domovoi's firewall rules. They hold none of your data and are safe to leave.",
+                UninstallMessages.Leftovers(left), "finished with leftovers");
+            Eq("Windows was still using some of Domovoi, so these are still here: Domovoi's background service and Domovoi's firewall rules.",
+                UninstallMessages.StillThere(left), "not finished");
+            True(UninstallMessages.Leftovers(new List<UninstallLeftover>()) == null, "no leftovers: no message");
+
+            // No message carries a path, an error code, a task or service
+            // name, or a line break (each is one key=value line).
+            foreach (UninstallKind k in Enum.GetValues(typeof(UninstallKind)))
+            {
+                var step = new UninstallStep(k, @"C:\x");
+                step.Sids.Add(Sid);
+                string plain = new UninstallLeftover(step, "x").Plain();
+                True(plain.Length > 5, k + ": says something");
+                foreach (string tech in new[] { ":\\", "error", "S-1-5", "DomovoiRemoveProfile", "domovoi-svc", "sc.exe", "icacls", "reg ", "\n", "\r" })
+                    True(plain.IndexOf(tech, StringComparison.OrdinalIgnoreCase) < 0, k + " plain has " + tech + ": " + plain);
+            }
+            foreach (string m in new[] { UninstallMessages.AtRestart(new[] { profile, files }), UninstallMessages.Leftovers(left), UninstallMessages.StillThere(left) })
+                foreach (string tech in new[] { "error 32", "DomovoiRemoveProfile", "startup task", "C:\\", "\n", "\r" })
+                    True(m.IndexOf(tech, StringComparison.OrdinalIgnoreCase) < 0, "message has " + tech + ": " + m);
+        });
     }
 }

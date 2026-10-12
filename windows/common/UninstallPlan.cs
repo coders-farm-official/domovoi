@@ -269,6 +269,31 @@ namespace Domovoi.Windows
 
         public UninstallLeftover(UninstallStep step, string what) { Step = step; What = what; }
 
+        // The same thing in plain words, for the uninstaller's message (owner,
+        // 2026-10-12: the message is for the household; the path, the error
+        // and how to remove it by hand stay in the log and the list of steps).
+        public string Plain()
+        {
+            switch (Step == null ? UninstallKind.Blocked : Step.Kind)
+            {
+                case UninstallKind.StopService: return "Domovoi's background service, which would not stop";
+                case UninstallKind.UnregisterDistro: return "Domovoi's Linux system";
+                case UninstallKind.DeleteService: return "Domovoi's background service";
+                case UninstallKind.DeleteProgramData: return "Domovoi's program data folder";
+                case UninstallKind.DeleteProfile: return UninstallMessages.ProfilePlain;
+                case UninstallKind.RemoveMediaAccess: return "Domovoi's access to your media folder";
+                case UninstallKind.RemoveFolderIfEmpty: return "an empty media folder";
+                case UninstallKind.UnhideAccount: return "the setting that hid Domovoi's account from the sign-in screen";
+                case UninstallKind.RemoveRunOnce: return "Setup's leftover restart entry";
+                case UninstallKind.RemoveFirewallRules: return "Domovoi's firewall rules";
+                case UninstallKind.RemoveRights: return "the service rights of Domovoi's hidden account";
+                case UninstallKind.DeleteAccount: return "Domovoi's hidden account";
+                case UninstallKind.StopAccountProcesses: return "programs still running as Domovoi's hidden account";
+                case UninstallKind.RemoveRecord: return "Setup's install record";
+                default: return "something Setup changed";
+            }
+        }
+
         // How to remove it by hand, for the message and the log.
         public string HowToRemove()
         {
@@ -287,6 +312,76 @@ namespace Domovoi.Windows
                 case UninstallKind.RemoveRecord: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Domovoi\" /f";
                 default: return "see docs/WINDOWS_HOST.md, Uninstalling";
             }
+        }
+    }
+
+    // Something Windows removes by itself at the next restart (a file still
+    // in use, the profile Windows still held): the detail for the log and
+    // the uninstaller's list of steps, and the same thing in plain words for
+    // its message.
+    public sealed class RestartNote
+    {
+        public string Detail;
+        public string Plain;
+        public RestartNote(string detail, string plain) { Detail = detail; Plain = plain; }
+    }
+
+    // The uninstaller's messages, in plain words (owner, 2026-10-12, after
+    // "a one-time startup task, DomovoiRemoveProfile, deletes it ... error
+    // 32" reached the final dialog). One line each: the helper prints them
+    // as notice_*= lines and the uninstaller shows them as they are.
+    public static class UninstallMessages
+    {
+        public const string ProfilePlain = "a leftover folder from Domovoi's hidden account";
+        public const string ProgramDataPlain = "a few of Domovoi's files that Windows still had open";
+
+        // Each once, in order: "a", "a and b", "a, b and c".
+        public static string Join(IEnumerable<string> items)
+        {
+            var list = new List<string>();
+            foreach (string i in items)
+                if (!string.IsNullOrEmpty(i) && !list.Contains(i)) list.Add(i);
+            if (list.Count == 0) return "";
+            if (list.Count == 1) return list[0];
+            return string.Join(", ", list.GetRange(0, list.Count - 1).ToArray()) + " and " + list[list.Count - 1];
+        }
+
+        static string Sentence(string s)
+        {
+            return s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
+        }
+
+        // What Windows removes at the next restart, or null for nothing.
+        public static string AtRestart(IEnumerable<RestartNote> notes)
+        {
+            var plain = new List<string>();
+            foreach (var n in notes) plain.Add(n.Plain);
+            string what = Join(plain);
+            if (what.Length == 0) return null;
+            return Sentence(what) + " will be removed automatically the next time Windows restarts. There's nothing for you to do.";
+        }
+
+        // Finished, with leftovers that hold nothing (exit 4), or null.
+        public static string Leftovers(IEnumerable<UninstallLeftover> left)
+        {
+            string what = Join(Plains(left));
+            if (what.Length == 0) return null;
+            return "A few things could not be removed: " + what + ". They hold none of your data and are safe to leave.";
+        }
+
+        // Not finished yet (exit 3): what Windows was still using, or null.
+        public static string StillThere(IEnumerable<UninstallLeftover> left)
+        {
+            string what = Join(Plains(left));
+            if (what.Length == 0) return null;
+            return "Windows was still using some of Domovoi, so these are still here: " + what + ".";
+        }
+
+        static List<string> Plains(IEnumerable<UninstallLeftover> left)
+        {
+            var plain = new List<string>();
+            foreach (var l in left) plain.Add(l.Plain());
+            return plain;
         }
     }
 

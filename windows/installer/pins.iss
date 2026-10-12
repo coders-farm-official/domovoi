@@ -15,6 +15,16 @@
 #define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"
 #define DomovoiCommit "fb62fa42e5914c34ced39a102cef453df0daa2dc"
 
+; Does the dashboard at that commit give each Settings tab its own address
+; (#settings/configuration/setup: Settings > Configuration with the
+; first-run admin setup open; wf/settings-deeplinks, SETUP_ROUTE in
+; web/static/components.jsx)? Then "Open Domovoi" opens it and the last
+; page's steps start there. Without them it opens #settings, Settings on its
+; first tab, and the steps say to click Configuration. Define it in the same
+; edit that moves DomovoiCommit to a commit that has them;
+; domovoi/tests/test_windows_installer.py checks it against the commit.
+; #define DashboardTabRoutes
+
 ; provision.sh, the one script Setup runs inside the distro (as root); it
 ; then clones the repository at DomovoiCommit and reads every other pin
 ; from that checkout. Two ways to get it:

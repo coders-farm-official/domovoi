@@ -21,6 +21,14 @@
 ; Build: windows\build.ps1 (Inno Setup 6). Docs: docs/WINDOWS_HOST.md.
 
 #include "pins.iss"
+; Where "Open Domovoi" lands (pins.iss, DashboardTabRoutes): Settings >
+; Configuration with the first-run admin setup open, in a dashboard that
+; has the tab addresses; Settings on its first tab in one from before them.
+#ifdef DashboardTabRoutes
+  #define DashboardRoute "settings/configuration/setup"
+#else
+  #define DashboardRoute "settings"
+#endif
 #define AppVersion "0.1.0-test"
 #define Helper "DomovoiSetupHelper.exe"
 ; Which build this is, for the dashboard link on the last page: a URL no
@@ -98,8 +106,9 @@ const
     first, by exact URL (web/static/sw.js before f4421ab, 2026-09-25); a
     URL no build opened before misses that cache and gets today's page,
     which installs the current worker (network-first; it takes over at
-    once: skipWaiting, clients.claim). }
-  OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}';
+    once: skipWaiting, clients.claim). The hash after it is the page:
+    DashboardRoute, above. }
+  OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}#{#DashboardRoute}';
   InstallPortCheck = 'preflight --ports-only --installing';
   LogsHint = 'Logs: C:\ProgramData\Domovoi\logs (only administrators can open it). Copy logs puts a copy in Documents\Domovoi logs and opens it.';
 
@@ -124,7 +133,7 @@ var
   FailureText: String;
   UndoOnExit: Boolean;
   SetupCodeText: String;
-  GpuText, TierText: String;
+  GpuRaw, TierText: String;
   CodeTitle, CodeHint, LanText: TNewStaticText;
   CodeEdit: TNewEdit;
   CopyButton, OpenButton, CopyLogsButton: TNewButton;
@@ -548,10 +557,97 @@ procedure OpenDomovoiClick(Sender: TObject);
 var
   Err: Integer;
 begin
+  { The steps say the code is on the clipboard when the page opens: copy it
+    first, as Copy does. }
+  if CodeEdit.Visible and (CodeEdit.Text <> '') then
+    CopyCodeClick(Sender);
   { localhost, not the LAN address: a secure context for the browser (PLAN
     4.12); with this build's mark, so no old service worker answers it
     from its cache (OpenUrl). }
   ShellExecAsOriginalUser('open', OpenUrl, '', '', SW_SHOWNORMAL, ewNoWait, Err);
+end;
+
+{ The steps to the admin account, by the dashboard's own labels (web/static:
+  the Admin card's "set up admin", the "first-run admin setup" dialog and
+  its "setup code", "confirm password" and "set password"; the dashboard's
+  domovoi/tests/test_web_settings_routes.py holds it to them). }
+function FinishSteps: String;
+begin
+#ifdef DashboardTabRoutes
+  Result := '1. Click Open Domovoi. It copies the code and opens Settings > Configuration with "first-run admin setup" showing (if it isn''t, click "set up admin" in the Admin box).' + #13#10;
+#else
+  Result := '1. Click Open Domovoi. It copies the code and opens Domovoi''s Settings. Click the Configuration tab (the last one), then "set up admin" in the Admin box.' + #13#10;
+#endif
+  Result := Result + '2. Paste the code into "setup code", choose an admin password of at least 10 characters, type it again in "confirm password", and click "set password".';
+end;
+
+{ The names of the graphics cards Setup found, each once, with a count for
+  more than one of the same: "NVIDIA GeForce RTX 4070 Ti SUPER (x2)", the
+  x being the multiplication sign. Raw is the host's gpu= value, the names
+  joined with ", ". }
+function GpuNames(const Raw: String): String;
+var
+  Parts, Names: TArrayOfString;
+  Counts: array of Integer;
+  I, J, N: Integer;
+  Name: String;
+  Found: Boolean;
+begin
+  Parts := StringSplit(Raw, [', '], stExcludeEmpty);
+  N := 0;
+  for I := 0 to GetArrayLength(Parts) - 1 do
+  begin
+    Name := Trim(Parts[I]);
+    if Name = '' then
+      Continue;
+    Found := False;
+    for J := 0 to N - 1 do
+      if Names[J] = Name then
+      begin
+        Counts[J] := Counts[J] + 1;
+        Found := True;
+        Break;
+      end;
+    if not Found then
+    begin
+      SetArrayLength(Names, N + 1);
+      SetArrayLength(Counts, N + 1);
+      Names[N] := Name;
+      Counts[N] := 1;
+      N := N + 1;
+    end;
+  end;
+  Result := '';
+  for J := 0 to N - 1 do
+  begin
+    if J > 0 then
+      Result := Result + ', ';
+    Result := Result + Names[J];
+    if Counts[J] > 1 then
+      Result := Result + ' (' + #$00D7 + IntToStr(Counts[J]) + ')';
+  end;
+end;
+
+{ Where the AI models run, from what Setup found (the host's gpu= value:
+  the NVIDIA cards provision.sh saw, "none", or '' when it couldn't tell).
+  Ollama uses an NVIDIA card it can reach; speech recognition always runs
+  on the processor (provision.sh writes WHISPER_DEVICE=cpu). Nothing here
+  claims more than that (owner, 2026-10-12: never show what isn't true). }
+function ModelsText(const Raw, Tier: String): String;
+var
+  Names: String;
+begin
+  Names := '';
+  if (Raw <> '') and (Raw <> 'none') then
+    Names := GpuNames(Raw);
+  if Names <> '' then
+    Result := 'Chat and voice-command models run on: ' + Names + '. Speech recognition runs on the processor.'
+  else if Raw = 'none' then
+    Result := 'No NVIDIA graphics card found: chat, voice-command and speech recognition models all run on the processor.'
+  else
+    Result := 'Speech recognition runs on the processor. Setup could not check for an NVIDIA graphics card for the chat and voice-command models.';
+  if Tier <> '' then
+    Result := Result + ' Model size: ' + Tier + '.';
 end;
 
 procedure CopyLogsClick(Sender: TObject);
@@ -567,7 +663,7 @@ begin
   CodeTitle := TNewStaticText.Create(WizardForm);
   CodeTitle.Parent := P;
   CodeTitle.Font.Style := [fsBold];
-  CodeTitle.Caption := 'Your setup code';
+  CodeTitle.Caption := 'Your setup code (shown only here; it works for 24 hours)';
   CodeEdit := TNewEdit.Create(WizardForm);
   CodeEdit.Parent := P;
   CodeEdit.ReadOnly := True;
@@ -579,7 +675,7 @@ begin
   CodeHint := TNewStaticText.Create(WizardForm);
   CodeHint.Parent := P;
   CodeHint.WordWrap := True;
-  CodeHint.Caption := 'Shown only here. Open Domovoi and enter it to make your admin account; it works for 24 hours.';
+  CodeHint.Caption := FinishSteps;
   OpenButton := TNewButton.Create(WizardForm);
   OpenButton.Parent := P;
   OpenButton.Caption := 'Open Domovoi';
@@ -599,19 +695,20 @@ var
 begin
   X := WizardForm.FinishedLabel.Left;
   W := WizardForm.FinishedLabel.Width;
-  Y := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(12);
+  { Tight: the steps and both notes below have to fit the page. }
+  Y := WizardForm.FinishedLabel.Top + WizardForm.FinishedLabel.Height + ScaleY(10);
   CodeTitle.SetBounds(X, Y, W, ScaleY(16));
-  Y := Y + ScaleY(20);
+  Y := Y + ScaleY(18);
   CopyButton.SetBounds(X + W - ScaleX(80), Y, ScaleX(80), ScaleY(25));
   CodeEdit.SetBounds(X, Y + ScaleY(1), W - ScaleX(88), ScaleY(23));
-  Y := Y + ScaleY(32);
+  Y := Y + ScaleY(30);
   CodeHint.SetBounds(X, Y, W, ScaleY(30));
   CodeHint.AdjustHeight;
-  Y := CodeHint.Top + CodeHint.Height + ScaleY(10);
+  Y := CodeHint.Top + CodeHint.Height + ScaleY(8);
   { One of the two shows: Open Domovoi after an install, Copy logs after a failure. }
   OpenButton.SetBounds(X, Y, ScaleX(120), ScaleY(25));
   CopyLogsButton.SetBounds(X, Y, ScaleX(120), ScaleY(25));
-  Y := Y + ScaleY(36);
+  Y := Y + ScaleY(32);
   LanText.SetBounds(X, Y, W, ScaleY(60));
   LanText.AdjustHeight;
 end;
@@ -631,12 +728,12 @@ begin
   if InstallOk then
   begin
     WizardForm.FinishedHeadingLabel.Caption := 'Domovoi is running';
-    WizardForm.FinishedLabel.Caption := 'Domovoi runs in the background from now on, also when nobody is signed in. The dashboard at ' + DashboardUrl + ' is where you use it.';
+    WizardForm.FinishedLabel.Caption := 'Domovoi runs in the background from now on, also when nobody is signed in. You use it in your browser at ' + DashboardUrl + '.';
     CodeEdit.Text := SetupCodeText;
     if SetupCodeText = '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10#13#10 + 'Setup could not read the setup code. Restarting the DomovoiHost service writes a fresh one (see docs/WINDOWS_HOST.md).';
-    LanText.Caption := 'Phones and satellites reach Domovoi at http://' + LanIp + ':6369. Give this PC a fixed address in your router (a DHCP reservation for ' + LanMac + '), or satellites lose Domovoi when the address changes.' + #13#10 +
-      'AI models run on: ' + GpuText + '. Model size: ' + TierText + '.';
+    LanText.Caption := 'Phones and satellites reach Domovoi at http://' + LanIp + ':6369. Reserve that address for this PC in your router (DHCP reservation for ' + LanMac + '), or satellites lose Domovoi when it changes.' + #13#10 +
+      ModelsText(GpuRaw, TierText);
   end
   else
   begin
@@ -765,9 +862,7 @@ begin
       State := 'retrying';
     if State = 'ready' then
     begin
-      GpuText := KvValue(Lines, 'gpu');
-      if (GpuText = '') or (GpuText = 'none') then
-        GpuText := 'the processor (no GPU found)';
+      GpuRaw := KvValue(Lines, 'gpu');
       TierText := KvValue(Lines, 'tier');
       Result := True;
       Exit;
@@ -1245,11 +1340,16 @@ begin
     CopyLogs(HelperExe, 'uninstall', LogFile);
 end;
 
+{ The messages are the helper's notice_*= lines, in plain words (owner,
+  2026-10-12: "Windows still had it open (error 32), so a one-time startup
+  task ... deletes it" was too technical for a dialog). The paths, error
+  codes and how to remove each leftover by hand stay in the list of steps
+  (Left over:, At the next restart:) and the uninstall's log. }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Code: Integer;
-  HelperExe, LogFile, Later: String;
-  Left, Kept, AtRestart: TArrayOfString;
+  HelperExe, LogFile, Later, LeftText, StillText: String;
+  Kept: TArrayOfString;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
@@ -1271,14 +1371,14 @@ begin
   LogFile := KvValue(UninstLines, 'log');
   Log('Uninstall helper exit code ' + IntToStr(Code) + '; record: ' + LogFile);
   UninstallProgressForm.StatusLabel.Caption := 'Removing the program...';
-  Left := KvValues(UninstLines, 'leftover');
   Kept := KvValues(UninstLines, 'kept');
-  AtRestart := KvValues(UninstLines, 'restart');
-  Later := '';
-  if GetArrayLength(AtRestart) > 0 then
-    Later := #13#10 + 'At the next restart Windows removes the rest by itself; there is nothing for you to do:' + #13#10#13#10 + JoinLines(AtRestart, '- ');
+  Later := KvValue(UninstLines, 'notice_restart');
+  LeftText := KvValue(UninstLines, 'notice_left');
+  StillText := KvValue(UninstLines, 'notice_still');
+  if Later <> '' then
+    Later := #13#10#13#10 + Later;
   if GetArrayLength(Kept) > 0 then
-    UninstallNotice('Kept on purpose', JoinLines(Kept, '- '), mbInformation, HelperExe, LogFile);
+    UninstallNotice('Kept on purpose', Trim(JoinLines(Kept, '')), mbInformation, HelperExe, LogFile);
   { 0: all gone now, or at the next restart by itself (owner fixes
     2026-10-12, items 8 and 9: the profile Windows still held is deleted by
     a one-time startup task, not left to the household). }
@@ -1287,21 +1387,28 @@ begin
   if Code = 0 then
     Exit;
   { 4: finished; what is left holds no data and grants nothing (or this was
-    the third try): list it with how to remove it by hand, and let Uninstall
-    remove the program, so nothing here asks for the uninstaller again. }
+    the third try): say so, point at the log for removing it by hand, and
+    let Uninstall remove the program, so nothing here asks for the
+    uninstaller again. }
   if Code = 4 then
   begin
-    UninstallNotice('Domovoi is removed', 'A few things could not be removed. They hold none of Domovoi''s data and are safe to leave, or remove them by hand:' + #13#10#13#10 +
-      JoinLines(Left, '- ') + Later + #13#10 + 'The same list is in ' + LogFile, mbInformation, HelperExe, LogFile);
+    if LeftText = '' then
+      LeftText := 'A few things could not be removed. They hold none of your data and are safe to leave.';
+    UninstallNotice('Domovoi is removed', LeftText + Later + #13#10#13#10 +
+      'To remove them by hand anyway, the uninstall''s log says how: ' + LogFile, mbInformation, HelperExe, LogFile);
     Exit;
   end;
   { Anything else short of "all gone": stop here, before Uninstall deletes
     C:\Program Files\Domovoi and the Apps entry, so the uninstaller (and the
     helper it runs) stay for the retry. }
   if Code = 3 then
-    UninstallNotice('Domovoi is not fully removed yet', 'Still there (try ' + KvValue(UninstLines, 'run') + '):' + #13#10#13#10 + JoinLines(Left, '- ') + Later + #13#10 +
-      'Domovoi stays in Installed apps for this. Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped. On the third try it finishes and lists whatever is left.' + #13#10#13#10 +
-      'Details: ' + LogFile, mbInformation, HelperExe, LogFile)
+  begin
+    if StillText = '' then
+      StillText := 'Windows was still using some of Domovoi.';
+    UninstallNotice('Domovoi is not fully removed yet', StillText + Later + #13#10#13#10 +
+      'Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall). It carries on where it stopped.' + #13#10#13#10 +
+      'Details: ' + LogFile, mbInformation, HelperExe, LogFile);
+  end
   else
     UninstallNotice('The uninstaller stopped', 'It stopped before removing Domovoi''s account, service or data: ' + KvValue(UninstLines, 'error') + #13#10#13#10 +
       'Nothing of Domovoi''s data was deleted, and Domovoi stays in Installed apps. Fix what the message says, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped.' + #13#10#13#10 +

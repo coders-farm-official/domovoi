@@ -15,7 +15,11 @@
 // Windows wouldn't let go of it), which needs nothing from anyone and
 // doesn't count as left over. Before each step a "progress=N|TOTAL|what"
 // line, and "info=" lines as it goes, which the uninstaller shows while it
-// runs. --dry-run prints the facts and the plan and changes nothing.
+// runs. The leftovers and restart items come once more in plain words
+// (leftover_plain=, restart_plain=), and the messages the uninstaller shows
+// are ready-made lines (notice_restart=, notice_left=, notice_still=;
+// UninstallMessages): the details stay in the log and the list of steps.
+// --dry-run prints the facts and the plan and changes nothing.
 //
 // Left in place on purpose: WSL and the VirtualMachinePlatform feature
 // (shared with the household's own WSL, PLAN 7), and every file in the
@@ -58,7 +62,7 @@ namespace Domovoi.Windows.Helper
             }
             o.Kv("run", Inv.S(run) + " of " + Inv.S(UninstallRunner.MaxRuns));
             var notes = new List<string>();
-            var atRestart = new List<string>();
+            var atRestart = new List<RestartNote>();
             var left = new List<UninstallLeftover>();
             int code = UninstallRunner.Run(plan, delegate (UninstallStep s)
             {
@@ -68,10 +72,20 @@ namespace Domovoi.Windows.Helper
             foreach (var l in left)
             {
                 o.Kv("leftover", l.What + " | to remove it by hand: " + l.HowToRemove());
+                o.Kv("leftover_plain", l.Plain());
                 o.LogOnly("leftover: " + l.What + " | " + l.HowToRemove());
             }
             foreach (string n in notes) { o.Kv("kept", n); o.LogOnly("kept: " + n); }
-            foreach (string n in atRestart) { o.Kv("restart", n); o.LogOnly("at the next restart: " + n); }
+            foreach (RestartNote n in atRestart)
+            {
+                o.Kv("restart", n.Detail);
+                o.Kv("restart_plain", n.Plain);
+                o.LogOnly("at the next restart: " + n.Detail);
+            }
+            string later = UninstallMessages.AtRestart(atRestart);
+            if (later != null) o.Kv("notice_restart", later);
+            if (code == UninstallRunner.ExitFinishedWithLeftovers && left.Count > 0) o.Kv("notice_left", UninstallMessages.Leftovers(left));
+            if (code == UninstallRunner.ExitLeftovers && left.Count > 0) o.Kv("notice_still", UninstallMessages.StillThere(left));
             o.Kv("result", code == UninstallRunner.ExitDone ? "removed" : code == UninstallRunner.ExitStopped ? "stopped"
                 : code == UninstallRunner.ExitLeftovers ? "leftovers, run again" : "removed, with leftovers");
             if (code == UninstallRunner.ExitStopped)
@@ -102,8 +116,8 @@ namespace Domovoi.Windows.Helper
             Folders.CreateAdminOnly(dir);
             string dest = Path.Combine(dir, "ext4.vhdx");
             File.Move(Paths.DistroDisk, dest);
-            string note = "Domovoi's distro disk (its database, settings and the server's identity), which WSL no longer listed, was moved to " + dest
-                + " (administrators only). Delete that folder when you no longer need it.";
+            string note = "Your Domovoi data was kept: Windows no longer listed Domovoi's Linux system, so its disk (the database, settings and the server's identity) was moved to "
+                + dest + ". Only administrators can open that folder; delete it when you no longer need it.";
             notes.Add(note);
             o.Say(note);
             return null;
@@ -173,7 +187,7 @@ namespace Domovoi.Windows.Helper
         }
 
         // Does one step; returns a leftover description, or null when done.
-        static string Do(UninstallStep s, Ledger ledger, List<string> notes, List<string> atRestart, Output o)
+        static string Do(UninstallStep s, Ledger ledger, List<string> notes, List<RestartNote> atRestart, Output o)
         {
             switch (s.Kind)
             {
@@ -289,7 +303,7 @@ namespace Domovoi.Windows.Helper
         // on 2026-10-12, held until a restart), its deletion is scheduled
         // for the next restart (ProfileTask), which needs nothing from the
         // household; only if that can't be set up is it left over.
-        static string DeleteProfile(string sid, List<string> atRestart, Output o)
+        static string DeleteProfile(string sid, List<RestartNote> atRestart, Output o)
         {
             string path = Account.ProfilePath(sid);
             int err = 0;
@@ -332,7 +346,7 @@ namespace Domovoi.Windows.Helper
             string note = "the profile " + (path ?? sid) + ": Windows still had it open (error " + Inv.S(err)
                 + "), so a one-time startup task, " + ProfileTask.TaskName + ", deletes it at the next restart and then deletes itself";
             o.Say(note);
-            atRestart.Add(note);
+            atRestart.Add(new RestartNote(note, UninstallMessages.ProfilePlain));
             return null;
         }
 
@@ -348,7 +362,7 @@ namespace Domovoi.Windows.Helper
             catch (SystemException) { return false; }
         }
 
-        static string DeleteProgramData(string sid, List<string> atRestart, Output o)
+        static string DeleteProgramData(string sid, List<RestartNote> atRestart, Output o)
         {
             // Nothing runs as the account by now (its service is gone and
             // StopAccountProcesses ran); make the tree admin-only anyway
@@ -372,7 +386,7 @@ namespace Domovoi.Windows.Helper
                         return Paths.ProgramData + " (" + why + "; " + Inv.S(failed) + " item(s) could not even be scheduled for deletion at the next restart)";
                     string note = Paths.ProgramData + ": " + Inv.S(n) + " file(s) and folder(s) Windows still had open (" + why + "); Windows deletes them at the next restart";
                     o.Say(note);
-                    atRestart.Add(note);
+                    atRestart.Add(new RestartNote(note, UninstallMessages.ProgramDataPlain));
                     return null;
                 }
                 if (!waited) { o.Say("waiting for WSL to let go of " + Paths.ProgramData + " (up to 3 minutes)"); waited = true; }

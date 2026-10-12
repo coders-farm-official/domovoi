@@ -134,14 +134,27 @@ that:
    there would run as administrator too). Every line is filtered on the
    way: passwords, tokens and setup codes are blanked as far as Setup can
    recognise them.
-8. **Shows your setup code** once, with a **Copy** button, and **Open
-   Domovoi**. Use the code there to make the admin account; it works for
-   24 hours (a restart of the service writes a fresh one). Open Domovoi
-   opens `http://localhost:6369/?installed=<commit>-<build time>`: a
+8. **Shows your setup code** once, with a **Copy** button, **Open
+   Domovoi**, and the steps to the admin account in the dashboard's own
+   words. The code works for 24 hours (a restart of the service writes a
+   fresh one). **Open Domovoi** copies the code too, then opens
+   `http://localhost:6369/?installed=<commit>-<build time>#settings/configuration/setup`:
+   Settings > Configuration, where the **first-run admin setup** opens by
+   itself on a box nobody has claimed yet (if it doesn't, **set up admin**
+   in the Admin box opens it). Paste the code into **setup code**, choose
+   an admin password of at least 10 characters, type it again in
+   **confirm password**, and click **set password**. A build whose pinned
+   commit predates the dashboard's tab addresses opens `#settings` instead
+   (`DashboardTabRoutes` in `pins.iss`), and its steps say to click the
+   Configuration tab first. The `?installed=` part is there because a
    browser that ran an earlier Domovoi on this PC may still have that
    dashboard's service worker, and the old ones answered from their cache
    first, by exact address, so an address no earlier build opened always
-   reaches today's dashboard (whose worker then takes over at once).
+   reaches today's dashboard (whose worker then takes over at once). The
+   page also says where the AI models run, from what Setup found: the
+   chat and voice-command models on the NVIDIA cards it lists (or on the
+   processor when there is none), speech recognition always on the
+   processor.
 
 ## Every change on the PC, and how uninstall undoes it
 
@@ -194,17 +207,22 @@ what is already gone.
 - **What Windows still has open** goes at the next restart by itself,
   with nothing for you to do: files in `C:\ProgramData\Domovoi` (Windows'
   delete-at-restart list) and the account's profile (the one-time
-  `DomovoiRemoveProfile` task). The uninstall finishes, says so, and
-  removes the program.
+  `DomovoiRemoveProfile` task). The uninstall finishes, says so in plain
+  words ("A leftover folder from Domovoi's hidden account will be removed
+  automatically the next time Windows restarts. There's nothing for you
+  to do."), and removes the program. The paths, error codes and the
+  task's name are in the window's list of steps and the uninstall's log,
+  not in its messages.
 - **If something else is left**, it depends on what:
   - Left over but harmless (nothing of Domovoi's data in it, no access
     granted once the account is gone): the service marked for deletion,
     an access rule for the deleted account's SID on a media folder, the
     sign-in screen entry, the resume entry, or the profile or files above
     when even their removal at restart could not be set up. The uninstall
-    finishes, lists each one with the command or setting that removes it
-    by hand, and removes the program. The service goes at the next
-    restart by itself.
+    finishes, names each one in plain words, says they hold none of your
+    data, and removes the program; the command or setting that removes
+    each by hand is in its log (and in the list of steps). The service
+    goes at the next restart by itself.
   - Left over and still active (the account itself, its rights, a
     program running as it, a firewall rule): the uninstall keeps Domovoi
     in Installed apps and asks you to restart Windows and uninstall again.
