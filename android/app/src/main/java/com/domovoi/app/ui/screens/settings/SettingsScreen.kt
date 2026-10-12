@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.PageHeader
+import com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCard
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.theme.Domovoi
 
@@ -238,5 +239,6 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
             }
         }
         item { ProblemReportsCard() }
+        item { AssistantBenchmarkCard() }
     }
 }

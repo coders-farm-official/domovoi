@@ -4,9 +4,12 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.alerts.IncidentAlerts
+import com.domovoi.app.assistant.AssistantBench
+import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.DeviceAuthInterceptor
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.IdentityGate
@@ -18,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
 class AppContainer(context: Context) {
@@ -72,6 +76,19 @@ class AppContainer(context: Context) {
     /** App-lifetime scope for fire-and-forget work that must outlive a
      *  composable (e.g. the video position save on player dispose). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** The on-device assistant's benchmark (Settings → About; M0 of the
+     *  phone assistant). Built on first use. Its only network use is the
+     *  model download the user starts, on a copy of the app's client WITHOUT
+     *  the household token (the models come from public hosts): the same
+     *  redirect and cleartext rules, no device token. */
+    val assistantBench: AssistantBench by lazy {
+        val modelHttp = api.http.newBuilder()
+            .apply { interceptors().removeAll { it is DeviceAuthInterceptor } }
+            .pingInterval(0, TimeUnit.SECONDS)
+            .build()
+        AssistantBench(context, ModelDownloader(modelHttp))
+    }
 }
 
 val LocalApp = staticCompositionLocalOf<AppContainer> {
