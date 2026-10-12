@@ -317,7 +317,7 @@ case $url in
     echo '{"status":"pulling aaaa","digest":"sha256:aaaa","total":1000,"completed":500}'
     echo '{"status":"pulling aaaa","digest":"sha256:aaaa","total":1000,"completed":1000}'
     echo '{"status":"verifying sha256 digest"}'
-    dg=$(grep "^$tag " "$SHIM_STATE/registry" | cut -d' ' -f2)
+    dg=$(grep "^$tag " "$SHIM_STATE/registry" | head -n 1 | cut -d' ' -f2)
     [ ! -f "$SHIM_STATE/pull-wrong-digest" ] || dg=0000000000000000000000000000000000000000000000000000000000000000
     grep -v "^$tag " "$SHIM_STATE/ollama-models" >"$SHIM_STATE/om.new"; echo "$tag $dg" >>"$SHIM_STATE/om.new"
     mv "$SHIM_STATE/om.new" "$SHIM_STATE/ollama-models"
@@ -701,9 +701,9 @@ new_case() {
   printf '%s' "$PIPER_CONTENT" >"$STATE/piper-content"
   sha_of_text "$PIPER_CONTENT" >"$STATE/piper-pin"
   # What the registry serves for each tag: the manifest's digests.
-  sed -n 's/^tier_[a-z]*_\(tool\|qa\)_model=\(.*\)$/\2/p' "$ORIGIN/scripts/linux/provision-manifest.conf" >"$CASE/tags"
+  sed -n 's/^tier_[a-z]*_\(tool\|qa\|vision\)_model=\(.*\)$/\2/p' "$ORIGIN/scripts/linux/provision-manifest.conf" >"$CASE/tags"
   : >"$STATE/registry"
-  for t in floor_tool floor_qa standard_tool standard_qa; do
+  for t in floor_tool floor_qa floor_vision standard_tool standard_qa standard_vision; do
     printf '%s %s\n' "$(sed -n "s/^tier_${t}_model=//p" "$ORIGIN/scripts/linux/provision-manifest.conf")" \
       "$(sed -n "s/^tier_${t}_digest=//p" "$ORIGIN/scripts/linux/provision-manifest.conf")" >>"$STATE/registry"
   done
@@ -857,6 +857,8 @@ case_dry_run_changes_nothing() {
   check "plans the fstab line" said 'C:/Users/Public/Domovoi/My\040Music /srv/media/music drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
   check "plans MUSIC_DIR (manifest beside the script)" said "MUSIC_DIR=/srv/media/music"
   check "plans the standard tier from 64 GB" said "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
+  check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
+  check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M ea422f1e73652a95479954d8572d3c8c6022f628ce2d38a1a04aae1b7f2d5300"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
   check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 19
   check "the preflight runs for real" eq "$(state_of preflight)" done
@@ -949,6 +951,7 @@ case_full_run_wsl() {
   check ".env: internet answer" has_line "$envf" "INTERNET_ACCESS=always"
   check ".env: tier tool model" has_line "$envf" "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
   check ".env: QA model" has_line "$envf" "OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M"
+  check ".env: vision model" has_line "$envf" "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
   check ".env: Whisper on cpu/int8" has_line "$envf" "WHISPER_COMPUTE_TYPE=int8"
   check ".env: the template's Whisper replaced" eq "$(grep -c '^WHISPER_MODEL=' "$envf")" 1
   check ".env: Ollama by IPv4" has_line "$envf" "OLLAMA_URL=http://127.0.0.1:11434"
@@ -967,6 +970,8 @@ case_full_run_wsl() {
   check "ollama.service is the doc's" has_line "$ROOT/etc/systemd/system/ollama.service" "ExecStart=/usr/local/bin/ollama serve"
   check "pulled the QA model" called '"model":"llama3.2:3b-instruct-q4_K_M"'
   check "pulled the router" called '"model":"qwen3:8b-q4_K_M"'
+  check "pulled the vision model" called '"model":"qwen3-vl:2b-instruct-q4_K_M"'
+  check "its digest checked" said "qwen3-vl:2b-instruct-q4_K_M pulled, digest matches the pin"
   check "download progress lines" grep -q '"step":"models".*"state":"progress".*"bytes":' "$CASE/progress.jsonl"
   check "Ollama download bytes" grep -q '"step":"ollama".*"bytes":' "$CASE/progress.jsonl"
   check "Whisper at the pinned revision" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/d1d751a5f8271d482d14ca55d9e2deeebbae577f/model.bin"
@@ -1832,6 +1837,78 @@ case_bare_metal_media_paths() {
 
 build_origin
 
+# Owner decision 2026-10-12: the tier's vision model (pictures in chat) is
+# written to .env and pulled, unless --no-vision-model; it is written all
+# the same then, so chat names the model to install.
+case_vision_model_pull_is_optional() {
+  new_case vision_model_pull_is_optional
+  local envf=$CHECKOUT/domovoi/.env vision=qwen3-vl:2b-instruct-q4_K_M
+  run_prov "${wsl_args[@]}" --no-vision-model=yes
+  check "--no-vision-model takes no value: 2" eq "$RC" 2
+  run_prov --dry-run "${wsl_args[@]}" --no-vision-model
+  check "dry run exit 0" eq "$RC" 0
+  check "dry run: still written" said "OLLAMA_VISION_MODEL=$vision"
+  check "dry run: says it is not pulled" said "(--no-vision-model: $vision is not pulled)"
+  check "dry run: no pull planned" not_said "ollama pull $vision"
+  run_prov "${wsl_args[@]}" --no-vision-model
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "the vision model not pulled" not_called "\"model\":\"$vision\""
+  check "the voice models pulled" called '"model":"llama3.2:3b-instruct-q4_K_M"'
+  check "said so" said "--no-vision-model: $vision is not pulled"
+  check ".env names it all the same" has_line "$envf" "OLLAMA_VISION_MODEL=$vision"
+  # The same box, run again without the option: the vision model alone is
+  # pulled, and nothing else changes.
+  run_prov "${wsl_args[@]}"
+  check "second run exit 0" eq "$RC" 0
+  check "models re-ran" eq "$(state_of models)" done
+  check "env skipped: .env already right" eq "$(state_of env)" skip
+  check "the vision model pulled" called "\"model\":\"$vision\""
+  check "the voice models not pulled again" not_called '"model":"llama3.2:3b-instruct-q4_K_M"'
+  check "said its size" said "reads pictures in chat (about 1.9 GB"
+  check "its digest checked against the pin" said "$vision pulled, digest matches the pin"
+  check "nothing restarted" not_called "systemctl restart"
+  end_case
+}
+
+# The vision model follows the household-settings rule like every model
+# key: written when absent or still the script's, kept when the household
+# set it, on a box this script set up before it wrote the key as well.
+case_vision_model_respects_the_household() {
+  new_case vision_model_respects_the_household
+  local envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written
+  local vision=qwen3-vl:2b-instruct-q4_K_M marker=$ROOT/var/lib/domovoi-provision/steps/env
+  run_prov "${wsl_args[@]}" --skip-models
+  check "first run exit 0" eq "$RC" 0
+  check "written" has_line "$envf" "OLLAMA_VISION_MODEL=$vision"
+  check "recorded as the script's" has_line "$rec" "OLLAMA_VISION_MODEL=$vision"
+  # A box with a GPU: the household picks the GPU model in Settings.
+  sed -i 's/^OLLAMA_VISION_MODEL=.*/OLLAMA_VISION_MODEL=qwen2.5vl:7b/' "$envf"
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.70
+  check "exit 0" eq "$RC" 0
+  check "env re-ran" eq "$(state_of env)" done
+  check "the household's vision model kept" has_line "$envf" "OLLAMA_VISION_MODEL=qwen2.5vl:7b"
+  check "said it kept it" said "OLLAMA_VISION_MODEL holds a value this script did not write"
+  # A box set up before the script wrote the key: no record of it, and the
+  # env step's inputs differ from its marker. Absent: the tier's is written.
+  sed -i '/^OLLAMA_VISION_MODEL=/d' "$envf" "$rec"
+  echo stale >"$marker"
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.70
+  check "upgrade exit 0" eq "$RC" 0
+  check "absent: written" has_line "$envf" "OLLAMA_VISION_MODEL=$vision"
+  check "absent: recorded" has_line "$rec" "OLLAMA_VISION_MODEL=$vision"
+  # The same, where the household had set one by hand: it stays theirs.
+  sed -i 's/^OLLAMA_VISION_MODEL=.*/OLLAMA_VISION_MODEL=llava:13b/' "$envf"
+  sed -i '/^OLLAMA_VISION_MODEL=/d' "$rec"
+  echo stale >"$marker"
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.70
+  check "upgrade with the household's value exit 0" eq "$RC" 0
+  check "the household's value kept" has_line "$envf" "OLLAMA_VISION_MODEL=llava:13b"
+  check "said so again" said "OLLAMA_VISION_MODEL holds a value this script did not write"
+  check "not recorded as the script's" eq "$(grep -c '^OLLAMA_VISION_MODEL=' "$rec")" 0
+  end_case
+}
+
 CASES=(
   case_help_and_usage_errors
   case_harness_vars_need_each_other
@@ -1880,6 +1957,8 @@ CASES=(
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
   case_os_jobs_opt_out_is_honoured
+  case_vision_model_pull_is_optional
+  case_vision_model_respects_the_household
 )
 
 for c in "${CASES[@]}"; do

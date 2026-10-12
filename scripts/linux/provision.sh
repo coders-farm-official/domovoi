@@ -34,8 +34,9 @@
 #   venv         the venv and the three hash-checked installs from
 #                requirements-linux-py314.lock (LINUX_HOST.md "Install")
 #   env          domovoi/.env: python -m domovoi.env_bootstrap [--internet],
-#                then the hardware tier's keys, the WSL keys and the media
-#                paths, through the repo's own .env writer. A key is
+#                then the hardware tier's keys (its vision model included),
+#                the WSL keys and the media paths, through the repo's own
+#                .env writer. A key is
 #                written only when it is absent or still holds what this
 #                script last wrote there (kept in
 #                /var/lib/domovoi-provision/env-written); one the household
@@ -46,8 +47,10 @@
 #                hands NVIDIA cards through) and on the CPU without one; no
 #                CUDA_VISIBLE_DEVICES pin. The GPUs it found go in the final
 #                line ("gpu"); the tier stays a question of memory alone
-#   models       the tier's two Ollama models, each checked against the
-#                manifest digest after the pull            (--skip-models: no)
+#   models       the tier's two Ollama models and its vision model (pictures
+#                in chat, about 1.9 GB; --no-vision-model: not pulled), each
+#                checked against the manifest digest after the pull
+#                                                          (--skip-models: no)
 #   whisper      the Whisper model at the manifest's Hugging Face revision,
 #                model.bin checked against its SHA-256; the small files
 #                beside it (config.json, tokenizer.json, vocabulary.*) come
@@ -420,6 +423,7 @@ LAN_IP=""
 MEDIA_ARGS=()
 WSL_OPT=auto
 SKIP_MODELS=0
+PULL_VISION=1
 DRY_RUN=0
 HEALTH_TIMEOUT=900
 ALLOWED_SIGNERS=""
@@ -467,6 +471,11 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         in Settings or by hand is kept, with a warning.
   --wsl, --no-wsl       force WSL mode on or off (default: detected from the
                         kernel, the rule domovoi/host_kind.py uses)
+  --no-vision-model     don't pull the tier's vision model, which reads
+                        pictures in chat (about 1.9 GB). It is still the one
+                        configured: chat then says it isn't installed, and
+                        an admin can install it later on the dashboard
+                        (Settings, Models)
   --skip-models         no Ollama pulls and no Whisper download (tests)
   --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
                         HEAD and every later update must verify against it
@@ -520,12 +529,13 @@ while [ $# -gt 0 ]; do
         --allowed-signers) ALLOWED_SIGNERS=$val ;;
       esac
       ;;
-    --wsl|--no-wsl|--skip-models|--dry-run|--keep-downloads|-h|--help)
+    --wsl|--no-wsl|--skip-models|--no-vision-model|--dry-run|--keep-downloads|-h|--help)
       [ "$has_val" = 0 ] || usage_error "$opt takes no value"
       case $opt in
         --wsl) WSL_OPT=yes ;;
         --no-wsl) WSL_OPT=no ;;
         --skip-models) SKIP_MODELS=1 ;;
+        --no-vision-model) PULL_VISION=0 ;;
         --dry-run) DRY_RUN=1 ;;
         --keep-downloads) KEEP_DOWNLOADS=1 ;;
         -h|--help) usage; final_line help 0 "Usage printed; nothing was done"; exit 0 ;;
@@ -800,7 +810,9 @@ MANIFEST_KEYS=(manifest_version docker_key_url docker_key_fpr docker_repo_url do
   whisper_model whisper_repo whisper_revision whisper_model_bin_sha256 whisper_model_bin_bytes
   tier_standard_min_mem_mib
   tier_floor_tool_model tier_floor_tool_digest tier_floor_qa_model tier_floor_qa_digest
-  tier_standard_tool_model tier_standard_tool_digest tier_standard_qa_model tier_standard_qa_digest)
+  tier_floor_vision_model tier_floor_vision_digest
+  tier_standard_tool_model tier_standard_tool_digest tier_standard_qa_model tier_standard_qa_digest
+  tier_standard_vision_model tier_standard_vision_digest)
 MANIFEST_FILE=""
 
 load_manifest() {
@@ -832,13 +844,15 @@ load_manifest() {
   [[ ${M[whisper_revision]} =~ ^[0-9a-f]{40}$ ]] || die "$file: whisper_revision is not a commit SHA"
   [[ ${M[whisper_repo]} =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "$file: whisper_repo is not owner/name"
   [[ ${M[whisper_model]} =~ ^[A-Za-z0-9._-]+$ ]] || die "$file: whisper_model is not a model name"
-  for k in whisper_model_bin_sha256 tier_floor_tool_digest tier_floor_qa_digest tier_standard_tool_digest tier_standard_qa_digest; do
+  for k in whisper_model_bin_sha256 tier_floor_tool_digest tier_floor_qa_digest tier_floor_vision_digest \
+      tier_standard_tool_digest tier_standard_qa_digest tier_standard_vision_digest; do
     [[ ${M[$k]} =~ ^[0-9a-f]{64}$ ]] || die "$file: $k is not a SHA-256"
   done
   for k in whisper_model_bin_bytes tier_standard_min_mem_mib; do
     [[ ${M[$k]} =~ ^[0-9]+$ ]] || die "$file: $k is not a number"
   done
-  for k in tier_floor_tool_model tier_floor_qa_model tier_standard_tool_model tier_standard_qa_model; do
+  for k in tier_floor_tool_model tier_floor_qa_model tier_floor_vision_model \
+      tier_standard_tool_model tier_standard_qa_model tier_standard_vision_model; do
     [[ ${M[$k]} =~ ^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._-]+$ ]] || die "$file: $k is not an exact model:tag"
   done
   MANIFEST_FILE=$file
@@ -872,6 +886,8 @@ tier_tool() { printf '%s' "${M[tier_${TIER_EFF}_tool_model]}"; }
 tier_tool_digest() { printf '%s' "${M[tier_${TIER_EFF}_tool_digest]}"; }
 tier_qa() { printf '%s' "${M[tier_${TIER_EFF}_qa_model]}"; }
 tier_qa_digest() { printf '%s' "${M[tier_${TIER_EFF}_qa_digest]}"; }
+tier_vision() { printf '%s' "${M[tier_${TIER_EFF}_vision_model]}"; }
+tier_vision_digest() { printf '%s' "${M[tier_${TIER_EFF}_vision_digest]}"; }
 
 # Read the manifest from the checkout (or, in a dry run before the clone,
 # the copy beside this script) and settle the tier.
@@ -1627,6 +1643,9 @@ env_keys() {
   echo "OLLAMA_MODEL=$(tier_qa)"
   echo "OLLAMA_TOOL_MODEL=$(tier_tool)"
   echo "OLLAMA_TOOL_THINK=false"
+  # Written whether it is pulled or not (--no-vision-model): chat then
+  # names it as the one to install.
+  echo "OLLAMA_VISION_MODEL=$(tier_vision)"
   if [ "$WSL" = 1 ]; then
     # WSL sees no removable drives, so USB adoption has nothing to scan.
     echo "SATELLITE_ADOPTION_ENABLED=false"
@@ -1641,7 +1660,7 @@ env_keys() {
 # this script creates has the template's value of each recorded as the
 # script's own, so a later run with another option still replaces it.
 ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE OLLAMA_URL OLLAMA_MODEL
-  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
+  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK OLLAMA_VISION_MODEL SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
   MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR VIDEOS_DIR)
 
 # What domovoi/.env assigns now to the keys in PROVISION_ENV_NAMES, as
@@ -2015,9 +2034,14 @@ pull_model() {
   [ "$ok" = 1 ]
 }
 
+# The tier's models to pull, "TAG DIGEST" per line: the QA model, the
+# router and (unless --no-vision-model) the vision model, each once.
 model_pairs() {
   printf '%s %s\n' "$(tier_qa)" "$(tier_qa_digest)"
   if [ "$(tier_tool)" != "$(tier_qa)" ]; then printf '%s %s\n' "$(tier_tool)" "$(tier_tool_digest)"; fi
+  if [ "$PULL_VISION" = 1 ] && [ "$(tier_vision)" != "$(tier_qa)" ] && [ "$(tier_vision)" != "$(tier_tool)" ]; then
+    printf '%s %s\n' "$(tier_vision)" "$(tier_vision_digest)"
+  fi
 }
 
 skip_models() { if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: no Ollama models pulled"; return 0; fi; return 1; }
@@ -2026,10 +2050,18 @@ check_models() {
   local tag want
   while read -r tag want; do [ "$(model_digest "$tag")" = "$want" ] || return 1; done < <(model_pairs)
 }
-plan_models() { model_pairs | sed 's/^/ollama pull /'; }
+plan_models() {
+  model_pairs | sed 's/^/ollama pull /'
+  if [ "$PULL_VISION" = 0 ]; then echo "(--no-vision-model: $(tier_vision) is not pulled)"; fi
+}
 do_models() {
   local tag want got i=0 n
   n=$(model_pairs | grep -c .)
+  if [ "$PULL_VISION" = 1 ]; then
+    log "the vision model $(tier_vision) reads pictures in chat (about 1.9 GB; --no-vision-model leaves it out)"
+  else
+    log "--no-vision-model: $(tier_vision) is not pulled; chat can't read pictures until it is installed (dashboard: Settings, Models)"
+  fi
   while read -r tag want; do
     got=$(model_digest "$tag") || got=""
     if [ "$got" = "$want" ]; then
