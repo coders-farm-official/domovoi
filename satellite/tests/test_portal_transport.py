@@ -892,3 +892,40 @@ def test_the_declared_board_is_the_selected_one_when_asked(portal):
     _s, body, _h = _get(portal, "/")
     assert 'value="xvf3800_usb" selected' in body
     assert 'value="respeaker_2mic_hat" selected' not in body
+
+
+# ─── setup over: the hotspot's PROFILE goes too ───────────────────────────
+#
+# 2026-10-12: taking the hotspot down left its profile saved, and an access
+# point profile is always "available" to NetworkManager — a satellite that
+# lost its router recovered onto its own setup network and stayed there.
+
+
+def test_a_successful_setup_deletes_the_hotspot_profile(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    t = _transport(calls, tmp_path)
+    t.expose(_info())
+    t.dispose()
+    joined = [" ".join(c) for c in calls]
+    down = next(i for i, c in enumerate(joined) if f"connection down {pt.AP_CONNECTION}" in c)
+    delete = next(i for i, c in enumerate(joined) if f"connection delete id {pt.AP_CONNECTION}" in c)
+    assert down < delete
+
+
+def test_a_retry_after_a_failed_join_keeps_the_profile(monkeypatch, tmp_path):
+    """withdraw() is the failed-join path: the hotspot comes back for the
+    customer's second try, so its profile is not deleted there."""
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = []
+    t = _transport(calls, tmp_path)
+    t.expose(_info())
+    t.withdraw()
+    assert not any("connection delete" in " ".join(c) for c in calls)
+
+
+def test_a_profile_that_will_not_delete_does_not_stop_the_reboot(monkeypatch, tmp_path):
+    monkeypatch.setattr(pt.shutil, "which", lambda n: f"/usr/bin/{n}")
+    t = _transport([], tmp_path, fail_on="connection delete")
+    t.expose(_info())
+    t.dispose()      # logged, not raised; the boot-time step deletes it later

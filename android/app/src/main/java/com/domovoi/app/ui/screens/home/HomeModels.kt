@@ -146,6 +146,10 @@ internal data class HomeNowPlaying(
 internal data class HomeWifi(
     val rx_mbits: Double? = null,
     val tx_mbits: Double? = null,
+    // Since 2026-10-12 (null from an older satellite): the received signal,
+    // and "ap" while the radio hosts the setup hotspot.
+    val signal_dbm: Double? = null,
+    val mode: String? = null,
 )
 
 @Serializable
@@ -465,13 +469,15 @@ internal fun groupRooms(sorted: List<HomeRoom>): List<RoomGroup> {
     return if (loose.isEmpty()) out else out + RoomGroup("ungrouped", loose)
 }
 
-/** A Wi-Fi push carries every room's new rx/tx: merged in, never re-read
+/** A Wi-Fi push carries every room's new link: merged in, never re-read
  *  (every room sends one a minute). Nothing else is taken from it. */
 internal fun mergeWifi(rooms: List<HomeRoom>, push: Map<String, HomeWifi>?): List<HomeRoom> {
     if (push.isNullOrEmpty()) return rooms
     return rooms.map { r ->
         val w = push[r.room_id] ?: return@map r
-        r.copy(wifi = (r.wifi ?: HomeWifi()).copy(rx_mbits = w.rx_mbits, tx_mbits = w.tx_mbits))
+        r.copy(wifi = (r.wifi ?: HomeWifi()).copy(
+            rx_mbits = w.rx_mbits, tx_mbits = w.tx_mbits, signal_dbm = w.signal_dbm, mode = w.mode,
+        ))
     }
 }
 
@@ -498,10 +504,18 @@ internal fun songTitle(song: HomeSong?): String =
         ?: song?.file?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
         ?: "unknown"
 
-/** Weak Wi-Fi is the web wifiTone's 'err' band: under 5 Mbit/s. */
+/** Weak Wi-Fi is the web wifiTone's 'err' band: by signal (below -70 dBm,
+ *  or the radio hosting the setup hotspot) when the satellite reports one;
+ *  an older satellite's rate under 5 Mbit/s otherwise. An idle link reads
+ *  the 1 Mbit/s beacon rate, so a signal-reporting room is never weak for
+ *  its rate alone. */
 internal fun weakWifi(r: HomeRoom): Boolean {
-    val rx = r.wifi?.rx_mbits ?: return false
-    return r.online && rx < 5
+    val w = r.wifi ?: return false
+    if (!r.online) return false
+    if (w.mode == "ap") return true
+    w.signal_dbm?.let { return it < -70.0 }
+    val rx = w.rx_mbits ?: return false
+    return rx < 5
 }
 
 internal fun kioskDead(r: HomeRoom): Boolean =

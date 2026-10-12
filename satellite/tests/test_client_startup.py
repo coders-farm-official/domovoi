@@ -88,11 +88,18 @@ def test_the_nmcli_recovery_is_allowlisted():
     fails the same way wpa_cli did."""
     from domovoi.satellite_media import overlay
 
+    from satellite import wifi_profiles
+
     sudoers = overlay.render_template("sudoers.tmpl", {"USER": "domovoi"})
-    assert "/usr/bin/nmcli device connect wlan0" in sudoers
+    # Exactly the argv the recovery runs, character for character: sudoers
+    # matches the command line, and a near miss is a password prompt.
+    assert "NOPASSWD: " + " ".join(wifi_profiles.connection_up_argv()) + "\n" in sudoers
+    assert wifi_profiles.connection_up_argv()[0] == "/usr/bin/nmcli"
+    # A new card's sudoers no longer allows "whatever NetworkManager picks".
+    assert "NOPASSWD: /usr/bin/nmcli device connect" not in sudoers
     src = inspect.getsource(client.Satellite._reconnect_wifi_nm)
-    assert '"/usr/bin/nmcli"' in src
     assert '"sudo", "-n"' in src
+    assert "plan_recovery" in src
 
 
 # ─── saying "I can't reach the server" ────────────────────────────────────

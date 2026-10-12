@@ -76,6 +76,8 @@ from satellite.tests._client_import import (
 REAL_HOME = Path.home()
 REAL_CONFIG_DIR = REAL_HOME / ".domovoi"
 ROOT_CONFIG_DIR = Path("/etc/domovoi")
+# Root's state directory (satellite/net_settings.py keeps its record there).
+ROOT_STATE_DIR = Path("/var/lib/domovoi")
 
 
 @pytest.fixture(scope="session")
@@ -116,7 +118,8 @@ def _relocate(value: Path, home: Path) -> Path | None:
     relocating the source tree would take the bundled sounds and greetings
     with it."""
     for root, stand_in in ((REAL_CONFIG_DIR, home / ".domovoi"),
-                           (ROOT_CONFIG_DIR, home / "etc-domovoi")):
+                           (ROOT_CONFIG_DIR, home / "etc-domovoi"),
+                           (ROOT_STATE_DIR, home / "var-lib-domovoi")):
         try:
             rel = value.relative_to(root)
         except ValueError:
@@ -196,6 +199,25 @@ class NetworkGuard:
     def clear(self) -> list[str]:
         seen, self.violations = self.violations, []
         return seen
+
+
+@pytest.fixture(autouse=True)
+def no_server_name_lookups(monkeypatch):
+    """Server discovery tries the core's NAME first (``domovoi.local``,
+    satellite/discovery.py). Resolved for real, that is a multicast query
+    on the developer's actual house network — and on a machine where the
+    house's real core answers, the address it returns would then be dialled
+    (and refused by :func:`network_guard`). So a name nobody gave a test a
+    resolver for does not resolve. A test of the name order passes its own
+    ``resolver=``."""
+    from satellite import discovery
+
+    def refuse(host, *args, **kwargs):
+        if _is_loopback(host):
+            return socket.getaddrinfo(host, *args, **kwargs)
+        raise socket.gaierror(getattr(socket, "EAI_NONAME", -2), f"{host}: no lookups in satellite tests")
+
+    monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER", refuse)
 
 
 @pytest.fixture(autouse=True)

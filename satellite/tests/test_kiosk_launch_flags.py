@@ -110,3 +110,31 @@ def test_the_script_hands_chromium_exactly_these_flags(tmp_path) -> None:
     for flag in QUIET_FLAGS + KEPT_FLAGS:
         assert flag in argv, flag
     assert argv[-1] == "http://domovoi.local:6369/display.html?room=den"
+
+
+@pytest.mark.skipif(BASH is None, reason="no usable bash")
+def test_a_stale_profile_lock_is_cleared_before_launch(tmp_path) -> None:
+    """A host-name change (satellite/net_settings.py) leaves Chromium's
+    Singleton lock naming the OLD host, and the kiosk then stops on
+    "profile in use on another computer". The launch clears the three lock
+    entries, and nothing else in the profile."""
+    profile = tmp_path / ".domovoi" / "kiosk-profile"
+    profile.mkdir(parents=True)
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie", "Preferences"):
+        (profile / name).write_text("x", encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "cage").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+    (bin_dir / "chromium").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+    (bin_dir / "venv-python").write_text("#!/bin/sh\necho http://x/\n", encoding="utf-8", newline="\n")
+    wrapper = (
+        'd="$BIN_DIR"; h="$HOME_DIR"; if command -v cygpath >/dev/null 2>&1; then '
+        'd=$(cygpath -u "$d"); h=$(cygpath -u "$h"); fi; chmod +x "$d"/*; '
+        'export HOME="$h" DOMOVOI_VENV_PY="$d/venv-python" DOMOVOI_KIOSK_BROWSER=chromium; '
+        'PATH="$d:$PATH" exec sh "$0"'
+    )
+    env = {**os.environ, "BIN_DIR": str(bin_dir), "HOME_DIR": str(tmp_path)}
+    proc = subprocess.run([BASH, "-c", wrapper, str(SCRIPT)], capture_output=True,
+                          text=True, env=env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert sorted(p.name for p in profile.iterdir()) == ["Preferences"]

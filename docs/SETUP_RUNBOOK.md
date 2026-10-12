@@ -49,9 +49,11 @@ kitchen" several times a day for years.
 
 **Where the server lives.** It needs to be always-on, on wired Ethernet if
 at all possible, and physically somewhere fan noise doesn't matter.
-Satellites reconnect by hostname or IP, so give the server a **DHCP
-reservation on your router right now** — before anything points at it.
-Moving the server's IP later means touching every Pi.
+Satellites look for the server by name first (`domovoi.local`, or the
+name the server tells them), then at the address that worked last time,
+and follow it if its address changes — so a **DHCP reservation** for the
+server is a convenience, not a requirement. If you make one, make it on
+the router, not as a static address on the box.
 
 **How much disk your media will want.** Domovoi itself is ~15–20 GB with
 all default models (less if you're following [CPU_HOST.md](CPU_HOST.md) and
@@ -453,7 +455,9 @@ And two that apply to any board:
 - **Underpowered PSU is the #1 cause of mystery flakiness.** 2.5 A
   minimum. Check `vcgencmd get_throttled` — anything but `0x0` means the
   Pi has browned out.
-- **Give every satellite a DHCP reservation** ([PROVISIONING §7](../satellite/PROVISIONING.md)).
+- **A DHCP reservation per satellite is optional** ([PROVISIONING §7](../satellite/PROVISIONING.md)):
+  each one is named `domovoi-<room>` on the network (router list and
+  mDNS). Never give a satellite a static address on the Pi itself.
 
 ### Point it at the server
 

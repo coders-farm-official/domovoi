@@ -316,9 +316,11 @@ Edit `~/.domovoi/config.toml`:
 ```toml
 [satellite]
 room_id = "<room>"                                   # match the hostname suffix
-domovoi_url = "ws://<server-ip-or-hostname>:6370"
+domovoi_url = "ws://<server-ip-or-hostname>:6370"    # or "auto": find it (below)
 # server_fingerprint = "SHA256:..."                  # see below — optional here
 ```
+
+**How the satellite finds the server** (every start, and again after it has been unable to reach the server for a while): first the server's **name** — `domovoi.local`, plus any name the server told it about on an earlier connect — then the **last address that worked** (what `domovoi_url` holds), then, only as a last resort, a sweep of its own `/24` for `GET /v1/health`. A name is resolved on the satellite and each address it resolves to must sign a fresh challenge for that exact address with the pinned server key before it is used, so a name can never hand a paired satellite to another machine. What worked is written back: into `domovoi_url` once the device is approved (or was told an address), into `~/.domovoi/pending-server.json` before that. This is what keeps a satellite with its server when the server's DHCP lease moves it. A unit with no `server_fingerprint` pinned anywhere and an address you typed keeps that address as typed: there is no identity to check a name against.
 
 ```toml
 [wake]
@@ -402,9 +404,27 @@ If you see the WebSocket connect immediately drop, or never see `server ready`, 
 
 ### 6.7 Sudoers entry for the WiFi self-heal
 
-The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) needs to run `wpa_cli reassociate` when the satellite has lost the server and the server does not answer a TCP connect (it never touches a link carrying a live session). `wpa_cli` requires root, so we add a single sudoers entry — no password prompt, exactly that one command, exactly that one interface, no other arguments.
+The satellite's WiFi watcher (added 2026-05-06 after an rx-bitrate-stuck-at-1-Mbit/s incident that chopped TTS mid-word) recovers the link when the satellite has lost the server AND nothing on the network answers: not the server's machine (a connection **refused** by it counts as an answer — that is the server restarting, and since 2026-10-12 it never makes a satellite rejoin the Wi-Fi), and not the router. It never touches a link carrying a live session. The recovery needs root, so we add a single sudoers entry — no password prompt, exactly that one command, no other arguments.
 
 > **What the sudoers lines are, and are not.** A card from media prep renders all of these lines into `/etc/sudoers.d/domovoi-satellite` (see `domovoi/satellite_media/templates/sudoers.tmpl`), keeps the service account **out of the `sudo` group**, and masks Pi OS's `010_pi-nopasswd`, so that file is the whole of the account's root access — `sudo -n true` fails. Each line names one root-owned helper the account cannot edit; what the helper does with root is bounded by the helper (the plugin-payload helper, for instance, runs whatever post-install script the server declared for an enabled plugin — see [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md), "The satellite service account"). On a hand-built satellite the user you created in the imager is normally in `sudo`; these entries then only remove the password prompt for the client's own calls. Remove the account from `sudo` (`sudo gpasswd -d <username> sudo`) and delete `/etc/sudoers.d/010_pi-nopasswd` if you want the prepared-card posture.
+
+**NetworkManager units (every Pi OS Bookworm/Trixie image, every prepared card).** The recovery brings the house network's profile back **by name**: `nmcli connection up id domovoi-home`. A card set up since 2026-10-12 names its house profile `domovoi-home` and has this line; on a hand-built unit, rename the profile you connected with and add the line:
+
+```bash
+nmcli -t -f NAME,TYPE connection show            # the wifi profile you are on
+sudo nmcli connection modify "<that name>" connection.id domovoi-home
+sudo visudo -f /etc/sudoers.d/satellite-nm
+```
+
+```
+<username> ALL=(root) NOPASSWD: /usr/bin/nmcli connection up id domovoi-home
+```
+
+Never `nmcli device connect wlan0` on its own: that lets NetworkManager pick any saved profile, and the setup hotspot's (`domovoi-setup`, on a portal-onboarded unit) is always "available" — a satellite that lost its router for a minute recovered onto its own setup network and stayed there for 18 days. Cards prepared before 2026-10-12 carry that line. Their client first tries the house profile by its uuid (sudo refuses it unless you allowed it), then that line, but only where it cannot raise an access point: the hotspot profile is gone (deleted at the first boot after the upgrade, §8.4), or the house network is in the last scan and its profile was used more recently than every access-point profile (NetworkManager picks the most recently used available one, and an access point is always available). Never while the link is up and the house network is not even visible; and a profile whose mode cannot be read counts as an access point. See `satellite/wifi_profiles.py`.
+
+The watcher never recovers the Wi-Fi for a server that **refuses** (restarting) or while the router answers — with one exception: when the server has been **silent** (timeouts, not refusals) for 10 minutes while the router answers, which is how a lossy link looks, it recovers once, and at most once an hour.
+
+**wpa_supplicant units** (no NetworkManager) use `wpa_cli reassociate`:
 
 ```bash
 sudo visudo -f /etc/sudoers.d/satellite-wifi
@@ -429,11 +449,12 @@ sudo -n /usr/sbin/wpa_cli -i wlan0 reassociate
 
 If you skip this step, the satellite still runs — the watcher will simply log a warning every time it decides the path to the server is broken, and you'll be back to manually running `sudo wpa_cli -i wlan0 reassociate` when chop appears.
 
-## 7. Networking — DHCP reservation
+## 7. Networking — names and addresses
 
-mDNS (`*.local`) is fine for development but flaky long-term. Recommended:
+Nothing here needs a fixed address. The satellite finds the server by name first and follows it to a new address (§6.4), and the satellite itself is `domovoi-<room>` on the network: that is its host name (§8.4), what the router's client list shows, and — with avahi running, as it is on Pi OS — `domovoi-<room>.local` over mDNS. NetworkManager asks for the address it had last time (its lease is kept in `/var/lib/NetworkManager/`, which survives a reboot), so most routers hand the same one back anyway.
 
-- [ ] In your router's admin: assign a **DHCP reservation** for this Pi's MAC address so its IP never changes. Note the IP.
+- **Do not give the Pi a static address on the Pi itself.** It collides with whatever the router hands out next and breaks the day the router or the subnet changes.
+- **Optional:** a **DHCP reservation** for the Pi's MAC address in the router's admin, if you want its address fixed in your notes or your router's client list. The satellite does not need one, and neither does the server (it is found by name first).
 - [ ] Verify the Domovoi server is reachable from the Pi:
   ```bash
   ping -c 3 <server-ip-or-hostname>
@@ -619,6 +640,30 @@ sudo reboot
 ```
 
 After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Satellites → room → Overview) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
+
+### 8.4 Network settings (applied as root at every boot)
+
+Three settings every satellite carries since 2026-10-12, because the router kept counting the satellites as new devices and they kept dropping off the server (`satellite/net_settings.py`):
+
+| Setting | Why |
+|---|---|
+| The setup hotspot profile `domovoi-setup` is **deleted** once setup is over | A saved access-point profile is one NetworkManager may pick whenever the house network is out of sight; a satellite then broadcasts `Domovoi-Setup-XXXX` instead of being on the house Wi-Fi. Deleted by that name only. |
+| **Wi-Fi power saving off** (`802-11-wireless.powersave 2` on the house profile only — `domovoi-home`, or the one in use on an older card — and `iw dev wlan0 set power_save off` on the radio) | The Pi's Wi-Fi chip dozes between beacons with it on: late pongs, late wake-word turns. |
+| Host name **`domovoi-<room>`** (`/etc/hostname`, `/etc/hosts`' `127.0.1.1` line; avahi restarted when running) | Every prepared card was `raspberrypi`. The router's list, DHCP and mDNS now name the room. Renamed only from `raspberrypi` or a blank, or from a name this step itself set (recorded in `/var/lib/domovoi/hostname-set`; the room was renamed). Any other name — `domovoi-pi` included — was a person's choice and is left alone. A room id with no ASCII letter or digit becomes `domovoi-<six hex digits of the Wi-Fi MAC>`, so two of them never share an mDNS name. |
+
+**Who applies them.** `domovoi-provisioning.service` (root, before the client) runs on every boot: on an unprovisioned unit it is the setup portal; on a provisioned one it checks these three, applies whichever is missing, and exits. A **new card** gets them at the end of setup, before its first reboot as a satellite — nothing to do. An **existing card** gets them from the satellite upgrade: the upgrade replaces the code this service runs and restarts only the client, so **reboot the satellite once after upgrading it** (unplug it for a few seconds). Until it has — or while the last boot-time run reported an error — its Health card (and the Android app's satellite overview) says **reboot needed**, with the reason.
+
+**It also keeps root's record of the server's address** (`/etc/domovoi/server.url`, which the clock helper trusts over its caller) with the server when it moves: the client finds the server again by name and saves the new address in `config.toml`; at the next boot root makes that address sign a fresh challenge for itself with the root-owned identity pin before it updates its record. A server that does not answer that boot is tried again at the next. (On a card prepared since this change the clock helper does the same check itself on every connect, so the clock follows at once.) A video satellite's kiosk is restarted when the address changes, and the kiosk launcher clears Chromium's profile lock, which names the old host after a rename.
+
+**What changed is logged.** Each run writes `/var/lib/domovoi/net-settings.json` (root's directory, readable by the satellite user; what it changed, left alone, or could not do); the client reads it and logs every line, so it lands in the log the server keeps for the room (Settings → Satellites → room → Logs, *retained*) as `network settings (applied as root at boot): changed: …`. The service's own journal has the same lines: `journalctl -u domovoi-provisioning -b`.
+
+**A hand-built unit without that service** (installed without `--with-provisioning`) applies the same step by hand, after each satellite upgrade that changes it:
+
+```bash
+sudo ~/satellite-venv/bin/python -m satellite.net_settings   # run from ~/domovoi
+```
+
+It prints what it changed; a second run changes nothing. Its client never shows *reboot needed* (there is no boot-time step to wait for).
 
 ## 9. Label the hardware
 

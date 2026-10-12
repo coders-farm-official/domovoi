@@ -3,34 +3,71 @@
 A satellite onboarded through the Wi-Fi portal has no way to learn the
 server's address: the core is not a participant in that adoption, and the
 customer shouldn't have to know their server's IP. So the config carries the
-sentinel ``auto`` and this module resolves it once, at first start.
+sentinel ``auto`` and this module resolves it.
 
-**Deliberately not mDNS.** Satellites are configured with the core's IP
-rather than ``domovoi.local`` precisely because multicast over Wi-Fi is the
-thing that fails at 3 a.m. — multicast-to-unicast conversion, mesh
-backhauls and guest-VLAN isolation all break it in ways that are invisible
-until they aren't. Making that load-bearing for a customer's first five
-minutes would be the worst possible place to inherit it.
+The order (since 2026-10-12, :func:`locate`):
 
-Instead: sweep the interface's own /24 for ``GET /v1/health`` and keep the
-host that answers with the Domovoi signature. Unicast HTTP is boring and
-works. The result is persisted, so this runs once rather than on every
-connect, and needs no new dependency and no core-side change at all.
+1. **The core's name** — ``domovoi.local`` and any name the core told this
+   device about in its ``ready`` frame (:func:`server_names`). A name is
+   only a hint: it is resolved HERE, to addresses, and each address is
+   dialled and held to the pinned server identity like any other, so the
+   proof is bound to the address actually dialled and a name that resolves
+   to an impostor gets nowhere. This is what keeps a satellite with the
+   core when the core's DHCP lease moves it to a new address.
+2. **The last-known address** — the one config.toml holds (or the pending
+   sidecar, before approval), verified the same way.
+3. **The /24 sweep**, only as a last resort: ``GET /v1/health`` on every
+   address of the interface's own subnet, keeping the host that answers as
+   this device's core.
+
+mDNS is not load-bearing anywhere in that list: multicast over Wi-Fi is the
+thing that fails at 3 a.m. (multicast-to-unicast conversion, mesh backhauls
+and guest-VLAN isolation all break it invisibly), so a name that does not
+resolve simply falls through to the address that worked last time, and then
+to the sweep. What worked is persisted by the caller (config.toml for an
+approved device, the pending sidecar before that).
 """
 
 from __future__ import annotations
 
 import functools
 import ipaddress
+import json
 import logging
+import re
 import socket
+import threading
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
 
 log = logging.getLogger(__name__)
 
 AUTO = "auto"
 CORE_PORT = 6370
 HEALTH_PATH = "/v1/health"
+
+#: Tried first, before any name the core advertised: the name a stock
+#: install answers to when its host is called ``domovoi`` (avahi publishes
+#: ``<hostname>.local``).
+DEFAULT_NAMES: tuple[str, ...] = ("domovoi.local",)
+#: Names the core advertised in its ``ready`` frame (``server_names``).
+SERVER_NAMES_PATH = Path("~/.domovoi").expanduser() / "server-names.json"
+#: At most this many advertised names are kept.
+MAX_NAMES = 4
+_NAME_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
+# A name lookup that has not answered by then is a name that will not
+# (nss-mdns gives up on its own after a few seconds anyway).
+_NAME_TIMEOUT_SEC = 3.0
+# One host, not a sweep: it may take its time to answer.
+_SINGLE_PROBE_TIMEOUT_SEC = 2.0
+# What resolves a name when the caller passes no resolver. A module
+# attribute so the test suite can refuse real lookups (satellite/tests/
+# conftest.py): resolving domovoi.local on a developer's machine asks the
+# developer's actual house.
+_DEFAULT_RESOLVER: Callable[..., Any] = socket.getaddrinfo
 
 # A home is a /24. Anything wider isn't worth 16k probes — fall back to
 # asking rather than hammering someone's network for a minute.
@@ -73,7 +110,8 @@ def candidate_hosts(ip: str, prefix: int = 24) -> list[str]:
 
 
 def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_SEC,
-          opener=None, expected_fingerprint: str | None = None) -> bool:
+          opener=None, expected_fingerprint: str | None = None,
+          scheme: str = "http") -> bool:
     """Whether ``host`` answers /v1/health as **this device's** Domovoi core.
 
     The bot_name check keeps us from adopting some unrelated service that
@@ -99,7 +137,7 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
     opener = opener or urllib.request.urlopen
     challenge = server_identity.new_challenge() if expected_fingerprint else None
     addr = f"{host}:{port}"
-    url = f"http://{host}:{port}{HEALTH_PATH}"
+    url = f"{'https' if scheme == 'https' else 'http'}://{host}:{port}{HEALTH_PATH}"
     if challenge:
         url = f"{url}?challenge={challenge}&addr={urllib.parse.quote(addr, safe='')}"
     try:
@@ -201,3 +239,230 @@ def resolve_url(configured: str, *, port: int = CORE_PORT, finder=None,
     if host is None:
         return None
     return f"ws://{host}:{port}"
+
+
+# ─── the order: name, last-known address, sweep ───────────────────────────
+
+
+def valid_name(name: object) -> bool:
+    """A host name (not an address) worth resolving."""
+    if not isinstance(name, str):
+        return False
+    text = name.strip().rstrip(".").lower()
+    if not text or text == "localhost":
+        return False
+    try:
+        ipaddress.ip_address(text)
+        return False
+    except ValueError:
+        pass
+    return bool(_NAME_RE.match(text))
+
+
+def _read_names(path: Path) -> list[str]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    names = doc.get("names") if isinstance(doc, dict) else None
+    if not isinstance(names, list):
+        return []
+    return [n.strip().rstrip(".").lower() for n in names if valid_name(n)][:MAX_NAMES]
+
+
+def server_names(path: Path | None = None) -> list[str]:
+    """The names to try, in order: :data:`DEFAULT_NAMES`, then the ones the
+    core advertised (deduplicated)."""
+    out: list[str] = []
+    for name in (*DEFAULT_NAMES, *_read_names(path or SERVER_NAMES_PATH)):
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def remember_names(names: Any, path: Path | None = None) -> bool:
+    """Keep the names the core advertised (its ``ready`` frame). Only the
+    syntax is checked: a name is a hint the identity check settles, so a
+    wrong one costs one failed lookup. True when the file changed."""
+    if not isinstance(names, list):
+        return False
+    clean: list[str] = []
+    for n in names:
+        if valid_name(n):
+            text = n.strip().rstrip(".").lower()
+            if text not in clean:
+                clean.append(text)
+    clean = clean[:MAX_NAMES]
+    path = path or SERVER_NAMES_PATH
+    if not clean or _read_names(path) == clean:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps({"names": clean}), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as e:
+        log.debug("could not save the server's names: %s", e)
+        return False
+    return True
+
+
+def resolve_name(name: str, *, timeout: float = _NAME_TIMEOUT_SEC,
+                 resolver: Callable[..., Any] | None = None) -> list[str]:
+    """The IPv4 addresses ``name`` resolves to, in the resolver's order, or
+    ``[]`` when it does not resolve within ``timeout``. Never raises."""
+    resolver = _DEFAULT_RESOLVER if resolver is None else resolver
+    result: list[Any] = []
+
+    def ask() -> None:
+        try:
+            result.extend(resolver(name, CORE_PORT, socket.AF_INET, socket.SOCK_STREAM))
+        except (OSError, UnicodeError, ValueError):
+            pass
+
+    worker = threading.Thread(target=ask, name="resolve-server-name", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        log.info("%s did not resolve within %.0fs", name, timeout)
+        return []
+    out: list[str] = []
+    for info in list(result):
+        try:
+            addr = info[4][0]
+            ip = ipaddress.ip_address(addr)
+        except (IndexError, TypeError, ValueError):
+            continue
+        if ip.version != 4 or ip.is_loopback or ip.is_unspecified or ip.is_multicast:
+            continue
+        if addr not in out:
+            out.append(addr)
+    return out
+
+
+@dataclass(frozen=True)
+class Located:
+    url: str
+    # "name", "last-known" or "scan".
+    via: str
+    detail: str = ""
+
+
+def _host_port(url: str, default_port: int) -> tuple[str | None, int]:
+    text = (url or "").strip()
+    if "://" not in text:
+        text = "ws://" + text
+    try:
+        parts = urllib.parse.urlsplit(text)
+        port = parts.port or default_port
+    except ValueError:
+        return None, default_port
+    return parts.hostname, port
+
+
+def host_port_of(url: str, default_port: int = CORE_PORT) -> tuple[str | None, int]:
+    """``(host, port)`` a ``ws://`` / ``wss://`` / bare address dials."""
+    return _host_port(url, default_port)
+
+
+def _secure(url: str | None) -> bool:
+    return (url or "").strip().lower().startswith(("wss://", "https://"))
+
+
+def http_base_of(url: str, default_port: int = CORE_PORT) -> str:
+    """The ``http(s)://host:port`` a core address answers HTTP on."""
+    host, port = _host_port(url, default_port)
+    host = host or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{'https' if _secure(url) else 'http'}://{host}:{port}"
+
+
+def locate(
+    *,
+    names: list[str] | tuple[str, ...] = DEFAULT_NAMES,
+    last_known: str | None = None,
+    port: int = CORE_PORT,
+    expected_fingerprint: str | None = None,
+    probe_fn: Callable[..., bool] | None = None,
+    finder: Callable[..., str | None] | None = None,
+    resolver: Callable[..., Any] | None = None,
+    scan: bool = True,
+    refused: Callable[[str, int], bool] | None = None,
+) -> Located | None:
+    """Find this device's core: by name, then at the last-known address,
+    then by sweeping the subnet. Every candidate must pass ``probe_fn``
+    (:func:`probe`: answers as Domovoi and, when a fingerprint is pinned,
+    signs a fresh nonce bound to the address dialled with the pinned key)
+    before it is returned. None when nothing did.
+
+    An address found by name keeps the last-known address's scheme and
+    port (a ``wss://`` core or a custom port stays so). ``refused(host,
+    port)`` asks whether the last-known address's machine REFUSES the
+    connect; when it does, the server's machine is right there and merely
+    not listening (a restart), and the sweep is skipped — the names are
+    still asked, being cheap and key-checked, so a core that moved while
+    something else took its old address is still followed."""
+    probe_fn = probe if probe_fn is None else probe_fn
+    last_host: str | None = None
+    last_port = port
+    if last_known and last_known.strip().lower() != AUTO:
+        last_host, last_port = _host_port(last_known, port)
+    secure = _secure(last_known) if last_host else False
+    scheme = "wss" if secure else "ws"
+    kwargs: dict[str, Any] = {"port": last_port, "timeout": _SINGLE_PROBE_TIMEOUT_SEC}
+    if expected_fingerprint:
+        kwargs["expected_fingerprint"] = expected_fingerprint
+    if secure:
+        kwargs["scheme"] = "https"
+
+    def verified(host: str) -> bool:
+        try:
+            return bool(probe_fn(host, **kwargs))
+        except Exception as e:  # noqa: BLE001 — a probe that breaks is a miss
+            log.debug("probing %s failed: %s", host, e)
+            return False
+
+    tried: set[str] = set()
+    for name in names:
+        addrs = resolve_name(name, resolver=resolver)
+        if not addrs:
+            log.info("server name %s did not resolve", name)
+            continue
+        for addr in addrs:
+            if addr in tried:
+                continue
+            tried.add(addr)
+            if verified(addr):
+                log.info("found the Domovoi server by name: %s -> %s", name, addr)
+                return Located(f"{scheme}://{addr}:{last_port}", "name", f"{name} -> {addr}")
+        log.info("server name %s resolved to %s, none of which proved to be "
+                 "this device's server", name, ", ".join(addrs))
+
+    if last_host and last_host not in tried:
+        tried.add(last_host)
+        if verified(last_host):
+            return Located(last_known.strip(), "last-known", last_host)
+        log.info("the last-known server address %s did not answer as this "
+                 "device's server", last_known)
+
+    if not scan:
+        return None
+    if last_host and refused is not None:
+        try:
+            refusing = bool(refused(last_host, last_port))
+        except Exception:  # noqa: BLE001
+            refusing = False
+        if refusing:
+            log.info("%s:%s refuses the connect: the server's machine is there and "
+                     "not listening (restarting?), so no sweep", last_host, last_port)
+            return None
+    # Resolved at CALL time (see resolve_url).
+    finder = find_core if finder is None else finder
+    fkw: dict[str, Any] = {"port": last_port}
+    if expected_fingerprint:
+        fkw["expected_fingerprint"] = expected_fingerprint
+    host = finder(**fkw)
+    if host is None:
+        return None
+    return Located(f"{scheme}://{host}:{last_port}", "scan", host)

@@ -32,7 +32,39 @@
  */
 
 /* ---- helpers ---------------------------------------------- */
-const wifiTone = (rx) => rx == null ? 'idle' : rx < 5 ? 'err' : rx < 15 ? 'warn' : 'ok';
+// Wi-Fi, by SIGNAL since 2026-10-12: the received signal at the satellite
+// (dBm) is what says whether its link is good. At or above -60 dBm good,
+// -60 to -70 fair, below -70 weak (a 2.4 GHz link wants about -67 for
+// steady real-time audio). Same bands as the voice answer
+// (domovoi/handlers/wifi.py SIGNAL_GOOD_DBM / SIGNAL_FAIR_DBM).
+const WIFI_SIGNAL_GOOD_DBM = -60;
+const WIFI_SIGNAL_FAIR_DBM = -70;
+const wifiSignalTone = (dbm) => dbm == null ? 'idle' : dbm >= WIFI_SIGNAL_GOOD_DBM ? 'ok' : dbm >= WIFI_SIGNAL_FAIR_DBM ? 'warn' : 'err';
+const wifiSignalWord = (dbm) => ({ ok: 'good', warn: 'fair', err: 'weak', idle: '' }[wifiSignalTone(dbm)]);
+// The rate is `iw`'s LAST frame, and an idle link's last frame is a beacon
+// at 1 Mbit/s: by itself it is never a verdict. It colours only a
+// satellite too old to report a signal, exactly as before.
+const wifiRateTone = (rx) => rx == null ? 'idle' : rx < 5 ? 'err' : rx < 15 ? 'warn' : 'ok';
+// The tone of a link: given the room's `wifi` object, by signal when it has
+// one (and red while the radio hosts the setup hotspot), else by rate. A
+// bare number is a rate (the older call form, kept for window.wifiTone).
+const wifiTone = (w) => {
+  if (w != null && typeof w === 'object') {
+    if (w.mode === 'ap') return 'err';
+    if (w.signal_dbm != null) return wifiSignalTone(w.signal_dbm);
+    return wifiRateTone(w.rx_mbits);
+  }
+  return wifiRateTone(w);
+};
+// What the link reads as, main + secondary: "-52 dBm" + "72 Mbit/s" for a
+// satellite that reports a signal, the rate alone for one that does not.
+const wifiLinkText = (w) => {
+  if (!w) return { main: '—', sub: null };
+  if (w.mode === 'ap') return { main: 'setup hotspot', sub: 'not on the house Wi-Fi' };
+  const rate = w.rx_mbits != null ? `${w.rx_mbits.toFixed(0)} Mbit/s` : null;
+  if (w.signal_dbm != null) return { main: `${Math.round(w.signal_dbm)} dBm`, sub: rate };
+  return { main: rate || '—', sub: null };
+};
 const wifiColor = (tone) => ({ ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--err)', idle: 'var(--fg-faint)' }[tone]);
 
 const fmtRemaining = (sec) => {
@@ -57,8 +89,9 @@ const SatCard = ({ s, onOpen, tick }) => {
   const songDur = np?.song?.duration_sec ?? 0;
   const elapsed = playing ? (np.elapsed_sec ?? 0) + tick : 0;
   const progress = playing && songDur ? Math.min(100, (elapsed / songDur) * 100) : 0;
-  const wTone = wifiTone(s.wifi?.rx_mbits);
+  const wTone = wifiTone(s.wifi);
   const wCol  = wifiColor(wTone);
+  const wText = wifiLinkText(s.wifi);
 
   return (
     <button onClick={() => onOpen(s)}
@@ -125,11 +158,15 @@ const SatCard = ({ s, onOpen, tick }) => {
 
       <div style={{ borderTop: '1px solid var(--border-soft)', padding: '10px 16px',
                     display: 'flex', alignItems: 'center', gap: 10, background: 'var(--sunken)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: wCol }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: wCol, minWidth: 0 }}
+             title={s.wifi && s.wifi.signal_dbm != null ? `signal ${wifiSignalWord(s.wifi.signal_dbm)} (good at -60 dBm or more, weak below -70)` : undefined}>
           <Icon name="wifi" size={13}/>
-          <span className="mono" style={{ fontSize: 12, color: 'var(--fg)' }}>
-            {s.wifi?.rx_mbits != null ? `${s.wifi.rx_mbits.toFixed(0)} Mbit/s` : '—'}
+          <span className="mono" style={{ fontSize: 12, color: s.wifi && s.wifi.mode === 'ap' ? wCol : 'var(--fg)' }}>
+            {wText.main}
           </span>
+          {wText.sub && (
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>· {wText.sub}</span>
+          )}
         </div>
         <span style={{ flex: 1 }}/>
         <span className="mono" style={{ fontSize: 11, color: online ? 'var(--ok)' : 'var(--fg-faint)' }}>
@@ -285,7 +322,7 @@ const SatLastOutage = ({ outage }) => {
                 <td className="mono">{e.failure || '—'}</td>
                 <td className="mono">{e.gateway_ok == null ? '?' : e.gateway_ok ? 'answers' : 'silent'}</td>
                 <td className="mono">{e.core_ok == null ? '?' : e.core_ok ? 'up' : 'down'}</td>
-                <td className="mono">{e.nm_state && e.nm_state.state ? e.nm_state.state : (e.wifi && e.wifi.rx_mbits != null ? `${e.wifi.rx_mbits} Mbit/s` : '—')}</td>
+                <td className="mono">{e.nm_state && e.nm_state.state ? e.nm_state.state : (e.wifi ? wifiLinkText(e.wifi).main : '—')}</td>
                 <td className="mono">{e.action || '—'}</td>
               </tr>
             ))}
@@ -326,6 +363,10 @@ const SatHealthCard = ({ room, online }) => {
         <div className="label">health</div>
         {s && <Pill tone={satHealthAgeTone(ageSec)}>{ageSec == null ? 'sample' : ageSec < 90 ? 'live' : `last sample ${relTime(latest.received_at)}`}</Pill>}
         {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
+        {s && s.reboot_needed &&
+          <Pill tone="warn" title={s.reboot_needed}>reboot needed</Pill>}
+        {s && s.wifi && s.wifi.mode === 'ap' &&
+          <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the satellite is bringing the house network back">setup hotspot on</Pill>}
         {s && s.mic_blocked === true &&
           <Pill tone="err" title="the device's microphone is switched off in its own settings (a phone's mic privacy toggle): it hears only silence">mic blocked</Pill>}
         {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
@@ -333,6 +374,11 @@ const SatHealthCard = ({ room, online }) => {
           <Pill tone="warn" title={s.throttled_flags.join(', ')}>throttled earlier this boot</Pill>}
         {hist && <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>{hist.samples} samples in 24 h</span>}
       </div>
+      {s && s.reboot_needed && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          Upgraded, but not rebooted yet: its network settings (no setup hotspot, Wi-Fi power saving off, host name domovoi-{room}) are applied at boot. Unplug it for a few seconds and plug it back in.
+        </div>
+      )}
       {error && !s && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>couldn’t read health: {error}</div>}
       {!error && !s && data && (
         <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
@@ -352,9 +398,11 @@ const SatHealthCard = ({ room, online }) => {
                          tone={satHealthTempTone(s.soc_temp_c)}/>
           <SatHealthStat label="uptime" value={satHealthUptime(s.uptime_s)}
                          sub={`process ${satHealthUptime(s.proc_uptime_s)} · ${s.reconnects == null ? '—' : s.reconnects} reconnects`}/>
-          <SatHealthStat label="wi-fi" value={s.wifi && s.wifi.rx_mbits != null ? `${s.wifi.rx_mbits.toFixed(0)} Mbit/s` : '—'}
-                         sub={s.nm_state && s.nm_state.state ? `NetworkManager: ${s.nm_state.state}` : (s.wifi && s.wifi.ssid ? s.wifi.ssid : 'no link data')}
-                         tone={s.wifi && s.wifi.rx_mbits != null ? wifiTone(s.wifi.rx_mbits) : 'idle'}/>
+          <SatHealthStat label="wi-fi" value={wifiLinkText(s.wifi).main}
+                         sub={[s.wifi && s.wifi.signal_dbm != null ? wifiLinkText(s.wifi).sub : null,
+                               s.nm_state && s.nm_state.state ? `NetworkManager: ${s.nm_state.state}` : (s.wifi && s.wifi.ssid ? s.wifi.ssid : 'no link data')]
+                               .filter(Boolean).join(' · ')}
+                         tone={s.wifi ? wifiTone(s.wifi) : 'idle'}/>
           <SatHealthStat label="microphone" value={s.mic_expected === false ? 'off' : s.mic_fps == null ? '—' : `${s.mic_fps.toFixed(1)} fps`}
                          sub={s.wake_loop_age_s == null ? 'wake loop not armed' : `wake loop ${s.wake_loop_age_s.toFixed(1)}s ago · queue ${s.mic_q == null ? '—' : s.mic_q}`}
                          tone={s.mic_expected === false ? 'idle' : s.mic_fps == null ? 'idle' : s.mic_fps > 20 ? 'ok' : s.mic_fps > 0 ? 'warn' : 'err'}/>
@@ -655,7 +703,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
   const [peer, setPeer] = React.useState('');
-  const wTone = wifiTone(s.wifi?.rx_mbits);
+  const wTone = wifiTone(s.wifi);
   const np = s.now_playing;
   const playing = np?.state === 'play' && np.song;
   const songDur = np?.song?.duration_sec ?? 0;
@@ -723,7 +771,9 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       `Upgrade the ${s.room_id} satellite to ${coreSha || 'the latest domovoi code'}?\n\n` +
       `It pulls the new satellite code from the Domovoi server, backs up its current ` +
       `tree, and restarts — dropping offline for a few seconds. If the new code won't ` +
-      `start, it rolls back automatically.`
+      `start, it rolls back automatically.\n\n` +
+      `Some updates finish at the next boot: if its health card then says ` +
+      `"reboot needed", unplug it for a few seconds and plug it back in.`
     )) return;
     try {
       await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
@@ -792,7 +842,23 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         </div>
         <div style={{ padding: '14px 16px' }}>
           <div className="label">wi-fi</div>
-          {s.wifi && s.wifi.rx_mbits != null ? (
+          {s.wifi && s.wifi.mode === 'ap' ? (
+            <>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor('err') }}>setup hotspot</div>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>hosting its setup network, not on the house Wi-Fi</div>
+            </>
+          ) : s.wifi && s.wifi.signal_dbm != null ? (
+            <>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor(wTone) }}>
+                {Math.round(s.wifi.signal_dbm)} dBm
+                <span style={{ fontSize: 11, fontWeight: 400 }}> {wifiSignalWord(s.wifi.signal_dbm)}</span>
+              </div>
+              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
+                {s.wifi.ssid || '—'}
+                {s.wifi.rx_mbits != null && ` · ${s.wifi.rx_mbits.toFixed(1)}${s.wifi.tx_mbits != null ? ` / ${s.wifi.tx_mbits.toFixed(1)}` : ''} Mbit/s`}
+              </div>
+            </>
+          ) : s.wifi && s.wifi.rx_mbits != null ? (
             <>
               <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor(wTone) }}>
                 {s.wifi.rx_mbits.toFixed(1)}

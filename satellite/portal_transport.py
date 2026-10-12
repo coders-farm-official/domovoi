@@ -269,7 +269,22 @@ class PortalTransport:
             self._queue.queue.clear()
 
     def dispose(self) -> None:
+        """Setup succeeded: the hotspot goes, and so does its PROFILE.
+
+        Taking it down is not enough. A saved access-point profile is one
+        NetworkManager may pick whenever the house network is out of sight
+        — an AP is always "available" — and a satellite that lost its
+        router for a minute then sat broadcasting its setup network for
+        weeks (2026-10-12). The boot-time step deletes it too
+        (satellite/net_settings.py), which is what reaches a unit set up
+        before this."""
         self.withdraw()
+        try:
+            self._nmcli(["connection", "delete", "id", AP_CONNECTION],
+                        "deleting the setup AP profile")
+            log.info("setup AP profile %s deleted", AP_CONNECTION)
+        except RuntimeError as e:
+            log.warning("%s", e)
 
     def reboot(self) -> None:
         self.run(["systemctl", "--no-block", "reboot"], timeout=60)

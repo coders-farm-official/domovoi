@@ -1288,10 +1288,14 @@ async def _satellite_for(
 
     wifi: WifiStatus | None = None
     if isinstance(wifi_dict, dict):
+        dbm = _as_float(wifi_dict.get("signal_dbm"))
+        mode = wifi_dict.get("mode")
         wifi = WifiStatus(
             rx_mbits=_as_float(wifi_dict.get("rx_mbits")),
             tx_mbits=_as_float(wifi_dict.get("tx_mbits")),
             ssid=wifi_dict.get("ssid"),
+            signal_dbm=dbm if dbm is not None and -120 <= dbm <= 0 else None,
+            mode=mode[:16] if isinstance(mode, str) and mode else None,
         )
 
     # Drop-in (Feature 4): AEC capability + current call peer, both from the

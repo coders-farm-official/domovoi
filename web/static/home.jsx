@@ -793,8 +793,10 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
   const ran = song ? (np.elapsed_sec || 0) + (playing && !stale ? sinceFetchSec : 0) : 0;
   const elapsed = dur ? Math.min(ran, dur) : ran;
   const progress = dur ? Math.min(100, (elapsed / dur) * 100) : 0;
-  const rx = s.wifi && s.wifi.rx_mbits;
-  const weakWifi = online && rx != null && window.wifiTone && window.wifiTone(rx) === 'err';
+  // satellites.jsx owns the rule: by signal (dBm) when the satellite
+  // reports one, by rate for an older one; an idle link's beacon rate is
+  // never "weak" on its own.
+  const weakWifi = online && !!s.wifi && !!window.wifiTone && window.wifiTone(s.wifi) === 'err';
   const kioskDead = online && s.sat_type === 'video' && s.display && s.display.kiosk_alive === false;
   const canAct = online && !stale && !busy;
 
@@ -1304,7 +1306,8 @@ const HomePage = ({ counts, badges }) => {
   const rooms = (Array.isArray(sats.data) ? sats.data : []).map((s) => {
     const w = wifiNow && wifiNow[s.room_id];
     if (!w || typeof w !== 'object') return s;
-    return { ...s, wifi: { ...(s.wifi || {}), rx_mbits: w.rx_mbits, tx_mbits: w.tx_mbits } };
+    return { ...s, wifi: { ...(s.wifi || {}), rx_mbits: w.rx_mbits, tx_mbits: w.tx_mbits,
+                           signal_dbm: w.signal_dbm, mode: w.mode } };
   });
   const cancelled = React.useRef(new Set());
   const { active, done, now } = HomeHooks.useTimers(timers.data, cancelled);

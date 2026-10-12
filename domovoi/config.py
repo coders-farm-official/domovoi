@@ -426,14 +426,17 @@ class Settings(BaseSettings):
     # as we tell uvicorn how often to ping; the Pi client responds with
     # zero code changes.
     #
-    # 10s interval + 5s timeout means a dead WS surfaces as a
-    # disconnect within ~15s, which then trips the receiver loop's
+    # 10s interval + 20s timeout means a dead WS surfaces as a
+    # disconnect within ~30s, which then trips the receiver loop's
     # finally block and evicts the stale `active_sessions` entry.
-    # Tighten to 5/3 if the Pi's wifi is rough enough that 15s feels
-    # long; loosen if the ping traffic becomes annoying (it won't —
-    # one tiny frame every 10s is nothing).
+    # The timeout was 5s until 2026-10-12: one pong delayed past 5s (a
+    # Pi's radio dozing in power save, a busy AP, a retransmit or two)
+    # dropped a perfectly live satellite, which then reconnected — the
+    # churn the satellites' Wi-Fi fixes are about. 20s still reclaims a
+    # dead socket well inside a minute; the satellite pings us too
+    # (websockets' default 20s/20s), so either end notices.
     ws_ping_interval_sec: float = 10.0
-    ws_ping_timeout_sec: float = 5.0
+    ws_ping_timeout_sec: float = 20.0
 
     # How long a stop (SIGTERM from systemd, Ctrl+C) may take, in three
     # nested bounds (domovoi/lifecycle.py). A stop that used to be SIGKILLed

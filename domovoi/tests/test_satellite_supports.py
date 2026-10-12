@@ -268,8 +268,11 @@ async def test_a_session_sends_only_ready_and_caches_what_the_hello_declared(dev
     ws.send_text = spy  # type: ignore[method-assign]
     await session.run()
 
-    ready = {k: v for k, v in ws.sent[0].items() if k != "bot_name"}
+    # bot_name and server_names (this host's `<hostname>.local`, 2026-10-12)
+    # depend on the machine the test runs on; the rest is the fixture.
+    ready = {k: v for k, v in ws.sent[0].items() if k not in ("bot_name", "server_names")}
     assert ready == d["ready"]
+    assert isinstance(ws.sent[0]["server_names"], list)
     assert ws.types() == ["ready"], "a hello is answered with `ready` and nothing else"
     assert seen == {"full_duplex": session.abilities.allows("full_duplex"), "registered": True}
     assert seen["full_duplex"] is ("full_duplex" in d["expect"]["allowed"])

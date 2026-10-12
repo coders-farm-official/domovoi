@@ -470,6 +470,17 @@ class HomeModelsTest {
         assertEquals(rooms, mergeWifi(rooms, null))
     }
 
+    @Test fun aRoomThatReportsASignalIsJudgedBySignalNotRate() {
+        val idle = room("kitchen").copy(wifi = HomeWifi(rx_mbits = 1.0, tx_mbits = 72.0, signal_dbm = -52.0))
+        assertFalse("an idle link reads the 1 Mbit/s beacon rate; the signal is good", weakWifi(idle))
+        val far = room("den").copy(wifi = HomeWifi(rx_mbits = 65.0, tx_mbits = 72.0, signal_dbm = -78.0))
+        assertTrue(weakWifi(far))
+        val hotspot = room("attic").copy(wifi = HomeWifi(mode = "ap"))
+        assertTrue(weakWifi(hotspot))
+        val merged = mergeWifi(listOf(room("kitchen")), mapOf("kitchen" to HomeWifi(1.0, 72.0, -52.0, "managed")))
+        assertEquals(HomeWifi(1.0, 72.0, -52.0, "managed"), merged[0].wifi)
+    }
+
     @Test fun wifiPushDecodesPerRoomAndSkipsJunk() {
         val payload = buildJsonObject {
             putJsonObject("kitchen") { put("rx_mbits", 12.5); put("tx_mbits", 3.0); put("ssid", "ignored") }

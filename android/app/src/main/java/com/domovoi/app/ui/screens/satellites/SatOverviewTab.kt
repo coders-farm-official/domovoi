@@ -73,6 +73,12 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
     val coreSha = versionState.data?.sha
     val needsUpgrade = coreSha != null && s.version != null && s.version != coreSha
     val upToDate = coreSha != null && s.version != null && s.version == coreSha
+    // Whether it was upgraded but not rebooted (the health sample says so).
+    // A read the caller may not make (or an older server) is just "no".
+    val healthState = rememberApi(s.room_id) {
+        runCatching { it.api.get("/api/satellites/${s.room_id}/health").decode<SatHealthDoc>() }.getOrNull()
+    }
+    val rebootReason = rebootNeeded(healthState.data)
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
@@ -94,7 +100,34 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
             Column(Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 14.dp)) {
                 SectionLabel("wi-fi")
                 val rx = s.wifi?.rx_mbits
-                if (rx != null) {
+                val dbm = s.wifi?.signal_dbm
+                if (s.wifi?.mode == "ap") {
+                    Text(
+                        "setup hotspot",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(Tone.Err),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        "hosting its setup network, not on the house Wi-Fi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (dbm != null) {
+                    Text(
+                        "%d dBm %s".format(Math.round(dbm), wifiSignalWord(dbm)),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(wifiSignalTone(dbm)),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        (s.wifi?.ssid ?: "—") + (rx?.let { " · %.1f Mbit/s".format(it) } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (rx != null) {
                     val tx = s.wifi?.tx_mbits
                     Text(
                         "%.1f".format(rx) + (tx?.let { " / %.1f".format(it) } ?: "") + " Mbit/s",
@@ -177,7 +210,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         DropInSection(s, sats)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        MaintenanceSection(s, coreSha, needsUpgrade, upToDate)
+        MaintenanceSection(s, coreSha, needsUpgrade, upToDate, rebootReason)
     }
 }
 
@@ -536,6 +569,7 @@ private fun MaintenanceSection(
     coreSha: String?,
     needsUpgrade: Boolean,
     upToDate: Boolean,
+    rebootReason: String? = null,
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -566,6 +600,16 @@ private fun MaintenanceSection(
         ) {
             SectionLabel("maintenance")
             if (needsUpgrade) Pill("needs upgrade", Tone.Warn)
+            if (rebootReason != null) Pill("reboot needed", Tone.Warn)
+        }
+        if (rebootReason != null) {
+            Text(
+                "Upgraded, but not rebooted yet: its network settings are applied at boot. " +
+                    "Unplug it for a few seconds and plug it back in. ($rebootReason)",
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -613,7 +657,9 @@ private fun MaintenanceSection(
             title = "upgrade ${s.room_id}?",
             body = "Upgrades to ${coreSha ?: "the latest Domovoi code"}. It pulls the new " +
                 "satellite code from the server, backs up its current tree, and restarts — " +
-                "dropping offline for a few seconds. If the new code won't start, it rolls back automatically.",
+                "dropping offline for a few seconds. If the new code won't start, it rolls back automatically. " +
+                "Some updates finish at the next boot: if it then says \"reboot needed\", unplug it " +
+                "for a few seconds and plug it back in.",
             confirmLabel = "upgrade",
             onConfirm = { upgrade() },
             onDismiss = { confirmUpgrade = false },

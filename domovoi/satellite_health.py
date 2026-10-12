@@ -93,14 +93,27 @@ def _bool(v: Any) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
+def _dbm(v: Any) -> float | int | None:
+    n = _num(v)
+    return n if n is not None and -120 <= n <= 0 else None
+
+
 def _wifi(v: Any) -> dict[str, Any] | None:
     if not isinstance(v, dict):
         return None
-    return {
+    out = {
         "rx_mbits": _num(v.get("rx_mbits")),
         "tx_mbits": _num(v.get("tx_mbits")),
         "ssid": _str(v.get("ssid"), 64),
     }
+    # 2026-10-12: the received signal, and "ap" when the radio is hosting
+    # the setup hotspot instead of being on the house network. Only kept
+    # when sent, so an older satellite's record reads as it always did.
+    if "signal_dbm" in v:
+        out["signal_dbm"] = _dbm(v.get("signal_dbm"))
+    if "mode" in v:
+        out["mode"] = _str(v.get("mode"), 16)
+    return out
 
 
 def _nm(v: Any) -> dict[str, Any] | None:
@@ -158,6 +171,10 @@ SAMPLE_FIELDS: dict[str, Any] = {
     # battery, and "the mic is on but the OS hands it silence" (Android's
     # mic privacy toggle records zeros). No Pi sends either.
     "battery": _battery, "mic_blocked": _bool,
+    # 2026-10-12: why the satellite needs a reboot (upgraded, and the
+    # network settings root applies at boot are not in place yet); absent
+    # or null when it does not.
+    "reboot_needed": lambda v: _str(v, 200),
 }
 
 
@@ -323,7 +340,8 @@ def format_health_line(room: str, s: dict[str, Any]) -> str:
         f"hwm={_mb(s.get('hwm_kb'))}MB cpu={s.get('cpu_pct')}% "
         f"temp={s.get('soc_temp_c')}C "
         f"throttled={hex(throttled) if isinstance(throttled, int) else None} "
-        f"wifi_rx={wifi.get('rx_mbits')} mic_fps={s.get('mic_fps')} "
+        f"wifi_rx={wifi.get('rx_mbits')} signal={wifi.get('signal_dbm')}dBm "
+        f"mic_fps={s.get('mic_fps')} "
         f"fds={s.get('fds')} up={s.get('uptime_s')}s reconnects={s.get('reconnects')}"
         + _spare_device_tail(s)
     )

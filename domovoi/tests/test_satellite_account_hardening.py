@@ -26,7 +26,9 @@ REPO = Path(__file__).resolve().parents[2]
 # rendered sudoers that is not one of these is a regression.
 EXPECTED_HELPERS = {
     "/usr/sbin/wpa_cli -i wlan0 reassociate",
-    "/usr/bin/nmcli device connect wlan0",
+    # The house network BY NAME (2026-10-12); `nmcli device connect wlan0`
+    # let NetworkManager pick the setup hotspot (satellite/wifi_profiles.py).
+    "/usr/bin/nmcli connection up id domovoi-home",
     "/usr/bin/systemctl --no-block restart domovoi-satellite.service",
     "/usr/bin/systemctl --no-block restart domovoi-kiosk.service",
     "/usr/local/sbin/domovoi-apply-payload",
