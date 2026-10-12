@@ -5,11 +5,17 @@
 //   * host\in\job.json        what the host should bring up; written by the
 //                             installer; the account can read, not write
 //   * host\in\req-<id>.json   a one-off request (the setup code); same ACL
+//   * host\in\<image>, provision.sh   the pinned downloads; same ACL, so
+//                             the account (and the distro) can't change them
 //   * host\out\status.json    what the host is doing; written by the host
-//   * host\out\resp-<id>.json the answer to a request
+//   * host\out\resp-<id>.json the answer to a request; the host deletes it
+//                             once its request is gone
 //   * the service's start parameter "unregister" (uninstall): only
 //     Administrators and SYSTEM may start the service (the SCM's default
 //     DACL), so only they can ask for it.
+//
+// The elevated helper only reads host\out; it never writes, moves or
+// deletes anything in a folder the account can write.
 //
 // The setup code never touches the disk in clear: the request carries a
 // one-time RSA public key the installer holds the private half of in
@@ -47,11 +53,17 @@ namespace Domovoi.Windows
         public static string Job { get { return Path.Combine(HostIn, "job.json"); } }
         public static string Status { get { return Path.Combine(HostOut, "status.json"); } }
         public static string UnregisterResult { get { return Path.Combine(HostOut, "unregister.json"); } }
-        public static string Ledger { get { return Path.Combine(State, "install.json"); } }
-        public static string InstallLog { get { return Path.Combine(Logs, "install.log"); } }
+        // state\ is Administrators and SYSTEM only: the account can't touch it.
+        public static string InstallLog { get { return Path.Combine(State, "install.log"); } }
         public static string HostLog { get { return Path.Combine(Logs, "host.log"); } }
         public static string ProvisionLog { get { return Path.Combine(Logs, "provision.log"); } }
         public static string SwapFile { get { return Path.Combine(Wsl, "swap.vhdx"); } }
+        public static string DistroDisk { get { return Path.Combine(Distro, "ext4.vhdx"); } }
+
+        // The install record (the ledger): admin-written, readable by all,
+        // outside ProgramData so it outlives a half-finished uninstall.
+        public const string RecordKey = @"SOFTWARE\Domovoi";
+        public const string RecordValue = "Install";
 
         // From a service, the System32 stub doesn't work in session 0
         // (microsoft/WSL#9231): always the WSL package's own wsl.exe.

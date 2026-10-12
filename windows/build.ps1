@@ -16,16 +16,30 @@ Stop after the tests (no Inno Setup needed).
 
 .PARAMETER Iscc
 Path to ISCC.exe. Default: Inno Setup 6 per-user, then machine-wide.
+
+.PARAMETER Sign
+Code signing is on hold (owner decision 2026-10-11; PLAN.md section 10):
+builds are unsigned. The switch and Invoke-Sign below are the place it
+goes back in; today -Sign refuses.
 #>
 [CmdletBinding()]
 param(
     [switch]$SkipInstaller,
     [switch]$SkipTests,
-    [string]$Iscc
+    [string]$Iscc,
+    [switch]$Sign
 )
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
+
+# Disabled hook: when signing comes back, sign DomovoiHost.exe and
+# DomovoiSetupHelper.exe before ISCC packs them, and DomovoiSetup.exe after
+# (Inno's SignTool directive can sign the setup and the uninstaller).
+function Invoke-Sign([string[]]$Files) {
+    throw 'Code signing is on hold (PLAN.md section 10): this build stays unsigned.'
+}
+if ($Sign) { Invoke-Sign @() }
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $out = Join-Path $here 'build'
@@ -59,7 +73,12 @@ if (-not $SkipTests) {
     # parser, so they reference this PowerShell's engine assembly.
     $sma = [psobject].Assembly.Location
     $testExe = Join-Path $obj 'DomovoiWindowsTests.exe'
-    Invoke-Csc $testExe ($common + @((Join-Path $here 'tests\Tests.cs'))) @("/r:$sma")
+    # The helper's and the host's sources are compiled in too (their own
+    # Main methods are skipped with /main), so the tests see the same code
+    # the exes run.
+    $helperSrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'helper') -Filter '*.cs' | ForEach-Object { $_.FullName })
+    $hostSrc = @(Get-ChildItem -LiteralPath (Join-Path $here 'host') -Filter '*.cs' | ForEach-Object { $_.FullName })
+    Invoke-Csc $testExe ($common + $helperSrc + $hostSrc + @((Join-Path $here 'tests\Tests.cs'))) @("/r:$sma", '/main:Tests')
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }
 }

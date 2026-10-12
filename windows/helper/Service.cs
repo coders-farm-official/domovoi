@@ -109,6 +109,26 @@ namespace Domovoi.Windows.Helper
             finally { Native.CloseServiceHandle(scm); }
         }
 
+        // Automatic (true) or Manual (false).
+        public static void SetAutomatic(bool automatic)
+        {
+            IntPtr scm = Native.OpenSCManagerW(null, null, Native.SC_MANAGER_ALL_ACCESS);
+            if (scm == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenSCManager");
+            try
+            {
+                IntPtr svc = Native.OpenServiceW(scm, Paths.ServiceName, Native.SERVICE_ALL_ACCESS);
+                if (svc == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "OpenService");
+                try
+                {
+                    if (!Native.ChangeServiceConfigW(svc, Native.SERVICE_NO_CHANGE, automatic ? Native.SERVICE_AUTO_START : Native.SERVICE_DEMAND_START,
+                        Native.SERVICE_NO_CHANGE, null, null, IntPtr.Zero, null, null, IntPtr.Zero, null))
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "ChangeServiceConfig start type");
+                }
+                finally { Native.CloseServiceHandle(svc); }
+            }
+            finally { Native.CloseServiceHandle(scm); }
+        }
+
         public static bool Delete()
         {
             IntPtr scm = Native.OpenSCManagerW(null, null, Native.SC_MANAGER_ALL_ACCESS);
@@ -200,8 +220,16 @@ namespace Domovoi.Windows.Helper
             {
                 if (s == null) throw new InvalidOperationException(Paths.ServiceName + " is not registered");
                 s.Refresh();
-                if (s.Status == ServiceControllerStatus.Running) return;
-                if (s.Status == ServiceControllerStatus.StopPending) s.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(120));
+                if (args == null && s.Status == ServiceControllerStatus.Running) return;
+                if (s.Status == ServiceControllerStatus.StopPending) s.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(240));
+                s.Refresh();
+                // A start parameter only reaches a service that starts now: a
+                // running one would ignore it, so stop it first.
+                if (args != null && s.Status != ServiceControllerStatus.Stopped)
+                {
+                    s.Stop();
+                    s.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(240));
+                }
                 if (args != null) s.Start(args); else s.Start();
                 s.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(seconds));
             }

@@ -1,8 +1,12 @@
 // The uninstall (PLAN 7, "Remove everything"; keep-data is step 4): looks
-// at the PC, asks UninstallPlan what to do, does it step by step, and
-// keeps going past a step that fails so one stuck item doesn't strand the
-// rest. Exit 0: all gone. Exit 3: done, with leftovers named in
-// "leftover=" lines (for example a profile still in use until a restart).
+// at the PC, asks UninstallPlan what to do, and runs it with
+// UninstallRunner. Exit 0: all gone. Exit 1: a critical step (stopping the
+// service, unregistering the distro) didn't work, and nothing after it was
+// touched: the account, its profile and rights, the service and
+// ProgramData are all still there for a retry, and Setup's uninstaller
+// stops too, so it stays. Exit 3: done, with leftovers named in
+// "leftover=" lines (a profile still in use until a restart); the install
+// record stays so a second run still knows the account's SID.
 // --dry-run prints the facts and the plan and changes nothing.
 //
 // Left in place on purpose: WSL and the VirtualMachinePlatform feature
@@ -11,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Security.Principal;
 using System.ServiceProcess;
@@ -28,32 +33,21 @@ namespace Domovoi.Windows.Helper
         {
             Ledger ledger = null;
             try { ledger = Steps.LoadLedger(); }
-            catch (FormatException e) { o.Say("install.json is unreadable (" + e.Message + "); going by what is on the PC"); }
-            catch (IOException e) { o.Say("install.json is unreadable (" + e.Message + "); going by what is on the PC"); }
+            catch (FormatException e) { o.Say("the install record is unreadable (" + e.Message + "); going by what is on the PC"); }
 
             UninstallFacts f = Facts(ledger, o);
             List<UninstallStep> plan = UninstallPlan.Make(ledger, f);
             o.Kv("steps", Inv.S(plan.Count));
-            foreach (var s in plan) o.Kv("plan", s.ToString());
+            foreach (var s in plan) o.Kv("plan", (s.Critical ? "[critical] " : "") + s);
             if (dry) return 0;
 
             var leftovers = new List<string>();
-            foreach (var s in plan)
-            {
-                try
-                {
-                    string left = Do(s, o);
-                    if (left != null) leftovers.Add(left);
-                }
-                catch (Exception e)
-                {
-                    o.Say("could not " + s + ": " + e.Message);
-                    leftovers.Add(s + " (" + e.Message + ")");
-                }
-            }
+            int code = UninstallRunner.Run(plan, delegate (UninstallStep s) { return Do(s, ledger, o); }, leftovers, null);
             foreach (string l in leftovers) o.Kv("leftover", l);
-            o.Kv("result", leftovers.Count == 0 ? "removed" : "leftovers");
-            return leftovers.Count == 0 ? 0 : 3;
+            o.Kv("result", code == UninstallRunner.ExitDone ? "removed" : (code == UninstallRunner.ExitStopped ? "stopped" : "leftovers"));
+            if (code == UninstallRunner.ExitStopped)
+                o.Kv("error", "uninstall stopped before removing the account, the service or any data: " + leftovers[leftovers.Count - 1]);
+            return code;
         }
 
         static UninstallFacts Facts(Ledger ledger, Output o)
@@ -78,27 +72,47 @@ namespace Domovoi.Windows.Helper
             {
                 f.ProfileExists = Account.ProfileExists(sid);
                 try { f.Rights = Account.Rights(new SecurityIdentifier(sid)); }
-                catch (System.ComponentModel.Win32Exception e) { o.Say("could not read the account rights: " + e.Message); }
+                catch (System.ComponentModel.Win32Exception e)
+                {
+                    f.RightsUnknown = true;
+                    o.Say("could not read the account rights (" + e.Message + "); removing them anyway");
+                }
             }
             f.UserListValuePresent = Account.HiddenValuePresent();
             try { f.FirewallRules = Steps.FirewallRuleNames(o); }
-            catch (InvalidOperationException e) { o.Say("could not list the firewall rules: " + e.Message); }
+            catch (Exception e)
+            {
+                if (!(e is InvalidOperationException || e is System.TimeoutException || e is System.ComponentModel.Win32Exception)) throw;
+                f.FirewallUnknown = true;
+                o.Say("could not list the firewall rules (" + e.Message + "); the removal step will check again");
+            }
             f.ProgramDataExists = Directory.Exists(Paths.ProgramData);
+            try
+            {
+                f.DistroDiskExists = File.Exists(Paths.DistroDisk);
+                if (Directory.Exists(Paths.Distro) && Folders.IsReparse(Paths.Distro)) f.DistroDiskExists = null;
+            }
+            catch (IOException) { f.DistroDiskExists = null; }
+            catch (UnauthorizedAccessException) { f.DistroDiskExists = null; }
             using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
             using (var k = hklm.OpenSubKey(RunOnceKey))
                 f.RunOnceValuePresent = k != null && k.GetValue(RunOnceValue) != null;
+            f.RecordExists = Steps.RecordExists();
             if (ledger != null)
                 foreach (var m in ledger.Media) if (Directory.Exists(m.Path)) f.MediaExisting.Add(m.Path);
             o.Kv("fact", "service=" + (f.ServiceExists ? (f.ServiceRunning ? "running" : "stopped") : "absent")
                 + " account=" + (f.AccountExists ? (f.AccountHasMarker ? "ours" : "not-marked") : "absent")
-                + " profile=" + (f.ProfileExists ? "present" : "absent") + " rules=" + Inv.S(f.FirewallRules.Count)
-                + " rights=" + Inv.S(f.Rights.Count) + " programdata=" + (f.ProgramDataExists ? "present" : "absent")
-                + " ledger=" + (ledger != null ? "present" : "absent"));
+                + " profile=" + (f.ProfileExists ? "present" : "absent")
+                + " distro_disk=" + (f.DistroDiskExists == null ? "unknown" : (f.DistroDiskExists.Value ? "present" : "absent"))
+                + " rules=" + (f.FirewallUnknown ? "unknown" : Inv.S(f.FirewallRules.Count))
+                + " rights=" + (f.RightsUnknown ? "unknown" : Inv.S(f.Rights.Count))
+                + " programdata=" + (f.ProgramDataExists ? "present" : "absent")
+                + " record=" + (ledger != null ? "present" : "absent"));
             return f;
         }
 
         // Does one step; returns a leftover description, or null when done.
-        static string Do(UninstallStep s, Output o)
+        static string Do(UninstallStep s, Ledger ledger, Output o)
         {
             switch (s.Kind)
             {
@@ -132,16 +146,20 @@ namespace Domovoi.Windows.Helper
                     o.Say("deleted the " + Paths.ServiceName + " service");
                     return null;
 
+                case UninstallKind.StopAccountProcesses:
+                    Processes.StopAccount(new SecurityIdentifier(s.Target), o.Say);
+                    return null;
+
                 case UninstallKind.RemoveFirewallRules:
                     Steps.PowerShell(Firewall.RemoveScript(), o);
+                    // Listing again must work: a failure is a leftover, never "removed".
                     List<string> left = Steps.FirewallRuleNames(o);
                     if (left.Count > 0) return "firewall rules " + string.Join(", ", left.ToArray());
                     o.Say("removed the Hyper-V firewall rules " + s.Target);
                     return null;
 
                 case UninstallKind.RemoveMediaAccess:
-                    Folders.RemoveAccess(s.Target, s.Sids, o.Say);
-                    return null;
+                    return Folders.RemoveAccess(s.Target, s.Sids, o.Say);
 
                 case UninstallKind.RemoveFolderIfEmpty:
                     Folders.RemoveIfEmpty(s.Target, o.Say);
@@ -165,7 +183,7 @@ namespace Domovoi.Windows.Helper
                     return null;
 
                 case UninstallKind.DeleteProgramData:
-                    return DeleteProgramData(o);
+                    return DeleteProgramData(ledger != null ? ledger.AccountSid : null, o);
 
                 case UninstallKind.RemoveRunOnce:
                     using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
@@ -173,23 +191,31 @@ namespace Domovoi.Windows.Helper
                         if (k != null) k.DeleteValue(RunOnceValue, false);
                     o.Say("removed Setup's resume-after-restart entry");
                     return null;
+
+                case UninstallKind.RemoveRecord:
+                    Steps.DeleteRecord(o);
+                    return null;
             }
             return null;
         }
 
-        // The host, as domovoi-svc, unregisters the distro, then stops
-        // itself (Host.Unregister).
+        // The host, as domovoi-svc, unregisters the distro, then stops itself
+        // (Host.Unregister). The result counts only if the host wrote it
+        // after this request: the helper never deletes in host\out.
         static string Unregister(Output o)
         {
-            try { File.Delete(Paths.UnregisterResult); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             if (!Directory.Exists(Paths.HostOut)) return "the distro (the host's folder is gone, so it could not report)";
+            DateTime asked = DateTime.UtcNow.AddSeconds(-2);
             o.Say("asking " + Paths.ServiceName + " to unregister the distro as " + Paths.AccountName);
             HostService.Start(new[] { Paths.UnregisterArg }, 120);
             if (!HostService.WaitFor(ServiceControllerStatus.Stopped, 15 * 60))
                 return "the distro (" + Paths.ServiceName + " did not finish unregistering within 15 minutes)";
-            var d = Json.ReadFile(Paths.UnregisterResult);
-            if (d == null) return "the distro (" + Paths.ServiceName + " gave no result; see " + Paths.HostLog + ")";
+            var d = Steps.ReadHostFile(Paths.UnregisterResult);
+            DateTime at;
+            if (d == null || !DateTime.TryParse(Json.Str(d, "at"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out at) || at.ToUniversalTime() < asked)
+                return "the distro (" + Paths.ServiceName + " gave no result for this request; see " + Paths.HostLog + ")";
             if (Json.Bool(d, "ok") != true) return "the distro (" + (Json.Str(d, "error") ?? "unregister failed") + ")";
+            if (File.Exists(Paths.DistroDisk)) return "the distro (WSL says it is unregistered, but " + Paths.DistroDisk + " is still there)";
             o.Say("unregistered the WSL distro '" + Paths.DistroName + "' (" + (Json.Str(d, "message") ?? "") + ")");
             return null;
         }
@@ -216,27 +242,28 @@ namespace Domovoi.Windows.Helper
                 if (!waited) { o.Say("waiting for WSL to let go of the profile (up to 3 minutes)"); waited = true; }
                 Thread.Sleep(5000);
             }
-            return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + "; restart Windows, then delete it in System > About > Advanced system settings > User Profiles)";
+            return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + "; restart Windows, then run the uninstaller again)";
         }
 
-        static string DeleteProgramData(Output o)
+        static string DeleteProgramData(string sid, Output o)
         {
+            // Nothing runs as the account by now (its service is gone and
+            // StopAccountProcesses ran); make the tree admin-only anyway
+            // before deleting, then delete without following links.
+            Folders.ResetForDelete(sid, o.Say);
             DateTime until = DateTime.UtcNow.AddMinutes(3);
             Exception last = null;
             bool waited = false;
             while (Directory.Exists(Paths.ProgramData))
             {
-                try
-                {
-                    Folders.DeleteTree(Paths.ProgramData);
-                }
+                try { Folders.DeleteTree(Paths.ProgramData); }
                 catch (IOException e) { last = e; }
                 catch (UnauthorizedAccessException e) { last = e; }
                 if (!Directory.Exists(Paths.ProgramData)) break;
                 if (DateTime.UtcNow > until)
                 {
                     int n = ScheduleDelete(Paths.ProgramData);
-                    return Paths.ProgramData + " (" + (last != null ? last.Message : "in use") + "; " + Inv.S(n) + " item(s) will be deleted at the next restart)";
+                    return Paths.ProgramData + " (" + (last != null ? last.Message : "in use") + "; " + Inv.S(n) + " item(s) will be deleted at the next restart; run the uninstaller again after it)";
                 }
                 if (!waited) { o.Say("waiting for WSL to let go of " + Paths.ProgramData + " (up to 3 minutes)"); waited = true; }
                 Thread.Sleep(5000);

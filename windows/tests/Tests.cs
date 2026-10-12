@@ -1,7 +1,10 @@
-// Unit tests for the pure logic in windows/common, compiled with the same
-// in-box C# compiler as the exes (no test framework to install). build.ps1
-// builds and runs it; domovoi/tests/test_windows_installer.py runs
-// build.ps1 -SkipInstaller on Windows. Exit code 0 when every test passes.
+// Unit tests for windows/common, compiled with the same in-box C# compiler
+// as the exes (no test framework to install), together with the helper's
+// and the host's own sources (so they are built and some of the helper's
+// file handling is exercised on throwaway folders under %TEMP%). Nothing
+// here changes the PC: no account, service, registry or firewall call is
+// made. build.ps1 builds and runs it; domovoi/tests/test_windows_installer.py
+// runs build.ps1 on Windows. Exit code 0 when every test passes.
 
 using System;
 using System.Collections.Generic;
@@ -79,6 +82,11 @@ static class Tests
         SetupCodes();
         Protocol();
         Uninstall();
+        Runner();
+        WslListing();
+        MediaRoots();
+        FirewallFilter();
+        Links();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;
@@ -600,10 +608,17 @@ static class Tests
         f.AccountExists = true; f.AccountSid = Sid; f.AccountHasMarker = true; f.ProfileExists = true;
         f.FirewallRules = new List<string>(l.FirewallRules);
         f.Rights = new List<string> { "SeServiceLogonRight", "SeDenyInteractiveLogonRight" };
-        f.UserListValuePresent = true; f.ProgramDataExists = true;
+        f.UserListValuePresent = true; f.ProgramDataExists = true; f.RecordExists = true;
+        f.DistroDiskExists = true;
         foreach (var m in l.Media) f.MediaExisting.Add(m.Path);
         return f;
     }
+
+    static readonly UninstallKind[] Stranding =
+    {
+        UninstallKind.DeleteService, UninstallKind.DeleteProfile, UninstallKind.RemoveRights,
+        UninstallKind.UnhideAccount, UninstallKind.DeleteAccount, UninstallKind.DeleteProgramData, UninstallKind.RemoveRecord,
+    };
 
     static void NoMediaDeleted(Ledger l, List<UninstallStep> plan)
     {
@@ -619,6 +634,18 @@ static class Tests
         }
     }
 
+    // Every step that could strand the distro comes after every critical step.
+    static void CriticalFirst(List<UninstallStep> plan)
+    {
+        int lastCritical = -1, firstStranding = int.MaxValue;
+        for (int i = 0; i < plan.Count; i++)
+        {
+            if (plan[i].Critical) lastCritical = i;
+            if (Stranding.Contains(plan[i].Kind) && i < firstStranding) firstStranding = i;
+        }
+        True(lastCritical < firstStranding, "a stranding step comes before a critical one");
+    }
+
     static void Uninstall()
     {
         Run("uninstall: a finished install, in order", delegate
@@ -628,20 +655,20 @@ static class Tests
             var kinds = plan.Select(s => s.Kind.ToString()).ToList();
             SeqEq(new[]
             {
-                "StopService", "RotatePassword", "UnregisterDistro", "DeleteService", "RemoveFirewallRules",
+                "StopService", "RotatePassword", "UnregisterDistro", "DeleteService", "StopAccountProcesses", "RemoveFirewallRules",
                 "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess",
                 "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty",
-                "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProgramData",
+                "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProgramData", "RemoveRecord",
             }, kinds, "steps");
+            SeqEq(new[] { "StopService", "RotatePassword", "UnregisterDistro" }, plan.Where(s => s.Critical).Select(s => s.Kind.ToString()), "critical steps");
             var folders = plan.Where(s => s.Kind == UninstallKind.RemoveFolderIfEmpty).Select(s => s.Target).ToList();
             Eq(@"C:\Users\Public\Domovoi", folders.Last(), "the root goes last, after its folders");
-            int unreg = kinds.IndexOf("UnregisterDistro"), delAcct = kinds.IndexOf("DeleteAccount");
-            True(unreg < delAcct, "unregister before the account goes");
             var unhide = plan.Single(s => s.Kind == UninstallKind.UnhideAccount);
             True(unhide.DeleteUserListKey && unhide.DeleteSpecialAccountsKey, "keys Setup made");
             NoMediaDeleted(l, plan);
+            CriticalFirst(plan);
         });
-        Run("uninstall: nothing there, no ledger: nothing to do (a second run)", delegate
+        Run("uninstall: nothing there, no record: nothing to do (a second run)", delegate
         {
             Eq(0, UninstallPlan.Make(null, new UninstallFacts()).Count, "empty plan");
         });
@@ -649,35 +676,74 @@ static class Tests
         {
             var f = new UninstallFacts();
             f.AccountExists = true; f.AccountSid = Sid; f.ProfileExists = true; f.UserListValuePresent = true;
-            f.Rights = new List<string> { "SeServiceLogonRight" };
+            f.Rights = new List<string> { "SeServiceLogonRight" }; f.DistroDiskExists = false;
             var plan = UninstallPlan.Make(null, f);
             True(!plan.Any(s => s.Kind == UninstallKind.DeleteAccount || s.Kind == UninstallKind.DeleteProfile
-                || s.Kind == UninstallKind.RemoveRights || s.Kind == UninstallKind.UnhideAccount), "not ours");
+                || s.Kind == UninstallKind.RemoveRights || s.Kind == UninstallKind.UnhideAccount || s.Kind == UninstallKind.StopAccountProcesses), "not ours");
         });
-        Run("uninstall: half-finished, account made but no service", delegate
+        Run("uninstall: half-finished, account made but no service and no distro", delegate
         {
             var l = new Ledger(); l.AccountSid = Sid; l.AccountCreated = true; l.ProgramDataCreated = true;
             var f = new UninstallFacts();
             f.AccountExists = true; f.AccountSid = Sid; f.AccountHasMarker = true; f.ProgramDataExists = true;
             f.Rights = new List<string> { "SeServiceLogonRight" }; f.UserListValuePresent = true;
+            f.DistroDiskExists = false; f.RecordExists = true;
             var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind.ToString()).ToList();
-            SeqEq(new[] { "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProgramData" }, kinds, "steps");
+            SeqEq(new[] { "StopAccountProcesses", "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProgramData", "RemoveRecord" }, kinds, "steps");
+        });
+        Run("uninstall: the distro's disk but no service: stop before anything (review #2)", delegate
+        {
+            var l = FullLedger();
+            var f = FullFacts(l); f.ServiceExists = false; f.ServiceRunning = false;
+            var plan = UninstallPlan.Make(l, f);
+            Eq(UninstallKind.Blocked, plan[0].Kind, "blocked first");
+            True(plan[0].Critical && plan[0].Reason.Contains("Setup again"), "critical, and says what to do: " + plan[0].Reason);
+            CriticalFirst(plan);
+        });
+        Run("uninstall: can't tell whether the disk is there: treated as there", delegate
+        {
+            var l = FullLedger();
+            var f = FullFacts(l); f.DistroDiskExists = null;
+            True(UninstallPlan.Make(l, f).Any(s => s.Kind == UninstallKind.UnregisterDistro), "unregisters");
+        });
+        Run("uninstall: no distro disk: no unregister needed", delegate
+        {
+            var l = FullLedger();
+            var f = FullFacts(l); f.DistroDiskExists = false;
+            var plan = UninstallPlan.Make(l, f);
+            True(!plan.Any(s => s.Kind == UninstallKind.UnregisterDistro || s.Kind == UninstallKind.RotatePassword), "no unregister");
+            Eq(UninstallKind.StopService, plan[0].Kind, "still stops the service first");
         });
         Run("uninstall: account already gone, leftovers keyed to its SID", delegate
         {
             var l = FullLedger();
             var f = new UninstallFacts();
             f.ProfileExists = true; f.Rights = new List<string> { "SeServiceLogonRight" };
-            f.ProgramDataExists = true; f.RunOnceValuePresent = true;
+            f.ProgramDataExists = true; f.RunOnceValuePresent = true; f.RecordExists = true; f.DistroDiskExists = true;
             var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind.ToString()).ToList();
-            SeqEq(new[] { "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteProgramData", "RemoveRunOnce" }, kinds, "steps");
+            SeqEq(new[] { "StopAccountProcesses", "RemoveFirewallRules", "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteProgramData", "RemoveRunOnce", "RemoveRecord" }, kinds, "steps (the ledger's rule list counts)");
+        });
+        Run("uninstall: ProgramData Setup didn't make is never deleted (review #4)", delegate
+        {
+            var l = FullLedger(); l.ProgramDataCreated = false;
+            True(!UninstallPlan.Make(l, FullFacts(l)).Any(s => s.Kind == UninstallKind.DeleteProgramData), "kept");
+            var f = new UninstallFacts(); f.ProgramDataExists = true;
+            True(!UninstallPlan.Make(null, f).Any(s => s.Kind == UninstallKind.DeleteProgramData), "no record: kept");
+        });
+        Run("uninstall: unreadable rules or rights still get their step (review #9)", delegate
+        {
+            var l = new Ledger(); l.AccountSid = Sid; l.AccountCreated = true;
+            var f = new UninstallFacts(); f.AccountExists = true; f.AccountSid = Sid; f.AccountHasMarker = true;
+            f.DistroDiskExists = false; f.FirewallUnknown = true; f.RightsUnknown = true;
+            var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind).ToList();
+            True(kinds.Contains(UninstallKind.RemoveFirewallRules) && kinds.Contains(UninstallKind.RemoveRights), "both there");
         });
         Run("uninstall: the household's own media folder keeps everything but Setup's rule", delegate
         {
             var l = new Ledger();
             var mine = new MediaFolderRecord(); mine.Path = @"D:\Music"; mine.Created = false; mine.AddedSids = new List<string> { Sid };
             l.Media.Add(mine);
-            var f = new UninstallFacts(); f.MediaExisting.Add(@"d:\music");
+            var f = new UninstallFacts(); f.MediaExisting.Add(@"d:\music"); f.DistroDiskExists = false;
             var plan = UninstallPlan.Make(l, f);
             Eq(1, plan.Count, "one step");
             Eq(UninstallKind.RemoveMediaAccess, plan[0].Kind, "access rule only");
@@ -688,8 +754,230 @@ static class Tests
             var l = FullLedger();
             var f = FullFacts(l); f.ServiceRunning = false;
             True(!UninstallPlan.Make(l, f).Any(s => s.Kind == UninstallKind.StopService), "no stop");
-            var g = new UninstallFacts(); g.ServiceExists = true; g.ServiceRunning = true;
+            var g = new UninstallFacts(); g.ServiceExists = true; g.ServiceRunning = true; g.DistroDiskExists = false;
             Eq(0, UninstallPlan.Make(null, g).Count, "a DomovoiHost Setup didn't register");
+        });
+    }
+
+    static void Runner()
+    {
+        Run("runner: everything works: exit 0, record removed", delegate
+        {
+            var l = FullLedger();
+            var plan = UninstallPlan.Make(l, FullFacts(l));
+            var left = new List<string>(); var ran = new List<UninstallStep>();
+            Eq(0, UninstallRunner.Run(plan, s => null, left, ran), "exit");
+            Eq(plan.Count, ran.Count, "all ran");
+        });
+        Run("runner: unregister fails: exit 1, nothing that could strand the distro ran (review #2)", delegate
+        {
+            var l = FullLedger();
+            var plan = UninstallPlan.Make(l, FullFacts(l));
+            var left = new List<string>(); var ran = new List<UninstallStep>();
+            int code = UninstallRunner.Run(plan, s => s.Kind == UninstallKind.UnregisterDistro ? "the distro (WSL said no)" : null, left, ran);
+            Eq(1, code, "exit");
+            SeqEq(new[] { "StopService", "RotatePassword", "UnregisterDistro" }, ran.Select(s => s.Kind.ToString()), "ran");
+            Eq("the distro (WSL said no)", left.Single(), "leftover");
+        });
+        Run("runner: a throwing step counts as not done", delegate
+        {
+            var l = FullLedger();
+            var plan = UninstallPlan.Make(l, FullFacts(l));
+            var left = new List<string>(); var ran = new List<UninstallStep>();
+            int code = UninstallRunner.Run(plan, delegate (UninstallStep s) { if (s.Kind == UninstallKind.StopService) throw new InvalidOperationException("stuck"); return null; }, left, ran);
+            Eq(1, code, "a critical step threw");
+            Eq(1, ran.Count, "stopped right there");
+        });
+        Run("runner: a non-critical leftover: exit 3, the rest runs, the record stays", delegate
+        {
+            var l = FullLedger();
+            var plan = UninstallPlan.Make(l, FullFacts(l));
+            var left = new List<string>(); var ran = new List<UninstallStep>();
+            int code = UninstallRunner.Run(plan, s => s.Kind == UninstallKind.DeleteProfile ? "the profile (in use)" : null, left, ran);
+            Eq(3, code, "exit");
+            True(ran.Any(s => s.Kind == UninstallKind.DeleteProgramData), "went on");
+            True(!ran.Any(s => s.Kind == UninstallKind.RemoveRecord), "the record stays for the next run");
+        });
+        Run("runner: blocked plans stop at once", delegate
+        {
+            var l = FullLedger();
+            var f = FullFacts(l); f.ServiceExists = false; f.ServiceRunning = false;
+            var left = new List<string>(); var ran = new List<UninstallStep>();
+            int code = UninstallRunner.Run(UninstallPlan.Make(l, f), s => null, left, ran);
+            Eq(1, code, "exit");
+            Eq(1, ran.Count, "only the block");
+        });
+    }
+
+    static void WslListing()
+    {
+        Run("wsl --list: names, none, or unknown (review #3)", delegate
+        {
+            SeqEq(new[] { "domovoi", "Ubuntu" }, WslList.Parse(0, false, "domovoi\r\nUbuntu\r\n"), "names");
+            Eq(true, WslList.Contains(WslList.Parse(0, false, "domovoi\n"), "domovoi").Value, "contains");
+            Eq(0, WslList.Parse(-1, false, "Windows Subsystem for Linux has no installed distributions.\nYou can resolve this by installing a distribution with the instructions below:\n\nError code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND\n").Count, "English, none");
+            Eq(0, WslList.Parse(-1, false, "Windows-Subsystem fuer Linux hat keine installierten Distributionen.\nFehlercode: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND\n").Count, "another language, by the error code");
+            True(WslList.Parse(-1, false, "The Windows Subsystem for Linux is being updated.\nError code: Wsl/Service/E_ACCESSDENIED\n") == null, "an update in progress is unknown");
+            True(WslList.Parse(1, false, "") == null, "a failure with no text is unknown");
+            True(WslList.Parse(0, true, "domovoi\n") == null, "a timeout is unknown");
+            True(WslList.Contains(null, "domovoi") == null, "unknown stays unknown");
+            Eq(false, WslList.Contains(WslList.Parse(-1, false, "Error code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND"), "domovoi").Value, "none means not registered");
+            SeqEq(new[] { "docker-desktop" }, WslList.Parse(0, false, "d\0o\0c\0k\0e\0r\0-\0d\0e\0s\0k\0t\0o\0p\0\n"), "UTF-16 leftovers");
+        });
+    }
+
+    static void MediaRoots()
+    {
+        Run("media root: system folders and profile roots refused (review #5)", delegate
+        {
+            var sys = SystemFolders.Typical();
+            foreach (string bad in new[]
+            {
+                @"C:\Windows", @"C:\Windows\Temp\x", @"C:\Program Files", @"C:\Program Files\Domovoi", @"C:\Program Files (x86)\Foo",
+                @"C:\ProgramData", @"C:\ProgramData\Domovoi\x", @"C:\Users", @"C:\Users\Kamron", @"C:\Users\Public",
+                @"C:\Users\Kamron\AppData\Roaming\Microsoft\Windows\Start Menu", @"C:\Users\Default\Music", @"C:\Users\domovoi-svc\x",
+                @"C:\Recovery\x",
+            })
+                True(MediaPaths.SystemProblem(bad, sys) != null, "refused: " + bad);
+            foreach (string ok in new[] { @"C:\Users\Public\Domovoi", @"C:\Users\Kamron\Music", @"D:\Media", @"C:\Media", @"C:\Users\Public\Music\Domovoi", @"C:\Windows2" })
+                True(MediaPaths.SystemProblem(ok, sys) == null, "allowed: " + ok + " (" + MediaPaths.SystemProblem(ok, sys) + ")");
+        });
+        Run("media root: this PC's own system folders are found", delegate
+        {
+            var here = Domovoi.Windows.Helper.Folders.SystemFoldersHere();
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            True(MediaPaths.SystemProblem(win, here) != null, "Windows");
+            True(MediaPaths.SystemProblem(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + @"\Domovoi", here) != null, "Program Files");
+            True(MediaPaths.SystemProblem(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), here) != null, "my profile");
+            True(MediaPaths.SystemProblem(MediaPaths.DefaultRoot, here) == null, "the default is fine");
+        });
+    }
+
+    // Runs one of Firewall's scripts in PowerShell against stand-in cmdlets:
+    // a Domovoi rule, WSL's own rules, a household rule and a Domovoi-named
+    // rule for another VM creator. Returns what it removed.
+    static List<string> RunAgainstFakeRules(string script)
+    {
+        const string fakes =
+            "$script:removed = New-Object System.Collections.ArrayList\n" +
+            "function Get-NetFirewallHyperVRule { param($ErrorAction) @(" +
+            "[pscustomobject]@{ Name='Domovoi-Core-6370'; VMCreatorId='{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' }, " +
+            "[pscustomobject]@{ Name='Domovoi-MPD-8050-8099'; VMCreatorId='{40e0ac32-46a5-438a-a0b2-2b479e8f2e90}' }, " +
+            "[pscustomobject]@{ Name='WslCore-Allow-Inbound-ICMPv4-1-40e0ac32-46a5-438a-a0b2-2b479e8f2e90'; VMCreatorId='{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' }, " +
+            "[pscustomobject]@{ Name='Household-Game-Server'; VMCreatorId='{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' }, " +
+            "[pscustomobject]@{ Name='Domovoi-Other-VM'; VMCreatorId='{11111111-2222-3333-4444-555555555555}' }) }\n" +
+            "function Remove-NetFirewallHyperVRule { param($Name) [void]$script:removed.Add($Name) }\n";
+        using (var ps = PowerShell.Create())
+        {
+            ps.AddScript(fakes + script + "\n$script:removed");
+            var outp = ps.Invoke();
+            if (ps.HadErrors) throw new InvalidOperationException("script errors: " + string.Join("; ", ps.Streams.Error.Select(e => e.ToString()).ToArray()));
+            return outp.Where(x => x != null && !x.ToString().StartsWith("removed ")).Select(x => x.ToString()).ToList();
+        }
+    }
+
+    static void FirewallFilter()
+    {
+        Run("firewall cleanup removes only Domovoi's WSL rules (review #11, mutant M1)", delegate
+        {
+            var removed = RunAgainstFakeRules(Firewall.RemoveScript());
+            SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099" }, removed, "removed");
+        });
+        Run("firewall: a cleanup filter wider than Domovoi-* fails this test", delegate
+        {
+            // The same script with the filter widened, as mutant M1 did:
+            // the check above must catch it.
+            string wide = Firewall.RemoveScript().Replace("'" + Firewall.RulePrefix + "*'", "'*'");
+            True(wide != Firewall.RemoveScript(), "the mutant changed the script");
+            var removed = RunAgainstFakeRules(wide);
+            True(removed.Contains("Household-Game-Server") && removed.Count > 2, "a wider filter would remove more");
+        });
+        Run("firewall: the add script clears only Domovoi's rules before adding", delegate
+        {
+            string add = Firewall.AddScript(Firewall.Plan("192.168.0.0/24"));
+            string prelude = add.Substring(0, add.IndexOf("New-NetFirewallHyperVRule", StringComparison.Ordinal));
+            SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099" }, RunAgainstFakeRules(prelude), "removed");
+        });
+    }
+
+    // Throwaway folders and junctions under %TEMP% (mklink /J needs no
+    // administrator), deleted at the end.
+    static string Scratch()
+    {
+        string d = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-tests-" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(d);
+        return d;
+    }
+
+    static void Junction(string link, string target)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+            "/c mklink /J " + CommandLine.Quote(link) + " " + CommandLine.Quote(target));
+        psi.UseShellExecute = false; psi.CreateNoWindow = true; psi.RedirectStandardOutput = true;
+        using (var p = System.Diagnostics.Process.Start(psi)) { p.StandardOutput.ReadToEnd(); p.WaitForExit(); if (p.ExitCode != 0) throw new InvalidOperationException("mklink failed"); }
+    }
+
+    static void Links()
+    {
+        Run("links: DeleteTree removes a junction, never what it points at (review probe T1)", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                System.IO.File.WriteAllText(System.IO.Path.Combine(victim, "keep.txt"), "x");
+                System.IO.Directory.CreateDirectory(System.IO.Path.Combine(root, "logs"));
+                Junction(System.IO.Path.Combine(root, "logs", "evil"), victim);
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                True(!System.IO.Directory.Exists(root), "tree gone");
+                True(System.IO.File.Exists(System.IO.Path.Combine(victim, "keep.txt")), "target untouched");
+            }
+            finally { if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true); }
+        });
+        Run("links: a media folder that is a junction is refused, its target untouched (review #10, probe T2)", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                string link = System.IO.Path.Combine(root, "Music");
+                Junction(link, victim);
+                // The target carries a rule for the SID RemoveAccess is asked
+                // to purge: following the link would take it off.
+                var vs = System.IO.Directory.GetAccessControl(victim);
+                vs.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(new System.Security.Principal.SecurityIdentifier(Users),
+                    System.Security.AccessControl.FileSystemRights.ReadData, System.Security.AccessControl.AccessControlType.Allow));
+                System.IO.Directory.SetAccessControl(victim, vs);
+                string before = System.IO.Directory.GetAccessControl(victim).GetSecurityDescriptorSddlForm(System.Security.AccessControl.AccessControlSections.Access);
+                var l = new Ledger();
+                Throws<InvalidOperationException>(delegate
+                {
+                    Domovoi.Windows.Helper.Folders.EnsureMediaFolder(link, new System.Security.Principal.SecurityIdentifier(Sid), false, l, delegate { }, delegate (string m) { });
+                }, "refused");
+                string after = System.IO.Directory.GetAccessControl(victim).GetSecurityDescriptorSddlForm(System.Security.AccessControl.AccessControlSections.Access);
+                Eq(before, after, "target's rules unchanged");
+                True(!l.Media.Any(m => m.Created), "not recorded as made");
+                Domovoi.Windows.Helper.Folders.RemoveAccess(link, new[] { Sid, Users }, delegate (string m) { });
+                Eq(before, System.IO.Directory.GetAccessControl(victim).GetSecurityDescriptorSddlForm(System.Security.AccessControl.AccessControlSections.Access), "RemoveAccess skips the link (probe T3a)");
+                True(!Domovoi.Windows.Helper.Folders.RemoveIfEmpty(link, delegate (string m) { }), "RemoveIfEmpty keeps a link");
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+        });
+        Run("links: RemoveIfEmpty keeps a folder with anything in it", delegate
+        {
+            string root = Scratch();
+            try
+            {
+                string full = System.IO.Path.Combine(root, "Music"), empty = System.IO.Path.Combine(root, "Videos");
+                System.IO.Directory.CreateDirectory(full); System.IO.Directory.CreateDirectory(empty);
+                System.IO.File.WriteAllText(System.IO.Path.Combine(full, "desktop.ini"), "");
+                True(!Domovoi.Windows.Helper.Folders.RemoveIfEmpty(full, delegate (string m) { }), "kept");
+                True(System.IO.File.Exists(System.IO.Path.Combine(full, "desktop.ini")), "file kept");
+                True(Domovoi.Windows.Helper.Folders.RemoveIfEmpty(empty, delegate (string m) { }), "empty one removed");
+            }
+            finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
         });
     }
 }

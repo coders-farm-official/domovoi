@@ -118,21 +118,32 @@ namespace Domovoi.Windows.Host
 
         string StateFile { get { return Path.Combine(Paths.HostOut, "host-state.json"); } }
 
+        Dictionary<string, object> ReadState()
+        {
+            try { return Json.ReadFile(StateFile) ?? new Dictionary<string, object>(); }
+            catch (FormatException) { return new Dictionary<string, object>(); }
+            catch (IOException) { return new Dictionary<string, object>(); }
+        }
+
+        void UpdateState(string key, object value)
+        {
+            var d = ReadState();
+            d[key] = value;
+            d["at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            try { Json.WriteFile(StateFile, d); }
+            catch (IOException e) { log.Write("can't record " + key + ": " + e.Message); }
+            catch (UnauthorizedAccessException e) { log.Write("can't record " + key + ": " + e.Message); }
+        }
+
         bool AlreadyProvisioned(HostJob job)
         {
-            try
-            {
-                var d = Json.ReadFile(StateFile);
-                return d != null && Json.Int(d, "generation") == job.Generation && Json.Int(d, "attempt") == job.Attempt
-                    && Json.Str(d, "result") == "ok";
-            }
-            catch (FormatException) { return false; }
-            catch (IOException) { return false; }
+            var d = ReadState();
+            return Json.Int(d, "generation") == job.Generation && Json.Int(d, "attempt") == job.Attempt && Json.Str(d, "result") == "ok";
         }
 
         void RecordProvisioned(HostJob job, string result)
         {
-            var d = new Dictionary<string, object>();
+            var d = ReadState();
             d["generation"] = job.Generation;
             d["attempt"] = job.Attempt;
             d["result"] = result;
@@ -141,6 +152,10 @@ namespace Domovoi.Windows.Host
             catch (IOException e) { log.Write("can't record the result: " + e.Message); }
             catch (UnauthorizedAccessException e) { log.Write("can't record the result: " + e.Message); }
         }
+
+        // The distro was imported once: its disk is the household's data and
+        // is never deleted or replaced by an import again.
+        bool ImportedBefore() { return Json.Bool(ReadState(), "imported") == true; }
 
         // -- the main loop ----------------------------------------------
 
@@ -223,10 +238,19 @@ namespace Domovoi.Windows.Host
             Status("config", HostProgress.PhaseConfig, 0, "Configuring WSL for Domovoi");
             if (!WriteWslConfig(job)) return false;
 
+            // WSL can be busy or updating, at boot especially: an answer we
+            // can't read is "ask again", never "no distro".
             bool? reg = Wsl.Registered();
-            if (reg == null) { Fail("WSL did not answer (wsl.exe --list timed out)", null); return false; }
+            while (reg == null)
+            {
+                Status("waiting", HostProgress.PhaseConfig, 0, "Waiting for WSL to answer");
+                log.Write("wsl.exe --list gave no usable answer; asking again in 15 s");
+                if (Sleep(15000)) return false;
+                reg = Wsl.Registered();
+            }
             if (!reg.Value && !Import(job)) return false;
             if (Stopping) return false;
+            if (!AlreadyProvisioned(job) && !InteropOff()) return false;
             KeepHolder();
 
             if (AlreadyProvisioned(job))
@@ -276,18 +300,32 @@ namespace Domovoi.Windows.Host
             if (!File.Exists(job.Image)) { Fail("the Ubuntu image is missing: " + job.Image, null); return false; }
             string sha = Sha256.OfFile(job.Image);
             if (sha != job.ImageSha256) { Fail("the Ubuntu image does not match its pinned SHA-256", null); return false; }
-            // A disk left by an import that never registered (killed midway)
-            // would make wsl --import refuse.
-            string vhd = Path.Combine(Paths.Distro, "ext4.vhdx");
+            string vhd = Paths.DistroDisk;
             if (File.Exists(vhd))
             {
-                log.Write("removing a stale " + vhd + " (the distro is not registered)");
-                try { File.Delete(vhd); }
-                catch (IOException e) { Fail("a stale distro disk is in use: " + e.Message, null); return false; }
+                // Once imported, the disk holds the household's data: WSL not
+                // listing it is a problem to look at, never a reason to import
+                // over it.
+                if (ImportedBefore())
+                {
+                    Fail("WSL does not list the distro '" + Paths.DistroName + "', but its disk " + vhd + " is there; Setup won't touch it (see docs/WINDOWS_HOST.md)", null);
+                    return false;
+                }
+                // A disk left by an import that was killed midway: keep it
+                // aside rather than delete it, then import again.
+                string aside = vhd + ".unregistered-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+                log.Write("moving a disk no import finished to " + aside);
+                try { File.Move(vhd, aside); }
+                catch (IOException e) { Fail("a disk no import finished is in use: " + e.Message, null); return false; }
             }
-            Status("importing", HostProgress.PhaseImport, 50, "Unpacking Ubuntu");
             log.Write("wsl --import " + Paths.DistroName + " " + Paths.Distro + " " + job.Image + " --version 2");
-            WslResult r = Wsl.Run(new[] { "--import", Paths.DistroName, Paths.Distro, job.Image, "--version", "2" }, 30 * 60 * 1000, null, 64 * 1024);
+            DateTime started = DateTime.UtcNow;
+            WslResult r = Wsl.Run(new[] { "--import", Paths.DistroName, Paths.Distro, job.Image, "--version", "2" }, 30 * 60 * 1000, null, 64 * 1024,
+                delegate
+                {
+                    int secs = (int)(DateTime.UtcNow - started).TotalSeconds;
+                    Status("importing", HostProgress.PhaseImport, Math.Min(90, secs), "Unpacking Ubuntu (" + Inv.S(secs) + " s)");
+                });
             log.Write("wsl --import exit " + Inv.S(r.ExitCode) + Trailer(r));
             bool? reg = Wsl.Registered();
             if (r.ExitCode != 0 || reg != true)
@@ -295,6 +333,47 @@ namespace Domovoi.Windows.Host
                 Fail("wsl --import failed (exit " + Inv.S(r.ExitCode) + "): " + FirstLine(r.Stdout + r.Stderr), null);
                 return false;
             }
+            UpdateState("imported", true);
+            return true;
+        }
+
+        // Interop off before the first provisioning pass. provision.sh turns
+        // it off too, but only in /etc/wsl.conf, which takes effect at the
+        // distro's next start; the stock image already runs systemd, so
+        // without this the whole first pass (as root, for minutes) would run
+        // with interop on, able to start Windows programs as domovoi-svc.
+        // A fresh image has no [interop] section, so this writes a minimal
+        // wsl.conf (the keys provision.sh writes, minus the default user,
+        // which doesn't exist yet) and restarts the distro. There is no race:
+        // the holder is stopped first, and the next wsl.exe starts the
+        // distro afresh with the new file. provision.sh then writes its own
+        // file and asks for the restart Provision() already handles.
+        bool InteropOff()
+        {
+            WslResult c = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c",
+                "grep -A3 '^\\[interop\\]' /etc/wsl.conf 2>/dev/null | grep -qx 'enabled *= *false'" }, 120000, null, 4096);
+            if (c.ExitCode == 0 && Json.Bool(ReadState(), "interop_off") == true) return true;
+            Status("config", HostProgress.PhaseImport, 95, "Closing the Linux system off from Windows");
+            string conf = "# Written by DomovoiHost before provisioning; scripts/linux/provision.sh replaces it.\n"
+                + "[boot]\nsystemd=true\n[interop]\nenabled=false\nappendWindowsPath=false\n[automount]\nenabled=false\nmountFsTab=true\n";
+            WslResult w = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c",
+                "cat > /etc/wsl.conf.domovoi-new && mv -f /etc/wsl.conf.domovoi-new /etc/wsl.conf" }, 120000, Encoding.UTF8.GetBytes(conf), 4096);
+            if (w.ExitCode != 0)
+            {
+                Fail("could not write /etc/wsl.conf in the distro (exit " + Inv.S(w.ExitCode) + "): " + FirstLine(w.Stderr + w.Stdout), null);
+                return false;
+            }
+            KillHolder();
+            WslResult t = Wsl.Run(new[] { "--terminate", Paths.DistroName }, 120000, null, 8192);
+            log.Write("interop off: wrote /etc/wsl.conf, wsl --terminate exit " + Inv.S(t.ExitCode));
+            if (t.ExitCode != 0)
+            {
+                Fail("could not restart the distro to turn interop off (exit " + Inv.S(t.ExitCode) + ")", null);
+                return false;
+            }
+            UpdateState("interop_off", true);
+            holderNext = DateTime.MinValue;
+            holderBackoffSec = 5;
             return true;
         }
 
@@ -339,7 +418,7 @@ namespace Domovoi.Windows.Host
             var psi = Wsl.Start(new[] { "-d", Paths.DistroName, "--cd", "/", "--exec", "sleep", "infinity" });
             try
             {
-                holder = Process.Start(psi);
+                holder = Wsl.Launch(psi);
                 holderStarted = DateTime.UtcNow;
                 log.Write("holder started (pid " + Inv.S(holder.Id) + ")");
             }
@@ -479,6 +558,12 @@ namespace Domovoi.Windows.Host
                     if (a.Data != null) plog.Write("stderr: " + a.Data);
                 };
                 p.Start();
+                try { ChildJob.Add(p); }
+                catch (System.ComponentModel.Win32Exception e)
+                {
+                    try { p.Kill(); } catch (InvalidOperationException) { }
+                    throw new InvalidOperationException("can't put provision.sh's wsl.exe in the host's job object: " + e.Message);
+                }
                 provision = p;
                 p.StandardInput.Close();
                 p.BeginOutputReadLine();
@@ -554,6 +639,21 @@ namespace Domovoi.Windows.Host
                 try { Json.WriteFile(Paths.ResponseFile(id), resp); }
                 catch (IOException e) { log.Write("can't answer request " + id + ": " + e.Message); }
                 catch (UnauthorizedAccessException e) { log.Write("can't answer request " + id + ": " + e.Message); }
+            }
+            // The helper never deletes in host\out (a folder this account can
+            // write): an answer goes once the installer has deleted its
+            // request.
+            string[] answers;
+            try { answers = Directory.GetFiles(Paths.HostOut, "resp-*.json"); }
+            catch (IOException) { return; }
+            catch (UnauthorizedAccessException) { return; }
+            foreach (string a in answers)
+            {
+                string id = Path.GetFileNameWithoutExtension(a).Substring(5);
+                if (File.Exists(Paths.RequestFile(id))) continue;
+                try { File.Delete(a); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
         }
 

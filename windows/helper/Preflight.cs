@@ -42,6 +42,7 @@ namespace Domovoi.Windows.Helper
             Ports(o);
             if (portsOnly) return;
             Os(o);
+            SmartAppControl(o);
             Memory(o);
             Virtualization(o);
             Disk(o);
@@ -170,6 +171,41 @@ namespace Domovoi.Windows.Helper
             bool avx2 = Native.IsProcessorFeaturePresent(Native.PF_AVX2_INSTRUCTIONS_AVAILABLE);
             o.Kv("avx2", avx2 ? "1" : "0");
             if (!avx2) o.Kv("warn", "This processor has no AVX2; speech recognition and the AI models will run slower.");
+        }
+
+        // Smart App Control (Windows 11) blocks programs that have no
+        // signature and no reputation. This test build is unsigned (code
+        // signing is on hold, PLAN 10), so with it on, Windows blocks
+        // DomovoiSetupHelper.exe and DomovoiHost.exe, and Setup itself. The
+        // state is VerifiedAndReputablePolicyState: 0 off, 1 on, 2 evaluation
+        // (Windows watches, blocks nothing yet, and may turn it on later).
+        public static string SmartAppControlState()
+        {
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\CI\Policy"))
+            {
+                object v = k == null ? null : k.GetValue("VerifiedAndReputablePolicyState");
+                if (!(v is int)) return "unknown";
+                switch ((int)v)
+                {
+                    case 0: return "off";
+                    case 1: return "on";
+                    case 2: return "evaluation";
+                    default: return "unknown";
+                }
+            }
+        }
+
+        public const string SmartAppControlHelp = "Turn it off in Windows Security > App & browser control > Smart App Control settings. On many Windows 11 builds it can only be turned back on by resetting or reinstalling Windows, so read what Windows Security says first (docs/WINDOWS_HOST.md, \"Unsigned\").";
+
+        static void SmartAppControl(Output o)
+        {
+            string s = SmartAppControlState();
+            o.Kv("smart_app_control", s);
+            if (s == "on")
+                o.Kv("fatal", "Smart App Control is on. It blocks programs without a signature, and this test build of Domovoi is unsigned: Windows would block Setup's helper now and the Domovoi service at every start. " + SmartAppControlHelp);
+            else if (s == "evaluation")
+                o.Kv("warn", "Smart App Control is in evaluation mode. If Windows turns it on later, it blocks Domovoi's unsigned service, and Domovoi stops starting. " + SmartAppControlHelp);
         }
 
         public static long InstalledRamBytes()

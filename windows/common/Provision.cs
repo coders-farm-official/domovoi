@@ -287,5 +287,59 @@ namespace Domovoi.Windows
             foreach (var f in Folders) list.Add(new KeyValuePair<string, string>(f[0], r + "\\" + f[1]));
             return list;
         }
+
+        static bool Same(string a, string b) { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+
+        static bool Below(string child, string parent)
+        {
+            return child.Length > parent.Length + 1 && child.StartsWith(parent + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Why a path can't be the media root because of what it is on this PC,
+        // or null. domovoi-svc gets inherited Modify on the media root, and the
+        // distro reaches it through drvfs, so it must never be a system or
+        // program folder (the distro could then replace programs Windows runs
+        // elevated), a profile or the profiles folder itself, or a folder
+        // that holds any of those. A folder inside a profile (its Music, say)
+        // is fine; its AppData is not.
+        public static string SystemProblem(string path, SystemFolders sys)
+        {
+            string p = Normalize(path);
+            foreach (string t in sys.Trees)
+            {
+                string n = Normalize(t);
+                if (Same(p, n) || Below(p, n)) return "that is inside " + n + ", a system folder; pick a folder of your own, such as " + DefaultRoot;
+                if (Below(n, p)) return "that folder holds " + n + ", a system folder; pick a folder of your own, such as " + DefaultRoot;
+            }
+            foreach (string x in sys.Exact)
+            {
+                string n = Normalize(x);
+                if (Same(p, n)) return n + " is a profile or system folder itself; pick or make a folder inside it, such as " + DefaultRoot;
+                if (Below(n, p)) return "that folder holds " + n + "; pick a folder of your own, such as " + DefaultRoot;
+            }
+            return null;
+        }
+    }
+
+    // The folders a media root may not be, be inside of (Trees) or hold
+    // (both). The helper fills it from this PC (Folders.SystemFoldersHere).
+    public sealed class SystemFolders
+    {
+        public List<string> Trees = new List<string>();
+        public List<string> Exact = new List<string>();
+
+        // A typical Windows 11 PC, for the tests.
+        public static SystemFolders Typical()
+        {
+            var s = new SystemFolders();
+            s.Trees.AddRange(new[]
+            {
+                @"C:\Windows", @"C:\Program Files", @"C:\Program Files (x86)", @"C:\ProgramData",
+                @"C:\Users\Default", @"C:\Users\domovoi-svc", @"C:\Users\Kamron\AppData", @"C:\Users\Public\AppData",
+                @"C:\$Recycle.Bin", @"C:\System Volume Information", @"C:\Recovery",
+            });
+            s.Exact.AddRange(new[] { @"C:\Users", @"C:\Users\Public", @"C:\Users\Kamron" });
+            return s;
+        }
     }
 }

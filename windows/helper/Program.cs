@@ -18,7 +18,8 @@
 //   media
 //   firewall [--subnet CIDR]
 //   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--lan-ip IP|auto|none]
-//   host-start | host-retry | setup-code
+//   check-media --root DIR                          read-only
+//   host-start | host-retry | host-park | setup-code
 //   uninstall [--dry-run]                           exit 3: done, with leftovers
 
 using System;
@@ -57,7 +58,7 @@ namespace Domovoi.Windows.Helper
 
     static class Program
     {
-        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "help" };
+        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "check-media", "help" };
 
         static int Main(string[] argv)
         {
@@ -88,8 +89,10 @@ namespace Domovoi.Windows.Helper
                 log = new Log(tmp, 10L * 1024 * 1024);
                 Console.Out.WriteLine("log=" + tmp);
             }
-            else if (!ReadOnly.Contains(verb) && Directory.Exists(Paths.Logs))
+            else if (!ReadOnly.Contains(verb) && Directory.Exists(Paths.State))
             {
+                // state\ is Administrators and SYSTEM only: domovoi-svc can't
+                // touch the elevated helper's log.
                 log = new Log(Paths.InstallLog, 10L * 1024 * 1024);
             }
             var o = new Output(log);
@@ -119,6 +122,8 @@ namespace Domovoi.Windows.Helper
                     case "host-start": Steps.HostStart(o); return 0;
                     case "host-status": Steps.HostStatusOut(o); return 0;
                     case "host-retry": Steps.HostRetry(o); return 0;
+                    case "host-park": Steps.HostPark(o); return 0;
+                    case "check-media": Steps.CheckMedia(o, a.Req("--root")); return 0;
                     case "setup-code": return Steps.ReadSetupCode(o);
                     case "plan": Steps.Plan(o); return 0;
                     case "uninstall": return Uninstall.Run(o, dry);

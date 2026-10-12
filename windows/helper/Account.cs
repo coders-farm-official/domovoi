@@ -193,17 +193,23 @@ namespace Domovoi.Windows.Helper
             finally { Marshal.FreeHGlobal(p); }
         }
 
-        // Hidden from the sign-in screen: a DWORD 0 named after the account
-        // under Winlogon\SpecialAccounts\UserList. Says which keys it made.
-        public static void Hide(out bool madeSpecialAccounts, out bool madeUserList)
+        // Which of the two keys Hide would have to make (recorded before it does).
+        public static void MissingHideKeys(out bool specialAccounts, out bool userList)
         {
             using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
             {
-                using (var k = hklm.OpenSubKey(SpecialAccountsKey)) madeSpecialAccounts = k == null;
-                using (var k = hklm.OpenSubKey(UserListKey)) madeUserList = k == null;
-                using (var k = hklm.CreateSubKey(UserListKey))
-                    k.SetValue(Paths.AccountName, 0, RegistryValueKind.DWord);
+                using (var k = hklm.OpenSubKey(SpecialAccountsKey)) specialAccounts = k == null;
+                using (var k = hklm.OpenSubKey(UserListKey)) userList = k == null;
             }
+        }
+
+        // Hidden from the sign-in screen: a DWORD 0 named after the account
+        // under Winlogon\SpecialAccounts\UserList.
+        public static void Hide()
+        {
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.CreateSubKey(UserListKey))
+                k.SetValue(Paths.AccountName, 0, RegistryValueKind.DWord);
         }
 
         public static bool HiddenValuePresent()
@@ -305,6 +311,30 @@ namespace Domovoi.Windows.Helper
             }
             finally { Native.LsaClose(pol); }
             return list;
+        }
+
+        // Only these rights; the others stay.
+        public static void RemoveRights(SecurityIdentifier sid, IEnumerable<string> rights)
+        {
+            IntPtr pol = OpenPolicy();
+            try
+            {
+                foreach (string r in rights)
+                {
+                    var s = new Native.LSA_UNICODE_STRING();
+                    s.Buffer = Marshal.StringToHGlobalUni(r);
+                    s.Length = (ushort)(r.Length * 2);
+                    s.MaximumLength = (ushort)(r.Length * 2 + 2);
+                    try
+                    {
+                        uint st = Native.LsaRemoveAccountRights(pol, Bytes(sid), false, new[] { s }, 1);
+                        if (st != 0 && st != Native.STATUS_OBJECT_NAME_NOT_FOUND)
+                            throw new Win32Exception(Native.LsaNtStatusToWinError(st), "LsaRemoveAccountRights " + r);
+                    }
+                    finally { Marshal.FreeHGlobal(s.Buffer); }
+                }
+            }
+            finally { Native.LsaClose(pol); }
         }
 
         // Every right the SID holds, and the SID's entry in the policy with

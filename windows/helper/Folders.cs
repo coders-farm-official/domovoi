@@ -4,25 +4,33 @@
 // nothing inherits from ProgramData, where every user may create files),
 // plus domovoi-svc where it needs it:
 //   distro, wsl, backups, logs, host\out   Modify
-//   host\in                                Read (the job and requests)
-//   state                                  nothing (install.json)
+//   host\in                                Read (the job, requests, downloads)
+//   state                                  nothing (install.log)
 // Household users get nothing here: the distro disk and the backups hold
-// the server's identity key and secrets.
+// the server's identity key and secrets. Setup uses this folder only if it
+// made it (a pre-existing one is refused, never re-permissioned), and the
+// uninstaller deletes it only then.
 //
 // The media root: domovoi-svc Modify (inherited by everything inside), and
 // on a folder Setup makes, the household (Users) Modify too. An existing
-// folder only gets domovoi-svc added; its other rules stay as they are.
+// folder only gets domovoi-svc added; its other rules stay as they are. A
+// system or program folder, a profile root or anything holding one is
+// refused (MediaPaths.SystemProblem).
 //
 // This runs elevated over folders domovoi-svc (and so the distro's root,
 // through drvfs) can write to, so it never follows a junction or symbolic
-// link: a reparse point where Setup expects a folder is refused, and
-// deletion removes links without entering them.
+// link: a reparse point where Setup expects a folder is refused (checked
+// again after creating it), ACL changes skip links, and deletion removes
+// links without entering them. Before a tree domovoi-svc could write is
+// deleted, the account's processes are ended and the tree is made
+// admin-only again (ResetForDelete).
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Microsoft.Win32;
 
 namespace Domovoi.Windows.Helper
 {
@@ -34,7 +42,7 @@ namespace Domovoi.Windows.Helper
 
         const InheritanceFlags Inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
 
-        static bool IsReparse(string path)
+        public static bool IsReparse(string path)
         {
             return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
         }
@@ -49,13 +57,7 @@ namespace Domovoi.Windows.Helper
         {
             var sec = Directory.GetAccessControl(path, AccessControlSections.Owner);
             var owner = sec.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
-            return owner != null && (owner.Equals(SystemSid) || owner.Equals(AdminsSid) || owner.Equals(TrustedInstaller()));
-        }
-
-        static SecurityIdentifier TrustedInstaller()
-        {
-            // NT SERVICE\TrustedInstaller
-            return new SecurityIdentifier("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
+            return owner != null && (owner.Equals(SystemSid) || owner.Equals(AdminsSid));
         }
 
         static DirectorySecurity RootSecurity()
@@ -68,60 +70,51 @@ namespace Domovoi.Windows.Helper
             return s;
         }
 
-        // Makes or fixes the ProgramData tree. True when Setup made the root.
-        public static bool EnsureProgramData(SecurityIdentifier svc, Action<string> say)
+        // The root, made by Setup (ours: the install record says so), or
+        // refused. Checked again after creating it: a link someone made
+        // between the check and the create would otherwise be used.
+        static void EnsureRoot(bool ours, Action<string> say)
         {
             string root = Paths.ProgramData;
-            bool created = false;
             if (Directory.Exists(root))
             {
-                RefuseReparse(root);
-                if (!OwnerTrusted(root))
-                    throw new InvalidOperationException(root + " already exists and is not owned by Administrators; Setup won't use a folder someone else made. Delete it and run Setup again.");
+                if (!ours)
+                    throw new InvalidOperationException(root + " already exists and Domovoi Setup did not make it; Setup won't use or change a folder it didn't make. Move it away and run Setup again.");
             }
             else
             {
+                if (!ours) throw new InvalidOperationException("internal: the install record must note " + root + " before Setup makes it");
                 Directory.CreateDirectory(root, RootSecurity());
-                created = true;
                 say("created " + root + " (SYSTEM and Administrators only)");
             }
+            RefuseReparse(root);
+            if (!OwnerTrusted(root))
+                throw new InvalidOperationException(root + " is not owned by Administrators; Setup won't use it");
             Directory.SetAccessControl(root, RootSecurity());
-            Sub(Paths.Distro, svc, FileSystemRights.Modify, say);
-            Sub(Paths.Wsl, svc, FileSystemRights.Modify, say);
-            Sub(Paths.Backups, svc, FileSystemRights.Modify, say);
-            Sub(Paths.Logs, svc, FileSystemRights.Modify, say);
-            Sub(Paths.State, null, 0, say);
-            Sub(Paths.HostDir, null, 0, say);
-            Sub(Paths.HostIn, svc, FileSystemRights.ReadAndExecute, say);
-            Sub(Paths.HostOut, svc, FileSystemRights.Modify, say);
-            return created;
         }
 
-        // Only the tree's admin-only parts, before the account exists (the
-        // ledger lives in state\).
-        public static bool EnsureProgramDataBase(Action<string> say)
+        // The admin-only parts, before the account exists (the install log
+        // lives in state\).
+        public static void EnsureProgramDataBase(bool ours, Action<string> say)
         {
-            string root = Paths.ProgramData;
-            bool created = false;
-            if (Directory.Exists(root))
-            {
-                RefuseReparse(root);
-                if (!OwnerTrusted(root))
-                    throw new InvalidOperationException(root + " already exists and is not owned by Administrators; Setup won't use a folder someone else made. Delete it and run Setup again.");
-            }
-            else
-            {
-                Directory.CreateDirectory(root, RootSecurity());
-                created = true;
-                say("created " + root + " (SYSTEM and Administrators only)");
-            }
-            Directory.SetAccessControl(root, RootSecurity());
-            Sub(Paths.State, null, 0, say);
-            Sub(Paths.Logs, null, 0, say);
-            return created;
+            EnsureRoot(ours, say);
+            Sub(Paths.State, null, 0);
         }
 
-        static void Sub(string path, SecurityIdentifier svc, FileSystemRights rights, Action<string> say)
+        public static void EnsureProgramData(SecurityIdentifier svc, bool ours, Action<string> say)
+        {
+            EnsureRoot(ours, say);
+            Sub(Paths.Distro, svc, FileSystemRights.Modify);
+            Sub(Paths.Wsl, svc, FileSystemRights.Modify);
+            Sub(Paths.Backups, svc, FileSystemRights.Modify);
+            Sub(Paths.Logs, svc, FileSystemRights.Modify);
+            Sub(Paths.State, null, 0);
+            Sub(Paths.HostDir, null, 0);
+            Sub(Paths.HostIn, svc, FileSystemRights.ReadAndExecute);
+            Sub(Paths.HostOut, svc, FileSystemRights.Modify);
+        }
+
+        static void Sub(string path, SecurityIdentifier svc, FileSystemRights rights)
         {
             if (!Directory.Exists(path)) Directory.CreateDirectory(path);
             RefuseReparse(path);
@@ -133,21 +126,104 @@ namespace Domovoi.Windows.Helper
             Directory.SetAccessControl(path, s);
         }
 
+        // Before deleting the tree: admin-only again, top down, skipping
+        // links, so nothing the account could still write is left writable
+        // while the elevated delete runs.
+        public static void ResetForDelete(string sid, Action<string> say)
+        {
+            string root = Paths.ProgramData;
+            if (!Directory.Exists(root)) return;
+            RefuseReparse(root);
+            Directory.SetAccessControl(root, RootSecurity());
+            if (sid == null) return;
+            var account = new SecurityIdentifier(sid);
+            foreach (string d in new[] { Paths.Distro, Paths.Wsl, Paths.Backups, Paths.Logs, Paths.State, Paths.HostDir, Paths.HostIn, Paths.HostOut })
+            {
+                if (!Directory.Exists(d) || IsReparse(d)) continue;
+                DirectorySecurity s = Directory.GetAccessControl(d, AccessControlSections.Access);
+                s.PurgeAccessRules(account);
+                Directory.SetAccessControl(d, s);
+            }
+            say("made " + root + " administrators-only before deleting it");
+        }
+
         // -- media ------------------------------------------------------
+
+        // The folders a media root may not be, be inside or hold, on this PC.
+        public static SystemFolders SystemFoldersHere()
+        {
+            var s = new SystemFolders();
+            string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            string sysDrive = Path.GetPathRoot(win).TrimEnd('\\');
+            foreach (string t in new[]
+            {
+                win,
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Environment.GetEnvironmentVariable("ProgramW6432"),
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                sysDrive + @"\$Recycle.Bin", sysDrive + @"\System Volume Information", sysDrive + @"\Recovery",
+            })
+                if (!string.IsNullOrEmpty(t) && !s.Trees.Contains(t)) s.Trees.Add(t);
+            string profiles = null, defaultProfile = null, publicProfile = null;
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(Account.ProfileListKey))
+            {
+                if (k != null)
+                {
+                    profiles = Environment.ExpandEnvironmentVariables(k.GetValue("ProfilesDirectory") as string ?? "");
+                    defaultProfile = Environment.ExpandEnvironmentVariables(k.GetValue("Default") as string ?? "");
+                    publicProfile = Environment.ExpandEnvironmentVariables(k.GetValue("Public") as string ?? "");
+                    foreach (string sid in k.GetSubKeyNames())
+                    {
+                        using (var p = k.OpenSubKey(sid))
+                        {
+                            string img = p == null ? null : p.GetValue("ProfileImagePath") as string;
+                            if (string.IsNullOrEmpty(img)) continue;
+                            img = Environment.ExpandEnvironmentVariables(img);
+                            s.Exact.Add(img);
+                            s.Trees.Add(Path.Combine(img, "AppData"));
+                        }
+                    }
+                }
+            }
+            if (string.IsNullOrEmpty(profiles)) profiles = sysDrive + @"\Users";
+            s.Exact.Add(profiles);
+            s.Exact.Add(string.IsNullOrEmpty(publicProfile) ? Path.Combine(profiles, "Public") : publicProfile);
+            s.Trees.Add(Path.Combine(publicProfile ?? Path.Combine(profiles, "Public"), "AppData"));
+            s.Trees.Add(string.IsNullOrEmpty(defaultProfile) ? Path.Combine(profiles, "Default") : defaultProfile);
+            s.Trees.Add(Path.Combine(profiles, Paths.AccountName));
+            // Folders under the profiles folder with no profile entry (old,
+            // half-deleted ones) are still someone's.
+            if (Directory.Exists(profiles))
+                foreach (string d in Directory.GetDirectories(profiles)) if (!s.Exact.Contains(d)) s.Exact.Add(d);
+            return s;
+        }
 
         public static void CheckMediaRoot(string root)
         {
             string why = MediaPaths.Problem(root);
             if (why != null) throw new ArgumentException("media folder: " + why);
-            var drive = new DriveInfo(MediaPaths.Normalize(root).Substring(0, 1));
+            string p = MediaPaths.Normalize(root);
+            var drive = new DriveInfo(p.Substring(0, 1));
             if (!drive.IsReady) throw new ArgumentException("media folder: drive " + drive.Name + " is not ready");
             if (drive.DriveType != DriveType.Fixed && drive.DriveType != DriveType.Removable)
                 throw new ArgumentException("media folder: pick a folder on a local drive (" + drive.Name + " is " + drive.DriveType + ")");
+            why = MediaPaths.SystemProblem(p, SystemFoldersHere());
+            if (why != null) throw new ArgumentException("media folder: " + why);
+            // The folder, or the nearest part of its path that exists, must
+            // be a real folder, not a link to somewhere else.
+            for (string d = p; d != null && d.Length > 3; d = Path.GetDirectoryName(d))
+            {
+                if (!Directory.Exists(d)) continue;
+                if (IsReparse(d)) throw new ArgumentException("media folder: " + d + " is a link (junction or symbolic link); pick the real folder");
+            }
         }
 
-        // One media folder: made if missing, domovoi-svc (and, on a folder
-        // Setup made, Users) allowed Modify. Records it in the ledger.
-        public static void EnsureMediaFolder(string path, SecurityIdentifier svc, bool isRoot, Ledger ledger, Action<string> say)
+        // One media folder: made if missing, domovoi-svc (and, on a root
+        // Setup made, Users) allowed Modify. The install record notes each
+        // change before it happens (save).
+        public static void EnsureMediaFolder(string path, SecurityIdentifier svc, bool isRoot, Ledger ledger, Action save, Action<string> say)
         {
             MediaFolderRecord rec = ledger.MediaFor(path);
             if (rec == null)
@@ -158,31 +234,32 @@ namespace Domovoi.Windows.Helper
             }
             if (!Directory.Exists(path))
             {
-                Directory.CreateDirectory(path);
                 rec.Created = true;
+                save();
+                Directory.CreateDirectory(path);
                 say("created " + path);
             }
+            RefuseReparse(path);
+            if (!rec.AddedSids.Contains(svc.Value)) { rec.AddedSids.Add(svc.Value); save(); }
             DirectorySecurity s = Directory.GetAccessControl(path, AccessControlSections.Access);
-            bool changed = false;
             if (rec.Created && isRoot)
-            {
                 s.AddAccessRule(new FileSystemAccessRule(UsersSid, FileSystemRights.Modify, Inherit, PropagationFlags.None, AccessControlType.Allow));
-                changed = true;
-            }
             s.AddAccessRule(new FileSystemAccessRule(svc, FileSystemRights.Modify, Inherit, PropagationFlags.None, AccessControlType.Allow));
-            changed = true;
-            if (changed) Directory.SetAccessControl(path, s);
-            if (!rec.AddedSids.Contains(svc.Value)) rec.AddedSids.Add(svc.Value);
+            Directory.SetAccessControl(path, s);
             say("allowed " + Paths.AccountName + " to read and write " + path + (rec.Created && isRoot ? " (and the household, Users)" : ""));
         }
 
-        public static void RemoveAccess(string path, IEnumerable<string> sids, Action<string> say)
+        // Setup's rules off a media folder; a link is skipped (its target is
+        // not Setup's to change).
+        public static string RemoveAccess(string path, IEnumerable<string> sids, Action<string> say)
         {
-            if (!Directory.Exists(path)) return;
+            if (!Directory.Exists(path)) return null;
+            if (IsReparse(path)) { say("left " + path + " alone (it is now a link, not the folder Setup changed)"); return null; }
             DirectorySecurity s = Directory.GetAccessControl(path, AccessControlSections.Access);
             foreach (string sid in sids) s.PurgeAccessRules(new SecurityIdentifier(sid));
             Directory.SetAccessControl(path, s);
             say("removed Setup's access rule from " + path);
+            return null;
         }
 
         // Only an empty folder goes; anything inside it, even a hidden

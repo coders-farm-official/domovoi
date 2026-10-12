@@ -116,6 +116,7 @@ namespace Domovoi.Windows.Helper
         public const int SERVICE_ALL_ACCESS = 0xF01FF;
         public const int SERVICE_WIN32_OWN_PROCESS = 0x10;
         public const int SERVICE_AUTO_START = 2;
+        public const int SERVICE_DEMAND_START = 3;
         public const int SERVICE_ERROR_NORMAL = 1;
         public const int SERVICE_NO_CHANGE = -1;
         public const int SERVICE_CONFIG_DESCRIPTION = 1;

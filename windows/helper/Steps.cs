@@ -3,6 +3,10 @@
 // until the host says ready (or failed: host-retry), then setup-code.
 // Each one is safe to run again: Setup's Retry and a repair run them all
 // a second time.
+//
+// The install record (the ledger) is written before each change it
+// records ("about to make X"), so a run killed in between still leaves the
+// uninstaller a note of everything that may exist.
 
 using System;
 using System.Collections.Generic;
@@ -13,6 +17,7 @@ using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading;
+using Microsoft.Win32;
 
 namespace Domovoi.Windows.Helper
 {
@@ -21,25 +26,57 @@ namespace Domovoi.Windows.Helper
         public const string ImageName = "ubuntu-26.04.1-wsl-amd64.wsl";
         public const string ProvisionName = "provision.sh";
 
-        // -- the ledger -------------------------------------------------
+        // -- the install record (HKLM\SOFTWARE\Domovoi, value Install) ---
+        // Admin-written, readable by everyone (it holds no secret), and
+        // outside C:\ProgramData\Domovoi, so it outlives a half-finished
+        // uninstall: the uninstaller deletes it last, and only when nothing
+        // is left over.
 
         public static Ledger LoadLedger()
         {
-            var d = Json.ReadFile(Paths.Ledger);
-            return d == null ? null : Ledger.FromJson(d);
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(Paths.RecordKey))
+            {
+                string text = k == null ? null : k.GetValue(Paths.RecordValue) as string;
+                return text == null ? null : Ledger.FromJson(Json.ParseObject(text));
+            }
+        }
+
+        public static bool RecordExists()
+        {
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(Paths.RecordKey))
+                return k != null && k.GetValue(Paths.RecordValue) != null;
         }
 
         static Ledger NeedLedger()
         {
             Ledger l = LoadLedger();
-            if (l == null) throw new InvalidOperationException("install.json is missing: run the prepare step first");
+            if (l == null) throw new InvalidOperationException("Setup's install record is missing: run the prepare step first");
             return l;
         }
 
         public static void SaveLedger(Ledger l)
         {
             l.Updated = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
-            Json.WriteFile(Paths.Ledger, l.ToJson());
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.CreateSubKey(Paths.RecordKey))
+                k.SetValue(Paths.RecordValue, Json.Serialize(l.ToJson()), RegistryValueKind.String);
+        }
+
+        public static void DeleteRecord(Output o)
+        {
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            {
+                using (var k = hklm.OpenSubKey(Paths.RecordKey, true))
+                {
+                    if (k == null) return;
+                    k.DeleteValue(Paths.RecordValue, false);
+                    if (k.ValueCount > 0 || k.SubKeyCount > 0) { o.Say("kept HKLM\\" + Paths.RecordKey + " (it holds other entries)"); return; }
+                }
+                hklm.DeleteSubKey(Paths.RecordKey, false);
+                o.Say("deleted Setup's install record HKLM\\" + Paths.RecordKey);
+            }
         }
 
         // -- prepare: the admin-only tree and the answers ---------------
@@ -50,9 +87,9 @@ namespace Domovoi.Windows.Helper
                 throw new ArgumentException("--internet must be always, sometimes or never");
             Folders.CheckMediaRoot(mediaRoot);
             if (commit.Length != 40) throw new ArgumentException("--commit must be a full SHA");
-            bool made = Folders.EnsureProgramDataBase(o.Say);
             Ledger l = LoadLedger() ?? new Ledger();
-            if (made) l.ProgramDataCreated = true;
+            if (!Directory.Exists(Paths.ProgramData)) { l.ProgramDataCreated = true; SaveLedger(l); }
+            Folders.EnsureProgramDataBase(l.ProgramDataCreated, o.Say);
             l.Internet = internet;
             l.MediaRoot = MediaPaths.Normalize(mediaRoot);
             l.Commit = commit;
@@ -69,33 +106,43 @@ namespace Domovoi.Windows.Helper
                 throw new ArgumentException("DomovoiHost.exe must be the one in " + expected + " (an admin-owned folder)");
             if (!File.Exists(exe)) throw new FileNotFoundException("DomovoiHost.exe is missing", exe);
             Ledger l = NeedLedger();
-            // A stopped service before its account's password changes.
-            using (var existing = HostService.Find()) if (existing != null) HostService.Stop(180, o.Say);
+            // A repair: the service stopped, and nothing left running as the
+            // account, before its password changes and its folders are reset.
+            using (var existing = HostService.Find()) if (existing != null) HostService.Stop(240, o.Say);
+            if (l.AccountSid != null) Processes.StopAccount(new SecurityIdentifier(l.AccountSid), o.Say);
             using (Secret pw = Secret.NewPassword())
             {
-                bool created = Account.CreateOrRotate(pw, l.AccountCreated, o.Say);
-                if (created) { l.AccountCreated = true; SaveLedger(l); }
+                if (!Account.Get().Exists) { l.AccountCreated = true; SaveLedger(l); }
+                Account.CreateOrRotate(pw, l.AccountCreated, o.Say);
                 SecurityIdentifier sid = Account.Sid();
                 l.AccountSid = sid.Value;
                 SaveLedger(l);
                 Account.JoinUsers(sid);
-                bool madeSpecial, madeUserList;
-                Account.Hide(out madeSpecial, out madeUserList);
-                if (madeSpecial) l.SpecialAccountsKeyCreated = true;
-                if (madeUserList) l.UserListKeyCreated = true;
+                bool missingSpecial, missingUserList;
+                Account.MissingHideKeys(out missingSpecial, out missingUserList);
+                if (missingSpecial) l.SpecialAccountsKeyCreated = true;
+                if (missingUserList) l.UserListKeyCreated = true;
                 SaveLedger(l);
+                Account.Hide();
                 o.Say("hid " + Paths.AccountName + " from the sign-in screen (HKLM\\" + Account.UserListKey + ")");
                 var rights = new List<string>(Account.BaseRights);
                 if (denyLogon) rights.AddRange(Account.DenyRights);
-                Account.AddRights(sid, rights);
                 foreach (string r in rights) if (!l.Rights.Contains(r)) l.Rights.Add(r);
                 SaveLedger(l);
+                Account.AddRights(sid, rights);
                 o.Say("granted " + Paths.AccountName + ": " + string.Join(", ", rights.ToArray()));
-                if (Folders.EnsureProgramData(sid, o.Say)) l.ProgramDataCreated = true;
+                if (!denyLogon)
+                {
+                    // /nodenylogon=1 on a later run: take back what an earlier one granted.
+                    Account.RemoveRights(sid, Account.DenyRights);
+                    foreach (string r in Account.DenyRights) l.Rights.Remove(r);
+                    SaveLedger(l);
+                    o.Say("removed the deny sign-in rights from " + Paths.AccountName + " (if it had them)");
+                }
+                Folders.EnsureProgramData(sid, l.ProgramDataCreated, o.Say);
                 o.Say("set the access rules on " + Paths.ProgramData);
-                bool svcCreated = HostService.CreateOrUpdate(exe, pw, o.Say);
-                if (svcCreated) l.ServiceCreated = true;
-                SaveLedger(l);
+                using (var svc = HostService.Find()) if (svc == null) { l.ServiceCreated = true; SaveLedger(l); }
+                HostService.CreateOrUpdate(exe, pw, o.Say);
             }
             o.Kv("account_sid", l.AccountSid);
         }
@@ -108,13 +155,16 @@ namespace Domovoi.Windows.Helper
             if (l.AccountSid == null) throw new InvalidOperationException("the account step has not run");
             var sid = new SecurityIdentifier(l.AccountSid);
             Folders.CheckMediaRoot(l.MediaRoot);
-            Folders.EnsureMediaFolder(l.MediaRoot, sid, true, l, o.Say);
-            SaveLedger(l);
+            Action save = delegate { SaveLedger(l); };
+            Folders.EnsureMediaFolder(l.MediaRoot, sid, true, l, save, o.Say);
             foreach (var m in MediaPaths.Under(l.MediaRoot))
-            {
-                Folders.EnsureMediaFolder(m.Value, sid, false, l, o.Say);
-                SaveLedger(l);
-            }
+                Folders.EnsureMediaFolder(m.Value, sid, false, l, save, o.Say);
+        }
+
+        public static void CheckMedia(Output o, string root)
+        {
+            Folders.CheckMediaRoot(root);
+            o.Kv("media", "ok");
         }
 
         // -- firewall ---------------------------------------------------
@@ -147,6 +197,8 @@ namespace Domovoi.Windows.Helper
             }
         }
 
+        // Throws when the rules can't be listed: a failed listing is never
+        // "no rules".
         public static List<string> FirewallRuleNames(Output o)
         {
             var names = new List<string>();
@@ -185,6 +237,8 @@ namespace Domovoi.Windows.Helper
 
         // -- the host's job ---------------------------------------------
 
+        // The pinned downloads go to host\in, which the account can read but
+        // not write: the distro can't swap them under the host.
         static void CopyPinned(string src, string dest, string sha, Output o)
         {
             if (File.Exists(dest) && Sha256.OfFile(dest) == sha) return;
@@ -199,8 +253,8 @@ namespace Domovoi.Windows.Helper
         {
             Ledger l = NeedLedger();
             if (!Sha256.IsHex(imageSha) || !Sha256.IsHex(provisionSha)) throw new ArgumentException("pins must be SHA-256 hex");
-            string imageDest = Path.Combine(Paths.Wsl, ImageName);
-            string provDest = Path.Combine(Paths.Wsl, ProvisionName);
+            string imageDest = Path.Combine(Paths.HostIn, ImageName);
+            string provDest = Path.Combine(Paths.HostIn, ProvisionName);
             CopyPinned(image, imageDest, imageSha, o);
             CopyPinned(provision, provDest, provisionSha, o);
 
@@ -233,6 +287,7 @@ namespace Domovoi.Windows.Helper
             try { var d = Json.ReadFile(Paths.Job); if (d != null) old = HostJob.FromJson(d); }
             catch (FormatException) { old = null; }
             bool same = old != null && old.ImageSha256 == job.ImageSha256 && old.ProvisionSha256 == job.ProvisionSha256
+                && old.Image == job.Image && old.Provision == job.Provision
                 && string.Join("\n", old.ProvisionArgs.ToArray()) == string.Join("\n", job.ProvisionArgs.ToArray())
                 && old.WslConfig == job.WslConfig;
             if (!same) l.JobGeneration++;
@@ -249,8 +304,20 @@ namespace Domovoi.Windows.Helper
 
         public static void HostStart(Output o)
         {
+            HostService.SetAutomatic(true);
             HostService.Start(null, 120);
             o.Say("started " + Paths.ServiceName);
+        }
+
+        // Setup stopped without undoing: DomovoiHost stopped and set to
+        // Manual, so it doesn't provision again at every boot. Running
+        // Setup again sets it back to Automatic.
+        public static void HostPark(Output o)
+        {
+            using (var s = HostService.Find()) if (s == null) { o.Kv("service", "missing"); return; }
+            HostService.Stop(240, o.Say);
+            HostService.SetAutomatic(false);
+            o.Say("set " + Paths.ServiceName + " to Manual and left it stopped");
         }
 
         public static void HostRetry(Output o)
@@ -268,6 +335,16 @@ namespace Domovoi.Windows.Helper
             o.Kv("attempt", Inv.S(job.Attempt));
         }
 
+        // Reads a file the account writes, without following a link put in
+        // its place.
+        public static Dictionary<string, object> ReadHostFile(string path)
+        {
+            if (!File.Exists(path)) return null;
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || (File.GetAttributes(Paths.HostOut) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException(path + " is a link; not reading it");
+            return Json.ReadFile(path);
+        }
+
         public static void HostStatusOut(Output o)
         {
             string svc = "missing";
@@ -282,7 +359,7 @@ namespace Domovoi.Windows.Helper
             }
             o.Kv("service", svc);
             Dictionary<string, object> d = null;
-            try { d = Json.ReadFile(Paths.Status); }
+            try { d = ReadHostFile(Paths.Status); }
             catch (FormatException) { }
             catch (IOException) { }
             if (d == null) { o.Kv("state", "none"); return; }
@@ -305,7 +382,9 @@ namespace Domovoi.Windows.Helper
         }
 
         // The setup code, through the host (PLAN 4.12 step 5): printed as
-        // code=... for Setup's finish page, and nowhere else.
+        // code=... for Setup's finish page, and nowhere else. The request
+        // file (host\in, admin-only) is deleted here; the answer (host\out)
+        // is the host's to delete once the request is gone.
         public static int ReadSetupCode(Output o)
         {
             using (var key = new SetupCodeKey())
@@ -326,7 +405,7 @@ namespace Domovoi.Windows.Helper
                         Thread.Sleep(500);
                     }
                     Thread.Sleep(200);
-                    var resp = Json.ReadFile(respFile);
+                    var resp = ReadHostFile(respFile);
                     if (Json.Bool(resp, "ok") != true) throw new InvalidOperationException(Json.Str(resp, "error") ?? "no setup code");
                     string code = key.Decrypt(Json.Str(resp, "ciphertext"));
                     if (!SetupCode.IsWellFormed(code)) throw new InvalidOperationException("the answer is not a setup code");
@@ -337,7 +416,6 @@ namespace Domovoi.Windows.Helper
                 finally
                 {
                     try { File.Delete(reqFile); } catch (IOException) { }
-                    try { File.Delete(respFile); } catch (IOException) { } catch (UnauthorizedAccessException) { }
                 }
             }
         }
@@ -350,11 +428,12 @@ namespace Domovoi.Windows.Helper
             long ram = Preflight.InstalledRamBytes();
             o.Kv("change", "create the hidden local account " + Paths.AccountName + " (standard user, random 40-character password never shown or stored, password never expires, hidden from the sign-in screen)");
             o.Kv("change", "grant it SeServiceLogonRight and deny it interactive, remote-desktop and network sign-in (LSA account rights)");
+            o.Kv("change", "write Setup's install record HKLM\\" + Paths.RecordKey);
             o.Kv("change", "create " + Paths.ProgramData + " (SYSTEM and Administrators; " + Paths.AccountName + " where it needs it)");
             o.Kv("change", "register the " + Paths.ServiceName + " service (Automatic, runs as " + HostService.Account + ", depends on WSLService)");
             o.Kv("change", "create the media folders under " + MediaPaths.DefaultRoot + " (unless chosen otherwise) and allow " + Paths.AccountName + " to read and write them");
             if (lan != null && lan.Private)
-                o.Kv("change", "add six Hyper-V firewall rules for WSL, inbound TCP from " + lan.Subnet + ": 6369, 6370, 8050-8099, 8096, 7676, 9467");
+                o.Kv("change", "add six Hyper-V firewall rules for WSL (every WSL VM on this PC), inbound TCP from " + lan.Subnet + ": 6369, 6370, 8050-8099, 8096, 7676, 9467");
             o.Kv("change", "as " + Paths.AccountName + ": write its .wslconfig (memory " + Inv.S(WslConfig.MemoryCapGb(ram)) + " GB, mirrored networking) and import the WSL distro 'domovoi' into " + Paths.Distro);
             if (!Preflight.VmpEnabled()) o.Kv("change", "turn on the Windows feature VirtualMachinePlatform (restart)");
             if (Preflight.WslStatus(Preflight.WslVersion()) != "ok") o.Kv("change", "install the WSL package 2.7.14 (restart)");

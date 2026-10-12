@@ -55,6 +55,10 @@ VersionInfoProductName=Domovoi
 Source: "..\build\bin\{#Helper}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\bin\DomovoiHost.exe"; DestDir: "{app}"; Flags: ignoreversion
 
+[UninstallDelete]
+; The copy Setup runs after a restart (CreateRunOnceEntry), if one was made.
+Type: filesandordirs; Name: "{app}\resume"
+
 [Messages]
 ConfirmUninstall=Remove Domovoi from this PC?%n%nThis deletes Domovoi's Linux system with its database (settings, history, voice profiles), the hidden account domovoi-svc, the DomovoiHost service, Domovoi's firewall rules and C:\ProgramData\Domovoi.%n%nFiles in your media folders are kept; a media folder is removed only if it is empty.
 
@@ -91,6 +95,10 @@ var
   CodeTitle, CodeHint, LanText: TNewStaticText;
   CodeEdit: TNewEdit;
   CopyButton, OpenButton: TNewButton;
+  StopButton: TNewButton;
+  StopRequested: Boolean;
+
+function GetTickCount: Cardinal; external 'GetTickCount@kernel32.dll stdcall';
 
 { -- helper calls ------------------------------------------------------- }
 
@@ -232,7 +240,9 @@ begin
     end;
     if not Ran or (Code <> 0) then
     begin
-      if MsgBox('Setup could not check this PC (' + KvValue(Preflight, 'error') + ').', mbError, MB_RETRYCANCEL) = IDRETRY then
+      if MsgBox('Setup could not check this PC (' + KvValue(Preflight, 'error') + ').' + #13#10#13#10 +
+        'If Windows blocked DomovoiSetupHelper.exe, Smart App Control or an antivirus program is stopping unsigned programs: this test build is unsigned (see docs/WINDOWS_HOST.md, "Unsigned").',
+        mbError, MB_RETRYCANCEL) = IDRETRY then
         Continue;
       Exit;
     end;
@@ -266,6 +276,7 @@ begin
     'Network: ' + LanIp + ' on ' + KvValue(Preflight, 'lan_interface') + ' (' + KvValue(Preflight, 'lan_category') +
       ' network, subnet ' + LanSubnet + ')' + #13#10 +
     'Internet: ' + KvValue(Preflight, 'internet') + #13#10 +
+    'Smart App Control: ' + KvValue(Preflight, 'smart_app_control') + #13#10 +
     'Ports Domovoi needs: free' + #13#10 + #13#10 +
     JoinLines(Warn, 'Note: ');
   PreflightDone := True;
@@ -296,15 +307,18 @@ begin
   S := S + IntToStr(N) + '. A private WSL distro named "domovoi" (Ubuntu 26.04) that belongs to domovoi-svc, stored in C:\ProgramData\Domovoi. WSL settings for domovoi-svc alone: mirrored networking, memory up to ' + WslMemGb + ' GB. Your own WSL distros, your .wslconfig and Docker Desktop are not touched.' + #13#10#13#10;
   N := N + 1;
   if LanPrivate = '1' then
-    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and satellites on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins).' + #13#10#13#10
+    S := S + IntToStr(N) + '. Six Hyper-V firewall rules for WSL, named Domovoi-..., so phones and satellites on your home network (' + LanSubnet + ') reach Domovoi: TCP 6369 (dashboard), 6370 (voice), 8050-8099 (music streams), 8096, 7676 and 9467 (plugins). They apply to every WSL VM on this PC, your own WSL distros and Docker Desktop''s included: anything of yours listening on those ports in mirrored mode becomes reachable from your home network too.' + #13#10#13#10
   else
     S := S + IntToStr(N) + '. No firewall rules: this PC has no private home-network address, so Domovoi answers on this PC only.' + #13#10#13#10;
   N := N + 1;
-  S := S + IntToStr(N) + '. A media folder you can open in Explorer (you choose it next; default C:\Users\Public\Domovoi) with Music, Pictures, Videos, Documents and Audiobooks inside. domovoi-svc may read and write it.' + #13#10#13#10;
+  S := S + IntToStr(N) + '. A media folder you can open in Explorer (you choose it next; default C:\Users\Public\Domovoi) with Music, Pictures, Videos, Documents and Audiobooks inside. domovoi-svc may read and write it; if Setup makes the folder, every user of this PC (Users) may too.' + #13#10#13#10;
   N := N + 1;
-  S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it).' + #13#10#13#10;
+  S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it). Setup won''t use a C:\ProgramData\Domovoi it didn''t make.' + #13#10#13#10;
+  N := N + 1;
+  S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
   S := S + 'Downloads: about 8-9 GB. Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models, each checked against a pinned hash.' + #13#10#13#10;
-  S := S + 'Not changed: power and sleep settings (this test build doesn''t ask), Windows Update, your user accounts and files.' + #13#10#13#10;
+  S := S + 'Not changed: power and sleep settings (this test build doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
+  S := S + 'This test build is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.';
   Result := S;
 end;
@@ -521,7 +535,7 @@ begin
     if Err = '' then
       Err := 'the helper exited with code ' + IntToStr(Code);
     Log('Step failed: ' + Title + ': ' + Err);
-    if TaskDialogMsgBox(Title + ': it did not work', Err + #13#10#13#10 + 'Logs: C:\ProgramData\Domovoi\logs',
+    if TaskDialogMsgBox(Title + ': it did not work', Err + #13#10#13#10 + 'Logs: C:\ProgramData\Domovoi\state\install.log and C:\ProgramData\Domovoi\logs',
       mbError, MB_RETRYCANCEL, ['Retry', 'Stop Setup'], 0) <> IDRETRY then
     begin
       FailureText := Title + ' did not work: ' + Err;
@@ -541,17 +555,49 @@ begin
     Result := Result + ' of ' + Format('%.1f', [StrToInt64Def(Total, 0) / 1073741824.0]) + ' GB';
 end;
 
-{ Follows DomovoiHost until Domovoi answers. False: the user stopped. }
+procedure StopClick(Sender: TObject);
+begin
+  StopRequested := True;
+end;
+
+{ Follows DomovoiHost until Domovoi answers. False: the user stopped, or
+  gave up after the time limit. }
 function WaitForHost: Boolean;
 var
   Lines, Ignored: TArrayOfString;
   Code, Percent, WantAttempt: Integer;
   State, Service, Err: String;
+  Started, LimitMs: Cardinal;
 begin
   Result := False;
   WantAttempt := 0;
+  StopRequested := False;
+  Started := GetTickCount;
+  { Four hours: far more than a slow line needs for 8-9 GB. }
+  LimitMs := 4 * 3600 * 1000;
+  StopButton.Visible := True;
+  try
   while True do
   begin
+    if StopRequested then
+    begin
+      StopRequested := False;
+      if MsgBox('Stop Setup now? Domovoi''s Linux system is not finished. You can run Setup again later and it carries on, or remove what Setup did.', mbConfirmation, MB_YESNO) = IDYES then
+      begin
+        FailureText := 'You stopped Setup before Domovoi was ready.';
+        Exit;
+      end;
+    end;
+    if GetTickCount - Started > LimitMs then
+    begin
+      if MsgBox('Domovoi is still not ready after ' + IntToStr(LimitMs div 3600000) + ' hours. Keep waiting another hour?' + #13#10#13#10 +
+        'What it is doing: ' + KvValue(Lines, 'message') + #13#10 + 'Logs: C:\ProgramData\Domovoi\logs (host.log, provision.log).', mbConfirmation, MB_YESNO) <> IDYES then
+      begin
+        FailureText := 'Domovoi was still not ready after ' + IntToStr(LimitMs div 3600000) + ' hours.';
+        Exit;
+      end;
+      LimitMs := LimitMs + 3600 * 1000;
+    end;
     if not RunHelper(AppHelper, 'host-status', Lines, Code) or (Code <> 0) then
     begin
       Wait(2000, ProgressPage.ProgressBar.Position);
@@ -599,6 +645,9 @@ begin
       WantAttempt := StrToIntDef(KvValue(Ignored, 'attempt'), 0);
     end;
     Wait(1500, Percent);
+  end;
+  finally
+    StopButton.Visible := False;
   end;
 end;
 
@@ -653,11 +702,18 @@ end;
 
 { -- restart and resume (PLAN 4.3) -------------------------------------- }
 
+{ The entry runs Setup elevated after the restart, so it must not run it
+  from wherever it was downloaded (a folder the user's own programs can
+  write): it runs a copy in C:\Program Files\Domovoi\resume, which only
+  administrators can change. The uninstaller removes that copy. }
 procedure CreateRunOnceEntry;
 var
-  Data: String;
+  Data, ResumeExe: String;
 begin
-  Data := AddQuotes(ExpandConstant('{srcexe}')) + ' /resume=1 /internet=' + InternetAnswer +
+  ResumeExe := ExpandConstant('{app}\resume\DomovoiSetup.exe');
+  if not ForceDirectories(ExtractFileDir(ResumeExe)) or not FileCopy(ExpandConstant('{srcexe}'), ResumeExe, False) then
+    RaiseException('Setup could not copy itself to ' + ResumeExe + ' to carry on after the restart.');
+  Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer +
     ' /mediaroot=' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0]));
   if NoDenyLogon then
     Data := Data + ' /nodenylogon=1';
@@ -667,7 +723,22 @@ end;
 { -- event functions ---------------------------------------------------- }
 
 function InitializeSetup: Boolean;
+var
+  Sac: Cardinal;
 begin
+  { Smart App Control blocks unsigned programs, and this test build is
+    unsigned (code signing is on hold). If Setup is running at all, Windows
+    let it start; the helper and the service it unpacks would still be
+    blocked, so say so now rather than fail later. 0 off, 1 on, 2
+    evaluation. }
+  if RegQueryDWordValue(HKLM, 'SYSTEM\CurrentControlSet\Control\CI\Policy', 'VerifiedAndReputablePolicyState', Sac) and (Sac = 1) then
+  begin
+    SuppressibleMsgBox('Smart App Control is on, and this test build of Domovoi is not code-signed. Windows would block Setup''s helper and the Domovoi service, so Setup stops here.' + #13#10#13#10 +
+      'To install it anyway, turn Smart App Control off in Windows Security > App & browser control > Smart App Control settings. On many Windows 11 builds it can only be turned back on by resetting or reinstalling Windows; read what Windows Security says first (docs/WINDOWS_HOST.md, "Unsigned").',
+      mbCriticalError, MB_OK, IDOK);
+    Result := False;
+    Exit;
+  end;
   Resumed := ExpandConstant('{param:resume|0}') = '1';
   NoDenyLogon := ExpandConstant('{param:nodenylogon|0}') = '1';
   ExtractTemporaryFile('{#Helper}');
@@ -694,6 +765,12 @@ begin
   DownloadPage.ShowBaseNameInsteadOfUrl := True;
   CheckPage := CreateOutputMarqueeProgressPage('Checking this PC', 'Setup changes nothing until you say so.');
   ProgressPage := CreateOutputProgressPage('Setting up Domovoi', 'This takes 20 to 40 minutes on a typical connection; most of it is downloading the AI models. You can keep using the PC.');
+  StopButton := TNewButton.Create(ProgressPage);
+  StopButton.Parent := ProgressPage.Surface;
+  StopButton.Caption := 'Stop Setup';
+  StopButton.SetBounds(ProgressPage.SurfaceWidth - ScaleX(110), ProgressPage.SurfaceHeight - ScaleY(30), ScaleX(110), ScaleY(25));
+  StopButton.OnClick := @StopClick;
+  StopButton.Visible := False;
   CreateFinishControls;
 end;
 
@@ -718,6 +795,8 @@ end;
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   Problem: String;
+  Lines: TArrayOfString;
+  Code: Integer;
 begin
   Result := True;
   if CurPageID = wpWelcome then
@@ -734,9 +813,13 @@ begin
     Result := InternetAnswer <> ''
   else if CurPageID = MediaPage.ID then
   begin
+    { The helper's own rules: a local folder, not a system or program
+      folder, a profile root or anything holding one, not a link. }
     Problem := '';
-    if (Length(MediaPage.Values[0]) < 4) or (Copy(MediaPage.Values[0], 2, 2) <> ':\') then
-      Problem := 'Pick a folder on a drive of this PC, such as C:\Users\Public\Domovoi.';
+    if not RunHelper(TmpHelper, 'check-media --root ' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0])), Lines, Code) then
+      Problem := 'Setup could not check that folder.'
+    else if Code <> 0 then
+      Problem := KvValue(Lines, 'error');
     if Problem <> '' then
     begin
       MsgBox(Problem, mbError, MB_OK);
@@ -829,13 +912,22 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Lines: TArrayOfString;
+  Code: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
     InstallOk := MachineSetup;
     if not InstallOk then
+    begin
       UndoOnExit := MsgBox(FailureText + #13#10#13#10 + 'Remove what Setup has changed so far? (Recommended unless you want to look at the logs first; you can also run Setup again later to carry on.)',
         mbConfirmation, MB_YESNO) = IDYES;
+      { Kept for later: DomovoiHost stopped and set to Manual, so it doesn't
+        start provisioning again at every boot. Setup sets it back. }
+      if not UndoOnExit and FileExists(AppHelper) then
+        RunHelper(AppHelper, 'host-park', Lines, Code);
+    end;
   end;
 end;
 
@@ -846,7 +938,7 @@ begin
   { The code was only ever in memory; drop it. }
   SetupCodeText := '';
   if UndoOnExit and FileExists(ExpandConstant('{uninstallexe}')) then
-    Exec(ExpandConstant('{uninstallexe}'), '/SILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_SHOWNORMAL, ewNoWait, Code);
+    Exec(ExpandConstant('{uninstallexe}'), '/SILENT /NORESTART', '', SW_SHOWNORMAL, ewNoWait, Code);
 end;
 
 { -- uninstall (PLAN 7) ------------------------------------------------- }
@@ -864,8 +956,8 @@ begin
   HelperExe := ExpandConstant('{app}\{#Helper}');
   if not FileExists(HelperExe) then
   begin
-    Log('No helper to run; nothing but the files to remove');
-    Exit;
+    SuppressibleMsgBox(HelperExe + ' is missing, so the uninstaller can''t undo what Setup changed. Run Domovoi Setup again (it repairs the program), then uninstall.', mbError, MB_OK, IDOK);
+    Abort;
   end;
   UninstallProgressForm.StatusLabel.Caption := 'Removing Domovoi''s Linux system, its hidden account, its service and its firewall rules. This can take a few minutes...';
   try
@@ -876,13 +968,19 @@ begin
     Code := -1;
   end;
   Log('Uninstall helper exit code ' + IntToStr(Code) + '; record: ' + KvValue(Lines, 'log'));
+  if Code = 0 then
+    Exit;
+  { Anything short of "all gone": stop here, before Uninstall deletes
+    C:\Program Files\Domovoi and the Apps entry, so the uninstaller (and the
+    helper it runs) stay for the retry. }
+  Left := KvValues(Lines, 'leftover');
   if Code = 3 then
-  begin
-    Left := KvValues(Lines, 'leftover');
-    SuppressibleMsgBox('Domovoi is removed, except for:' + #13#10#13#10 + JoinLines(Left, '- ') + #13#10 +
-      'Details: ' + KvValue(Lines, 'log'), mbInformation, MB_OK, IDOK);
-  end
-  else if Code <> 0 then
-    SuppressibleMsgBox('The uninstaller could not finish (' + KvValue(Lines, 'error') + '). Run it again; it carries on where it stopped. Details: ' +
-      KvValue(Lines, 'log'), mbError, MB_OK, IDOK);
+    SuppressibleMsgBox('Domovoi is not fully removed yet. Still there:' + #13#10#13#10 + JoinLines(Left, '- ') + #13#10 +
+      'Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped.' + #13#10#13#10 +
+      'Details: ' + KvValue(Lines, 'log'), mbInformation, MB_OK, IDOK)
+  else
+    SuppressibleMsgBox('The uninstaller stopped before removing Domovoi''s account, service or data: ' + KvValue(Lines, 'error') + #13#10#13#10 +
+      'Nothing of Domovoi''s data was deleted. Fix what the message says, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped.' + #13#10#13#10 +
+      'Details: ' + KvValue(Lines, 'log'), mbError, MB_OK, IDOK);
+  Abort;
 end;
