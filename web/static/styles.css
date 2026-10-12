@@ -1462,6 +1462,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
 /* Chat message stamp, actions menu and details (chat.jsx, chat_details.js) */
 .chat-stamp { display: flex; align-items: center; gap: 4px; min-height: 22px; margin-top: -2px; padding-left: 24px; font-size: 10px; color: var(--fg-faint); }
 .chat-stamp.mine { padding-left: 0; }
+/* Who Domovoi heard on a spoken message (the app's chat mic): softer for a weak match. */
+.chat-speaker { display: flex; align-items: center; gap: 4px; margin-top: -1px; padding-right: 8px; max-width: 100%; white-space: nowrap; font-size: 10px; color: var(--fg-muted); }
+.chat-speaker.soft { opacity: 0.55; color: var(--fg-faint); }
+.chat-speaker .ava { width: 14px; height: 14px; font-size: 8px; border: 0; }
 .chat-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--fg-faint); cursor: pointer; opacity: 0.55; }
 .chat-more:hover, .chat-more:focus-visible { opacity: 1; background: var(--sunken); color: var(--fg); }
 .chat-menu { position: fixed; z-index: 95; min-width: 150px; padding: 4px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-md), var(--inner-highlight); }

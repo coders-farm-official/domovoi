@@ -630,7 +630,7 @@ class ReminderHandler(Handler):
             created_at=now,
             label=label,
             message=task,
-            room_id=ctx.room_id,
+            room_id=ctx.satellite_room_id,
         )
         return Response(
             text=reply,
@@ -651,7 +651,7 @@ class ReminderHandler(Handler):
                 ORDER BY expires_at ASC
                 """
             ),
-            {"room_id": ctx.room_id},
+            {"room_id": ctx.satellite_room_id},
         )
         # A reminder with no task reads as its label: "your 10 minute
         # reminder", not an empty "In 8 minutes: ."
@@ -702,11 +702,11 @@ class ReminderHandler(Handler):
         #    "delete this room's own reminders". Acknowledge that fire (the
         #    timer handler does the same for "stop the timer") and delete
         #    nothing.
-        if not label_phrase and ctx.room_id is not None:
+        if not label_phrase and ctx.satellite_room_id is not None:
             from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire
 
             if await ack_recent_fire(
-                session, ctx.room_id, within_sec=ACK_WITHIN_SEC, kind="reminder",
+                session, ctx.satellite_room_id, within_sec=ACK_WITHIN_SEC, kind="reminder",
             ) is not None:
                 return Response(
                     text="Okay.",
@@ -724,7 +724,7 @@ class ReminderHandler(Handler):
                     """
                 ),
                 {
-                    "room_id": ctx.room_id,
+                    "room_id": ctx.satellite_room_id,
                     # "10 minutes" → "10 minute", so "cancel the reminder
                     # for 10 minutes" finds a no-task "10 minute reminder".
                     # Only ever widens the substring match: the singular
@@ -741,7 +741,7 @@ class ReminderHandler(Handler):
                       AND message IS NOT NULL
                     """
                 ),
-                {"room_id": ctx.room_id},
+                {"room_id": ctx.satellite_room_id},
             )
         deleted = result.rowcount or 0
         if deleted:

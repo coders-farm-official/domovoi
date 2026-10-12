@@ -11504,6 +11504,59 @@
         }
       }
     },
+    "/api/chat/threads/{thread_id}/voice": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Send Voice",
+        "description": "One push-to-talk turn from the app's chat mic, answered in this\nthread: forwarded with the caller's credentials to the core's\n``POST /v1/phone/voice`` (domovoi/phone_voice.py), which transcribes\nit, identifies the speaker, routes it like a satellite turn, speaks\nthe reply and writes both rows. The core's answer (transcript, reply,\nbase64 WAV, speaker, device actions, the two rows) or refusal comes\nback as it was given; 502 / 504 when the core can't be reached or took\ntoo long.\n\nThe body is capped before it is parsed by the process-wide transport\nguard (domovoi/transport_guard.py: 1 MiB for a route not listed there,\non a declared Content-Length and on a streamed overrun alike), which\nleaves room for the longest recording (30 s, 960 kB) and its form.",
+        "operationId": "send_voice_api_chat_threads__thread_id__voice_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_send_voice_api_chat_threads__thread_id__voice_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/chat/uploads": {
       "post": {
         "tags": [
@@ -12891,6 +12944,39 @@
           "message"
         ],
         "title": "AnnounceRequest"
+      },
+      "Body_send_voice_api_chat_threads__thread_id__voice_post": {
+        "properties": {
+          "audio": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "Audio",
+            "description": "16 kHz mono PCM16, raw or as a WAV file"
+          },
+          "phone_id": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Phone Id"
+          },
+          "player": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player"
+          }
+        },
+        "type": "object",
+        "required": [
+          "audio",
+          "phone_id"
+        ],
+        "title": "Body_send_voice_api_chat_threads__thread_id__voice_post"
       },
       "Body_upload_api_chat_uploads_post": {
         "properties": {

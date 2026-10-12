@@ -95,6 +95,9 @@ class WifiHandler(Handler):
     priority_band = 120
     display = HandlerDisplay(label="Wi-Fi", tone="device")
     requires_network = "no"
+    # The satellite's own link, from its own reports: nothing a phone turn
+    # can read or fix (Handler.satellite_only).
+    satellite_only = True
 
     tool_schema = {
         "name": "wifi",

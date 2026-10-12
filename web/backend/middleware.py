@@ -50,6 +50,10 @@ BODY_LIMITS: tuple[tuple[str, int], ...] = (
     # whether this caller may install anything (api/plugins.py keeps the
     # same ceiling for a body that arrives without a Content-Length).
     ("/api/plugins/install", 66 * MB),
+    # A chat picture: the handler takes 20 MB (api/chat.py
+    # _MAX_UPLOAD_BYTES); the transport guard's 64 MB ceiling for it is
+    # narrowed to that plus its form, so nothing bigger is spooled first.
+    ("/api/chat/uploads", 21 * MB),
 )
 
 

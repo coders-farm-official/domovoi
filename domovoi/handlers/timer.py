@@ -230,7 +230,7 @@ class TimerHandler(Handler):
             created_at=now,
             label=label,
             message=None,
-            room_id=ctx.room_id,
+            room_id=ctx.satellite_room_id,
         )
         spoken = _format_duration(duration_sec)
         text = (
@@ -254,21 +254,21 @@ class TimerHandler(Handler):
         # was announced there deleted the kitchen's own running timer. Only
         # a TIMER that went off counts: after a reminder, "cancel the
         # timer" still cancels this room's timer.
-        if label is None and not everywhere and ctx.room_id is not None:
+        if label is None and not everywhere and ctx.satellite_room_id is not None:
             from domovoi.timer_delivery import ACK_WITHIN_SEC, ack_recent_fire
 
             if await ack_recent_fire(
-                session, ctx.room_id, within_sec=ACK_WITHIN_SEC, kind="timer",
+                session, ctx.satellite_room_id, within_sec=ACK_WITHIN_SEC, kind="timer",
             ) is not None:
                 return Response(
                     text="Okay.", session_id=ctx.session_id, matched_handler=self.name,
                 )
         repo = TimerRepository(session)
         deleted = await repo.cancel_by_label(
-            label=label, room_id=ctx.room_id, house_wide=everywhere,
+            label=label, room_id=ctx.satellite_room_id, house_wide=everywhere,
         )
         if deleted == 0:
-            if label and not everywhere and ctx.room_id is not None:
+            if label and not everywhere and ctx.satellite_room_id is not None:
                 rooms = await repo.label_rooms(label)
                 if rooms:
                     return Response(
@@ -292,7 +292,7 @@ class TimerHandler(Handler):
     async def _status(self, *, ctx: Context, session: AsyncSession) -> Response:
         repo = TimerRepository(session)
         # The room's timer first; its reminder only when no timer runs.
-        nxt = await repo.next_for_status(room_id=ctx.room_id)
+        nxt = await repo.next_for_status(room_id=ctx.satellite_room_id)
         if nxt is None:
             return Response(
                 text="No timers running.",
