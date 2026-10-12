@@ -198,7 +198,7 @@ def test_server_error_is_not_an_auth_failure(outcomes):
 GUARDED_DELETE_TOASTS = {
     "files.jsx": 1,      # performDelete
     "music.jsx": 2,      # onDeleteTrack, onDeletePlaylist (reportMutationFailure)
-    "people.jsx": 2,     # deleteMemory, deleteFavorite
+    "people.jsx": 3,     # deleteMemory, deleteFavorite, onDeleteSample (voice samples)
     "calendar.jsx": 1,   # del
 }
 
