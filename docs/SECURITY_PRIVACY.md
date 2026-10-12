@@ -244,9 +244,12 @@ before an admin exists). The recording is kept only in memory for the
 turn — transcribed, matched against the household's voice profiles, then
 dropped; the transcript and the reply are written into the chat thread
 (with who voice identification heard), and the turn is logged like a
-room's under `phone-<device id>`. A confident match on a phone may save
-one voice sample for that phone, as a room's does after a run of
-confident matches (the rules are in `domovoi/voice_identifier.py`).
+room's under `phone-<device id>`. A phone turn never adds a voice sample
+by itself: a room's satellite saves one after a run of confident matches
+(`domovoi/voice_identifier.py`), but a phone id is self-asserted and new
+on every reinstall, and phone-mic samples would move the voice every
+satellite matches against, so phones only match. Saying "my name is …"
+from a phone still enrols that voice, as it does in a room.
 
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's

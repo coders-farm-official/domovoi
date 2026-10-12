@@ -53,6 +53,7 @@ import io
 import json
 import logging
 import re
+import struct
 import time
 import wave
 from collections import OrderedDict
@@ -87,6 +88,8 @@ MAX_CLIP_BYTES = MAX_CLIP_SEC * BYTES_PER_SEC
 MIN_CLIP_SEC = 0.3
 #: The devices tier's id shape (web/backend/api/devices.py _DEVICE_ID_RE).
 PHONE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{2,63}$")
+#: chat_threads.id is a BIGINT: anything past it is no thread at all.
+MAX_THREAD_ID = 2**63 - 1
 MAX_PLAYER_CHARS = 2048
 _PLAYER_KEYS = ("title", "artist", "kind", "playing")
 
@@ -135,7 +138,9 @@ def pcm_from_upload(data: bytes) -> bytes:
                         415, "audio must be 16 kHz mono 16-bit PCM", "bad_audio_format",
                     )
                 pcm = w.readframes(w.getnframes())
-        except (wave.Error, EOFError) as e:
+        except (wave.Error, EOFError, RuntimeError, ValueError, OSError, struct.error) as e:
+            # RuntimeError: the wave module's own answer to a chunk whose
+            # size runs past the end of the file.
             raise PhoneTurnRefused(400, "audio is not a readable WAV file", "bad_audio") from e
     else:
         pcm = data
@@ -204,27 +209,20 @@ def reset_for_tests() -> None:
 
 
 async def _identify(pcm: bytes, room: str) -> Any:
+    """Who spoke — matching only. No ``room_id`` goes to the identifier,
+    so a phone never feeds its passive learning (``_learn_room``: after a
+    run of confident matches it saves the clip as that person's sample for
+    the "room"). A phone id is self-asserted and changes with every
+    reinstall, so each would add a sample, and phone-mic samples move the
+    centroid every satellite matches against. Until the owner decides how
+    phone audio should enrol, only an explicit "my name is …" does."""
     from domovoi.voice_identifier import identify
 
     try:
-        return await identify(pcm, room_id=room)
+        return await identify(pcm, room_id=None)
     except Exception as e:  # noqa: BLE001 — best-effort, as on a satellite
         log.warning("phone voice: voice identification failed: %s", e)
         return None
-
-
-async def _person_name(person_id: int | None) -> str | None:
-    if person_id is None:
-        return None
-    try:
-        async with session_scope() as s:
-            row = (
-                await s.execute(text("SELECT name FROM people WHERE id = :id"), {"id": person_id})
-            ).first()
-    except Exception as e:  # noqa: BLE001
-        log.warning("phone voice: person lookup failed: %s", e)
-        return None
-    return row[0] if row else None
 
 
 def _speaker_score(ident: Any) -> float | None:
@@ -383,7 +381,13 @@ async def _write_turn(
 ) -> list[dict[str, Any]]:
     """Both turns into the thread, as the typed send writes them (and the
     thread titled by its first message), then ``chat_changed`` so open
-    dashboards and apps re-read it."""
+    dashboards and apps re-read it.
+
+    The speaker is re-read in the insert itself: the turn may have deleted
+    them ("forget me"), or an admin may have while it was answered, and the
+    person id voice identification gave before routing would then break
+    the foreign key and lose both rows. A speaker who is gone is stored as
+    nobody, with no score."""
     from sqlalchemy.exc import IntegrityError
 
     try:
@@ -395,7 +399,16 @@ async def _write_turn(
                         INSERT INTO chat_messages
                             (thread_id, role, content, device_id, source,
                              speaker_person_id, speaker_confidence)
-                        VALUES (:t, 'user', :c, :dev, 'voice', :sp, :sc)
+                        VALUES (
+                            :t, 'user', :c, :dev, 'voice',
+                            (SELECT p.id FROM people p WHERE p.id = CAST(:sp AS BIGINT)),
+                            CASE
+                                WHEN CAST(:sp AS BIGINT) IS NOT NULL AND NOT EXISTS (
+                                    SELECT 1 FROM people p WHERE p.id = CAST(:sp AS BIGINT)
+                                ) THEN NULL
+                                ELSE CAST(:sc AS REAL)
+                            END
+                        )
                         RETURNING {_ROW_COLUMNS}
                         """
                     ),
@@ -434,8 +447,13 @@ async def _write_turn(
             )
             await s.execute(text("SELECT pg_notify('chat_changed', 'message')"))
     except IntegrityError as e:
-        # The thread was deleted while the turn was being answered.
-        raise PhoneTurnRefused(404, "thread not found", "thread_not_found") from e
+        if not await _thread_exists(thread_id):
+            # The thread was deleted while the turn was being answered.
+            raise PhoneTurnRefused(404, "thread not found", "thread_not_found") from e
+        log.error("phone voice: the turn into thread %s could not be saved: %s", thread_id, e)
+        raise PhoneTurnRefused(
+            500, "Domovoi answered, but couldn't save the turn into this chat.", "save_failed",
+        ) from e
     return [message_dict(user), message_dict(assistant)]
 
 
@@ -489,6 +507,8 @@ async def run_phone_turn(
         }
     """
     phone_id = valid_phone_id(phone_id)
+    if not 1 <= int(thread_id) <= MAX_THREAD_ID:
+        raise PhoneTurnRefused(404, "thread not found", "thread_not_found")
     room = phone_room(phone_id)
     pcm = pcm_from_upload(audio)
     if not await _thread_exists(thread_id):
@@ -580,7 +600,6 @@ async def _answer(
         _fan_out(app, response, room)
 
     score = _speaker_score(ident)
-    speaker_name = await _person_name(person_id)
     stats: dict[str, Any] = {
         **stages,
         "model_role": "voice",
@@ -618,14 +637,15 @@ async def _answer(
             {"mime": "audio/wav", "b64": base64.b64encode(wav).decode("ascii")}
             if wav else None
         ),
+        # Who the stored row names: nobody when the turn forgot them.
         "speaker": (
             {
-                "person_id": person_id,
-                "name": speaker_name,
-                "confidence": score,
-                "confident": speaker_is_confident(score),
+                "person_id": messages[0]["speaker_person_id"],
+                "name": messages[0].get("speaker_name"),
+                "confidence": messages[0].get("speaker_confidence"),
+                "confident": messages[0]["speaker_confident"],
             }
-            if person_id is not None else None
+            if messages[0].get("speaker_person_id") is not None else None
         ),
         "expect_followup": expect_followup,
         "actions": actions,

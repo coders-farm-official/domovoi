@@ -252,8 +252,9 @@ async def test_a_turn_is_answered_and_both_rows_land_in_the_thread(
     assert body["speaker"] == {"person_id": ana, "name": "Ana", "confidence": 0.9, "confident": True}
     assert body["room_id"] == ROOM
     assert body["actions"] == [] and body["error"] is None
-    # Voice identification ran on the phone's own "room".
-    assert heard_as.room == ROOM
+    # Voice identification ran without a room: a phone never feeds the
+    # identifier's passive learning (see test_phone_turns_never_learn_...).
+    assert heard_as.room is None
 
     user, assistant = await _rows(tid)
     assert (user["role"], user["content"], user["source"]) == ("user", "What time is it?", "voice")
@@ -879,3 +880,220 @@ async def test_an_audiobook_asked_for_plays_on_the_phone(
         "items": [{"kind": "book", "id": book, "title": "Cellar Tales", "duration_sec": 3600}],
     }]
     assert room_player == []
+
+
+# ─── Review fixes (2026-10-12) ────────────────────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_forget_me_from_a_phone_still_writes_both_rows(
+    db_session, open_gate, whisper, heard_as,
+) -> None:
+    """ "forget me" deletes the speaker inside the turn; the user row must
+    then name nobody instead of tripping the foreign key and losing both
+    rows (it used to come back as a 404 "thread not found")."""
+    ana = await _person("Ana")
+    heard_as.person, heard_as.score = ana, 0.9
+    whisper.texts = ["forget me"]
+    tid = await _thread()
+    async with _client() as c:
+        r = await _turn(c, tid)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["reply"] == "Okay, I've forgotten you, Ana."
+    assert body["speaker"] is None
+    user, assistant = await _rows(tid)
+    assert (user["content"], user["speaker_person_id"], user["speaker_confidence"]) == ("forget me", None, None)
+    assert assistant["content"] == body["reply"]
+    async with SessionLocal() as s:
+        assert (await s.execute(text("SELECT count(*) FROM people WHERE id = :p"), {"p": ana})).scalar_one() == 0
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_speaker_deleted_by_an_admin_mid_turn_is_saved_as_nobody(
+    db_session, open_gate, whisper, heard_as, monkeypatch,
+) -> None:
+    ana = await _person("Ana")
+    heard_as.person, heard_as.score = ana, 0.9
+    whisper.texts = ["what time is it"]
+    real_synth = phone_voice._synthesize
+
+    async def _admin_deletes_then_synth(response):
+        # After routing, before the rows are written: the dashboard's delete.
+        async with SessionLocal() as s:
+            await s.execute(text("DELETE FROM people WHERE id = :p"), {"p": ana})
+            await s.commit()
+        return await real_synth(response)
+
+    monkeypatch.setattr(phone_voice, "_synthesize", _admin_deletes_then_synth)
+    tid = await _thread()
+    async with _client() as c:
+        r = await _turn(c, tid)
+    assert r.status_code == 200, r.text
+    assert r.json()["matched_handler"] == "clock" and r.json()["speaker"] is None
+    user, _assistant = await _rows(tid)
+    assert user["speaker_person_id"] is None and user["speaker_confidence"] is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_phone_turns_never_learn_a_voice_sample(db_session, open_gate, whisper, monkeypatch) -> None:
+    """Passive learning saves a person's clip as their sample for each
+    "room" after a run of confident matches. A phone id is self-asserted
+    (and new on every reinstall), so phones must not feed it: five phone
+    ids, each matched confidently, leave the person's samples as they were."""
+    from domovoi import voice_identifier
+    from domovoi.clients.voice_embedder import StubVoiceEmbedder
+    from domovoi.config import settings
+    from domovoi.db.repositories import VoiceProfilesRepository
+
+    monkeypatch.setattr(settings, "voice_profile_drift_reenroll_after", 1)
+    voice_identifier._CONFIDENT_HITS.clear()
+    clip = _pcm()
+    ana = await _person("Ana")
+    vec = await StubVoiceEmbedder().embed(clip)
+    async with SessionLocal() as s:
+        await VoiceProfilesRepository(s).add(
+            person_id=ana, embedding=vec.astype("float32").tobytes(),
+            model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG, room_id="kitchen", sample_seconds=1.0,
+        )
+        await s.commit()
+    whisper.texts = ["what time is it"] * 5
+    tid = await _thread()
+    async with _client() as c:
+        for i in range(5):
+            r = await c.post(
+                "/v1/phone/voice",
+                data={"phone_id": f"android-spoof{i}", "thread_id": str(tid)},
+                files={"audio": ("turn.pcm", clip, "application/octet-stream")},
+            )
+            assert r.json()["speaker"]["person_id"] == ana  # named, confidently
+    async with SessionLocal() as s:
+        samples = (
+            await s.execute(text("SELECT count(*) FROM voice_profiles WHERE person_id = :p"), {"p": ana})
+        ).scalar_one()
+    assert samples == 1
+
+
+_BAD_WAV = b"RIFF" + (30).to_bytes(4, "little") + b"WAVE" + b"LIST" + (5000).to_bytes(4, "little") + b"x" * 40
+
+
+def test_a_wav_whose_chunk_runs_past_the_end_is_a_400() -> None:
+    with pytest.raises(phone_voice.PhoneTurnRefused) as e:
+        phone_voice.pcm_from_upload(_BAD_WAV)
+    assert e.value.status == 400
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_wav_is_refused_not_a_server_error(open_gate) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=core_app, raise_app_exceptions=False), base_url="http://test",
+    ) as c:
+        r = await c.post(
+            "/v1/phone/voice", data={"phone_id": PHONE, "thread_id": "1"},
+            files={"audio": ("turn.wav", _BAD_WAV, "audio/wav")},
+        )
+    assert r.status_code == 400, r.text
+    assert r.json()["code"] == "bad_audio"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thread_id", [str(2**63), str(2**64 + 5), "0", "-3"])
+async def test_a_thread_id_past_a_bigint_is_refused_on_both_hops(thread_id, open_gate, monkeypatch) -> None:
+    install_fake_db(monkeypatch, admin=False)
+    files = {"audio": ("turn.pcm", _pcm(0.5), "application/octet-stream")}
+    async with AsyncClient(
+        transport=ASGITransport(app=core_app, raise_app_exceptions=False), base_url="http://test",
+    ) as c:
+        r = await c.post("/v1/phone/voice", data={"phone_id": PHONE, "thread_id": thread_id}, files=files)
+    assert r.status_code == 422, r.text
+    async with _web() as web:
+        r = await web.post(f"/api/chat/threads/{thread_id}/voice", data={"phone_id": PHONE}, files=files)
+    assert r.status_code == 422, r.text
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_second_turn_from_a_busy_phone_is_refused(db_session, open_gate, whisper, heard_as) -> None:
+    """One turn per phone at a time: a press while the last is still being
+    answered gets 409 and is not heard; once it is done the phone is free."""
+    whisper.texts = ["what time is it"]
+    tid = await _thread()
+    phone_voice._BUSY.add(ROOM)
+    try:
+        async with _client() as c:
+            r = await _turn(c, tid)
+        assert r.status_code == 409 and r.json()["code"] == "busy"
+        assert whisper.calls == 0 and await _rows(tid) == []
+    finally:
+        phone_voice._BUSY.discard(ROOM)
+    async with _client() as c:
+        assert (await _turn(c, tid)).status_code == 200
+    assert ROOM not in phone_voice._BUSY
+
+
+@pytest.mark.asyncio
+async def test_the_web_hop_forwards_the_callers_credential_and_never_its_own(monkeypatch) -> None:
+    """The core must see who is calling: the caller's household token or
+    Bearer, never the web process's own service credential."""
+    import httpx
+
+    import web.backend.api.chat as chat_api
+    from domovoi import admin_auth as aa
+
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-bearer"}, device_token="caller-token")
+    monkeypatch.setattr(aa, "read_device_token_file", lambda: "service-token")
+    seen: list[httpx.Request] = []
+
+    def _core(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"heard": False, "reason": "blank", "messages": []})
+
+    monkeypatch.setattr(
+        chat_api, "_core_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(_core), base_url="http://test"),
+    )
+    files = {"audio": ("turn.pcm", _pcm(0.5), "application/octet-stream")}
+    async with _web() as web:
+        r = await web.post("/api/chat/threads/5/voice", data={"phone_id": PHONE}, files=files,
+                           headers={HEADER: "caller-token"})
+        assert r.status_code == 200, r.text
+        r = await web.post("/api/chat/threads/5/voice", data={"phone_id": PHONE}, files=files,
+                           headers=bearer("admin-bearer"))
+        assert r.status_code == 200, r.text
+    by_token, by_bearer = seen
+    assert by_token.headers.get(HEADER) == "caller-token"
+    assert by_token.headers.get("authorization") is None
+    assert by_bearer.headers.get("authorization") == "Bearer admin-bearer"
+    assert by_bearer.headers.get(HEADER) is None
+    for req in seen:
+        assert "service-token" not in str(req.headers)
+
+
+@pytest.mark.asyncio
+async def test_the_web_caps_a_voice_body_before_parsing_it(monkeypatch) -> None:
+    """An oversized body, declared or streamed, is refused by the transport
+    guard before the multipart parser spools it; a chat picture has its own
+    21 MB cap rather than the transport's 64."""
+    big = b"\0" * (2 * 1024 * 1024)
+    async with _web() as web:
+        r = await web.post("/api/chat/threads/1/voice", data={"phone_id": PHONE},
+                           files={"audio": ("a.pcm", big, "application/octet-stream")})
+        assert r.status_code == 413
+
+        async def _stream():
+            yield (b'--B\r\nContent-Disposition: form-data; name="audio"; filename="a.pcm"\r\n'
+                   b"Content-Type: application/octet-stream\r\n\r\n")
+            for _ in range(40):
+                yield b"\0" * 65536
+            yield b"\r\n--B--\r\n"
+
+        r = await web.post("/api/chat/threads/1/voice", content=_stream(),
+                           headers={"Content-Type": "multipart/form-data; boundary=B"})
+        assert r.status_code in (400, 413)
+
+    from web.backend import middleware as mw
+
+    assert mw.body_limit_for("/api/chat/uploads") == 21 * mw.MB

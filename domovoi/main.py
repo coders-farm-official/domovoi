@@ -887,7 +887,9 @@ async def post_intent(intent: Intent):
 async def phone_voice_turn(
     audio: UploadFile = File(..., description="16 kHz mono PCM16, raw or as a WAV file"),
     phone_id: str = Form(..., max_length=64),
-    thread_id: int = Form(...),
+    # chat_threads.id is a BIGINT: a bigger number is refused here (422)
+    # rather than reaching the database as an overflow.
+    thread_id: int = Form(..., ge=1, le=2**63 - 1),
     player: str | None = Form(None, max_length=2048),
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice

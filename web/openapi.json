@@ -11510,7 +11510,7 @@
           "chat"
         ],
         "summary": "Send Voice",
-        "description": "One push-to-talk turn from the app's chat mic, answered in this\nthread: forwarded with the caller's credentials to the core's\n``POST /v1/phone/voice`` (domovoi/phone_voice.py), which transcribes\nit, identifies the speaker, routes it like a satellite turn, speaks\nthe reply and writes both rows. The core's answer (transcript, reply,\nbase64 WAV, speaker, device actions, the two rows) or refusal comes\nback as it was given; 502 / 504 when the core can't be reached or took\ntoo long.",
+        "description": "One push-to-talk turn from the app's chat mic, answered in this\nthread: forwarded with the caller's credentials to the core's\n``POST /v1/phone/voice`` (domovoi/phone_voice.py), which transcribes\nit, identifies the speaker, routes it like a satellite turn, speaks\nthe reply and writes both rows. The core's answer (transcript, reply,\nbase64 WAV, speaker, device actions, the two rows) or refusal comes\nback as it was given; 502 / 504 when the core can't be reached or took\ntoo long.\n\nThe body is capped before it is parsed by the process-wide transport\nguard (domovoi/transport_guard.py: 1 MiB for a route not listed there,\non a declared Content-Length and on a streamed overrun alike), which\nleaves room for the longest recording (30 s, 960 kB) and its form.",
         "operationId": "send_voice_api_chat_threads__thread_id__voice_post",
         "parameters": [
           {
@@ -11519,6 +11519,8 @@
             "required": true,
             "schema": {
               "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
               "title": "Thread Id"
             }
           }

@@ -80,7 +80,7 @@ from typing import Any, AsyncIterator, Optional
 
 import anyio
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as PathParam, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -771,8 +771,9 @@ def _core_client() -> httpx.AsyncClient:
 
 @router.post("/threads/{thread_id}/voice", dependencies=DEVICE)
 async def send_voice(
-    thread_id: int,
     request: Request,
+    # chat_threads.id is a BIGINT (422 past it, never a database overflow).
+    thread_id: int = PathParam(..., ge=1, le=2**63 - 1),
     audio: UploadFile = File(..., description="16 kHz mono PCM16, raw or as a WAV file"),
     phone_id: str = Form(..., max_length=64),
     player: Optional[str] = Form(None, max_length=2048),
@@ -784,7 +785,12 @@ async def send_voice(
     the reply and writes both rows. The core's answer (transcript, reply,
     base64 WAV, speaker, device actions, the two rows) or refusal comes
     back as it was given; 502 / 504 when the core can't be reached or took
-    too long."""
+    too long.
+
+    The body is capped before it is parsed by the process-wide transport
+    guard (domovoi/transport_guard.py: 1 MiB for a route not listed there,
+    on a declared Content-Length and on a streamed overrun alike), which
+    leaves room for the longest recording (30 s, 960 kB) and its form."""
     data = await audio.read(_VOICE_MAX_BYTES + 1)
     if len(data) > _VOICE_MAX_BYTES:
         raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
