@@ -25,7 +25,10 @@
 #     pull-wrong-digest is set) and the two health URLs (up while the unit
 #     is active);
 #   * systemctl keeps is-active state per unit (start, restart, enable
-#     --now); docker keeps built images and the search helper's state;
+#     --now) and a failed mark (daemon-reload fails a running timer or
+#     path unit whose unit file is a mask, as systemd does, and says so in
+#     the state's journal file; reset-failed or a start clears it); docker
+#     keeps built images and the search helper's state;
 #   * the venv's python answers the script's tagged snippets
 #     (#provision:...): env-write applies PROVISION_ENV_KEYS to the
 #     checkout's domovoi/.env, piper-info / piper-download and
@@ -334,7 +337,7 @@ SH
   cat >"$bin/systemctl" <<'SH'
 #!/usr/bin/env bash
 echo "systemctl $*" >>"$SHIM_STATE/calls.log"
-mkdir -p "$SHIM_STATE/active" "$SHIM_STATE/enabled"
+mkdir -p "$SHIM_STATE/active" "$SHIM_STATE/enabled" "$SHIM_STATE/failed"
 quiet=0 now=0 args=()
 for a in "$@"; do
   case $a in --quiet|-q) quiet=1 ;; --now) now=1 ;; --*) ;; *) args+=("$a") ;; esac
@@ -353,9 +356,25 @@ case $cmd in
   start|restart)
     for u in "${units[@]}"; do
       if [ -f "$SHIM_STATE/start-fail" ]; then echo "Job for $u failed" >&2; exit 1; fi
-      touch "$SHIM_STATE/active/$u"
+      touch "$SHIM_STATE/active/$u"; rm -f "$SHIM_STATE/failed/$u"
     done ;;
   stop) for u in "${units[@]}"; do rm -f "$SHIM_STATE/active/$u"; done ;;
+  daemon-reload)
+    # A running timer or path unit whose unit file is now a mask has
+    # nothing left to trigger: the reload fails it ("Unit to trigger
+    # vanished"), and only reset-failed (or a start) clears that; a stop
+    # does not. A running service just keeps running.
+    for f in "$SHIM_STATE/active/"*.timer "$SHIM_STATE/active/"*.path; do
+      [ -e "$f" ] || continue
+      u=${f##*/}
+      if [ "$("$SHIM_REAL_READLINK" "$SHIM_ROOT/etc/systemd/system/$u" 2>/dev/null)" = /dev/null ]; then
+        rm -f "$f"; touch "$SHIM_STATE/failed/$u"
+        echo "$u: Unit to trigger vanished." >>"$SHIM_STATE/journal"
+      fi
+    done ;;
+  reset-failed)
+    if [ "${#units[@]}" -eq 0 ]; then rm -f "$SHIM_STATE/failed/"*
+    else for u in "${units[@]}"; do rm -f "$SHIM_STATE/failed/$u"; done; fi ;;
 esac
 exit 0
 SH
@@ -725,6 +744,13 @@ wsl_args=(--internet always)
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
+# before A B: the first call matching A precedes the first matching B.
+before() {
+  local a b
+  a=$(grep -nF -- "$1" "$STATE/calls.log" | head -n 1 | cut -d: -f1)
+  b=$(grep -nF -- "$2" "$STATE/calls.log" | head -n 1 | cut -d: -f1)
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ] || { echo "      [$1] does not come before [$2]"; return 1; }
+}
 said() { grep -qF -- "$1" "$CASE/output.log"; }
 not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
 eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
@@ -1484,6 +1510,55 @@ case_os_jobs_opt_out_is_honoured() {
   end_case
 }
 
+# Real WSL run 2026-10-11: masking timers that were running left
+# apt-daily, apt-daily-upgrade and motd-news "failed" ("Unit to trigger
+# vanished") and the box "degraded" until the next start, after the first
+# provision and after each switch to never. os-jobs.sh stops a running
+# timer or path unit after its mask and before systemd reloads, and clears
+# the failed mark of every unit it changed (reset-failed), never by
+# stopping the shutdown helper. (A helper that stops after the reload, or
+# not at all, or never resets, fails this case.)
+case_os_jobs_never_leaves_the_box_degraded() {
+  new_case os_jobs_never_leaves_the_box_degraded
+  mkdir -p "$STATE/active" "$STATE/failed"
+  local u running=(apt-daily.timer apt-daily-upgrade.timer motd-news.timer apport-autoreport.path)
+  for u in "${running[@]}" unattended-upgrades.service snapd.snap-repair.timer snapd.socket; do touch "$STATE/active/$u"; done
+  # Failed before this run (a reload somebody else ran, say): masked now,
+  # it would stay listed failed until the next boot.
+  touch "$STATE/failed/ua-timer.timer"
+  run_prov --internet never --skip-models
+  check "never: exit 0" eq "$RC" 0
+  check "never: os-jobs done" eq "$(state_of os-jobs)" done
+  for u in "${running[@]}"; do
+    check "never: $u masked" masked "$u"
+    check "never: $u stopped" test ! -e "$STATE/active/$u"
+  done
+  check "never: no unit failed at a reload" eq "$(cat "$STATE/journal" 2>/dev/null)" ""
+  check "never: nothing left failed (not degraded)" eq "$(ls -A "$STATE/failed")" ""
+  for u in "${NEVER_UNITS[@]}"; do
+    [ "$u" = snapd.snap-repair.timer ] || check "never: $u's failed mark cleared" called "systemctl reset-failed $u"
+  done
+  check "never: WSL's units' too" called "systemctl reset-failed snapd.snap-repair.timer"
+  check "never: the shutdown helper left running" test -e "$STATE/active/unattended-upgrades.service"
+  check "never: and never stopped" not_called "systemctl stop unattended-upgrades.service"
+  # The household answers Yes in Settings later (the .env writer), then the
+  # box re-applies its configuration. An older helper left two of the
+  # timers failed: an enabled one, which starts again, and a disabled one.
+  touch "$STATE/enabled/apt-daily.timer" "$STATE/failed/apt-daily.timer" "$STATE/failed/motd-news.timer"
+  sed -i 's/^INTERNET_ACCESS=.*/INTERNET_ACCESS=always/' "$CHECKOUT/domovoi/.env"
+  run_prov --internet never --skip-models
+  check "always: exit 0" eq "$RC" 0
+  check "always: os-jobs done" eq "$(state_of os-jobs)" done
+  check "always: nothing left failed" eq "$(ls -A "$STATE/failed")" ""
+  check "always: cleared before it starts" before "systemctl reset-failed apt-daily.timer" "systemctl start apt-daily.timer"
+  check "always: the disabled one's cleared too" called "systemctl reset-failed motd-news.timer"
+  check "always: the enabled timer runs again" test -e "$STATE/active/apt-daily.timer"
+  run_prov --internet never --skip-models
+  check "again: os-jobs skipped" eq "$(state_of os-jobs)" skip
+  check "again: nothing reset" not_called "systemctl reset-failed"
+  end_case
+}
+
 case_wsl_without_systemd_stops_for_a_restart() {
   new_case wsl_without_systemd_stops_for_a_restart
   echo init >"$ROOT/proc/1/comm"
@@ -1880,6 +1955,7 @@ CASES=(
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
   case_os_jobs_opt_out_is_honoured
+  case_os_jobs_never_leaves_the_box_degraded
 )
 
 for c in "${CASES[@]}"; do

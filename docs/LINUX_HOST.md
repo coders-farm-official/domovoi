@@ -798,6 +798,12 @@ masks them (`systemctl mask`, and stops the timers):
 
 Only units that are installed and not masked already are touched, and
 each one it masks is written down in `/var/lib/domovoi-os-jobs/masked`.
+The timers are stopped before systemd reloads and every unit it changes
+has its failed mark cleared, so `systemctl --failed` stays empty and the
+box doesn't report "degraded" over it. `unattended-upgrades.service` is
+only the helper that keeps a shutdown from cutting an upgrade short:
+masked, it keeps running until the next boot, because stopping it would
+stop an upgrade already under way.
 Under **Yes, always** or **Sometimes** it unmasks exactly those (a mask you
 made yourself stays) and starts the enabled ones again, so they run as
 Ubuntu ships them. Not answered yet: left as they are. A unit file of your

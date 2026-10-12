@@ -17,11 +17,12 @@
 # What it does:
 #   never              masks the units below that are installed, are not
 #                      masked yet, and have no unit file of the
-#                      administrator's in /etc/systemd/system, then stops
-#                      them; each one is written down in
-#                      /var/lib/domovoi-os-jobs/masked BEFORE it is masked
-#                      (and crossed off again if the mask fails), so a
-#                      killed run never leaves a mask nobody wrote down
+#                      administrator's in /etc/systemd/system, and stops
+#                      the timers and the path unit among them; each one
+#                      is written down in /var/lib/domovoi-os-jobs/masked
+#                      BEFORE it is masked (and crossed off again if the
+#                      mask fails), so a killed run never leaves a mask
+#                      nobody wrote down
 #                        apt-daily.timer apt-daily-upgrade.timer
 #                        unattended-upgrades.service  (package updates)
 #                        motd-news.timer               (login news)
@@ -29,6 +30,9 @@
 #                        apport-autoreport.path apport-autoreport.timer
 #                                                      (crash reports)
 #                        snapd.snap-repair.timer       (snap repairs)
+#                      unattended-upgrades.service is only Ubuntu's
+#                      shutdown helper: masked, it is left running until
+#                      the next boot (see "never: stopped" below for why)
 #   always, sometimes  unmasks exactly the units that file names (a mask
 #                      somebody else made stays), and starts the ones that
 #                      are enabled, so a timer runs again as shipped
@@ -47,6 +51,9 @@
 # A mask is what `systemctl mask` makes, a link to /dev/null in
 # /etc/systemd/system, made by hand so it works the same before systemd
 # runs (and in the tests). systemctl is called only while systemd is PID 1.
+# Every unit a run masks, disables or unmasks then has systemd's "failed"
+# mark for it cleared (systemctl reset-failed), so the box never reports
+# "degraded" over a change made here.
 #
 # Options:
 #   --internet ANSWER   always | sometimes | never | "" (unanswered)
@@ -296,6 +303,29 @@ for u in "${WANT_MASKED[@]}"; do
   if mask_unit "$u"; then DONE_MASKED+=("$u"); echo "masked $u (internet: never)"; else NOT_MASKED+=("$u"); fi
 done
 
+# never: stopped. A timer or path unit that is masked is stopped now: after
+# its mask is made (so only what got masked is stopped) and BEFORE systemd
+# reloads, while systemd still has its unit file loaded. A reload first
+# leaves a running one masked with nothing to trigger: systemd fails it
+# ("Unit to trigger vanished"), a stop no longer clears that, and the box
+# reports "degraded" until the next boot. `systemctl mask --now` reloads
+# before it stops, so it does exactly that.
+# unattended-upgrades.service is left running. It is the shutdown helper:
+# it waits for logind's shutdown signal, never goes online meanwhile, and a
+# masked service that keeps running is not "failed". Stopping it is not
+# always safe: if an upgrade run holds the apt lock, the helper's stop
+# signals that run to stop and waits for it (up to 25 minutes, within the
+# unit's 30-minute TimeoutStopSec), which would hold this step that long;
+# a stop not waited for would still be going at the reload below, after
+# which the masked unit has systemd's default stop timeout instead:
+# SIGKILLed, "failed". It does its duty at the next shutdown, and the mask
+# keeps it from starting again at boot.
+if systemd_running; then
+  for u in "${DONE_MASKED[@]}"; do
+    case $u in *.timer|*.path) systemctl stop "$u" >/dev/null 2>&1 || true ;; esac
+  done
+fi
+
 # always / sometimes: unmask what was written down (systemctl unmask
 # removes the same link).
 for u in "${WANT_UNMASKED[@]}"; do
@@ -314,10 +344,13 @@ fi
 
 if systemd_running && [ $(( ${#DONE_WSL[@]} + ${#DONE_MASKED[@]} + ${#DONE_UNMASKED[@]} )) -gt 0 ]; then
   systemctl daemon-reload || FAILED=1
-  # A running timer keeps its schedule until it is stopped; a service
-  # (unattended-upgrades) is left to finish what it is doing.
-  for u in "${DONE_MASKED[@]}"; do
-    case $u in *.timer|*.path) systemctl stop "$u" >/dev/null 2>&1 || true ;; esac
+  # No "failed" mark left on what this run changed: one a reload somebody
+  # else ran (an apt hook, say) between a mask and its stop put there, or
+  # one an older version of this script left. Before the starts below, so
+  # a start that fails now still shows. "Not loaded" (a masked unit that is
+  # stopped) means there is nothing to clear: never a failure.
+  for u in "${DONE_WSL[@]}" "${DONE_MASKED[@]}" "${DONE_UNMASKED[@]}"; do
+    systemctl reset-failed "$u" >/dev/null 2>&1 || true
   done
   # An enabled unit that is unmasked starts now, as it would at boot.
   for u in "${DONE_UNMASKED[@]}"; do
