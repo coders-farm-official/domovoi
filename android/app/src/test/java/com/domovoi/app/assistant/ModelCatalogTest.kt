@@ -47,22 +47,21 @@ class ModelCatalogTest {
         assertEquals(ModelKind.LLM, ModelCatalog.gemma4E2b.kind)
         assertTrue(ModelCatalog.speechModels.all { it.kind == ModelKind.STT })
         assertEquals(ModelKind.VAD, ModelCatalog.sileroVad.kind)
-        assertEquals(ModelKind.TTS, ModelCatalog.piperTimingVoice.kind)
         assertTrue(ModelCatalog.all.containsAll(ModelCatalog.speechModels))
     }
 
-    /** The research-only voice may be used to measure, never shipped: it is
-     *  the only timing-only entry, and no other entry is a voice. */
-    @Test fun theTimingVoiceIsMarkedAndIsTheOnlyVoice() {
-        assertTrue(ModelCatalog.piperTimingVoice.timingOnly)
-        assertEquals(listOf(ModelCatalog.piperTimingVoice), ModelCatalog.all.filter { it.timingOnly })
-        assertEquals(listOf(ModelCatalog.piperTimingVoice), ModelCatalog.all.filter { it.kind == ModelKind.TTS })
-        ModelCatalog.all.filter { it.files.any { f -> f.url.contains("lessac", ignoreCase = true) } }
-            .forEach { assertTrue("${it.id} uses the research-only voice", it.timingOnly) }
-        assertTrue(ModelCatalog.piperTimingVoice.id.contains("timing-only"))
+    /** The phone speaks with Android's own TextToSpeech (option A,
+     *  2026-10-12): the catalog downloads no voice, nothing timing-only, and
+     *  nothing espeak-ng would read (its data is GPL-3.0). */
+    @Test fun noVoiceAndNoEspeakDataIsDownloaded() {
+        assertEquals(emptyList<CatalogModel>(), ModelCatalog.all.filter { it.kind == ModelKind.TTS })
+        assertEquals(emptyList<CatalogModel>(), ModelCatalog.all.filter { it.timingOnly })
+        ModelCatalog.all.flatMap { it.files }.forEach { f ->
+            assertFalse(f.url, Regex("espeak|piper|lessac|phontab", RegexOption.IGNORE_CASE).containsMatchIn(f.url))
+        }
     }
 
-    /** Permissive licences only, apart from the timing-only voice. */
+    /** Permissive licences only, apart from a timing-only entry. */
     @Test fun shippableModelsArePermissivelyLicensed() {
         val permissive = setOf("Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC")
         ModelCatalog.all.filterNot { it.timingOnly }.forEach {

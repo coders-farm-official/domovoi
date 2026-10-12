@@ -11,13 +11,16 @@ import java.util.jar.JarFile
 /**
  * The no-network rule, checked on the compiled classes: in the assistant's
  * code only the model downloader may touch an HTTP client or socket, and the
- * two libraries it runs on (LiteRT-LM, sherpa-onnx) reference no networking
- * class at all in their Java/Kotlin layer. Every class name, method owner
- * and type descriptor a class uses sits in its constant pool, so a class
- * that never names `okhttp3/…` or `java/net/…` there cannot call into them.
+ * libraries it runs on (LiteRT-LM; sherpa-onnx's Kotlin API, built in from
+ * android/native/sherpa-onnx; ONNX Runtime's Java API, packaged though
+ * unused) reference no networking class at all in their Java/Kotlin layer.
+ * Every class name, method owner and type descriptor a class uses sits in its
+ * constant pool, so a class that never names `okhttp3/…` or `java/net/…`
+ * there cannot call into them.
  *
- * (Their native libraries were checked by hand for M0: none imports socket,
- * connect, getaddrinfo or any other networking symbol from libc.)
+ * (Their native libraries were checked by hand, for M0 and again for the
+ * rebuilt sherpa-onnx and ONNX Runtime 1.28.0: none imports socket, connect,
+ * getaddrinfo or any other networking symbol from libc.)
  */
 class NoNetworkTest {
 
@@ -58,8 +61,9 @@ class NoNetworkTest {
     @Test fun theLibrariesJavaLayersReferenceNoNetworking() {
         val litert = classesIn("com/google/ai/edge/litertlm", com.google.ai.edge.litertlm.Engine::class.java)
         val sherpa = classesIn("com/k2fsa/sherpa/onnx", com.k2fsa.sherpa.onnx.OfflineRecognizer::class.java)
-        assertTrue(litert.size > 20 && sherpa.size > 20)
-        val offenders = (litert + sherpa).mapNotNull { (name, bytes) ->
+        val ort = classesIn("ai/onnxruntime", ai.onnxruntime.OrtEnvironment::class.java)
+        assertTrue(litert.size > 20 && sherpa.size > 20 && ort.size > 20)
+        val offenders = (litert + sherpa + ort).mapNotNull { (name, bytes) ->
             val refs = utf8Constants(bytes).filter { s -> networking.any { s.contains(it) } || s.contains("android/net/") }
             refs.takeIf { it.isNotEmpty() }?.let { "$name: $it" }
         }

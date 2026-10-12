@@ -1,27 +1,20 @@
 package com.domovoi.app.assistant
 
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
-import com.k2fsa.sherpa.onnx.OfflineTts
-import com.k2fsa.sherpa.onnx.OfflineTtsConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import com.k2fsa.sherpa.onnx.SileroVadModelConfig
 import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.io.File
 
-// sherpa-onnx (k2-fsa) engines. Every model is a downloaded file read by
-// path (no AssetManager). sherpa-onnx ends the process on a config it cannot
-// use, so each constructor checks its files exist first.
+// sherpa-onnx (k2-fsa) engines: listening only. The app's copy of
+// sherpa-onnx is built without text to speech (android/native/sherpa-onnx);
+// the phone speaks with Android's TextToSpeech (AndroidSpeechOut.kt).
+// Every model is a downloaded file read by path (no AssetManager).
+// sherpa-onnx ends the process on a config it cannot use, so each
+// constructor checks its files exist first.
 
 private fun requireFiles(vararg paths: String) {
     paths.forEach { require(File(it).isFile) { "missing model file: $it" } }
@@ -119,126 +112,5 @@ class SherpaSpeechDetector(model: String, val minSilenceS: Float = DEFAULT_MIN_S
         const val DEFAULT_MIN_SILENCE_S = 0.5f
 
         fun from(store: ModelStore) = SherpaSpeechDetector(store.path(ModelCatalog.sileroVad, "silero_vad.onnx"))
-    }
-}
-
-/**
- * Speech out with a Piper (VITS) voice through sherpa-onnx, played through
- * an AudioTrack marked as the assistant speaking. Each sentence is
- * synthesized, then streamed to the speaker; [stop] aborts synthesis and
- * silences playback at once.
- */
-class PiperSpeechOut(model: String, tokens: String, dataDir: String, threads: Int = 2) : SpeechOut {
-    private val tts: OfflineTts
-    val sampleRate: Int
-    private val track: AudioTrack
-    @Volatile private var stopped = false
-
-    init {
-        requireFiles(model, tokens, "$dataDir/phontab", "$dataDir/phonindex", "$dataDir/phondata", "$dataDir/intonations")
-        tts = OfflineTts(
-            config = OfflineTtsConfig(
-                model = OfflineTtsModelConfig(
-                    vits = OfflineTtsVitsModelConfig(model = model, tokens = tokens, dataDir = dataDir),
-                    numThreads = threads,
-                ),
-            ),
-        )
-        sampleRate = tts.sampleRate()
-        // At least a quarter second, in whole 4-byte float frames (AudioTrack
-        // refuses a size that is not a multiple of the frame size).
-        val minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
-        val bufferBytes = (maxOf(minBuffer, sampleRate) + 3) / 4 * 4
-        track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                    .build(),
-            )
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .setBufferSizeInBytes(bufferBytes)
-            .build()
-    }
-
-    /** Synthesis only, no playback (the benchmark's spoken self-test). */
-    fun synthesize(text: String): FloatArray = tts.generate(text, 0, 1f).samples
-
-    override suspend fun speak(sentence: String): SpokenSentence = withContext(Dispatchers.IO) {
-        stopped = false
-        val started = System.nanoTime()
-        val headAtStart = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-        track.play()
-        val sink = ChunkSink { chunk ->
-            if (stopped) return@ChunkSink false
-            track.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
-            !stopped
-        }
-        tts.generateWithCallback(sentence, 0, 1f, sink)
-        val firstAudio = sink.firstChunkNs
-        val frames = sink.frames
-        // Wait for the speaker to play what was written (or a stop).
-        val deadline = System.nanoTime() + ((frames * 1_000_000_000L) / sampleRate) + 1_000_000_000L
-        while (!stopped && System.nanoTime() < deadline) {
-            val played = (track.playbackHeadPosition.toLong() and 0xFFFFFFFFL) - headAtStart
-            if (played >= frames) break
-            delay(15)
-        }
-        if (!stopped) track.pause()
-        SpokenSentence(sentence, started, firstAudio, System.nanoTime(), frames.toDouble() / sampleRate)
-    }
-
-    override fun stop() {
-        stopped = true
-        runCatching {
-            track.pause()
-            track.flush()
-        }
-    }
-
-    override fun close() {
-        stop()
-        runCatching { track.release() }
-        tts.release()
-    }
-
-    companion object {
-        fun from(store: ModelStore): PiperSpeechOut {
-            val voice = ModelCatalog.piperTimingVoice
-            return PiperSpeechOut(
-                model = store.path(voice, "en_US-lessac-medium.onnx"),
-                tokens = store.path(voice, "tokens.txt"),
-                dataDir = store.path(voice, "espeak-ng-data"),
-            )
-        }
-    }
-}
-
-/**
- * The per-chunk callback sherpa-onnx's TTS calls from native code. It must
- * be a real class: the JNI side looks up `invoke([F)Ljava/lang/Integer;` on
- * the object it is handed, and a Kotlin 2 lambda (compiled through
- * invokedynamic) has only the erased `invoke(Object)`, so the lookup fails
- * and the app aborts (found on the emulator). Returns 1 to continue, 0 to
- * stop synthesis.
- */
-internal class ChunkSink(private val write: (FloatArray) -> Boolean) : (FloatArray) -> Int {
-    @Volatile var firstChunkNs: Long? = null
-        private set
-    @Volatile var frames: Long = 0
-        private set
-
-    override fun invoke(samples: FloatArray): Int {
-        if (firstChunkNs == null) firstChunkNs = System.nanoTime()
-        val keepGoing = write(samples)
-        frames += samples.size
-        return if (keepGoing) 1 else 0
     }
 }

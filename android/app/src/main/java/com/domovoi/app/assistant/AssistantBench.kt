@@ -82,7 +82,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
     private var stt: SpeechToText? = null
     private var sttId: String? = null
     private var vad: SherpaSpeechDetector? = null
-    private var tts: PiperSpeechOut? = null
+    private var tts: AndroidSpeechOut? = null
 
     val device: DeviceFacts by lazy { probe.facts() }
 
@@ -240,7 +240,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
         val sttModel = selectedStt()
         launchRun(
             if (fromMic) "voice test" else "voice self-test",
-            listOf(ModelCatalog.gemma4E2b, sttModel, ModelCatalog.sileroVad, ModelCatalog.piperTimingVoice),
+            listOf(ModelCatalog.gemma4E2b, sttModel, ModelCatalog.sileroVad),
         ) {
             traffic("before the voice test")
             val engine = ensureLlm(_state.value.backend, audio = false)
@@ -266,6 +266,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
                 onText = ::live,
             )
             record { it.copy(voiceTurns = it.voiceTurns + result) }
+            noteVoice()
             memory("after the voice test")
             traffic("voice test")
         }
@@ -273,12 +274,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
 
     /** Gemma's own audio input: the model hears the question (no recognizer). */
     fun runAudioIn(fromMic: Boolean) {
-        val needed = buildList {
-            add(ModelCatalog.gemma4E2b)
-            add(ModelCatalog.sileroVad)
-            if (!fromMic) add(ModelCatalog.piperTimingVoice)
-        }
-        launchRun("audio input experiment", needed) {
+        launchRun("audio input experiment", listOf(ModelCatalog.gemma4E2b, ModelCatalog.sileroVad)) {
             traffic("before the audio input experiment")
             val engine = ensureLlm(_state.value.backend, audio = true)
             memory("model loaded with its audio encoder")
@@ -451,13 +447,24 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
         vad ?: SherpaSpeechDetector.from(store).also { vad = it }
     }
 
-    private suspend fun ensureTts(): PiperSpeechOut = withContext(Dispatchers.IO) {
-        tts ?: PiperSpeechOut.from(store).also { tts = it }
+    /** The phone's own text-to-speech engine and voice (AndroidSpeechOut). */
+    private suspend fun ensureTts(): AndroidSpeechOut {
+        tts?.let { return it }
+        step("starting the phone's text-to-speech engine")
+        return AndroidSpeechOut.create(app).also {
+            tts = it
+            noteVoice()
+        }
+    }
+
+    /** Which engine and voice spoke, in the results. */
+    private fun noteVoice() {
+        tts?.let { voice -> record { it.copy(voice = voice.info.describe()) } }
     }
 
     /** The question: from the mic, or synthesized by the voice and fed to the
      *  detector as the mic would. */
-    private suspend fun hear(fromMic: Boolean, detector: SpeechDetector, voice: PiperSpeechOut?): Utterance? {
+    private suspend fun hear(fromMic: Boolean, detector: SpeechDetector, voice: SpeechSynthesizer?): Utterance? {
         if (fromMic) {
             step("listening: ask a question")
             _state.update { it.copy(listening = true) }
@@ -468,10 +475,10 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
             }
         }
         step("the phone is asking itself a question")
-        val spoken = withContext(Dispatchers.Default) {
-            resample(requireNotNull(voice).synthesize(SELF_TEST_QUESTION), voice.sampleRate, SPEECH_SAMPLE_RATE)
+        val said = requireNotNull(voice).synthesize(SELF_TEST_QUESTION)
+        return withContext(Dispatchers.Default) {
+            detectUtterance(resample(said.samples, said.sampleRate, SPEECH_SAMPLE_RATE), detector)
         }
-        return withContext(Dispatchers.Default) { detectUtterance(spoken, detector) }
     }
 
     private fun closeAll() {

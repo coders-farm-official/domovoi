@@ -208,11 +208,13 @@ fun AssistantBenchmarkCard() {
         }
         Text(
             "Voice test: tap, then ask a question out loud. Self-tests have the phone speak a question to " +
-                "itself instead. The heat loop keeps the model busy for ten minutes; leave the screen on.",
+                "itself instead. The heat loop keeps the model busy for ten minutes; leave the screen on. " +
+                "Answers are spoken by this phone's own text-to-speech voice.",
             style = MaterialTheme.typography.bodySmall,
             color = Domovoi.colors.fgMuted,
             modifier = Modifier.padding(top = 6.dp),
         )
+
 
         if (!idle || ui.loaded != null) {
             Spacer(Modifier.height(8.dp))

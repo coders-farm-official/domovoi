@@ -95,6 +95,8 @@ data class BenchResults(
     val voiceTurns: List<VoiceTurnResult> = emptyList(),
     val audioIn: List<AudioInResult> = emptyList(),
     val heat: HeatResult? = null,
+    /** Which engine and voice spoke (SpeechVoiceInfo.describe). */
+    val voice: String? = null,
     val memory: List<MemoryReading> = emptyList(),
     val traffic: List<TrafficReading> = emptyList(),
     val notes: List<String> = emptyList(),
@@ -181,7 +183,9 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
     appendLine("Android ${device.android} (API ${device.api}), ${device.abi}, RAM ${gb(device.totalRamBytes)}" +
         if (device.lowRamDevice) ", low-RAM device" else "")
     appendLine("app ${device.app}")
-    appendLine("models: ${ModelCatalog.gemma4E2b.name} (LiteRT-LM 0.18.0); speech by sherpa-onnx 1.13.8")
+    appendLine("models: ${ModelCatalog.gemma4E2b.name} (LiteRT-LM 0.18.0); listening: sherpa-onnx 1.13.8 " +
+        "built without text to speech, on ONNX Runtime 1.28.0; speaking: Android TextToSpeech")
+    results.voice?.let { appendLine("voice: $it") }
 
     if (results.loads.isNotEmpty()) {
         appendLine()
@@ -220,7 +224,7 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
             appendLine("  ${i + 1}. ${v.source}, ${v.sttModel}: end of speech to first word ${ms(v.toFirstAudioMs)} " +
                 "(${ms(withWait)} counting the ${v.endOfSpeechWaitMs} ms silence wait)")
             appendLine("     speech to text ${ms(v.sttMs)} for ${f1(v.utteranceS)} s of audio; model first text " +
-                "${ms(v.llmFirstTextMs)}; first sentence ${ms(v.firstSentenceMs)}; voice first audio ${ms(v.ttsFirstAudioMs)}")
+                "${ms(v.llmFirstTextMs)}; first sentence ${ms(v.firstSentenceMs)}; voice to its first word ${ms(v.ttsFirstAudioMs)}")
             appendLine("     heard: ${clip(v.transcript, 100)}")
             appendLine("     said: ${clip(v.reply)}")
         }

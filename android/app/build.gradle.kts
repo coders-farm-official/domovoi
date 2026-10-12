@@ -39,12 +39,18 @@ android {
     buildFeatures {
         compose = true
     }
+    // Speech recognition and voice detection: sherpa-onnx's JNI library,
+    // built from source WITHOUT its text to speech (espeak-ng, GPL-3.0) by
+    // android/native/sherpa-onnx/build.sh, with the Kotlin API it binds to
+    // from the same commit. Its one native dependency, libonnxruntime.so,
+    // comes from the onnxruntime-android dependency below.
+    sourceSets["main"].jniLibs.srcDir("../native/sherpa-onnx/jniLibs")
+    sourceSets["main"].java.srcDir("../native/sherpa-onnx/kotlin")
     packaging {
         jniLibs {
-            // sherpa-onnx's C and C++ API libraries are for native callers;
-            // the Kotlin API loads libsherpa-onnx-jni.so, which needs
-            // neither (its only sherpa dependency is libonnxruntime.so).
-            excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
+            // ONNX Runtime's own Java API is not used (sherpa-onnx calls the
+            // runtime from native code), so its JNI bridge stays out.
+            excludes += listOf("**/libonnxruntime4j_jni.so")
         }
     }
     testOptions {
@@ -85,13 +91,11 @@ dependencies {
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.media3.ui)
     implementation(libs.coil.video)
-    // On-device assistant: LiteRT-LM runs the language model, sherpa-onnx
-    // the speech (recognition, voice detection, synthesis). The sherpa-onnx
-    // AAR comes from its GitHub release (settings.gradle.kts).
+    // On-device assistant: LiteRT-LM runs the language model; sherpa-onnx
+    // (android/native/sherpa-onnx, above) listens, on ONNX Runtime; the
+    // phone's own TextToSpeech speaks.
     implementation(libs.litertlm.android)
-    implementation(libs.sherpa.onnx) {
-        artifact { type = "aar"; extension = "aar" }
-    }
+    implementation(libs.onnxruntime.android)
     // The model download runs as a WorkManager job, so it survives leaving
     // the app, an app restart and a dropped Wi-Fi connection.
     implementation(libs.androidx.work.runtime.ktx)

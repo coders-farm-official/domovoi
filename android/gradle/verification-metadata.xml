@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Gradle dependency verification, scoped to the on-device assistant's two
-  native libraries: Gradle refuses the build if either artifact's SHA-256
-  differs from the one recorded here. Every other dependency is trusted as
-  before (the regex below excludes only these two groups), so this file
-  changes nothing else about the build.
+  Gradle dependency verification, scoped to the on-device assistant's
+  native libraries from Maven: Gradle refuses the build if an artifact's
+  SHA-256 differs from the one recorded here. Every other dependency is
+  trusted as before (the regex below excludes only these groups), so this
+  file changes nothing else about the build.
 
   Recorded 2026-10-12 from the artifacts as downloaded:
   - LiteRT-LM 0.18.0 from Google Maven (dl.google.com/android/maven2).
-  - sherpa-onnx 1.13.8 from github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8;
-    the hash matches the digest GitHub lists for that release asset.
+  - ONNX Runtime 1.28.0 (the official onnxruntime-android package, MIT)
+    from Maven Central; the SHA-1s match the .sha1 files Maven Central
+    publishes beside them. android/native/sherpa-onnx/ builds the speech
+    library against this same AAR (same SHA-256).
+  sherpa-onnx itself is not a Maven dependency: its JNI library is built
+  from source, with text to speech left out, by android/native/sherpa-onnx/.
   A version bump updates the version in gradle/libs.versions.toml AND the
   hashes here, taken from the new artifacts.
 -->
@@ -20,7 +24,7 @@
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
       <trusted-artifacts>
-         <trust group="^(?!com[.]google[.]ai[.]edge[.]litertlm$|com[.]k2fsa[.]sherpa[.]onnx$).*$" regex="true"
+         <trust group="^(?!com[.]google[.]ai[.]edge[.]litertlm$|com[.]microsoft[.]onnxruntime$).*$" regex="true"
                 reason="Only the on-device assistant's native libraries are pinned by hash."/>
       </trusted-artifacts>
    </configuration>
@@ -33,9 +37,12 @@
             <sha256 value="3c631cd8e04fe4289818d41675c0f6b1f26a7a37db63606699a51e2c95695a54" origin="Google Maven, 2026-10-12"/>
          </artifact>
       </component>
-      <component group="com.k2fsa.sherpa.onnx" name="sherpa-onnx" version="1.13.8">
-         <artifact name="sherpa-onnx-1.13.8.aar">
-            <sha256 value="633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96" origin="GitHub release v1.13.8, 2026-10-12"/>
+      <component group="com.microsoft.onnxruntime" name="onnxruntime-android" version="1.28.0">
+         <artifact name="onnxruntime-android-1.28.0.aar">
+            <sha256 value="f351a0638696f54b35184290dbc001d66daae17281ad0b548d2c70347d53b8a9" origin="Maven Central, 2026-10-12"/>
+         </artifact>
+         <artifact name="onnxruntime-android-1.28.0.pom">
+            <sha256 value="0e575ec392a5ab9220924db266214459ae8912fec2427cf826c650b70f6a2947" origin="Maven Central, 2026-10-12"/>
          </artifact>
       </component>
    </components>

@@ -42,8 +42,9 @@ data class CatalogModel(
  * taken from the Hugging Face API (LFS files) or the downloaded file
  * (small files) on 2026-10-12.
  *
- * M0 (benchmark) catalog. The voice here is for timing only — see
- * [piperTimingVoice]; the product voice is a separate decision.
+ * M0 (benchmark) catalog. It has no voice: the phone speaks with Android's
+ * own TextToSpeech (AndroidSpeechOut), and a downloadable voice, if one is
+ * chosen later, would be a [ModelKind.TTS] entry here.
  */
 object ModelCatalog {
     private const val GEMMA_REV = "b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1"
@@ -121,47 +122,7 @@ object ModelCatalog {
         licenseUrl = "https://github.com/snakers4/silero-vad/blob/master/LICENSE",
     )
 
-    private const val PIPER_REV = "83f7470750b36549037551ef7007fa3b4b8697e0"
-    private const val PIPER = "https://huggingface.co/csukuangfj/vits-piper-en_US-lessac-medium/resolve/$PIPER_REV"
-
-    /**
-     * A medium Piper voice, for TIMING ONLY. Its training data (Blizzard
-     * 2013, Lessac) is licensed for research, not commercial use, so the app
-     * must never ship with it; a separate task picks a permissively licensed
-     * voice. The espeak-ng data it phonemizes with is GPL-3.0-or-later.
-     * Only the English espeak-ng files are fetched.
-     */
-    val piperTimingVoice = CatalogModel(
-        id = "piper-timing-only-lessac-medium",
-        name = "Piper medium voice (timing only)",
-        kind = ModelKind.TTS,
-        files = listOf(
-            ModelFile("en_US-lessac-medium.onnx", "$PIPER/en_US-lessac-medium.onnx", 63_201_425,
-                "ea793a648ce0370665f99fbf891eae3b3a973565c72b08534bb5b2c04e8f2332"),
-            ModelFile("tokens.txt", "$PIPER/tokens.txt", 921,
-                "87c8ef66eae5473ed0cc0366b3964c736ca6c5f676c979522ea31234e47430b9"),
-            ModelFile("espeak-ng-data/phontab", "$PIPER/espeak-ng-data/phontab", 55_796,
-                "886f3fa402cb0ba73d483aa8ad000af47a6b7cc06293c75a97913fba68a530f6"),
-            ModelFile("espeak-ng-data/phonindex", "$PIPER/espeak-ng-data/phonindex", 39_074,
-                "3ca7b8fa3b42624e4b0f152707e7a39245fce569aa99ea47c055d9e622fcf0c4"),
-            ModelFile("espeak-ng-data/phondata", "$PIPER/espeak-ng-data/phondata", 550_424,
-                "4e0288957874029a8c3c9f41a8f517ad4bf18127046decbdd4b9d1d6807ce3a3"),
-            ModelFile("espeak-ng-data/intonations", "$PIPER/espeak-ng-data/intonations", 2_040,
-                "3f8af65fd3eda9759a10f021d61361c120871f463515229c925995c7f90918cc"),
-            ModelFile("espeak-ng-data/en_dict", "$PIPER/espeak-ng-data/en_dict", 166_944,
-                "71bd330ba8a2e3e8076e631508208ef49449d6147c17b7bd2b4b1e1468292e35"),
-            ModelFile("espeak-ng-data/lang/gmw/en", "$PIPER/espeak-ng-data/lang/gmw/en", 140,
-                "4605d5330801de3641c6e366d15f129ea1f5ffbce8722642aba01ace07ab9c83"),
-            ModelFile("espeak-ng-data/lang/gmw/en-US", "$PIPER/espeak-ng-data/lang/gmw/en-US", 257,
-                "41534c2a22df5dd4f1052ff9e1a33a3ea7bff5a26b5c02bdad5ba8ddb7524704"),
-        ),
-        license = "voice: research-only data (Blizzard 2013); espeak-ng data: GPL-3.0-or-later",
-        licenseUrl = "https://www.cstr.ed.ac.uk/projects/blizzard/2013/lessac_blizzard2013/license.html",
-        timingOnly = true,
-        note = "timing only, never shipped",
-    )
-
     val speechModels: List<CatalogModel> = listOf(moonshineTinyEn, moonshineBaseEn)
 
-    val all: List<CatalogModel> = listOf(gemma4E2b, moonshineTinyEn, moonshineBaseEn, sileroVad, piperTimingVoice)
+    val all: List<CatalogModel> = listOf(gemma4E2b, moonshineTinyEn, moonshineBaseEn, sileroVad)
 }
