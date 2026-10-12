@@ -1672,7 +1672,7 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
           <input value={msg} onChange={e => setMsg(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') send(); }}
                  placeholder="dinner's ready" disabled={onlineCount === 0}
-                 style={{ flex: 1, font: 'inherit', fontSize: 14, height: 38, padding: '0 12px',
+                 style={{ flex: 1, minWidth: 0, font: 'inherit', fontSize: 14, height: 38, padding: '0 12px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
           <Button variant="primary" icon="megaphone" disabled={!msg.trim() || onlineCount === 0} onClick={send}>
