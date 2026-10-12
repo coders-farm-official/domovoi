@@ -4,6 +4,26 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Chat mic fixes: "Hey Domovoi, …" and "what's playing"
+
+A server update and a new Android build.
+
+* **Saying "Hey Domovoi" into the phone's mic no longer hides the
+  request.** A satellite's transcript starts after its wake word; the
+  phone's held it ("Hey Domovoit, play Suicide Boys."), which no command
+  matched, so the turn went to the language model with the name buried
+  in it, and a random song played. The server now takes a leading wake
+  phrase off before routing, however speech-to-text spells the name;
+  the chat keeps what was said. (Server.)
+* **"What's playing" from the phone answered that the playing song was
+  paused** — the mic pauses the phone's music while you hold the button,
+  and the turn reported it then. It now reports the player as it was
+  when you pressed. (App.)
+* Not a bug: when a request picks one song, that song is the phone's
+  whole queue, so the mini player shows its play button once the song
+  ends. Music playing before a turn pauses while you hold the button,
+  comes back when you let go, and dips under the spoken reply.
+
 ## 2026-10-12 — Android: an on-device assistant benchmark, and a bigger app
 
 New Android build only; nothing changes on the server.
