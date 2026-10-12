@@ -2055,7 +2055,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
   const body = (
     <>
       {approvals.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">waiting for approval</div>
           {approvals.map(a => (
             <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
@@ -2069,7 +2069,7 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       )}
 
       {pending.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">plugged in — ready to adopt</div>
           {pending.map(p => (
             <PendingSatCard key={p.pending_id} p={p}

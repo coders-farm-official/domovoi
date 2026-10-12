@@ -266,7 +266,7 @@ const PrepareMediaCard = ({ fire }) => {
   };
 
   return (
-    <div style={{ marginTop: 16, background: 'var(--card)', border: '1px solid var(--border)',
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)',
                   borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
       <button onClick={() => setOpen(o => !o)}
               style={{ font: 'inherit', width: '100%', textAlign: 'left', cursor: 'pointer',

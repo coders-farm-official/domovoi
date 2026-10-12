@@ -1495,8 +1495,12 @@ a.home-att-row:hover { background: var(--brand-soft); }
 }
 
 /* Settings → Satellites (satellites.jsx SatellitesPanel): the roster's
-   counts, where the old Satellites page had them in its header. */
-.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 14px 0; }
+   counts, where the old Satellites page had them in its header. The panel
+   is one child of the Settings `.page`, so it stacks its own sections
+   (approvals, the cards, Broadcast, satellite media) with the page's gap:
+   without it they sat flush against each other (2026-10-12). */
+.sat-panel { display: flex; flex-direction: column; gap: 20px; }
+.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 0; }
 /* Settings → Phone bar (settings.jsx PhoneBarCard). */
 @media (max-width: 760px) {
   .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
