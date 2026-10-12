@@ -99,6 +99,11 @@ python -m web.backend.main           # web dashboard on :6369 (separate process)
 # Tests (conftest forces USE_STUBS=true and refuses non-_test DB)
 pytest
 pytest domovoi/tests/test_router.py
+pytest -n 4                          # parallel: one DB copy per worker; bash_harness tests deselected
+scripts/dev/run-linux-harness.sh all # the bash harnesses, in a pinned Linux container (Docker)
+scripts/dev/run-linux-harness.sh apply-update --case 'searxng_*'   # only some cases (--list names them)
+# Failures are labelled NEW or known (domovoi/tests/known_failures.toml).
+# Details: docs/CONTRIBUTING.md, "Running the tests".
 
 # Plugin dev loop (console script from pyproject: domovoi = plugins_runtime CLI)
 domovoi plugin new <slug>            # scaffold manifest + package + tests
