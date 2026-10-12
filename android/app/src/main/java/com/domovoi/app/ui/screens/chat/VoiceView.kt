@@ -166,6 +166,8 @@ internal class VoiceController(
             note = "still answering the last one"
             return false
         }
+        // Already listening (a second finger): the first press owns the turn.
+        if (phase == TalkPhase.Recording || phase == TalkPhase.CancelArmed) return false
         val interrupted = phase == TalkPhase.Speaking
         if (interrupted) player.stop()
         val r = HoldToTalkRecorder()
