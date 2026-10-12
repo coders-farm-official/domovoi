@@ -23,7 +23,7 @@ internal val MANUAL_NODES = listOf(
     ManualNode("▚", "core", "the brain — routes every request", "fastapi :6370 · handlers · plugin runtime", live = true),
     ManualNode("◟", "whisper", "turns your speech into text", "faster-whisper · cuda"),
     ManualNode("◍", "ollama", "understands & answers", "llama3.2 · qwen2.5"),
-    ManualNode("◠", "tts", "gives Domovoi its voice", "edge → piper → system"),
+    ManualNode("◠", "tts", "gives Domovoi its voice", "piper on onnx runtime → system"),
     ManualNode("▤", "postgres", "remembers everything", "postgres 16 · migrations"),
     ManualNode("♪", "mpd", "plays music, per room", "one container / room"),
     ManualNode("⚙", "workers", "background jobs", "timers · library upkeep · plugin workers"),
@@ -51,7 +51,7 @@ internal val MANUAL_TECH = listOf(
     TechRow("core", "FastAPI · Python 3.11+ · native on Windows for CUDA · intent router → handlers → TTS · background workers · in-process plugin runtime"),
     TechRow("whisper", "faster-whisper large-v3 on CUDA (float16), via CTranslate2"),
     TechRow("ollama", "llama3.2:3b answers questions · qwen2.5:14b routes tool calls (stronger schema adherence)"),
-    TechRow("tts", "engine chain: edge-tts (cloud neural) → Piper (local) → system voice · voices configurable per satellite"),
+    TechRow("tts", "Domovoi's own text-to-phoneme converter → a Piper voice on ONNX Runtime (Norman, Kristin or Linda, public domain) → the system voice as the floor · Edge neural voices only when picked, never a fallback · voices configurable per satellite · this phone can speak with the same voice"),
     TechRow("postgres", "PostgreSQL 16 (the only Dockerized piece) · migration-only schema · LISTEN/NOTIFY live state bus"),
     TechRow("mpd", "Music Player Daemon — one lazily-spawned container per room"),
     TechRow("workers", "timer watcher, library index/enrich, memory extractor, and more — plugins register their own alongside"),
@@ -92,7 +92,15 @@ internal val MANUAL_FAQ = listOf(
     ),
     FaqRow(
         "Can I add my own voice?",
-        "Upload a Piper .onnx model for a fully-local voice, or register a Microsoft Edge neural voice — on the web dashboard, Settings → Voices.",
+        "Pick one of the three public-domain voices, upload a Piper .onnx trained on British-English (\"en\") phonemes, or register a Microsoft Edge neural voice — on the web dashboard, Settings → Voices.",
+    ),
+    FaqRow(
+        "It says a name wrong. Can I fix it?",
+        "Yes: on the web dashboard, Settings → Voices → Say it like. Type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN), and press play to hear it first. This phone uses the same list.",
+    ),
+    FaqRow(
+        "Can this phone sound like Domovoi?",
+        "Yes: Settings → Voice here — \"Same as the server\" (the default) or one of the three voices. The one in use downloads once (about 64 MB) and then speaks offline; until it has, the phone's own text-to-speech voice speaks.",
     ),
     FaqRow(
         "Why two different LLMs?",
@@ -175,11 +183,13 @@ internal val MANUAL_HOWTO = listOf(
     HowtoRow(
         "text-to-speech",
         listOf(
-            "Pick or upload a voice on the web dashboard under Settings → Voices and set a default.",
-            "Register an Edge cloud voice by id, or upload a local Piper .onnx.",
+            "Pick Domovoi's voice (Norman, Kristin or Linda) on the web dashboard under Settings → Voices.",
+            "A word said wrong? Add it under \"Say it like\" there: Siobhan = shiv-AWN.",
+            "Register an Edge cloud voice by id, or upload a local Piper .onnx trained on British-English (\"en\") phonemes.",
+            "This phone's voice: Settings → Voice here.",
         ),
         listOf(
-            "No voice? Play a sample — the engine falls back edge → piper → system.",
+            "No voice? Play a sample — a missing or broken Piper voice falls back to the system voice.",
             "Wrong voice? Confirm the intended one is set as default.",
         ),
     ),
