@@ -582,6 +582,22 @@ const fmtDur = (sec) => {
   return `${m}:${s.toString().padStart(2,'0')}`;
 };
 
+/* Spare-device satellites (S0, 2026-10-12). `s.supports` is what a
+ * connected device declared it can do (domovoi/satellite_abilities.py);
+ * null means it sent no list — every Pi — and then everything is offered,
+ * exactly as before. Shared here because the Satellites tab and the Wake
+ * words tab both ask. */
+const satCan = (s, ability) => !s || !Array.isArray(s.supports) || s.supports.includes(ability);
+const SAT_BOARD_LABELS = { linux_pc: 'Linux PC', android_room: 'Android room' };
+/* The board badge: the spare-device kinds by name, any other board only
+ * when the device declared a list. A Pi (adopted board, no list) gets
+ * none, as before. */
+const satBoardLabel = (s) => {
+  if (!s || !s.board) return null;
+  if (SAT_BOARD_LABELS[s.board]) return SAT_BOARD_LABELS[s.board];
+  return Array.isArray(s.supports) ? s.board : null;
+};
+
 /* ---- Toast (page-level helper) ----------------------------- */
 /*
  * Stacked: every fire() gets its OWN toast box with its OWN removal
@@ -2812,6 +2828,7 @@ Object.assign(window, {
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
   SETTINGS_TAB_ROUTES, settingsTabRoute,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
+  satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn,
   TimerFireAlerts,

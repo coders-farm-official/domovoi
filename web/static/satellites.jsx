@@ -78,6 +78,11 @@ const SatCard = ({ s, onOpen, tick }) => {
                       color: online ? 'var(--fg)' : 'var(--fg-muted)' }}>
           {s.room_id}
         </div>
+        {satBoardLabel(s) && (
+          <span className="sat-board-badge" title={`board: ${s.board}`}>
+            <Icon name={s.board === 'android_room' ? 'smartphone' : 'laptop'} size={12}/> {satBoardLabel(s)}
+          </span>
+        )}
         {s.sat_type === 'video' && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
                          fontSize: 11, color: 'var(--fg-muted)', background: 'var(--sunken)',
@@ -321,6 +326,8 @@ const SatHealthCard = ({ room, online }) => {
         <div className="label">health</div>
         {s && <Pill tone={satHealthAgeTone(ageSec)}>{ageSec == null ? 'sample' : ageSec < 90 ? 'live' : `last sample ${relTime(latest.received_at)}`}</Pill>}
         {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
+        {s && s.mic_blocked === true &&
+          <Pill tone="err" title="the device's microphone is switched off in its own settings (a phone's mic privacy toggle): it hears only silence">mic blocked</Pill>}
         {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
         {s && s.throttled_flags && s.throttled_flags.length > throttle.length && throttle.length === 0 &&
           <Pill tone="warn" title={s.throttled_flags.join(', ')}>throttled earlier this boot</Pill>}
@@ -357,6 +364,11 @@ const SatHealthCard = ({ room, online }) => {
           <SatHealthStat label="handles" value={s.fds == null ? '—' : `${s.fds} fds`}
                          sub={`${s.threads == null ? '—' : s.threads} threads · ${s.mem_avail_kb == null ? '—' : satHealthMb(s.mem_avail_kb)} free`}
                          tone={s.fds == null ? 'idle' : s.fds > 400 ? 'warn' : 'ok'}/>
+          {s.battery && (
+            <SatHealthStat label="battery" value={s.battery.percent == null ? '—' : `${s.battery.percent.toFixed(0)}%`}
+                           sub={s.battery.charging ? 'charging' : s.battery.on_power ? 'on power' : s.battery.on_power === false ? 'on battery' : 'power unknown'}
+                           tone={s.battery.percent == null ? 'idle' : (s.battery.on_power === false && s.battery.percent < 20) ? 'err' : s.battery.on_power === false ? 'warn' : 'ok'}/>
+          )}
         </div>
       )}
       {s && (
@@ -662,6 +674,11 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   // known-equal version disables it. Without the bootstrap case, a hand-updated
   // Pi (which reports no version yet) could never trigger its first UI upgrade.
   const upToDate = !!(coreSha && s.version && s.version === coreSha);
+  // What this device declared (S0). A Pi sends no list: all true, as before.
+  const canRestart = satCan(s, 'restart');
+  const canUpgrade = satCan(s, 'code_sync');
+  const canAnnounce = satCan(s, 'announce_after_session_end');
+  const notOffered = satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device';
 
   const sendAnnounce = async () => {
     if (!msg.trim()) {
@@ -844,6 +861,14 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             <div className="mono" style={{ color: 'var(--fg-muted)' }}>{s.hardware}</div>
           </>
         )}
+        {satBoardLabel(s) && (
+          <>
+            <div className="label">board</div>
+            <div className="mono" style={{ color: 'var(--fg-muted)' }}>
+              {satBoardLabel(s)}{satBoardLabel(s) !== s.board ? ` · ${s.board}` : ''}
+            </div>
+          </>
+        )}
         <div className="label">voice</div>
         <div className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || 'registry default'}</div>
         <div className="label">version</div>
@@ -893,19 +918,22 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
 
       <VolumeControl s={s} fire={fire}/>
 
-      {s.sat_type === 'video' && <VideoControls s={s} fire={fire}/>}
+      {s.sat_type === 'video' && satCan(s, 'display') && <VideoControls s={s} fire={fire}/>}
 
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>announce to {s.room_id}</div>
+        {!canAnnounce && (
+          <div className="mono sat-not-offered">{notOffered} doesn't take announcements — timers and reminders aren't spoken there</div>
+        )}
         <div style={{ display: 'flex', gap: 8 }}>
           <input value={msg} onChange={e => setMsg(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') sendAnnounce(); }}
                  placeholder={`speak through the ${s.room_id} satellite…`}
-                 disabled={s.status !== 'online'}
+                 disabled={s.status !== 'online' || !canAnnounce}
                  style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
-          <Button variant="primary" icon="send" disabled={!msg.trim() || s.status !== 'online'} onClick={sendAnnounce}>
+          <Button variant="primary" icon="send" disabled={!msg.trim() || s.status !== 'online' || !canAnnounce} onClick={sendAnnounce}>
             send
           </Button>
         </div>
@@ -953,14 +981,14 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
           maintenance
-          {needsUpgrade && <Pill tone="warn">needs upgrade</Pill>}
+          {needsUpgrade && canUpgrade && <Pill tone="warn">needs upgrade</Pill>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button icon="refresh-cw" disabled={s.status !== 'online'} onClick={restartSat}>
+          <Button icon="refresh-cw" disabled={s.status !== 'online' || !canRestart} onClick={restartSat}>
             Restart satellite
           </Button>
-          <Button variant={needsUpgrade ? 'primary' : 'secondary'} icon="download-cloud"
-                  disabled={s.status !== 'online' || upToDate} onClick={upgradeSat}>
+          <Button variant={needsUpgrade && canUpgrade ? 'primary' : 'secondary'} icon="download-cloud"
+                  disabled={s.status !== 'online' || upToDate || !canUpgrade} onClick={upgradeSat}>
             Upgrade satellite
           </Button>
           <Button icon="shield-off" disabled={!(s.pairing && s.pairing.paired)} onClick={resetPairing}>
@@ -1010,9 +1038,15 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             </Button>
           )}
         </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
-          restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
-        </div>
+        {canRestart && canUpgrade ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+            restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
+          </div>
+        ) : (
+          <div className="mono sat-not-offered" style={{ marginTop: 6 }}>
+            {notOffered} {!canRestart && !canUpgrade ? 'restarts and updates itself' : !canRestart ? 'restarts itself' : 'updates itself'} — it didn't offer {[!canRestart && 'restart', !canUpgrade && 'code sync'].filter(Boolean).join(' or ')} · reset pairing lets a new device re-pair as this room
+          </div>
+        )}
       </div>
     </>
   );
@@ -1454,6 +1488,9 @@ const RoomLogsBody = ({ room, online }) => {
   const live = data && (data.live !== undefined ? data.live : { text: data.text, bytes: data.bytes,
                                                                 buffered_bytes: data.buffered_bytes, truncated: data.truncated });
   const retained = data && data.retained;
+  // A connected device that declared no live log (S0) answers like an
+  // offline one, with `live_supported: false`.
+  const liveOffered = !(data && data.live_supported === false);
   const showRetained = view === 'retained' && !!retained;
   const text = showRetained ? (retained.text || '') : ((live && live.text) || '');
   const preStyle = {
@@ -1471,7 +1508,7 @@ const RoomLogsBody = ({ room, online }) => {
         <Button icon="rotate-cw" onClick={load}>Refresh</Button>
         <Tabs padX={0} value={showRetained ? 'retained' : 'live'} onChange={setView} tabs={[
           { id: 'retained', label: `retained on the server${retained ? ` · ${fmtBytes(retained.bytes)}` : ' · none'}` },
-          { id: 'live', label: `live ring${live ? ` · ${fmtBytes(live.bytes)}` : online ? '' : ' · offline'}` },
+          { id: 'live', label: `live ring${live ? ` · ${fmtBytes(live.bytes)}` : liveOffered ? (online ? '' : ' · offline') : ' · not offered'}` },
         ]}/>
         {showRetained && retained.truncated &&
           <Pill tone="idle">last {fmtBytes(retained.bytes)} of {fmtBytes(retained.file_bytes)} on disk</Pill>}
@@ -1483,7 +1520,10 @@ const RoomLogsBody = ({ room, online }) => {
             : 'in memory on the Pi · lost on restart'}
         </span>
       </div>
-      {!showRetained && !live
+      {!showRetained && !live && !liveOffered
+        ? <Empty glyph="sleeping" title="this device doesn't offer a live log"
+                 sub="it didn't declare one in its hello — the retained log is what it pushed"/>
+      : !showRetained && !live
         ? <Empty glyph="sleeping" title="the live ring needs the satellite online"
                  sub={retained ? 'the retained log above is what it pushed before it went offline' : 'the buffer lives in its own process'}/>
         : text === ''
@@ -1542,7 +1582,10 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
-          {tab === 'settings'      && <RoomSettingsBody room={s.room_id} fire={fire}/>}
+          {tab === 'settings'      && (satCan(s, 'config')
+            ? <RoomSettingsBody room={s.room_id} fire={fire}/>
+            : <Empty glyph="sleeping" title="settings stay on the device"
+                     sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
         </div>
       </aside>
     </>
@@ -1867,7 +1910,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontWeight: 600 }}>{a.room_id}</div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            {a.board || 'unknown board'}
+            {(a.board && (SAT_BOARD_LABELS[a.board] || a.board)) || 'unknown board'}
             {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
             {' · '}{a.sat_type || 'voice'}
             {/* How many times the DEVICE has re-announced itself, which is
