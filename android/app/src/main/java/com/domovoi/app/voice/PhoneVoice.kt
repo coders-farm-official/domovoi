@@ -3,9 +3,10 @@ package com.domovoi.app.voice
 import android.content.Context
 import android.util.Log
 import androidx.work.WorkInfo
-import com.domovoi.app.assistant.AndroidSpeechOut
 import com.domovoi.app.assistant.AudioTrackSink
 import com.domovoi.app.assistant.CatalogModel
+import com.domovoi.app.assistant.ClipPlayer
+import com.domovoi.app.assistant.ExoClipPlayer
 import com.domovoi.app.assistant.DownloadProgress
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.ModelDownloads
@@ -14,6 +15,8 @@ import com.domovoi.app.assistant.PhoneSpeech
 import com.domovoi.app.assistant.PiperConfig
 import com.domovoi.app.assistant.PiperSpeechOut
 import com.domovoi.app.assistant.PiperVoice
+import com.domovoi.app.assistant.SampleSource
+import com.domovoi.app.assistant.VoiceClips
 import com.domovoi.app.assistant.VoiceSamples
 import com.domovoi.app.assistant.VoiceSource
 import com.domovoi.app.assistant.describeDownload
@@ -155,8 +158,13 @@ data class PhoneVoiceUi(
     val pronunciationError: String? = null,
     /** A sample is playing. */
     val sampling: Boolean = false,
+    /** The voices with a built-in sample clip in the app (VoiceClips). */
+    val clips: Set<String> = emptySet(),
 ) {
     val effectiveInstalled: Boolean get() = effective in installed
+
+    /** What "play a sample" plays for the voice in use; null: no button. */
+    val effectiveSample: SampleSource? get() = SampleSource.of(effectiveInstalled, effective in clips)
 }
 
 /**
@@ -175,6 +183,8 @@ class PhoneVoice(
     private val prefs: Prefs,
 ) : VoiceSource {
     private val app = context.applicationContext
+    /** Plays the built-in sample clips (Media3, built on first use). */
+    private val clipPlayer: ClipPlayer by lazy { ExoClipPlayer(app) }
     /** Built off the main thread on first use (filesDir reads the disk). */
     private val store by lazy { ModelStore.forApp(app) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -210,6 +220,7 @@ class PhoneVoice(
             val info = cachedInfo()
             val choice = prefs.voiceChoice.value
             val installed = ModelCatalog.voices.filter { store.isInstalled(it) }.map { it.id }.toSet()
+            val clips = VoiceClips.voicesIn(runCatching { app.assets.list(VoiceClips.DIR) }.getOrNull())
             _state.update {
                 it.copy(
                     choice = choice,
@@ -217,6 +228,7 @@ class PhoneVoice(
                     serverInfoCached = info != null,
                     effective = PhoneVoiceChoice.effective(choice, info?.server_voice).id,
                     installed = installed,
+                    clips = clips,
                 )
             }
             phonemizer?.let { usePronunciations(it, info) }
@@ -323,19 +335,30 @@ class PhoneVoice(
             }
         }
 
-    /** Speaks a sample line with the voice in use (Android's own voice
-     *  until the Domovoi voice is downloaded). Again: stops it. */
+    /** Plays a sample of the voice in use: the sample line in it once it
+     *  is downloaded, its built-in clip until then, never another voice
+     *  (Android's own voice once answered here, so all three sounded the
+     *  same). No sample to play: nothing happens (the card shows no button
+     *  then). Again: stops it. */
     fun playSample() {
         if (_state.value.sampling) {
             stopSample()
             return
         }
+        val ui = _state.value
+        val source = ui.effectiveSample ?: return
         _state.update { it.copy(sampling = true) }
         sampleJob = scope.launch {
             try {
-                val out = open() ?: AndroidSpeechOut.create(app)
-                sample = out
-                out.speak(SAMPLE_LINE)
+                val out = if (source == SampleSource.VOICE) open() else null
+                if (out != null) {
+                    sample = out
+                    out.speak(SAMPLE_LINE)
+                } else if (ui.effective in ui.clips) {
+                    clipPlayer.play(VoiceClips.assetPath(ui.effective))
+                } else {
+                    _messages.tryEmit("the voice can't play a sample right now")
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {

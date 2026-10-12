@@ -62,6 +62,10 @@ android {
             test.systemProperty("domovoi.phonemizer.dir", phonemizer.absolutePath)
             test.inputs.file(File(phonemizer, "golden.json")).withPathSensitivity(PathSensitivity.RELATIVE)
             test.inputs.dir(File(phonemizer, "data")).withPathSensitivity(PathSensitivity.RELATIVE)
+            // The built-in sample clips the app ships (VoiceClipsTest).
+            val clips = rootProject.file("../domovoi/voice_clips")
+            test.systemProperty("domovoi.voice_clips.dir", clips.absolutePath)
+            test.inputs.dir(clips).withPathSensitivity(PathSensitivity.RELATIVE)
             // GET /api/voice as the server serves it (docs/uml/voice-api-fixture.json),
             // read by voice/VoiceApiContractTest.kt.
             val voiceApi = rootProject.file("../docs/uml/voice-api-fixture.json")
@@ -79,6 +83,9 @@ android {
  *   (CMUdict and its licence, the corrections, weak forms, the default
  *   "say it like" list, the voices' id map, the out-of-dictionary model),
  *   each checked against that hash first; a mismatch fails the build.
+ * - `voice_clips/`: the shipped voices' built-in sample clips
+ *   (`domovoi/voice_clips/`, what "play a sample" plays before a voice is
+ *   downloaded), checked against their SHA256SUMS the same way.
  * - `licences/sherpa-onnx/`: sherpa-onnx's licence and those of everything
  *   compiled into it (android/native/sherpa-onnx/), for the licences card.
  */
@@ -86,6 +93,10 @@ abstract class VoiceAssetsTask : DefaultTask() {
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val phonemizerData: DirectoryProperty
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val voiceClips: DirectoryProperty
 
     @get:InputFile
     @get:PathSensitive(PathSensitivity.RELATIVE)
@@ -98,12 +109,9 @@ abstract class VoiceAssetsTask : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
-    @TaskAction
-    fun copy() {
-        val src = phonemizerData.get().asFile
-        val out = outputDir.get().asFile
-        out.deleteRecursively()
-        val phonemizer = File(out, "phonemizer").apply { mkdirs() }
+    /** Every file [src]/SHA256SUMS lists, hash-checked, into [dest]. */
+    private fun copyListed(src: File, dest: File, what: String) {
+        dest.mkdirs()
         val sums = File(src, "SHA256SUMS")
         val listed = sums.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
         if (listed.isEmpty()) throw GradleException("$sums lists no files")
@@ -113,12 +121,20 @@ abstract class VoiceAssetsTask : DefaultTask() {
             val want = parts[0].lowercase()
             val path = parts[1].removePrefix("*")
             val file = File(src, path)
-            if (!file.isFile) throw GradleException("phonemizer data: $path is listed in SHA256SUMS but missing")
+            if (!file.isFile) throw GradleException("$what: $path is listed in SHA256SUMS but missing")
             val got = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
-            if (got != want) throw GradleException("phonemizer data: $path is $got, SHA256SUMS says $want")
-            file.copyTo(File(phonemizer, path), overwrite = true)
+            if (got != want) throw GradleException("$what: $path is $got, SHA256SUMS says $want")
+            file.copyTo(File(dest, path), overwrite = true)
         }
-        sums.copyTo(File(phonemizer, "SHA256SUMS"), overwrite = true)
+        sums.copyTo(File(dest, "SHA256SUMS"), overwrite = true)
+    }
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        copyListed(phonemizerData.get().asFile, File(out, "phonemizer"), "phonemizer data")
+        copyListed(voiceClips.get().asFile, File(out, "voice_clips"), "voice clips")
         val notices = File(out, "licences/sherpa-onnx").apply { mkdirs() }
         sherpaLicense.get().asFile.copyTo(File(notices, "LICENSE"), overwrite = true)
         sherpaLicenses.get().asFile.copyRecursively(notices, overwrite = true)
@@ -127,6 +143,7 @@ abstract class VoiceAssetsTask : DefaultTask() {
 
 val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
     phonemizerData.set(rootProject.layout.projectDirectory.dir("../domovoi/phonemizer/data"))
+    voiceClips.set(rootProject.layout.projectDirectory.dir("../domovoi/voice_clips"))
     sherpaLicense.set(rootProject.layout.projectDirectory.file("native/sherpa-onnx/LICENSE"))
     sherpaLicenses.set(rootProject.layout.projectDirectory.dir("native/sherpa-onnx/licenses"))
 }

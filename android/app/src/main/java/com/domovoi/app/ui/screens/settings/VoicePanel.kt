@@ -191,7 +191,10 @@ internal fun VoiceCard() {
                         Text("download (${fmtBytes(model.totalBytes)})")
                     }
                 }
-                OutlinedButton(onClick = { voice.playSample() }) { Text(if (ui.sampling) "stop" else "play a sample") }
+                // Only when it plays this voice: its download, or its built-in clip.
+                if (ui.effectiveSample != null) {
+                    OutlinedButton(onClick = { voice.playSample() }) { Text(if (ui.sampling) "stop" else "play a sample") }
+                }
                 if (ui.effectiveInstalled && !ui.downloading) {
                     TextButton(onClick = { confirmDelete = model }) { Text("delete", color = Domovoi.colors.fgMuted) }
                 }
