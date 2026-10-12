@@ -14,10 +14,13 @@ so HTTP clients can stream it directly without re-encoding.
   VITS model run directly on ONNX Runtime, fed by Domovoi's own permissive
   text-to-phoneme converter (``domovoi/phonemizer``; no espeak-ng, no
   piper-tts). It speaks voices trained on espeak's British ``"en"`` phoneme
-  set, which the converter writes: the three public-domain voices Domovoi
-  offers (``SHIPPED_VOICES``). The one-time voice download goes through the
-  egress gate, so it is refused under ``never`` and the chain carries on to
-  `system`.
+  set (the three public-domain voices Domovoi offers, ``SHIPPED_VOICES``)
+  or its American ``"en-us"`` set (most voices people train and upload):
+  the converter writes the set the voice's ``.onnx.json`` names. A voice
+  trained on any other set can't speak here and the chain carries on to
+  `system` (:func:`piper_voice_problem` says why, for the UI). The
+  one-time voice download goes through the egress gate, so it is refused
+  under ``never`` and the chain carries on to `system`.
 - `system` — the OS's own synthesizer: pyttsx3/SAPI5 on Windows,
   `espeak-ng` (or `espeak`) on Linux/BSD when the owner installed one (Domovoi
   no longer installs it), `say` on macOS. Robotic, but it
@@ -251,8 +254,8 @@ PIPER_PINNED_REVISION = "c10ece1aade47bb51c153c893d14e5bf8e5b7117"
 class ShippedVoice:
     """One of the voices Domovoi offers: public domain (LibriVox / LJ Speech
     recordings, trained from scratch by Bryce Beattie, no lessac base), and
-    trained on espeak's British "en" phoneme set, which domovoi/phonemizer
-    writes. ``onnx_sha256`` is the LFS oid of the model at
+    trained on espeak's British "en" phoneme set, one of the two sets
+    domovoi/phonemizer writes. ``onnx_sha256`` is the LFS oid of the model at
     PIPER_PINNED_REVISION; ``json_blob_sha1`` the git blob id of its config,
     sha1(b"blob <len>\\0" + content)."""
 
@@ -493,8 +496,61 @@ def _piper_voice_path(model_ref: str) -> Path:
 
 class UnsupportedPiperVoice(ValueError):
     """A Piper model this engine can't speak: its config asks for phonemes
-    other than espeak's British "en" set (the only set Domovoi's converter
-    writes), or it is not a Piper model at all."""
+    other than espeak's English sets ("en", "en-us": the ones Domovoi's
+    converter writes), or it is not a Piper model at all."""
+
+
+def piper_config_problem(cfg: object) -> str | None:
+    """Why a voice with this ``.onnx.json`` (parsed) can't speak here, in
+    words for the owner; None when it can (espeak "en" or "en-us"
+    phonemes and a phoneme id map)."""
+    from domovoi.phonemizer import dialect_for_espeak_voice
+
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("phoneme_id_map"), dict):
+        return "its config has no phoneme map, so it is not a Piper voice config"
+    phoneme_type = str(cfg.get("phoneme_type") or "espeak")
+    espeak = cfg.get("espeak")
+    espeak_voice = str((espeak.get("voice") if isinstance(espeak, dict) else None) or "")
+    if phoneme_type != "espeak":
+        return (f"it was trained on {phoneme_type!r} phonemes; Domovoi writes espeak's English phonemes "
+                f"(\"en\" or \"en-us\") only")
+    if dialect_for_espeak_voice(espeak_voice) is None:
+        return (f"it was trained on espeak's {espeak_voice or 'unnamed'!r} phonemes; Domovoi writes "
+                f"English (\"en\" or \"en-us\") only")
+    return None
+
+
+def piper_voice_problem(model_ref: str) -> str | None:
+    """Why the Piper voice ``model_ref`` can't speak, read from its config
+    on disk without loading the model; None when it can, or when it is not
+    on disk (a catalogue voice downloads on first use)."""
+    local = _piper_local_path(model_ref)
+    if local is None:
+        return None
+    try:
+        cfg = json.loads(Path(f"{local}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return f"its config can't be read ({e.__class__.__name__})"
+    return piper_config_problem(cfg)
+
+
+def piper_voice_dialect(model_ref: str) -> str:
+    """The phoneme set ("en" or "en-us") the Piper voice ``model_ref``
+    speaks: the loaded voice's, else its config's on disk, else "en" (the
+    catalogue voices). Loads nothing."""
+    from domovoi.phonemizer import DEFAULT_DIALECT, dialect_for_espeak_voice
+
+    loaded = _piper_voice_cache.get(model_ref)
+    if loaded is not None:
+        return loaded.dialect
+    local = _piper_local_path(model_ref)
+    if local is not None:
+        try:
+            cfg = json.loads(Path(f"{local}.json").read_text(encoding="utf-8"))
+            return dialect_for_espeak_voice((cfg.get("espeak") or {}).get("voice")) or DEFAULT_DIALECT
+        except (OSError, ValueError, AttributeError):
+            pass
+    return DEFAULT_DIALECT
 
 
 # Silence between the sentences of one reply, as the Piper voices' original
@@ -525,29 +581,35 @@ def _cap_text(text: str) -> str:
 class PiperVoice:
     """A Piper VITS voice on ONNX Runtime, fed by domovoi.phonemizer.
 
-    Loads ``<model>.onnx`` and its ``.onnx.json``: the phoneme id map, the
-    sample rate and the inference scales come from the config. Thread-safe
-    to share (ONNX Runtime's ``run`` is)."""
+    Loads ``<model>.onnx`` and its ``.onnx.json``: the phoneme set
+    (``espeak.voice``: "en" or "en-us", :attr:`dialect`), the phoneme id
+    map, the sample rate and the inference scales come from the config.
+    Thread-safe to share (ONNX Runtime's ``run`` is)."""
 
-    def __init__(self, onnx_path: Path) -> None:
+    def __init__(self, onnx_path: Path, *, threads: int | None = None) -> None:
+        """``threads``: ONNX Runtime's intra-op threads (default: its own
+        choice; scripts that need repeatable output pass 1)."""
         import numpy as np
         import onnxruntime as ort
+
+        from domovoi.phonemizer import dialect_for_espeak_voice
 
         cfg_path = Path(f"{onnx_path}.json")
         try:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
             raise UnsupportedPiperVoice(f"{cfg_path.name}: not a readable Piper config ({e})") from None
-        phoneme_type = str(cfg.get("phoneme_type") or "espeak")
-        espeak_voice = str((cfg.get("espeak") or {}).get("voice") or "")
-        if phoneme_type != "espeak" or espeak_voice != "en" or not isinstance(cfg.get("phoneme_id_map"), dict):
-            raise UnsupportedPiperVoice(
-                f"{onnx_path.name} was trained on {phoneme_type} phonemes for {espeak_voice or '?'!r}; "
-                f"Domovoi's converter writes espeak \"en\" phonemes only"
-            )
+        problem = piper_config_problem(cfg)
+        if problem is not None:
+            raise UnsupportedPiperVoice(f"{onnx_path.name} can't speak here: {problem}")
         inf = cfg.get("inference") or {}
+        self.name = onnx_path.name
         self.np = np
+        self.dialect: str = dialect_for_espeak_voice(cfg["espeak"]["voice"])
         self.id_map: dict[str, list[int]] = cfg["phoneme_id_map"]
+        # Symbols the converter writes that this voice's map lacks -> what
+        # is said instead (phoneme_ids.fit_to_map), filled as they turn up.
+        self._missing: dict[str, str] = {}
         self.sample_rate = int((cfg.get("audio") or {}).get("sample_rate") or 22050)
         self.noise_scale = float(inf.get("noise_scale", 0.667))
         self.length_scale = float(inf.get("length_scale", 1.0))
@@ -555,14 +617,33 @@ class PiperVoice:
         self.multi_speaker = int(cfg.get("num_speakers") or 1) > 1
         so = ort.SessionOptions()
         so.inter_op_num_threads = 1
+        if threads:
+            so.intra_op_num_threads = threads
         self.session = ort.InferenceSession(str(onnx_path), so, providers=["CPUExecutionProvider"])
 
-    def sentence_audio(self, phonemes: str, speed: float) -> "object":
-        """One sentence's phoneme string -> float32 samples in [-1, 1]."""
-        from domovoi.phonemizer import phoneme_ids
+    def sentence_ids(self, phonemes: str) -> list[int] | None:
+        """One sentence's phoneme string -> this voice's ids, a symbol its
+        map lacks said as the nearest one it has (logged once); None when
+        nothing in it is a sound the voice knows."""
+        from domovoi.phonemizer import fit_to_map, phoneme_ids, speaks_anything
 
+        seen = len(self._missing)
+        fitted = fit_to_map(phonemes, self.id_map, self._missing)
+        if len(self._missing) > seen:
+            new = list(self._missing)[seen:]
+            log.warning("TTS: %s has no %s in its phoneme map; said as %s", self.name,
+                        ", ".join(repr(c) for c in new),
+                        ", ".join(repr(self._missing[c]) if self._missing[c] else "nothing" for c in new))
+        ids = phoneme_ids(fitted, self.id_map)
+        return ids if speaks_anything(ids, self.id_map) else None
+
+    def sentence_audio(self, phonemes: str, speed: float) -> "object":
+        """One sentence's phoneme string -> float32 samples in [-1, 1]
+        (none when nothing in it is a sound the voice knows)."""
         np = self.np
-        ids = phoneme_ids(phonemes, self.id_map)
+        ids = self.sentence_ids(phonemes)
+        if ids is None:
+            return np.zeros(0, dtype=np.float32)
         length = self.length_scale / speed if speed > 0 else self.length_scale
         args = {
             "input": np.array([ids], dtype=np.int64),
@@ -582,10 +663,13 @@ class PiperVoice:
         np = self.np
         gap = np.zeros(int(SENTENCE_SILENCE_SEC * self.sample_rate), dtype=np.int16)
         parts = []
-        for k, ph in enumerate(sentences):
-            if k:
+        for ph in sentences:
+            audio = self.sentence_audio(ph, speed)
+            if not audio.size:
+                continue
+            if parts:
                 parts.append(gap)
-            parts.append((self.sentence_audio(ph, speed) * 32767).astype(np.int16))
+            parts.append((audio * 32767).astype(np.int16))
         return b"".join(p.tobytes() for p in parts)
 
 
@@ -616,10 +700,10 @@ def preload_piper_voice_sync(voice: str) -> bool:
     return _synth_piper_sync("Okay.", voice, 1.0) is not None
 
 
-def _phonemize(text: str) -> list[str]:
+def _phonemize(text: str, dialect: str = "en") -> list[str]:
     from domovoi.phonemizer import get_phonemizer
 
-    return get_phonemizer().phonemize(text)
+    return get_phonemizer().phonemize(text, dialect=dialect)
 
 
 def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
@@ -630,12 +714,13 @@ def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
 
     v = _piper_voice(voice)
     text = _cap_text(text)
-    sentences = _phonemize(text)
+    dialect = getattr(v, "dialect", "en")   # the voice's phoneme set
+    sentences = _phonemize(text, dialect)
     if not sentences and any(ch.isalnum() for ch in text):
         # Words, but none in a script the converter reads (Cyrillic, CJK,
         # ...): say so in the voice instead of going silent.
         log.warning("TTS: no pronounceable words in a %d-character text; saying the fallback line", len(text))
-        sentences = _phonemize(UNREADABLE_TEXT_FALLBACK)
+        sentences = _phonemize(UNREADABLE_TEXT_FALLBACK, dialect)
     pcm = v.synthesize_pcm(sentences, speed) if sentences else b""
     if not pcm:
         # Nothing to say (punctuation only), or a voice that rendered no

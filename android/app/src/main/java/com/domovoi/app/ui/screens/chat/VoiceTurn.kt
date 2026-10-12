@@ -71,6 +71,32 @@ internal data class VoiceTurnReply(
         audio?.b64?.takeIf { it.isNotEmpty() }?.let { runCatching { java.util.Base64.getMimeDecoder().decode(it) }.getOrNull() }
 }
 
+/** How a chat-mic reply is heard. */
+internal enum class ReplyPlayback {
+    /** Spoken on the phone from the reply text, in its own voice pick. */
+    PHONE_VOICE,
+
+    /** The audio the server rendered (its voice: "same as the server",
+     *  or the phone's pick isn't downloaded). */
+    SERVER_AUDIO,
+
+    /** Nothing to hear (no text, or the server's TTS was down). */
+    NONE,
+}
+
+/**
+ * The playback path of a reply (owner, 2026-10-12: a phone set to its own
+ * voice hears replies in it). [ownVoiceReady]: the phone's own pick is
+ * downloaded and loaded for this turn (PhoneVoiceChoice.replyVoiceOnPhone),
+ * so the server was asked for no audio; it wins even over audio an older
+ * server sent anyway. Otherwise the server's audio, when there is some.
+ */
+internal fun replyPlayback(ownVoiceReady: Boolean, serverAudio: Boolean, reply: String): ReplyPlayback = when {
+    ownVoiceReady && reply.isNotBlank() -> ReplyPlayback.PHONE_VOICE
+    serverAudio -> ReplyPlayback.SERVER_AUDIO
+    else -> ReplyPlayback.NONE
+}
+
 /** A refused turn: the server's own sentence and its code. */
 internal class VoiceTurnException(val status: Int, message: String, val code: String?) : IOException(message)
 
@@ -114,13 +140,17 @@ internal fun playerStateForTurn(item: PlayItem?, playingAtPress: Boolean, playin
  *  the web hop's own 180 s so the server's 504 is what the phone reads. */
 private const val VOICE_READ_TIMEOUT_SEC = 200L
 
-/** Sends one recording (16 kHz mono PCM16) into [threadId]. */
+/** Sends one recording (16 kHz mono PCM16) into [threadId]. [speak]
+ *  false: the phone speaks the reply itself, so the server renders no
+ *  audio for it (`speak=false`; the field is left out otherwise, as an
+ *  older server expects). */
 internal suspend fun sendVoiceTurn(
     app: AppContainer,
     threadId: Long,
     pcm: ByteArray,
     player: JsonObject?,
-): VoiceTurnReply = sendVoiceTurn(app.api, app.prefs.deviceId, threadId, pcm, player)
+    speak: Boolean = true,
+): VoiceTurnReply = sendVoiceTurn(app.api, app.prefs.deviceId, threadId, pcm, player, speak)
 
 /** [sendVoiceTurn] on a bare [ApiClient] (the JVM tests' shape). */
 internal suspend fun sendVoiceTurn(
@@ -129,11 +159,13 @@ internal suspend fun sendVoiceTurn(
     threadId: Long,
     pcm: ByteArray,
     player: JsonObject?,
+    speak: Boolean = true,
 ): VoiceTurnReply = withContext(Dispatchers.IO) {
     val form = MultipartBody.Builder().setType(MultipartBody.FORM)
         .addFormDataPart("audio", "turn.pcm", pcm.toRequestBody("application/octet-stream".toMediaType()))
         .addFormDataPart("phone_id", deviceId)
         .apply { if (player != null) addFormDataPart("player", player.toString()) }
+        .apply { if (!speak) addFormDataPart("speak", "false") }
         .build()
     val req = Request.Builder()
         .url(api.absolute("/api/chat/threads/$threadId/voice"))

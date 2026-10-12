@@ -1,11 +1,14 @@
 """Permissive English text-to-phoneme converter for Piper voices trained on
-espeak-ng's British "en" phoneme set (Domovoi's voices: norman, kristin,
-ljspeech, all medium).
+espeak-ng's English phoneme sets: British "en" (Domovoi's voices: norman,
+kristin, ljspeech, all medium) and American "en-us" (most voices people
+train themselves).
 
 Pipeline: normalize -> words -> ARPAbet (the owner's "say it like" list,
 then context rules for heteronyms, CMUdict + built-in corrections, compound
 split, and a small CTC model for words in no dictionary) -> IPA with stress
-in the "en" conventions -> one phoneme string per sentence.
+in the conventions of the voice's set ("en" or "en-us", ``dialect``) -> one
+phoneme string per sentence. Everything before the IPA step is shared by
+both sets.
 
 No espeak-ng code or data is used. Licences: CMUdict BSD-2-Clause style
 (data/cmudict/LICENSE); everything else here is Domovoi's own (MIT). The
@@ -25,6 +28,21 @@ log = logging.getLogger(__name__)
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 G2P_MODEL = "g2p.int8.onnx"
 _MODEL_CACHE_MAX = 20000
+
+# The phoneme sets the converter writes, by the name a Piper voice's
+# .onnx.json gives them ("espeak": {"voice": ...}): British "en" (the
+# shipped voices) and American "en-us".
+DIALECTS = ("en", "en-us")
+DEFAULT_DIALECT = "en"
+FUNCTION_WORDS = {"en": "function_words_en.tsv", "en-us": "function_words_en_us.tsv"}
+
+
+def dialect_for_espeak_voice(voice):
+    """The converter's set for a voice config's ``espeak.voice`` ("en",
+    "en-us"; case and ``_``/``-`` don't matter), or None when it writes no
+    set that voice was trained on."""
+    v = str(voice or "").strip().lower().replace("_", "-")
+    return v if v in DIALECTS else None
 
 VOWELS = {"AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"}
 CONS_IPA = {"B": "b", "CH": "tʃ", "D": "d", "DH": "ð", "F": "f", "G": "ɡ", "HH": "h", "JH": "dʒ", "K": "k",
@@ -66,10 +84,10 @@ def possessive_arpa(phones):
     return ["S"] if last in {"P", "T", "K", "F", "TH"} else ["Z"]
 
 
-def possessive_ipa(ipa):
+def possessive_ipa(ipa, dialect=DEFAULT_DIALECT):
     """The IPA ending of "'s" after a phoneme string."""
     if ipa.endswith(("s", "z", "ʃ", "ʒ")):
-        return "ɪz"
+        return "ᵻz" if dialect == "en-us" else "ɪz"
     return "s" if ipa.endswith(("p", "t", "k", "f", "θ")) else "z"
 
 
@@ -104,13 +122,10 @@ class Phonemizer:
                     self.lex[w] = []
                     seen.add(w)
                 self.lex[w].append(ph)
-        self.fw = {}
-        with open(os.path.join(data_dir, "function_words_en.tsv"), encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("#") or not line.strip():
-                    continue
-                w, d, v, fin = line.rstrip("\n").split("\t")
-                self.fw[w] = (d, d if v == "-" else v, d if fin == "-" else fin)
+        # Weak forms, one table per phoneme set; self.fw is the "en" one.
+        self.fw_by_dialect = {d: self._load_function_words(os.path.join(data_dir, f))
+                              for d, f in FUNCTION_WORDS.items()}
+        self.fw = self.fw_by_dialect["en"]
         self.g2p = None
         self._model_cache = {}
         if model:
@@ -118,6 +133,17 @@ class Phonemizer:
         self._pron = {}
         self.set_pronunciations(load_default_pronunciations(data_dir) if pronunciations is None
                                 else pronunciations)
+
+    @staticmethod
+    def _load_function_words(path):
+        fw = {}
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+                w, d, v, fin = line.rstrip("\n").split("\t")
+                fw[w] = (d, d if v == "-" else v, d if fin == "-" else fin)
+        return fw
 
     def _load_model(self, g2p_dir):
         try:
@@ -494,18 +520,119 @@ class Phonemizer:
             return "ɔɪ"
         return "ə"
 
+    # ---------------- ARPAbet -> IPA ("en-us" conventions) ----------------
+    def to_ipa_us(self, phones, word=None, next_vowel=False, keep_post_secondary=False):
+        """One word in espeak's American "en-us" conventions: rhotic (every
+        r is said), ``æ oʊ ɑː ɚ``, a flapped ``ɾ`` for t between a vowel and
+        an unstressed vowel, ``ᵻ`` for the unstressed e of some prefixes and
+        endings. Stress marks as in "en"."""
+        al = self.align(word, phones) if word else {}
+        w = (word or "").lower()
+        out = []
+        n = len(phones)
+        smap = self.stress_marks(phones, keep_post_secondary)
+        i = 0
+        while i < n:
+            p = phones[i]
+            b = base(p)
+            st = p[len(b):]
+            if b not in VOWELS:
+                if b == "N" and i + 1 < n and base(phones[i + 1]) in ("K", "G"):
+                    out.append("ŋ")
+                elif b == "T" and _flaps(phones, i, smap):
+                    out.append("ɾ")
+                else:
+                    out.append(CONS_IPA.get(b, ""))
+                i += 1
+                continue
+            g = al.get(i)
+            grp, gs = (g[1], g[0]) if g else (None, 0)
+            nb = base(phones[i + 1]) if i + 1 < n else None
+            r = nb == "R"
+            if r:
+                after = phones[i + 2] if i + 2 < n else None
+                r_prev = is_vowel(after) if after else next_vowel
+            else:
+                r_prev = False
+            mark, sd = smap[i]
+            stressed = st in ("1", "2") and not (b == "IY" and st == "2" and sd == "0" and i >= n - 2)
+            if b == "ER":
+                after = phones[i + 1] if i + 1 < n else None
+                v = "ɜː" if stressed else "ɚ"
+                if (after and is_vowel(after)) or (after is None and next_vowel):
+                    v += "ɹ"
+                out.append(mark + v)
+                i += 1
+                continue
+            v = self.vowel_us(b, stressed, grp, gs, w, r, r_prev, phones, i, n)
+            out.append(mark + v)
+            if r:
+                out.append("ɹ")
+                i += 2
+                continue
+            i += 1
+        return "".join(out)
+
+    @classmethod
+    def vowel_us(cls, b, stressed, grp, gs, w, r, r_prev, phones, i, n):
+        """A vowel in "en-us": before r the r-coloured set (the caller adds
+        the ɹ), otherwise the "en" choice in American qualities."""
+        prev = base(phones[i - 1]) if i > 0 else None
+        if r:
+            if b == "AA":
+                return "ɑː"                                   # car, sorry
+            if b in ("AO", "OW"):
+                return "ɔː" if prev == "W" else "oː"          # award; four, story, storm
+            if b == "AE":
+                return "æ" if r_prev else "ɛ"                 # carry; scarecrow
+            if b == "EH":                                     # marry; very, Sarah, there
+                return "æ" if r_prev and grp and "a" in grp and w[gs + len(grp):gs + len(grp) + 2] == "rr" else "ɛ"
+            if b in ("IH", "IY"):                             # zero, serious; here, near, Sheeran
+                return "iə" if r_prev and grp == "e" else "ɪ"
+            if b in ("UH", "UW"):
+                return "ʊ"                                    # sure, tour
+            if b == "EY":
+                return "ɛ"
+            if b == "AH":
+                return "ʌ" if stressed else "ə"
+        if b == "AA" and (grp in ("au", "aw") or (grp == "ou" and w[gs + 2:gs + 4] == "gh")):
+            return "ɔː"                                       # caught, bought (CMUdict's AA)
+        if b == "AO" and prev == "W" and i + 1 < n and base(phones[i + 1]) == "N":
+            return "ɔ"                                        # wanted (CMUdict's AO)
+        en = cls.vowel(b, stressed, grp, gs, w, False, False, phones, i, False)
+        if en == "ɒ":
+            # "en"'s short o: ɔ after w before l or n (want, quality), before
+            # f, th, ng (soft, often, long) and an s closing the syllable
+            # (cost); else ɑː (lot, dog, watch, possible).
+            nxt = base(phones[i + 1]) if i + 1 < n else None
+            after = phones[i + 2] if i + 2 < n else None
+            if prev == "W":
+                return "ɔ" if nxt in ("L", "N") else "ɑː"
+            if nxt in ("F", "TH", "NG") or (nxt == "S" and not (after and is_vowel(after))):
+                return "ɔ"
+            return "ɑː"
+        if en == "ɪ" and not stressed and _i2_us(phones, i, grp, gs, w):
+            return "ᵻ"
+        return _EN_TO_US.get(en, en)
+
     # ---------------- sentences ----------------
-    def phonemize(self, text, extra=None):
+    def phonemize(self, text, extra=None, dialect=DEFAULT_DIALECT):
         """Text -> one Piper phoneme string per sentence. ``extra``: resolved
         :class:`Pronunciation` entries to use over the list for this call
-        only (a preview of an entry not saved yet)."""
-        return [p for p, _ in self.phonemize_detailed(text, extra)]
+        only (a preview of an entry not saved yet). ``dialect``: the voice's
+        phoneme set, "en" (the shipped voices) or "en-us"."""
+        return [p for p, _ in self.phonemize_detailed(text, extra, dialect)]
 
-    def phonemize_detailed(self, text, extra=None):
+    def phonemize_detailed(self, text, extra=None, dialect=DEFAULT_DIALECT):
         """Text -> [(sentence phoneme string, word details)]. Each word's
         ``src`` says where its pronunciation came from: say (the owner's
         list), rule, lex, lex+s, fw (weak form), hyphen, compound, model,
         spell."""
+        if dialect not in DIALECTS:
+            raise ValueError(f"no phoneme set {dialect!r} (have {', '.join(DIALECTS)})")
+        us = dialect == "en-us"
+        fw = self.fw_by_dialect[dialect]
+        to_ipa = self.to_ipa_us if us else self.to_ipa
         pron = self._pron
         if extra:
             pron = {**pron, **{p.key: p for p in extra}}
@@ -544,7 +671,7 @@ class Phonemizer:
                     it["src"] = "say"
                     if p.ipa is not None:
                         it["ph"] = []
-                        it["fixed"] = p.ipa + (possessive_ipa(p.ipa) if poss else "")
+                        it["fixed"] = p.ipa + (possessive_ipa(p.ipa, dialect) if poss else "")
                     else:
                         ph = list(p.phones)
                         it["ph"] = ph + (possessive_arpa(ph) if poss else [])
@@ -567,13 +694,13 @@ class Phonemizer:
                 nv = (not clause_final) and _starts_with_vowel(nxt_it)
                 if it.get("fixed") is not None:
                     ipa = it["fixed"]
-                elif it["kind"] == "word" and it["w"] in self.fw and it["src"] in ("lex", "rule"):
-                    d, v, f = self.fw[it["w"]]
+                elif it["kind"] == "word" and it["w"] in fw and it["src"] in ("lex", "rule"):
+                    d, v, f = fw[it["w"]]
                     ipa = f if clause_final else (v if nv else d)
                     it["src"] = "fw"
                 else:
-                    ipa = self.to_ipa(it["ph"], it.get("align", it.get("w")) if it["kind"] == "word" else None,
-                                      nv, keep_post_secondary=it["kind"] == "spell")
+                    ipa = to_ipa(it["ph"], it.get("align", it.get("w")) if it["kind"] == "word" else None,
+                                 nv, keep_post_secondary=it["kind"] == "spell")
                     if it["kind"] == "word" and not any(c in ipa for c in "ˈˌ") and it["src"] != "fw":
                         ipa = self._force_stress(ipa)
                 it["ipa"] = ipa
@@ -583,6 +710,8 @@ class Phonemizer:
                     out.pop()
                     if items[k - 1]["w"] == "from":
                         out[-1] = "fɹʌm"
+                    elif us and items[k - 1]["w"] == "on":
+                        out[-1] = "ɔn"
                 out.append(ipa)
                 out.append(" ")
             while out and out[-1] == " ":
@@ -596,6 +725,50 @@ class Phonemizer:
         if not m:
             return ipa
         return ipa[:m.start()] + "ˈ" + ipa[m.start():]
+
+
+# "en" vowel -> "en-us" vowel, outside r (the rest are the same in both).
+_EN_TO_US = {"a": "æ", "əʊ": "oʊ"}
+
+
+def _i2_us(phones, i, grp, gs, w):
+    """en-us: the unstressed "ɪ" at ``phones[i]`` is espeak's reduced ``ᵻ``:
+    an e after the word's first consonant (remind, degrees, before) or
+    before its last vowel (television, necessary), the e of -es after a
+    hissing sound and of -ed after t or d (closes, wanted), the i of -ity /
+    -ible (quality, possible). Not a word-initial e (eleven, enough)."""
+    vowels = [k for k, p in enumerate(phones) if is_vowel(p)]
+    if (i == vowels[-1] and i == len(phones) - 2 and base(phones[-1]) == "Z" and w.endswith("'s")
+            and i > 0 and base(phones[i - 1]) in ("S", "Z", "SH", "ZH", "CH", "JH")):
+        return True     # the possessive 's after a hissing sound (boss's)
+    if grp is None:
+        return False
+    if grp == "e":
+        if i == vowels[0]:
+            return gs > 0
+        if i != vowels[-1]:
+            return True
+        prev = base(phones[i - 1]) if i > 0 else None
+        return gs == len(w) - 2 and ((w.endswith("es") and prev in ("S", "Z", "SH", "ZH", "CH", "JH"))
+                                     or (w.endswith("ed") and prev in ("T", "D")))
+    return grp == "i" and w[gs:] in ("ity", "ible", "ibly")
+
+
+def _flaps(phones, i, smap):
+    """en-us: the t at ``phones[i]`` is said as a flap ``ɾ``: after a vowel
+    (or a vowel and r), before an unstressed vowel (better, thirty,
+    party), never after n (twenty) or before a syllabic n (important)."""
+    if i == 0 or i + 1 >= len(phones) or not is_vowel(phones[i + 1]):
+        return False
+    nxt = phones[i + 1]
+    if not (nxt.endswith("0") or (smap[i + 1][1] == "0" and base(nxt) == "IY" and i + 2 >= len(phones))):
+        return False
+    if base(phones[i + 1]) == "AH" and i + 2 < len(phones) and base(phones[i + 2]) == "N":
+        return False    # before a syllabic n: important, certain, button
+    prev = phones[i - 1]
+    if is_vowel(prev):
+        return True
+    return base(prev) == "R" and i >= 2 and is_vowel(phones[i - 2])
 
 
 def _starts_with_vowel(it):

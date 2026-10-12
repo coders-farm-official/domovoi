@@ -326,7 +326,10 @@ async def test_a_piper_voice_not_on_disk_under_never_is_not_re_rendered_every_pa
         models = tmp_path / "voice-models"
         models.mkdir(parents=True, exist_ok=True)
         (models / "en_US-ryan-high.onnx").write_bytes(b"m")
-        (models / "en_US-ryan-high.onnx.json").write_text("{}")
+        # (a config on a phoneme set the converter writes: one on another
+        # set could never speak, and would keep its system-voice clips)
+        (models / "en_US-ryan-high.onnx.json").write_text(
+            '{"espeak": {"voice": "en"}, "phoneme_type": "espeak", "phoneme_id_map": {"_": [0]}}')
         engines.piper = "ok"
         await cs.regenerate_if_needed()
         assert engines.taken() == [("piper", "en_US-ryan-high")] * _clip_count()

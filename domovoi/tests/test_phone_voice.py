@@ -1326,3 +1326,40 @@ async def test_the_web_caps_a_voice_body_before_parsing_it(monkeypatch) -> None:
     from web.backend import middleware as mw
 
     assert mw.body_limit_for("/api/chat/uploads") == 21 * mw.MB
+
+
+# ─── The phone that speaks the reply itself ───────────────────────────────
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_phone_speaking_its_own_voice_gets_no_audio(
+    db_session, web_to_core, whisper, heard_as, monkeypatch,
+) -> None:
+    """speak=false (the phone's own voice pick is downloaded, so it speaks
+    the reply text itself): nothing is synthesized and ``audio`` is null;
+    the reply and both rows are as before. Without the field, as before."""
+    synthesized: list[str] = []
+    real = phone_voice._synthesize
+
+    async def counting(response):
+        synthesized.append(response.text)
+        return await real(response)
+
+    monkeypatch.setattr(phone_voice, "_synthesize", counting)
+    whisper.texts = ["what time is it", "what time is it", "what time is it"]
+    tid = await _thread()
+    async with _web() as web:
+        quiet = await web.post(f"/api/chat/threads/{tid}/voice", data={"phone_id": PHONE, "speak": "false"},
+                               files={"audio": ("turn.wav", _wav(_pcm()), "audio/wav")})
+        assert quiet.status_code == 200, quiet.text
+        assert quiet.json()["audio"] is None and quiet.json()["reply"]
+        assert synthesized == []
+        spoken = await web.post(f"/api/chat/threads/{tid}/voice", data={"phone_id": PHONE},
+                                files={"audio": ("turn.wav", _wav(_pcm()), "audio/wav")})
+        assert spoken.json()["audio"]["b64"] and len(synthesized) == 1
+    async with _client() as c:
+        r = await _turn(c, tid, speak="false")
+        assert r.status_code == 200 and r.json()["audio"] is None and len(synthesized) == 1
+    rows = await _rows(tid)
+    assert [r["role"] for r in rows] == ["user", "assistant"] * 3

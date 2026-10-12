@@ -83,21 +83,83 @@ def test_ids_scales_and_speed_reach_the_model(voice):
     assert len(samples) == n_a + gap + len(phoneme_ids("wˈɪn.")) * 10
 
 
-@pytest.mark.parametrize("cfg", [
-    _config("en-us"),
-    _config("en-gb-x-rp"),
-    _config(phoneme_type="text"),
-    {"audio": {"sample_rate": 22050}},
+@pytest.mark.parametrize(("cfg", "why"), [
+    (_config("de"), "espeak's 'de' phonemes"),
+    (_config("en-gb-x-rp"), "espeak's 'en-gb-x-rp' phonemes"),
+    (_config(""), "espeak's 'unnamed' phonemes"),
+    (_config(phoneme_type="text"), "'text' phonemes"),
+    ({"audio": {"sample_rate": 22050}}, "no phoneme map"),
 ])
-def test_a_voice_on_another_phoneme_set_is_refused(monkeypatch, tmp_path, cfg):
+def test_a_voice_on_another_phoneme_set_is_refused(monkeypatch, tmp_path, cfg, why):
     import onnxruntime as ort
 
     monkeypatch.setattr(ort, "InferenceSession", lambda *a, **k: pytest.fail("no session for a refused voice"))
     onnx = tmp_path / "v.onnx"
     onnx.write_bytes(b"model")
     Path(f"{onnx}.json").write_text(json.dumps(cfg), encoding="utf-8")
-    with pytest.raises(tts_mod.UnsupportedPiperVoice):
+    with pytest.raises(tts_mod.UnsupportedPiperVoice, match=re.escape(why)):
         tts_mod.PiperVoice(onnx)
+    # The same words for the owner, without loading the model.
+    assert why in tts_mod.piper_config_problem(cfg)
+
+
+@pytest.mark.parametrize("espeak_voice,dialect", [("en", "en"), ("en-us", "en-us"), ("en_US", "en-us"), ("EN", "en")])
+def test_both_english_sets_speak(monkeypatch, tmp_path, espeak_voice, dialect):
+    """A voice trained on espeak "en-us" (what most people train with:
+    the owner's uploads say so) is spoken in that set, not refused."""
+    import onnxruntime as ort
+
+    session = _Session()
+    monkeypatch.setattr(ort, "InferenceSession", lambda *a, **k: session)
+    onnx = tmp_path / "mine.onnx"
+    onnx.write_bytes(b"model")
+    Path(f"{onnx}.json").write_text(json.dumps(_config(espeak_voice)), encoding="utf-8")
+    v = tts_mod.PiperVoice(onnx)
+    assert v.dialect == dialect and tts_mod.piper_config_problem(_config(espeak_voice)) is None
+    monkeypatch.setattr(tts_mod, "_piper_voice", lambda ref: v)
+    assert _frames(tts_mod._synth_piper_sync("Better water, Domovoi.", "mine", 1.0)) > 0
+    from domovoi.phonemizer import get_phonemizer
+
+    want = get_phonemizer().phonemize("Better water, Domovoi.", dialect=dialect)
+    assert [c["input"].tolist()[0] for c in session.calls] == [phoneme_ids(s) for s in want]
+    if dialect == "en-us":
+        assert want == ["bˈɛɾɚ wˈɔːɾɚ, dˈoʊmoʊvˌɔɪ."]
+
+
+def test_a_symbol_the_voice_lacks_is_said_as_the_nearest_one(monkeypatch, tmp_path, caplog):
+    """A voice trained on fewer symbols: the flap and the reduced vowel
+    become t and ɪ (logged once), never a crash or silence."""
+    import onnxruntime as ort
+
+    session = _Session()
+    monkeypatch.setattr(ort, "InferenceSession", lambda *a, **k: session)
+    small = {k: v for k, v in default_id_map().items() if k not in ("ɾ", "ᵻ")}
+    onnx = tmp_path / "small.onnx"
+    onnx.write_bytes(b"model")
+    Path(f"{onnx}.json").write_text(json.dumps(_config("en-us", phoneme_id_map=small)), encoding="utf-8")
+    v = tts_mod.PiperVoice(onnx)
+    assert v.synthesize_pcm(["bˈɛɾɚ ɹᵻmˈaɪnd.", "ɹᵻpˈiːt."], 1.0)
+    fed = [c["input"].tolist()[0] for c in session.calls]
+    assert fed == [phoneme_ids("bˈɛtɚ ɹɪmˈaɪnd.", small), phoneme_ids("ɹɪpˈiːt.", small)]
+    warned = [r.getMessage() for r in caplog.records if "phoneme map" in r.getMessage()]
+    assert len(warned) == 1 and "'ɾ'" in warned[0] and "'ᵻ'" in warned[0]
+
+
+def test_a_voice_that_knows_none_of_the_sounds_falls_through(monkeypatch, tmp_path):
+    """Nothing in the text is a sound the voice's map has: no audio (so the
+    router moves on to the system voice) rather than a run on silence."""
+    import onnxruntime as ort
+
+    session = _Session()
+    monkeypatch.setattr(ort, "InferenceSession", lambda *a, **k: session)
+    tiny = {k: default_id_map()[k] for k in ("^", "$", "_", " ", ".")}
+    onnx = tmp_path / "tiny.onnx"
+    onnx.write_bytes(b"model")
+    Path(f"{onnx}.json").write_text(json.dumps(_config("en-us", phoneme_id_map=tiny)), encoding="utf-8")
+    v = tts_mod.PiperVoice(onnx)
+    monkeypatch.setattr(tts_mod, "_piper_voice", lambda ref: v)
+    assert tts_mod._synth_piper_sync("Hello there.", "tiny", 1.0) is None
+    assert session.calls == []
 
 
 def test_a_multi_speaker_voice_gets_speaker_zero(monkeypatch, tmp_path):
@@ -160,15 +222,18 @@ def test_the_router_falls_through_when_a_voice_is_refused(monkeypatch, tmp_path)
     monkeypatch.setattr(ort, "InferenceSession", lambda *a, **k: _Session())
     vdir = tmp_path / "voices"
     vdir.mkdir()
-    (vdir / "old-us-voice.onnx").write_bytes(b"m")
-    (vdir / "old-us-voice.onnx.json").write_text(json.dumps(_config("en-us")), encoding="utf-8")
+    (vdir / "german-voice.onnx").write_bytes(b"m")
+    (vdir / "german-voice.onnx.json").write_text(json.dumps(_config("de")), encoding="utf-8")
     monkeypatch.setattr(tts_mod.settings, "voice_models_dir", str(vdir))
     monkeypatch.setattr(tts_mod, "_piper_voice_cache", {})
     other = tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 16_000)
     monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda text: other)
-    client = tts_mod.RealTTSClient(preferred_engine="piper", edge_voice="x", piper_voice="old-us-voice", speed=1.0)
+    client = tts_mod.RealTTSClient(preferred_engine="piper", edge_voice="x", piper_voice="german-voice", speed=1.0)
     result = client._synth_detailed_blocking("hello")
     assert result.engine == "system"
+    # ...and the UI can say why without loading the model.
+    assert "espeak's 'de' phonemes" in tts_mod.piper_voice_problem("german-voice")
+    assert tts_mod.piper_voice_problem("not-on-disk") is None
 
 
 def test_no_code_imports_piper_tts_or_espeak():

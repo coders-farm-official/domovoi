@@ -104,7 +104,19 @@ async def test_sampling_an_edge_voice_is_refused_before_the_core_is_asked(fake_r
 
 
 @pytest.mark.asyncio
-async def test_sampling_a_piper_voice_still_works_under_never(fake_registry) -> None:
+async def test_sampling_a_piper_voice_still_works_under_never(fake_registry, monkeypatch, tmp_path) -> None:
+    """A Piper voice on this server speaks offline: its sample is asked of
+    the core as before (one not on the server has no sample to play:
+    test_voice_samples.py)."""
+    import json
+
+    from domovoi.clients import tts
+    from domovoi.phonemizer import default_id_map
+
+    monkeypatch.setattr(tts.settings, "voice_models_dir", str(tmp_path))
+    (tmp_path / "en_US-amy-medium.onnx").write_bytes(b"model")
+    (tmp_path / "en_US-amy-medium.onnx.json").write_text(json.dumps({
+        "espeak": {"voice": "en"}, "phoneme_type": "espeak", "phoneme_id_map": default_id_map()}))
     with egress.override_policy("never"):
         async with _web() as c:
             r = await c.get("/api/voices/2/sample")

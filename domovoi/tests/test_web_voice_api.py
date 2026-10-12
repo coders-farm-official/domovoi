@@ -181,9 +181,34 @@ async def test_choosing_the_server_voice(_db, fresh_lists, core_hops):  # noqa: 
         assert r.status_code == 400
 
 
+@pytest.fixture
+def voices_dir(monkeypatch, tmp_path):
+    """A voices folder of the test's own (never the real ~/.domovoi one)."""
+    from domovoi.clients import tts
+
+    folder = tmp_path / "piper_voices"
+    folder.mkdir()
+    monkeypatch.setattr(tts.settings, "voice_models_dir", str(folder))
+    monkeypatch.setattr(tts, "_piper_voice_cache", {})
+    from web.backend.api import voices as voices_api
+
+    monkeypatch.setattr(voices_api, "_voices_dir", lambda: folder)
+    return folder
+
+
+def _voice_files(folder, name, espeak_voice="en"):
+    from domovoi.phonemizer import default_id_map
+
+    (folder / f"{name}.onnx").write_bytes(b"model")
+    (folder / f"{name}.onnx.json").write_text(json.dumps({
+        "audio": {"sample_rate": 22050}, "espeak": {"voice": espeak_voice}, "phoneme_type": "espeak",
+        "phoneme_id_map": default_id_map()}), encoding="utf-8")
+
+
 @requires_db
 @pytest.mark.asyncio
-async def test_preview_and_samples_go_to_the_core(_db, fresh_lists, core_hops):  # noqa: F811
+async def test_preview_and_samples_go_to_the_core(_db, fresh_lists, core_hops, voices_dir):  # noqa: F811
+    _voice_files(voices_dir, "en_US-kristin-medium")      # on this server: synthesized live
     async with web_client() as c:
         await claim_admin(c)
         device = await db_device_token()
@@ -197,9 +222,59 @@ async def test_preview_and_samples_go_to_the_core(_db, fresh_lists, core_hops): 
         r = await c.post("/api/voice/pronunciations/preview", json={"word": "Bob", "say_like": "shh"}, headers=h)
         assert r.status_code == 400
         r = await c.get("/api/voice/sample/en_US-kristin-medium", headers=h)
-        assert r.status_code == 200
+        assert r.status_code == 200 and r.headers["x-sample-source"] == "voice"
         assert core_hops[-1] == ("/v1/admin/voices/sample", {"name": "Kristin"})
+        hops = len(core_hops)
+        # Norman isn't downloaded here: its built-in clip, not the core.
+        r = await c.get("/api/voice/sample/en_US-norman-medium", headers=h)
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/ogg"
+        assert r.headers["x-sample-source"] == "clip" and len(core_hops) == hops
         assert (await c.get("/api/voice/sample/en_US-ryan-high", headers=h)).status_code == 404
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_uploaded_voice_says_whether_it_can_speak(_db, fresh_lists, core_hops, voices_dir,
+                                                           monkeypatch):  # noqa: F811
+    """An en-us upload (most voices people train) speaks; one on another
+    phoneme set is kept, says why it can't, and has no play button."""
+    from web.backend.api import voices as voices_api
+
+    monkeypatch.setattr(voices_api, "post_admin", voice_api.post_admin)
+    monkeypatch.setattr(voices_api, "post_admin_bytes", voice_api.post_admin_bytes)
+
+    def config(espeak_voice):
+        from domovoi.phonemizer import default_id_map
+
+        return json.dumps({"audio": {"sample_rate": 22050}, "espeak": {"voice": espeak_voice},
+                           "phoneme_type": "espeak", "phoneme_id_map": default_id_map()}).encode()
+
+    async with web_client() as c:
+        token = await claim_admin(c)
+        h = {**bearer(token), "X-Requested-With": "t"}
+        r = await c.post("/api/voices/piper", data={"name": "Kronk"}, headers=h, files={
+            "onnx": ("kronk.onnx", b"model", "application/octet-stream"),
+            "config": ("kronk.onnx.json", config("en-us"), "application/json")})
+        assert r.status_code == 201, r.text
+        assert (r.json()["sample"], r.json()["problem"]) == ("voice", None)
+        r = await c.post("/api/voices/piper", data={"name": "Heidi"}, headers=h, files={
+            "onnx": ("heidi.onnx", b"model", "application/octet-stream"),
+            "config": ("heidi.onnx.json", config("de"), "application/json")})
+        assert r.status_code == 201, r.text
+        heidi = r.json()
+        assert heidi["sample"] is None and "espeak's 'de' phonemes" in heidi["problem"]
+        assert (voices_dir / "heidi.onnx").is_file()           # kept: the owner decides
+        rows = {v["name"]: v for v in (await c.get("/api/voices", headers=h)).json()}
+        assert rows["Heidi"]["problem"] == heidi["problem"] and rows["Kronk"]["problem"] is None
+        assert rows["Norman"]["sample"] == "clip"               # not downloaded here
+        hops = len(core_hops)
+        r = await c.get(f"/api/voices/{heidi['id']}/sample", headers=h)
+        assert r.status_code == 409 and "can't speak here" in r.json()["detail"]
+        r = await c.get(f"/api/voices/{rows['Norman']['id']}/sample", headers=h)
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/ogg"
+        assert len(core_hops) == hops                           # neither asked the core
+        r = await c.get(f"/api/voices/{rows['Kronk']['id']}/sample", headers=h)
+        assert r.status_code == 200 and core_hops[-1] == ("/v1/admin/voices/sample", {"name": "Kronk"})
 
 
 async def _rows():

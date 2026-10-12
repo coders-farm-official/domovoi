@@ -33,22 +33,29 @@ class G2pVocab(val letters: Map<Char, Long>, val phones: List<String>, val maxCh
 /**
  * Everything the converter loads once: CMUdict with Domovoi's corrections
  * (only a word's first variant is ever used, so only that is kept), the
- * weak forms, the voices' phoneme id map, the shipped "say it like" list
- * and the model's vocabulary.
+ * weak forms of each phoneme set, the voices' phoneme id map, the shipped
+ * "say it like" list and the model's vocabulary.
  */
 class PhonemizerData(
     /** word -> its first pronunciation, ARPAbet separated by single spaces. */
     val lex: Map<String, String>,
-    /** word -> (default, before a vowel, clause-final) weak forms. */
+    /** word -> (default, before a vowel, clause-final) weak forms, "en". */
     val fw: Map<String, Triple<String, String, String>>,
     val idMap: Map<String, IntArray>,
     val defaultPronunciations: List<Pair<String, String>>,
     val vocab: G2pVocab,
+    /** The weak forms of "en-us" (function_words_en_us.tsv). */
+    val fwUs: Map<String, Triple<String, String, String>> = fw,
 ) {
+    /** The weak forms of a phoneme set ("en" or "en-us"). */
+    fun functionWords(dialect: String): Map<String, Triple<String, String, String>> =
+        if (dialect == Phonemizer.EN_US) fwUs else fw
+
     companion object {
         const val CMUDICT = "cmudict/cmudict.dict"
         const val CORRECTIONS = "lexicon_corrections.txt"
         const val FUNCTION_WORDS = "function_words_en.tsv"
+        const val FUNCTION_WORDS_US = "function_words_en_us.tsv"
         const val PRONUNCIATIONS = "pronunciations_default.txt"
         const val ID_MAP = "phoneme_ids_en.json"
         const val G2P_MODEL = "g2p/g2p.int8.onnx"
@@ -99,14 +106,19 @@ class PhonemizerData(
                     if (corrected.add(parts[0])) lex[parts[0]] = parts.drop(1).joinToString(" ")
                 }
             }
-            val fw = HashMap<String, Triple<String, String, String>>()
-            files.open(FUNCTION_WORDS).bufferedReader(Charsets.UTF_8).useLines { lines ->
-                for (line in lines) {
-                    if (line.startsWith("#") || Py.strip(line).isEmpty()) continue
-                    val (w, d, v, fin) = line.split("\t")
-                    fw[w] = Triple(d, if (v == "-") d else v, if (fin == "-") d else fin)
+            fun weakForms(path: String): Map<String, Triple<String, String, String>> {
+                val fw = HashMap<String, Triple<String, String, String>>()
+                files.open(path).bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    for (line in lines) {
+                        if (line.startsWith("#") || Py.strip(line).isEmpty()) continue
+                        val (w, d, v, fin) = line.split("\t")
+                        fw[w] = Triple(d, if (v == "-") d else v, if (fin == "-") d else fin)
+                    }
                 }
+                return fw
             }
+            val fw = weakForms(FUNCTION_WORDS)
+            val fwUs = weakForms(FUNCTION_WORDS_US)
             val idJson = Json.parseToJsonElement(files.open(ID_MAP).use { it.readBytes().toString(Charsets.UTF_8) })
             val idMap = idJson.jsonObject.getValue("phoneme_id_map").jsonObject.mapValues { (_, v) ->
                 v.jsonArray.map { it.jsonPrimitive.int }.toIntArray()
@@ -119,7 +131,7 @@ class PhonemizerData(
                 phones = vocabJson.getValue("phones").jsonArray.map { it.jsonPrimitive.content },
                 maxChars = vocabJson.getValue("max_chars").jsonPrimitive.int,
             )
-            return PhonemizerData(lex, fw, idMap, defaults, vocab)
+            return PhonemizerData(lex, fw, idMap, defaults, vocab, fwUs)
         }
     }
 }

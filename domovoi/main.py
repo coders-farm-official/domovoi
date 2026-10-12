@@ -908,12 +908,15 @@ async def phone_voice_turn(
     # rather than reaching the database as an overflow.
     thread_id: int = Form(..., ge=1, le=2**63 - 1),
     player: str | None = Form(None, max_length=2048),
+    # False: the phone speaks the reply itself (its own voice pick), so no
+    # audio is rendered for it. Default true, as before.
+    speak: bool = Form(True),
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice
-    identification, the router satellites use, text-to-speech, and both
-    turns written into chat thread ``thread_id``. Never registers a
-    satellite session. See ``domovoi/phone_voice.py`` for the request and
-    the answer."""
+    identification, the router satellites use, text-to-speech (unless
+    ``speak`` is false), and both turns written into chat thread
+    ``thread_id``. Never registers a satellite session. See
+    ``domovoi/phone_voice.py`` for the request and the answer."""
     from domovoi import phone_voice
 
     data = await audio.read(phone_voice.MAX_CLIP_BYTES + 4096)
@@ -924,6 +927,7 @@ async def phone_voice_turn(
             thread_id=thread_id,
             audio=data,
             player=phone_voice.parse_player(player),
+            speak=speak,
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})
@@ -3389,7 +3393,7 @@ async def admin_voice_say_like(body: _SayLikeBody) -> FastAPIResponse:
     button beside a "say it like" entry. In ``voice`` (a shipped voice id)
     or the server's voice. 400 with the reason when the entry can't be used;
     the phonemes go back in ``X-Phonemes``."""
-    from domovoi.clients.tts import PIPER_PINS
+    from domovoi.clients.tts import PIPER_PINS, piper_voice_dialect
     from domovoi.phonemizer import PronunciationError, get_phonemizer
 
     ph = await asyncio.to_thread(get_phonemizer)
@@ -3398,7 +3402,6 @@ async def admin_voice_say_like(body: _SayLikeBody) -> FastAPIResponse:
     except PronunciationError as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
     text = body.word.strip() + "."
-    phonemes = ph.phonemize(text, extra=[entry])
     if body.voice is not None and body.voice not in PIPER_PINS:
         raise HTTPException(status_code=400, detail=f"{body.voice!r} is not one of the voices")
     voice = body.voice
@@ -3407,6 +3410,9 @@ async def admin_voice_say_like(body: _SayLikeBody) -> FastAPIResponse:
 
         async with session_scope() as s:
             voice = await server_voice(s)
+    # In the voice's own phoneme set: the server's voice may be an
+    # uploaded en-us one.
+    phonemes = ph.phonemize(text, extra=[entry], dialect=piper_voice_dialect(voice))
     wav = await asyncio.to_thread(_say_phonemes_wav, phonemes, voice)
     if wav is None:
         raise HTTPException(status_code=502, detail=f"the voice {voice} could not speak")
@@ -3437,7 +3443,9 @@ async def admin_voice_sample(body: _VoiceSampleBody) -> FastAPIResponse:
     """Synthesize a sample line (intro + random fun fact) in a registered
     voice and return it as WAV. Powers the web Voices page play button — the
     web backend proxies this since it has no TTS of its own. Live synthesis,
-    so each call picks a fresh fact and needs no pre-rendered clip."""
+    so each call picks a fresh fact and needs no pre-rendered clip. 409 when
+    the chain's fallback (another voice) would have answered: a sample
+    plays the voice it names or nothing."""
     from domovoi.voice_sample import build_sample_text
 
     async with session_scope() as s:
@@ -3446,9 +3454,17 @@ async def admin_voice_sample(body: _VoiceSampleBody) -> FastAPIResponse:
         raise HTTPException(status_code=404, detail=f"no voice named {body.name!r}")
 
     text = build_sample_text(voice["name"])
-    wav = await get_tts_client().synthesize(
+    result = await get_tts_client().synthesize_detailed(
         text, engine=voice["engine"], voice=voice["model_ref"]
     )
+    if result.engine != voice["engine"]:
+        # Another rung answered (a voice that can't speak here, or Edge
+        # turned off): that is not a sample of this voice.
+        raise HTTPException(
+            status_code=409,
+            detail=f"{voice['name']} can't speak here right now; another voice would answer instead",
+        )
+    wav = result.wav
     return FastAPIResponse(
         content=wav,
         media_type="audio/wav",

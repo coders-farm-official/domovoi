@@ -3,3 +3,4 @@
 # conversion on checkout, whatever core.autocrlf says.
 domovoi/phonemizer/data/** -text
 domovoi/phonemizer/golden.json -text
+domovoi/voice_clips/** -text

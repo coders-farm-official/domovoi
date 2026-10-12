@@ -2,9 +2,11 @@
 
 Domovoi's voices (the public-domain Piper voices `en_US-norman-medium`,
 `en_US-kristin-medium` and `en_US-ljspeech-medium`) were trained on the
-phoneme strings espeak-ng writes for British English (`"en"`). espeak-ng is
+phoneme strings espeak-ng writes for British English (`"en"`); most voices
+people train themselves use its American English (`"en-us"`). espeak-ng is
 GPL, so Domovoi makes those strings itself: this package turns English text
-into the same symbol set from permissively licensed parts only. The server
+into either symbol set from permissively licensed parts only, the one a
+voice's `.onnx.json` names (`"espeak": {"voice": "en-us"}`). The server
 uses it in Python; the Android app uses a Kotlin port of it, and both check
 themselves against one fixture, `golden.json`.
 
@@ -13,6 +15,7 @@ from domovoi.phonemizer import get_phonemizer, phoneme_ids
 
 ph = get_phonemizer()                      # loads once, ~0.6 s; thread-safe after that
 ph.phonemize("Hey Domovoi! It's 72°F.")    # ['hˈeɪ dˈəʊməʊvˌɔɪ!', 'ɪts sˈɛvənti tˈuː dɪɡɹˈiːz fˈeəɹənhˌaɪt.']
+ph.phonemize("Better water.", dialect="en-us")   # ['bˈɛɾɚ wˈɔːɾɚ.']
 phoneme_ids("hˈeɪ dˈəʊməʊvˌɔɪ!")          # [1, 0, 20, 0, 120, 0, ...] for the voice's ONNX model
 ```
 
@@ -23,11 +26,13 @@ about 1 ms the first time (the model), then it is cached.
 
 | Part | Licence |
 |---|---|
-| The code here, `lexicon_corrections.txt`, `function_words_en.tsv`, `pronunciations_default.txt`, the model and its training script | MIT (Domovoi's own) |
+| The code here, `lexicon_corrections.txt`, `function_words_en.tsv`, `function_words_en_us.tsv`, `pronunciations_default.txt`, the model and its training script | MIT (Domovoi's own) |
 | `data/cmudict/` (the Carnegie Mellon Pronouncing Dictionary) | BSD-2-Clause style, `data/cmudict/LICENSE` (verified at the source, github.com/cmusphinx/cmudict) |
 | `data/phoneme_ids_en.json` | the symbol table of the three voices' `.onnx.json` (public-domain voices) |
 
 No espeak-ng code, data or output is used anywhere, including in training.
+(espeak-ng was run only to measure how often the converter disagrees with
+it, in throwaway containers outside the repo: see "The American set".)
 
 ## How it works
 
@@ -41,14 +46,19 @@ No espeak-ng code, data or output is used anywhere, including in training.
    wind, record, use, lead, tear); CMUdict plus `lexicon_corrections.txt`;
    possessive `'s`; hyphenated parts; a compound split into two dictionary
    words; the out-of-dictionary model; spelling the letters.
-3. **ARPAbet to the voices' IPA** with stress, in espeak's `"en"`
+3. **ARPAbet to the voice's IPA** with stress, in espeak's `"en"`
    conventions (vowel qualities chosen partly from the spelling, linking r,
    `ŋ` before k/g, secondary stress next to the primary dropped), weak forms
    of function words (`function_words_en.tsv`) by position, and espeak's
-   joins (`ɪnðə`, `ɒvðə`).
+   joins (`ɪnðə`, `ɒvðə`); or in its `"en-us"` conventions (below). Steps
+   1 and 2 are the same for both sets.
 4. **Ids** (`phoneme_ids.py`), Piper's rule: NFD-normalize, then `^ _`,
    each known code point's ids followed by `_`, then `$`. One map serves
-   all three voices.
+   all three voices (and the en-us voices seen so far). A voice whose own
+   map lacks a symbol gets the nearest one it has (`fit_to_map`: `ɾ` as
+   `t`, `ᵻ` as `ɪ`, `ɚ` as `əɹ`, ...), logged once; a sentence with no
+   sound the voice knows is not sent to it, so the engine falls through to
+   the system voice rather than going silent.
 
 ## Files
 
@@ -66,6 +76,7 @@ domovoi/phonemizer/
     cmudict/             cmudict.dict, LICENSE, README (pinned, see below)
     lexicon_corrections.txt   additions/fixes to CMUdict (ARPAbet)
     function_words_en.tsv     weak forms: word, default, before a vowel, clause-final
+    function_words_en_us.tsv  the same for "en-us"
     pronunciations_default.txt the shipped "say it like" list
     phoneme_ids_en.json  the voices' phoneme id map
     g2p/g2p.int8.onnx    the out-of-dictionary model (3.3 MB)
@@ -129,28 +140,76 @@ The shipped list holds the product's name as the owner says it
 middle, not DOM-uh-voy), Domo is `dˈəʊməʊ`, and Nguyen is "win". These
 are only defaults: an owner can change or remove them.
 
+## The American set (`"en-us"`)
+
+A voice whose `.onnx.json` says `"espeak": {"voice": "en-us"}` (most
+voices people train; espeak's British `"en"` is the default and the
+shipped voices' set) is spoken in espeak's American conventions, written
+here from CMUdict (itself American) by hand-made rules, as for `"en"`:
+
+- every r is said: `kˈɑːɹ`, `fɔːɹ`, `hˈɪɹ`, `ðˈɛɹ`, `ʃˈʊɹ`; unstressed
+  ER is `ɚ` (`tˈaɪmɚ`), and `ɚɹ` / `ɜːɹ` before a vowel;
+- `æ` (`dˈæns`), `oʊ` (`həlˈoʊ`), `ɑː` for the lot vowel (`lˈɑːt`), `ɔ`
+  before f, th, ng and a syllable-closing s, and after w before l or n
+  (`sˈɔft`, `lˈɔŋ`, `wˈɔnt`); `oːɹ` for "or" words (`fˈoːɹ`, `stˈoːɹi`),
+  `ɔːɹ` after w (`ɐwˈɔːɹd`);
+- a t between a vowel (or vowel + r) and an unstressed vowel is a flap,
+  `ɾ` (`bˈɛɾɚ`, `θˈɜːɾi`, `pˈɑːɹɾi`), not after n (`twˈɛnti`) or before
+  a syllabic n (`ɪmpˈoːɹtənt`); "it" before a vowel is `ɪɾ`;
+- no y after t, d, n (`nˈuː`, `tˈuːzdeɪ`);
+- espeak's reduced vowel `ᵻ` for an unstressed e after the first
+  consonant (`ɹᵻmˈaɪnd`, `dᵻɡɹˈiːz`) or before the last vowel
+  (`tˈɛlᵻvˌɪʒən`), the e of -es after a hissing sound and of -ed after t
+  or d (`klˈoʊzᵻz`, `wˈɔntᵻd`), the i of -ity / -ible (`kwˈɔlᵻɾi`);
+- weak forms from `function_words_en_us.tsv` (`ʌv`, `ænd`, `fɔːɹ`, `wʌz`).
+
+The "say it like" list is the same for both sets: a respelling is read in
+the voice's own set; an advanced `/phonemes/` entry is the voice's own
+string and is used as written.
+
+**How close to espeak-ng (2026-10-12).** The espeak-ng inside
+piper-phonemize 1.1.0 (what Piper voices are trained with) was run
+in a throwaway container on the fixture's 683 texts, with `"en-us"`, as a
+reference only; nothing it wrote is kept. Exact match per text (stress
+marks included / ignored) and phoneme error rate:
+
+| Group | en-us exact | ignoring stress | PER | (en, same texts) |
+|---|---|---|---|---|
+| all 683 texts | 65.9 % | 71.3 % | 15.1 % | 64.7 %, 70.3 %, 16.1 % |
+| 337 common words | 88.7 % | 92.0 % | 2.1 % | 86.9 %, 90.5 %, 2.7 % |
+| 13 comparison sentences | 30.8 % | 46.2 % | 10.3 % (3.5 % fed the same words) | 30.8 %, 46.2 %, 10.1 % |
+
+Most of the rest is the same in both sets and by design: espeak reads
+`$14.99` as "dollar fourteen point nine nine" and `72°F` as "degrees F",
+says `Nguyen` and `Joaquin` its own way (the converter has the owner's
+entries), and stresses heteronyms differently. The American-only
+differences left are lexical: espeak says `ɔːɹ` in morning, forecast and
+lord (`oːɹ` here), `ɑː` in office, `ʊɹɹ` in during.
+
 ## The golden fixture (`golden.json`)
 
-What the converter must produce for 696 texts: the 13 comparison
-sentences, 39 Domovoi phrases, function-word sentences, heteronyms, 32
-number forms plus 93 more normalization cases (money, times, dates, units,
-ordinals, phone numbers, abbreviations, odd punctuation), 74 names, 62
-artists, the 337 common words, and 13 cases with their own "say it like"
-lists. UTF-8 JSON, LF line endings, one case per line.
+What the converter must produce for 696 texts, each in both phoneme sets
+(1,392 cases): the 13 comparison sentences, 39 Domovoi phrases,
+function-word sentences, heteronyms, 32 number forms plus 93 more
+normalization cases (money, times, dates, units, ordinals, phone numbers,
+abbreviations, odd punctuation), 74 names, 62 artists, the 337 common
+words, and 13 cases with their own "say it like" lists. UTF-8 JSON, LF
+line endings, one case per line.
 
 Top level:
 
 | Key | Meaning |
 |---|---|
-| `format` | `domovoi-phonemizer-golden/1` |
+| `format` | `domovoi-phonemizer-golden/2` (`/1` had the `"en"` cases only) |
 | `data_sha256` | SHA-256 of each data file the fixture was made from (paths under `data/`) |
 | `made_with` | the ONNX Runtime version and machine that wrote it (1.28.0, Linux x86_64: the phone's runtime; a server's lock runs 1.30.0, which reads every model word here the same) |
 | `default_pronunciations` | the list in force for every case without its own: `[[word, say_it_like], ...]` |
-| `ids` | which voice the ids are for (`en_US-norman-medium`; the same for kristin and ljspeech), the map file, and the id rule |
+| `dialects` | the phoneme sets, by the name a case uses: `{"en": {"espeak_voice", "function_words", "voices"}, "en-us": {...}}`; `espeak_voice` is what a voice's `.onnx.json` says |
+| `ids` | which voice the ids are for (`en_US-norman-medium`; the same for kristin and ljspeech), the map file, and the id rule; both sets use the same map |
 | `near_tie_margin`, `near_tie_words` | see below |
-| `counts` | cases per group |
+| `counts` | cases per set, then per group: `{"en": {"sentences": 13, ...}, "en-us": {...}}` |
 | `invalid_say_it_like` | `[word, say_it_like]` pairs a port must refuse |
-| `cases` | the cases |
+| `cases` | the cases: all the `"en"` ones, then all the `"en-us"` ones |
 
 A case:
 
@@ -158,8 +217,12 @@ A case:
 {"id": "sentences-005", "group": "sentences", "text": "Hey Domovoi! Sure, I'll turn that down.",
  "phonemes": ["hˈeɪ dˈəʊməʊvˌɔɪ!", "ʃˈʊə, aɪl tˈɜːn ðat dˈaʊn."],
  "ids": [[1, 0, 20, 0, ...], [1, 0, ...]]}
+{"id": "en-us-sentences-005", "group": "sentences", "dialect": "en-us", "text": "Hey Domovoi! Sure, I'll turn that down.",
+ "phonemes": ["hˈeɪ dˈoʊmoʊvˌɔɪ!", "ʃˈʊɹ, aɪl tˈɜːn ðæt dˈaʊn."], "ids": [...]}
 ```
 
+- `dialect`: the phoneme set the case is in (`phonemize(text,
+  dialect=...)`); none means `"en"`.
 - `phonemes`: one string per sentence, in order. Assert equality of the
   whole list.
 - `ids`: one list per sentence, from `phonemes` by the id rule.

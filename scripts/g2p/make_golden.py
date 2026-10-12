@@ -4,8 +4,10 @@ The fixture pins what the converter says for a few hundred texts: the
 comparison sentences, Domovoi's own phrases, numbers/money/times/dates/
 units, heteronyms, names, artists and the common-words list (inputs in
 golden_inputs/, one text per line), plus "say it like" lists and entries
-that must be refused. The Python tests and the Kotlin port both assert
-against the same file; its format is described in domovoi/phonemizer/README.md.
+that must be refused, each in both phoneme sets the converter writes:
+espeak's British "en" (the shipped voices) and American "en-us". The
+Python tests and the Kotlin port both assert against the same file; its
+format is described in domovoi/phonemizer/README.md.
 
     python scripts/g2p/make_golden.py           # rewrite the fixture
     python scripts/g2p/make_golden.py --check   # exit 1 if it is out of date
@@ -30,6 +32,7 @@ sys.path.insert(0, REPO)
 
 from domovoi.phonemizer import (  # noqa: E402
     DATA_DIR,
+    DIALECTS,
     Phonemizer,
     PronunciationError,
     load_default_pronunciations,
@@ -41,8 +44,15 @@ OUT = os.path.join(REPO, "domovoi", "phonemizer", "golden.json")
 GROUPS = ["sentences", "phrases", "function_words", "heteronyms", "numbers", "normalization",
           "names", "artists", "common_words"]
 DATA_FILES = ["cmudict/cmudict.dict", "lexicon_corrections.txt", "function_words_en.tsv",
-              "pronunciations_default.txt", "g2p/g2p.int8.onnx", "g2p/g2p_vocab.json",
-              "phoneme_ids_en.json"]
+              "function_words_en_us.tsv", "pronunciations_default.txt", "g2p/g2p.int8.onnx",
+              "g2p/g2p_vocab.json", "phoneme_ids_en.json"]
+# The phoneme sets, as a voice's .onnx.json names them ("espeak": {"voice": ...}).
+SETS = {
+    "en": {"espeak_voice": "en", "function_words": "function_words_en.tsv",
+           "voices": ["en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"]},
+    "en-us": {"espeak_voice": "en-us", "function_words": "function_words_en_us.tsv",
+              "voices": "any Piper voice whose .onnx.json says \"espeak\": {\"voice\": \"en-us\"}"},
+}
 NEAR_TIE = 0.1
 
 # (list in force for the case, text). The list replaces the default one.
@@ -110,14 +120,18 @@ def respelling_model_words(ph, text):
     return out
 
 
-def case(ph, group, n, text, pron=None):
-    detailed = ph.phonemize_detailed(text)
+def case(ph, group, n, text, pron=None, dialect="en"):
+    detailed = ph.phonemize_detailed(text, dialect=dialect)
     phon = [p for p, _ in detailed]
     for p in phon:
         bad = unknown_symbols(p)
         if bad:
             raise SystemExit(f"{text!r}: symbols the voices lack: {bad}")
-    c = {"id": f"{group}-{n:03d}", "group": group, "text": text}
+    prefix = "" if dialect == "en" else dialect + "-"
+    c = {"id": f"{prefix}{group}-{n:03d}", "group": group}
+    if dialect != "en":
+        c["dialect"] = dialect
+    c["text"] = text
     if pron is not None:
         c["pronunciations"] = [list(x) for x in pron]
         c["resolved"] = {k: ("/" + v.ipa + "/" if v.ipa is not None else " ".join(v.phones))
@@ -142,17 +156,20 @@ def build():
         raise SystemExit("onnxruntime is needed to build the fixture")
     default = load_default_pronunciations(DATA_DIR)
     cases, counts = [], {}
-    for g in GROUPS:
-        texts = [t.strip() for t in open(os.path.join(HERE, "golden_inputs", g + ".txt"), encoding="utf-8")
-                 if t.strip()]
-        counts[g] = len(texts)
-        for n, t in enumerate(texts, 1):
-            cases.append(case(ph, g, n, t))
-    for n, (pron, text) in enumerate(SAY_IT_LIKE_CASES, 1):
-        ph.set_pronunciations(pron)
-        cases.append(case(ph, "say_it_like", n, text, pron))
-    ph.set_pronunciations(default)
-    counts["say_it_like"] = len(SAY_IT_LIKE_CASES)
+    assert tuple(SETS) == DIALECTS
+    for dialect in DIALECTS:
+        counts[dialect] = {}
+        for g in GROUPS:
+            texts = [t.strip() for t in open(os.path.join(HERE, "golden_inputs", g + ".txt"), encoding="utf-8")
+                     if t.strip()]
+            counts[dialect][g] = len(texts)
+            for n, t in enumerate(texts, 1):
+                cases.append(case(ph, g, n, t, dialect=dialect))
+        for n, (pron, text) in enumerate(SAY_IT_LIKE_CASES, 1):
+            ph.set_pronunciations(pron)
+            cases.append(case(ph, "say_it_like", n, text, pron, dialect=dialect))
+        ph.set_pronunciations(default)
+        counts[dialect]["say_it_like"] = len(SAY_IT_LIKE_CASES)
     for w, s in INVALID:
         try:
             ph.resolve_pronunciation(w, s)
@@ -161,7 +178,7 @@ def build():
         raise SystemExit(f"expected {w!r} = {s!r} to be refused")
     ties = sorted({w for c in cases for w in c.get("near_tie", [])})
     header = {
-        "format": "domovoi-phonemizer-golden/1",
+        "format": "domovoi-phonemizer-golden/2",
         "about": [
             "What Domovoi's text-to-phoneme converter (domovoi/phonemizer) must produce. Generated by "
             "scripts/g2p/make_golden.py; asserted by domovoi/tests/test_phonemizer_golden.py and by the "
@@ -169,6 +186,8 @@ def build():
             "Each case: text -> phonemes (one string per sentence, the voice's symbols, UTF-8) -> ids "
             "(one list per sentence). Cases without 'pronunciations' use default_pronunciations; a case "
             "with 'pronunciations' replaces the list with exactly those entries ([] = none).",
+            "'dialect' names the phoneme set a case is written in (see 'dialects'); a case without one "
+            "is in \"en\". Every text appears once per set.",
             "'model' lists the words the out-of-dictionary model pronounced (ARPAbet), for debugging. "
             "'near_tie' names model words whose choice is within near_tie_margin logits of another "
             "phoneme: exact on x86-64 ONNX Runtime, possibly one phoneme off on another runtime.",
@@ -176,12 +195,15 @@ def build():
         ],
         "data_sha256": {f: sha256(os.path.join(DATA_DIR, f)) for f in DATA_FILES},
         "default_pronunciations": [list(x) for x in default],
+        "dialects": SETS,
         "ids": {
             "voice": "en_US-norman-medium",
             "same_for": ["en_US-kristin-medium", "en_US-ljspeech-medium"],
             "map_file": "data/phoneme_ids_en.json",
             "rule": "NFD-normalize the phoneme string; ids = map['^'] + map['_'], then for each code point "
                     "in the map: map[c] + map['_'] (code points not in the map are skipped), then map['$'].",
+            "dialects": "the same map for both sets: Piper's espeak symbol map, which the en-us voices "
+                        "checked (2026-10-12) carry too",
         },
         "made_with": {"onnxruntime": _ort_version(), "machine": f"{platform.system()} {platform.machine()}"},
         "near_tie_margin": NEAR_TIE,
@@ -246,7 +268,8 @@ def main():
                 bad.append(c["id"])
             elif o["phonemes"] != c["phonemes"] and not near_tie_ok(o["phonemes"], c["phonemes"], o):
                 bad.append(c["id"])
-        if len(old) != len(cases) or committed["data_sha256"] != header["data_sha256"]:
+        if (len(old) != len(cases) or committed["data_sha256"] != header["data_sha256"]
+                or any(o.get("dialect") != c.get("dialect") for c in cases for o in [old.get(c["id"], c)])):
             bad.append("(cases or data files)")
         print("golden.json is up to date" if not bad else f"golden.json is OUT OF DATE (run make_golden.py): {bad[:10]}")
         sys.exit(0 if not bad else 1)

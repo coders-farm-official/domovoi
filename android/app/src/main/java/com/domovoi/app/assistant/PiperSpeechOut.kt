@@ -122,9 +122,27 @@ class PiperSpeechOut(
     private val threads: Int = 0,
     private val clock: () -> Long = System::nanoTime,
     private val log: (String) -> Unit = { Log.i(TAG, it) },
+    /** The voice's phoneme set ("en", or "en-us" for a voice trained on
+     *  espeak's American English): PiperConfig.dialect. */
+    private val dialect: String = Phonemizer.EN,
 ) : PhoneSpeech {
 
     private val generation = AtomicLong()
+
+    /** Symbols the converter writes that the voice's map lacks -> what is
+     *  said instead (PhonemeIds.fit). */
+    private val missing = HashMap<String, String>()
+
+    /** One sentence's ids for this voice, a symbol it lacks said as the
+     *  nearest one it has (logged once); null when nothing in it is a sound
+     *  the voice knows (it is skipped, never sent). */
+    internal fun idsFor(phonemes: String): IntArray? {
+        val seen = synchronized(missing) { missing.keys.toSet() }
+        val ids = PhonemeIds.ids(PhonemeIds.fit(phonemes, idMap, missing), idMap)
+        val new = synchronized(missing) { missing.filterKeys { it !in seen } }
+        if (new.isNotEmpty()) log("the voice's map has no ${new.keys.joinToString()}; said as ${new.values.joinToString { it.ifEmpty { "nothing" } }}")
+        return ids.takeIf { PhonemeIds.speaksAnything(it, idMap) }
+    }
 
     /** The last sentence's phoneme strings, as spoken (for the device check). */
     @Volatile var lastPhonemes: List<String> = emptyList()
@@ -138,7 +156,7 @@ class PiperSpeechOut(
     override suspend fun speak(sentence: String): SpokenSentence = withContext(Dispatchers.IO) {
         val gen = generation.get()
         val started = clock()
-        val phonemes = phonemizer.phonemize(sentence)
+        val phonemes = phonemizer.phonemize(sentence, dialect)
         lastPhonemes = phonemes
         log("phonemes: ${phonemes.joinToString(" | ")}")
         var first: Long? = null
@@ -152,8 +170,9 @@ class PiperSpeechOut(
                         for ((i, p) in phonemes.withIndex()) {
                             if (generation.get() != gen) break
                             val t0 = clock()
+                            val ids = idsFor(p) ?: continue
                             val audio = try {
-                                voice.synthesize(PhonemeIds.ids(p, idMap))
+                                voice.synthesize(ids)
                             } catch (e: VoiceModel.Stopped) {
                                 break
                             }
@@ -202,7 +221,7 @@ class PiperSpeechOut(
     /** The voice's audio for [text], every sentence with the gap between
      *  them, not played (the benchmark's self-test). */
     override suspend fun synthesize(text: String): SynthesizedSpeech = withContext(Dispatchers.Default) {
-        val parts = phonemizer.phonemize(text).map { voice.synthesize(PhonemeIds.ids(it, idMap)) }
+        val parts = phonemizer.phonemize(text, dialect).mapNotNull { p -> idsFor(p)?.let { voice.synthesize(it) } }
         val gap = (voice.sampleRate * SENTENCE_GAP_S).toInt()
         val out = FloatArray(parts.sumOf { it.size } + gap * (parts.size - 1).coerceAtLeast(0))
         var at = 0

@@ -2,15 +2,17 @@ package com.domovoi.app.phonemizer
 
 /**
  * Domovoi's permissive English text-to-phoneme converter for its Piper
- * voices (norman, kristin, ljspeech, all trained on espeak-ng's British
- * "en" symbols): a Kotlin port of `domovoi/phonemizer/convert.py` that must
+ * voices: a Kotlin port of `domovoi/phonemizer/convert.py` that must
  * produce exactly what the Python one does, case for case, on the shared
- * fixture `domovoi/phonemizer/golden.json` (PhonemizerGoldenTest).
+ * fixture `domovoi/phonemizer/golden.json` (PhonemizerGoldenTest). It
+ * writes espeak-ng's British "en" symbols (norman, kristin, ljspeech) or
+ * its American "en-us" ones (most voices people train), the set a voice's
+ * `.onnx.json` names ([dialectForEspeakVoice]).
  *
  * normalize -> words -> ARPAbet (the owner's "say it like" list, context
  * rules for heteronyms, CMUdict + corrections, compound split, the
- * out-of-dictionary model, spelling) -> IPA with stress in the "en"
- * conventions -> one phoneme string per sentence.
+ * out-of-dictionary model, spelling) -> IPA with stress in the "en" or
+ * "en-us" conventions -> one phoneme string per sentence.
  *
  * Build it once and share it: [phonemize] is safe from several threads,
  * and [setPronunciations] swaps the owner's list in one assignment.
@@ -231,10 +233,70 @@ class Phonemizer(
         return out.toString()
     }
 
+    // ---------------- ARPAbet -> IPA ("en-us" conventions) ----------------
+
+    /** One word in espeak's American "en-us" conventions: rhotic (every r
+     *  is said), æ oʊ ɑː ɚ, a flapped ɾ for t between a vowel and an
+     *  unstressed vowel, ᵻ for the unstressed e of some prefixes and
+     *  endings. Stress marks as in "en". */
+    private fun toIpaUs(phones: List<String>, word: String?, nextVowel: Boolean = false, keepPostSecondary: Boolean = false): String {
+        val al = if (!word.isNullOrEmpty()) align(word, phones) else emptyMap()
+        val w = (word ?: "").lowercase()
+        val out = StringBuilder()
+        val n = phones.size
+        val smap = stressMarks(phones, keepPostSecondary)
+        var i = 0
+        while (i < n) {
+            val p = phones[i]
+            val b = base(p)
+            val st = p.substring(b.length)
+            if (b !in VOWELS) {
+                if (b == "N" && i + 1 < n && base(phones[i + 1]) in setOf("K", "G")) {
+                    out.append("ŋ")
+                } else if (b == "T" && flaps(phones, i, smap)) {
+                    out.append("ɾ")
+                } else {
+                    out.append(CONS_IPA[b] ?: "")
+                }
+                i++
+                continue
+            }
+            val g = al[i]
+            val grp = g?.second
+            val gs = g?.first ?: 0
+            val r = i + 1 < n && base(phones[i + 1]) == "R"
+            val rPrev = if (r) {
+                val after = if (i + 2 < n) phones[i + 2] else null
+                if (after != null) isVowel(after) else nextVowel
+            } else {
+                false
+            }
+            val (mark, sd) = smap.getValue(i)
+            val stressed = (st == "1" || st == "2") && !(b == "IY" && st == "2" && sd == '0' && i >= n - 2)
+            if (b == "ER") {
+                val after = if (i + 1 < n) phones[i + 1] else null
+                var v = if (stressed) "ɜː" else "ɚ"
+                if ((after != null && isVowel(after)) || (after == null && nextVowel)) v += "ɹ"
+                out.append(mark).append(v)
+                i++
+                continue
+            }
+            out.append(mark).append(vowelUs(b, stressed, grp, gs, w, r, rPrev, phones, i))
+            if (r) {
+                out.append("ɹ")
+                i += 2
+                continue
+            }
+            i++
+        }
+        return out.toString()
+    }
+
     // ---------------- sentences ----------------
 
-    /** Text -> one Piper phoneme string per sentence. */
-    fun phonemize(text: String): List<String> = phonemizeDetailed(text).map { it.first }
+    /** Text -> one Piper phoneme string per sentence, in the phoneme set
+     *  [dialect] ("en", the shipped voices, or "en-us"). */
+    fun phonemize(text: String, dialect: String = EN): List<String> = phonemizeDetailed(text, dialect).map { it.first }
 
     /** One word of a sentence, as the converter saw it. */
     class Item internal constructor(
@@ -258,7 +320,10 @@ class Phonemizer(
     }
 
     /** Text -> (sentence phoneme string, its words). */
-    fun phonemizeDetailed(text: String): List<Pair<String, List<Item>>> {
+    fun phonemizeDetailed(text: String, dialect: String = EN): List<Pair<String, List<Item>>> {
+        require(dialect in DIALECTS) { "no phoneme set '$dialect' (have ${DIALECTS.joinToString()})" }
+        val us = dialect == EN_US
+        val fw = data.functionWords(dialect)
         val pron = this.pron
         val res = mutableListOf<Pair<String, List<Item>>>()
         for (sent in Normalize.normalize(text)) {
@@ -295,7 +360,7 @@ class Phonemizer(
                     it.src = "say"
                     if (p.ipa != null) {
                         it.ph = emptyList()
-                        it.fixed = p.ipa + (if (poss) possessiveIpa(p.ipa) else "")
+                        it.fixed = p.ipa + (if (poss) possessiveIpa(p.ipa, dialect) else "")
                     } else {
                         val ph = p.phones.orEmpty()
                         it.ph = ph + (if (poss) possessiveArpa(ph) else emptyList())
@@ -325,13 +390,17 @@ class Phonemizer(
                 val fixed = it.fixed
                 if (fixed != null) {
                     ipa = fixed
-                } else if (it.kind == Item.Kind.WORD && it.w in data.fw && (it.src == "lex" || it.src == "rule")) {
-                    val (d, v, f) = data.fw.getValue(it.w!!)
+                } else if (it.kind == Item.Kind.WORD && it.w in fw && (it.src == "lex" || it.src == "rule")) {
+                    val (d, v, f) = fw.getValue(it.w!!)
                     ipa = if (clauseFinal) f else if (nv) v else d
                     it.src = "fw"
                 } else {
-                    ipa = toIpa(it.ph, if (it.kind == Item.Kind.WORD) (it.align ?: it.w) else null, nv,
-                        keepPostSecondary = it.kind == Item.Kind.SPELL)
+                    val word = if (it.kind == Item.Kind.WORD) (it.align ?: it.w) else null
+                    ipa = if (us) {
+                        toIpaUs(it.ph, word, nv, keepPostSecondary = it.kind == Item.Kind.SPELL)
+                    } else {
+                        toIpa(it.ph, word, nv, keepPostSecondary = it.kind == Item.Kind.SPELL)
+                    }
                     if (it.kind == Item.Kind.WORD && ipa.none { c -> c == 'ˈ' || c == 'ˌ' } && it.src != "fw") {
                         ipa = forceStress(ipa)
                     }
@@ -342,7 +411,11 @@ class Phonemizer(
                     items[k - 1].w in setOf("of", "in", "on", "from") && out.isNotEmpty() && out.last() == " "
                 ) {
                     out.removeAt(out.size - 1)
-                    if (items[k - 1].w == "from") out[out.size - 1] = "fɹʌm"
+                    if (items[k - 1].w == "from") {
+                        out[out.size - 1] = "fɹʌm"
+                    } else if (us && items[k - 1].w == "on") {
+                        out[out.size - 1] = "ɔn"
+                    }
                 }
                 out += ipa
                 out += " "
@@ -360,6 +433,24 @@ class Phonemizer(
 
     companion object {
         private const val MODEL_CACHE_MAX = 20_000
+
+        /** espeak's British set: the shipped voices'. The default. */
+        const val EN = "en"
+
+        /** espeak's American set: most voices people train. */
+        const val EN_US = "en-us"
+
+        /** The phoneme sets the converter writes, by the name a Piper
+         *  voice's `.onnx.json` gives them (`"espeak": {"voice": ...}`). */
+        val DIALECTS = listOf(EN, EN_US)
+
+        /** The set for a voice config's `espeak.voice` (case and `_`/`-`
+         *  don't matter), or null when the converter writes no set that
+         *  voice was trained on. */
+        fun dialectForEspeakVoice(voice: String?): String? {
+            val v = Py.strip(voice ?: "").lowercase().replace('_', '-')
+            return v.takeIf { it in DIALECTS }
+        }
 
         val VOWELS = setOf("AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW")
         private val CONS_IPA = mapOf(
@@ -411,8 +502,10 @@ class Phonemizer(
         }
 
         /** The IPA ending of "'s" after a phoneme string. */
-        fun possessiveIpa(ipa: String): String {
-            if (ipa.endsWith("s") || ipa.endsWith("z") || ipa.endsWith("ʃ") || ipa.endsWith("ʒ")) return "ɪz"
+        fun possessiveIpa(ipa: String, dialect: String = EN): String {
+            if (ipa.endsWith("s") || ipa.endsWith("z") || ipa.endsWith("ʃ") || ipa.endsWith("ʒ")) {
+                return if (dialect == EN_US) "ᵻz" else "ɪz"
+            }
             return if (listOf("p", "t", "k", "f", "θ").any { ipa.endsWith(it) }) "s" else "z"
         }
 
@@ -531,6 +624,91 @@ class Phonemizer(
                 "OY" -> return "ɔɪ"
             }
             return "ə"
+        }
+
+        private val SIBILANTS = setOf("S", "Z", "SH", "ZH", "CH", "JH")
+
+        /** A vowel in "en-us": before r the r-coloured set (the caller adds
+         *  the ɹ), otherwise the "en" choice in American qualities. */
+        private fun vowelUs(
+            b: String, stressed: Boolean, grp: String?, gs: Int, w: String,
+            r: Boolean, rPrev: Boolean, phones: List<String>, i: Int,
+        ): String {
+            val n = phones.size
+            val prev = if (i > 0) base(phones[i - 1]) else null
+            if (r) {
+                when (b) {
+                    "AA" -> return "ɑː"                                  // car, sorry
+                    "AO", "OW" -> return if (prev == "W") "ɔː" else "oː"  // award; four, story, storm
+                    "AE" -> return if (rPrev) "æ" else "ɛ"               // carry; scarecrow
+                    "EH" -> return if (rPrev && grp != null && 'a' in grp &&
+                        Py.slice(w, gs + grp.length, gs + grp.length + 2) == "rr"
+                    ) "æ" else "ɛ"                                       // marry; very, Sarah, there
+                    "IH", "IY" -> return if (rPrev && grp == "e") "iə" else "ɪ"  // zero; here, near, Sheeran
+                    "UH", "UW" -> return "ʊ"                             // sure, tour
+                    "EY" -> return "ɛ"
+                    "AH" -> return if (stressed) "ʌ" else "ə"
+                }
+            }
+            if (b == "AA" && (grp == "au" || grp == "aw" || (grp == "ou" && Py.slice(w, gs + 2, gs + 4) == "gh"))) {
+                return "ɔː"                                              // caught, bought (CMUdict's AA)
+            }
+            if (b == "AO" && prev == "W" && i + 1 < n && base(phones[i + 1]) == "N") return "ɔ"  // wanted
+            val en = vowel(b, stressed, grp, gs, w, false, false, phones, i)
+            if (en == "ɒ") {
+                // "en"'s short o: ɔ after w before l or n (want, quality),
+                // before f, th, ng (soft, often, long) and an s closing the
+                // syllable (cost); else ɑː (lot, dog, watch, possible).
+                val nxt = if (i + 1 < n) base(phones[i + 1]) else null
+                val after = if (i + 2 < n) phones[i + 2] else null
+                if (prev == "W") return if (nxt == "L" || nxt == "N") "ɔ" else "ɑː"
+                if (nxt == "F" || nxt == "TH" || nxt == "NG" || (nxt == "S" && !(after != null && isVowel(after)))) return "ɔ"
+                return "ɑː"
+            }
+            if (en == "ɪ" && !stressed && i2Us(phones, i, grp, gs, w)) return "ᵻ"
+            return when (en) {
+                "a" -> "æ"
+                "əʊ" -> "oʊ"
+                else -> en
+            }
+        }
+
+        /** en-us: the unstressed "ɪ" at phones[i] is espeak's reduced ᵻ: an
+         *  e after the word's first consonant (remind, degrees, before) or
+         *  before its last vowel (television, necessary), the e of -es after
+         *  a hissing sound and of -ed after t or d (closes, wanted), the i
+         *  of -ity / -ible (quality, possible). Not a word-initial e. */
+        private fun i2Us(phones: List<String>, i: Int, grp: String?, gs: Int, w: String): Boolean {
+            val vowels = phones.indices.filter { isVowel(phones[it]) }
+            if (i == vowels.last() && i == phones.size - 2 && base(phones.last()) == "Z" && w.endsWith("'s") &&
+                i > 0 && base(phones[i - 1]) in SIBILANTS
+            ) {
+                return true   // the possessive 's after a hissing sound (boss's)
+            }
+            if (grp == null) return false
+            if (grp == "e") {
+                if (i == vowels.first()) return gs > 0
+                if (i != vowels.last()) return true
+                val prev = if (i > 0) base(phones[i - 1]) else null
+                return gs == w.length - 2 && ((w.endsWith("es") && prev in SIBILANTS) ||
+                    (w.endsWith("ed") && (prev == "T" || prev == "D")))
+            }
+            return grp == "i" && Py.slice(w, gs) in setOf("ity", "ible", "ibly")
+        }
+
+        /** en-us: the t at phones[i] is said as a flap ɾ: after a vowel (or
+         *  a vowel and r), before an unstressed vowel (better, thirty,
+         *  party), never after n (twenty) or before a syllabic n. */
+        private fun flaps(phones: List<String>, i: Int, smap: Map<Int, Pair<String, Char>>): Boolean {
+            if (i == 0 || i + 1 >= phones.size || !isVowel(phones[i + 1])) return false
+            val nxt = phones[i + 1]
+            if (!(nxt.endsWith("0") || (smap.getValue(i + 1).second == '0' && base(nxt) == "IY" && i + 2 >= phones.size))) {
+                return false
+            }
+            if (base(nxt) == "AH" && i + 2 < phones.size && base(phones[i + 2]) == "N") return false
+            val prev = phones[i - 1]
+            if (isVowel(prev)) return true
+            return base(prev) == "R" && i >= 2 && isVowel(phones[i - 2])
         }
 
         private fun forceStress(ipa: String): String {

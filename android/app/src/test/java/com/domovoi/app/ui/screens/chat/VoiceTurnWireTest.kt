@@ -107,4 +107,17 @@ class VoiceTurnWireTest {
         }
         return -1
     }
+
+    /** A phone speaking the reply in its own voice asks for no audio
+     *  (speak=false); otherwise the field is left out, as before. */
+    @Test fun aPhoneThatSpeaksItselfAsksForNoAudio() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"heard": true, "reply": "It's 9:05.", "audio": null}"""))
+        server.enqueue(MockResponse().setBody("""{"heard": true, "reply": "It's 9:05."}"""))
+        sendVoiceTurn(api, "android-1a2b", 7, ByteArray(10), null, speak = false)
+        val quiet = String(server.takeRequest().body.readByteArray(), Charsets.ISO_8859_1)
+        assertTrue(quiet, Regex("""name="speak"[\s\S]{0,60}?\r\n\r\nfalse\r\n""").containsMatchIn(quiet))
+        sendVoiceTurn(api, "android-1a2b", 7, ByteArray(10), null)
+        val spoken = String(server.takeRequest().body.readByteArray(), Charsets.ISO_8859_1)
+        assertTrue(!spoken.contains("name=\"speak\""))
+    }
 }

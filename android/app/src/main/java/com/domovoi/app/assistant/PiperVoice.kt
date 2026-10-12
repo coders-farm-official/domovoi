@@ -4,7 +4,10 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtException
 import ai.onnxruntime.OrtSession
+import com.domovoi.app.phonemizer.Phonemizer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -22,12 +25,18 @@ data class PiperConfig(
     val noiseW: Float,
     /** The voice's own phoneme id map (Domovoi's three share one). */
     val idMap: Map<String, IntArray>,
+    /** The phoneme set it was trained on, as the converter names it ("en",
+     *  "en-us"), or null when the converter writes no set it knows (such a
+     *  voice can't speak through Domovoi's converter). */
+    val dialect: String? = Phonemizer.EN,
 ) {
     companion object {
         fun parse(json: String): PiperConfig {
             val o = Json.parseToJsonElement(json).jsonObject
             val inference = o["inference"]?.jsonObject
             fun scale(name: String, default: Float) = inference?.get(name)?.jsonPrimitive?.floatOrNull ?: default
+            val phonemeType = o["phoneme_type"]?.jsonPrimitive?.contentOrNull ?: "espeak"
+            val espeakVoice = (o["espeak"] as? JsonObject)?.get("voice")?.jsonPrimitive?.contentOrNull
             return PiperConfig(
                 sampleRate = o.getValue("audio").jsonObject.getValue("sample_rate").jsonPrimitive.int,
                 noiseScale = scale("noise_scale", 0.667f),
@@ -36,6 +45,7 @@ data class PiperConfig(
                 idMap = o.getValue("phoneme_id_map").jsonObject.mapValues { (_, v) ->
                     v.jsonArray.map { it.jsonPrimitive.int }.toIntArray()
                 },
+                dialect = if (phonemeType == "espeak") Phonemizer.dialectForEspeakVoice(espeakVoice) else null,
             )
         }
     }

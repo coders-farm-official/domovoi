@@ -13,6 +13,10 @@ import pytest
 from domovoi.phonemizer import (
     DATA_DIR,
     Phonemizer,
+    default_id_map,
+    dialect_for_espeak_voice,
+    fit_to_map,
+    speaks_anything,
     PronunciationError,
     format_pronunciation_text,
     get_phonemizer,
@@ -175,9 +179,10 @@ ODD_INPUTS = [
 ]
 
 
+@pytest.mark.parametrize("dialect", ["en", "en-us"])
 @pytest.mark.parametrize("text", ODD_INPUTS)
-def test_no_input_raises(ph, text):
-    for s in ph.phonemize(text):
+def test_no_input_raises(ph, text, dialect):
+    for s in ph.phonemize(text, dialect=dialect):
         assert isinstance(s, str) and s
         assert unknown_symbols(s) == []
         assert phoneme_ids(s)[0] == 1 and phoneme_ids(s)[-1] == 2
@@ -240,8 +245,8 @@ def test_a_long_reply_is_capped_per_synthesis_call(monkeypatch):
 
     seen = []
     monkeypatch.setattr(tts, "_piper_voice", lambda ref: type("V", (), {
-        "sample_rate": 22050, "synthesize_pcm": lambda self, s, speed: b"\x01\x00" * 10})())
-    monkeypatch.setattr(tts, "_phonemize", lambda text: seen.append(text) or ["hˈaɪ"])
+        "sample_rate": 22050, "dialect": "en", "synthesize_pcm": lambda self, s, speed: b"\x01\x00" * 10})())
+    monkeypatch.setattr(tts, "_phonemize", lambda text, dialect="en": seen.append(text) or ["hˈaɪ"])
     sentence = "This is a sentence that goes on. "
     tts._synth_piper_sync(sentence * 1000, "en_US-norman-medium", 1.0)
     assert len(seen[0]) <= tts.MAX_SPOKEN_CHARS and seen[0].endswith("goes on.")
@@ -260,3 +265,69 @@ def test_twelve_syllables_and_no_more(ph):
     assert len(ph.resolve_pronunciation("Bob", twelve).pieces) == 12
     with pytest.raises(PronunciationError, match="at most 12 syllables"):
         ph.resolve_pronunciation("Bob", twelve + "-la")
+
+
+# ── espeak's American set ("en-us") ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(("voice", "dialect"), [
+    ("en", "en"), ("en-us", "en-us"), ("EN-US", "en-us"), ("en_US", "en-us"), (" en ", "en"),
+    ("en-gb-x-rp", None), ("de", None), ("", None), (None, None)])
+def test_the_set_comes_from_the_voice_config(voice, dialect):
+    assert dialect_for_espeak_voice(voice) == dialect
+
+
+def test_an_unknown_set_is_refused(ph):
+    with pytest.raises(ValueError, match="no phoneme set"):
+        ph.phonemize("hello", dialect="de")
+
+
+@pytest.mark.parametrize(("text", "us", "en"), [
+    ("car", "kˈɑːɹ", "kˈɑː"),                    # every r is said
+    ("better water", "bˈɛɾɚ wˈɔːɾɚ", "bˈɛtə wˈɔːtə"),  # flap, r-coloured schwa
+    ("twenty", "twˈɛnti", "twˈɛnti"),            # no flap after n
+    ("dance", "dˈæns", "dˈans"),
+    ("hello", "həlˈoʊ", "həlˈəʊ"),
+    ("lot", "lˈɑːt", "lˈɒt"),
+    ("soft", "sˈɔft", "sˈɒft"),
+    ("new tune", "nˈuː tˈuːn", "njˈuː tjˈuːn"),  # no yod after n, t, d
+    ("remind", "ɹᵻmˈaɪnd", "ɹɪmˈaɪnd"),          # espeak's reduced vowel
+    ("wanted", "wˈɔntᵻd", "wˈɔːntɪd"),
+    ("four", "fˈoːɹ", "fˈɔː"),
+    ("read it again", "ɹˈiːd ɪɾ ɐɡˈɛn", "ɹˈiːd ɪt ɐɡˈɛn"),
+])
+def test_american_conventions(ph, text, us, en):
+    assert ph.phonemize(text, dialect="en-us") == [us]
+    assert ph.phonemize(text) == [en]
+
+
+def test_say_it_like_entries_serve_both_sets():
+    """A respelling is read in the voice's own set; the /phonemes/ form is
+    the voice's own string, used as written."""
+    p = Phonemizer(pronunciations=[("Domovoi", "DOH-moe-voy"), ("Bob", "/bˈɑːb/")])
+    assert p.phonemize("Domovoi's Bob", dialect="en-us") == ["dˈoʊmoʊvˌɔɪz bˈɑːb"]
+    assert p.phonemize("Domovoi's Bob") == ["dˈəʊməʊvˌɔɪz bˈɑːb"]
+
+
+def test_a_voice_map_without_a_symbol_gets_the_nearest():
+    full = default_id_map()
+    small = {k: v for k, v in full.items() if k not in ("ɾ", "ᵻ", "ɚ", "ː")}
+    memo = {}
+    assert fit_to_map("bˈɛɾɚ ɹᵻmˈaɪnd", small, memo) == "bˈɛtəɹ ɹɪmˈaɪnd"
+    assert memo == {"ɾ": "t", "ᵻ": "ɪ", "ɚ": "əɹ"}
+    assert fit_to_map("fˈoːɹ", small, memo) == "fˈoɹ"          # a length mark is dropped
+    assert memo["ː"] == ""
+    assert fit_to_map("bˈɛɾɚ", full) == "bˈɛɾɚ"
+    # Every symbol either set writes is in the shipped map: nothing to fit.
+    ph = get_phonemizer()
+    for d in ("en", "en-us"):
+        for s in ph.phonemize("Better water, Domovoi! I'd read it again; the store's 4th floor.", dialect=d):
+            assert unknown_symbols(s) == [] and fit_to_map(s, full) == s
+
+
+def test_ids_with_no_sound_are_known():
+    m = default_id_map()
+    assert speaks_anything(phoneme_ids("hˈaɪ."))
+    assert not speaks_anything(phoneme_ids(". , !"))
+    assert not speaks_anything(phoneme_ids(""))
+    assert m["^"] and m["$"] and m["_"]
