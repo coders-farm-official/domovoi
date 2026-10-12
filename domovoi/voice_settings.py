@@ -29,8 +29,10 @@ log = logging.getLogger(__name__)
 # The shipped list's own date: what ``updated_at`` says until the owner
 # changes anything.
 DEFAULTS_UPDATED_AT = datetime(2026, 10, 12, tzinfo=timezone.utc)
-# More entries than any household needs; keeps one admin's slip from
-# growing the table (and every reply's lookup) without bound.
+# More words than any household needs; keeps one admin's slip from
+# growing the table (and every reply's lookup) without bound. Counts the
+# owner's own words; the rows of the shipped defaults (at most one each)
+# come on top.
 MAX_PRONUNCIATIONS = 500
 
 
@@ -65,17 +67,39 @@ def effective_pronunciations(rows: list[dict]) -> list[tuple[str, str]]:
     return out
 
 
-def updated_at(rows: list[dict]) -> datetime:
+def updated_at(rows: list[dict], changed: datetime | None = None) -> datetime:
     times = [r["updated_at"] for r in rows if r.get("updated_at") is not None]
+    if changed is not None:
+        times.append(changed)
     return max([DEFAULTS_UPDATED_AT, *times])
+
+
+def default_keys() -> set[str]:
+    from domovoi.phonemizer import PronunciationError, pronunciation_key
+
+    keys = set()
+    for word, _ in default_pronunciations():
+        try:
+            keys.add(pronunciation_key(word))
+        except PronunciationError:
+            continue
+    return keys
+
+
+def owner_words(rows: list[dict]) -> int:
+    """How many words of the owner's own the rows hold (what
+    MAX_PRONUNCIATIONS caps; a default's row doesn't count)."""
+    defaults = default_keys()
+    return sum(1 for r in rows if r["key"] not in defaults)
 
 
 async def load_pronunciations(session) -> tuple[list[tuple[str, str]], datetime]:
     """(effective list, when it last changed)."""
     from domovoi.db.repositories import PronunciationsRepository
 
-    rows = await PronunciationsRepository(session).all()
-    return effective_pronunciations(rows), updated_at(rows)
+    repo = PronunciationsRepository(session)
+    rows = await repo.all()
+    return effective_pronunciations(rows), updated_at(rows, await repo.last_change())
 
 
 async def apply_pronunciations() -> list[str]:

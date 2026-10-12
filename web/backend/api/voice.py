@@ -37,8 +37,9 @@ from domovoi.db.repositories import PronunciationsRepository, VoicesRepository
 from domovoi.phonemizer import Phonemizer, PronunciationError, pronunciation_key
 from domovoi.voice_settings import (
     MAX_PRONUNCIATIONS,
-    default_pronunciations,
+    default_keys,
     effective_pronunciations,
+    owner_words,
     voice_payload,
 )
 from web.backend.db import session_scope
@@ -188,9 +189,11 @@ async def put_pronunciation(body: PronunciationBody, request: Request) -> dict:
     async with session_scope() as s:
         repo = PronunciationsRepository(s)
         rows = await repo.all()
-        if key not in {r["key"] for r in rows} and len(effective_pronunciations(rows)) >= MAX_PRONUNCIATIONS:
+        new_own_word = key not in {r["key"] for r in rows} and key not in default_keys()
+        if new_own_word and owner_words(rows) >= MAX_PRONUNCIATIONS:
             raise HTTPException(status_code=409, detail=f"the list holds at most {MAX_PRONUNCIATIONS} words")
         await repo.put(key=key, word=body.word.strip(), say_like=body.say_like.strip())
+        await repo.touch()
     await _reload_core(request)
     return await _payload()
 
@@ -198,8 +201,9 @@ async def put_pronunciation(body: PronunciationBody, request: Request) -> dict:
 @router.delete("/pronunciations/{word}", response_model=VoiceSettings, dependencies=ADMIN)
 async def delete_pronunciation(word: str, request: Request) -> dict:
     """Take a word off the list: the converter decides how to say it again.
-    A shipped entry stays off until it is added again or the defaults are
-    put back."""
+    The owner's own word's row is deleted; a shipped entry is marked
+    removed, and stays off until it is added again or the defaults are put
+    back."""
     try:
         key = pronunciation_key(word)
     except PronunciationError as e:
@@ -210,19 +214,25 @@ async def delete_pronunciation(word: str, request: Request) -> dict:
         listed = {pronunciation_key(w): w for w, _ in effective_pronunciations(rows)}
         if key not in listed:
             raise HTTPException(status_code=404, detail=f"{word!r} is not on the list")
-        await repo.put(key=key, word=listed[key], say_like=None)
+        if key in default_keys():
+            await repo.put(key=key, word=listed[key], say_like=None)
+        else:
+            await repo.delete([key])
+        await repo.touch()
     await _reload_core(request)
     return await _payload()
 
 
 @router.post("/pronunciations/defaults", response_model=VoiceSettings, dependencies=ADMIN)
 async def restore_default_pronunciations(request: Request) -> dict:
-    """Put every shipped entry back as it shipped. The owner's own words
-    stay."""
+    """Put every shipped entry back as it shipped: the owner's rows for the
+    default words (changes and removals) are deleted, so the defaults of
+    the release the box runs apply, now and after later updates. The
+    owner's own words stay."""
     async with session_scope() as s:
         repo = PronunciationsRepository(s)
-        for word, say in default_pronunciations():
-            await repo.put(key=pronunciation_key(word), word=word, say_like=say)
+        await repo.delete(default_keys())
+        await repo.touch()
     await _reload_core(request)
     return await _payload()
 

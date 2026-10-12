@@ -503,6 +503,23 @@ SENTENCE_SILENCE_SEC = 0.2
 # Said, in the voice, when a text has words but none the converter can read
 # (no Latin letters: another script entirely), rather than silence.
 UNREADABLE_TEXT_FALLBACK = "Sorry, I can't read that out loud."
+# The most text one synthesis call speaks (a few minutes of speech). Replies
+# are spoken a sentence or a paragraph at a time; a longer text is cut at
+# the last sentence end (else the last space) before this and the rest
+# dropped with a log line, so one runaway reply can't hold a voice turn.
+MAX_SPOKEN_CHARS = 5000
+
+
+def _cap_text(text: str) -> str:
+    if len(text) <= MAX_SPOKEN_CHARS:
+        return text
+    head = text[:MAX_SPOKEN_CHARS]
+    cut = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if cut < MAX_SPOKEN_CHARS // 2:
+        cut = head.rfind(" ")
+    cut = cut + 1 if cut > 0 else MAX_SPOKEN_CHARS
+    log.warning("TTS: a %d-character text was cut to %d characters", len(text), cut)
+    return text[:cut]
 
 
 class PiperVoice:
@@ -612,6 +629,7 @@ def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
         return None
 
     v = _piper_voice(voice)
+    text = _cap_text(text)
     sentences = _phonemize(text)
     if not sentences and any(ch.isalnum() for ch in text):
         # Words, but none in a script the converter reads (Cyrillic, CJK,

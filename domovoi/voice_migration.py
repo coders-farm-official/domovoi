@@ -13,8 +13,11 @@ is built:
   log says so). A voice that is one of the three, or an owner's own
   uploaded model, is kept as it is.
 * The retired voices' model files (``<name>.onnx`` / ``.onnx.json``, exactly
-  those names) are deleted from the voices folder, ``voice_models_dir``.
-  Nothing outside that folder is touched.
+  those names) are deleted from the voices folder, ``voice_models_dir`` —
+  but only once one of the three shipped voices is on disk there, so a box
+  whose new voice hasn't downloaded yet (no internet, a failed fetch) keeps
+  the old files; a later boot deletes them. Nothing outside that folder is
+  touched, and nothing reached through a link.
 
 The registry rows of the retired voices are removed by
 :func:`domovoi.voice_catalog.seed_voices`, and the new voice is fetched by
@@ -27,7 +30,7 @@ import logging
 import os
 from pathlib import Path
 
-from domovoi.clients.tts import DEFAULT_PIPER_VOICE, RETIRED_PIPER_VOICES
+from domovoi.clients.tts import DEFAULT_PIPER_VOICE, RETIRED_PIPER_VOICES, SHIPPED_VOICES
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -57,10 +60,19 @@ def migrate_configured_voice(env_path: Path | None = None) -> str | None:
     return old
 
 
+def shipped_voice_on_disk(root: Path) -> bool:
+    """Whether one of the three shipped voices (model and config) sits in
+    the voices folder ``root``."""
+    return any((root / f"{v.model_ref}.onnx").is_file() and (root / f"{v.model_ref}.onnx.json").is_file()
+               for v in SHIPPED_VOICES)
+
+
 def remove_retired_voice_files(voices_dir: Path | None = None) -> list[str]:
     """Delete the retired voices' downloaded model files from the voices
-    folder. Only ``<retired name>.onnx`` and ``.onnx.json`` directly inside
-    it; returns the file names removed."""
+    folder: ``<retired name>.onnx`` and ``.onnx.json`` directly inside it,
+    not links, and only once a shipped voice is on disk there (until then
+    an old voice file is the box's only neural voice on disk). Returns the
+    file names removed."""
     vdir = Path(voices_dir or settings.voice_models_dir)
     removed: list[str] = []
     try:
@@ -68,6 +80,10 @@ def remove_retired_voice_files(voices_dir: Path | None = None) -> list[str]:
     except OSError:
         return removed
     if not root.is_dir():
+        return removed
+    if not shipped_voice_on_disk(root):
+        if any((root / f"{n}.onnx").exists() for n in RETIRED_PIPER_VOICES):
+            log.info("voice: keeping the retired voice files in %s until a shipped voice is on disk", root)
         return removed
     for name in sorted(RETIRED_PIPER_VOICES):
         for suffix in (".onnx", ".onnx.json"):

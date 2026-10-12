@@ -658,8 +658,14 @@ if [ "${1-}" = -c ]; then
       exit 0 ;;
     "#provision:piper-info")
       echo "$HOME/.domovoi/piper_voices"
+      # piper-configured: what the core's settings name first, printed the
+      # way the real snippet prints an unpinned voice (an empty name is
+      # what a stray blank line would look like).
+      if [ -f "$SHIM_STATE/piper-configured" ]; then
+        cat "$SHIM_STATE/piper-configured"; echo -; echo 0
+      fi
       for v in en_US-norman-medium en_US-kristin-medium en_US-ljspeech-medium; do
-        echo "$v $(cat "$SHIM_STATE/piper-pin") 16"
+        echo "$v"; cat "$SHIM_STATE/piper-pin"; echo 16
       done
       exit 0 ;;
     "#provision:piper-download")
@@ -1167,6 +1173,36 @@ case_whisper_sha_mismatch_stops() {
   check "says mismatch" said "Whisper model.bin SHA-256 mismatch"
   check "snapshot deleted" absent "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/d1d751a5f8271d482d14ca55d9e2deeebbae577f"
   check "no marker" no_marker whisper
+  end_case
+}
+
+# The configured voice is the path of an uploaded model, with a space in it:
+# one value per line keeps it whole, it is left to the core (no pin), and
+# the three shipped voices are still fetched and checked.
+case_piper_unpinned_voice_with_a_space() {
+  new_case piper_unpinned_voice_with_a_space
+  printf '%s\n' "/srv/my voices/mine.onnx" >"$STATE/piper-configured"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "piper done" eq "$(state_of piper)" done
+  check "the whole path named" said "the Piper voice '/srv/my voices/mine.onnx' has no pin"
+  check "Norman fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
+  check "Linda fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
+  check "nothing fetched for the path" not_called "/srv/my voices/mine.onnx /home"
+  end_case
+}
+
+# An empty configured voice is no voice at all: skipped, not a voice named
+# "-" with pin "0", and the three shipped voices are fetched.
+case_piper_empty_configured_voice() {
+  new_case piper_empty_configured_voice
+  printf '\n' >"$STATE/piper-configured"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "piper done" eq "$(state_of piper)" done
+  check "no warning about a nameless voice" not_said "the Piper voice '' has no pin"
+  check "no voice named -" not_said "the Piper voice '-'"
+  check "Kristin fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-kristin-medium.onnx"
   end_case
 }
 
@@ -2001,6 +2037,8 @@ CASES=(
   case_ollama_sha_mismatch_stops
   case_whisper_sha_mismatch_stops
   case_piper_sha_mismatch_stops
+  case_piper_unpinned_voice_with_a_space
+  case_piper_empty_configured_voice
   case_model_digest_mismatch_stops
   case_docker_key_mismatch_stops
   case_manifest_missing_key_stops

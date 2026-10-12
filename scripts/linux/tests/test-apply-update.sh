@@ -792,6 +792,30 @@ case_retired_packages_failure_is_a_warning() {
   end_case
 }
 
+# A re-sync that fails rolls back before anything is uninstalled: the
+# previous checkout still needs piper-tts, and nothing re-installs it then.
+case_retired_packages_untouched_when_the_sync_fails() {
+  new_case retired_packages_untouched_when_the_sync_fails
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]
+name = "domovoi"
+version = "1"
+dependencies = ["onnxruntime"]
+' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps")
+  echo "$sha_b" >"$STATE/pip-fail-when-head"
+  printf 'ERROR: no matching distribution
+' >"$STATE/pip-fail-output"
+  printf '  Successfully uninstalled piper-tts-1.8.0
+' >"$STATE/pip-uninstall-output"
+  run_update
+  check "the sync failed" eq "$(field error | grep -c 'failed at sync-deps')" 1
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "nothing uninstalled" not_called "uninstall -y piper-tts"
+  check "no such step" eq "$(grep -c 'drop-retired-packages' "$RESULT")" 0
+  end_case
+}
+
 case_retired_packages_kept_through_a_rollback() {
   new_case retired_packages_kept_through_a_rollback
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -2674,6 +2698,7 @@ CASES=(
   case_retired_packages_absent_leave_no_step
   case_retired_packages_failure_is_a_warning
   case_retired_packages_kept_through_a_rollback
+  case_retired_packages_untouched_when_the_sync_fails
   case_mpd_changed
   case_mpd_conf_only
   case_migration_health_failure_rolls_back

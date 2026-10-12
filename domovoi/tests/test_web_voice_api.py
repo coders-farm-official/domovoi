@@ -85,7 +85,7 @@ async def fresh_lists():
     from domovoi.db.session import engine
 
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE pronunciations"))
+        await conn.execute(text("TRUNCATE pronunciations, pronunciations_changed"))
         await conn.execute(text("DELETE FROM voices"))
         await conn.execute(text(
             "INSERT INTO voices (name, engine, model_ref, is_default) VALUES "
@@ -197,3 +197,71 @@ async def test_preview_and_samples_go_to_the_core(_db, fresh_lists, core_hops): 
         assert r.status_code == 200
         assert core_hops[-1] == ("/v1/admin/voices/sample", {"name": "Kristin"})
         assert (await c.get("/api/voice/sample/en_US-ryan-high", headers=h)).status_code == 404
+
+
+async def _rows():
+    from domovoi.db.session import engine
+
+    async with engine.begin() as conn:
+        return (await conn.execute(text("SELECT key, say_like FROM pronunciations ORDER BY key"))).all()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_table_stays_bounded(_db, fresh_lists, core_hops):  # noqa: F811
+    """Removing the owner's own word deletes its row; a default gets one row
+    at most; putting the defaults back deletes the default words' rows, so a
+    later release's defaults apply."""
+    async with web_client() as c:
+        token = await claim_admin(c)
+        h = {**bearer(token), "X-Requested-With": "t"}
+        await c.post("/api/voice/pronunciations", json={"word": "Siobhan", "say_like": "shiv-AWN"}, headers=h)
+        before = (await c.get("/api/voice", headers=h)).json()["updated_at"]
+        r = await c.delete("/api/voice/pronunciations/Siobhan", headers=h)
+        assert r.status_code == 200
+        assert await _rows() == []                          # deleted, not marked
+        assert r.json()["updated_at"] >= before             # a deletion still moves updated_at
+        await c.post("/api/voice/pronunciations", json={"word": "Nguyen", "say_like": "NOO-yen"}, headers=h)
+        await c.delete("/api/voice/pronunciations/Nguyen", headers=h)
+        assert await _rows() == [("nguyen", None)]          # a removed default: one row
+        await c.post("/api/voice/pronunciations", json={"word": "Domo", "say_like": "DOH-mo"}, headers=h)
+        await c.post("/api/voice/pronunciations", json={"word": "Kamron", "say_like": "CAM-ron"}, headers=h)
+        r = await c.post("/api/voice/pronunciations/defaults", headers=h)
+        assert await _rows() == [("kamron", "CAM-ron")]     # only the owner's own word is left
+
+        # A later release ships a different default: it reaches this box.
+        from domovoi import voice_settings
+
+        newer = [("Domovoi", "DOH-moe-voy"), ("Domo", "DOH-moh"), ("Nguyen", "win")]
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(voice_settings, "default_pronunciations", lambda: newer)
+            body = (await c.get("/api/voice", headers=h)).json()
+        assert {"word": "Domo", "say_like": "DOH-moh"} in body["pronunciations"]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_cap_counts_the_owners_words(_db, fresh_lists, core_hops, monkeypatch):  # noqa: F811
+    from domovoi import voice_settings
+    from domovoi.db.session import engine
+
+    monkeypatch.setattr(voice_settings, "MAX_PRONUNCIATIONS", 3)
+    monkeypatch.setattr(voice_api, "MAX_PRONUNCIATIONS", 3)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "INSERT INTO pronunciations (key, word, say_like) VALUES "
+            "('aa', 'Aa', 'ay'), ('bb', 'Bb', 'bee'), ('nguyen', 'Nguyen', NULL)"))
+    async with web_client() as c:
+        token = await claim_admin(c)
+        h = {**bearer(token), "X-Requested-With": "t"}
+        ok = await c.post("/api/voice/pronunciations", json={"word": "Cc", "say_like": "see"}, headers=h)
+        assert ok.status_code == 200                        # 2 own words + a default's row: room for one
+        full = await c.post("/api/voice/pronunciations", json={"word": "Dd", "say_like": "dee"}, headers=h)
+        assert full.status_code == 409 and "at most 3" in full.json()["detail"]
+        again = await c.post("/api/voice/pronunciations", json={"word": "Cc", "say_like": "SEE"}, headers=h)
+        assert again.status_code == 200                     # changing a listed word is always allowed
+        default = await c.post("/api/voice/pronunciations", json={"word": "Nguyen", "say_like": "win"}, headers=h)
+        assert default.status_code == 200                   # a default word doesn't count
+        await c.delete("/api/voice/pronunciations/Cc", headers=h)
+        r = await c.post("/api/voice/pronunciations", json={"word": "Dd", "say_like": "dee"}, headers=h)
+        assert r.status_code == 200                         # removing one makes room

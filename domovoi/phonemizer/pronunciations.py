@@ -68,7 +68,7 @@ def pronunciation_key(word):
         raise PronunciationError("the word is empty")
     if len(w) > MAX_WORD_CHARS:
         raise PronunciationError(f"{w[:20]}...: a word is at most {MAX_WORD_CHARS} letters")
-    if not TOKEN_RE.fullmatch(w) or w.startswith("<"):
+    if not TOKEN_RE.fullmatch(w) or w.startswith("<") or not any(c.isalpha() for c in w):
         raise PronunciationError(
             f"{w}: one word only (letters, with ' or - inside), as it is written in text")
     return strip_accents(unicodedata.normalize("NFC", w)).lower()

@@ -193,3 +193,34 @@ def test_pins_are_the_three_public_domain_voices():
         assert re.fullmatch(r"[0-9a-f]{64}", sha) and size == 63531379
         assert re.fullmatch(r"[0-9a-f]{40}", blob) and 4000 < jsize < 6000
     assert tts_mod.PIPER_PINNED_REVISION == "c10ece1aade47bb51c153c893d14e5bf8e5b7117"
+
+
+@pytest.mark.parametrize("configured,first", [
+    ("", None),                                          # no configured voice: just the three
+    ("/srv/my voices/mine.onnx", "/srv/my voices/mine.onnx"),   # a path with a space, unpinned
+    ("en_US-kristin-medium", "en_US-kristin-medium"),    # a shipped one: listed once
+])
+def test_the_provisioning_reads_one_value_per_line(monkeypatch, capsys, configured, first):
+    """scripts/linux/provision.sh's piper-info snippet, run for real: the
+    folder, then three lines a voice (name, SHA-256 or "-", size)."""
+    import contextlib
+    import io as _io
+
+    text = (REPO / "scripts/linux/provision.sh").read_text(encoding="utf-8")
+    snippet = re.search(r"PY_PIPER_INFO='(#provision:piper-info\n.*?)'\n", text, re.S).group(1)
+    monkeypatch.setattr(tts_mod.settings, "tts_piper_voice", configured)
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(compile(snippet, "piper-info", "exec"), {})
+    lines = buf.getvalue().splitlines()
+    assert lines[0] == tts_mod.settings.voice_models_dir
+    triples = [lines[i:i + 3] for i in range(1, len(lines), 3)]
+    names = [t[0] for t in triples]
+    expected = ([first] if first and first not in tts_mod.PIPER_PINS else []) + [
+        "en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"]
+    if first in tts_mod.PIPER_PINS:
+        expected = [first] + [n for n in expected if n != first]
+    assert names == expected
+    for name, sha, size in triples:
+        pin = tts_mod.PIPER_PINS.get(name)
+        assert (sha, size) == ((pin[0], str(pin[1])) if pin else ("-", "0"))

@@ -75,6 +75,8 @@ INVALID = [
     ("Bob", "/w€n/"),
     ("Bob", "-".join(["la"] * 13)),
     ("Bob", "shh"),
+    (",", "comma"),
+    ("?", "what"),
 ]
 
 

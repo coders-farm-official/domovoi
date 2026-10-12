@@ -113,10 +113,26 @@ def _number_word(s):
         return N.decimal(s)
     if len(s) > 1 and s.startswith("0"):
         return N.digits(s)
-    n = int(s)
     if len(s) >= 10:
         return N.digits(s)
-    return N.cardinal(n)
+    return N.cardinal(int(s))
+
+
+# A number longer than this many digits is read digit by digit before
+# anything else looks at it: no number word exists for it, Python refuses
+# to turn 4,301 digits into an int, and every later pattern then sees short
+# runs only.
+LONG_NUMBER_DIGITS = 30
+
+
+def _long_number(m):
+    whole, _, frac = m.group(0).partition(".")
+    if sum(c.isdigit() for c in whole) <= LONG_NUMBER_DIGITS:
+        return m.group(0)
+    out = " " + N.digits(whole)
+    if frac:
+        out += " point " + " ".join(N.ONES[int(c)] for c in frac)
+    return out + " "
 
 
 def _plain_number(m):
@@ -155,16 +171,19 @@ def prenormalize(text):
     t = unicodedata.normalize("NFC", text)
     t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
     t = t.replace("—", ", ").replace("–", " to ").replace("…", "...")
+    # very long numbers: digit by digit, first (LONG_NUMBER_DIGITS)
+    t = re.sub(r"\d[\d,]*(?:\.\d+)?", _long_number, t)
     # stylized names: $ glued to letters is an S ($uicideboy$ -> suicideboys)
     t = re.sub(r"(?<=[A-Za-z])\$|\$(?=[A-Za-z])", "s", t)
     # money
     t = re.sub(r"([$£€])\s?(\d[\d,]*)(?:\.(\d+))?(?:\s?(thousand|million|billion|trillion|[KMB]\b))?",
                _money, t)
     # temperature / degrees
-    t = re.sub(r"(-?\d+(?:\.\d+)?)\s?°\s?([FC])?\b", _temp, t)
+    t = re.sub(r"(?<!\d)(-?\d+(?:\.\d+)?)\s?°\s?([FC])?\b", _temp, t)
     # percent
-    t = re.sub(r"(-?\d+(?:\.\d+)?)\s?%", lambda m: f" {m.group(1)} percent ", t)
-    # clock times
+    t = re.sub(r"(?<!\d)(-?\d+(?:\.\d+)?)\s?%", lambda m: f" {m.group(1)} percent ", t)
+    # clock times (a match starting mid-run of digits can't succeed for the
+    # patterns below: \b or (?<!\d) keeps each one linear)
     t = re.sub(r"\b(\d{1,2}):(\d{2})(?:\s*([AaPp]\.?\s?[Mm]\.?)(?![A-Za-z]))?", _time, t)
     t = re.sub(r"\b(\d{1,2})\s*([AaPp])\.?\s?[Mm]\b\.?", _ampm, t)
     # phone numbers: digit by digit
@@ -174,7 +193,7 @@ def prenormalize(text):
     # "24/7"
     t = t.replace("24/7", " twenty four seven ")
     # units glued to numbers
-    t = re.sub(r"(\d+(?:\.\d+)?)\s?(" + "|".join(re.escape(u) for u in sorted(UNITS, key=len, reverse=True))
+    t = re.sub(r"(?<!\d)(\d+(?:\.\d+)?)\s?(" + "|".join(re.escape(u) for u in sorted(UNITS, key=len, reverse=True))
                + r")\b", lambda m: _units(m), t, flags=re.I)
     # ordinals
     t = re.sub(r"\b(\d+)(st|nd|rd|th)\b", lambda m: " " + N.ordinal(int(m.group(1))) + " ", t)

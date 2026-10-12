@@ -1624,9 +1624,9 @@ class PronunciationsRepository:
     """The owner's changes to the "say it like" list (table
     ``pronunciations``, V027): one row per word, keyed by the converter's
     normalized form. ``say_like`` None marks a shipped default the owner
-    removed. Rows are upserted, never deleted, so the newest ``updated_at``
-    is when the list last changed. The effective list (defaults + these
-    rows) is built by :mod:`domovoi.voice_settings`."""
+    removed. ``pronunciations_changed`` holds when the list last changed
+    (:meth:`touch` after every change, deletions included). The effective
+    list (defaults + these rows) is built by :mod:`domovoi.voice_settings`."""
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
@@ -1654,9 +1654,34 @@ class PronunciationsRepository:
             {"key": key, "word": word, "say_like": say_like},
         )
 
+    async def delete(self, keys) -> int:
+        """Delete the rows of ``keys``; how many went."""
+        keys = list(keys)
+        if not keys:
+            return 0
+        row = await self.s.execute(
+            text("DELETE FROM pronunciations WHERE key = ANY(:keys)"), {"keys": keys}
+        )
+        return int(row.rowcount or 0)
+
     async def count(self) -> int:
         row = await self.s.execute(text("SELECT COUNT(*) FROM pronunciations"))
         return int(row.scalar_one())
+
+    async def touch(self) -> None:
+        """Record that the list changed, now."""
+        await self.s.execute(
+            text(
+                """
+                INSERT INTO pronunciations_changed (id, changed_at) VALUES (1, NOW())
+                ON CONFLICT (id) DO UPDATE SET changed_at = NOW()
+                """
+            )
+        )
+
+    async def last_change(self):
+        row = await self.s.execute(text("SELECT changed_at FROM pronunciations_changed WHERE id = 1"))
+        return row.scalar()
 
 
 class WakeWordsRepository:

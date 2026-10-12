@@ -207,3 +207,56 @@ def test_without_onnx_runtime_unknown_words_are_spelled():
     assert not p.has_model
     assert p.phonemize("hello") == ["həlˈəʊ"]
     assert p.phonemize("Skrillex")[0]  # spelled out, but it still speaks
+
+
+# ─── Very long numbers (review 2026-10-12) ────────────────────────────────
+
+
+@pytest.mark.parametrize("text", [
+    "1" * 16000, "1" * 16000 + "%", "1" * 16000 + " km", "1" * 16000 + "°C", "x " + "1" * 4400,
+    "$" + "1" * 5000, "3." + "1" * 16000, "1" * 16000 + ".5", "1" * 16000 + "th", "1," * 8000,
+])
+def test_a_very_long_number_is_quick_and_never_raises(text):
+    import time
+
+    from domovoi.phonemizer.normalize import prenormalize
+
+    t0 = time.perf_counter()
+    words = prenormalize(text)
+    assert time.perf_counter() - t0 < 1.0, "the normalizer must stay linear on long digit runs"
+    assert words.strip()
+
+
+def test_a_long_number_is_read_digit_by_digit(ph):
+    from domovoi.phonemizer.normalize import prenormalize
+
+    assert prenormalize("7" * 31).split() == ["seven"] * 31
+    assert prenormalize("$" + "1" * 18).split()[-1] == "dollars"        # 30 digits and fewer: as before
+    assert ph.phonemize("1" * 4400)[0].count("wˈɒn") == 4400
+
+
+def test_a_long_reply_is_capped_per_synthesis_call(monkeypatch):
+    from domovoi.clients import tts
+
+    seen = []
+    monkeypatch.setattr(tts, "_piper_voice", lambda ref: type("V", (), {
+        "sample_rate": 22050, "synthesize_pcm": lambda self, s, speed: b"\x01\x00" * 10})())
+    monkeypatch.setattr(tts, "_phonemize", lambda text: seen.append(text) or ["hˈaɪ"])
+    sentence = "This is a sentence that goes on. "
+    tts._synth_piper_sync(sentence * 1000, "en_US-norman-medium", 1.0)
+    assert len(seen[0]) <= tts.MAX_SPOKEN_CHARS and seen[0].endswith("goes on.")
+    tts._synth_piper_sync("short", "en_US-norman-medium", 1.0)
+    assert seen[1] == "short"
+
+
+@pytest.mark.parametrize("word", [",", "?", ".", ";", ":", "!"])
+def test_punctuation_is_not_a_word(word):
+    with pytest.raises(PronunciationError, match="one word only"):
+        pronunciation_key(word)
+
+
+def test_twelve_syllables_and_no_more(ph):
+    twelve = "-".join(["la"] * 12)
+    assert len(ph.resolve_pronunciation("Bob", twelve).pieces) == 12
+    with pytest.raises(PronunciationError, match="at most 12 syllables"):
+        ph.resolve_pronunciation("Bob", twelve + "-la")

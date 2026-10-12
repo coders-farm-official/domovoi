@@ -2129,10 +2129,12 @@ PY_PIPER_INFO='#provision:piper-info
 from domovoi.config import settings
 from domovoi.clients import tts
 print(settings.voice_models_dir)
-wanted = [settings.tts_piper_voice] + [v.model_ref for v in tts.SHIPPED_VOICES]
-for voice in dict.fromkeys(wanted):
+wanted = [(settings.tts_piper_voice or "").strip()] + [v.model_ref for v in tts.SHIPPED_VOICES]
+for voice in dict.fromkeys(v for v in wanted if v and "\n" not in v):
     pin = tts.PIPER_PINS.get(voice)
-    print(voice, pin[0] if pin else "-", pin[1] if pin else 0)'
+    print(voice)
+    print(pin[0] if pin else "-")
+    print(pin[1] if pin else 0)'
 
 # Fetch ahead, whatever the internet answer (PLAN 4.8): provisioning is
 # online by definition, so the egress gate is held open for this one call.
@@ -2148,16 +2150,23 @@ with egress.override_policy("always"):
 
 # piper_info: PIPER_DIR, and per voice (the configured one first, then the
 # three Domovoi offers) PIPER_VOICES / PIPER_SHAS ("-": no pin) / PIPER_SIZES.
+# One value per line, three lines a voice, so a name with spaces (the path
+# of an uploaded .onnx) stays whole; an empty name is skipped, and a size
+# that isn't a number counts as 0.
 PIPER_DIR="" PIPER_VOICES=() PIPER_SHAS=() PIPER_SIZES=()
 piper_info() {
-  local out v sha size
+  local out i size
+  local -a lines
   out=$(svc_py -c "$PY_PIPER_INFO") || return 1
-  PIPER_DIR=$(sed -n 1p <<<"$out")
+  mapfile -t lines <<<"$out"
+  PIPER_DIR=${lines[0]:-}
   PIPER_VOICES=() PIPER_SHAS=() PIPER_SIZES=()
-  while read -r v sha size; do
-    [ -n "$v" ] || continue
-    PIPER_VOICES+=("$v") PIPER_SHAS+=("$sha") PIPER_SIZES+=("$size")
-  done < <(sed -n '2,$p' <<<"$out")
+  for ((i = 1; i + 2 < ${#lines[@]} + 1; i += 3)); do
+    [ -n "${lines[$i]}" ] || continue
+    size=${lines[$((i + 2))]:-0}
+    [[ $size =~ ^[0-9]+$ ]] || size=0
+    PIPER_VOICES+=("${lines[$i]}") PIPER_SHAS+=("${lines[$((i + 1))]:--}") PIPER_SIZES+=("$size")
+  done
   [ -n "$PIPER_DIR" ] && [ ${#PIPER_VOICES[@]} -gt 0 ]
 }
 inputs_piper() { piper_info || return 1; printf '%s\n' "$PIPER_DIR" "${PIPER_VOICES[@]}" "${PIPER_SHAS[@]}"; }
