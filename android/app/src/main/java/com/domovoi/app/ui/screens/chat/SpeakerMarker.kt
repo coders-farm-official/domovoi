@@ -42,7 +42,7 @@ internal data class SpeakerMark(
 
 /**
  * The marker for a message, or null when it needs none (anything typed, or
- * Domovoi's own reply). [ownerId] is the phone's owner (`Prefs.ownerPersonId`).
+ * Domovoi's own reply). [ownerId] is the phone's owner on this server (`Prefs.owners`).
  */
 internal fun speakerMark(
     source: String?,

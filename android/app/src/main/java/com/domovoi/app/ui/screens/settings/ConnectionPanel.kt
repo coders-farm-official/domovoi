@@ -72,7 +72,9 @@ internal fun ConnectionPanel() {
     val serverUrl by app.prefs.serverUrl.collectAsState()
     val themeMode by app.prefs.themeMode.collectAsState()
     val listenerId by app.prefs.listenerPersonId.collectAsState()
-    val ownerId by app.prefs.ownerPersonId.collectAsState()
+    val owners by app.prefs.owners.collectAsState()
+    // Per server: a person id belongs to the server that issued it.
+    val ownerId = ServerCredentials.ownerFor(owners, serverUrl)
     val connected by app.bus.connected.collectAsState()
     val deviceToken by app.prefs.deviceToken.collectAsState()
     val trusted by app.prefs.trustedServers.collectAsState()
@@ -333,7 +335,7 @@ internal fun ConnectionPanel() {
                         options = listenerOptions,
                         label = { it?.name ?: "nobody in particular" },
                         onSelect = { person ->
-                            app.prefs.setOwnerPersonId(person?.id?.toString())
+                            app.prefs.setOwnerPersonId(serverUrl, person?.id?.toString())
                             toast(
                                 if (person == null) "this phone belongs to nobody in particular"
                                 else "this phone belongs to ${person.name}",

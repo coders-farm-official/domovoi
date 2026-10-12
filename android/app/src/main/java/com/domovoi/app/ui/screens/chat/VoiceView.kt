@@ -55,7 +55,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -104,6 +103,26 @@ internal enum class TalkPhase { Idle, Recording, CancelArmed, Sending, Speaking 
  */
 internal fun slidOff(x: Float, y: Float, width: Int, height: Int, marginPx: Float): Boolean =
     x < -marginPx || y < -marginPx || x > width + marginPx || y > height + marginPx
+
+/** What one pointer event means for a held talk button. */
+internal enum class HoldStep { HOLD, RELEASE, CANCEL }
+
+/**
+ * Read a pointer event on the held button the way Compose's
+ * `waitForUpOrCancellation` does: the pointer gone ([present] false) or an
+ * event someone else already consumed is a CANCEL — that is how Android's
+ * own cancellation arrives (the notification shade, an incoming call, a
+ * system dialog, the screen going off): an "up" that is already consumed.
+ * Only an unconsumed lift is a RELEASE, which sends; still pressed is HOLD.
+ * Before 2026-10-12 a cancelled touch was taken for neither, and the
+ * recording ran on to its 30 s cap and was sent.
+ */
+internal fun holdStep(present: Boolean, pressed: Boolean, consumed: Boolean): HoldStep = when {
+    !present -> HoldStep.CANCEL
+    consumed -> HoldStep.CANCEL
+    pressed -> HoldStep.HOLD
+    else -> HoldStep.RELEASE
+}
 
 /** The dock's next state after a drag the lists could not use:
  *  [leftoverY] < 0 is the finger pushing on past the end (scrolling down
@@ -483,29 +502,43 @@ private fun TalkButton(controller: VoiceController) {
                         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         var off = false
                         var cancelled = false
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null) {
-                                cancelled = true // the system took the gesture
-                                break
+                        var settled = false
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                when (holdStep(change != null, change?.pressed == true, change?.isConsumed == true)) {
+                                    HoldStep.CANCEL -> {
+                                        cancelled = true
+                                        break
+                                    }
+                                    HoldStep.RELEASE -> {
+                                        change!!.consume()
+                                        break
+                                    }
+                                    HoldStep.HOLD -> {
+                                        val c = change!!
+                                        val nowOff = slidOff(c.position.x, c.position.y, size.width, size.height, margin)
+                                        if (nowOff != off) {
+                                            off = nowOff
+                                            controller.slide(off)
+                                        }
+                                        c.consume()
+                                    }
+                                }
                             }
-                            if (change.changedToUp()) {
-                                change.consume()
-                                break
-                            }
-                            val nowOff = slidOff(change.position.x, change.position.y, size.width, size.height, margin)
-                            if (nowOff != off) {
-                                off = nowOff
-                                controller.slide(off)
-                            }
-                            change.consume()
+                            val cancel = off || cancelled
+                            controller.release(cancel)
+                            settled = true
+                            view.performHapticFeedback(
+                                if (cancel) rejectHaptic() else confirmHaptic(),
+                            )
+                        } finally {
+                            // The gesture itself was torn down (the view left,
+                            // the pointer input restarted): nothing is sent,
+                            // and the mic closes.
+                            if (!settled) controller.release(cancel = true)
                         }
-                        val cancel = off || cancelled
-                        controller.release(cancel)
-                        view.performHapticFeedback(
-                            if (cancel) rejectHaptic() else confirmHaptic(),
-                        )
                     }
                 },
             contentAlignment = Alignment.Center,

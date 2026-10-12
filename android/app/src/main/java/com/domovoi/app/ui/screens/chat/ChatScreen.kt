@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.domovoi.app.AppContainer
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
@@ -855,7 +856,9 @@ internal fun MessageBubble(m: LiveMessage, threadId: Long) {
             }
         }
         // Who Domovoi heard, on a message said into the chat mic.
-        val owner by app.prefs.ownerPersonId.collectAsState()
+        val owners by app.prefs.owners.collectAsState()
+        val server by app.prefs.serverUrl.collectAsState()
+        val owner = ServerCredentials.ownerFor(owners, server)
         speakerMark(m.source, m.role, m.speakerPersonId, m.speakerName, m.speakerConfident, owner)
             ?.takeIf { !m.pending }
             ?.let { SpeakerMarker(it, Modifier.padding(end = 2.dp)) }

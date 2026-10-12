@@ -167,6 +167,19 @@ class VoiceTurnTest {
 
     // ── The hold-to-talk view's decisions ───────────────────────────────
 
+    @Test fun aCancelledTouchIsNeverASend() {
+        // Android cancels a touch (the shade, a call, a dialog, screen off)
+        // with an "up" that is already consumed: that throws the take away.
+        assertEquals(HoldStep.CANCEL, holdStep(present = true, pressed = false, consumed = true))
+        // The pointer gone from the event altogether: the same.
+        assertEquals(HoldStep.CANCEL, holdStep(present = false, pressed = false, consumed = false))
+        // Someone else claimed the gesture while it was held.
+        assertEquals(HoldStep.CANCEL, holdStep(present = true, pressed = true, consumed = true))
+        // Only a finger lifted off the button, unclaimed, sends.
+        assertEquals(HoldStep.RELEASE, holdStep(present = true, pressed = false, consumed = false))
+        assertEquals(HoldStep.HOLD, holdStep(present = true, pressed = true, consumed = false))
+    }
+
     @Test fun aFingerHasSlidOffOnlyPastTheMargin() {
         val m = 40f
         assertFalse(slidOff(10f, 10f, 400, 400, m))

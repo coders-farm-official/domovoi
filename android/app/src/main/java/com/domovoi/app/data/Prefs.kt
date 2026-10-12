@@ -59,7 +59,7 @@ class Prefs(
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
-    private val kOwner = stringPreferencesKey("owner_person")
+    private val kOwners = stringPreferencesKey("owner_people")
     private val kSharedScreens = stringPreferencesKey("shared_screens")
     private val kLyricsPanelOpen = booleanPreferencesKey("lyrics_panel_open")
     private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
@@ -96,12 +96,13 @@ class Prefs(
     private val _listenerPersonId = MutableStateFlow<String?>(null)
     val listenerPersonId: StateFlow<String?> = _listenerPersonId
 
-    /** "This phone belongs to": the person (a server `people.id`) who
-     *  usually talks from this phone. Voice ID still decides who spoke; a
-     *  voice message's speaker marker is drawn softer when it names someone
-     *  else (ui/screens/chat/SpeakerMarker.kt). Null: nobody in particular. */
-    private val _ownerPersonId = MutableStateFlow<String?>(null)
-    val ownerPersonId: StateFlow<String?> = _ownerPersonId
+    /** "This phone belongs to", per server (normalised address -> that
+     *  server's `people.id`): who usually talks from this phone. Voice ID
+     *  still decides who spoke; a voice message's speaker marker is drawn
+     *  softer when it names someone else (ui/screens/chat/SpeakerMarker.kt).
+     *  Read with [ServerCredentials.ownerFor]; absent: nobody in particular. */
+    private val _owners = MutableStateFlow<Map<String, String>>(emptyMap())
+    val owners: StateFlow<Map<String, String>> = _owners
 
     /**
      * Each server's last answer to "is this install a shared screen?"
@@ -189,7 +190,7 @@ class Prefs(
             trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
-            _ownerPersonId.value = p[kOwner]
+            _owners.value = ServerCredentials.decodeOwners(p[kOwners])
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
             _lyricsPanelOpen.value = p[kLyricsPanelOpen] ?: true
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
@@ -354,6 +355,7 @@ class Prefs(
             IdentityGate.pinKey(url)?.let { key -> if (key in trustDecided) setTrustDecided(trustDecided - key) }
         }
         setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
+        setOwners(ServerCredentials.withOwner(_owners.value, url, null))
     }
 
     // ── Shared screen ──────────────────────────────────────────────────
@@ -417,13 +419,15 @@ class Prefs(
         }
     }
 
-    fun setOwnerPersonId(id: String?) {
-        _ownerPersonId.value = id
-        scope.launch {
-            context.dataStore.edit {
-                if (id == null) it.remove(kOwner) else it[kOwner] = id
-            }
-        }
+    /** Who this phone belongs to on the server at [url]; null: nobody. */
+    fun setOwnerPersonId(url: String, id: String?) {
+        setOwners(ServerCredentials.withOwner(_owners.value, url, id))
+    }
+
+    private fun setOwners(next: Map<String, String>) {
+        if (next == _owners.value) return
+        _owners.value = next
+        scope.launch { context.dataStore.edit { it[kOwners] = ServerCredentials.encodeOwners(next) } }
     }
 
     fun setListenerPersonId(id: String?) {
