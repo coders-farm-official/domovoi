@@ -3240,6 +3240,7 @@
           "people"
         ],
         "summary": "List Profiles",
+        "description": "A person's voice samples (metadata only, never an embedding),\nnewest first, each with its ``source``: ``satellite`` or ``phone``\n(V026). The dashboard's People page lists the two sets apart; an\nadmin deletes one with ``DELETE \u2026/profiles/{profile_id}``.",
         "operationId": "list_profiles_api_people__person_id__profiles_get",
         "parameters": [
           {
@@ -19346,6 +19347,11 @@
               }
             ],
             "title": "Sample Seconds"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "satellite"
           }
         },
         "type": "object",

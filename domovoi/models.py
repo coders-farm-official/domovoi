@@ -133,7 +133,11 @@ class Context(BaseModel):
     # media asked for by voice plays ON the phone (Response.device_actions),
     # timers and reminders go house-wide as if set with no room
     # (``satellite_room_id``), and a satellite's own settings (Wi-Fi, its
-    # voice) are refused politely (Handler.satellite_only).
+    # voice) are refused politely (Handler.satellite_only). It is also what
+    # lets a turn add to a person's PHONE voice samples (V026,
+    # handlers/voice_profile.py ``phone_chat_mic``). A future "phone as a
+    # satellite" mode must NOT set it: that mode may not create or extend
+    # phone profiles (owner decision 2026-10-12).
     device_kind: str | None = None
     # What the phone's own player is doing, as the app reported it with the
     # turn: {"title", "artist", "kind", "playing"} — any key may be missing.

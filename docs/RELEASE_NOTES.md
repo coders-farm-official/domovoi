@@ -4,6 +4,65 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Phone voice profiles: "my name is …" from the chat mic
+
+A server update. It adds migration **V026** (the update runs it).
+
+* **Your voice on the phone is kept apart from your voice in the rooms.**
+  A phone's mic hears a voice very differently from a satellite's, so a
+  person now has phone samples next to their satellite samples.
+  Satellites only ever match satellite samples, so nothing said into a
+  phone changes how the rooms recognize anyone. The phone matches your
+  phone samples when you have any, otherwise your satellite ones as
+  before.
+* **Saying "my name is …" into the phone no longer makes a second you.**
+  If that name is already someone, Domovoi asks "Add this phone's voice
+  to …?"; "yes" on your very next press (within a minute) adds it, up to
+  three phone samples per person, the oldest dropped
+  (`VOICE_PROFILE_PHONE_SAMPLE_CAP`); "no", or saying anything else,
+  changes nothing. If two people share the name, it won't guess which one
+  you are and says so. A new name is enrolled as before, from the phone's
+  sample. The same goes for "this is …" introductions on the phone.
+* **Someone enrolled only from a phone is unknown to every satellite**:
+  their only samples are phone samples, which satellites never use. If
+  they then introduce themselves at a satellite ("my name is …"), the
+  satellite enrols a second person with the same name, as it does today
+  for any existing name (that duplicate-name gap on satellites is
+  unchanged in this release); an admin can delete the extra one on the
+  People page.
+* **People page:** a person's profile now lists their voice samples in two
+  groups, satellite and phone, each with a delete button (admin).
+* **The migration** files any sample a phone enrolled before this update
+  (stored under the phone's `phone-…` id) as a phone sample, so it stops
+  counting towards that person's room voice.
+
+## 2026-10-12 — Chat mic fixes: "Hey Domovoi, …" and "what's playing"
+
+A server update and a new Android build.
+
+* **Saying "Hey Domovoi" into the phone's mic no longer hides the
+  request.** A satellite's transcript starts after its wake word; the
+  phone's held it ("Hey Domovoit, play Suicide Boys."), which no command
+  matched, so the turn went to the language model with the name buried
+  in it, and a random song played. The server now takes a leading wake
+  phrase off before routing, however speech-to-text spells the name;
+  the chat keeps what was said. (Server.)
+* **"What's playing" from the phone answered that the playing song was
+  paused** — the mic pauses the phone's music while you hold the button,
+  and the turn reported it then. It now reports the player as it was
+  when you pressed. (App.)
+* **Connecting the app to a different Domovoi clears the phone's player.**
+  What was queued from the old server (its songs, stations, episodes,
+  books) stops and leaves the mini player, and a cast to one of its rooms
+  ends on the phone; nothing of it is asked of the new server. Servers are
+  told apart by the identity the app pinned, so the same Domovoi at a new
+  address, a reconnect, or switching between this phone and the server
+  keeps everything playing. Songs saved on the phone stay. (App.)
+* Not a bug: when a request picks one song, that song is the phone's
+  whole queue, so the mini player shows its play button once the song
+  ends. Music playing before a turn pauses while you hold the button,
+  comes back when you let go, and dips under the spoken reply.
+
 ## 2026-10-12 — Android: an on-device assistant benchmark, and a bigger app
 
 New Android build only; nothing changes on the server.

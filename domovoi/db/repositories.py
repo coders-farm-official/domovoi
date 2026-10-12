@@ -434,6 +434,25 @@ class PeopleRepository:
             return None
         return int(result[0]), result[1], result[2]
 
+    async def find_by_name(self, name: str) -> list[tuple[int, str]]:
+        """Everyone called ``name`` (case and surrounding space aside), as
+        ``(id, name)``, oldest row first — at most two, which is enough to
+        tell "nobody", "this person" and "more than one" apart. A caller
+        that finds more than one must not pick (a parent and child can
+        share a name)."""
+        rows = await self.s.execute(
+            text(
+                """
+                SELECT id, name FROM people
+                 WHERE lower(btrim(name)) = lower(btrim(:name))
+                 ORDER BY id
+                 LIMIT 2
+                """
+            ),
+            {"name": name},
+        )
+        return [(int(r[0]), r[1]) for r in rows.all()]
+
     async def list_recently_seen(
         self, since: datetime
     ) -> list[tuple[int, datetime | None]]:
@@ -965,9 +984,16 @@ class VoiceProfilesRepository:
     (enrollment, plus at most one learned sample per room). The
     identifier scores a person against the centroid of their rows —
     see ``voice_identifier._person_scores``.
+
+    Two sets per person (V026, ``source``): ``satellite`` rows, heard by
+    a room's satellite, and ``phone`` rows, said into the app's chat mic.
+    :meth:`all_for_model` is the satellites' matching set and holds no
+    phone row; a phone turn reads both (:meth:`phone_matching_rows`).
     """
 
     EMBEDDING_MODEL_TAG = "resemblyzer-v1"
+    SATELLITE = "satellite"
+    PHONE = "phone"
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
@@ -980,14 +1006,15 @@ class VoiceProfilesRepository:
         model: str,
         room_id: str | None,
         sample_seconds: float | None,
+        source: str = SATELLITE,
     ) -> int:
         row = await self.s.execute(
             text(
                 """
                 INSERT INTO voice_profiles
-                    (person_id, embedding, model, room_id, sample_seconds)
+                    (person_id, embedding, model, room_id, sample_seconds, source)
                 VALUES
-                    (:person_id, :embedding, :model, :room_id, :sample_seconds)
+                    (:person_id, :embedding, :model, :room_id, :sample_seconds, :source)
                 RETURNING id
                 """
             ),
@@ -997,15 +1024,52 @@ class VoiceProfilesRepository:
                 "model": model,
                 "room_id": room_id,
                 "sample_seconds": sample_seconds,
+                "source": source,
             },
         )
         return int(row.scalar_one())
+
+    async def add_phone_sample(
+        self,
+        *,
+        person_id: int,
+        embedding: bytes,
+        model: str,
+        room_id: str | None,
+        cap: int,
+    ) -> tuple[int, int]:
+        """Add one of ``person_id``'s phone samples, keeping at most
+        ``cap`` of them: the oldest go first. Returns (the new row's id,
+        how many old phone samples were dropped). Their satellite samples
+        are never touched."""
+        new_id = await self.add(
+            person_id=person_id, embedding=embedding, model=model,
+            room_id=room_id, sample_seconds=None, source=self.PHONE,
+        )
+        dropped = await self.s.execute(
+            text(
+                """
+                DELETE FROM voice_profiles
+                 WHERE person_id = :pid AND source = 'phone'
+                   AND id NOT IN (
+                       SELECT id FROM voice_profiles
+                        WHERE person_id = :pid AND source = 'phone'
+                        ORDER BY enrolled_at DESC, id DESC
+                        LIMIT :keep
+                   )
+                """
+            ),
+            {"pid": person_id, "keep": max(1, int(cap))},
+        )
+        return new_id, int(dropped.rowcount or 0)
 
     async def all_for_model(
         self, model: str
     ) -> list[tuple[int, int, bytes, str | None]]:
         """Return ``(profile_id, person_id, embedding_bytes, room_id)``
-        for every profile matching ``model``.
+        for every SATELLITE profile matching ``model`` — what a satellite's
+        turn is matched against. Phone samples are never in it, so they
+        cannot move a satellite centroid.
 
         Pulls every row on every match call. At household scale (a few
         dozen samples max) this is microseconds; if it ever becomes hot
@@ -1016,13 +1080,34 @@ class VoiceProfilesRepository:
                 """
                 SELECT id, person_id, embedding, room_id
                 FROM voice_profiles
-                WHERE model = :model
+                WHERE model = :model AND source = 'satellite'
                 """
             ),
             {"model": model},
         )
         return [
             (int(r[0]), int(r[1]), bytes(r[2]), r[3]) for r in result.all()
+        ]
+
+    async def phone_matching_rows(
+        self, model: str
+    ) -> list[tuple[int, int, bytes, str | None, str]]:
+        """Every profile matching ``model``, both sets, as
+        ``(profile_id, person_id, embedding_bytes, room_id, source)`` — a
+        phone turn picks per person which set to score
+        (``voice_identifier.phone_matching_samples``)."""
+        result = await self.s.execute(
+            text(
+                """
+                SELECT id, person_id, embedding, room_id, source
+                FROM voice_profiles
+                WHERE model = :model
+                """
+            ),
+            {"model": model},
+        )
+        return [
+            (int(r[0]), int(r[1]), bytes(r[2]), r[3], str(r[4])) for r in result.all()
         ]
 
 

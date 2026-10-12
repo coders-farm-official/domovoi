@@ -164,6 +164,11 @@ prose:
    of their samples), yielding `person_id` + `presence_tier` in the turn's
    `Context`. Two people too close to tell apart name nobody, and only
    confident matches ever save a sample (`domovoi/voice_identifier.py`).
+   A person's samples come in two sets (V026): satellite samples, which
+   are all a satellite ever matches, and phone samples from the app's chat
+   mic, which a phone turn matches first (falling back to the satellite
+   set). Phone samples are only added on purpose ("my name is …" said into
+   the chat mic), never learned.
 4. **Chat-mode bypass.** If the session is in conversational chat mode, the
    turn skips the command router entirely and goes to the Letta agent (or ends
    the chat on an exit phrase). Command mode pays only one session-context

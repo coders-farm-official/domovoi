@@ -132,6 +132,74 @@ class PlayerController(
     private var sleepJob: Job? = null
     private var remotePollJob: Job? = null
 
+    /** The server the app talks to now ([serverChanged]); null before the
+     *  first word from AppContainer. */
+    private var activeServer: ServerScope? = null
+
+    /** The server the queue's server media came from (ServerScope.kt);
+     *  null while the queue holds none (empty, or the phone's own songs). */
+    private var queueServer: ServerScope? = null
+
+    /** Note where server media just queued came from. */
+    private fun tagQueued(items: List<PlayItem>, replaced: Boolean) {
+        if (replaced) queueServer = null
+        if (items.any(ServerSwitch::fromServer)) queueServer = queueServer ?: activeServer
+    }
+
+    /**
+     * The app now talks to [to] (AppContainer watches the saved server and
+     * the identity pinned for it). The same server — the same identity at
+     * any address, a mode switch, a reconnect — changes nothing. A
+     * DIFFERENT server, or none: whatever came from the old one stops and
+     * goes from the queue and the mini player, a cast to one of its rooms
+     * ends here without a word to the new server (that room is the old
+     * server's), and nothing of the old one is saved, re-read or re-cast
+     * through the new one. The phone's own songs stay, and keep playing
+     * when one of them is what plays.
+     */
+    fun serverChanged(to: ServerScope) {
+        val before = activeServer
+        activeServer = to
+        val queued = queueServer
+        if (queued != null && queued.isSameServer(to)) {
+            queueServer = queued.merge(to)
+            return
+        }
+        val leaving = (queued != null) || (before != null && !before.isSameServer(to))
+        if (!leaving) return
+        dropServerMedia()
+    }
+
+    private fun dropServerMedia() {
+        queueServer = null
+        if (_target.value is PlayTarget.Room) {
+            // The room is the old server's: stop watching it, and say
+            // nothing about it to the new one.
+            playHereGen.incrementAndGet()
+            remotePollJob?.cancel()
+            remotePollJob = null
+            _remote.value = null
+            _target.value = PlayTarget.Local
+        }
+        val plan = ServerSwitch.plan(_queue.value, _index.value)
+        if (plan.removed.isEmpty()) return
+        if (plan.currentGoes) {
+            // The queue changes first, so the pause's position save finds
+            // only the phone's own songs (nothing to send the new server).
+            _queue.value = plan.kept
+            _index.value = plan.keptIndex
+            exoPlayer.pause()
+            exoPlayer.stop()
+            if (plan.kept.isEmpty()) exoPlayer.clearMediaItems()
+            else exoPlayer.setMediaItems(plan.kept.map(::mediaItemFor), plan.keptIndex, 0L)
+        } else {
+            // One of the phone's own songs is playing: it plays on.
+            plan.removed.forEach { exoPlayer.removeMediaItem(it) }
+            _queue.value = plan.kept
+            _index.value = plan.keptIndex
+        }
+    }
+
     private fun attach(player: Player) {
         player.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -228,6 +296,7 @@ class PlayerController(
         playHereGen.incrementAndGet()
         val left = leaveRoom(onLeft)
         ensureService()
+        tagQueued(window.items, replaced = true)
         _queue.value = window.items
         _index.value = window.index
         exoPlayer.setMediaItems(window.items.map(::mediaItemFor), window.index, (resumeSec * 1000).toLong())
@@ -240,6 +309,7 @@ class PlayerController(
     fun enqueue(items: List<PlayItem>) {
         if (items.isEmpty()) return
         if (_queue.value.isEmpty()) { playItems(items); return }
+        tagQueued(items, replaced = false)
         _queue.value = _queue.value + items
         items.forEach { exoPlayer.addMediaItem(mediaItemFor(it)) }
     }
@@ -247,6 +317,7 @@ class PlayerController(
     fun playNext(items: List<PlayItem>) {
         if (items.isEmpty()) return
         if (_queue.value.isEmpty()) { playItems(items); return }
+        tagQueued(items, replaced = false)
         val at = _index.value + 1
         _queue.value = _queue.value.toMutableList().apply { addAll(at, items) }
         items.forEachIndexed { i, it -> exoPlayer.addMediaItem(at + i, mediaItemFor(it)) }
@@ -282,6 +353,7 @@ class PlayerController(
 
     fun clearQueue() {
         flushSpokenPosition()
+        queueServer = null
         _queue.value = emptyList()
         _index.value = 0
         exoPlayer.stop()

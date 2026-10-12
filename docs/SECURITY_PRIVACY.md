@@ -247,9 +247,15 @@ dropped; the transcript and the reply are written into the chat thread
 room's under `phone-<device id>`. A phone turn never adds a voice sample
 by itself: a room's satellite saves one after a run of confident matches
 (`domovoi/voice_identifier.py`), but a phone id is self-asserted and new
-on every reinstall, and phone-mic samples would move the voice every
-satellite matches against, so phones only match. Saying "my name is …"
-from a phone still enrols that voice, as it does in a room.
+on every reinstall, so phones only match. A person's phone-mic samples
+are a set of their own (V026): satellites never match them, so a phone
+cannot move the voice every satellite matches against. They are added
+only on purpose: "my name is X" said into the chat mic, for an X who
+exists, asks "Add this phone's voice to X?" and a "yes" adds that clip to
+X's phone samples (at most three by default, the oldest dropped) rather
+than enrolling a second X; a new name enrols into the phone set. Only the
+chat mic does this. An admin sees and deletes phone samples apart from
+satellite samples on the People page.
 
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's

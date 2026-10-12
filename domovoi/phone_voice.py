@@ -18,6 +18,15 @@ conversation_log) like any room. The phone is its own device
 (``Response.device_actions``, handed to the app as ``actions``), timers and
 reminders go house-wide, and a satellite's own settings are refused.
 
+THE WAKE PHRASE. A satellite's transcript starts after its wake word, so
+the router never sees one. People say it into a push-to-talk phone anyway
+("Hey Domovoi, play suicide boys"), and a leading "hey domovoit," (as
+speech-to-text spells it) keeps every start-anchored fast path from
+matching: the turn went to the tool model with the name buried in it,
+and on 2026-10-12 "play Suicide Boys" from a phone played a random song.
+:func:`strip_wake_phrase` takes it off before routing; the chat thread
+keeps what was said.
+
 FOLLOW-UPS. Pending confirmations and parked choices live in the routing
 session, and the session is kept per phone AND chat thread (process
 memory, like a satellite's, which a reconnect also starts afresh): a
@@ -49,6 +58,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import difflib
 import io
 import json
 import logging
@@ -175,6 +185,120 @@ def parse_player(raw: str | None) -> dict[str, Any]:
     return out
 
 
+# ─── The wake phrase ──────────────────────────────────────────────────────
+
+#: What may part a wake phrase from the request: spaces and punctuation,
+#: dashes and an ellipsis included ("Hey Domovoi… play jazz").
+_WAKE_SEP = r"\s,.!?;:\-…—–"
+#: Punctuation proper: what must follow a name said WITHOUT a greeting, so
+#: "Max, turn it up" loses its "Max," but "Max out the volume" is a request.
+_WAKE_PUNCT = ",.!?;:-…—–"
+#: A hesitation, then the greeting the name is said with ("hey", "ok").
+_WAKE_HEAD_RE = re.compile(
+    rf"[{_WAKE_SEP}]*(?:(?:um|uh|oh)[{_WAKE_SEP}]+)?(?:(?P<greet>hey|hi|hello|ok|okay)\b[{_WAKE_SEP}]*)?",
+    re.IGNORECASE,
+)
+#: One word and whatever separates it from the next.
+_WAKE_WORD_RE = re.compile(rf"(?P<word>[a-z]+)(?P<sep>[{_WAKE_SEP}]*)", re.IGNORECASE)
+#: The names the wake phrase is said with; the household's own name for the
+#: assistant (``settings.bot_name``) joins them.
+_WAKE_NAMES = ("domovoi", "domo")
+#: Names this long or longer may be heard approximately; a shorter one
+#: ("Domo", a short household name such as "Max") counts only as said:
+#: "dome" and "demo" are words of their own ("OK, dome light on").
+_WAKE_FUZZY_MIN_LEN = 5
+#: How close a heard word must sound to a name (difflib's ratio) after a
+#: greeting: "domavoy" is 0.71 from "domovoi", "damuvoi" 0.71, "dominic" 0.57.
+_WAKE_NEAR = 0.7
+#: Without a greeting only a near-exact one counts ("domovoit", 0.93): a bare
+#: word that merely starts like it may be the request itself.
+_WAKE_NEAR_ALONE = 0.8
+
+
+def _wake_names() -> tuple[str, ...]:
+    own = re.sub(r"[^a-z]", "", (settings.bot_name or "").lower())
+    return _WAKE_NAMES + ((own,) if len(own) >= 3 and own not in _WAKE_NAMES else ())
+
+
+def _sounds_like_the_name(heard: str, *, greeted: bool) -> bool:
+    heard = heard.lower()
+    for name in _wake_names():
+        if heard == name:
+            return True
+        if len(name) < _WAKE_FUZZY_MIN_LEN:
+            continue
+        # Speech-to-text keeps the first sound, give or take a d/t.
+        if heard[0] != name[0] and {heard[0], name[0]} != {"d", "t"}:
+            continue
+        near = _WAKE_NEAR if greeted else _WAKE_NEAR_ALONE
+        if difflib.SequenceMatcher(None, heard, name).ratio() >= near:
+            return True
+    return False
+
+
+def _name_ends(said: str, word: re.Match[str], *, greeted: bool) -> bool:
+    """Whether the name heard ends where ``word`` does: nothing glued to it
+    ("Domovoi's playlist" is a request about Domovoi), and, said without a
+    greeting, punctuation after it ("Max, turn it up", not "Max out …")."""
+    after = said[word.end("word"):word.end("word") + 1]
+    if after and (after.isalnum() or after in "'’"):
+        return False
+    return greeted or any(ch in _WAKE_PUNCT for ch in word.group("sep"))
+
+
+def _strip_one_wake_phrase(said: str) -> str | None:
+    """``said`` after one leading wake phrase, or None when it has none."""
+    head = _WAKE_HEAD_RE.match(said)
+    greeted = bool(head and head.group("greet"))
+    at = head.end() if head else 0
+    first = _WAKE_WORD_RE.match(said, at)
+    if first is None:
+        return None
+    # The name heard as two words ("doma voy", "domo voi"): only a space
+    # between them, a short second word, and no longer than the name
+    # itself would be heard ("domovoi play" is the name and a request).
+    second = _WAKE_WORD_RE.match(said, first.end())
+    if (
+        second is not None
+        and first.group("sep")
+        and first.group("sep").strip(" -") == ""
+        and len(second.group("word")) <= 4
+        and len(first.group("word")) + len(second.group("word")) <= len("domovoi") + 2
+        and _sounds_like_the_name(first.group("word") + second.group("word"), greeted=greeted)
+        and _name_ends(said, second, greeted=greeted)
+    ):
+        return said[second.end():]
+    if _sounds_like_the_name(first.group("word"), greeted=greeted) and _name_ends(
+        said, first, greeted=greeted,
+    ):
+        return said[first.end():]
+    return None
+
+
+def strip_wake_phrase(transcript: str) -> str:
+    """``transcript`` without a leading wake phrase — "Hey Domovoit, play
+    Suicide Boys." → "play Suicide Boys." — so the router reads a phone turn
+    the way it reads a satellite's (see THE WAKE PHRASE above).
+
+    Fuzzy, as speech-to-text spells the name: a greeting (hey / hi / hello /
+    ok / okay) and a word that sounds like Domovoi ("Domovoit", "Domavoy",
+    "doma voy"), or is "Domo" or the household's own name for the assistant
+    (a short name only as said); or, without a greeting, a near-exact name
+    with punctuation after it ("Domovoi, …"). Never a name with something
+    glued to it ("Domovoi's playlist"). Said twice, both go. A transcript
+    that is nothing BUT the wake phrase comes back as it was (there is no
+    request to route instead)."""
+    rest = transcript
+    for _ in range(2):
+        after = _strip_one_wake_phrase(rest)
+        if after is None:
+            break
+        rest = after
+    if rest is transcript or not any(ch.isalnum() for ch in rest):
+        return transcript
+    return rest.strip()
+
+
 # ─── Sessions: one per phone and thread ───────────────────────────────────
 
 _SESSIONS: "OrderedDict[tuple[str, int], UUID]" = OrderedDict()
@@ -209,17 +333,19 @@ def reset_for_tests() -> None:
 
 
 async def _identify(pcm: bytes, room: str) -> Any:
-    """Who spoke — matching only. No ``room_id`` goes to the identifier,
-    so a phone never feeds its passive learning (``_learn_room``: after a
-    run of confident matches it saves the clip as that person's sample for
-    the "room"). A phone id is self-asserted and changes with every
-    reinstall, so each would add a sample, and phone-mic samples move the
-    centroid every satellite matches against. Until the owner decides how
-    phone audio should enrol, only an explicit "my name is …" does."""
-    from domovoi.voice_identifier import identify
+    """Who spoke — matching only, against each person's PHONE samples
+    when they have any, else their satellite samples
+    (``samples="phone"``, V026). No ``room_id`` goes to the identifier,
+    and a phone match never learns anyway: a phone never feeds the passive
+    learning (``_learn_room``: after a run of confident matches it saves
+    the clip as that person's sample for the "room"). A phone id is
+    self-asserted and changes with every reinstall, so each would add a
+    sample. Phone samples are added only on purpose: "my name is …" said
+    here, then "yes" (handlers/voice_profile.py)."""
+    from domovoi.voice_identifier import PHONE_SAMPLES, identify
 
     try:
-        return await identify(pcm, room_id=None)
+        return await identify(pcm, room_id=None, samples=PHONE_SAMPLES)
     except Exception as e:  # noqa: BLE001 — best-effort, as on a satellite
         log.warning("phone voice: voice identification failed: %s", e)
         return None
@@ -262,13 +388,16 @@ async def _transcribe(pcm: bytes, stages: dict[str, int]) -> str:
     t0 = time.perf_counter()
     heard, window = await transcribe_with_window(whisper, pcm)
     heard = (heard or "").strip()
+    # Decided on the request as it will be routed: a leading "hey Domovoi"
+    # would send every turn to the tool model, and so to a second hearing.
+    request = strip_wake_phrase(heard)
     if (
         window == SHORT_WINDOW_SEC
         and settings.whisper_short_window_recheck
         and can_decode_full_window(whisper)
-        and goes_to_the_tool_model(heard)
-        and not is_question_about_the_world(heard)
-        and not is_request_for_a_story(heard)
+        and goes_to_the_tool_model(request)
+        and not is_question_about_the_world(request)
+        and not is_request_for_a_story(request)
     ):
         try:
             again, _ = await transcribe_full_window(whisper, pcm)
@@ -546,6 +675,8 @@ async def _answer(
         # A satellite's blank guard: nothing to route, nothing written.
         log.info("phone voice: blank recording from %s (%.1f s)", room, len(pcm) / BYTES_PER_SEC)
         return _not_heard("blank", room)
+    # What is routed (and logged as the intent); the thread keeps what was said.
+    request = strip_wake_phrase(transcript)
 
     t0 = time.perf_counter()
     ident = await _identify(pcm, room)
@@ -568,7 +699,7 @@ async def _answer(
         device_kind="phone",
         device_player=player,
     )
-    intent = Intent(transcript=transcript, room_id=room, session_id=session_id)
+    intent = Intent(transcript=request, room_id=room, session_id=session_id)
 
     response: Response | None = None
     error: dict[str, str] | None = None
@@ -578,7 +709,7 @@ async def _answer(
             response = await route(intent, ctx, s)
             await run_voice_profile_hooks(
                 s, response=response, ctx=ctx, ident=ident, person_id=person_id,
-                transcript=transcript, audio_seconds=len(pcm) / BYTES_PER_SEC,
+                transcript=request, audio_seconds=len(pcm) / BYTES_PER_SEC,
             )
     except Exception:  # noqa: BLE001 — recorded in the thread, not lost
         log.exception("phone voice: the turn from %s failed", room)
@@ -623,8 +754,9 @@ async def _answer(
         stats={k: v for k, v in stats.items() if v is not None},
     )
     log.info(
-        "phone voice: %s thread=%s heard %r -> %s/%s (speaker %s %s) in %d ms",
+        "phone voice: %s thread=%s heard %r%s -> %s/%s (speaker %s %s) in %d ms",
         room, thread_id, transcript,
+        f" (routed as {request!r})" if request != transcript else "",
         getattr(response, "matched_handler", None), getattr(response, "matched_path", None),
         person_id, "-" if score is None else f"{score:.3f}", stats["wall_ms"],
     )

@@ -5,6 +5,8 @@
  *   * GET /api/people/{id}/sessions            — sessions for the selected person.
  *   * GET /api/people/{id}/conversations       — conversation_log rows for them.
  *   * GET /api/people/{id}/memories|favorites|preferences — the Memory tab.
+ *   * GET /api/people/{id}/profiles            — their voice samples, satellite
+ *                                                and phone sets (Profile tab).
  *   * GET /api/denylist                        — opted-out voice count.
  *   * /ws/state · `people.last_seen.changed`   — push refresh of the roster.
  *
@@ -80,8 +82,59 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
   );
 };
 
+/* ---- Voice samples (Profile tab) -------------------------- */
+/*
+ * A person's voice samples in their two sets (V026): satellite samples,
+ * heard by a room's satellite (what satellites recognize them by), and
+ * phone samples, said into the app's chat mic (what a phone turn
+ * recognizes them by first; satellites never use them). Metadata only,
+ * never an embedding. Deleting one is admin-tier on the server.
+ */
+const PERSON_VOICE_SAMPLE_SETS = [
+  { key: 'satellite', label: 'satellite samples',
+    hint: 'heard by a room’s satellite — what satellites recognize this voice by' },
+  { key: 'phone', label: 'phone samples',
+    hint: 'said into the app’s chat mic — what the phone recognizes this voice by first; satellites never use them' },
+];
+
+const PersonVoiceSampleRow = ({ sample, onDelete }) => (
+  <div style={{ padding: '8px 16px', borderTop: '1px solid var(--border-soft)',
+                display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center' }}>
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{sample.room_id || 'no room'}</div>
+      <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
+        #{sample.id} · added {sample.enrolled_at ? new Date(sample.enrolled_at).toLocaleString() : '—'} ({relTime(sample.enrolled_at)})
+      </div>
+    </div>
+    <Button icon="trash-2" onClick={() => onDelete(sample)}
+            style={{ background: 'var(--err-soft)', color: 'var(--err)', borderColor: 'transparent' }}>
+      delete
+    </Button>
+  </div>
+);
+
+const PersonVoiceSamples = ({ samples, onDelete }) => (
+  <div style={{ borderBottom: '1px solid var(--border-soft)' }}>
+    {PERSON_VOICE_SAMPLE_SETS.map(set => {
+      const rows = samples.filter(s => (s.source || 'satellite') === set.key);
+      return (
+        <div key={set.key}>
+          <div style={{ padding: '12px 16px 2px', display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <div className="label">{set.label}</div>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{rows.length}</span>
+          </div>
+          <div style={{ padding: '0 16px 8px', fontSize: 12, color: 'var(--fg-muted)' }}>{set.hint}</div>
+          {rows.length === 0
+            ? <div style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--fg-faint)' }}>none</div>
+            : rows.map(s => <PersonVoiceSampleRow key={s.id} sample={s} onDelete={onDelete}/>)}
+        </div>
+      );
+    })}
+  </div>
+);
+
 /* ---- Profile tab ------------------------------------------ */
-const ProfileTab = ({ person, sessionCount, turnCount, onForget, fire }) => {
+const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, onForget, fire }) => {
   // Rename via PATCH not yet on the people API; surface it as a toast
   // until the endpoint lands. Kept the input for visual continuity.
   const [editing, setEditing] = React.useState(false);
@@ -132,7 +185,9 @@ const ProfileTab = ({ person, sessionCount, turnCount, onForget, fire }) => {
         <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
           <div className="label">voice profiles</div>
           <div style={{ fontSize: 18, fontWeight: 600, marginTop: 2 }}>{person.voice_profile_count}</div>
-          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>enrolled</div>
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
+            {samples.filter(s => s.source === 'phone').length} from the phone
+          </div>
         </div>
         <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
           <div className="label">sessions</div>
@@ -145,6 +200,8 @@ const ProfileTab = ({ person, sessionCount, turnCount, onForget, fire }) => {
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>conversation_log rows</div>
         </div>
       </div>
+
+      <PersonVoiceSamples samples={samples} onDelete={onDeleteSample}/>
 
       <div style={{ padding: 16, borderBottom: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>notes</div>
@@ -581,6 +638,7 @@ const PeoplePage = () => {
   const [memories, setMemories] = React.useState([]);
   const [favorites, setFavorites] = React.useState([]);
   const [preferences, setPreferences] = React.useState({});
+  const [samples, setSamples] = React.useState([]);
   const [perPersonLoading, setPerPersonLoading] = React.useState(false);
   const [refreshTick, setRefreshTick] = React.useState(0);
   const refreshProfile = React.useCallback(() => setRefreshTick(t => t + 1), []);
@@ -596,7 +654,7 @@ const PeoplePage = () => {
   React.useEffect(() => {
     if (selectedId == null) {
       setSessions([]); setConversations([]);
-      setMemories([]); setFavorites([]); setPreferences({});
+      setMemories([]); setFavorites([]); setPreferences({}); setSamples([]);
       setPersonRefusal(null);
       return;
     }
@@ -608,12 +666,13 @@ const PeoplePage = () => {
     });
     setPerPersonLoading(true);
     (async () => {
-      const [ss, cc, mm, ff, pp] = await Promise.all([
+      const [ss, cc, mm, ff, pp, vs] = await Promise.all([
         read(`/api/people/${selectedId}/sessions?limit=50`, []),
         read(`/api/people/${selectedId}/conversations?limit=200`, []),
         read(`/api/people/${selectedId}/memories`, []),
         read(`/api/people/${selectedId}/favorites`, []),
         read(`/api/people/${selectedId}/preferences`, {}),
+        read(`/api/people/${selectedId}/profiles`, []),
       ]);
       if (cancelled) return;
       setSessions(ss || []);
@@ -621,6 +680,7 @@ const PeoplePage = () => {
       setMemories(mm || []);
       setFavorites(ff || []);
       setPreferences(pp || {});
+      setSamples(vs || []);
       setPersonRefusal(refusal);
       setPerPersonLoading(false);
     })();
@@ -640,6 +700,20 @@ const PeoplePage = () => {
       refreshPeople();
     } catch (e) {
       reportMutationFailure(fire, 'forget', e);
+    }
+  };
+
+  // One voice sample, either set (admin-tier on the server).
+  const onDeleteSample = async (sample) => {
+    const where = sample.source === 'phone' ? 'phone sample' : 'satellite sample';
+    if (!window.confirm(`Delete this ${where} (#${sample.id}) from ${selected ? selected.name : 'this person'}? This can't be undone.`)) return;
+    try {
+      await apiDelete(`/api/people/${sample.person_id}/profiles/${sample.id}`);
+      fire(`deleted ${where} #${sample.id}`);
+      refreshProfile();
+      refreshPeople();
+    } catch (e) {
+      reportMutationFailure(fire, 'delete', e);
     }
   };
 
@@ -751,6 +825,8 @@ const PeoplePage = () => {
               <ProfileTab person={selected}
                           sessionCount={sessions.length}
                           turnCount={conversations.length}
+                          samples={samples}
+                          onDeleteSample={onDeleteSample}
                           onForget={() => setConfirmFor(selected)}
                           fire={fire}/>
             )}

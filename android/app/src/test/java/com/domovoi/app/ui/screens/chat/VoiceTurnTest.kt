@@ -131,6 +131,16 @@ class VoiceTurnTest {
         assertEquals("true", st["playing"].toString())
     }
 
+    @Test fun aTurnReportsThePlayerAsItWasWhenTheButtonWentDown() {
+        val song = PlayItem.fromTrack(13, "Long Hearth", "Hearth Ensemble", null, 600.0)
+        // Playing at the press, paused by the mic's own focus when sent:
+        // still playing as far as "what's playing" is concerned.
+        assertEquals("true", playerStateForTurn(song, playingAtPress = true, playingNow = false)!!["playing"].toString())
+        // Paused by the person before the press: paused.
+        assertEquals("false", playerStateForTurn(song, playingAtPress = false, playingNow = false)!!["playing"].toString())
+        assertNull(playerStateForTurn(null, playingAtPress = true, playingNow = true))
+    }
+
     // ── The speaker marker ──────────────────────────────────────────────
 
     @Test fun onlyASpokenMessageCarriesAMarker() {
