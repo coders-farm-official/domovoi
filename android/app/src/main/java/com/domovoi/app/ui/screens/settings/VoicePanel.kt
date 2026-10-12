@@ -120,6 +120,8 @@ internal fun VoiceCard() {
         voice.messages.collect { toast(it) }
     }
     LaunchedEffect(serverUrl) { voice.fetchFromServer() }
+    // Load the converter (and the voice, once downloaded) while the card is read.
+    LaunchedEffect(ui.effective, ui.effectiveInstalled) { voice.prepare() }
 
     // The download runs as a foreground job with a progress notification;
     // Android 13+ shows it only with this permission (asked once; the

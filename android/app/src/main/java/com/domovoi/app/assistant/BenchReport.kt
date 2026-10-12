@@ -63,6 +63,8 @@ data class VoiceSampleResult(
     val totalMs: Long,
     /** Length of the speech (0 when the engine does not say). */
     val audioS: Double,
+    /** Which voice read it ([PhoneSpeech.voiceKey]); null when not known. */
+    val voice: String? = null,
 )
 
 data class AudioInResult(
@@ -251,14 +253,18 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
     }
 
     if (results.samples.isNotEmpty()) {
-        val samples = results.samples
         appendLine()
         appendLine("VOICE SAMPLES (this phone's voice reading the comparison lines)")
-        appendLine("  median to the first word: ${ms(median(samples.mapNotNull { it.firstWordMs?.toDouble() })?.toLong())}")
-        samples.forEach { s ->
-            val n = VoiceSamples.LINES.indexOf(s.line).takeIf { it >= 0 }?.let { "${it + 1}" } ?: "-"
-            appendLine("  $n. first word ${ms(s.firstWordMs)}, done ${ms(s.totalMs)}" +
-                (if (s.audioS > 0) ", ${f1(s.audioS)} s of speech" else "") + ": ${clip(s.line, 70)}")
+        // One block per voice, in the order they spoke, when more than one did.
+        val byVoice = results.samples.groupBy { it.voice }
+        byVoice.forEach { (voice, samples) ->
+            if (byVoice.size > 1) appendLine("  ${voice ?: "voice not recorded"}:")
+            appendLine("  median to the first word: ${ms(median(samples.mapNotNull { it.firstWordMs?.toDouble() })?.toLong())}")
+            samples.forEach { s ->
+                val n = VoiceSamples.LINES.indexOf(s.line).takeIf { it >= 0 }?.let { "${it + 1}" } ?: "-"
+                appendLine("  $n. first word ${ms(s.firstWordMs)}, done ${ms(s.totalMs)}" +
+                    (if (s.audioS > 0) ", ${f1(s.audioS)} s of speech" else "") + ": ${clip(s.line, 70)}")
+            }
         }
     }
 

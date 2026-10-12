@@ -169,4 +169,31 @@ class PiperSpeechOutTest {
         val android = renderBenchReport(device, BenchResults(voice = "Android TextToSpeech, engine X"), "now")
         assertTrue(android.contains("speaking: Android TextToSpeech"))
     }
+
+    /** Norman, then Kristin, read the lines: each block names its voice. */
+    @Test fun samplesFromTwoVoicesAreReportedApart() {
+        val device = DeviceFacts("Acme", "Phone 9", null, "16", 36, 8_000_000_000, false, "arm64-v8a", "1.0.0")
+        val line = VoiceSamples.LINES[0]
+        val results = BenchResults(samples = listOf(
+            VoiceSampleResult(line, 300, 3000, 2.8, "en_US-norman-medium"),
+            VoiceSampleResult(line, 200, 2900, 2.6, "en_US-kristin-medium"),
+            VoiceSampleResult(VoiceSamples.LINES[1], 400, 7000, 6.0, "en_US-kristin-medium"),
+        ))
+        val text = renderBenchReport(device, results, "now")
+        val norman = text.indexOf("  en_US-norman-medium:")
+        val kristin = text.indexOf("  en_US-kristin-medium:")
+        assertTrue(text, norman in 0 until kristin)
+        val normanBlock = text.substring(norman, kristin)
+        val kristinBlock = text.substring(kristin)
+        assertTrue(normanBlock, normanBlock.contains("median to the first word: 300 ms\n  1. first word 300 ms"))
+        assertTrue(kristinBlock, kristinBlock.contains("median to the first word: 300 ms\n  1. first word 200 ms"))
+        assertTrue(kristinBlock.contains("  2. first word 400 ms"))
+    }
+
+    @Test fun aSampleRecordsWhichVoiceReadIt() = runBlocking {
+        val out = PiperSpeechOut(phonemizer, FakeVoiceModel(), "en_US-ljspeech-medium", FakeSink(), clock = clock.read, log = {})
+        val results = runVoiceSamples(out, listOf("Hi."), gapMs = 0)
+        assertEquals("en_US-ljspeech-medium", results.single().voice)
+        assertEquals(null, runVoiceSamples(FakeSpeechOut(clock), listOf("Hi."), gapMs = 0).single().voice)
+    }
 }

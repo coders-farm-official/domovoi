@@ -56,15 +56,36 @@ class PhonemizerData(
 
         private val VARIANT = Regex("""\(\p{Nd}+\)$""")
 
+        /** The phones after the word, separated by single spaces (as
+         *  str.split() would leave them). */
+        private fun phonesOf(rest: String): String {
+            var plain = rest.isNotEmpty() && !Py.isSpace(rest[0])
+            if (plain) {
+                for (i in 1 until rest.length) {
+                    val c = rest[i]
+                    if (Py.isSpace(c) && (c != ' ' || Py.isSpace(rest[i - 1]))) {
+                        plain = false
+                        break
+                    }
+                }
+            }
+            return if (plain) rest else Py.split(rest).joinToString(" ")
+        }
+
         fun load(files: PhonemizerFiles): PhonemizerData {
             val lex = HashMap<String, String>(140_000)
+            // 135,000 lines: parsed by hand (a word, then its phones), and a
+            // later variant of a word already seen is skipped unread.
             files.open(CMUDICT).bufferedReader(Charsets.UTF_8).useLines { lines ->
                 for (raw in lines) {
-                    val line = Py.strip(raw.substringBefore('#'))
+                    val hash = raw.indexOf('#')
+                    val line = Py.strip(if (hash >= 0) raw.substring(0, hash) else raw)
                     if (line.isEmpty()) continue
-                    val parts = Py.split(line)
-                    val w = VARIANT.replace(parts[0], "")
-                    if (w !in lex) lex[w] = parts.drop(1).joinToString(" ")
+                    val gap = line.indexOfFirst { Py.isSpace(it) }
+                    val first = if (gap < 0) line else line.substring(0, gap)
+                    val w = if (first.endsWith(')')) VARIANT.replace(first, "") else first
+                    if (w in lex) continue
+                    lex[w] = if (gap < 0) "" else phonesOf(line.substring(gap + 1))
                 }
             }
             // The first line for a word in the corrections replaces every

@@ -5,7 +5,6 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtException
 import ai.onnxruntime.OrtSession
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.float
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
@@ -72,10 +71,14 @@ class PiperVoice(model: File, val config: PiperConfig, threads: Int) : VoiceMode
     }
     @Volatile private var running: OrtSession.RunOptions? = null
     @Volatile private var cancelled = false
+    /** One run at a time, and never a run on a closed session. */
+    private val lock = Any()
+    private var closed = false
 
     override val sampleRate: Int get() = config.sampleRate
 
-    override fun synthesize(ids: IntArray): FloatArray {
+    override fun synthesize(ids: IntArray): FloatArray = synchronized(lock) {
+        if (closed) throw VoiceModel.Stopped()
         cancelled = false
         val longs = LongArray(ids.size) { ids[it].toLong() }
         val scales = floatArrayOf(config.noiseScale, config.lengthScale, config.noiseW)
@@ -111,9 +114,14 @@ class PiperVoice(model: File, val config: PiperConfig, threads: Int) : VoiceMode
         runCatching { running?.setTerminate(true) }
     }
 
+    /** Cuts off a run in progress, then frees the model once it has ended. */
     override fun close() {
         cancel()
-        session.close()
+        synchronized(lock) {
+            if (closed) return
+            closed = true
+            session.close()
+        }
     }
 
     companion object {

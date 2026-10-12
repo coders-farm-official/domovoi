@@ -175,7 +175,8 @@ class PhoneVoice(
     private val prefs: Prefs,
 ) : VoiceSource {
     private val app = context.applicationContext
-    private val store = ModelStore.forApp(app)
+    /** Built off the main thread on first use (filesDir reads the disk). */
+    private val store by lazy { ModelStore.forApp(app) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val _state = MutableStateFlow(PhoneVoiceUi())
@@ -250,11 +251,13 @@ class PhoneVoice(
      *  a second), with the list in force for the active server. */
     suspend fun phonemizer(): Phonemizer = phonemizer ?: loadLock.withLock {
         phonemizer ?: withContext(Dispatchers.IO) {
+            val t0 = System.nanoTime()
             val files = PhonemizerFiles { path -> app.assets.open("phonemizer/$path") }
             val data = PhonemizerData.load(files)
             Phonemizer(data, OrtG2pModel.load(files)).also {
                 usePronunciations(it, cachedInfo())
                 phonemizer = it
+                Log.i(TAG, "converter loaded in ${(System.nanoTime() - t0) / 1_000_000} ms (${data.lex.size} words)")
             }
         }
     }
@@ -281,19 +284,40 @@ class PhoneVoice(
         val voice = PhoneVoiceChoice.effective(prefs.voiceChoice.value, cachedInfo()?.server_voice)
         if (!withContext(Dispatchers.IO) { store.isInstalled(voice) }) return null
         val p = phonemizer()
-        val model = loadLock.withLock {
+        val model = voiceModel(voice)
+        return PiperSpeechOut(p, model, voice.id, AudioTrackSink(model.sampleRate), model.config.idMap, PiperVoice.defaultThreads())
+    }
+
+    /** Loads the converter, and the voice in use when it is downloaded, in
+     *  the background, so the first sentence does not wait for them. */
+    fun prepare() {
+        scope.launch {
+            runCatching {
+                phonemizer()
+                val voice = PhoneVoiceChoice.effective(prefs.voiceChoice.value, cachedInfo()?.server_voice)
+                if (withContext(Dispatchers.IO) { store.isInstalled(voice) }) voiceModel(voice)
+            }.onFailure { Log.w(TAG, "prepare: ${it.message}") }
+        }
+    }
+
+    /** The voice's model, loaded once (one at a time: a new voice replaces the old). */
+    private suspend fun voiceModel(voice: CatalogModel): PiperVoice =
+        loadLock.withLock {
             withContext(Dispatchers.IO) {
                 loaded?.takeIf { it.first == voice.id }?.second ?: run {
                     loaded?.second?.close()
                     loaded = null
                     val config = PiperConfig.parse(store.fileFor(voice, voice.files.first { it.path.endsWith(".onnx.json") }).readText())
                     val onnx = store.fileFor(voice, voice.files.first { it.path.endsWith(".onnx") })
-                    PiperVoice(onnx, config, PiperVoice.defaultThreads()).also { loaded = voice.id to it }
+                    val t0 = System.nanoTime()
+                    PiperVoice(onnx, config, PiperVoice.defaultThreads()).also {
+                        loaded = voice.id to it
+                        Log.i(TAG, "${voice.id} loaded in ${(System.nanoTime() - t0) / 1_000_000} ms, " +
+                            "${PiperVoice.defaultThreads()} threads")
+                    }
                 }
             }
         }
-        return PiperSpeechOut(p, model, voice.id, AudioTrackSink(model.sampleRate), model.config.idMap, PiperVoice.defaultThreads())
-    }
 
     /** Speaks a sample line with the voice in use (Android's own voice
      *  until the Domovoi voice is downloaded). Again: stops it. */

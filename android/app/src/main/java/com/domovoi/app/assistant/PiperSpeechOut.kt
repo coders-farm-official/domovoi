@@ -149,13 +149,18 @@ class PiperSpeechOut(
                 val chunks = Channel<ShortArray>(capacity = 2)
                 val producer = launch(Dispatchers.Default) {
                     try {
-                        for (p in phonemes) {
+                        for ((i, p) in phonemes.withIndex()) {
                             if (generation.get() != gen) break
+                            val t0 = clock()
                             val audio = try {
                                 voice.synthesize(PhonemeIds.ids(p, idMap))
                             } catch (e: VoiceModel.Stopped) {
                                 break
                             }
+                            val ms = (clock() - t0) / 1_000_000
+                            val seconds = audio.size.toDouble() / voice.sampleRate
+                            log(String.format(java.util.Locale.US, "sentence %d of %d: %d ms for %.2f s of audio (real-time factor %.3f)",
+                                i + 1, phonemes.size, ms, seconds, if (seconds > 0) ms / 1000.0 / seconds else 0.0))
                             chunks.send(toPcm16(audio))
                         }
                     } finally {
