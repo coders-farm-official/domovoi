@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -141,7 +142,7 @@ fun VideosScreen() {
         it.api.get("/api/videos/recent?${it.videoIdentityQuery()}").decode<RecentList>().recent
     }
 
-    var filter by remember { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf("") }
     var feed by remember { mutableStateOf<OpenFeed?>(null) }
     /** Set when a feed closes: which list to centre, and on which video. */
     var centerOn by remember { mutableStateOf<Pair<FeedFrom, String>?>(null) }

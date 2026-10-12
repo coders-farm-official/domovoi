@@ -37,6 +37,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +77,29 @@ internal class MusicUi {
     val seenSources = mutableStateListOf<String>()
 
     var uploading by mutableStateOf(false)
+
+    companion object {
+        /**
+         * Where the page is — tab, search, filters, page of tracks — kept
+         * when the workspace goes away and comes back (a spell in the
+         * background drops to local media and back; the "your device"
+         * switch keeps this side alive, but not through that). Selections
+         * and open drawers are not kept.
+         */
+        val Saver: Saver<MusicUi, Any> = listSaver(
+            save = { listOf(it.tab, it.q, it.source, it.sort, it.favoritedOnly, it.page) },
+            restore = { saved ->
+                MusicUi().apply {
+                    tab = saved[0] as Int
+                    q = saved[1] as String
+                    source = saved[2] as String
+                    sort = saved[3] as String
+                    favoritedOnly = saved[4] as Boolean
+                    page = saved[5] as Int
+                }
+            },
+        )
+    }
 }
 
 @Composable

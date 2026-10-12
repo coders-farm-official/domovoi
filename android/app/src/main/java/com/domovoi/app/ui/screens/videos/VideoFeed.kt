@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.automirrored.outlined.PlaylistPlay
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -142,6 +143,8 @@ fun VideoFeedPlayer(
     startIndex: Int,
     resumeSec: Long = 0,
     onSave: ((FeedVideo) -> Unit)? = null,
+    /** A phone video's way to the server (the connected Videos page's "your device"). */
+    onUpload: ((FeedVideo) -> Unit)? = null,
     onPersist: (suspend (video: FeedVideo, posSec: Long, durSec: Long?, ended: Boolean) -> Unit)? = null,
     onClose: (currentKey: String?) -> Unit,
 ) {
@@ -435,6 +438,9 @@ fun VideoFeedPlayer(
                     }
                     if (onSave != null) {
                         FeedAction(Icons.Outlined.Download, "save to device") { onSave(video); sheet = null }
+                    }
+                    if (onUpload != null) {
+                        FeedAction(Icons.Outlined.Upload, "upload") { onUpload(video); sheet = null }
                     }
                     if (video.shareable) {
                         FeedAction(Icons.Outlined.Share, "share") {

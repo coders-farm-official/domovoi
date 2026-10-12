@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.screens.local
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -71,6 +72,10 @@ import kotlinx.coroutines.withContext
  * third is Files, ui/screens/files/PhoneFiles.kt) when no domovoi is
  * connected; files saved by the connected-mode download actions land in
  * Downloads/Domovoi, get indexed by MediaStore, and show up here.
+ *
+ * The connected Music and Videos pages show these same screens under their
+ * "your device" switch (YourDevice.kt), with an [upload] that puts an Upload
+ * button on each row; without one (the local shell) they are unchanged.
  */
 
 /** Ask-once permission gate shared by both screens. */
@@ -104,18 +109,25 @@ private fun PermissionGate(
 // ---------------------------------------------------------------------------
 
 @Composable
-fun LocalMusicScreen() {
+internal fun LocalMusicScreen(
+    subtitle: String = "on this device — connect to a domovoi for your full library",
+    upload: DeviceUploader? = null,
+) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        PageHeader("Music", "on this device — connect to a domovoi for your full library")
+        PageHeader("Music", subtitle)
         Spacer(Modifier.height(12.dp))
+        upload?.refused?.let {
+            UploadRefusedCard(it)
+            Spacer(Modifier.height(10.dp))
+        }
         PermissionGate(LocalMedia.audioPermission(), "no access to device music") {
-            LocalMusicList()
+            LocalMusicList(upload)
         }
     }
 }
 
 @Composable
-private fun LocalMusicList() {
+private fun LocalMusicList(upload: DeviceUploader?) {
     val app = LocalApp.current
     val context = LocalContext.current
     var tracks by remember { mutableStateOf<List<LocalTrack>?>(null) }
@@ -164,14 +176,27 @@ private fun LocalMusicList() {
                 "downloads from a domovoi land in Downloads/Domovoi and show up here",
             )
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(shown, key = { it.id }) { t -> LocalTrackRow(t) { play(t) } }
+                items(shown, key = { it.id }) { t ->
+                    val key = trackUploadKey(t.id)
+                    LocalTrackRow(
+                        t,
+                        upload = upload?.state(key),
+                        onUpload = { upload?.upload(key, Uri.parse(t.uri), t.title) },
+                    ) { play(t) }
+                }
             }
         }
     }
 }
 
+/** [upload] null: no Upload button (the local shell). */
 @Composable
-private fun LocalTrackRow(t: LocalTrack, onPlay: () -> Unit) {
+private fun LocalTrackRow(
+    t: LocalTrack,
+    upload: UploadButtonState? = null,
+    onUpload: () -> Unit = {},
+    onPlay: () -> Unit,
+) {
     val shape = RoundedCornerShape(6.dp)
     Row(
         Modifier.fillMaxWidth()
@@ -215,6 +240,7 @@ private fun LocalTrackRow(t: LocalTrack, onPlay: () -> Unit) {
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
             color = Domovoi.colors.fgFaint,
         )
+        upload?.let { UploadRowButton(it, onUpload) }
         Icon(
             Icons.Filled.PlayArrow, contentDescription = "play",
             tint = Domovoi.colors.brand, modifier = Modifier.size(20.dp),
@@ -237,18 +263,25 @@ private fun TrackGlyph() {
 // ---------------------------------------------------------------------------
 
 @Composable
-fun LocalVideosScreen() {
+internal fun LocalVideosScreen(
+    subtitle: String = "on this device — connect to a domovoi for your full library",
+    upload: DeviceUploader? = null,
+) {
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        PageHeader("Videos", "on this device — connect to a domovoi for your full library")
+        PageHeader("Videos", subtitle)
         Spacer(Modifier.height(12.dp))
+        upload?.refused?.let {
+            UploadRefusedCard(it)
+            Spacer(Modifier.height(10.dp))
+        }
         PermissionGate(LocalMedia.videoPermission(), "no access to device videos") {
-            LocalVideosGrid()
+            LocalVideosGrid(upload)
         }
     }
 }
 
 @Composable
-private fun LocalVideosGrid() {
+private fun LocalVideosGrid(upload: DeviceUploader?) {
     val context = LocalContext.current
     var videos by remember { mutableStateOf<List<LocalVideo>?>(null) }
     /** Index of the tapped video; the feed's order is the grid's. */
@@ -285,16 +318,15 @@ private fun LocalVideosGrid() {
             items(videos.orEmpty(), key = { it.id }) { v ->
                 Column {
                     LocalVideoTile(v) { feedStart = videos.orEmpty().indexOf(v) }
-                    Text(
-                        v.name, style = MaterialTheme.typography.labelMedium,
-                        color = Domovoi.colors.fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    Text(
-                        v.durationSec?.let { fmtDur(it) } ?: "—",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
-                        color = Domovoi.colors.fgFaint,
-                    )
+                    if (upload == null) {
+                        LocalVideoCaption(v)
+                    } else {
+                        val key = videoUploadKey(v.id)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) { LocalVideoCaption(v) }
+                            UploadRowButton(upload.state(key)) { upload.upload(key, Uri.parse(v.uri), v.name) }
+                        }
+                    }
                 }
             }
         }
@@ -320,6 +352,12 @@ private fun LocalVideosGrid() {
         VideoFeedPlayer(
             videos = feedVideos,
             startIndex = start,
+            onUpload = upload?.let { u ->
+                { fv ->
+                    list.firstOrNull { localKey(it) == fv.key }
+                        ?.let { v -> u.upload(videoUploadKey(v.id), Uri.parse(v.uri), v.name) }
+                }
+            },
             onClose = { key ->
                 feedStart = null
                 centerKey = key
@@ -329,6 +367,20 @@ private fun LocalVideosGrid() {
 }
 
 private fun localKey(v: LocalVideo): String = "local:${v.id}"
+
+@Composable
+private fun LocalVideoCaption(v: LocalVideo) {
+    Text(
+        v.name, style = MaterialTheme.typography.labelMedium,
+        color = Domovoi.colors.fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+    Text(
+        v.durationSec?.let { fmtDur(it) } ?: "—",
+        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+        color = Domovoi.colors.fgFaint,
+    )
+}
 
 @Composable
 private fun LocalVideoTile(v: LocalVideo, onClick: () -> Unit) {

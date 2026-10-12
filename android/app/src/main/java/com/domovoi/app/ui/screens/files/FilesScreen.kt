@@ -59,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +86,13 @@ import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.screens.documents.SheetEditorOverlay
 import com.domovoi.app.ui.screens.documents.TextEditorOverlay
 import com.domovoi.app.ui.screens.documents.relFromEpochSec
+import com.domovoi.app.ui.screens.local.UploadButtonState
+import com.domovoi.app.ui.screens.local.UploadDest
+import com.domovoi.app.ui.screens.local.UploadKind
+import com.domovoi.app.ui.screens.local.UploadRefusedCard
+import com.domovoi.app.ui.screens.local.UploadRowButton
+import com.domovoi.app.ui.screens.local.fileUploadKey
+import com.domovoi.app.ui.screens.local.rememberDeviceUploader
 import com.domovoi.app.ui.shell.LocalServerChoice
 import com.domovoi.app.ui.shell.enabled
 import com.domovoi.app.ui.theme.Domovoi
@@ -106,6 +114,10 @@ import kotlinx.coroutines.launch
  *
  * The same browser serves the phone's own files in the local shell
  * ([LocalFilesScreen]); everything that differs lives behind [FileSource].
+ * In the workspace it serves them again under the page's "your device"
+ * switch (ui/screens/local/YourDevice.kt), where [uploadMode] turns each
+ * row's send-to-home into Upload: progress on the row, a refusal said up
+ * front when the server blocks this device.
  */
 @Composable
 fun FilesScreen() {
@@ -116,7 +128,7 @@ fun FilesScreen() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun FilesBrowser(source: FileSource) {
+internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
@@ -129,16 +141,20 @@ internal fun FilesBrowser(source: FileSource) {
     }
     val libraries = libs.data ?: emptyList()
 
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var path by remember { mutableStateOf("") }
+    // Saveable, so the folder survives the workspace going away and coming
+    // back (a spell in the background, the system folder picker).
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var path by rememberSaveable { mutableStateOf("") }
 
     // Auto-select the first library once loaded; re-select if the current one
-    // vanishes (e.g. a removable drive was ejected between refreshes).
-    LaunchedEffect(libraries) {
-        if (libraries.isEmpty()) {
+    // vanishes (e.g. a removable drive was ejected between refreshes). Not
+    // before the list has loaded: a restored folder must outlive the wait.
+    LaunchedEffect(libs.data) {
+        val loaded = libs.data ?: return@LaunchedEffect
+        if (loaded.isEmpty()) {
             selectedId = null
-        } else if (selectedId == null || libraries.none { it.id == selectedId }) {
-            selectedId = libraries.first().id
+        } else if (selectedId == null || loaded.none { it.id == selectedId }) {
+            selectedId = loaded.first().id
             path = ""
         }
     }
@@ -173,6 +189,8 @@ internal fun FilesBrowser(source: FileSource) {
     // "Send to home" is offered only while the server can actually be used.
     val serverUsable = LocalServerChoice.current.enabled
     val canSendHome = source.onPhone && serverUsable
+    // "Your device" in the workspace: send-to-home is the row's Upload.
+    val uploader = if (uploadMode) rememberDeviceUploader(UploadKind.File) else null
 
     var textEditorRel by remember { mutableStateOf<String?>(null) }
     var sheetEditorRel by remember { mutableStateOf<String?>(null) }
@@ -183,6 +201,10 @@ internal fun FilesBrowser(source: FileSource) {
     var sendHomeEntry by remember { mutableStateOf<FileEntry?>(null) }
     var confirmForget by remember { mutableStateOf<FileLibrary?>(null) }
     var busy by remember { mutableStateOf<String?>(null) } // uploading | deleting | importing | sending
+
+    fun askSendHome(e: FileEntry) {
+        if (uploader == null || uploader.gate()) sendHomeEntry = e
+    }
 
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetMultipleContents(),
@@ -325,7 +347,13 @@ internal fun FilesBrowser(source: FileSource) {
         val id = selectedId ?: return
         val uri = source.contentUri(id, e.rel)
         if (uri == null) {
-            toast("send failed: can't read \"${e.name}\"")
+            toast("${if (uploader != null) "upload" else "send"} failed: can't read \"${e.name}\"")
+            return
+        }
+        if (uploader != null) {
+            // Streamed, with progress on the row, and it carries on if the
+            // page is left (DeviceUpload.kt).
+            uploader.upload(fileUploadKey(id, e.rel), uri, e.name, UploadDest.Library(target.id, target.label, targetPath))
             return
         }
         busy = "sending"
@@ -418,6 +446,10 @@ internal fun FilesBrowser(source: FileSource) {
                 }
                 Spacer(Modifier.height(10.dp))
             }
+            uploader?.refused?.let {
+                UploadRefusedCard(it)
+                Spacer(Modifier.height(10.dp))
+            }
 
             if (selectedId != null) {
                 Breadcrumb(
@@ -480,7 +512,8 @@ internal fun FilesBrowser(source: FileSource) {
                                 onOpen = { onEntryPrimary(e) },
                                 onImport = if (isRemovable && !blocked) ({ importEntry = e }) else null,
                                 onDownload = if (source.canDownload) ({ source.download(ctx, selectedId ?: "", e) }) else null,
-                                onSendHome = if (canSendHome && !e.isDir) ({ sendHomeEntry = e }) else null,
+                                onSendHome = if (canSendHome && !e.isDir) ({ askSendHome(e) }) else null,
+                                upload = uploader?.state(fileUploadKey(selectedId ?: "", e.rel)),
                                 // The web moves things by drag and drop; a phone
                                 // gets a destination picker instead (FilesMoveSheet).
                                 onMove = if (canWrite) ({ moveEntry = e }) else null,
@@ -510,7 +543,8 @@ internal fun FilesBrowser(source: FileSource) {
             ImageViewerOverlay(
                 name = e.name,
                 model = source.imageModel(id, e),
-                onSendHome = if (canSendHome) ({ sendHomeEntry = e }) else null,
+                onSendHome = if (canSendHome) ({ askSendHome(e) }) else null,
+                sendLabel = if (uploader != null) "upload" else "send to home",
                 onOpenWith = {
                     if (!source.openFile(ctx, id, e)) toast("no app on this phone opens \"${e.name}\"")
                 },
@@ -583,6 +617,7 @@ internal fun FilesBrowser(source: FileSource) {
                 doSendHome(e, target, targetPath)
             },
             onDismiss = { sendHomeEntry = null },
+            asUpload = uploader != null,
         )
     }
 }
@@ -706,6 +741,8 @@ private fun FileRow(
     onSendHome: (() -> Unit)?,
     onMove: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    /** Set in "your device" mode: [onSendHome] is shown as the Upload button, in this state. */
+    upload: UploadButtonState? = null,
 ) {
     Column {
         Row(
@@ -756,8 +793,12 @@ private fun FileRow(
                 }
             }
             onSendHome?.let {
-                IconButton(onClick = it) {
-                    Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
+                if (upload != null) {
+                    UploadRowButton(upload, it)
+                } else {
+                    IconButton(onClick = it) {
+                        Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
+                    }
                 }
             }
             onMove?.let {
