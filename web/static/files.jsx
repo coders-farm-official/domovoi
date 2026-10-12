@@ -1130,8 +1130,10 @@ const FilesPage = () => {
       )}
 
       <Card>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px',
-                      borderBottom: '1px solid var(--border-soft)' }}>
+        {/* Wraps: on a phone the filter, sort and count go to a second line
+            rather than pushing the page sideways. */}
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px 12px',
+                      padding: '9px 14px', borderBottom: '1px solid var(--border-soft)' }}>
           {entries.length > 0 && (
             <input type="checkbox" checked={allSelected}
                    title={`select the ${entries.length} loaded item${entries.length === 1 ? '' : 's'}`
