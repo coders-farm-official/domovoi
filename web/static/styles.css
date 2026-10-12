@@ -1447,6 +1447,13 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-details-rows dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
 .chat-details-rows dd.err { color: var(--err); }
 .chat-details-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-soft); }
+/* A plain answer instead of a reply (a reply's error with a code), and the
+ * composer's note on why a picture can't be read here. */
+.chat-note { margin-top: 4px; padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--fg); background: var(--err-soft); border-left: 2px solid var(--err); border-radius: var(--r-sm); }
+.chat-note.info { background: var(--sunken); border-left-color: var(--border-strong); }
+.chat-note-row { display: flex; align-items: flex-start; gap: 8px; }
+.chat-note-sub { margin-top: 4px; color: var(--fg-muted); }
+.chat-note-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--fg); text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 2px; }
 @media (max-width: 760px) {
   .chat-more { width: 36px; height: 36px; }
   .chat-menu-item { min-height: 44px; }
