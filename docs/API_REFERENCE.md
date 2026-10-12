@@ -297,8 +297,9 @@ filter, search or sort changes.
 **Old clients.** A request that sends none of `limit` / `cursor` /
 `offset` is treated as a client built before paging (the Android app
 installed before 2026-10-11): `GET /api/videos/list` and
-`GET /api/files/browse` answer with every entry as before (still within
-their walk caps) plus `total` and `has_more: false`;
+`GET /api/files/browse` answer with every entry as before (Videos at
+most 2,000 per library, the bound such a client was built against) plus
+`total` and `has_more: false`;
 `GET /api/audiobooks`, `GET /api/podcasts/subscriptions` and
 `GET /api/podcasts/subscriptions/{id}/episodes` answer with the bare JSON
 array they always did. `GET /api/music/library` was always paged (default
@@ -310,9 +311,24 @@ server keeps each library walk / folder listing between requests
 folder it read (~0.5 ms for 100 folders). A file added, removed or renamed
 anywhere it read, a write through this server into the library (upload,
 delete, move, import, a document save), `refresh=true`, or five minutes'
-age re-reads it. Measured on a 10,000-entry synthetic tree (Windows dev
-box): a cold walk of 10,000 videos ~0.1 s (was ~2 s), a cold 10,000-entry
-folder ~0.13 s (was ~6 s), every later page ~25 ms end to end.
+age re-reads it (a listing that read more than 2,000 folders re-checks
+them at most every 2 s). Memory: a budget of 256 MB estimated at ~600 B a
+row plus ~200 B a row per sorted view; past it the least recently used
+idle listings go, and a listing read in the last two minutes is never
+evicted for room — one library bigger than the whole budget stays cached
+while it is being scrolled instead of being re-walked per page.
+
+**No count caps.** A library is walked whole (owner decision 2026-10-12).
+The one remaining limit is time: a walk still running after 2 minutes
+stops, keeps what it found, and the answer says `truncated: true`,
+`truncated_reason: "time"`. Measured on synthetic trees (Windows dev box,
+other agents' test runs also loading it): 10,000 videos ~0.1 s cold (was
+~2 s), a 10,000-entry folder ~0.13 s (was ~6 s); 50,000 videos in 500
+folders ~1.0–1.5 s for the cold first page and ~50 ms for each later page
+or a search's page (end to end through the app, ~28 MB cached), a
+50,000-entry folder ~1.0–1.2 s cold and ~45 ms later (~38 MB). The walk,
+the sort and a search's scan run in worker threads, never on the event
+loop.
 
 ---
 
@@ -1323,7 +1339,7 @@ fire the `video_positions.changed` WS event.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/videos/list` | `?q=&library_id=&sort=&limit=&cursor=&refresh=` | Videos across every present library (bounded walk — 2,000 per library, 2,000 folders; hidden dirs skipped), paged (§1.7) as `{videos, total, limit, has_more, next_cursor, libraries, truncated}`. `sort`: `library` (default: library, then path) · `name` · `newest` · `oldest` · `largest`. `q` is a case-insensitive substring of the name or path; `library_id` keeps one library. `libraries` is `[{library_id, library_label, total}]` — the matches per library with `q` applied — for section headers; `truncated` says a walk cap was hit. No paging params → every match, as before. The walk is cached between pages (§1.7). |
+| `GET /api/videos/list` | `?q=&library_id=&sort=&limit=&cursor=&refresh=` | Videos across every present library (each walked whole — no count cap; hidden dirs skipped), paged (§1.7) as `{videos, total, limit, has_more, next_cursor, libraries, truncated, truncated_reason}`. `sort`: `library` (default: library, then path) · `name` · `newest` · `oldest` · `largest`. `q` is a case-insensitive substring of the name or path; `library_id` keeps one library. `libraries` is `[{library_id, library_label, total}]` — the matches per library with `q` applied — for section headers; `truncated` says the list is short of the disk: `truncated_reason` `"time"` (a walk ran past its 2-minute budget) or `"unpaged"` (no paging params: every match, as before, at most 2,000 per library — the bound clients from before paging were built against). The walk is cached between pages (§1.7). |
 | `GET /api/videos/stream` | `?library_id=&path=&download=` | Range/206 playback with the container's native MIME. `.mkv` serves as `x-matroska` — Chromium-family browsers and ExoPlayer play it; others fall back to `?download=1` (attachment). |
 | `GET /api/videos/poster` | `?library_id=&path=` | Cached ffmpeg-extracted poster frame (`video_posters_dir`); `204` when no frame could be extracted. |
 | `GET /api/videos/position` | `?library_id=&path=&device_id=&person_id=` | Resume position (`{position_sec, duration_sec}`). |

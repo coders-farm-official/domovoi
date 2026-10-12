@@ -202,18 +202,72 @@ def _snap(n: int):
     return listing_cache.Snapshot(rows=[{"i": i} for i in range(n)], hay=[""] * n, dirs={})
 
 
-def test_the_cache_is_bounded_by_rows_and_keeps_the_newest(monkeypatch):
+def test_idle_listings_go_first_and_one_in_use_stays_past_the_budget(monkeypatch):
+    """The budget is bytes (rows x the per-row estimate). Past it the least
+    recently used IDLE listings go; a listing read in the last IN_USE_SEC
+    stays even when it alone is bigger than the whole budget — scrolling a
+    huge library must not re-walk it on every page."""
     from web.backend.api import listing_cache
 
     listing_cache.clear()
-    monkeypatch.setattr(listing_cache, "MAX_CACHED_ROWS", 25)
+    monkeypatch.setattr(listing_cache, "ROW_BYTES", 100)
+    monkeypatch.setattr(listing_cache, "MAX_CACHE_BYTES", 2500)        # 25 rows
     for name in ("a", "b", "c"):
         listing_cache.get((f"lib:{name}", "/r"), lambda: _snap(10))
-    kept = [k[0] for k in listing_cache._snapshots]
-    assert kept == ["lib:b", "lib:c"]
-    listing_cache.get(("lib:huge", "/r"), lambda: _snap(100))
-    assert [k[0] for k in listing_cache._snapshots] == ["lib:huge"]   # alone, never evicted
+    # all three in use: over budget (3,000 B) but nothing is evicted
+    assert [k[0] for k in listing_cache._snapshots] == ["lib:a", "lib:b", "lib:c"]
+    # a and b go idle; the next insert evicts them (oldest first) to fit
+    for k in ("lib:a", "lib:b"):
+        listing_cache._snapshots[(k, "/r")].used_at -= listing_cache.IN_USE_SEC + 1
+    listing_cache.get(("lib:d", "/r"), lambda: _snap(10))
+    assert [k[0] for k in listing_cache._snapshots] == ["lib:c", "lib:d"]
+    # one listing bigger than the whole budget is kept, alone if need be
+    for snap in listing_cache._snapshots.values():
+        snap.used_at -= listing_cache.IN_USE_SEC + 1
+    big = listing_cache.get(("lib:huge", "/r"), lambda: _snap(100))
+    assert [k[0] for k in listing_cache._snapshots] == ["lib:huge"]
+    assert listing_cache.get(("lib:huge", "/r"), lambda: _snap(1)) is big     # a hit, no re-walk
     listing_cache.clear()
+
+
+def test_the_count_bound_still_applies(monkeypatch):
+    from web.backend.api import listing_cache
+
+    listing_cache.clear()
+    monkeypatch.setattr(listing_cache, "MAX_SNAPSHOTS", 3)
+    for i in range(5):
+        listing_cache.get((f"lib:{i}", "/r"), lambda: _snap(1))
+    assert [k[0] for k in listing_cache._snapshots] == ["lib:2", "lib:3", "lib:4"]
+    listing_cache.clear()
+
+
+def test_a_many_folder_listing_rechecks_its_folders_at_most_every_few_seconds(tmp_path, monkeypatch):
+    from web.backend.api import listing_cache
+
+    d = tmp_path / "d"
+    d.mkdir()
+    snap = listing_cache.Snapshot(rows=[], hay=[], dirs={str(d): d.stat().st_mtime_ns})
+    monkeypatch.setattr(listing_cache, "VALIDATE_ALWAYS_DIRS", 0)    # "many" = more than 0
+    (d / "new.mp4").write_bytes(b"x")
+    import os
+    os.utime(d, ns=(1, 1))                                              # the folder changed
+    assert snap.fresh() is True            # checked less than VALIDATE_EVERY_SEC ago (at build)
+    snap.validated_at -= listing_cache.VALIDATE_EVERY_SEC + 1
+    assert snap.fresh() is False
+    monkeypatch.setattr(listing_cache, "VALIDATE_ALWAYS_DIRS", 10)     # a small listing
+    snap2 = listing_cache.Snapshot(rows=[], hay=[], dirs={str(d): 5})
+    assert snap2.fresh() is False          # checked on every request
+
+
+def test_memo_computes_once_per_key_and_keeps_a_few():
+    s = _snap(3)
+    calls = []
+    for _ in range(3):
+        s.memo("q", lambda: calls.append(1) or [1, 2])
+    assert calls == [1]
+    for i in range(20):
+        s.memo(i, lambda: i)
+    assert "q" not in s._memo and len(s._memo) == 8
 
 
 def test_invalidate_drops_a_library_and_an_in_flight_build_is_not_kept():

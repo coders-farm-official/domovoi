@@ -686,36 +686,40 @@ async def browse(
     rel = "" if rel == "." else rel
     breadcrumb = [seg for seg in rel.split("/") if seg] if rel else []
 
-    def load() -> tuple[listing_cache.Snapshot, list, list, list]:
+    needle = (q or "").strip().lower()
+
+    def answer() -> tuple[list[dict[str, Any]], dict[str, Any], int]:
+        """The folder's page, off the event loop: the read, the sort and a
+        search's scan (memoised on the listing, so its later pages are
+        lookups) are tens of milliseconds at 50,000 entries."""
         snap = listing_cache.get(
             (lib.id, str(root), "folder", rel),
             lambda: _read_folder(root, target),
             force=refresh,
         )
         rows, keys, order = snap.view(sort, _FILE_SORT_KEYS[sort])
-        return snap, rows, keys, order
+        matches = None
+        if needle or kind:
+            hay = snap.hay
+            matches = snap.memo(("folder", sort, needle, kind), lambda: [
+                i for i in range(len(rows))
+                if (not needle or needle in hay[order[i]]) and (not kind or rows[i]["kind"] == kind)
+            ])
+        if paging.wants_page(limit, cursor, offset):
+            page, fields = paging.page_view(
+                rows, keys, sort=sort, limit=limit or paging.DEFAULT_LIMIT,
+                cursor=cursor, offset=offset, matches=matches,
+            )
+        else:
+            page = rows if matches is None else [rows[i] for i in matches]
+            fields = paging.page_fields(total=len(page), limit=None, has_more=False,
+                                        next_cursor=None)
+        return page, fields, len(rows)
 
     try:
-        snap, rows, keys, order = await anyio.to_thread.run_sync(load)
+        page, fields, folder_total = await anyio.to_thread.run_sync(answer)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"cannot list directory: {e}")
-
-    needle = (q or "").strip().lower()
-    keep = None
-    if needle or kind:
-        hay = snap.hay
-        keep = lambda i: (not needle or needle in hay[order[i]]) and (  # noqa: E731
-            not kind or rows[i]["kind"] == kind)
-
-    if paging.wants_page(limit, cursor, offset):
-        page, fields = paging.page_view(
-            rows, keys, sort=sort, limit=limit or paging.DEFAULT_LIMIT,
-            cursor=cursor, offset=offset, keep=keep,
-        )
-    else:
-        page = [r for i, r in enumerate(rows) if keep is None or keep(i)]
-        fields = paging.page_fields(total=len(page), limit=None, has_more=False,
-                                    next_cursor=None)
 
     blocked_reason = await _block_status(device_id)
     return BrowseResponse(
@@ -728,7 +732,7 @@ async def browse(
         entries=[BrowseEntry(**r) for r in page],
         writable=blocked_reason is None,
         blocked_reason=blocked_reason,
-        folder_total=len(rows),
+        folder_total=folder_total,
         **fields,
     )
 

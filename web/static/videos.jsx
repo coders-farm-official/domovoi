@@ -335,9 +335,12 @@ const VideosPage = () => {
         ))
       )}
       <PagedListFooter list={list} noun="videos"/>
-      {list.extra && list.extra.truncated && (
+      {/* Every library is read whole now; the one remaining limit is time
+          (web/backend/api/media_walk.py): a drive still being read after two
+          minutes is listed as far as it got, and this says so. */}
+      {list.extra && list.extra.truncated_reason === 'time' && (
         <div style={{ fontSize: 11, color: 'var(--fg-faint)', textAlign: 'center', marginBottom: 12 }}>
-          a library holds more videos than one listing reads — some aren't shown
+          a library took too long to read, so this list stops where it got to — some videos aren't shown
         </div>
       )}
 

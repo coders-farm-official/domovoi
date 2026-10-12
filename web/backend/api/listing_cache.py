@@ -15,7 +15,10 @@ per key: ``(library id, root, …)`` for a library walk (Videos), and
 built lazily, once per sort, and kept on the snapshot.
 
 **When it is thrown away** (checked on every request; the check is one
-``stat`` per directory, ~0.5 ms for a 100-folder library):
+``stat`` per directory, ~0.5 ms for a 100-folder library — a listing that
+read more than :data:`VALIDATE_ALWAYS_DIRS` folders is re-checked at most
+every :data:`VALIDATE_EVERY_SEC`, so scrolling a 5,000-folder library
+doesn't stat 5,000 folders per page):
 
 * any directory the walk read has a different mtime — a file or folder
   added, removed or renamed in it, by anyone, through any process (the
@@ -32,14 +35,22 @@ built lazily, once per sort, and kept on the snapshot.
   remove files, which their folder's mtime already says;
 * ``refresh=true`` on the request (the pages' Rescan / pull-to-refresh).
 
-The existing bounds stay where they were (``media_walk``'s directory and
-file caps); the cache only stops the same bounded work being repeated.
-Memory is bounded by :data:`MAX_SNAPSHOTS` and :data:`MAX_CACHED_ROWS`
-(least recently used goes first).
+**Memory** (owner decision 2026-10-12: the walk has no count caps any
+more, so one library can be very large). The budget is in bytes,
+:data:`MAX_CACHE_BYTES`, estimated per row: measured 2026-10-12 at 50,000
+rows, a walked video row with its search text is ~520 B and a folder entry
+~560 B (:data:`ROW_BYTES` = 600), and each sorted view adds ~190 B a row
+(:data:`VIEW_ROW_BYTES` = 200). Past the budget — or past
+:data:`MAX_SNAPSHOTS` listings — the least recently used listings go,
+except that a listing read in the last :data:`IN_USE_SEC` is never evicted
+to make room: a library bigger than the whole budget stays cached alone
+while someone scrolls it (the budget is exceeded, and a warning logged)
+rather than being re-walked on every page. It goes once it idles.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -47,13 +58,22 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Hashable, Optional
 
+log = logging.getLogger(__name__)
+
 MAX_AGE_SEC = 300.0
 MAX_SNAPSHOTS = 64
-# And at most this many rows across all of them (~1 KB a row with its
-# sorted views): a few huge folders browsed in a row must not pin hundreds
-# of MB. The least recently used snapshots go first; the one just built
-# always stays.
-MAX_CACHED_ROWS = 60_000
+# The memory budget and its per-row estimate (see the module docstring).
+MAX_CACHE_BYTES = 256 * 1024 * 1024
+ROW_BYTES = 600
+VIEW_ROW_BYTES = 200
+# A listing read this recently is in use: never evicted to make room.
+IN_USE_SEC = 120.0
+# A listing that read more folders than this re-checks their mtimes at most
+# this often (a smaller one checks on every request).
+VALIDATE_ALWAYS_DIRS = 2000
+VALIDATE_EVERY_SEC = 2.0
+# Filter results kept per listing (a search scrolled page by page).
+_MEMO_MAX = 8
 
 
 @dataclass
@@ -64,10 +84,32 @@ class Snapshot:
     truncated: bool = False
     built_at: float = field(default_factory=time.monotonic)
     expired: bool = False                # set by invalidate() on a snapshot in use
+    stopped: Optional[str] = None        # why a truncated walk stopped ("time")
+    used_at: float = field(default_factory=time.monotonic)
+    validated_at: float = field(default_factory=time.monotonic)
     _views: dict[str, tuple[list[dict[str, Any]], list[tuple], list[int]]] = field(
         default_factory=dict
     )
+    _memo: "OrderedDict[Hashable, Any]" = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def est_bytes(self) -> int:
+        return len(self.rows) * (ROW_BYTES + VIEW_ROW_BYTES * len(self._views))
+
+    def memo(self, key: Hashable, compute: Callable[[], Any]) -> Any:
+        """``compute()`` once per ``key`` for this snapshot (a search's
+        matching rows, say), the last few kept: scrolling a filtered list
+        doesn't re-scan every row per page."""
+        with self._lock:
+            if key in self._memo:
+                self._memo.move_to_end(key)
+                return self._memo[key]
+        value = compute()
+        with self._lock:
+            self._memo[key] = value
+            while len(self._memo) > _MEMO_MAX:
+                self._memo.popitem(last=False)
+        return value
 
     def view(
         self, sort: str, key: Callable[[dict[str, Any]], tuple],
@@ -87,14 +129,18 @@ class Snapshot:
             return got
 
     def fresh(self) -> bool:
-        if self.expired or time.monotonic() - self.built_at > MAX_AGE_SEC:
+        now = time.monotonic()
+        if self.expired or now - self.built_at > MAX_AGE_SEC:
             return False
+        if len(self.dirs) > VALIDATE_ALWAYS_DIRS and now - self.validated_at < VALIDATE_EVERY_SEC:
+            return True
         for path, mtime_ns in self.dirs.items():
             try:
                 if os.stat(path).st_mtime_ns != mtime_ns:
                     return False
             except OSError:
                 return False
+        self.validated_at = now
         return True
 
 
@@ -133,6 +179,7 @@ def get(
                 _snapshots.move_to_end(key)
         if snap is not None and not force and snap.fresh():
             stats["hits"] += 1
+            snap.used_at = time.monotonic()
             return snap
         with _lock:
             gen = (_global_generation, _generations.get(lib, 0) if lib else 0)
@@ -143,14 +190,38 @@ def get(
             if now == gen:
                 _snapshots[key] = snap
                 _snapshots.move_to_end(key)
-                rows = sum(len(x.rows) for x in _snapshots.values())
-                while len(_snapshots) > 1 and (
-                    len(_snapshots) > MAX_SNAPSHOTS or rows > MAX_CACHED_ROWS
-                ):
-                    old, gone = _snapshots.popitem(last=False)
-                    rows -= len(gone.rows)
-                    _build_locks.pop(old, None)
+                _evict(keep=key)
         return snap
+
+
+def _evict(keep: Hashable) -> None:
+    """Make room (under ``_lock``): least recently used first, never ``keep``
+    (just built), and never a listing in use for want of BYTES — only the
+    count bound may take one of those."""
+    now = time.monotonic()
+    total = sum(x.est_bytes() for x in _snapshots.values())
+    for key in list(_snapshots):
+        if total <= MAX_CACHE_BYTES and len(_snapshots) <= MAX_SNAPSHOTS:
+            return
+        if key == keep:
+            continue
+        snap = _snapshots[key]
+        if now - snap.used_at < IN_USE_SEC and len(_snapshots) <= MAX_SNAPSHOTS:
+            continue
+        total -= snap.est_bytes()
+        del _snapshots[key]
+        _build_locks.pop(key, None)
+    if total > MAX_CACHE_BYTES:
+        log.warning(
+            "listing cache over its budget (~%d MB of %d MB) — every listing in it is in use",
+            total // (1024 * 1024), MAX_CACHE_BYTES // (1024 * 1024),
+        )
+
+
+def cached_bytes() -> int:
+    """The cache's estimated size (tests, diagnostics)."""
+    with _lock:
+        return sum(x.est_bytes() for x in _snapshots.values())
 
 
 def invalidate(library_id: Optional[str] = None) -> None:

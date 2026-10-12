@@ -389,3 +389,57 @@ def test_a_junction_inside_the_root_is_walked_once(registry, roots, videos):
     rels = [v["rel"] for v in body["videos"] if v["library_id"] == "core:videos"]
     # show-0's 18 episodes appear once — under whichever path the walk met first.
     assert len(rels) == 120
+
+
+# ─── No count caps (owner decision 2026-10-12) ──────────────────────────────
+@pytest.fixture
+def big_library(roots):
+    """2,110 videos in 2,011 folders: past both of the old 2,000 caps."""
+    v = roots["videos"]
+    for i in range(2010):
+        _touch(v / f"f{i:04d}" / f"clip {i:04d}.mp4", size=1)
+    for i in range(100):
+        _touch(v / "many" / f"extra {i:03d}.mp4", size=1)
+    return v
+
+
+def test_the_walk_has_no_file_or_folder_cap(registry, big_library):
+    with _client() as c:
+        body = c.get("/api/videos/list", params={"limit": 200, "library_id": "core:videos"}).json()
+        last = c.get("/api/videos/list", params={"limit": 50, "offset": 2100,
+                                                 "library_id": "core:videos"}).json()
+    assert body["total"] == 2110
+    assert body["truncated"] is False and body["truncated_reason"] is None
+    assert [v["name"] for v in last["videos"]] == [f"extra {i:03d}.mp4" for i in range(90, 100)]
+
+
+def test_old_clients_keep_their_per_library_bound(registry, big_library):
+    with _client() as c:
+        body = c.get("/api/videos/list").json()
+    mine = [v for v in body["videos"] if v["library_id"] == "core:videos"]
+    assert len(mine) == videos_api.LEGACY_UNPAGED_PER_LIBRARY == 2000
+    assert body["truncated"] is True and body["truncated_reason"] == "unpaged"
+
+
+def test_a_walk_past_its_time_budget_stops_and_says_so(registry, videos, monkeypatch):
+    from web.backend.api import media_walk
+
+    monkeypatch.setattr(media_walk, "WALK_TIME_BUDGET_SEC", -1.0)
+    with _client() as c:
+        body = c.get("/api/videos/list", params={"limit": 50}).json()
+    assert body["truncated"] is True and body["truncated_reason"] == "time"
+    assert body["total"] == 0
+
+
+def test_a_library_bigger_than_the_cache_is_not_rewalked_per_page(registry, big_library, monkeypatch):
+    monkeypatch.setattr(listing_cache, "MAX_CACHE_BYTES", 1024)      # far smaller than 2,110 rows
+    with _client() as c:
+        first = c.get("/api/videos/list", params={"limit": 50, "library_id": "core:videos"}).json()
+        builds = listing_cache.stats["builds"]
+        cursor, pages = first["next_cursor"], 0
+        while cursor and pages < 10:
+            cursor = c.get("/api/videos/list", params={"limit": 50, "library_id": "core:videos",
+                                                       "cursor": cursor}).json()["next_cursor"]
+            pages += 1
+    assert pages == 10
+    assert listing_cache.stats["builds"] == builds       # served from the cache every time

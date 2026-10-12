@@ -1,21 +1,32 @@
-"""Shared bounded recursive walk of a media library for one file family.
+"""Shared recursive walk of a media library for one file family.
 
-The Videos and Images tabs both enumerate "every matching file across every
-Files library" without a DB index. This module owns that walk so the two
-routers stay in lockstep on the security posture: hidden + secret-shaped
-dirs are pruned, symlinks that escape the root are dropped (files.py
-guard), and both the directories visited and the files returned are capped
-so a whole removable drive can't turn one request into unbounded work.
+The Videos tab enumerates "every matching file across every Files library"
+without a DB index. This module owns that walk so every caller keeps the
+same security posture: hidden + secret-shaped dirs are pruned, a symlinked
+directory is never followed, a directory (a Windows junction, say) whose
+realpath leaves the root is dropped whole, a file that is a link is dropped
+when its realpath leaves the root, and a folder reached twice (a junction
+loop) is walked once.
 
-Cost (measured 2026-10-11 on the Windows dev box, 10,000 videos in 100
-folders): resolving every FILE's realpath made one walk ~2 s; it is ~0.3 s
-now. The realpath check runs once per DIRECTORY — a directory whose
-realpath is inside the root holds files whose realpath is too, unless the
-file is itself a link, and those few are still resolved one by one — and
-the relative path is built as a string. Same answer, a fraction of the
-system calls. ``listing_cache`` keeps the result between pages; the
-``meta`` out-parameter hands it each visited directory's mtime so it can
-tell when the walk is stale without walking again.
+**No count caps (owner decision 2026-10-12).** The walk used to stop at
+2,000 files and 2,000 folders per library, so one request could never
+become unbounded work while the whole list went out in one answer. Every
+list is paged now and the walk is cached between pages (``listing_cache``),
+so the walk enumerates the whole library. What stays is a TIME budget,
+:data:`WALK_TIME_BUDGET_SEC`: a walk still going after that long (a huge or
+very slow removable drive) stops, keeps what it found, and says so
+(``meta["truncated"]``, ``meta["stopped"] = "time"``) — the Videos page
+tells the person rather than hanging a request on it.
+
+Cost (Windows dev box): 10,000 videos in 100 folders ~0.1 s (2026-10-11);
+50,000 in 500 folders ~1 s for the walk and the first page together
+(2026-10-12, with other test runs loading the box).
+The realpath check runs once per DIRECTORY — a directory whose realpath is
+inside the root holds files whose realpath is too, unless the file is
+itself a link, and those few are still resolved one by one — and the
+relative path is built as a string. ``meta`` hands ``listing_cache`` each
+visited directory's mtime so it can tell when the walk is stale without
+walking again.
 
 Sync — callers run it in a worker thread (``anyio.to_thread``).
 """
@@ -24,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,7 +43,11 @@ from web.backend.api.files_security import MediaLibrary, is_sensitive_name
 
 log = logging.getLogger(__name__)
 
-_MAX_DIRS_PER_LIBRARY = 2000
+# The one remaining safety limit: a walk running longer than this stops and
+# reports itself truncated. 50,000 files take well under a second on a
+# local disk; minutes means a slow or enormous drive, and the page should
+# say so rather than keep a request waiting indefinitely.
+WALK_TIME_BUDGET_SEC = 120.0
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -55,30 +71,39 @@ def _is_link(entry: os.DirEntry) -> bool:
 def walk_library_files(
     lib: MediaLibrary,
     extensions: frozenset[str],
-    max_files: int,
+    max_files: Optional[int] = None,
     meta: Optional[dict[str, Any]] = None,
+    *,
+    time_budget: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """Every file under ``lib.root_path`` whose suffix is in ``extensions``,
     as ``{library_id, library_label, rel, name, size, mtime}`` rows.
 
-    ``meta``, when given, is filled with ``dirs`` ({visited dir → its
-    st_mtime_ns}) and ``truncated`` (a cap was hit)."""
+    ``max_files`` is an optional cap for a caller that wants one (none of
+    the paged lists does). ``time_budget`` (default
+    :data:`WALK_TIME_BUDGET_SEC`) bounds the walk's wall time. ``meta``,
+    when given, is filled with ``dirs`` ({visited dir → its st_mtime_ns}),
+    ``truncated`` (the walk stopped early) and ``stopped`` (``"time"`` /
+    ``"files"`` / None)."""
     root = lib.root_path
+    budget = WALK_TIME_BUDGET_SEC if time_budget is None else time_budget
+    deadline = time.monotonic() + budget
     out: list[dict[str, Any]] = []
     dirs: dict[str, int] = {}
-    truncated = False
+    stopped: Optional[str] = None
     seen_real: set[Path] = set()
     # (directory, its path relative to the root as "a/b/" — built as a
     # string, because PurePath.relative_to costs ~0.1 ms a call on Windows)
     stack: list[tuple[Path, str]] = [(root, "")]
-    dirs_seen = 0
     while stack:
-        here, prefix = stack.pop()
-        dirs_seen += 1
-        if dirs_seen > _MAX_DIRS_PER_LIBRARY or len(out) >= max_files:
-            truncated = True
-            log.warning("media walk cap hit in %s — listing truncated", lib.id)
+        if time.monotonic() > deadline:
+            stopped = "time"
+            log.warning("media walk of %s stopped after %.0f s — listing truncated", lib.id, budget)
             break
+        if max_files is not None and len(out) >= max_files:
+            stopped = "files"
+            break
+        here, prefix = stack.pop()
         # One realpath per directory: a junction (Windows) or any other
         # redirect that lands outside the root drops the whole directory,
         # and a loop back to a folder already walked is not walked twice.
@@ -112,8 +137,8 @@ def walk_library_files(
                     continue
                 subdirs.append((here / name, f"{prefix}{name}/"))
                 continue
-            if len(out) >= max_files:
-                truncated = True
+            if max_files is not None and len(out) >= max_files:
+                stopped = "files"
                 break
             if os.path.splitext(name)[1].lower() not in extensions:
                 continue
@@ -139,5 +164,6 @@ def walk_library_files(
         stack.extend(reversed(subdirs))
     if meta is not None:
         meta["dirs"] = dirs
-        meta["truncated"] = truncated
+        meta["truncated"] = stopped is not None
+        meta["stopped"] = stopped
     return out

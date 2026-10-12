@@ -10613,7 +10613,7 @@
           "videos"
         ],
         "summary": "List Videos",
-        "description": "Videos across every present library, sorted and filtered here, one\npage at a time.\n\nPaged (``limit`` / ``cursor`` / ``offset`` sent): ``videos`` is one page\nand ``total`` / ``has_more`` / ``next_cursor`` say where it sits\n(``web/backend/api/paging.py``). ``libraries`` counts the matches per\nlibrary (the search applied, the library filter not), for the section\nheaders. Unpaged (an old client): every match, as before, with the same\nextra fields.\n\nThe walk is bounded per library (``_MAX_VIDEOS_PER_LIBRARY``, and\nmedia_walk's directory cap) and cached between requests\n(``listing_cache``); ``truncated`` says a cap was hit.",
+        "description": "Videos across every present library, sorted and filtered here, one\npage at a time.\n\nPaged (``limit`` / ``cursor`` / ``offset`` sent): ``videos`` is one page\nand ``total`` / ``has_more`` / ``next_cursor`` say where it sits\n(``web/backend/api/paging.py``). ``libraries`` counts the matches per\nlibrary (the search applied, the library filter not), for the section\nheaders. Unpaged (an old client): every match, as before, with the same\nextra fields, at most :data:`LEGACY_UNPAGED_PER_LIBRARY` per library.\n\nEvery library is walked whole \u2014 no count cap \u2014 and the walk is cached\nbetween requests (``listing_cache``). ``truncated`` says the listing is\nshort of the disk: ``truncated_reason`` \"time\" (a walk ran past\nmedia_walk's time budget) or \"unpaged\" (the old-client bound).",
         "operationId": "list_videos_api_videos_list_get",
         "parameters": [
           {

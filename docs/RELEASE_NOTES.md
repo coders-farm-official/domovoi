@@ -38,8 +38,13 @@ other lists arrive whole, as before).
   a folder changes, a write through the server lands, on **Rescan**, or
   after five minutes. A cold read of a 10,000-entry folder fell from ~6 s
   to ~0.13 s, and of 10,000 videos from ~2 s to ~0.1 s (Windows dev box);
-  later pages take ~25 ms. The walk limits are unchanged (2,000 videos and
-  2,000 folders per library); the Videos page says when one was reached.
+  later pages take ~25 ms.
+* **Videos reads every library whole.** The 2,000-videos and 2,000-folders
+  per library limits are gone. 50,000 videos show their first page in
+  ~1–1.5 s and every later page in ~50 ms. The one limit left is time: a
+  drive still being read after two minutes is listed as far as it got, and
+  the Videos page says so. An app from before this update still gets at
+  most 2,000 videos per library (the list it was built to hold).
 
 ## 2026-10-11 — Android: "your device" on the Files, Music and Videos pages
 

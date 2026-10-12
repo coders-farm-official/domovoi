@@ -235,10 +235,12 @@ def page_view(
     cursor: Optional[str],
     offset: Optional[int],
     keep: Optional[Callable[[int], bool]] = None,
+    matches: Optional[Sequence[int]] = None,
 ) -> tuple[list[Any], dict[str, Any]]:
     """One page of an already-sorted list. ``keys[i]`` is the sort key of
     ``rows[i]`` (ascending tuples — a descending field is stored negated).
-    ``keep(i)``, when given, is the filter; ``total`` counts what it keeps.
+    The filter is ``keep(i)``, or ``matches`` — the kept indices, ascending,
+    already worked out (a memoised search); ``total`` counts what it keeps.
     Returns (page rows, paging fields)."""
     start: Optional[int] = None
     if cursor is not None:
@@ -248,7 +250,9 @@ def page_view(
         except TypeError:
             raise _bad_cursor()
 
-    if keep is None:
+    if matches is None and keep is not None:
+        matches = [i for i in range(len(rows)) if keep(i)]
+    if matches is None:
         total = len(rows)
         first = start if start is not None else (offset or 0)
         idx = range(first, min(first + limit, total))
@@ -256,7 +260,6 @@ def page_view(
         page = [rows[i] for i in idx]
         last = idx[-1] if len(idx) else None
     else:
-        matches = [i for i in range(len(rows)) if keep(i)]
         total = len(matches)
         pos = bisect.bisect_left(matches, start) if start is not None else (offset or 0)
         chosen = matches[pos:pos + limit]
