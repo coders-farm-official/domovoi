@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -23,6 +24,10 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- The on-device assistant's model download (assistant/ModelDownloadWorker)
+         runs as a WorkManager foreground job so it survives leaving the app;
+         Android 14+ needs its service type declared and permitted. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -43,6 +48,15 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- The on-device assistant speaks with the phone's text-to-speech
+         engine (assistant/AndroidSpeechOut); from API 30 an app sees the
+         installed engines only when it declares that it looks for them. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <!-- allowBackup=false: nothing the app stores (server address, device id,
          the pairing token, the timer alerts' mirror with a reminder's words)
          is ever copied into a cloud or adb backup. From API 31 that flag no
@@ -61,6 +75,13 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.Domovoi">
+
+        <!-- The on-device assistant's GPU backend (LiteRT-LM) opens the
+             vendor's OpenCL driver; from API 31 an app sees a vendor
+             library only when it asks for it here. required="false": a
+             phone without them still installs and runs on the CPU. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"
@@ -91,6 +112,13 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+
+        <!-- WorkManager's own foreground service, given the type the model
+             download runs under (merged into the library's declaration). -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <service
             android:name=".player.PlaybackService"

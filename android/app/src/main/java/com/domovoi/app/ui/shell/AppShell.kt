@@ -85,6 +85,8 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.screens.ScreenRouter
 import com.domovoi.app.ui.screens.local.LocalSourceChoices
 import com.domovoi.app.ui.screens.local.SourceChoices
+import com.domovoi.app.ui.screens.settings.LocalSettingsButton
+import com.domovoi.app.ui.screens.settings.LocalSettingsScreen
 import com.domovoi.app.ui.screens.settings.PairingScreen
 import com.domovoi.app.ui.shell.player.DockedPlayer
 import com.domovoi.app.ui.theme.Domovoi
@@ -523,6 +525,13 @@ private fun TopChrome(content: @Composable () -> Unit) {
 @Composable
 private fun OfflineShell(choice: ServerChoice) {
     var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos, 2 = files
+    // This phone's own settings (problem reports, the on-device assistant
+    // benchmark): the top bar's gear opens them, with no server needed.
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    if (settingsOpen) {
+        LocalSettingsScreen(onBack = { settingsOpen = false })
+        return
+    }
     val openConnection = LocalOpenConnection.current
     // The banner is for a server that can't be used. Choosing "this phone"
     // with the server right there is not an outage, so it says nothing.
@@ -595,6 +604,8 @@ private fun OfflineShell(choice: ServerChoice) {
                             color = Domovoi.colors.fgMuted,
                         )
                     }
+                    Box(Modifier.width(6.dp))
+                    LocalSettingsButton { settingsOpen = true }
                 }
             }
             if (outOfReach != null) {

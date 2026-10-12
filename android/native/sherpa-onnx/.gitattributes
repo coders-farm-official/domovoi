@@ -1,0 +1,4 @@
+# Build outputs and their hashes (SHA256SUMS), byte for byte: no line-ending
+# conversion on checkout, so the recorded hashes hold on every platform and
+# the scripts keep the LF line endings the build container needs.
+* -text
