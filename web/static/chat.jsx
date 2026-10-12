@@ -290,6 +290,8 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
 
   const stamp = ChatDetails.stamp(m.created_at);
   const line = [stamp, !isUser && !m.pending ? m.model : null].filter(Boolean).join(' · ');
+  // Who Domovoi heard, on a message said into the app's chat mic.
+  const speaker = !m.pending ? ChatDetails.speakerMark(m) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
@@ -323,6 +325,14 @@ const ChatMessage = ({ m, threadId, onCopy, admin }) => {
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
             <ChatReplyError m={m} admin={admin}/>
           </div>
+        </div>
+      )}
+      {speaker && (
+        <div className={`chat-speaker${speaker.soft ? ' soft' : ''}`}
+             title={speaker.description} aria-label={speaker.description}>
+          <Icon name="mic" size={11}/>
+          {speaker.name && <Avatar name={speaker.name}/>}
+          <span>{speaker.label}</span>
         </div>
       )}
       {!m.pending && (

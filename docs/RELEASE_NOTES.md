@@ -31,9 +31,10 @@ update runs it). Update the server first: the new app's mic needs it.
   speed in a book, "add this song to …" (the phone says it can't yet), and
   "drop in on …" (use a room's drop-in button).
 * **Who spoke.** Each spoken message carries a small marker naming who
-  Domovoi recognized, lighter when it isn't sure or when it names someone
-  other than the phone's owner — set that in the app under Settings →
-  Connection → **This phone belongs to**. Voice profiles enrolled on a
+  Domovoi recognized, in the app and on the dashboard's chat, lighter when
+  it isn't sure (and, in the app, when it names someone other than the
+  phone's owner, set per server under Settings → Connection → **This
+  phone belongs to**). Voice profiles enrolled on a
   satellite may not match a phone's mic as well, so the marker can say
   "voice not recognized" for someone a satellite knows.
 * **For operators:** turns are logged under `phone-<device id>` like a

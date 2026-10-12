@@ -64,6 +64,22 @@ CASES = {
         "role": "assistant", "error": "The model m isn't installed.", "stats": {"error_code": "model_missing"}}]},
     "err_uncoded": {"call": "errorView", "args": [{"role": "assistant", "error": "Failed to fetch"}]},
     "err_none": {"call": "errorView", "args": [{"role": "assistant", "content": "hi"}]},
+    # The speaker marker on a message said into the app's chat mic (V025),
+    # read from the row exactly as GET /api/chat/threads/{id}/messages sends it.
+    "mark_sure": {"call": "speakerMark", "args": [{
+        "role": "user", "source": "voice", "speaker_person_id": 3, "speaker_name": "Ana",
+        "speaker_confidence": 0.86, "speaker_confident": True}]},
+    "mark_unsure": {"call": "speakerMark", "args": [{
+        "role": "user", "source": "voice", "speaker_person_id": 3, "speaker_name": "Ana",
+        "speaker_confidence": 0.77, "speaker_confident": False}]},
+    "mark_nobody": {"call": "speakerMark", "args": [{
+        "role": "user", "source": "voice", "speaker_person_id": None, "speaker_confidence": 0.41}]},
+    "mark_forgotten": {"call": "speakerMark", "args": [{
+        "role": "user", "source": "voice", "speaker_person_id": 9, "speaker_name": None,
+        "speaker_confident": True}]},
+    "mark_typed": {"call": "speakerMark", "args": [{"role": "user", "source": "typed", "speaker_person_id": 3}]},
+    "mark_old_row": {"call": "speakerMark", "args": [{"role": "user", "content": "from before V025"}]},
+    "mark_reply": {"call": "speakerMark", "args": [{"role": "assistant", "source": "voice"}]},
 }
 
 
@@ -164,3 +180,17 @@ def test_coded_errors_read_plainly(out) -> None:
     assert out["err_missing"]["models"] is True
     assert out["err_uncoded"] == {"text": "Failed to fetch", "code": None, "models": False}
     assert out["err_none"] is None
+
+
+def test_the_speaker_marker_reads_like_the_apps(out) -> None:
+    """Same words as SpeakerMarker.kt: the name for a clear match, "maybe"
+    and softer for a weak one, "voice not recognized" for nobody."""
+    assert out["mark_sure"] == {"label": "Ana", "name": "Ana", "soft": False, "description": "spoken by Ana"}
+    assert out["mark_unsure"]["label"] == "maybe Ana" and out["mark_unsure"]["soft"] is True
+    assert out["mark_nobody"] == {
+        "label": "voice not recognized", "name": None, "soft": True,
+        "description": "spoken; Domovoi didn't recognize the voice",
+    }
+    assert out["mark_forgotten"]["label"] == "someone it knows"
+    for typed in ("mark_typed", "mark_old_row", "mark_reply"):
+        assert out[typed] is None

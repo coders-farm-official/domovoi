@@ -156,7 +156,26 @@ const ChatDetails = (() => {
     return { text, code, models: MODEL_CODES.includes(code) };
   };
 
-  return { stamp, rows, lengthLine, ACCEPTS, visionMissingText, visionMissing, errorView };
+  /* Who Domovoi heard on a message said into the app's chat mic (V025),
+   * worded as the app's SpeakerMarker.kt: the name at full strength for a
+   * clear match, "maybe <name>" drawn softer for a weak one, "voice not
+   * recognized" for nobody. Null for anything typed and for replies. The
+   * app also softens a match that isn't its owner; a browser has none. */
+  const speakerMark = (m) => {
+    if (!m || m.source !== 'voice' || m.role !== 'user') return null;
+    if (m.speaker_person_id == null) {
+      return { label: 'voice not recognized', name: null, soft: true,
+               description: "spoken; Domovoi didn't recognize the voice" };
+    }
+    const who = (m.speaker_name || '').trim() || 'someone it knows';
+    if (!m.speaker_confident) {
+      return { label: `maybe ${who}`, name: who, soft: true,
+               description: `spoken; Domovoi thinks it was ${who}, but isn't sure` };
+    }
+    return { label: who, name: who, soft: false, description: `spoken by ${who}` };
+  };
+
+  return { stamp, rows, lengthLine, ACCEPTS, visionMissingText, visionMissing, errorView, speakerMark };
 })();
 
 window.ChatDetails = ChatDetails;
