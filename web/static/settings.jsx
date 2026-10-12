@@ -2757,6 +2757,101 @@ const HouseholdTokenCard = ({ fire }) => {
   );
 };
 
+/* This device's phone bar: the tabs along the bottom when this browser is
+ * phone-width (components.jsx PhoneBarStore / phoneBarRoutes). Kept in
+ * this browser only, so it needs no sign-in and touches nothing on the
+ * server — which is why it is a tab of its own (Settings → Phone bar)
+ * rather than a card under Devices, whose other cards ask an admin to
+ * sign in. Home's "everything" grid links here. Offers what a launcher
+ * may show on this screen (navItemsFor): plugin pages too, and on a shared
+ * screen never the personal pages, whatever was saved. */
+const PhoneBarCard = ({ fire }) => {
+  const shared = useSharedScreen();
+  const manifest = window.DomovoiPluginManifest || { plugins: [] };
+  const items = navItemsFor(manifest, { shared });
+  const saved = usePhoneBar();
+  const bar = phoneBarRoutes(items, saved);
+  const byRoute = {};
+  items.forEach((it) => { byRoute[it.route] = it; });
+  const [unkept, setUnkept] = React.useState(false);
+  const label = (r) => (byRoute[r] && byRoute[r].label) || r;
+  const save = (next) => {
+    if (next === bar) return;
+    setUnkept(!PhoneBarStore.set(next));
+  };
+  const reset = () => {
+    setUnkept(!PhoneBarStore.set(null));
+    fire('phone bar back to home · music · videos · chat');
+  };
+  const glyph = (it) => (it && !it.core ? <PluginNavIcon src={it.iconSrc}/> : <Icon name={(it && it.icon) || 'puzzle'} size={16}/>);
+  const spare = items.filter((it) => !bar.includes(it.route));
+  const full = bar.length >= PHONE_BAR_MAX;
+  return (
+    <Card title="Phone bar"
+          sub={`The tabs along the bottom of this browser at phone width, left to right. Home is always first; ${PHONE_BAR_MIN} to ${PHONE_BAR_MAX} tabs. Everything else is on Home's “everything” grid.`}>
+      <div className="phone-bar-edit" style={{ padding: '8px 16px 4px' }}>
+        {bar.map((r, i) => (
+          <div key={r} className="phone-bar-row" data-route={r}
+               style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44,
+                        borderTop: i ? '1px solid var(--border-soft)' : 'none' }}>
+            <span className="mono" style={{ width: 16, fontSize: 11, color: 'var(--fg-faint)' }}>{i + 1}</span>
+            {glyph(byRoute[r])}
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{label(r)}</span>
+            {r === 'home' ? (
+              <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>always first</span>
+            ) : (
+              <>
+                <IconButton name="chevron-up" title={`move ${label(r)} left`} disabled={i <= 1}
+                            onClick={() => save(phoneBarEdit(bar, 'left', r))}/>
+                <IconButton name="chevron-down" title={`move ${label(r)} right`} disabled={i >= bar.length - 1}
+                            onClick={() => save(phoneBarEdit(bar, 'right', r))}/>
+                <IconButton name="x" title={`take ${label(r)} off the bar`} disabled={bar.length <= PHONE_BAR_MIN}
+                            onClick={() => save(phoneBarEdit(bar, 'remove', r))}/>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {spare.length > 0 && (
+        <div style={{ padding: '6px 16px 12px' }}>
+          <div className="label" style={{ marginBottom: 6 }}>
+            {full ? `the bar is full (${PHONE_BAR_MAX}) · take one off to add another` : 'add to the bar'}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {spare.map((it) => (
+              <Button key={it.route} variant="secondary" icon="plus" disabled={full}
+                      title={`add ${it.label} to the bar`}
+                      onClick={() => save(phoneBarEdit(bar, 'add', it.route))}>
+                {it.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span className="mono phone-bar-preview" style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--fg-muted)' }}>
+          {bar.map((r) => label(r).toLowerCase()).join(' · ')}
+        </span>
+        <Button variant="ghost" icon="rotate-ccw" disabled={saved == null} onClick={reset}>
+          default
+        </Button>
+      </div>
+      <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
+        {unkept
+          ? 'This browser can’t keep it (private window or blocked storage): it lasts until you reload.'
+          : 'Kept in this browser only — another phone keeps its own.'}
+        {shared && ' A shared screen leaves people, chat, files and news off, whatever the bar says.'}
+      </div>
+    </Card>
+  );
+};
+
+// Settings → Phone bar.
+const PhoneBarPanel = () => {
+  const [fire, toastNode] = useToast();
+  return <><PhoneBarCard fire={fire}/>{toastNode}</>;
+};
+
 const DevicesPanel = () => {
   const [fire, toastNode] = useToast();
   // ONE devices list for the whole tab. Each card used to fetch its own,
@@ -2779,11 +2874,12 @@ const DevicesPanel = () => {
 /* ============================================================ */
 /* Recordings — opt-in command recordings, reviewed by an admin */
 /* ============================================================ */
-/* Rooms an admin opted in (Satellites drawer → command recordings) keep
- * each wake-word or follow-up command, audio plus transcript, for tuning
- * when Domovoi stops listening. Here an admin plays them back, says
- * whether the capture ended at the right moment, and deletes them. Every
- * call is the server's security tier (admin only, 501 before setup). */
+/* Rooms an admin opted in (Settings → Satellites, the room's drawer →
+ * command recordings) keep each wake-word or follow-up command, audio
+ * plus transcript, for tuning when Domovoi stops listening. Here an admin
+ * plays them back, says whether the capture ended at the right moment,
+ * and deletes them. Every call is the server's security tier (admin only,
+ * 501 before setup). */
 
 const CAPTURE_LABEL_ORDER = ['cut_off', 'fine', 'waited_too_long'];
 
@@ -2890,7 +2986,7 @@ const CapturesPanel = () => {
     <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>{text}</div>
   );
   const sub = 'What opted-in rooms said to Domovoi, kept to tune when it stops listening. '
-    + 'Turn a room on or off in its Satellites drawer.';
+    + 'Turn a room on or off in its drawer under Settings → Satellites.';
 
   if (!admin) {
     return <Card title="Command recordings" sub={sub}>{note('Admins only. Sign in to review recordings.')}</Card>;
@@ -2952,7 +3048,7 @@ const CapturesPanel = () => {
         </div>
         {shown.length === 0 ? (
           <Empty title={all.length ? 'nothing matches' : 'nothing recorded yet'}
-                 sub={all.length ? undefined : 'turn recording on for a room in its satellites drawer'}/>
+                 sub={all.length ? undefined : 'turn recording on for a room in its drawer, under Settings → Satellites'}/>
         ) : shown.map((c) => (
           <CaptureRow key={c.id} c={c} labels={labels} playing={playing === c.id}
                       busy={busy === c.id} onPlay={play} onLabel={setLabel}
@@ -2979,6 +3075,8 @@ const SETTINGS_TABS = [
   { id: 'wakewords', label: 'Wake Words' },
   { id: 'recordings', label: 'Recordings' },  // opt-in command recordings (admins)
   { id: 'devices', label: 'Devices' },        // device names + queue / files access
+  { id: 'phonebar', label: 'Phone bar' },     // this browser's phone tabs (no sign-in: kept in the browser)
+  { id: 'satellites', label: 'Satellites' },  // the rooms' Pis (was a nav route, #satellites still opens it)
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
   { id: 'config', label: 'Configuration' },   // last tab, by request
@@ -2991,6 +3089,8 @@ const SETTINGS_SUB = {
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
   recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',
   devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
+  phonebar: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
+  satellites: 'The Pi in each room: status, approvals and adoption, announcements, and each room’s drawer.',
   models: "What's active in each role, install more, and the host hardware readout.",
   internet: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
   config: 'Editable domovoi configuration.',
@@ -3035,6 +3135,8 @@ const SettingsPage = () => {
       {tab === 'wakewords' && <WakeWordsPanel/>}
       {tab === 'recordings' && <CapturesPanel/>}
       {tab === 'devices' && <DevicesPanel/>}
+      {tab === 'phonebar' && <PhoneBarPanel/>}
+      {tab === 'satellites' && <SatellitesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'internet' && <InternetPanel/>}
       {tab === 'config' && <ConfigPanel/>}

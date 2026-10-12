@@ -42,6 +42,8 @@ import com.domovoi.app.net.OnStateEvents
 import com.domovoi.app.net.WsEvent
 import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.shell.LocalOpenSettingsTab
+import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
 import kotlinx.coroutines.CancellationException
@@ -109,6 +111,8 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val live by app.bus.connected.collectAsState()
     val deviceToken by app.prefs.deviceToken.collectAsState()
     val serverUrl by app.prefs.serverUrl.collectAsState()
+    val savedBar by app.prefs.phoneBar.collectAsState()
+    val openSettingsTab = LocalOpenSettingsTab.current
     val paired = !deviceToken.isNullOrBlank()
     val compact = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass ==
         WindowWidthSizeClass.COMPACT
@@ -471,7 +475,11 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
                 item(key = "today") { todaySec() }
                 if (compact) {
                     item(key = "everything") {
-                        HomeEverything(everythingTiles(caps, shared), counts) { navigate(it) }
+                        HomeEverything(
+                            everythingTiles(caps, shared, PhoneBar.routes(PhoneBar.decode(savedBar), caps, shared)),
+                            counts,
+                            onEditBar = { openSettingsTab("phonebar") },
+                        ) { navigate(it) }
                     }
                 }
             }

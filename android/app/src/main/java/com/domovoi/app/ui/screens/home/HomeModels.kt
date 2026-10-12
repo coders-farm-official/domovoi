@@ -8,6 +8,7 @@ import com.domovoi.app.net.Capabilities
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
 import com.domovoi.app.ui.shell.EverythingRoutes
+import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.visibleOn
 import kotlinx.serialization.Serializable
@@ -422,6 +423,20 @@ internal fun timerLeftByRoom(active: List<HomeTimer>, nowMs: Long): Map<String, 
 
 // ─── Rooms ────────────────────────────────────────────────────────────────
 
+/**
+ * What a room is playing, or null. Only an online room that is playing or
+ * paused has a song: a STOPPED room's player keeps the last song loaded and
+ * the read still names it (state "stop", song set), which made a room
+ * nobody was listening to look like it was playing that song at 0:00 on
+ * Home while Music and Satellites said nothing (2026-10-11). A stopped room
+ * is quiet, as everywhere else — the web's HomeRoomSong.
+ */
+internal fun roomSong(r: HomeRoom): HomeSong? {
+    val np = r.now_playing ?: return null
+    if (!r.online || np.song == null) return null
+    return if (np.state == "play" || np.state == "pause") np.song else null
+}
+
 /** Playing, then paused, then online and quiet, then waiting, then offline. */
 internal fun roomRank(r: HomeRoom): Int {
     val np = r.now_playing
@@ -466,8 +481,7 @@ internal fun mergeWifi(rooms: List<HomeRoom>, push: Map<String, HomeWifi>?): Lis
  *  brings the next one, the count used to run on ("0:14 / 0:13"). */
 internal fun roomElapsedSec(r: HomeRoom, stale: Boolean, sinceReadSec: Double): Double {
     val np = r.now_playing ?: return 0.0
-    val song = np.song
-    if (!r.online || song == null) return 0.0
+    val song = roomSong(r) ?: return 0.0
     val playing = np.state == "play"
     val ran = (np.elapsed_sec ?: 0.0) + if (playing && !stale) sinceReadSec else 0.0
     val dur = song.duration_sec ?: 0.0
@@ -820,11 +834,15 @@ internal fun hintPhrase(manual: HomeManual?): String {
 
 // ─── Everything ───────────────────────────────────────────────────────────
 
-/** The "everything" grid: every screen that is not a bottom-bar tab, that
- *  this server's plugins allow, and — on a shared screen — that is not
- *  somebody's own. */
-internal fun everythingTiles(caps: Capabilities, shared: Boolean): List<Route> =
-    EverythingRoutes.filter { it.visibleOn(caps, shared) }
+/** The "everything" grid: every screen that is not on this phone's bar
+ *  ([bar], ui/shell/PhoneBar.kt; the default bar unless given), that this
+ *  server's plugins allow, and — on a shared screen — that is not
+ *  somebody's own. Satellites is not here: it is a Settings tab. */
+internal fun everythingTiles(
+    caps: Capabilities,
+    shared: Boolean,
+    bar: List<Route> = PhoneBar.routes(null, caps, shared),
+): List<Route> = EverythingRoutes.filter { it !in bar && it.visibleOn(caps, shared) }
 
 // ─── Stop all ─────────────────────────────────────────────────────────────
 

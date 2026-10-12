@@ -1,4 +1,6 @@
-/* Satellites page — per-room Pi grid + drill-in detail drawer + broadcast composer.
+/* Satellites — per-room Pi grid + drill-in detail drawer + broadcast composer.
+ * Since 2026-10-11 a Settings tab (Settings → Satellites, SatellitesPanel);
+ * the old #satellites opens that tab (components.jsx settingsTabRoute).
  *
  * Data sources:
  *   * GET /api/satellites                                     — grid roster
@@ -1958,7 +1960,12 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
   );
 };
 
-const SatellitesPage = () => {
+/* The satellites view. `embedded` is how Settings → Satellites shows it
+ * (SatellitesPanel): under the Settings header, with the roster's counts
+ * as its first line. Without it, the same view as a page of its own, which
+ * the shell no longer routes to (#satellites opens the Settings tab). Every
+ * read, action and auth tier is the same either way. */
+const SatellitesPage = ({ embedded = false } = {}) => {
   const [openRoom, setOpenRoom] = React.useState(null);
   const [tick, setTick] = React.useState(0);
   const [fire, toastNode] = useToast();
@@ -2044,13 +2051,9 @@ const SatellitesPage = () => {
     </div>
   );
 
-  return (
-    <div className="page">
-      <PageHeader
-        title="Satellites"
-        sub={`${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`}
-      />
-
+  const summary = `${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`;
+  const body = (
+    <>
       {approvals.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
           <div className="label">waiting for approval</div>
@@ -2118,11 +2121,29 @@ const SatellitesPage = () => {
                     fire={fire}/>
       )}
       {toastNode}
+    </>
+  );
+  if (embedded) {
+    return (
+      <div className="sat-panel">
+        <div className="sat-panel-summary mono">{summary}</div>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <div className="page">
+      <PageHeader title="Satellites" sub={summary}/>
+      {body}
     </div>
   );
 };
 
+// Settings → Satellites (settings.jsx).
+const SatellitesPanel = () => <SatellitesPage embedded/>;
+
 window.SatellitesPage = SatellitesPage;
+window.SatellitesPanel = SatellitesPanel;
 // Home (home.jsx) shows the same rooms, timers and broadcast. It reads
 // these from window instead of declaring its own: every page script
 // shares one Babel scope, and a second top-level `const wifiTone` would

@@ -525,7 +525,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Response / purpose |
 |---|---|---|
-| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where the Satellites page explains that USB adoption and writing a card aren't available. |
+| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where Settings → Satellites explains that USB adoption and writing a card aren't available. |
 | `GET /api/capabilities/manual` | Open | Handler metadata + example phrases for the "What can I say?" manual page (from core `GET /v1/handlers`). |
 
 ### 3.4 Acquisitions

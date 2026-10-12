@@ -65,6 +65,7 @@ class Prefs(
     private val kLyricsRoomNudge = stringPreferencesKey("lyrics_room_nudge")
     private val kPreferLocal = booleanPreferencesKey("prefer_local")
     private val kPhoneFolders = stringPreferencesKey("phone_folders")
+    private val kPhoneBar = stringPreferencesKey("phone_bar")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -130,6 +131,12 @@ class Prefs(
     private val _phoneFolders = MutableStateFlow<List<PhoneFolder>>(emptyList())
     val phoneFolders: StateFlow<List<PhoneFolder>> = _phoneFolders
 
+    /** This phone's bottom-bar tabs as picked in Settings → Phone bar, as
+     *  ui/shell/PhoneBar.kt encodes them; null = never picked (the
+     *  default). The web keeps the same choice in localStorage. */
+    private val _phoneBar = MutableStateFlow<String?>(null)
+    val phoneBar: StateFlow<String?> = _phoneBar
+
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
     var deviceId: String = ""
         private set
@@ -180,6 +187,7 @@ class Prefs(
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
             _preferLocal.value = p[kPreferLocal] ?: false
             _phoneFolders.value = PhoneFolders.decode(p[kPhoneFolders])
+            _phoneBar.value = p[kPhoneBar]
             deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
@@ -389,6 +397,15 @@ class Prefs(
         if (_phoneFolders.value == list) return
         _phoneFolders.value = list
         scope.launch { context.dataStore.edit { it[kPhoneFolders] = PhoneFolders.encode(list) } }
+    }
+
+    /** [encoded] null = back to the default bar. */
+    fun setPhoneBar(encoded: String?) {
+        if (_phoneBar.value == encoded) return
+        _phoneBar.value = encoded
+        scope.launch {
+            context.dataStore.edit { if (encoded == null) it.remove(kPhoneBar) else it[kPhoneBar] = encoded }
+        }
     }
 
     fun setListenerPersonId(id: String?) {

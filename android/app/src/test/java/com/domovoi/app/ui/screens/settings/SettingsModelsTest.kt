@@ -15,11 +15,23 @@ class SettingsModelsTest {
     @Test fun settingsKeepsOnlyDeviceLocalTabsPlusTheDashboardHandOff() {
         // Greetings / Voices / Wake Words / Models / Configuration are gone by
         // design: the app has no admin session, so they could never apply.
+        // Satellites moved in from the nav (2026-10-11, the web's Settings →
+        // Satellites), and the phone bar's editor lives here too.
         assertEquals(
-            listOf("Connection", "Server settings", "About"),
+            listOf("Connection", "Phone bar", "Satellites", "Server settings", "About"),
             SettingsTab.entries.map { it.label },
         )
         assertEquals(SettingsTab.Connection, SettingsTab.entries.first())
+    }
+
+    @Test fun aLinkNamesATabByItsKey() {
+        // ui/shell: Route.Satellites opens "satellites"; Home's "edit the
+        // bar" opens "phonebar".
+        assertEquals(SettingsTab.Satellites, SettingsTab.named(com.domovoi.app.ui.shell.settingsTabFor(com.domovoi.app.ui.shell.Route.Satellites)))
+        assertEquals(SettingsTab.PhoneBar, SettingsTab.named("phonebar"))
+        assertNull(SettingsTab.named(null))
+        assertNull(SettingsTab.named("greetings"))
+        assertEquals(SettingsTab.entries.size, SettingsTab.entries.map { it.key }.toSet().size)
     }
 
     @Test fun dashboardSettingsUrl_deepLinksToTheConnectedServersSettingsPage() {

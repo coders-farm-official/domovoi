@@ -365,11 +365,12 @@ table.tbl .actions { text-align: right; }
 .empty .s { font-size: 11px; color: var(--fg-faint); font-family: var(--ff-mono); }
 
 /* Mobile -------------------------------------------------------- */
-/* The sidebar becomes a bottom strip of the five PRIMARY tabs — home,
-   music, satellites, calendar, chat (CORE_NAV_ITEMS `primary`, the
-   Android app's compact routes). Every other page, plugin pages
-   included, is on Home's "everything" grid; the strip used to squeeze
-   all of them into one 10px row with no overflow handling.
+/* The sidebar becomes a bottom strip of this device's phone bar — home,
+   music, videos, chat unless someone here picked others (components.jsx
+   phoneBarRoutes marks those rows `primary`; the Android app's bottom bar
+   does the same). Every other page, plugin pages included, is on Home's
+   "everything" grid; the strip used to squeeze all of them into one 10px
+   row with no overflow handling.
 
    The docked mini-player (player.jsx, position:fixed) sits ON TOP of the
    strip rather than over it: `--dock-bottom` lifts it by the strip's
@@ -399,9 +400,9 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }
   .sidebar .nav { flex-direction: row; flex: 1; gap: 0; justify-content: space-around; }
   .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; min-width: 0; }
-  /* The strip reads home · music · satellites · calendar · chat, whatever
-     the sidebar's published nav order (components.jsx sets --strip-order
-     on the five primary items). */
+  /* The strip reads in the phone bar's order (home · music · videos · chat
+     by default), whatever the sidebar's published nav order: components.jsx
+     sets --strip-order on the items that are on the bar (2 to 5). */
   .sidebar .nav-item.primary { order: var(--strip-order, 9); }
   .sidebar .nav-item:not(.primary) { display: none; }
   .sidebar .nav-item.brand-link { display: flex; }
@@ -1452,4 +1453,12 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .chat-menu-item { min-height: 44px; }
   .chat-details-bg { align-items: flex-end; padding: 0; }
   .chat-details { width: 100%; border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Settings → Satellites (satellites.jsx SatellitesPanel): the roster's
+   counts, where the old Satellites page had them in its header. */
+.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 14px 0; }
+/* Settings → Phone bar (settings.jsx PhoneBarCard). */
+@media (max-width: 760px) {
+  .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
 }

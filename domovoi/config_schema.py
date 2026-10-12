@@ -848,7 +848,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
-        "(the plug-in-and-adopt flow on the Satellites page). Turn off to "
+        "(the plug-in-and-adopt flow in Settings → Satellites). Turn off to "
         "stop scanning removable drives entirely.",
         "bool", tier="hot",
     ),

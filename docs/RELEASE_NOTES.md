@@ -4,6 +4,34 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — Satellites moves into Settings, a phone bar you pick, and stopped rooms read quiet
+
+Dashboard and Android build; nothing to do on the server beyond the usual
+update.
+
+* **Satellites is a Settings tab now** (Settings → Satellites, next to
+  Devices; on Android, Settings → Satellites). It left the sidebar, the
+  phone's bottom bar, the Android rail and drawer and Home's "everything"
+  grid. Everything on it works as before, with the same sign-ins: the room
+  drawer, approvals, adoption, announcements, preparing satellite media.
+  Old links and bookmarks to `#satellites` open the tab, and so do Home's
+  room cards and problem rows. The satellites count badge is gone with
+  the sidebar row (Settings has none); the tab's first line counts the
+  rooms.
+* **The phone bar is home · music · videos · chat**, and each phone can
+  pick its own: Settings → **Phone bar** on the dashboard and in the app,
+  or "edit the bar" on Home's
+  "everything" grid. Home stays first; two to five tabs; plugin pages can
+  go there too. It is kept on that phone only (the browser's storage, the
+  app's settings): another phone, or a private window, keeps the default.
+  Calendar moved to the "everything" grid. A shared screen still leaves
+  people, chat, files and news off, whatever its bar says.
+* **A stopped room no longer looks like it is playing on Home.** A room's
+  player keeps the last song loaded after a stop, and Home showed that
+  song at 0:00 as if it were on; Music and Satellites already said
+  nothing. Home now shows a stopped room as quiet, on the dashboard and in
+  the app.
+
 ## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
 
 New Android build; nothing to do on the server beyond the usual update.

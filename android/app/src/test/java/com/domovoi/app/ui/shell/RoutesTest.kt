@@ -40,15 +40,14 @@ class RoutesTest {
     }
 
     @Test fun navigationTablesCoverEveryDestinationExactlyOnce() {
-        // Compact nav: the web phone strip, left to right; everything else
-        // lives on Home's "everything" grid.
-        assertEquals(
-            listOf(Route.Home, Route.Music, Route.Satellites, Route.Calendar, Route.Chat),
-            CompactRoutes,
-        )
-        val reachable = (CompactRoutes + EverythingRoutes).toSet()
+        // Compact nav: the web phone strip's default, left to right; every
+        // other screen lives on Home's "everything" grid (the grid drops
+        // whatever is on this phone's bar, PhoneBarTest).
+        assertEquals(listOf(Route.Home, Route.Music, Route.Videos, Route.Chat), DefaultPhoneBar)
+        val reachable = (listOf(Route.Home) + EverythingRoutes).toSet()
         assertEquals(Route.entries.toSet() - LauncherlessRoutes, reachable)
-        assertEquals(CompactRoutes.size + EverythingRoutes.size, reachable.size) // no duplicates
+        assertEquals(1 + EverythingRoutes.size, reachable.size) // no duplicates
+        assertTrue(DefaultPhoneBar.all { it == Route.Home || it in EverythingRoutes })
         // Settings and the manual have no tab, so the grid must carry them.
         assertTrue(EverythingRoutes.contains(Route.Settings))
         assertTrue(EverythingRoutes.contains(Route.Manual))
@@ -64,13 +63,24 @@ class RoutesTest {
     @Test fun theContainersScreenIsOnNoLauncher() {
         // Reached from the banner and from an incident's notification only,
         // like the web's #containers, which is not in the nav.
-        assertEquals(setOf(Route.Containers), LauncherlessRoutes)
-        assertFalse(Route.Containers in CompactRoutes)
+        assertEquals(setOf(Route.Containers, Route.Satellites), LauncherlessRoutes)
+        assertFalse(Route.Containers in DefaultPhoneBar)
         assertFalse(Route.Containers in EverythingRoutes)
         assertFalse(Route.Containers in WorkspaceRoutes)
         // Never gated: the banner's "details" must always land somewhere.
         assertNull(Route.Containers.requiredCapability())
         assertTrue(Route.Containers.visibleOn(Capabilities.EMPTY, shared = true))
+    }
+
+    @Test fun satellitesIsASettingsTabOnNoLauncher() {
+        // The web's Settings → Satellites (2026-10-11): the route is how a
+        // link names it, and the shell opens Settings on that tab.
+        assertEquals("satellites", settingsTabFor(Route.Satellites))
+        Route.entries.filter { it != Route.Satellites }.forEach { assertNull(it.name, settingsTabFor(it)) }
+        assertFalse(Route.Satellites in WorkspaceRoutes)
+        assertFalse(Route.Satellites in EverythingRoutes)
+        assertFalse(Route.Satellites in DefaultPhoneBar)
+        assertFalse(Route.Satellites in PhoneBar.Choices)
     }
 
     @Test fun sharedScreenLeavesPersonalScreensOffEveryLauncher() {
@@ -80,10 +90,10 @@ class RoutesTest {
             assertTrue(it.visibleOn(Capabilities.EMPTY, shared = false))
             assertFalse(it.visibleOn(Capabilities.EMPTY, shared = true))
         }
-        // The bottom bar keeps four tabs on a shared screen.
+        // The default bottom bar keeps three tabs on a shared screen.
         assertEquals(
-            listOf(Route.Home, Route.Music, Route.Satellites, Route.Calendar),
-            CompactRoutes.filter { it.visibleOn(Capabilities.EMPTY, shared = true) },
+            listOf(Route.Home, Route.Music, Route.Videos),
+            PhoneBar.routes(null, Capabilities.EMPTY, shared = true),
         )
         // Capability gating still applies on top.
         assertFalse(Route.Stations.visibleOn(Capabilities.EMPTY, shared = false))
