@@ -617,6 +617,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 doSendHome(e, target, targetPath)
             },
             onDismiss = { sendHomeEntry = null },
+            asUpload = uploader != null,
         )
     }
 }
