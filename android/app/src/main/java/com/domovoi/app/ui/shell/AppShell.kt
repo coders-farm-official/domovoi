@@ -81,6 +81,8 @@ import com.domovoi.app.ui.components.DomovoiGlyph
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.screens.ScreenRouter
+import com.domovoi.app.ui.screens.local.LocalSourceChoices
+import com.domovoi.app.ui.screens.local.SourceChoices
 import com.domovoi.app.ui.screens.settings.PairingScreen
 import com.domovoi.app.ui.shell.player.DockedPlayer
 import com.domovoi.app.ui.theme.Domovoi
@@ -236,6 +238,9 @@ private fun ShellContent() {
         return
     }
     var route by rememberSaveable { mutableStateOf(StartRoute) }
+    // Which side of the "your device" switch each page last showed, for
+    // this server, across routes, rotation and a trip through local media.
+    val sourceChoices = rememberSaveable(saver = SourceChoices.Saver) { SourceChoices() }
     val backStack = remember { mutableStateListOf<Route>() }
     val navigate: (Route) -> Unit = { r ->
         if (r != route) {
@@ -323,7 +328,11 @@ private fun ShellContent() {
         }
     }
 
-    CompositionLocalProvider(LocalCapabilities provides caps, LocalSharedScreen provides shared) {
+    CompositionLocalProvider(
+        LocalCapabilities provides caps,
+        LocalSharedScreen provides shared,
+        LocalSourceChoices provides sourceChoices,
+    ) {
         val counts = rememberSidebarCounts()
         val widthClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
 

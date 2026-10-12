@@ -155,6 +155,7 @@ internal fun ImageViewerOverlay(
     onSendHome: (() -> Unit)?,
     onOpenWith: () -> Unit,
     onClose: () -> Unit,
+    sendLabel: String = "send to home",
 ) {
     BackHandler { onClose() }
     var scale by remember { mutableFloatStateOf(1f) }
@@ -179,7 +180,7 @@ internal fun ImageViewerOverlay(
                 )
                 onSendHome?.let {
                     IconButton(onClick = it) {
-                        Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
+                        Icon(Icons.Outlined.CloudUpload, sendLabel, tint = Domovoi.colors.fgMuted)
                     }
                 }
                 IconButton(onClick = onOpenWith) {

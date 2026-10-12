@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -82,7 +83,7 @@ fun MusicScreen() {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val ui = remember { MusicUi() }
+    val ui = rememberSaveable(saver = MusicUi.Saver) { MusicUi() }
 
     // ── Data ──────────────────────────────────────────────────────────
     var qDebounced by remember { mutableStateOf("") }

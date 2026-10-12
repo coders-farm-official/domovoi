@@ -23,6 +23,11 @@ import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.screens.settings.SettingsScreen
 import com.domovoi.app.ui.screens.stations.StationsScreen
 import com.domovoi.app.ui.screens.images.ImagesScreen
+import com.domovoi.app.ui.screens.local.DevicePage
+import com.domovoi.app.ui.screens.local.SourceSwitchPage
+import com.domovoi.app.ui.screens.local.YourDeviceFiles
+import com.domovoi.app.ui.screens.local.YourDeviceMusic
+import com.domovoi.app.ui.screens.local.YourDeviceVideos
 import com.domovoi.app.ui.screens.videos.VideosScreen
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
@@ -47,17 +52,18 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
     when (route) {
         Route.Home -> HomeScreen(navigate, counts)
         Route.Chat -> ChatScreen()
-        Route.Music -> MusicScreen()
+        // Music, Videos and Files carry the server / "your device" switch.
+        Route.Music -> SourceSwitchPage(DevicePage.Music, server = { MusicScreen() }, device = { YourDeviceMusic() })
         Route.Podcasts -> PodcastsScreen()
         Route.Audiobooks -> AudiobooksScreen()
-        Route.Videos -> VideosScreen()
+        Route.Videos -> SourceSwitchPage(DevicePage.Videos, server = { VideosScreen() }, device = { YourDeviceVideos() })
         Route.Images -> ImagesScreen()
         Route.News -> NewsScreen()
         Route.People -> PeopleScreen()
         Route.Satellites -> SatellitesScreen()
         Route.Calendar -> CalendarScreen()
         Route.Stations -> StationsScreen()
-        Route.Files -> FilesScreen()
+        Route.Files -> SourceSwitchPage(DevicePage.Files, server = { FilesScreen() }, device = { YourDeviceFiles() })
         Route.Settings -> SettingsScreen(navigate)
         Route.Manual -> ManualScreen()
         Route.Containers -> ContainersScreen()
