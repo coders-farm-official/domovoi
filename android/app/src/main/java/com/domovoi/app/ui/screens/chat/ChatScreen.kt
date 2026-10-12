@@ -1,6 +1,9 @@
 package com.domovoi.app.ui.screens.chat
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -41,6 +44,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +53,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -101,7 +106,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 // ---------------------------------------------------------------------------
 
 @Serializable
-private data class ThreadRow(
+internal data class ThreadRow(
     val id: Long = 0,
     val title: String? = null,
     val updated_at: String? = null,
@@ -113,10 +118,10 @@ private data class ThreadRow(
 private data class ThreadList(val threads: List<ThreadRow> = emptyList())
 
 @Serializable
-private data class ImageRef(val token: String = "", val name: String = "")
+internal data class ImageRef(val token: String = "", val name: String = "")
 
 @Serializable
-private data class MessageRow(
+internal data class MessageRow(
     val id: Long = 0,
     val role: String = "",
     val content: String = "",
@@ -127,6 +132,14 @@ private data class MessageRow(
     val stats: ChatStats? = null,
     val device_id: String? = null,
     val device_name: String? = null,
+    /** "typed", or "voice" for both rows of a turn said into the chat mic (V025). */
+    val source: String? = null,
+    /** Who voice identification heard (a voice user row); null when nobody. */
+    val speaker_person_id: Long? = null,
+    val speaker_name: String? = null,
+    val speaker_confidence: Double? = null,
+    /** The match was clear enough to draw the speaker marker at full strength. */
+    val speaker_confident: Boolean = false,
 )
 
 @Serializable
@@ -150,7 +163,7 @@ internal fun attachBudget(attached: Int, picked: Int, cap: Int = MAX_CHAT_IMAGES
 }
 
 /** Mutable transcript entry (the streaming assistant bubble updates live). */
-private class LiveMessage(
+internal class LiveMessage(
     val role: String,
     content: String,
     val images: List<ImageRef> = emptyList(),
@@ -162,6 +175,11 @@ private class LiveMessage(
     stats: ChatStats? = null,
     device: String? = null,
     errorCode: String? = null,
+    /** "voice" for a turn said into the chat mic; null/"typed" otherwise. */
+    val source: String? = null,
+    speakerPersonId: Long? = null,
+    speakerName: String? = null,
+    speakerConfident: Boolean = false,
 ) {
     var content by mutableStateOf(content)
     var error by mutableStateOf(error)
@@ -174,6 +192,9 @@ private class LiveMessage(
     var createdAt by mutableStateOf(createdAt)
     var stats by mutableStateOf(stats)
     var device by mutableStateOf(device)
+    var speakerPersonId by mutableStateOf(speakerPersonId)
+    var speakerName by mutableStateOf(speakerName)
+    var speakerConfident by mutableStateOf(speakerConfident)
     /** Measured on this phone while a reply streams (details dialog only). */
     var sentAtMs: Long? = null
     var firstWordsAtMs: Long? = null
@@ -185,6 +206,8 @@ private class LiveMessage(
         imageNames = images.map { it.name },
         stats = stats,
         device = device,
+        source = source,
+        speaker = speakerPersonId?.let { speakerName ?: "person #$it" },
         firstWordsMs = sentAtMs?.let { s -> firstWordsAtMs?.let { it - s } },
         totalMs = sentAtMs?.let { s -> doneAtMs?.let { it - s } },
     )
@@ -381,6 +404,18 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         it.api.get("/api/chat/models").decode<ChatModelsInfo>()
     }
     var pictureNote by remember { mutableStateOf(false) }
+    // The hold-to-talk view (VoiceView.kt), over the conversation.
+    var voiceOpen by remember { mutableStateOf(false) }
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) voiceOpen = true else toast("the microphone permission is needed to talk to the domovoi")
+    }
+    val openVoice = {
+        val has = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (has) voiceOpen = true else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     LaunchedEffect(thread.id) {
         runCatching {
@@ -398,6 +433,10 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                             it.device_id != null && it.device_id == app.prefs.deviceId -> "this phone"
                             else -> it.device_name ?: it.device_id
                         },
+                        source = it.source,
+                        speakerPersonId = it.speaker_person_id,
+                        speakerName = it.speaker_name,
+                        speakerConfident = it.speaker_confident,
                     ),
                 )
             }
@@ -565,6 +604,11 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         }
     }
 
+    if (voiceOpen) {
+        VoiceView(thread.id, transcript, onClose = { voiceOpen = false })
+        return
+    }
+
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         ChatPaneGutter()
         ThreadTitleRow(thread, onBack)
@@ -638,11 +682,21 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
             )
-            IconButton(onClick = { send() }, enabled = draft.isNotBlank() && !sending) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send, contentDescription = "send",
-                    tint = if (draft.isNotBlank() && !sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
-                )
+            // Nothing typed: the mic, which opens the hold-to-talk view.
+            if (draft.isBlank() && attachments.isEmpty()) {
+                IconButton(onClick = openVoice, enabled = !sending) {
+                    Icon(
+                        Icons.Outlined.Mic, contentDescription = "talk",
+                        tint = if (!sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
+                    )
+                }
+            } else {
+                IconButton(onClick = { send() }, enabled = draft.isNotBlank() && !sending) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send, contentDescription = "send",
+                        tint = if (draft.isNotBlank() && !sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
+                    )
+                }
             }
         }
         ChatPaneGutter()
@@ -706,7 +760,7 @@ private fun ChatPaneGutter() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(m: LiveMessage, threadId: Long) {
+internal fun MessageBubble(m: LiveMessage, threadId: Long) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -800,6 +854,11 @@ private fun MessageBubble(m: LiveMessage, threadId: Long) {
                 )
             }
         }
+        // Who Domovoi heard, on a message said into the chat mic.
+        val owner by app.prefs.ownerPersonId.collectAsState()
+        speakerMark(m.source, m.role, m.speakerPersonId, m.speakerName, m.speakerConfident, owner)
+            ?.takeIf { !m.pending }
+            ?.let { SpeakerMarker(it, Modifier.padding(end = 2.dp)) }
         // Stamp line: when, and (for a reply) which model answered.
         val stamp = chatStamp(m.createdAt)
         val model = m.model.takeIf { !isUser && !m.pending }

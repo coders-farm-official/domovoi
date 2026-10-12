@@ -56,6 +56,15 @@ internal data class ChatStats(
     val model_role: String? = null,
     /** Why a reply has an error, for the clients' own wording (ChatErrors.kt). */
     val error_code: String? = null,
+    // A spoken turn's reply (the chat mic, V025): what answered it and where
+    // the time went, instead of Ollama's figures.
+    val matched_handler: String? = null,
+    val matched_path: String? = null,
+    val audio_ms: Double? = null,
+    val stt_ms: Double? = null,
+    val identify_ms: Double? = null,
+    val route_ms: Double? = null,
+    val tts_ms: Double? = null,
 )
 
 /** What the details dialog knows about one message. [firstWordsMs] and
@@ -75,6 +84,10 @@ internal data class MessageFacts(
     val stats: ChatStats? = null,
     /** The sending device's name; for a message sent from here, "this phone". */
     val device: String? = null,
+    /** "voice" for a turn said into the chat mic. */
+    val source: String? = null,
+    /** Who voice identification heard (a spoken message), by name. */
+    val speaker: String? = null,
 )
 
 /**
@@ -107,7 +120,20 @@ internal fun detailRows(f: MessageFacts, zone: ZoneId = ZoneId.systemDefault()):
         rows += "sent" to "$full (${relTime(f.createdAt)})"
     }
     if (f.role == "user") f.device?.takeIf { it.isNotBlank() }?.let { rows += "device" to it }
+    if (f.source == "voice") {
+        rows += "spoken" to if (f.role == "user") "said into the chat mic" else "answered out loud"
+        if (f.role == "user") rows += "heard as" to (f.speaker ?: "a voice Domovoi didn't recognize")
+    }
     val st = f.stats
+    if (st?.model_role == "voice") {
+        st.matched_handler?.let { h -> rows += "answered by" to (st.matched_path?.let { "$h ($it)" } ?: h) }
+        val parts = listOfNotNull(
+            st.stt_ms?.let { "hearing ${secs(it.toLong())}" },
+            st.route_ms?.let { "answering ${secs(it.toLong())}" },
+            st.tts_ms?.let { "speaking ${secs(it.toLong())}" },
+        )
+        if (parts.isNotEmpty()) rows += "time spent" to parts.joinToString(" · ")
+    }
     if (f.role != "user") f.model?.takeIf { it.isNotBlank() }?.let { model ->
         val why = when (st?.model_role) {
             "chat" -> " (chat model)"

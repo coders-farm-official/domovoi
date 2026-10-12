@@ -323,7 +323,7 @@ async def test_a_tap_is_not_transcribed(db_session, open_gate, whisper, heard_as
 @pytest.mark.asyncio
 async def test_an_unknown_thread_is_404_before_anything_is_heard(db_session, open_gate, whisper) -> None:
     async with _client() as c:
-        r = await _turn(c, 987654)
+        r = await _turn(c, 424243)
     assert r.status_code == 404
     assert r.json()["code"] == "thread_not_found"
     assert whisper.calls == 0

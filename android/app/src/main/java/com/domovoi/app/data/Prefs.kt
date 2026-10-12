@@ -59,6 +59,7 @@ class Prefs(
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
+    private val kOwner = stringPreferencesKey("owner_person")
     private val kSharedScreens = stringPreferencesKey("shared_screens")
     private val kLyricsPanelOpen = booleanPreferencesKey("lyrics_panel_open")
     private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
@@ -94,6 +95,13 @@ class Prefs(
 
     private val _listenerPersonId = MutableStateFlow<String?>(null)
     val listenerPersonId: StateFlow<String?> = _listenerPersonId
+
+    /** "This phone belongs to": the person (a server `people.id`) who
+     *  usually talks from this phone. Voice ID still decides who spoke; a
+     *  voice message's speaker marker is drawn softer when it names someone
+     *  else (ui/screens/chat/SpeakerMarker.kt). Null: nobody in particular. */
+    private val _ownerPersonId = MutableStateFlow<String?>(null)
+    val ownerPersonId: StateFlow<String?> = _ownerPersonId
 
     /**
      * Each server's last answer to "is this install a shared screen?"
@@ -181,6 +189,7 @@ class Prefs(
             trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
+            _ownerPersonId.value = p[kOwner]
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
             _lyricsPanelOpen.value = p[kLyricsPanelOpen] ?: true
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
@@ -405,6 +414,15 @@ class Prefs(
         _phoneBar.value = encoded
         scope.launch {
             context.dataStore.edit { if (encoded == null) it.remove(kPhoneBar) else it[kPhoneBar] = encoded }
+        }
+    }
+
+    fun setOwnerPersonId(id: String?) {
+        _ownerPersonId.value = id
+        scope.launch {
+            context.dataStore.edit {
+                if (id == null) it.remove(kOwner) else it[kOwner] = id
+            }
         }
     }
 
