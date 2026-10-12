@@ -42,6 +42,7 @@ namespace Domovoi.Windows.Helper
             Ports(o, installing);
             if (portsOnly) return;
             EarlierUninstall(o);
+            LeftoverProfile(o);
             Os(o);
             SmartAppControl(o);
             Memory(o);
@@ -128,6 +129,45 @@ namespace Domovoi.Windows.Helper
                     + (n > 0 ? Inv.S(n) + " file(s) in " + Paths.ProgramData + " or " + programFiles : "")
                     + (n > 0 && task ? ", and " : "") + (task ? "its old account's profile" : "")
                     + "). Restart Windows, then run Setup again.");
+        }
+
+        // A domovoi-svc profile folder whose account is gone (LeftoverProfiles).
+        static void LeftoverProfile(Output o)
+        {
+            var entries = new List<ProfileEntry>();
+            string profiles = null;
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(Account.ProfileListKey))
+            {
+                if (k != null)
+                {
+                    profiles = Environment.ExpandEnvironmentVariables(k.GetValue("ProfilesDirectory") as string ?? "");
+                    foreach (string sid in k.GetSubKeyNames())
+                        using (var p = k.OpenSubKey(sid))
+                        {
+                            string img = p == null ? null : p.GetValue("ProfileImagePath") as string;
+                            if (!string.IsNullOrEmpty(img)) entries.Add(new ProfileEntry(sid, Environment.ExpandEnvironmentVariables(img)));
+                        }
+                }
+            }
+            var folders = new List<string>();
+            if (!string.IsNullOrEmpty(profiles) && Directory.Exists(profiles))
+                folders.AddRange(Directory.GetDirectories(profiles, Paths.AccountName + "*"));
+            var found = LeftoverProfiles.Find(entries, folders, SidIsAnAccount);
+            o.Kv("leftover_profile", found.Count > 0 ? found[0].Path : "");
+            if (found.Count > 0) o.Kv("fatal", LeftoverProfiles.Message(found));
+        }
+
+        // False only when Windows says the SID maps to no account.
+        public static bool SidIsAnAccount(string sid)
+        {
+            try
+            {
+                new System.Security.Principal.SecurityIdentifier(sid).Translate(typeof(System.Security.Principal.NTAccount));
+                return true;
+            }
+            catch (System.Security.Principal.IdentityNotMappedException) { return false; }
+            catch (SystemException) { return true; }
         }
 
         // The uninstall's one-time startup task (ProfileTask) is registered.

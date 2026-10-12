@@ -93,6 +93,7 @@ static class Tests
         ProfileCleanup();
         LogCopies();
         UninstallTexts();
+        LeftoverProfileTests();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;
@@ -1413,6 +1414,55 @@ static class Tests
             Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Sources(@"C:\Windows\System32\config\SAM"); }, "another file");
             Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Sources(@"C:\Users\Public\domovoi-uninstall-20261012-133801.log"); }, "another folder");
             True(Domovoi.Windows.Helper.Logs.Sources(null).Any(s => s.Value == "provision.log"), "provision.log is among them");
+        });
+    }
+
+    const string OldSid = "S-1-5-21-225214871-3057608554-2089764004-1003";
+    const string NewSid = "S-1-5-21-225214871-3057608554-2089764004-1005";
+    const string MineSid = "S-1-5-21-225214871-3057608554-2089764004-1001";
+
+    static void LeftoverProfileTests()
+    {
+        Func<string, bool> accounts = sid => sid != OldSid;
+        Run("leftover profile: a first install, and a live install in domovoi-svc.<PC name>, find nothing", delegate
+        {
+            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\Kamron") }, new[] { @"C:\Users\Kamron" }, accounts).Count, "first install");
+            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\Kamron"), new ProfileEntry(NewSid, @"C:\Users\domovoi-svc.MY-PC") },
+                new[] { @"C:\Users\Kamron", @"C:\Users\domovoi-svc.MY-PC" }, accounts).Count, "the account's own profile under another name");
+        });
+        Run("leftover profile: this PC today, the deleted account's domovoi-svc folder, with the one-line cleanup", delegate
+        {
+            var found = LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\Kamron"), new ProfileEntry(OldSid, @"C:\Users\domovoi-svc") },
+                new[] { @"C:\Users\Kamron", @"C:\Users\domovoi-svc" }, accounts);
+            Eq(1, found.Count, "one");
+            Eq(@"C:\Users\domovoi-svc", found[0].Path, "path");
+            Eq("Get-CimInstance Win32_UserProfile -Filter \"SID='" + OldSid + "'\" | Remove-CimInstance", found[0].Cleanup(), "cleanup");
+            ParsesAsPowerShell(found[0].Cleanup(), "the cleanup");
+            string m = LeftoverProfiles.Message(found);
+            True(m.Contains(@"C:\Users\domovoi-svc") && m.Contains("Restart Windows") && m.Contains(found[0].Cleanup()) && m.Contains("Check again"), m);
+        });
+        Run("leftover profile: the old one next to a new install's domovoi-svc.<PC name>: only the old one", delegate
+        {
+            var found = LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\domovoi-svc"), new ProfileEntry(NewSid, @"C:\Users\domovoi-svc.MY-PC") },
+                new[] { @"C:\Users\domovoi-svc", @"C:\Users\domovoi-svc.MY-PC" }, accounts);
+            SeqEq(new[] { @"C:\Users\domovoi-svc" }, found.Select(f => f.Path), "the old one");
+        });
+        Run("leftover profile: a folder with no profile entry; look-alikes and other people left alone", delegate
+        {
+            var found = LeftoverProfiles.Find(new ProfileEntry[0], new[] { @"C:\Users\domovoi-svc\", @"C:\Users\domovoi-svcx", @"C:\Users\Kamron" }, accounts);
+            Eq(1, found.Count, "one");
+            True(found[0].Sid == null, "no SID");
+            Eq(@"Remove-Item -LiteralPath 'C:\Users\domovoi-svc' -Recurse -Force", found[0].Cleanup(), "cleanup");
+            ParsesAsPowerShell(found[0].Cleanup(), "the cleanup");
+            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\Kamron") }, new string[0], accounts).Count, "a deleted account that isn't domovoi-svc");
+        });
+        Run("leftover profile: the account lookup Setup uses; .wslconfig goes into the real profile", delegate
+        {
+            True(Domovoi.Windows.Helper.Preflight.SidIsAnAccount(System.Security.Principal.WindowsIdentity.GetCurrent().User.Value), "this account");
+            True(!Domovoi.Windows.Helper.Preflight.SidIsAnAccount("S-1-5-21-1-2-3-4000"), "no such account");
+            Eq(@"C:\Users\domovoi-svc.MY-PC\.wslconfig", WslConfig.FileIn(@"C:\Users\domovoi-svc.MY-PC"), "where Windows made the profile");
+            Throws<ArgumentException>(delegate { WslConfig.FileIn(""); }, "no profile");
+            True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.MY-PC"), "the uninstall recognises it");
         });
     }
 

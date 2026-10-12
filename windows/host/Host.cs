@@ -276,13 +276,14 @@ namespace Domovoi.Windows.Host
 
         bool WriteWslConfig(HostJob job)
         {
+            // This account's own profile, wherever Windows made it (WslConfig.FileIn).
             string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (string.IsNullOrEmpty(profile) || !Directory.Exists(profile))
             {
                 Fail("the account's profile folder is missing", null);
                 return false;
             }
-            string path = Path.Combine(profile, ".wslconfig");
+            string path = WslConfig.FileIn(profile);
             string text = job.WslConfig.Replace("\r\n", "\n").Replace("\n", "\r\n");
             try
             {
@@ -806,8 +807,8 @@ namespace Domovoi.Windows.Host
         }
 
         // With the distro gone, this account's WSL VM still holds files in
-        // its profile (C:\Users\domovoi-svc: WSL's temporary folder for the
-        // VM) until it idles out, and the uninstaller deletes that profile
+        // its profile (C:\Users\domovoi-svc or wherever Windows made it:
+        // WSL's temporary folder for the VM) until it idles out, and the uninstaller deletes that profile
         // next; on 2026-10-12 it was still held minutes later and stayed until
         // a restart. wsl --shutdown ends the CALLER's WSL session only: WSL's
         // service keeps one session per Windows user, found by the caller's

@@ -206,7 +206,13 @@ namespace Domovoi.Windows.Helper
             // Folders under the profiles folder with no profile entry (old,
             // half-deleted ones) are still someone's.
             if (Directory.Exists(profiles))
-                foreach (string d in Directory.GetDirectories(profiles)) if (!s.Exact.Contains(d)) s.Exact.Add(d);
+                foreach (string d in Directory.GetDirectories(profiles))
+                {
+                    if (!s.Exact.Contains(d)) s.Exact.Add(d);
+                    // domovoi-svc.<name>: Windows' name for the account's profile
+                    // when an old domovoi-svc folder was still there.
+                    if (UninstallFacts.IsDomovoiProfilePath(d) && !s.Trees.Contains(d)) s.Trees.Add(d);
+                }
             return s;
         }
 

@@ -44,6 +44,16 @@ namespace Domovoi.Windows
             return cap;
         }
 
+        // Where the file goes: the account's own profile as Windows made it,
+        // which DomovoiHost reads from its own environment at run time. Not
+        // always C:\Users\domovoi-svc: with an old folder of that name still
+        // there, Windows makes C:\Users\domovoi-svc.<PC name>.
+        public static string FileIn(string userProfile)
+        {
+            if (string.IsNullOrEmpty(userProfile)) throw new ArgumentException("no profile folder");
+            return System.IO.Path.Combine(userProfile, ".wslconfig");
+        }
+
         static string Escape(string windowsPath)
         {
             // The file's values take Windows paths with escaped backslashes (MS
