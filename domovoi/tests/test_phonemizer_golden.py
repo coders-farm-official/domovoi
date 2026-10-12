@@ -2,7 +2,9 @@
 
 The same file is the contract for the Kotlin port, so a failure here is a
 change in what the voices say: regenerate with scripts/g2p/make_golden.py
-only on purpose, and read the diff.
+only on purpose, and read the diff. Every text is there once per phoneme
+set the converter writes ("en" for the shipped voices, "en-us"); a case's
+``dialect`` says which (none: "en").
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import pytest
 
 from domovoi.phonemizer import (
     DATA_DIR,
+    DIALECTS,
     Phonemizer,
     PronunciationError,
     load_default_pronunciations,
@@ -37,14 +40,26 @@ def ph() -> Phonemizer:
     return p
 
 
+def _dialect(case) -> str:
+    return case.get("dialect", "en")
+
+
 def test_the_fixture_covers_what_the_brief_asks():
     counts = GOLDEN["counts"]
-    assert sum(counts.values()) == len(CASES) >= 300
-    for group in ("sentences", "phrases", "numbers", "normalization", "names", "artists",
-                  "common_words", "heteronyms", "say_it_like"):
-        assert counts[group] > 0, group
+    assert set(counts) == set(DIALECTS) == set(GOLDEN["dialects"])
+    assert sum(sum(c.values()) for c in counts.values()) == len(CASES) >= 600
+    for dialect, by_group in counts.items():
+        for group in ("sentences", "phrases", "numbers", "normalization", "names", "artists",
+                      "common_words", "heteronyms", "say_it_like"):
+            assert by_group[group] > 0, (dialect, group)
+            assert by_group[group] == sum(1 for c in CASES if _dialect(c) == dialect and c["group"] == group)
+    # The 13 comparison sentences and the word lists in both sets, text for text.
+    assert counts["en-us"] == counts["en"] and counts["en-us"]["sentences"] == 13
+    en = [(c["group"], c["text"]) for c in CASES if _dialect(c) == "en"]
+    assert [(c["group"], c["text"]) for c in CASES if _dialect(c) == "en-us"] == en
     assert len(GOLDEN["invalid_say_it_like"]) >= 5
     assert all(c["ids"] and len(c["ids"]) == len(c["phonemes"]) for c in CASES)
+    assert len({c["id"] for c in CASES}) == len(CASES)
 
 
 def test_the_fixture_was_made_from_these_data_files():
@@ -83,7 +98,7 @@ def _same(case, got, expected=None) -> bool:
 
 @pytest.mark.parametrize("case", DEFAULT_CASES, ids=[c["id"] for c in DEFAULT_CASES])
 def test_phonemes_and_ids(ph, case):
-    got = ph.phonemize(case["text"])
+    got = ph.phonemize(case["text"], dialect=_dialect(case))
     assert _same(case, got), (case["text"], got, case["phonemes"])
     assert [phoneme_ids(p) for p in got] == (case["ids"] if got == case["phonemes"]
                                              else [phoneme_ids(p) for p in got])
@@ -94,7 +109,7 @@ def test_say_it_like_cases(case):
     p = Phonemizer(pronunciations=[tuple(x) for x in case["pronunciations"]])
     resolved = {k: ("/" + v.ipa + "/" if v.ipa is not None else " ".join(v.phones))
                 for k, v in p.pronunciations().items()}
-    got = p.phonemize(case["text"])
+    got = p.phonemize(case["text"], dialect=_dialect(case))
     assert _same(case, got), (case["text"], got, case["phonemes"])
     if got == case["phonemes"]:
         assert resolved == case["resolved"]
