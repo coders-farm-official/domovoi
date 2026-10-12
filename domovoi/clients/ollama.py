@@ -234,6 +234,9 @@ async def chat_stream(
     base_url: str | None = None,
     connect_timeout: float = 10.0,
     stats: dict[str, Any] | None = None,
+    *,
+    think: bool | None = None,
+    num_ctx: int | None = None,
 ) -> AsyncIterator[str]:
     """Stream one multi-turn chat completion via ``POST /api/chat``, yielding
     assistant-content deltas as they arrive.
@@ -252,45 +255,66 @@ async def chat_stream(
     copied into it when the stream ends: ``done_reason``, the token counts
     ``prompt_eval_count`` / ``eval_count`` and the nanosecond durations
     ``total_duration`` / ``load_duration`` / ``prompt_eval_duration`` /
-    ``eval_duration`` — whichever the server sent. Untouched on failure."""
+    ``eval_duration`` — whichever the server sent. Untouched on failure.
+
+    ``think`` (None: not sent) goes out as Ollama's ``think`` flag. The
+    chat sends ``False`` with pictures: several vision models reason
+    before they answer unless told not to, and only the answer is
+    streamed, so the reader would wait in silence (15-90 s on a CPU, or no
+    answer at all within the reply's length). A server that refuses the
+    flag (a 400 that names it) is asked once more without it. ``num_ctx``
+    is this call's context window; unset or 0 uses ``ollama_num_ctx``."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/chat"
     body: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
-    # Same context window as the voice pipeline's QA calls; unset (0)
-    # sends nothing, as before.
-    options = _num_ctx_options(settings.ollama_num_ctx)
+    # The call's own context window (the chat's calls with pictures), else
+    # the same one as the voice pipeline's QA calls; unset (0) sends
+    # nothing, as before.
+    options = _num_ctx_options(num_ctx) or _num_ctx_options(settings.ollama_num_ctx)
     if options:
         body["options"] = options
+    if think is not None:
+        body["think"] = think
     # And the same keep_alive when this is one of the voice models.
     keep_alive = _keep_alive_for_model(model)
     if keep_alive is not None:
         body["keep_alive"] = keep_alive
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
     async with httpx.AsyncClient(timeout=timeout) as c:
-        async with c.stream("POST", url, json=body) as resp:
-            if resp.status_code >= 400:
-                # Ollama says what went wrong in the body ({"error": "model
-                # \"x\" not found, try pulling it first"}); raise_for_status
-                # would throw that away and keep only the status and the URL.
-                raise OllamaChatError(resp.status_code, _error_detail(await resp.aread()))
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if chunk.get("error"):
-                    raise OllamaChatError(None, str(chunk["error"]))
-                delta = (chunk.get("message") or {}).get("content")
-                if delta:
-                    yield delta
-                if chunk.get("done"):
-                    if stats is not None:
-                        stats.update({k: chunk[k] for k in _DONE_STATS if chunk.get(k) is not None})
-                    return
+        while True:
+            async with c.stream("POST", url, json=body) as resp:
+                if resp.status_code >= 400:
+                    # Ollama says what went wrong in the body ({"error": "model
+                    # \"x\" not found, try pulling it first"}); raise_for_status
+                    # would throw that away and keep only the status and the URL.
+                    detail = _error_detail(await resp.aread())
+                    if "think" in body and resp.status_code == 400 and "think" in detail.lower():
+                        log.warning(
+                            "ollama refused the think flag for %s (%s); asking again without it",
+                            model, detail,
+                        )
+                        del body["think"]
+                        continue
+                    raise OllamaChatError(resp.status_code, detail)
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if chunk.get("error"):
+                        raise OllamaChatError(None, str(chunk["error"]))
+                    delta = (chunk.get("message") or {}).get("content")
+                    if delta:
+                        yield delta
+                    if chunk.get("done"):
+                        if stats is not None:
+                            stats.update({k: chunk[k] for k in _DONE_STATS if chunk.get(k) is not None})
+                        return
+                return
 
 
 class OllamaChatError(RuntimeError):

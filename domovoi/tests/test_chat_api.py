@@ -8,6 +8,7 @@ Uploads use a tmp UPLOADS_DIR via monkeypatch.
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 from typing import Any
@@ -39,11 +40,12 @@ def uploads_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def stub_stream(monkeypatch):
-    """Capture the (messages, model) each send used; yield canned deltas."""
+    """Capture the (messages, model, other arguments) each send used; yield
+    canned deltas."""
     calls: list[dict[str, Any]] = []
 
     async def _stream(messages, model, **kw):
-        calls.append({"messages": messages, "model": model})
+        calls.append({"messages": messages, "model": model, "kw": kw})
         for chunk in ("Hello", " there"):
             yield chunk
 
@@ -454,6 +456,45 @@ def test_upload_and_vision_model_switch(uploads_dir, stub_stream, tags):
         # Deleting the thread removes the now-unreferenced upload file.
         c.delete(f"/api/chat/threads/{t['id']}")
         assert not (uploads_dir / f"{token}.png").is_file()
+
+
+@requires_db
+def test_a_picture_reaches_the_model_shrunk_without_thinking(uploads_dir, stub_stream, tags):
+    """Owner decision 2026-10-12: the model gets each picture at most 1280
+    px on its long edge, from a copy beside the upload, and a call carrying
+    pictures sends think=false and the vision context window. A text turn
+    after it sends neither; deleting the thread removes the copy too."""
+    from PIL import Image
+
+    tags.models = [chat_api.core_settings.ollama_vision_model]
+    photo = io.BytesIO()
+    Image.new("RGB", (4032, 3024), (120, 90, 60)).save(photo, "JPEG", quality=85)
+    with _client() as c:
+        up = c.post("/api/chat/uploads", files={"file": ("kitchen.jpg", io.BytesIO(photo.getvalue()), "image/jpeg")})
+        token = up.json()["token"]
+        t = c.post("/api/chat/threads", json={}).json()
+        r = c.post(f"/api/chat/threads/{t['id']}/messages",
+                   json={"content": "describe this room", "images": [{"token": token, "name": "kitchen.jpg"}]})
+        assert r.status_code == 200
+        sent = stub_stream[-1]
+        (b64,) = sent["messages"][-1]["images"]
+        got = Image.open(io.BytesIO(base64.b64decode(b64)))
+        assert got.size == (1280, 960) and got.format == "JPEG"
+        assert (uploads_dir / f"{token}-1280.jpg").is_file()
+        # The user's own picture is what the thread shows, untouched.
+        served = c.get(f"/api/chat/uploads/{token}")
+        assert Image.open(io.BytesIO(served.content)).size == (4032, 3024)
+        vision_ctx = chat_api.core_settings.ollama_vision_num_ctx
+        assert sent["kw"]["think"] is False and sent["kw"]["num_ctx"] == vision_ctx
+        done = next(d for ev, d in _sse_events(r.text) if ev == "done")
+        expected_ctx = vision_ctx or chat_api.core_settings.ollama_num_ctx
+        assert done["stats"].get("num_ctx") == (expected_ctx or None)
+
+        c.post(f"/api/chat/threads/{t['id']}/messages", json={"content": "and the light?"})
+        assert "think" not in stub_stream[-1]["kw"] and "num_ctx" not in stub_stream[-1]["kw"]
+
+        c.delete(f"/api/chat/threads/{t['id']}")
+        assert list(uploads_dir.iterdir()) == []
 
 
 @requires_db

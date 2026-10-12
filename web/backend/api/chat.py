@@ -25,7 +25,11 @@ its text names internal hosts, ports and library help URLs.
 
 Uploads land in ``~/.domovoi/chat_uploads/<token><ext>`` (token = uuid hex,
 server-generated — the client never names files here) and are referenced
-from ``chat_messages.images`` as ``[{token, name}]``.
+from ``chat_messages.images`` as ``[{token, name}]``. The model gets each
+picture upright and at most 1280 px on its long edge (:func:`_vision_bytes`),
+from a copy kept beside the upload as ``<token>-1280.jpg|.png``; a call
+that carries pictures also sends ``think: false`` and the vision context
+window (``ollama_vision_num_ctx``).
 
 Thread/message writes are DEVICE tier (REV-1): a valid ``X-Device-Token``
 or an admin Bearer, with the pre-setup LAN grace kept. Thread history
@@ -54,14 +58,18 @@ when it is a well-formed id (``devices.valid_device_id``) — and reads join
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+import anyio
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -88,6 +96,14 @@ _MAX_IMAGES_PER_MESSAGE = 4
 # How much history rides along to the model per turn (messages, not tokens —
 # local models have modest contexts; the UI shows everything from the DB).
 _HISTORY_LIMIT = 30
+# The longest edge a picture reaches the model with. A CPU benchmark of
+# vision models (2026-10-11/12, owner-approved 2026-10-12) found a 12 MP
+# phone photo sent as it is fills a 4096-token context on its own (the
+# reply stopped after ~60 tokens) and can take minutes to read on a CPU. At
+# 1280 px a picture is ~1.1k tokens, and the default model still read the
+# screenshots, receipts and charts in the test.
+_VISION_MAX_EDGE = 1280
+_EXIF_ORIENTATION = 0x0112
 
 _TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -212,7 +228,8 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
         for img in images or []:
             token = img.get("token")
             if token and token not in still_used and _TOKEN_RE.match(token):
-                for p in UPLOADS_DIR.glob(f"{token}.*"):
+                # The upload, and the copy the model was sent (_vision_bytes).
+                for p in [*UPLOADS_DIR.glob(f"{token}.*"), *UPLOADS_DIR.glob(f"{token}-*")]:
                     p.unlink(missing_ok=True)
     return {"deleted": thread_id}
 
@@ -371,10 +388,15 @@ def _reply_stats(
     context_sent: int,
     context_in_thread: int,
     model_role: str,
+    num_ctx: int | None = None,
 ) -> dict[str, Any]:
     """The ``chat_messages.stats`` object for one reply (keys: V017).
     ``ollama`` is what :func:`ollama_client.chat_stream` reported, possibly
-    nothing at all if the stream failed; absent figures are left out."""
+    nothing at all if the stream failed; absent figures are left out.
+    ``num_ctx`` is the context window the call asked for (default: the
+    Q&A one; 0 or None: none was sent)."""
+    if num_ctx is None:
+        num_ctx = core_settings.ollama_num_ctx
     out: dict[str, Any] = {
         "prompt_tokens": ollama.get("prompt_eval_count"),
         "output_tokens": ollama.get("eval_count"),
@@ -388,7 +410,7 @@ def _reply_stats(
         "context_sent": context_sent,
         "context_in_thread": context_in_thread,
         "context_limit": _HISTORY_LIMIT,
-        "num_ctx": core_settings.ollama_num_ctx or None,
+        "num_ctx": num_ctx or None,
         "model_role": model_role,
     }
     tokens, gen_ns = ollama.get("eval_count"), ollama.get("eval_duration")
@@ -438,9 +460,73 @@ def _upload_path(token: str) -> Path | None:
     return None
 
 
+def _vision_copy_path(src: Path) -> Path:
+    """Where the copy of an upload the model is sent lives: beside it, as
+    ``<token>-1280.jpg`` for a JPEG and ``<token>-1280.png`` for anything
+    else (lossless, so the text in a screenshot stays sharp). The ``-``
+    keeps it out of :func:`_upload_path`'s ``<token>.*``."""
+    ext = ".jpg" if src.suffix.lower() in (".jpg", ".jpeg") else ".png"
+    return src.with_name(f"{src.stem}-{_VISION_MAX_EDGE}{ext}")
+
+
+def _vision_bytes(src: Path) -> bytes:
+    """The picture ``src`` as the model gets it: upright (a phone photo's
+    EXIF orientation applied, which Ollama ignores) and at most
+    ``_VISION_MAX_EDGE`` px on its long edge, from the copy beside the
+    upload, made on first use. A picture that is already both is sent as
+    it was uploaded, with no copy. One Pillow can't read is sent as it is,
+    as before. Sync — run it in a worker thread. Raises ``OSError`` only
+    when the upload itself can't be read."""
+    copy = _vision_copy_path(src)
+    if copy.is_file():
+        try:
+            return copy.read_bytes()
+        except OSError:
+            pass
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(src) as im:
+            upright = im.getexif().get(_EXIF_ORIENTATION, 1) in (1, None)
+            if upright and max(im.size) <= _VISION_MAX_EDGE:
+                return src.read_bytes()
+            out = ImageOps.exif_transpose(im)
+        jpeg = copy.suffix == ".jpg"
+        if jpeg and out.mode not in ("RGB", "L"):
+            out = out.convert("RGB")
+        elif out.mode not in ("RGB", "RGBA", "L", "LA"):
+            # Palette and other modes: resampled as RGB(A), not nearest-pixel.
+            alpha = "transparency" in out.info or out.mode in ("PA", "RGBa", "La")
+            out = out.convert("RGBA" if alpha else "RGB")
+        out.thumbnail((_VISION_MAX_EDGE, _VISION_MAX_EDGE), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        # No EXIF in the copy: it is upright now, and the rest is not the
+        # model's business.
+        if jpeg:
+            out.save(buf, "JPEG", quality=90)
+        else:
+            out.save(buf, "PNG")
+        data = buf.getvalue()
+    except Exception as e:  # noqa: BLE001 — any decode failure: send it as it is
+        log.warning("chat: picture %s not shrunk for the model (%s: %s); sending it as it is",
+                    src.name, type(e).__name__, e)
+        return src.read_bytes()
+    part = copy.with_name(f"{copy.name}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        part.write_bytes(data)
+        os.replace(part, copy)
+    except OSError as e:
+        log.warning("chat: could not keep the model's copy of %s (%s); it is made again next time",
+                    src.name, e)
+        with contextlib.suppress(OSError):
+            part.unlink(missing_ok=True)
+    return data
+
+
 async def _history_for_model(thread_id: int, with_images: bool = True) -> list[dict[str, Any]]:
     """The last N persisted turns in Ollama chat shape, images inlined as
-    base64 (vision context survives across turns within the window).
+    base64 (vision context survives across turns within the window), each
+    upright and shrunk to the model's size (:func:`_vision_bytes`).
 
     ``with_images=False`` leaves the pictures out — for a turn answered by
     the text model, which can't read them: Ollama refuses a request that
@@ -468,9 +554,10 @@ async def _history_for_model(thread_id: int, with_images: bool = True) -> list[d
             p = _upload_path(img.get("token", ""))
             if p is not None:
                 try:
-                    b64s.append(base64.b64encode(p.read_bytes()).decode())
+                    data = await anyio.to_thread.run_sync(_vision_bytes, p)
                 except OSError:
                     continue
+                b64s.append(base64.b64encode(data).decode())
         if b64s:
             msg["images"] = b64s
         out.append(msg)
@@ -552,6 +639,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     history = [] if refusal else await _history_for_model(
         thread_id, with_images=model_role != "chat",
     )
+    # A call that carries pictures: no reasoning before the answer (only
+    # the answer is streamed, so the reader would wait in silence), and the
+    # vision context window, which four pictures need.
+    vision_call = any(m.get("images") for m in history)
+    num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
+    stream_knobs: dict[str, Any] = (
+        {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
+    )
     async with session_scope() as s:
         in_thread = (
             await s.execute(
@@ -572,7 +667,9 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
         else:
             try:
-                async for delta in ollama_client.chat_stream(history, model=model, stats=ollama_stats):
+                async for delta in ollama_client.chat_stream(
+                    history, model=model, stats=ollama_stats, **stream_knobs,
+                ):
                     if first_token_ms is None:
                         first_token_ms = (time.monotonic() - started) * 1000
                     chunks.append(delta)
@@ -600,6 +697,7 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                 context_sent=len(history),
                 context_in_thread=int(in_thread),
                 model_role=model_role,
+                num_ctx=num_ctx,
             )
         if code is not None:
             stats["error_code"] = code
