@@ -2,7 +2,10 @@
  * full-screen overlay <video> with per-(device × person) resume positions.
  *
  * Data sources:
- *   * GET  /api/videos/list        — bounded walk of every library
+ *   * GET  /api/videos/list        — every library's videos, one page at a
+ *                                    time as the grid scrolls (data.js
+ *                                    usePagedList); the filter and sort run
+ *                                    on the server over every video
  *   * GET  /api/videos/recent      — newest resume rows for this device
  *   * GET/POST/DELETE /api/videos/position — the resume store
  *   * /ws/state · video_positions.changed — refetch the recent strip
@@ -181,13 +184,29 @@ const VideoOverlay = ({ video, resumeSec, onClose }) => {
   );
 };
 
+const VID_SORTS = [
+  { v: 'library', l: 'by library' }, { v: 'name', l: 'name' },
+  { v: 'newest', l: 'newest' }, { v: 'oldest', l: 'oldest' }, { v: 'largest', l: 'largest' },
+];
+
 const VideosPage = () => {
   const [filter, setFilter] = React.useState('');
   const debFilter = useDebouncedValue(filter, 200);
+  const [sort, setSort] = React.useState('library');
   const [playing, setPlaying] = React.useState(null); // { video, resumeSec }
 
-  const { items: videos, loading } =
-    useApiList('/api/videos/list', { pickItems: (x) => x.videos });
+  // The search and the sort are the server's, over every video in every
+  // library; the grid holds only the pages scrolled to.
+  const needle = debFilter.trim();
+  const listPath = `/api/videos/list?sort=${encodeURIComponent(sort)}`
+    + (needle ? `&q=${encodeURIComponent(needle)}` : '');
+  const list = usePagedList(listPath, {
+    pick: (x) => x && x.videos, key: (v) => `${v.library_id}:${v.rel}`,
+  });
+  const videos = list.items;
+  const loading = list.loading;
+  const libTotals = {};
+  ((list.extra && list.extra.libraries) || []).forEach((l) => { libTotals[l.library_id] = l.total; });
 
   const pid = SpokenAudio.getPerson();
   const recentPath = `/api/videos/recent?device_id=${encodeURIComponent(SpokenAudio.clientId())}`
@@ -215,30 +234,40 @@ const VideosPage = () => {
     refreshRecent();
   };
 
-  const q = debFilter.trim().toLowerCase();
-  const filtered = q
-    ? videos.filter((v) => v.name.toLowerCase().includes(q) || v.rel.toLowerCase().includes(q))
-    : videos;
+  const q = needle;
 
-  // Group by library for section headers (registry order is stable).
+  // Section headers per library when sorted by library (the server sends
+  // them in library order, so a header's rows arrive together); one flat
+  // grid for every other sort. A header counts the library's matches on
+  // the server, not the rows loaded so far.
   const byLibrary = [];
-  const seen = {};
-  filtered.forEach((v) => {
-    let g = seen[v.library_id];
-    if (!g) { g = { id: v.library_id, label: v.library_label, videos: [] }; seen[v.library_id] = g; byLibrary.push(g); }
-    g.videos.push(v);
-  });
+  if (sort === 'library') {
+    const seen = {};
+    videos.forEach((v) => {
+      let g = seen[v.library_id];
+      if (!g) { g = { id: v.library_id, label: v.library_label, videos: [] }; seen[v.library_id] = g; byLibrary.push(g); }
+      g.videos.push(v);
+    });
+  } else if (videos.length) {
+    byLibrary.push({ id: '*', label: null, videos });
+  }
 
   return (
     <>
       <PageHeader title="Videos" sub="videos across your files libraries · resume where you left off"
                   actions={
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       <input type="text" placeholder="filter…" value={filter}
                              onChange={(e) => setFilter(e.target.value)}
                              style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 10px',
                                       borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                                       background: 'var(--card)', color: 'var(--fg)', width: 180 }}/>
+                      <select value={sort} onChange={(e) => setSort(e.target.value)} title="sort"
+                              style={{ font: 'inherit', fontSize: 12, height: 30, padding: '0 8px',
+                                       borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                                       background: 'var(--card)', color: 'var(--fg)' }}>
+                        {VID_SORTS.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+                      </select>
                     </div>
                   }/>
 
@@ -271,15 +300,22 @@ const VideosPage = () => {
         </div>
       )}
 
-      {(!videos || videos.length === 0) && !loading ? (
-        <Empty glyph="sleeping" title="no videos found"
-               sub="drop video files (mp4 · webm · mkv · mov) into any files library"/>
+      {(!videos || videos.length === 0) && !loading && !list.error ? (
+        q
+          ? <Empty glyph="sleeping" title="no videos match" sub={`filter = “${q}”`}
+                   action={<Button icon="x" onClick={() => setFilter('')}>clear filter</Button>}/>
+          : <Empty glyph="sleeping" title="no videos found"
+                   sub="drop video files (mp4 · webm · mkv · mov) into any files library"/>
       ) : (
         byLibrary.map((g) => (
           <div key={g.id} style={{ marginBottom: 24 }}>
-            <div className="nav-section" style={{ padding: 0, marginBottom: 8 }}>
-              {g.label} <span className="mono" style={{ fontSize: 10 }}>· {g.videos.length}</span>
-            </div>
+            {g.label != null && (
+              <div className="nav-section" style={{ padding: 0, marginBottom: 8 }}>
+                {g.label} <span className="mono" style={{ fontSize: 10 }}>
+                  · {fmtCount(libTotals[g.id] != null ? libTotals[g.id] : g.videos.length)}
+                </span>
+              </div>
+            )}
             <div style={{ display: 'grid', gap: 12,
                           gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
               {g.videos.map((v) => (
@@ -297,6 +333,12 @@ const VideosPage = () => {
             </div>
           </div>
         ))
+      )}
+      <PagedListFooter list={list} noun="videos"/>
+      {list.extra && list.extra.truncated && (
+        <div style={{ fontSize: 11, color: 'var(--fg-faint)', textAlign: 'center', marginBottom: 12 }}>
+          a library holds more videos than one listing reads — some aren't shown
+        </div>
       )}
 
       {playing && (

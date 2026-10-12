@@ -233,6 +233,26 @@ The same honesty note as queue access applies: a device tells the server who it
 is, so this settles a household argument rather than stopping someone
 determined.
 
+## Why do long lists load as I scroll?
+
+The Music library, Videos, Files, Audiobooks and Podcasts (shows and each
+show's episodes) never load a whole list at once. Each shows the first 50
+rows and fetches the next 50 as you near the bottom, with a line at the end
+saying how many are showing out of how many there are ("showing 100 of
+5,232"). If a page fails to load, that line offers **retry**.
+
+Search boxes, filters and sorting ask the server, so they cover everything
+— not just the rows already on screen — and changing one starts the list
+again from the top. **Select all** (Music's library table, the Files list)
+selects the rows that are loaded, and its tooltip says how many; scroll
+further first if you want more of them in the selection.
+
+Videos and Files are read straight from disk, and the server remembers each
+listing between pages so scrolling stays quick. It notices files added,
+removed or renamed on its own; a file edited in place by some other program
+can take up to five minutes to show its new size, or press **Rescan** on the
+Files page.
+
 ## What music sources exist out of the box?
 
 - **Your local library** — files in your music folder (`MUSIC_DIR`, default `~/Music`), indexed and playable by voice per room, with playlists, album art in the browser player, and optional automatic metadata cleanup.

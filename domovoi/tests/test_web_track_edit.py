@@ -150,7 +150,7 @@ PAGE_API = {"GET /api/music/now-playing": [], "GET /api/playlists": [],
                                              "by_added_via": {"manual": 1}, "by_source": {"library": 1},
                                              "enriched_count": 0},
             "GET /api/acquisitions?limit=100": None,
-            "GET /api/music/library?sort=added_desc&limit=12&offset=0": {"total": 1, "items": [TRACK]}}
+            "GET /api/music/library?sort=added_desc": {"total": 1, "items": [TRACK]}}
 
 EDIT_SCRIPT = r"""
   h.render();

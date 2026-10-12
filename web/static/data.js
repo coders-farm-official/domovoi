@@ -284,7 +284,8 @@ const _blockProbeReason = async () => {
     if (!id) return null;
     const r = await fetch(
       `${API_BASE}/api/files/browse?library_id=${encodeURIComponent(BLOCK_PROBE_LIBRARY)}`
-      + `&path=&device_id=${encodeURIComponent(id)}`,
+      // One row is plenty: only `writable` / `blocked_reason` are read.
+      + `&path=&device_id=${encodeURIComponent(id)}&limit=1`,
       { credentials: 'include', headers: apiHeaders() },
     );
     if (!r.ok) return null;
@@ -1200,6 +1201,232 @@ const useApiObject = (path, { eventTypes = [], quiet = false, refetchOnAuth = fa
   }, [refresh, eventTypes.join(',')]);
 
   return { data, loading, error, refresh };
+};
+
+/* ─── Load as you scroll ─────────────────────────────────────────────
+ * Owner decision 2026-10-11: no files-like page (Music, Videos, Files,
+ * Audiobooks, Podcasts) ever loads a whole list. Every one of those lists
+ * speaks the server's one paging contract (web/backend/api/paging.py):
+ * `limit` + an opaque keyset `cursor`, answered with `total`, `has_more`
+ * and `next_cursor`. Sorting, filtering and search are the SERVER's, so
+ * they cover the whole list; a page only ever holds what was scrolled to.
+ *
+ * usePagedList(basePath, opts) — `basePath` carries the filters and sort
+ * (no limit / cursor). A new basePath (a filter, search or sort changed,
+ * another folder) drops what was loaded and starts again at page one.
+ *   items, total, hasMore, loading, error, extra (the latest answer, for
+ *   per-list fields such as a folder's breadcrumb),
+ *   loadMore()  — the next page (PagedListFooter calls it near the end),
+ *   reload({fresh}) — re-read what is loaded, keeping the scroll position
+ *                 (WS change events, after a mutation); `fresh` adds
+ *                 refresh=true so a filesystem list re-walks,
+ *   updateItem(key, patch) / removeItem(key) — in-place edits that need
+ *                 no round trip.
+ * Rows are keyed (`key`, default `id`): a row already loaded is never
+ * appended twice, whatever the server sends. A response that lands after
+ * the list was reset is dropped. */
+const PAGED_DEFAULT_SIZE = 50;
+const PAGED_SERVER_MAX = 200;
+// A reload re-reads at most this many rows; past it the list starts over
+// at page one (a person 1,000 rows deep is rare, and the cursor would be
+// re-reading 5 pages on every change event).
+const PAGED_RELOAD_CAP = 1000;
+
+const pagedUrl = (basePath, limit, cursor, fresh) => {
+  let u = basePath + (basePath.indexOf('?') >= 0 ? '&' : '?') + `limit=${limit}`;
+  if (cursor) u += `&cursor=${encodeURIComponent(cursor)}`;
+  if (fresh) u += '&refresh=true';
+  return u;
+};
+
+const usePagedList = (basePath, { pageSize = PAGED_DEFAULT_SIZE, pick = (d) => d && d.items,
+                                  key = (it) => it.id, eventTypes = [], quiet = false } = {}) => {
+  const empty = { items: [], total: null, nextCursor: null, hasMore: false, loading: !!basePath,
+                  error: null, extra: null };
+  const [st, setSt] = React.useState(empty);
+  const stRef = React.useRef(st);
+  stRef.current = st;
+  const gen = React.useRef(0);          // bumped by every reset / reload
+  const busy = React.useRef(false);
+  const pickRef = React.useRef(pick); pickRef.current = pick;
+  const keyRef = React.useRef(key); keyRef.current = key;
+
+  const merge = (base, got) => {
+    const k = keyRef.current;
+    const seen = new Set(base.map(k));
+    const out = base.slice();
+    for (const it of got || []) {
+      const id = k(it);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(it);
+    }
+    return out;
+  };
+
+  const loadMore = React.useCallback(async () => {
+    const s = stRef.current;
+    if (!basePath || busy.current || !s.hasMore || !s.nextCursor) return;
+    const mine = gen.current;
+    busy.current = true;
+    setSt((p) => ({ ...p, loading: true, error: null }));
+    let data; let failed = null;
+    try { data = await apiGet(pagedUrl(basePath, pageSize, s.nextCursor), { quiet }); }
+    catch (e) { failed = e; }
+    if (mine !== gen.current) return;   // reset meanwhile: its own load owns `busy`
+    busy.current = false;
+    if (failed) { setSt((p) => ({ ...p, loading: false, error: failed })); return; }
+    setSt((p) => ({
+      items: merge(p.items, pickRef.current(data)),
+      total: data && typeof data.total === 'number' ? data.total : p.total,
+      nextCursor: (data && data.next_cursor) || null,
+      hasMore: !!(data && data.has_more),
+      loading: false, error: null, extra: data,
+    }));
+  }, [basePath, pageSize, quiet]);
+
+  // Page one (want = 0) or the loaded window again (want = rows loaded).
+  const readFromTop = React.useCallback(async (want, { fresh = false, quietRead = false } = {}) => {
+    if (!basePath) { setSt({ ...empty, loading: false }); return; }
+    const mine = ++gen.current;
+    busy.current = true;
+    if (!want) setSt({ ...empty, loading: true });
+    else setSt((p) => ({ ...p, loading: true, error: null }));
+    let items = []; let last = null; let cursor = null;
+    const target = Math.max(pageSize, Math.min(want || 0, PAGED_RELOAD_CAP));
+    try {
+      do {
+        const lim = Math.min(PAGED_SERVER_MAX, Math.max(pageSize, target - items.length));
+        // eslint-disable-next-line no-await-in-loop
+        last = await apiGet(pagedUrl(basePath, lim, cursor, fresh && !cursor),
+                            { quiet: quiet || quietRead });
+        if (mine !== gen.current) return;
+        items = merge(items, pickRef.current(last));
+        cursor = last && last.has_more ? last.next_cursor : null;
+      } while (cursor && items.length < target);
+    } catch (e) {
+      if (mine !== gen.current) return;
+      busy.current = false;
+      if (e && e.staleCredential) { readFromTop(want, { fresh, quietRead }); return; }
+      console.warn(`fetch ${basePath}:`, e);
+      setSt((p) => ({ ...p, items: want ? p.items : [], loading: false, error: e,
+                      hasMore: want ? p.hasMore : false }));
+      return;
+    }
+    busy.current = false;
+    setSt({
+      items, total: last && typeof last.total === 'number' ? last.total : items.length,
+      nextCursor: cursor, hasMore: !!cursor, loading: false, error: null, extra: last,
+    });
+  }, [basePath, pageSize, quiet]);
+
+  // A new list (filters, sort, folder): start over at page one.
+  React.useEffect(() => { readFromTop(0); }, [readFromTop]);
+
+  const reload = React.useCallback((opts = {}) => {
+    const n = stRef.current.items.length;
+    return readFromTop(n > PAGED_RELOAD_CAP ? 0 : n, opts);
+  }, [readFromTop]);
+
+  // The first page failed: retry it; a later page failed: retry that page.
+  const retry = React.useCallback(() => {
+    const s = stRef.current;
+    if (s.items.length === 0) return readFromTop(0);
+    return loadMore();
+  }, [readFromTop, loadMore]);
+
+  // Change events re-read the loaded window, debounced: an indexer sweep
+  // fires many in a row.
+  React.useEffect(() => {
+    if (!eventTypes || eventTypes.length === 0) return undefined;
+    let t = null;
+    const off = stateBus.subscribe((ev) => {
+      if (!eventTypes.includes(ev.type)) return;
+      if (t) clearTimeout(t);
+      t = setTimeout(() => { t = null; reload({ quietRead: true }); }, 400);
+    });
+    return () => { if (t) clearTimeout(t); off(); };
+  }, [reload, eventTypes.join(',')]);
+
+  // A read refused for want of a credential retries once one arrives.
+  React.useEffect(() => {
+    const e = st.error;
+    if (!e || (e.status !== 401 && e.status !== 403) || typeof Auth === 'undefined') return undefined;
+    try {
+      const seen = Auth.credentialVersion;
+      return Auth.subscribe(() => {
+        if (Auth.credentialVersion === seen) return;
+        retry();
+      });
+    } catch { return undefined; }
+  }, [st.error, retry]);
+
+  const updateItem = React.useCallback((id, patch) => setSt((p) => ({
+    ...p,
+    items: p.items.map((it) => (keyRef.current(it) === id
+      ? (typeof patch === 'function' ? patch(it) : { ...it, ...patch }) : it)),
+  })), []);
+  const removeItem = React.useCallback((id) => setSt((p) => {
+    const items = p.items.filter((it) => keyRef.current(it) !== id);
+    const gone = p.items.length - items.length;
+    return { ...p, items, total: typeof p.total === 'number' ? Math.max(0, p.total - gone) : p.total };
+  }), []);
+
+  return { ...st, loadMore, reload, retry, updateItem, removeItem, pageSize };
+};
+
+const fmtCount = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
+
+/* The end of a paged list: an IntersectionObserver sentinel that asks for
+ * the next page as it comes within ~600px of view (no scroll math), the
+ * "showing N of M" line, a retry row when a page failed, and a plain
+ * "load more" button for a browser without IntersectionObserver (and for
+ * the keyboard). `noun` names the rows ("tracks", "videos"). */
+const PagedListFooter = ({ list, noun = 'items', compact = false }) => {
+  const ref = React.useRef(null);
+  const visible = React.useRef(false);
+  const canObserve = typeof IntersectionObserver !== 'undefined';
+  const { items, total, hasMore, loading, error, loadMore, retry } = list;
+
+  React.useEffect(() => {
+    if (!canObserve || !ref.current) return undefined;
+    const io = new IntersectionObserver((entries) => {
+      visible.current = entries.some((e) => e.isIntersecting);
+      if (visible.current) loadMore();
+    }, { rootMargin: '600px 0px' });
+    io.observe(ref.current);
+    return () => io.disconnect();
+  }, [loadMore, canObserve]);
+
+  // A page that didn't fill the screen leaves the sentinel in view, and an
+  // observer only speaks on a CHANGE: ask again after every load.
+  React.useEffect(() => {
+    if (visible.current && hasMore && !loading && !error) loadMore();
+  }, [items.length, hasMore, loading, error, loadMore]);
+
+  const shown = items.length;
+  // React.createElement, not JSX: data.js is also evaluated as plain
+  // JavaScript (domovoi/tests run it uncompiled), so it stays JSX-free.
+  const h = React.createElement;
+  if (!loading && !error && shown === 0) return h('div', { ref });
+  return h('div', {
+    ref, className: 'paged-footer', 'data-paged-footer': '',
+    style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+             flexWrap: 'wrap', padding: compact ? '10px 12px' : '14px 16px',
+             fontSize: 11, color: 'var(--fg-muted)' },
+  },
+  h('span', { className: 'mono' },
+    total != null ? `showing ${fmtCount(shown)} of ${fmtCount(total)} ${noun}`
+                  : `${fmtCount(shown)} ${noun}`),
+  loading ? h('span', null, 'loading…') : null,
+  error && !loading
+    ? h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 8, color: 'var(--fg)' } },
+        shown === 0 ? `couldn't load ${noun}` : "couldn't load the next page",
+        h(Button, { icon: 'rotate-ccw', onClick: () => retry() }, 'retry'))
+    : null,
+  !loading && !error && hasMore
+    ? h(Button, { onClick: () => loadMore(), title: 'load the next page' }, 'load more')
+    : null);
 };
 
 // Debounce any value. Tail-edge: returns the latest value after it

@@ -5,7 +5,10 @@
  * current chapter file (the player seeks within it).
  *
  * Data sources:
- *   * GET  /api/audiobooks              — indexed books
+ *   * GET  /api/audiobooks              — indexed books, one page at a time
+ *                                         as the grid scrolls (data.js
+ *                                         usePagedList); search + sort are
+ *                                         the server's, over every book
  *   * POST /api/audiobooks/reindex      — re-walk audiobooks_dir
  *   * /ws/state · podcasts.changed      — refresh on (re)index
  *   * /ws/state · podcast_positions.changed — refresh resume positions
@@ -14,7 +17,16 @@
 const AudiobooksPage = () => {
   const p = usePlayback();
   const [fire, toastNode] = useToast();
-  const { items: books, refresh } = useApiList('/api/audiobooks', { eventTypes: ['podcasts.changed'] });
+  const [search, setSearch] = React.useState('');
+  const debSearch = useDebouncedValue(search, 250);
+  const [sort, setSort] = React.useState('title');
+  const needle = debSearch.trim();
+  const list = usePagedList(
+    `/api/audiobooks?sort=${encodeURIComponent(sort)}`
+      + (needle ? `&q=${encodeURIComponent(needle)}` : ''),
+    { eventTypes: ['podcasts.changed'] });
+  const books = list.items;
+  const refresh = list.reload;
   const [busy, setBusy] = React.useState(false);
   const [resumePrompt, setResumePrompt] = React.useState(null);
 
@@ -43,16 +55,32 @@ const AudiobooksPage = () => {
     <>
       <PageHeader title="Audiobooks" sub="local books with chapters + resume, played here or cast to a room"
                   actions={
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <input type="text" placeholder="search books…" value={search}
+                             onChange={(e) => setSearch(e.target.value)}
+                             style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 10px',
+                                      borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                                      background: 'var(--card)', color: 'var(--fg)', width: 170 }}/>
+                      <select value={sort} onChange={(e) => setSort(e.target.value)} title="sort"
+                              style={{ font: 'inherit', fontSize: 12, height: 30, padding: '0 8px',
+                                       borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                                       background: 'var(--card)', color: 'var(--fg)' }}>
+                        <option value="title">title</option>
+                        <option value="author">author</option>
+                        <option value="newest">newest</option>
+                      </select>
                       <ListeningAsSelector/>
                       <Button icon="refresh-cw" onClick={reindex} disabled={busy}>{busy ? 'indexing…' : 'reindex'}</Button>
                     </div>
                   }/>
 
-      {(!books || books.length === 0) ? (
-        <Empty glyph="headphones" title="no audiobooks yet"
-               sub="drop .m4b files or per-chapter folders into your audiobooks dir, then reindex"
-               action={<Button variant="primary" icon="refresh-cw" onClick={reindex}>reindex</Button>}/>
+      {(!books || books.length === 0) && !list.loading && !list.error ? (
+        needle
+          ? <Empty glyph="headphones" title="no books match" sub={`search = “${needle}”`}
+                   action={<Button icon="x" onClick={() => setSearch('')}>clear search</Button>}/>
+          : <Empty glyph="headphones" title="no audiobooks yet"
+                   sub="drop .m4b files or per-chapter folders into your audiobooks dir, then reindex"
+                   action={<Button variant="primary" icon="refresh-cw" onClick={reindex}>reindex</Button>}/>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
           {books.map((b) => (
@@ -81,6 +109,7 @@ const AudiobooksPage = () => {
           ))}
         </div>
       )}
+      <PagedListFooter list={list} noun="books"/>
 
       {resumePrompt && (
         <AbResumePrompt prompt={resumePrompt} onClose={() => setResumePrompt(null)}

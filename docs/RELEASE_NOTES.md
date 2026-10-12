@@ -4,6 +4,36 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — Long lists load as you scroll
+
+Nothing to do beyond the usual update. The Android app already installed
+keeps working against the updated server (it gets the answers it was built
+for); a new Android build that pages the same way follows.
+
+* **Music, Videos, Files, Audiobooks and Podcasts load a page at a time.**
+  The first 50 rows show at once; the next 50 load as you near the bottom,
+  with "showing N of M" and a **retry** when a page fails. Music's library
+  table loses its page arrows for the same scrolling, and its page grew
+  from 12 rows to 50.
+* **Every search, filter and sort runs on the server** and covers the
+  whole list. New: a search box on Audiobooks, Podcasts (shows, and the
+  episodes of one show) and in the Files list (this folder), and sort
+  choices on Videos, Files and Audiobooks.
+* **Select all** on Music and Files selects the loaded rows; its tooltip
+  says how many.
+* **API:** every list behind those pages takes `limit` (default 50, max
+  200) and a `cursor` from the previous answer's `next_cursor`, and
+  answers with `total`, `has_more` and `next_cursor` (API_REFERENCE §1.7).
+  A client that sends no paging parameter gets the answer it always got:
+  the whole list for Videos, a Files folder, Audiobooks and Podcasts (the
+  bare array for those three), and Music's 50-row page with `offset`.
+* **Videos and Files listings are cached between pages** and re-read when
+  a folder changes, a write through the server lands, on **Rescan**, or
+  after five minutes. A cold read of a 10,000-entry folder fell from ~6 s
+  to ~0.13 s, and of 10,000 videos from ~2 s to ~0.1 s (Windows dev box);
+  later pages take ~25 ms. The walk limits are unchanged (2,000 videos and
+  2,000 folders per library); the Videos page says when one was reached.
+
 ## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
 
 New Android build; nothing to do on the server beyond the usual update.
