@@ -290,7 +290,19 @@ internal class VoiceController(
     private fun apply(action: DeviceAction) {
         val p = app.player
         when (action) {
-            is DeviceAction.Play -> p.playItems(action.items)
+            is DeviceAction.Play -> {
+                val first = action.items.first()
+                if (action.resume && first.isSpoken) {
+                    // Where this phone's listener left off, as the
+                    // Audiobooks and Podcasts screens start it.
+                    scope.launch {
+                        val (pos, speed) = p.fetchPosition(first)
+                        p.playItems(action.items, 0, pos, speed)
+                    }
+                } else {
+                    p.playItems(action.items)
+                }
+            }
             DeviceAction.Pause -> p.pause()
             DeviceAction.Resume -> p.resume()
             DeviceAction.Stop -> p.stop()

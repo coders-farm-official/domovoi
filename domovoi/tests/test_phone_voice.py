@@ -853,3 +853,29 @@ async def test_transport_volume_and_whats_playing_act_on_the_phone(
     # Nothing playing on the phone: said so, nothing to do.
     assert idle["reply"] == "Nothing is playing on this phone." and idle["actions"] == []
     assert room_player == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_audiobook_asked_for_plays_on_the_phone(
+    db_session, open_gate, whisper, heard_as, room_player,
+) -> None:
+    """The book goes to the phone, which resumes it where its listener left
+    off (the app reads that position itself); no room's player is asked."""
+    async with SessionLocal() as s:
+        book = (await s.execute(text(
+            "INSERT INTO audiobooks (title, author, file_path, duration_sec) "
+            "VALUES ('Cellar Tales', 'N', '/b/cellar.m4b', 3600) RETURNING id"
+        ))).scalar_one()
+        await s.commit()
+    whisper.texts = ["play the audiobook cellar tales"]
+    tid = await _thread()
+    async with _client() as c:
+        body = (await _turn(c, tid)).json()
+    assert body["matched_handler"] == "spoken_audio", body
+    assert body["reply"] == "Playing Cellar Tales."
+    assert body["actions"] == [{
+        "type": "play", "resume": True,
+        "items": [{"kind": "book", "id": book, "title": "Cellar Tales", "duration_sec": 3600}],
+    }]
+    assert room_player == []

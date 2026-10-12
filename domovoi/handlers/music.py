@@ -962,9 +962,10 @@ class MusicHandler(MusicChoiceMixin, Handler):
         said: str | None,
     ) -> Response:
         """``_play``'s search half for a phone: the library's own table
-        stands in for a room's MPD search, then the lyric last resort.
-        Podcasts and a streaming provider play through a room's player, so
-        a phone that found nothing here is told so plainly."""
+        stands in for a room's MPD search, then the lyric last resort, then
+        a subscribed podcast of that name (which plays on the phone too). A
+        streaming provider plays through a room's player, so a phone that
+        found nothing by then is told so plainly."""
         rows = await phone_play.search_library(session, query)
         if rows:
             row = rows[0]
@@ -978,6 +979,17 @@ class MusicHandler(MusicChoiceMixin, Handler):
         )
         if lyric_reply is not None:
             return lyric_reply
+        show = _podcast_show_candidate(query)
+        if show:
+            from domovoi.handlers.spoken_audio import SpokenAudioHandler
+
+            try:
+                pod_response = await SpokenAudioHandler().try_play_latest(ctx, session, show)
+            except Exception as e:
+                log.warning("podcast fallback failed for %r: %s", show, e)
+                pod_response = None
+            if pod_response is not None:
+                return pod_response
         q_display = " by ".join(v for v in (query.get("title"), query.get("artist")) if v) or query.get("any", "")
         return Response(
             text=(

@@ -10,6 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -138,8 +139,9 @@ internal suspend fun sendVoiceTurn(
 
 /** One thing the server asked this phone to do. */
 internal sealed class DeviceAction {
-    /** Play [items] on the phone, replacing what it plays. */
-    data class Play(val items: List<PlayItem>) : DeviceAction()
+    /** Play [items] on the phone, replacing what it plays. [resume]: a book
+     *  or an episode, picked up where this phone's listener left off. */
+    data class Play(val items: List<PlayItem>, val resume: Boolean = false) : DeviceAction()
     data object Pause : DeviceAction()
     data object Resume : DeviceAction()
     data object Stop : DeviceAction()
@@ -159,7 +161,8 @@ internal fun parseDeviceActions(raw: List<JsonObject>): List<DeviceAction> = raw
     when (a.str("type")) {
         "play" -> {
             val items = (a["items"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::playItemFor) }
-            if (items.isEmpty()) null else DeviceAction.Play(items)
+            val resume = (a["resume"] as? JsonPrimitive)?.booleanOrNull == true
+            if (items.isEmpty()) null else DeviceAction.Play(items, resume)
         }
         "pause" -> DeviceAction.Pause
         "resume" -> DeviceAction.Resume

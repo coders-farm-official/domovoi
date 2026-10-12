@@ -94,6 +94,19 @@ class VoiceTurnTest {
         assertEquals(DeviceAction.Volume("set", 100), actions[2])
     }
 
+    @Test fun aBookIsPlayedFromWhereItsListenerLeftOff() {
+        val raw = DomovoiJson.parseToJsonElement(
+            """[{"type": "play", "resume": true, "items": [{"kind": "book", "id": 5, "title": "Cellar Tales", "duration_sec": 3600}]}]""",
+        )
+        val (play) = parseDeviceActions((raw as kotlinx.serialization.json.JsonArray).map { it.jsonObject })
+        play as DeviceAction.Play
+        assertTrue(play.resume)
+        assertEquals(PlayItem.fromBook(5, "Cellar Tales", null, 3600.0, null, emptyList()), play.items.single())
+        assertTrue(play.items.single().isSpoken)
+        // A song never resumes.
+        assertFalse((parseDeviceActions(decode(answer).actions)[0] as DeviceAction.Play).resume)
+    }
+
     @Test fun aPlayWithNothingPlayableIsNoAction() {
         val raw = DomovoiJson.parseToJsonElement("""[{"type": "play", "items": [{"kind": "x", "id": 1, "title": "t"}]}]""")
         val list = (raw as kotlinx.serialization.json.JsonArray).map { it.jsonObject }

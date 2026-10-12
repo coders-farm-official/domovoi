@@ -4,6 +4,45 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Chat: talk to Domovoi from the app's chat screen
+
+New Android build and a server update (it adds migration **V025**; the
+update runs it). Update the server first: the new app's mic needs it.
+
+* **A mic in the chat composer.** With nothing typed, the send button is a
+  mic. It opens a big hold-to-talk button: press and hold to talk, let go
+  to send, slide your finger off the button to cancel; pressing again while
+  Domovoi is speaking stops the reply. The thread sits underneath showing
+  the latest exchange; scroll down into it for the whole chat, back up past
+  its top for the button again. The app asks for the microphone the first
+  time.
+* **Spoken turns are answered like a satellite's** — the same commands, the
+  same follow-ups ("did you mean …?" is answered by your next press, and
+  "yes" picks it up) — and both sides are saved into the thread, so voice
+  and typed messages scroll together. The reply is spoken on the phone.
+* **The phone is its own device.** Music, an artist, an album, "play
+  something", playlists, an audiobook or a podcast's latest episode asked
+  for by voice play **on the phone**, with its own player (a book or an
+  episode picks up where you left off); pause, next, volume and "what's
+  playing" act on it. Timers and reminders set from the phone are
+  house-wide, as from any room. Intercom ("tell the kitchen dinner's
+  ready") works. A satellite's own settings (its Wi-Fi, its voice) are
+  politely refused. Not yet from the phone: radio, chapters / skipping /
+  speed in a book, "add this song to …" (the phone says it can't yet), and
+  "drop in on …" (use a room's drop-in button).
+* **Who spoke.** Each spoken message carries a small marker naming who
+  Domovoi recognized, lighter when it isn't sure or when it names someone
+  other than the phone's owner — set that in the app under Settings →
+  Connection → **This phone belongs to**. Voice profiles enrolled on a
+  satellite may not match a phone's mic as well, so the marker can say
+  "voice not recognized" for someone a satellite knows.
+* **For operators:** turns are logged under `phone-<device id>` like a
+  room. A recording stays in memory for the turn only. Before first-run
+  admin setup the phone's mic is refused (`501`), like the drop-in call.
+  New endpoints: `POST /v1/phone/voice` (core) and
+  `POST /api/chat/threads/{id}/voice` (dashboard); chat messages gain
+  `source` and the speaker fields (API_REFERENCE.md §2.1, §3.18).
+
 ## 2026-10-12 — Chat: a vision model that suits a processor, and pictures shrunk for it
 
 A server update. To read pictures in chat, install the new default vision
