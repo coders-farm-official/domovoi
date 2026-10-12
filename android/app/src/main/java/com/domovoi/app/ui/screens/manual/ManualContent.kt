@@ -92,7 +92,7 @@ internal val MANUAL_FAQ = listOf(
     ),
     FaqRow(
         "Can I add my own voice?",
-        "Pick one of the three public-domain voices, upload a Piper .onnx trained on British-English (\"en\") phonemes, or register a Microsoft Edge neural voice — on the web dashboard, Settings → Voices.",
+        "Pick one of the three public-domain voices, upload a Piper .onnx trained on English phonemes (American \"en-us\", what most voices people train use, or British \"en\"), or register a Microsoft Edge neural voice — on the web dashboard, Settings → Voices.",
     ),
     FaqRow(
         "It says a name wrong. Can I fix it?",
@@ -185,7 +185,7 @@ internal val MANUAL_HOWTO = listOf(
         listOf(
             "Pick Domovoi's voice (Norman, Kristin or Linda) on the web dashboard under Settings → Voices.",
             "A word said wrong? Add it under \"Say it like\" there: Siobhan = shiv-AWN.",
-            "Register an Edge cloud voice by id, or upload a local Piper .onnx trained on British-English (\"en\") phonemes.",
+            "Register an Edge cloud voice by id, or upload a local Piper .onnx trained on English phonemes (American \"en-us\" or British \"en\").",
             "This phone's voice: Settings → Voice here.",
         ),
         listOf(

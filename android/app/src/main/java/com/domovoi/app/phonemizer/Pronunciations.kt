@@ -157,6 +157,55 @@ object PhonemeIds {
         return out.toIntArray()
     }
 
+    /** What a symbol becomes for a voice whose map lacks it: the first
+     *  candidate whose every code point the map has, else nothing (the
+     *  same table as phoneme_ids.py's FALLBACKS). */
+    val FALLBACKS: Map<String, List<String>> = mapOf(
+        "ɾ" to listOf("t", "d"), "ᵻ" to listOf("ɪ", "i", "ə"), "ɚ" to listOf("əɹ", "ər", "ə"),
+        "ɐ" to listOf("ə", "a"), "æ" to listOf("a", "ɛ"), "a" to listOf("æ", "ɐ"),
+        "ɒ" to listOf("ɑ", "ɔ", "o"), "ɔ" to listOf("ɒ", "o"), "ɑ" to listOf("a", "ɒ"), "ɜ" to listOf("ə", "ɛ"),
+        "ʌ" to listOf("ə", "a"), "ə" to listOf("ɐ", "e"), "ɛ" to listOf("e"), "e" to listOf("ɛ"),
+        "ɪ" to listOf("i"), "i" to listOf("ɪ"), "ʊ" to listOf("u"), "u" to listOf("ʊ"), "o" to listOf("ɔ", "ʊ"),
+        "ɹ" to listOf("r", "ɾ"), "ɡ" to listOf("g"), "ŋ" to listOf("n"), "θ" to listOf("t"), "ð" to listOf("d"),
+        "ʃ" to listOf("s"), "ʒ" to listOf("z", "ʃ"), "ː" to listOf(""), "ˈ" to listOf(""), "ˌ" to listOf(""),
+        "j" to listOf("i"),
+    )
+
+    /** [phonemes] (NFD) with each code point [map] lacks replaced by its
+     *  first [FALLBACKS] candidate the map has wholly, else dropped, so a
+     *  voice trained on fewer symbols says the nearest sound. [memo] (one
+     *  per voice): missing code point -> what took its place, filled as
+     *  they turn up. */
+    fun fit(phonemes: String, map: Map<String, IntArray>, memo: MutableMap<String, String> = HashMap()): String {
+        val nfd = Py.nfd(phonemes)
+        val out = StringBuilder(nfd.length)
+        var i = 0
+        while (i < nfd.length) {
+            val cp = nfd.codePointAt(i)
+            i += Character.charCount(cp)
+            val ch = String(Character.toChars(cp))
+            if (ch in map) {
+                out.append(ch)
+                continue
+            }
+            val sub = synchronized(memo) {
+                memo.getOrPut(ch) {
+                    FALLBACKS[ch].orEmpty().firstOrNull { c -> c.all { x -> x.toString() in map } } ?: ""
+                }
+            }
+            out.append(sub)
+        }
+        return out.toString()
+    }
+
+    /** Whether a sentence's ids hold any sound: something besides the
+     *  begin, end and pad ids and the map's space and punctuation. */
+    fun speaksAnything(ids: IntArray, map: Map<String, IntArray>): Boolean {
+        val quiet = HashSet<Int>()
+        for (sym in listOf(BOS, EOS, PAD, " ", ",", ".", "!", "?", ";", ":", "ˈ", "ˌ")) map[sym]?.forEach { quiet += it }
+        return ids.any { it !in quiet }
+    }
+
     /** Code points of [phonemes] (NFD) the map lacks, in order, once each. */
     fun unknownSymbols(phonemes: String, map: Map<String, IntArray>): List<String> {
         val out = mutableListOf<String>()

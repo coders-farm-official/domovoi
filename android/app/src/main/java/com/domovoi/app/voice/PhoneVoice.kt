@@ -285,7 +285,11 @@ class PhoneVoice(
         if (!withContext(Dispatchers.IO) { store.isInstalled(voice) }) return null
         val p = phonemizer()
         val model = voiceModel(voice)
-        return PiperSpeechOut(p, model, voice.id, AudioTrackSink(model.sampleRate), model.config.idMap, PiperVoice.defaultThreads())
+        // A voice on a phoneme set the converter doesn't write can't speak
+        // through it: the caller's fallback speaks instead.
+        val dialect = model.config.dialect ?: return null
+        return PiperSpeechOut(p, model, voice.id, AudioTrackSink(model.sampleRate), model.config.idMap,
+            PiperVoice.defaultThreads(), dialect = dialect)
     }
 
     /** Loads the converter, and the voice in use when it is downloaded, in

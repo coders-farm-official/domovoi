@@ -196,4 +196,49 @@ class PiperSpeechOutTest {
         assertEquals("en_US-ljspeech-medium", results.single().voice)
         assertEquals(null, runVoiceSamples(FakeSpeechOut(clock), listOf("Hi."), gapMs = 0).single().voice)
     }
+
+    @Test fun theConfigNamesThePhonemeSet() {
+        fun cfg(espeak: String?, type: String? = null) = PiperConfig.parse(buildJsonObject {
+            putJsonObject("audio") { put("sample_rate", 22050) }
+            if (espeak != null) putJsonObject("espeak") { put("voice", espeak) }
+            if (type != null) put("phoneme_type", type)
+            putJsonObject("phoneme_id_map") { put("_", JsonArray(listOf(JsonPrimitive(0)))) }
+        }.toString())
+        assertEquals("en", cfg("en").dialect)
+        assertEquals("en-us", cfg("en-us").dialect)       // the owner's uploads, most voices people train
+        assertEquals("en-us", cfg("en_US").dialect)
+        assertNull(cfg("de").dialect)
+        assertNull(cfg("en-us", type = "text").dialect)
+        assertNull(cfg(null).dialect)
+    }
+
+    @Test fun anEnUsVoiceIsSpokenInAmericanPhonemes() = runBlocking {
+        val voice = FakeVoiceModel()
+        val out = PiperSpeechOut(phonemizer, voice, "kronk", FakeSink(), clock = clock.read, log = {}, dialect = "en-us")
+        out.speak("Better water.")
+        assertEquals(listOf("bˈɛɾɚ wˈɔːɾɚ."), out.lastPhonemes)
+        assertEquals(listOf(PhonemeIds.ids("bˈɛɾɚ wˈɔːɾɚ.", phonemizer.idMap).toList()), voice.calls.map { it.toList() })
+    }
+
+    @Test fun aSymbolTheVoiceLacksIsSaidAsTheNearestOne() = runBlocking {
+        val small = phonemizer.idMap.filterKeys { it != "ɾ" && it != "ᵻ" }
+        val voice = FakeVoiceModel()
+        val logged = mutableListOf<String>()
+        val out = PiperSpeechOut(phonemizer, voice, "small", FakeSink(), idMap = small, clock = clock.read,
+            log = { logged += it }, dialect = "en-us")
+        out.speak("Better, remind me.")
+        assertEquals(listOf(PhonemeIds.ids("bˈɛtɚ, ɹɪmˈaɪnd mˌiː.", small).toList()), voice.calls.map { it.toList() })
+        assertEquals(1, logged.count { "has no" in it })
+        out.speak("Better.")
+        assertEquals(1, logged.count { "has no" in it })     // once per voice
+    }
+
+    @Test fun aSentenceWithNoSoundTheVoiceKnowsIsNotSent() = runBlocking {
+        val tiny = phonemizer.idMap.filterKeys { it in setOf("^", "$", "_", " ", ".") }
+        val voice = FakeVoiceModel()
+        val out = PiperSpeechOut(phonemizer, voice, "tiny", FakeSink(), idMap = tiny, clock = clock.read, log = {})
+        val said = out.speak("Hello there.")
+        assertTrue(voice.calls.isEmpty())
+        assertEquals(0.0, said.audioSeconds, 0.0)
+    }
 }

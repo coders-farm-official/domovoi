@@ -26,7 +26,8 @@ import java.security.MessageDigest
  * the fixture's `near_tie` cases alone may differ by one phoneme of the
  * model's output (another ONNX Runtime may pick the other side of a near
  * tie). A failure here is a difference in what the phone's voice says from
- * what the server's says: fix the port, never the fixture.
+ * what the server's says: fix the port, never the fixture. Every text is
+ * there once per phoneme set (a case's `dialect`: "en-us"; none: "en").
  */
 class PhonemizerGoldenTest {
 
@@ -73,6 +74,9 @@ class PhonemizerGoldenTest {
 
     private fun JsonElement.idLists(): List<List<Int>> = jsonArray.map { l -> l.jsonArray.map { it.jsonPrimitive.int } }
 
+    /** The case's phoneme set: its `dialect`, or "en". */
+    private val JsonObject.dialect: String get() = this["dialect"]?.jsonPrimitive?.content ?: Phonemizer.EN
+
     /** Levenshtein distance over phone tokens. */
     private fun distance(a: List<String>, b: List<String>): Int {
         val d = Array(a.size + 1) { IntArray(b.size + 1) }
@@ -102,14 +106,14 @@ class PhonemizerGoldenTest {
             val got = p.pronunciations().mapValues { it.value.resolved.split(' ') }
             if (want.keys != got.keys || !want.all { (k, v) -> distance(v, got.getValue(k)) <= nearTie.size }) return false
             val wantText = case.getValue("phonemes").strings()
-            val gotText = p.phonemize(case.getValue("text").jsonPrimitive.content)
+            val gotText = p.phonemize(case.getValue("text").jsonPrimitive.content, case.dialect)
             return wantText.size == gotText.size &&
                 distance(wantText.joinToString(" | ").map { it.toString() }, gotText.joinToString(" | ").map { it.toString() }) <= 2 * nearTie.size
         }
         val want = case["model"]?.jsonArray?.associate { e ->
             e.jsonArray[0].jsonPrimitive.content to e.jsonArray[1].jsonPrimitive.content.split(' ')
         } ?: return false
-        val got = p.phonemizeDetailed(case.getValue("text").jsonPrimitive.content)
+        val got = p.phonemizeDetailed(case.getValue("text").jsonPrimitive.content, case.dialect)
             .flatMap { it.second }.filter { it.src == "model" }.associate { it.w!! to it.ph }
         if (got.keys != want.keys) return false
         return want.all { (w, phones) ->
@@ -120,7 +124,7 @@ class PhonemizerGoldenTest {
 
     @Test fun theFixtureWasMadeFromTheseDataFiles() {
         val want = golden.getValue("data_sha256").jsonObject
-        assertTrue(want.size >= 7)
+        assertTrue(want.size >= 8)
         for ((rel, hash) in want) {
             assertEquals("$rel changed since golden.json was made", hash.jsonPrimitive.content, sha256(File(dir, "data/$rel")))
         }
@@ -133,7 +137,7 @@ class PhonemizerGoldenTest {
             .filter { it.isNotEmpty() && !it.startsWith("#") }
             .associate { line -> line.split(Regex("""\s+"""), limit = 2).let { it[1].removePrefix("*") to it[0] } }
         listOf(
-            PhonemizerData.CMUDICT, PhonemizerData.CORRECTIONS, PhonemizerData.FUNCTION_WORDS,
+            PhonemizerData.CMUDICT, PhonemizerData.CORRECTIONS, PhonemizerData.FUNCTION_WORDS, PhonemizerData.FUNCTION_WORDS_US,
             PhonemizerData.PRONUNCIATIONS, PhonemizerData.ID_MAP, PhonemizerData.G2P_MODEL, PhonemizerData.G2P_VOCAB,
             "cmudict/LICENSE",
         ).forEach { rel ->
@@ -153,7 +157,12 @@ class PhonemizerGoldenTest {
 
     @Test fun everyCase() {
         val all = cases
-        assertEquals(golden.getValue("counts").jsonObject.values.sumOf { it.jsonPrimitive.int }, all.size)
+        val counts = golden.getValue("counts").jsonObject
+        assertEquals(Phonemizer.DIALECTS.toSet(), counts.keys)
+        assertEquals(counts.values.sumOf { set -> set.jsonObject.values.sumOf { it.jsonPrimitive.int } }, all.size)
+        for (d in Phonemizer.DIALECTS) {
+            assertEquals(d, counts.getValue(d).jsonObject.values.sumOf { it.jsonPrimitive.int }, all.count { it.dialect == d })
+        }
         val failures = mutableListOf<String>()
         var exact = 0
         val allowed = mutableListOf<String>()
@@ -164,7 +173,7 @@ class PhonemizerGoldenTest {
             val p = case["pronunciations"]?.let { list ->
                 Phonemizer(data, model, list.jsonArray.map { e -> e.strings().let { (w, s) -> w to s } })
             } ?: ph
-            val got = p.phonemize(text)
+            val got = p.phonemize(text, case.dialect)
             val gotResolved = p.pronunciations().mapValues { it.value.resolved }
             val wantResolved = case["resolved"]?.jsonObject?.mapValues { it.value.jsonPrimitive.content }
             val resolvedOk = wantResolved == null || wantResolved == gotResolved
@@ -179,7 +188,8 @@ class PhonemizerGoldenTest {
                     if (resolvedOk) "" else "\n    resolved $gotResolved, want $wantResolved"
             }
         }
-        println("golden.json: ${all.size} cases, $exact exact, ${allowed.size} within the near-tie allowance, ${failures.size} failed")
+        println("golden.json: ${all.size} cases (${Phonemizer.DIALECTS.joinToString { d -> "$d ${all.count { it.dialect == d }}" }}), " +
+            "$exact exact, ${allowed.size} within the near-tie allowance, ${failures.size} failed")
         allowed.forEach { println("  near tie: $it") }
         if (failures.isNotEmpty()) fail("${failures.size} of ${all.size} cases differ:\n" + failures.joinToString("\n"))
     }
@@ -206,6 +216,20 @@ class PhonemizerGoldenTest {
             assertTrue(e.message!!.startsWith("Bob:"))
         }
         assertEquals(setOf("nguyen"), p.pronunciations().keys)
+    }
+
+    /** The sets the fixture names are the ones the port writes, by the
+     *  name a voice's .onnx.json gives them. */
+    @Test fun thePhonemeSetsAreTheConvertersOwn() {
+        val sets = golden.getValue("dialects").jsonObject
+        assertEquals(Phonemizer.DIALECTS.toSet(), sets.keys)
+        for ((name, set) in sets) {
+            val espeak = set.jsonObject.getValue("espeak_voice").jsonPrimitive.content
+            assertEquals(name, Phonemizer.dialectForEspeakVoice(espeak))
+        }
+        assertEquals("en-us", Phonemizer.dialectForEspeakVoice("EN_us"))
+        assertEquals(null, Phonemizer.dialectForEspeakVoice("de"))
+        assertEquals(PhonemizerData.FUNCTION_WORDS_US, sets.getValue("en-us").jsonObject.getValue("function_words").jsonPrimitive.content)
     }
 
     @Test fun theIdsAreTheVoicesOwn() {
@@ -254,7 +278,7 @@ class PhonemizerGoldenTest {
 
     /** The benchmark's voice samples are the fixture's 13 comparison sentences. */
     @Test fun theVoiceSamplesAreTheFixturesSentences() {
-        val sentences = cases.filter { it.getValue("group").jsonPrimitive.content == "sentences" }
+        val sentences = cases.filter { it.getValue("group").jsonPrimitive.content == "sentences" && it.dialect == Phonemizer.EN }
             .map { it.getValue("text").jsonPrimitive.content }
         assertEquals(sentences, VoiceSamples.LINES)
     }
