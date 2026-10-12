@@ -90,7 +90,11 @@
       videos: () => window.VideosPage,
       news: () => window.NewsPage,
       people: () => window.PeoplePage,
-      satellites: () => window.SatellitesPage,
+      // A Settings tab since 2026-10-11: the shell turns #satellites into
+      // Settings → Satellites before it gets here (settingsTabRoute,
+      // components.jsx). The route stays a core one, so no plugin can
+      // take the old address.
+      satellites: () => window.SettingsPage,
       calendar: () => window.CalendarPage,
       files: () => window.FilesPage,
       plugins: () => window.PluginsPage,
@@ -254,10 +258,12 @@
       const initialTheme = document.documentElement.getAttribute('data-theme')
         || localStorage.getItem('domovoi-theme') || 'light';
       // Home is where a bare URL, the installed app (manifest start_url)
-      // and an unknown route all land. Deep links (#music, …) still work.
+      // and an unknown route all land. Deep links (#music, …) still work,
+      // and a page that became a Settings tab (#satellites) opens that tab
+      // (settingsTabRoute, components.jsx).
       const initialRoute = (window.location.hash || '#home').slice(1);
       const [theme, setThemeState] = React.useState(initialTheme);
-      const [route, setRouteState] = React.useState(initialRoute);
+      const [route, setRouteState] = React.useState(() => settingsTabRoute(initialRoute));
 
       const setTheme = (t) => {
         document.documentElement.setAttribute('data-theme', t);
@@ -265,13 +271,14 @@
         setThemeState(t);
       };
       const setRoute = (r) => {
-        window.location.hash = r;
-        setRouteState(r);
+        const to = settingsTabRoute(r);
+        window.location.hash = to;
+        setRouteState(to);
       };
 
       React.useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
-        const handler = () => setRouteState((window.location.hash || '#home').slice(1));
+        const handler = () => setRouteState(settingsTabRoute((window.location.hash || '#home').slice(1)));
         window.addEventListener('hashchange', handler);
         return () => window.removeEventListener('hashchange', handler);
       }, []);

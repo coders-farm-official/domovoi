@@ -1231,25 +1231,26 @@ const useStateEvents = (eventTypes, onEvent) => {
 
 // Sidebar count badges. Computed from the same lists each page uses;
 // kept here so the App shell can render counts without each page
-// having to lift state up.
+// having to lift state up. (No satellites count since 2026-10-11:
+// Satellites is a Settings tab, and Settings has no badge — the tab's
+// own first line counts the rooms.)
 const useSidebarCounts = () => {
   const [counts, setCounts] = React.useState({
-    music: null, people: null, satellites: null, calendar: null,
+    music: null, people: null, calendar: null,
   });
 
   React.useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
-      const [music, people, sats, cal] = await Promise.all([
+      const [music, people, cal] = await Promise.all([
         // Library endpoint returns {total, items}; ask for 1 item so the
         // network payload stays tiny — we only want the count.
         apiGet('/api/music/library?limit=1').catch(() => null),
-        // People, rooms and the calendar are household reads (WEB-15):
+        // People and the calendar are household reads (WEB-15):
         // quiet, because a count badge nobody asked for must not pop the
         // pair prompt on an unpaired browser — it just shows no count, and
         // a credential arriving re-reads (below).
         apiGet('/api/people', { quiet: true }).catch(() => null),
-        apiGet('/api/satellites', { quiet: true }).catch(() => null),
         apiGet('/api/calendar/events', { quiet: true }).catch(() => null),
         // Plugin pages declare their own sidebar badges in the plugin
         // manifest (usePluginBadges in components.jsx) — nothing
@@ -1260,7 +1261,6 @@ const useSidebarCounts = () => {
       setCounts({
         music: typeof music?.total === 'number' ? music.total : null,
         people: lenOf(people),
-        satellites: lenOf(sats),
         calendar: lenOf(cal),
       });
     };

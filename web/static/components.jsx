@@ -294,10 +294,31 @@ const announceInternetChange = (access) => {
 /* Open Settings on a tab. The shell maps one hash to one page (#settings),
  * so the tab rides sessionStorage; a Settings page already on screen
  * hears SETTINGS_TAB_EVENT instead. */
-const openSettingsTab = (tab) => {
+const askSettingsTab = (tab) => {
   try { sessionStorage.setItem('domovoi.settings.tab', tab); } catch { /* storage blocked */ }
   try { window.dispatchEvent(new CustomEvent(SETTINGS_TAB_EVENT, { detail: { tab } })); } catch { /* no CustomEvent */ }
+};
+const openSettingsTab = (tab) => {
+  askSettingsTab(tab);
   try { window.location.hash = 'settings'; } catch { /* no location */ }
+};
+
+/* Pages that became a Settings tab, by their old route → the tab. Since
+ * 2026-10-11 Satellites lives in Settings; the old #satellites (a
+ * bookmark, a link in the docs, Home's room cards and problem rows, which
+ * keep it because it also works in a new tab) still lands there. */
+const SETTINGS_TAB_ROUTES = { satellites: 'satellites' };
+
+/* The route the shell shows for `route`: an old route of a Settings tab
+ * opens Settings on that tab, and the address bar says #settings (replaced,
+ * not pushed, so Back doesn't bounce off the old address). Anything else
+ * is itself. */
+const settingsTabRoute = (route) => {
+  const tab = SETTINGS_TAB_ROUTES[route];
+  if (!tab) return route;
+  askSettingsTab(tab);
+  try { window.history.replaceState(null, '', '#settings'); } catch { /* the old hash stays; the page is still right */ }
+  return 'settings';
 };
 
 /* "needs internet · Settings → Internet", the link opening that tab. */
@@ -1139,16 +1160,19 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
  * (design §5.2, echoed in /api/plugins/manifest) so plugin authors can
  * slot pages deliberately. `countKey` reads useSidebarCounts.
  *
- * `primary` marks the five tabs the phone strip keeps (760px and below):
- * home · music · satellites · calendar · chat, left to right (`strip`,
- * the strip's own order — the sidebar keeps the published one). Everything
- * else is one tap away on Home's "everything" grid. The desktop sidebar
- * shows every item EXCEPT home: there the brand row is the link to it
- * (`brandLink`). */
+ * The phone strip (760px and below) is this device's phone bar
+ * (PHONE_BAR_DEFAULT, home · music · videos · chat, unless someone here
+ * picked others in Settings → Phone bar); everything else is one tap away on
+ * Home's "everything" grid. The desktop sidebar shows every item EXCEPT
+ * home: there the brand row is the link to it (`brandLink`).
+ *
+ * Satellites is not here: since 2026-10-11 it is a Settings tab
+ * (Settings → Satellites), and the old #satellites still lands on it
+ * (SETTINGS_TAB_ROUTES below). */
 const CORE_NAV_ITEMS = [
-  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, primary: true, strip: 1, brandLink: true },
-  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8, primary: true, strip: 5 },
-  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music', primary: true, strip: 2 },
+  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, brandLink: true },
+  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
+  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music' },
   { route: 'podcasts',   icon: 'podcast',     label: 'Podcasts',   order: 12 },
   { route: 'audiobooks', icon: 'book-open',   label: 'Audiobooks', order: 14 },
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
@@ -1156,8 +1180,7 @@ const CORE_NAV_ITEMS = [
   // page slots there (nav_order 16 in its manifest) when installed.
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people' },
-  { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites', primary: true, strip: 3 },
-  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar', primary: true, strip: 4 },
+  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
@@ -1207,11 +1230,11 @@ const useSharedScreen = () => {
 
 /* Every nav destination, core and plugin, in sidebar order. Core items
  * carry `core: true` and their CORE_NAV_ITEMS fields; plugin pages carry
- * `core: false`, their `slug`, `iconSrc` (the manifest's nav_icon) and
- * never `primary`. Interleaved by nav order; equal values sort core-first,
- * then plugin slug (design §5.2). The Sidebar draws it, and Home's
- * "everything" grid draws the non-primary part of the same list, so the
- * two can't disagree about what exists. */
+ * `core: false`, their `slug` and `iconSrc` (the manifest's nav_icon).
+ * Interleaved by nav order; equal values sort core-first, then plugin slug
+ * (design §5.2). The Sidebar draws it, and Home's "everything" grid draws
+ * the part of the same list that is not on the phone bar, so the two
+ * can't disagree about what exists. */
 const buildNavItems = (manifest) => {
   const items = CORE_NAV_ITEMS.map((it) => ({ ...it, core: true, slug: '' }));
   (manifest?.plugins || []).forEach((p) => (p.pages || []).forEach((pg) => {
@@ -1232,6 +1255,120 @@ const buildNavItems = (manifest) => {
 // SHARED_SCREEN_HIDDEN pages.
 const navItemsFor = (manifest, { shared = false } = {}) =>
   buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route)));
+
+/* ---- the phone bar ----------------------------------------------------
+ * The tabs along the bottom of a phone-width screen (760px and below).
+ * home · music · videos · chat unless someone on THIS device picked others
+ * in Settings → Phone bar: Home always first, at most five, at
+ * least two, any page a launcher may show (navItemsFor — so plugin pages
+ * too, and on a shared screen never the personal ones, whatever was saved).
+ * Kept in this browser's localStorage: a per-device convenience, so a
+ * browser that can't keep it (a private window, blocked storage) keeps it
+ * for the visit and starts from the default next time. */
+const PHONE_BAR_DEFAULT = ['home', 'music', 'videos', 'chat'];
+const PHONE_BAR_MAX = 5;
+const PHONE_BAR_MIN = 2;
+const PHONE_BAR_KEY = 'domovoi-phone-bar';
+
+const PhoneBarStore = (() => {
+  let memory = null;       // this visit's bar when storage can't keep it
+  let unkept = false;      // a write failed: memory is the truth until reload
+  const subs = new Set();
+  const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  const get = () => {
+    if (unkept) return memory;
+    try {
+      const raw = localStorage.getItem(PHONE_BAR_KEY);
+      if (raw == null) return null;
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v.filter((r) => typeof r === 'string') : null;
+    } catch { return memory; }
+  };
+  // `routes` null = back to the default. True when the browser kept it.
+  const set = (routes) => {
+    const list = Array.isArray(routes) ? routes.filter((r) => typeof r === 'string') : null;
+    memory = list;
+    let kept = true;
+    try {
+      if (list == null) localStorage.removeItem(PHONE_BAR_KEY);
+      else localStorage.setItem(PHONE_BAR_KEY, JSON.stringify(list));
+      unkept = false;
+    } catch { kept = false; unkept = true; }
+    notify();
+    return kept;
+  };
+  let listening = false;
+  return {
+    get,
+    set,
+    subscribe(fn) {
+      subs.add(fn);
+      // Another tab of this browser changed it.
+      if (!listening) {
+        listening = true;
+        try {
+          window.addEventListener('storage', (e) => { if (!e || e.key === PHONE_BAR_KEY || e.key == null) notify(); });
+        } catch { /* no window events */ }
+      }
+      return () => { subs.delete(fn); };
+    },
+  };
+})();
+
+/* This device's saved phone bar (a list of routes), or null for the
+ * default; re-renders when it changes. */
+const usePhoneBar = () => {
+  const [bar, setBar] = React.useState(() => PhoneBarStore.get());
+  React.useEffect(() => {
+    const sync = () => setBar(PhoneBarStore.get());
+    const off = PhoneBarStore.subscribe(sync);
+    sync();
+    return off;
+  }, []);
+  return bar;
+};
+
+/* The routes the phone bar shows, left to right, from `items` (what
+ * navItemsFor offers this screen) and the saved list (null = default):
+ * Home first, then the saved pages that exist here, at most
+ * PHONE_BAR_MAX. A saved bar left with fewer than PHONE_BAR_MIN (its
+ * pages gone: a plugin removed, the screen made shared) falls back to the
+ * default. */
+const phoneBarRoutes = (items, saved) => {
+  const offered = new Set((items || []).map((it) => it.route));
+  const pick = (list) => {
+    const out = ['home'];
+    (list || []).forEach((r) => {
+      if (out.length < PHONE_BAR_MAX && r !== 'home' && offered.has(r) && !out.includes(r)) out.push(r);
+    });
+    return out;
+  };
+  const mine = Array.isArray(saved) ? pick(saved) : null;
+  return mine && mine.length >= PHONE_BAR_MIN ? mine : pick(PHONE_BAR_DEFAULT);
+};
+
+/* One edit to the bar `current` (phoneBarRoutes' answer): 'add' a page at
+ * the right end, 'remove' one, or move one 'left' / 'right'. Home never
+ * moves or goes, and the limits hold: an edit past them is no edit. */
+const phoneBarEdit = (current, op, route) => {
+  const rest = (current || []).filter((r) => r !== 'home');
+  const i = rest.indexOf(route);
+  const size = rest.length + 1;
+  if (op === 'add' && route !== 'home' && i < 0 && size < PHONE_BAR_MAX) {
+    rest.push(route);
+  } else if (op === 'remove' && i >= 0 && size > PHONE_BAR_MIN) {
+    rest.splice(i, 1);
+  } else if ((op === 'left' || op === 'right') && i >= 0) {
+    const j = op === 'left' ? i - 1 : i + 1;
+    if (j < 0 || j >= rest.length) return current;
+    const moved = rest[i];
+    rest[i] = rest[j];
+    rest[j] = moved;
+  } else {
+    return current;
+  }
+  return ['home', ...rest];
+};
 
 /* Poll each plugin page's declared badge endpoint on a shared, jittered
  * 30 s cadence (design §5.3 badge contract): open GET returning JSON;
@@ -1279,28 +1416,30 @@ const PluginNavIcon = ({ src }) => src
          style={{ width: 16, height: 16, flexShrink: 0 }}/>
   : <Icon name="puzzle" className="ico" size={16}/>;
 
-/* One nav row's classes. `primary` keeps the row in the phone strip;
- * `brand-link` hides it in the desktop sidebar, where the brand row is
- * that link; `more-active` lights the home tab on a phone while a page
- * that lives on Home's "everything" grid is open, the way the Android
- * app's home tab does (styles.css only honours it at 760px and below). */
+/* One nav row's classes. `primary` keeps the row in the phone strip (it is
+ * on this device's phone bar); `brand-link` hides it in the desktop
+ * sidebar, where the brand row is that link; `more-active` lights the home
+ * tab on a phone while a page that lives on Home's "everything" grid is
+ * open, the way the Android app's home tab does (styles.css only honours
+ * it at 760px and below). */
 const navItemClass = (it, route, primaryRoutes) => [
   'nav-item',
   route === it.route ? 'active' : '',
-  it.primary ? 'primary' : '',
+  primaryRoutes.has(it.route) ? 'primary' : '',
   it.brandLink ? 'brand-link' : '',
   it.brandLink && route !== it.route && !primaryRoutes.has(route) ? 'more-active' : '',
 ].filter(Boolean).join(' ');
 
 /* `badges` is App's one usePluginBadges result; a Sidebar rendered without
  * it polls for itself. On a shared screen the personal pages drop off the
- * sidebar and the strip alike (navItemsFor), and the strip keeps four tabs. */
+ * sidebar and the strip alike (navItemsFor), whatever the phone bar says. */
 const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const shared = useSharedScreen();
   const items = navItemsFor(manifest, { shared });
-  const primaryRoutes = new Set(items.filter((it) => it.primary).map((it) => it.route));
+  const strip = phoneBarRoutes(items, usePhoneBar());
+  const primaryRoutes = new Set(strip);
   return (
     <aside className="sidebar">
       {/* The way home on a desktop. An anchor, not an onClick div, so it
@@ -1322,7 +1461,7 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
                  className={navItemClass(it, route, primaryRoutes)}
                  // The phone strip's left-to-right order (styles.css reads
                  // it only at 760px and below).
-                 style={it.strip ? { '--strip-order': it.strip } : undefined}
+                 style={primaryRoutes.has(it.route) ? { '--strip-order': strip.indexOf(it.route) + 1 } : undefined}
                  onClick={() => setRoute(it.route)}>
               {it.core
                 ? <Icon name={it.icon} className="ico" size={16}/>
@@ -2670,6 +2809,8 @@ Object.assign(window, {
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, usePluginBadges,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
+  PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
+  SETTINGS_TAB_ROUTES, settingsTabRoute,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn,
