@@ -234,3 +234,7 @@ trained on CMUdict alone.
   `f6446b2332927190d98df95dc37ac081e27eb58c9484906e49f86b3f382bf65a`.
   Float results are bit-for-bit only on the same torch build, thread count
   and CPU family; elsewhere expect the same metrics, not the same bytes.
+  Checked 2026-10-12: a full rerun of the script in the pinned container
+  (14 threads on an i9-14900KF's E-cores, about 95 minutes) reproduced all
+  four files above byte for byte, every epoch's loss and dev scores equal
+  to the recorded run's.
