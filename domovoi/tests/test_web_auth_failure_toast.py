@@ -225,9 +225,8 @@ RAW_TOASTS_LEFT = {
     "satellites.jsx": ["adopt failed"],                    # inline form error with its own 409/410 wording
     "satellite_media.jsx": ["couldn't load setup details"],  # a read, not a mutation
     "plugins.jsx": [],   # staging refusals: apiErrorText reads the coded {error: {message}}
-    # Verb-less guard() / act() wrappers (each call site needs a verb), and
-    # a sample fetch whose error is a bare status line, not a JSON body.
-    "settings.jsx": ["failed", "sample failed", "failed", "failed", "failed"],
+    # Verb-less guard() / act() wrappers (each call site needs a verb).
+    "settings.jsx": ["failed", "failed", "failed", "failed"],
     "models.jsx": ["failed"],
 }
 

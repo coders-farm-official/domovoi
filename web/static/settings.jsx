@@ -517,14 +517,10 @@ const VoicesPanel = () => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setSamplingId(v.id);
     try {
-      const r = await fetch(`/api/voices/${v.id}/sample`);
-      if (!r.ok) {
-        // A Microsoft voice under "No": the server's own sentence, not a status line.
-        let body = '';
-        try { body = await r.text(); } catch { /* no body */ }
-        if (r.status === 409 && body.includes(INTERNET_OFF_MESSAGE)) throw new Error(INTERNET_OFF_MESSAGE);
-        throw new Error(`${r.status} ${r.statusText}`);
-      }
+      // With the browser's credential: the server's synthesis is on the
+      // household device tier, and a bare fetch carries only the cookie,
+      // which that tier refuses (every Piper sample came back 502).
+      const r = await apiFetchRaw(`/api/voices/${v.id}/sample`);
       const said = r.headers.get('X-Sample-Text');
       if (said) fire(`🔊 ${decodeURIComponent(said)}`);
       const url = URL.createObjectURL(await r.blob());
@@ -535,7 +531,9 @@ const VoicesPanel = () => {
       audio.onerror = () => { fire('sample playback failed'); done(); };
       await audio.play();
     } catch (e) {
-      fire(`sample failed: ${e.message || e}`);
+      // The server's own sentence (a Microsoft voice under "No" says the
+      // internet is turned off); quiet when the pair / sign-in prompt owns it.
+      reportMutationFailure(fire, 'Play', e);
       setSamplingId(null);
     }
   };
