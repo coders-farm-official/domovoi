@@ -4,6 +4,30 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Phone voice profiles: "my name is …" from the chat mic
+
+A server update. It adds migration **V026** (the update runs it).
+
+* **Your voice on the phone is kept apart from your voice in the rooms.**
+  A phone's mic hears a voice very differently from a satellite's, so a
+  person now has phone samples next to their satellite samples.
+  Satellites only ever match satellite samples, so nothing said into a
+  phone changes how the rooms recognize anyone. The phone matches your
+  phone samples when you have any, otherwise your satellite ones as
+  before.
+* **Saying "my name is …" into the phone no longer makes a second you.**
+  If that name is already someone, Domovoi asks "Add this phone's voice
+  to …?"; "yes" on your next press adds it (up to three phone samples per
+  person, the oldest dropped; `VOICE_PROFILE_PHONE_SAMPLE_CAP`), "no"
+  changes nothing. A new name is enrolled as before, from the phone's
+  sample. (On a satellite, "my name is …" for an existing name still
+  enrols a second person; unchanged in this release.)
+* **People page:** a person's profile now lists their voice samples in two
+  groups, satellite and phone, each with a delete button (admin).
+* **The migration** files any sample a phone enrolled before this update
+  (stored under the phone's `phone-…` id) as a phone sample, so it stops
+  counting towards that person's room voice.
+
 ## 2026-10-12 — Chat mic fixes: "Hey Domovoi, …" and "what's playing"
 
 A server update and a new Android build.

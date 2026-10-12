@@ -309,6 +309,11 @@ class VoiceProfile(BaseModel):
     enrolled_at: datetime
     room_id: str | None = None
     sample_seconds: float | None = None
+    # Which set the sample is in (V026): "satellite" (heard by a room's
+    # satellite) or "phone" (said into the app's chat mic). Satellites
+    # match only satellite samples; a phone turn matches phone samples
+    # first.
+    source: str = "satellite"
 
 
 # ─── Profile personalization ─────────────────────────────────────
