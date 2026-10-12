@@ -342,15 +342,13 @@ def _command_captures_root() -> Path | None:
 def _is_command_captures(p: Path) -> bool:
     """True when ``p`` is, or sits inside, ``COMMAND_CAPTURES_DIR``. A
     relative setting names no fixed place (the core refuses to record into
-    one), so it guards nothing here either."""
-    raw = getattr(core_settings, "command_captures_dir", None)
-    if not raw:
+    one), so it guards nothing here either. The setting is read in one
+    place, :func:`_command_captures_root`, for this check and the walks'."""
+    root = _command_captures_root()
+    if root is None:
         return False
     try:
-        configured = Path(str(raw)).expanduser()
-        if not configured.is_absolute():
-            return False
-        p.expanduser().resolve(strict=False).relative_to(configured.resolve(strict=False))
+        p.expanduser().resolve(strict=False).relative_to(root)
     except (ValueError, OSError):
         return False
     return True
