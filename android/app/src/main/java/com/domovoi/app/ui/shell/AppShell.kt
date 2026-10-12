@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.shell
 
+import android.os.SystemClock
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -109,22 +111,34 @@ fun AppShell() {
     // right there — so while it is down the server is asked directly, and
     // any HTTP answer counts. Reset per server, so a switch gets a fresh
     // grace period rather than inheriting the old server's verdict.
+    //
+    // Only while the app is on screen ([Reachability]): a spell in the
+    // background — frozen behind the system folder picker, say — used to
+    // count against the grace by the wall clock, so one failed probe on the
+    // way back (a stale connection after the thaw) dropped a phone sitting
+    // next to a healthy server to local media. Asking now stops when the app
+    // leaves the screen and starts again, with a fresh probe, when it
+    // returns; a probe that straddles the trip is dropped with its coroutine.
+    val reach = remember(serverUrl) { Reachability() }
     var unreachable by remember(serverUrl) { mutableStateOf(false) }
-    LaunchedEffect(serverUrl, connected) {
+    val shellLifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(serverUrl, connected, shellLifecycle) {
         if (serverUrl.isBlank() || connected) {
+            reach.connected()
             unreachable = false
             return@LaunchedEffect
         }
-        var lastAnswer = System.currentTimeMillis()
-        while (true) {
-            val now = System.currentTimeMillis()
-            if (app.api.answers()) {
-                lastAnswer = now
-                unreachable = false
-            } else if (now - lastAnswer >= UNREACHABLE_GRACE_MS) {
-                unreachable = true
+        shellLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            askWhileOnScreen(reach, probe = { app.api.answers() }, clock = SystemClock::elapsedRealtime) { now ->
+                if (now != unreachable) {
+                    Log.i(
+                        "AppShell",
+                        if (now) "server out of reach after ${UNREACHABLE_GRACE_MS / 1000} s of asking on screen; local media"
+                        else "server answered again; workspace",
+                    )
+                    unreachable = now
+                }
             }
-            delay(REACH_PROBE_EVERY_MS)
         }
     }
 
