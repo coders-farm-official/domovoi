@@ -156,7 +156,7 @@ The Chat page (dashboard and Android app) talks to Ollama from the web process. 
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| "Pictures need the vision model qwen2.5vl:7b, which isn't installed on this Domovoi." (also shown by the paperclip) | The vision model isn't pulled; it isn't by default | Settings → Models: install it, or switch the Vision row to a vision-capable model you have. See [FAQ: pictures in chat](FAQ.md#can-i-send-pictures-in-chat) |
+| "Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi." (also shown by the paperclip) | The vision model isn't pulled; it isn't by default (except by `scripts/linux/provision.sh`) | Settings → Models: install it, or switch the Vision row to a vision-capable model you have. See [FAQ: pictures in chat](FAQ.md#can-i-send-pictures-in-chat) |
 | "The vision model … can't read pictures." | The Vision row names a text-only model | Pick a vision-capable model for the Vision row in Settings → Models |
 | "The model … isn't installed on this Domovoi." | `OLLAMA_MODEL` (the chat model) isn't pulled | Install it, or pick an installed one, in Settings → Models |
 | "… needs more memory than this Domovoi has free right now." | Other models are loaded (the voice models stay loaded for `OLLAMA_KEEP_ALIVE`) | Try again once they unload, shorten the keep-alive, or pick a smaller model; see [CPU_HOST.md](CPU_HOST.md) |

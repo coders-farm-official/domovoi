@@ -1330,7 +1330,14 @@ not installed, or none is set, such a message is answered at once with the
 be asked what is installed, the send goes ahead. A text turn sends the
 thread's earlier pictures to no one: they ride along only to the vision
 model, because Ollama refuses a request that hands a text-only model an
-image. Mutations fire the `chat.changed` WS event.
+image. Each picture goes to the model upright (EXIF orientation applied)
+and at most 1280 px on its long edge, from a copy kept beside the upload
+(`<token>-1280.jpg` or `.png`; a picture already that small and upright
+goes as it is); the upload itself, which `GET /api/chat/uploads/{token}`
+serves, is unchanged. A call that carries pictures also sends
+`think: false` (a refusal of the flag is retried once without it) and
+`ollama_vision_num_ctx` as its context window. Mutations fire the
+`chat.changed` WS event.
 
 Reads are **Device read** — the thread list (titles and snippets are message
 text), a thread's transcript and the images sent into it are the household's
@@ -1344,7 +1351,7 @@ upload — is **Device** tier.
 | `GET /api/chat/threads` | `?archived=` | Thread list, newest first, with message counts + last snippet. |
 | `POST /api/chat/threads` | `ThreadCreate` | New thread (first user message titles it). |
 | `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
-| `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files are removed. |
+| `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files (and the model's copies of them) are removed. |
 | `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time). |
 | `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` `{detail, code, model}` when there is no reply or it broke off — see the codes below). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
@@ -1358,8 +1365,10 @@ means the model had to be loaded first); `first_token_ms`, `wall_ms`
 (measured by the server); `done_reason` (`stop`, or `length` when the reply
 was cut off); `context_sent`, `context_in_thread`, `context_limit` (messages
 sent to the model against those in the thread — fewer sent means older ones
-fell out of what it saw); `num_ctx`; `model_role` (`chat`, `vision` when
-images were attached, `override` when the request named a model); and
+fell out of what it saw); `num_ctx` (the context window the call asked
+for: `ollama_vision_num_ctx` when it carried pictures); `model_role`
+(`chat`, `vision` when images were attached, `override` when the request
+named a model); and
 `error_code` when the reply has an `error`.
 
 A failed reply never carries the exception's own text (it named internal
