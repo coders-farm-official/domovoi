@@ -34,15 +34,18 @@ import com.domovoi.app.ui.theme.Domovoi
  * This phone's own settings, reachable with no server: the local-media
  * shell has no Settings route, so a gear in its top bar
  * ([LocalSettingsButton]) opens this instead. It holds only what needs no
- * server — the problem reports and the on-device assistant's benchmark —
- * the same cards Settings → About shows when a Domovoi is connected.
+ * server — the voice, the problem reports, the on-device assistant's
+ * benchmark and the licences — the same cards Settings → Voice and About
+ * show when a Domovoi is connected.
  */
 @Composable
 internal fun LocalSettingsScreen(
     onBack: () -> Unit,
     cards: @Composable () -> Unit = {
+        VoiceCard()
         ProblemReportsCard()
         AssistantBenchmarkCard()
+        LicencesCard()
     },
 ) {
     BackHandler(onBack = onBack)
@@ -67,14 +70,14 @@ internal fun LocalSettingsScreen(
             Column(Modifier.padding(start = 4.dp)) {
                 Text("Settings", style = MaterialTheme.typography.titleLarge, color = Domovoi.colors.fg)
                 Text(
-                    "This phone's problem reports and the on-device assistant. Server settings " +
-                        "appear once a Domovoi is connected.",
+                    "This phone's voice, its problem reports and the on-device assistant. Server " +
+                        "settings appear once a Domovoi is connected.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgMuted,
                 )
             }
         }
-        // Two cards: a plain scrolling column (no lazy list to measure).
+        // A few cards: a plain scrolling column (no lazy list to measure).
         Column(
             Modifier
                 .fillMaxSize()

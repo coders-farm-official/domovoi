@@ -33,7 +33,9 @@ class ModelCatalogTest {
     @Test fun idsArePlainAndUniqueAndPathsStayInsideTheModelDirectory() {
         val ids = ModelCatalog.all.map { it.id }
         assertEquals(ids.size, ids.toSet().size)
-        ids.forEach { assertTrue(it, Regex("^[a-z0-9-]+$").matches(it)) }
+        // Lower case, except a voice's id, which is the server's (en_US-...).
+        ModelCatalog.assistant.forEach { assertTrue(it.id, Regex("^[a-z0-9-]+$").matches(it.id)) }
+        ModelCatalog.voices.forEach { assertTrue(it.id, Regex("^en_US-[a-z]+-medium$").matches(it.id)) }
         ModelCatalog.all.forEach { m ->
             val paths = m.files.map { it.path }
             assertEquals("duplicate path in ${m.id}", paths.size, paths.toSet().size)
@@ -50,20 +52,36 @@ class ModelCatalogTest {
         assertTrue(ModelCatalog.all.containsAll(ModelCatalog.speechModels))
     }
 
-    /** The phone speaks with Android's own TextToSpeech (option A,
-     *  2026-10-12): the catalog downloads no voice, nothing timing-only, and
-     *  nothing espeak-ng would read (its data is GPL-3.0). */
-    @Test fun noVoiceAndNoEspeakDataIsDownloaded() {
-        assertEquals(emptyList<CatalogModel>(), ModelCatalog.all.filter { it.kind == ModelKind.TTS })
+    /** The phone's voices are the server's three public-domain Piper voices
+     *  (2026-10-12), pinned to the server's revision; nothing espeak-ng would
+     *  read (its data is GPL-3.0), no lessac/amy/ryan, nothing timing-only. */
+    @Test fun theVoicesAreTheServersThreePublicDomainPiperVoices() {
+        val voices = ModelCatalog.all.filter { it.kind == ModelKind.TTS }
+        assertEquals(listOf("en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"), voices.map { it.id })
+        assertEquals(ModelCatalog.voices, voices)
+        assertEquals(ModelCatalog.norman, ModelCatalog.defaultVoice)
+        assertTrue(ModelCatalog.assistant.none { it.kind == ModelKind.TTS })
+        voices.forEach { v ->
+            assertEquals("public domain", v.license)
+            assertEquals(listOf("${v.id}.onnx", "${v.id}.onnx.json"), v.files.map { it.path })
+            v.files.forEach { f ->
+                assertTrue(f.url, f.url.startsWith(
+                    "https://huggingface.co/rhasspy/piper-voices/resolve/c10ece1aade47bb51c153c893d14e5bf8e5b7117/en/en_US/"))
+            }
+            assertEquals(63_531_379L, v.files[0].size)
+        }
+        assertEquals("b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71", ModelCatalog.norman.files[0].sha256)
         assertEquals(emptyList<CatalogModel>(), ModelCatalog.all.filter { it.timingOnly })
         ModelCatalog.all.flatMap { it.files }.forEach { f ->
-            assertFalse(f.url, Regex("espeak|piper|lessac|phontab", RegexOption.IGNORE_CASE).containsMatchIn(f.url))
+            assertFalse(f.url, Regex("espeak|lessac|phontab|amy|ryan", RegexOption.IGNORE_CASE).containsMatchIn(f.url))
         }
+        assertEquals(ModelCatalog.kristin, ModelCatalog.voice("en_US-kristin-medium"))
+        assertEquals(null, ModelCatalog.voice("en_US-lessac-medium"))
     }
 
-    /** Permissive licences only, apart from a timing-only entry. */
+    /** Permissive licences only (public domain counts), apart from a timing-only entry. */
     @Test fun shippableModelsArePermissivelyLicensed() {
-        val permissive = setOf("Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC")
+        val permissive = setOf("Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "public domain")
         ModelCatalog.all.filterNot { it.timingOnly }.forEach {
             assertTrue("${it.id}: ${it.license}", it.license in permissive)
             assertTrue(it.licenseUrl.startsWith("https://"))

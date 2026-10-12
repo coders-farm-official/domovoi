@@ -53,7 +53,12 @@ data class BenchUi(
  * (the shell swapping to local media when the server drops, for instance).
  * One run at a time; the engines stay loaded until [unload].
  */
-class AssistantBench(context: Context, private val downloader: ModelDownloader) {
+class AssistantBench(
+    context: Context,
+    private val downloader: ModelDownloader,
+    /** The phone's voice: Domovoi's own once downloaded (voice/PhoneVoice). */
+    private val voices: VoiceSource? = null,
+) {
     private val app = context.applicationContext
     val store = ModelStore.forApp(app)
     private val probe = DeviceProbe(app)
@@ -82,7 +87,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
     private var stt: SpeechToText? = null
     private var sttId: String? = null
     private var vad: SherpaSpeechDetector? = null
-    private var tts: AndroidSpeechOut? = null
+    private var tts: PhoneSpeech? = null
 
     val device: DeviceFacts by lazy { probe.facts() }
 
@@ -97,7 +102,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
     }
 
     private fun refreshModels(downloadingId: String? = null, failed: Map<String, String> = emptyMap()) {
-        val models = ModelCatalog.all.associate { m ->
+        val models = ModelCatalog.assistant.associate { m ->
             val state = when {
                 m.id == downloadingId -> ModelState(ModelStatus.DOWNLOADING, downloader.bytesDone(m, store))
                 store.isInstalled(m) -> ModelState(ModelStatus.READY, m.totalBytes)
@@ -127,7 +132,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
     fun setAllowMobileData(allow: Boolean) {
         _state.update { it.copy(allowMobileData = allow) }
         if (_state.value.downloading) {
-            val again = requested.ifEmpty { ModelCatalog.all }
+            val again = requested.ifEmpty { ModelCatalog.assistant }
                 .filter { _state.value.models[it.id]?.status != ModelStatus.READY }
             if (again.isNotEmpty()) ModelDownloads.start(app, again, allow)
         }
@@ -146,7 +151,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
             withTimeoutOrNull(10_000) {
                 ModelDownloads.watch(app).first { it == null || it.state.isFinished }
             }
-            ModelCatalog.all.filterNot { store.isInstalled(it) }.forEach { store.deletePartials(it) }
+            ModelCatalog.assistant.filterNot { store.isInstalled(it) }.forEach { store.deletePartials(it) }
             refreshModels()
             _messages.tryEmit("download cancelled")
         }
@@ -470,11 +475,31 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
         vad ?: SherpaSpeechDetector.from(store).also { vad = it }
     }
 
-    /** The phone's own text-to-speech engine and voice (AndroidSpeechOut). */
-    private suspend fun ensureTts(): AndroidSpeechOut {
-        tts?.let { return it }
-        step("starting the phone's text-to-speech engine")
-        return AndroidSpeechOut.create(app).also {
+    /**
+     * The voice that speaks: Domovoi's own (the voice chosen in Settings ->
+     * Voice) once it is downloaded, else the phone's own text-to-speech
+     * engine and voice. A change of voice since the last run is picked up.
+     */
+    private suspend fun ensureTts(): PhoneSpeech {
+        val wanted = voices?.wantedKey() ?: VoiceSource.ANDROID
+        tts?.let {
+            if (it.voiceKey == wanted) return it
+            it.close()
+            tts = null
+        }
+        val domovoi = if (wanted == VoiceSource.ANDROID) null else {
+            step("loading the Domovoi voice")
+            try {
+                voices?.open()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                note("the Domovoi voice could not start (${e.message ?: e.javaClass.simpleName}); the phone's own voice speaks")
+                null
+            }
+        }
+        if (domovoi == null) step("starting the phone's text-to-speech engine")
+        return (domovoi ?: AndroidSpeechOut.create(app)).also {
             tts = it
             noteVoice()
         }
@@ -482,7 +507,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
 
     /** Which engine and voice spoke, in the results. */
     private fun noteVoice() {
-        tts?.let { voice -> record { it.copy(voice = voice.info.describe()) } }
+        tts?.let { voice -> record { it.copy(voice = voice.describe()) } }
     }
 
     /** The question: from the mic, or synthesized by the voice and fed to the

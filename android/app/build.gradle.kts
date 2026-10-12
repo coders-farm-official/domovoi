@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -46,17 +48,87 @@ android {
     // comes from the onnxruntime-android dependency below.
     sourceSets["main"].jniLibs.srcDir("../native/sherpa-onnx/jniLibs")
     sourceSets["main"].java.srcDir("../native/sherpa-onnx/kotlin")
-    packaging {
-        jniLibs {
-            // ONNX Runtime's own Java API is not used (sherpa-onnx calls the
-            // runtime from native code), so its JNI bridge stays out.
-            excludes += listOf("**/libonnxruntime4j_jni.so")
-        }
-    }
+    // ONNX Runtime's Java API (and so its JNI bridge, libonnxruntime4j_jni.so)
+    // is used since the phone's own voice: the phonemizer's out-of-dictionary
+    // model and the Piper voice run on it (phonemizer/, assistant/PiperVoice.kt).
     testOptions {
         // JVM unit tests: stub android.* so pure-Kotlin helpers that touch
         // framework classes indirectly (icons, Log) don't throw.
         unitTests.isReturnDefaultValues = true
+        // The phonemizer's golden test reads domovoi/phonemizer/ itself
+        // (golden.json and data/), the same files the server tests read.
+        unitTests.all { test ->
+            val phonemizer = rootProject.file("../domovoi/phonemizer")
+            test.systemProperty("domovoi.phonemizer.dir", phonemizer.absolutePath)
+            test.inputs.file(File(phonemizer, "golden.json")).withPathSensitivity(PathSensitivity.RELATIVE)
+            test.inputs.dir(File(phonemizer, "data")).withPathSensitivity(PathSensitivity.RELATIVE)
+        }
+    }
+}
+
+/**
+ * The phone's voice data, from its one source in the repo into the app's
+ * assets at build time, so the app never carries a hand-made copy:
+ *
+ * - `phonemizer/`: every file `domovoi/phonemizer/data/SHA256SUMS` lists
+ *   (CMUdict and its licence, the corrections, weak forms, the default
+ *   "say it like" list, the voices' id map, the out-of-dictionary model),
+ *   each checked against that hash first; a mismatch fails the build.
+ * - `licences/sherpa-onnx/`: sherpa-onnx's licence and those of everything
+ *   compiled into it (android/native/sherpa-onnx/), for the licences card.
+ */
+abstract class VoiceAssetsTask : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val phonemizerData: DirectoryProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sherpaLicense: RegularFileProperty
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sherpaLicenses: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val src = phonemizerData.get().asFile
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        val phonemizer = File(out, "phonemizer").apply { mkdirs() }
+        val sums = File(src, "SHA256SUMS")
+        val listed = sums.readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+        if (listed.isEmpty()) throw GradleException("$sums lists no files")
+        for (line in listed) {
+            val parts = line.split(Regex("""\s+"""), limit = 2)
+            if (parts.size != 2) throw GradleException("$sums: bad line '$line'")
+            val want = parts[0].lowercase()
+            val path = parts[1].removePrefix("*")
+            val file = File(src, path)
+            if (!file.isFile) throw GradleException("phonemizer data: $path is listed in SHA256SUMS but missing")
+            val got = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
+            if (got != want) throw GradleException("phonemizer data: $path is $got, SHA256SUMS says $want")
+            file.copyTo(File(phonemizer, path), overwrite = true)
+        }
+        sums.copyTo(File(phonemizer, "SHA256SUMS"), overwrite = true)
+        val notices = File(out, "licences/sherpa-onnx").apply { mkdirs() }
+        sherpaLicense.get().asFile.copyTo(File(notices, "LICENSE"), overwrite = true)
+        sherpaLicenses.get().asFile.copyRecursively(notices, overwrite = true)
+    }
+}
+
+val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
+    phonemizerData.set(rootProject.layout.projectDirectory.dir("../domovoi/phonemizer/data"))
+    sherpaLicense.set(rootProject.layout.projectDirectory.file("native/sherpa-onnx/LICENSE"))
+    sherpaLicenses.set(rootProject.layout.projectDirectory.dir("native/sherpa-onnx/licenses"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
     }
 }
 
@@ -102,4 +174,5 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.onnxruntime.jvm)
 }
