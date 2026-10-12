@@ -64,6 +64,7 @@ def test_script_parses():
 
 
 @requires_bash
+@pytest.mark.bash_harness
 def test_apply_update_harness():
     proc = subprocess.run(
         [BASH, str(HARNESS)],

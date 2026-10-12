@@ -34,10 +34,12 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,17 +54,25 @@ import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.DeviceDownloads
+import com.domovoi.app.net.DomovoiJson
+import com.domovoi.app.net.Paging
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.net.toPage
 import com.domovoi.app.ui.components.EmptyState
 import com.domovoi.app.ui.components.ErrorState
+import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.PageHeader
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.ui.components.fmtDur
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.MonoFamily
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -83,9 +93,6 @@ data class VideoRow(
     val duration_sec: Int? = null,
     val title: String? = null,
 )
-
-@Serializable
-private data class VideoList(val videos: List<VideoRow> = emptyList())
 
 @Serializable
 private data class RecentList(val recent: List<VideoRow> = emptyList())
@@ -132,8 +139,28 @@ fun VideosScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val list = rememberApi("videos") {
-        it.api.get("/api/videos/list").decode<VideoList>().videos
+    var filter by rememberSaveable { mutableStateOf("") }
+    var needle by remember { mutableStateOf(filter.trim()) }
+    LaunchedEffect(filter) {
+        delay(250)
+        needle = filter.trim()
+    }
+    // A page of videos at a time as the grid scrolls (net/Paging.kt). The
+    // filter is the server's, over every video in every library; the order
+    // is the server's "library" sort (library, then path), which keeps a
+    // library's tiles together under its header.
+    val listPath = "/api/videos/list?sort=library" +
+        (if (needle.isNotEmpty()) "&q=" + Uri.encode(needle) else "")
+    val pager = rememberPager<VideoRow>(listPath, keyOf = ::videoKey) { a, req ->
+        a.api.get(Paging.path(listPath, req)).toPage<VideoRow>("videos", loadedBefore = req.offset)
+    }
+    val list by pager.state.collectAsState()
+    val totals = remember(list.extra) {
+        runCatching {
+            list.extra?.get("libraries")?.let {
+                DomovoiJson.decodeFromJsonElement(ListSerializer(LibraryTotal.serializer()), it)
+            }.orEmpty().associate { it.library_id to it.total }
+        }.getOrDefault(emptyMap())
     }
     val recent = rememberApi(
         "videos-recent", eventTypes = setOf("video_positions.changed"),
@@ -141,7 +168,6 @@ fun VideosScreen() {
         it.api.get("/api/videos/recent?${it.videoIdentityQuery()}").decode<RecentList>().recent
     }
 
-    var filter by remember { mutableStateOf("") }
     var feed by remember { mutableStateOf<OpenFeed?>(null) }
     /** Set when a feed closes: which list to centre, and on which video. */
     var centerOn by remember { mutableStateOf<Pair<FeedFrom, String>?>(null) }
@@ -173,14 +199,11 @@ fun VideosScreen() {
         }
     }
 
-    val q = filter.trim().lowercase()
-    val filtered = list.data.orEmpty().filter {
-        q.isBlank() || it.name.lowercase().contains(q) || it.rel.lowercase().contains(q)
-    }
-    val grouped = filtered.groupBy { it.library_id }
+    val grouped = list.items.groupBy { it.library_id }
     val rec = recent.data.orEmpty()
-    val entries = videoGridEntries(showRecent = rec.isNotEmpty() && q.isBlank(), grouped = grouped)
+    val entries = videoGridEntries(showRecent = rec.isNotEmpty() && needle.isEmpty(), grouped = grouped, totals = totals)
     val gridOrder = gridFeedOrder(entries)
+    LoadMoreNearEnd(gridState, pager)
 
     LaunchedEffect(centerOn) {
         val (from, key) = centerOn ?: return@LaunchedEffect
@@ -204,10 +227,11 @@ fun VideosScreen() {
         Spacer(Modifier.height(12.dp))
 
         when {
-            list.data == null && list.loading -> LoadingState()
-            list.data == null && list.error != null ->
-                ErrorState(list.error ?: "request failed", list.refresh)
-            list.data.isNullOrEmpty() -> EmptyState(
+            list.items.isEmpty() && list.loading -> LoadingState()
+            list.items.isEmpty() && list.error != null ->
+                ErrorState(list.error ?: "request failed", pager::retry)
+            list.items.isEmpty() && needle.isNotEmpty() -> EmptyState("no videos match", "filter = \"$needle\"")
+            list.items.isEmpty() -> EmptyState(
                 "no videos found",
                 "drop video files (mp4 · webm · mkv · mov) into any files library",
             )
@@ -266,14 +290,20 @@ fun VideosScreen() {
                         }
                     }
                 }
+                item(key = "videos-footer", span = { GridItemSpan(maxLineSpan) }) {
+                    PagedFooter(list, "videos", onRetry = pager::retry, onLoadMore = pager::loadMore)
+                }
             }
         }
     }
 
     feed?.let { open ->
-        val byKey = remember(open) { open.videos.associateBy(::videoKey) }
-        val feedVideos = remember(open) {
-            open.videos.map { v ->
+        // A feed opened from the grid follows the grid: as it loads more
+        // pages, they join the feed's end (and the feed asks for them).
+        val order = if (open.from == FeedFrom.Grid) gridOrder else open.videos
+        val byKey = remember(order) { order.associateBy(::videoKey) }
+        val feedVideos = remember(order) {
+            order.map { v ->
                 FeedVideo(
                     key = videoKey(v),
                     title = v.title ?: v.name,
@@ -298,6 +328,7 @@ fun VideosScreen() {
                 recent.refresh()
                 if (key != null) centerOn = open.from to key
             },
+            onNearEnd = if (open.from == FeedFrom.Grid) pager::loadMore else null,
         )
     }
 }

@@ -131,7 +131,7 @@ a wrong token cannot unpair a browser that is already paired.
 
 ## 5. What you get
 
-- The dashboard's Satellites page shows a `video` chip on the card; the
+- The dashboard's Settings → Satellites shows a `video` chip on the card; the
   drawer gains a **display** block (screen on/off, restart kiosk,
   kiosk-alive pill) and transport buttons on the now-playing row.
 - The screen shows cover art (library tracks; streams get the gradient),
@@ -140,7 +140,7 @@ a wrong token cannot unpair a browser that is already paired.
 - "Play music in <room>" through any voice satellite — or the dashboard —
   targets this satellite's own room id like any other satellite. Each
   satellite has its OWN music pipe (per-satellite MPD); group satellites
-  sharing a physical room with a room label on the Satellites page.
+  sharing a physical room with a room label in Settings → Satellites.
 
 ## 6. Troubleshooting
 

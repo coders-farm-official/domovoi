@@ -15,10 +15,12 @@ The shell half of the Home page (design-notes HOME-PLAN.md, approved
   (no longer a dead ``div`` carrying a fake "/ 1.0"), and the topbar's
   "domovoi" crumb is the same link — the only one on a phone, where the
   brand row is hidden.
-* the phone strip (760px and below) keeps only the five ``primary`` tabs —
-  home · music · satellites · calendar · chat, in that order — and every
-  other page sits on Home's "everything" grid. The desktop sidebar keeps
-  every item except a separate home row.
+* the phone strip (760px and below) keeps only this device's phone bar —
+  home · music · videos · chat by default, in that order (2026-10-11; the
+  per-device choice is driven by test_web_phone_bar.py) — and every other
+  page sits on Home's "everything" grid. The desktop sidebar keeps every
+  item except a separate home row. Satellites is on no launcher: it is a
+  Settings tab now.
 * a shared screen (an admin marks the device) drops the personal pages
   (People, Chat, Files, News) from every launcher — the sidebar, the strip
   and the grid — through one filter, ``navItemsFor``.
@@ -56,7 +58,7 @@ HARNESS = Path(__file__).with_name("jsx_interact_harness.js")
 COMPONENTS = "web/static/components.jsx"
 HOME = "web/static/home.jsx"
 
-PRIMARY = {"home", "music", "satellites", "calendar", "chat"}
+PRIMARY = {"home", "music", "videos", "chat"}
 
 _SETUP = (
     "ServerStore = { current: () => null, currentLabel: () => 'box:6369' };"
@@ -319,18 +321,21 @@ def _classes(driven, scenario) -> dict[str, list[str]]:
     return {r["route"]: r["cls"] for r in driven[scenario]["rows"]}
 
 
-def test_exactly_the_five_primary_tabs_are_marked_primary(driven) -> None:
+def test_exactly_the_default_bar_is_marked_primary(driven) -> None:
     rows = _classes(driven, "sidebar_on_music")
     primary = {route for route, cls in rows.items() if "primary" in cls}
     assert primary == PRIMARY
-    # Plugin pages are never primary: they live on the everything grid.
+    # A plugin page is on the bar only when someone here put it there
+    # (test_web_phone_bar.py): by default it lives on the everything grid.
     assert "radio" in rows and "primary" not in rows["radio"]
 
 
 def test_the_desktop_sidebar_keeps_every_page_but_hides_the_home_row(driven) -> None:
     rows = _classes(driven, "sidebar_on_music")
-    assert set(rows) >= PRIMARY | {"podcasts", "audiobooks", "videos", "news", "people",
+    assert set(rows) >= PRIMARY | {"podcasts", "audiobooks", "calendar", "news", "people",
                                    "files", "plugins", "radio"}
+    # Satellites left the sidebar for Settings (2026-10-11).
+    assert "satellites" not in rows
     assert [r for r, cls in rows.items() if "brand-link" in cls] == ["home"]
     css = _src("styles.css")
     phone = _phone_block(css)
@@ -343,7 +348,8 @@ def test_the_phone_strip_shows_only_primary_tabs() -> None:
     assert ".sidebar .nav-item:not(.primary) { display: none; }" in phone
     # The tabs share the strip's full width: without the wrapper stretching,
     # each tab sized to its content (33px in headless Chrome at 375px) and
-    # "Satellites" spilled into its neighbours.
+    # a long label ("Satellites", when it had a tab) spilled into its
+    # neighbours.
     assert ".sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }" in phone
     assert 'className="nav-wrap"' in _src("components.jsx")
     # The home row the desktop hides comes back in the strip, AFTER the
@@ -392,10 +398,12 @@ def test_main_keeps_room_for_the_player_on_a_phone() -> None:
 def test_the_everything_grid_lists_every_page_off_the_strip(driven) -> None:
     tiles = driven["home_everything"]["tiles"]
     assert "#radio" in tiles and "#settings" in tiles and "#manual" in tiles
-    for r in ("podcasts", "audiobooks", "videos", "news", "people", "files", "plugins"):
+    for r in ("podcasts", "audiobooks", "calendar", "news", "people", "files", "plugins"):
         assert f"#{r}" in tiles
     for r in PRIMARY:
         assert f"#{r}" not in tiles, f"#{r} is a strip tab, not an everything tile"
+    # Satellites is a Settings tab, reached through the Settings tile.
+    assert "#satellites" not in tiles
 
 
 def test_home_top_level_names_are_prefixed() -> None:
@@ -436,12 +444,12 @@ def test_one_list_decides_what_a_shared_screen_hides() -> None:
     assert "HOME_SHARED_HIDDEN" not in home and "'documents'" not in home
 
 
-def test_the_strip_reads_home_music_satellites_calendar_chat(driven) -> None:
+def test_the_strip_reads_home_music_videos_chat(driven) -> None:
     strip = {r["route"]: r["strip"] for r in driven["sidebar_on_music"]["rows"] if r["strip"] is not None}
-    assert sorted(strip, key=strip.get) == ["home", "music", "satellites", "calendar", "chat"]
+    assert sorted(strip, key=strip.get) == ["home", "music", "videos", "chat"]
     assert ".sidebar .nav-item.primary { order: var(--strip-order, 9); }" in _phone_block(_src("styles.css"))
     readme = (REPO_ROOT / "docs" / "design" / "README.md").read_text(encoding="utf-8")
-    assert "(home · music · satellites · calendar · chat)" in readme
+    assert "(home · music · videos · chat by default" in readme
 
 
 def test_a_sidebar_handed_the_badges_polls_nothing_itself(driven) -> None:

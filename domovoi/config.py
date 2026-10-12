@@ -268,7 +268,16 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = 0
     ollama_tool_num_ctx: int = 0
 
-    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", mode="before")
+    # Context window for the text chat's calls that carry pictures (the
+    # vision model's). A picture costs ~1.1k tokens at the 1280 px long edge
+    # the chat shrinks it to, so four in one message (the chat's cap) don't
+    # fit Ollama's usual 4096: it refuses the request (HTTP 400 "exceeds the
+    # available context size", measured 2026-10-12). 0 = the same as
+    # ollama_num_ctx (use it when one model is both the vision and the Q&A
+    # model, or Ollama reloads it whenever the window changes).
+    ollama_vision_num_ctx: int = 8192
+
+    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", "ollama_vision_num_ctx", mode="before")
     @classmethod
     def _blank_num_ctx_is_unset(cls, value: object) -> object:
         """A blank ``OLLAMA_NUM_CTX=`` means "don't send it", the same as 0
@@ -280,7 +289,15 @@ class Settings(BaseSettings):
 
     # Vision-capable model for the text-chat surface: any chat message that
     # carries images is answered by this model instead of ollama_model.
-    ollama_vision_model: str = "qwen2.5vl:7b"
+    # The default suits a box without a GPU (owner decision 2026-10-12, from
+    # a CPU benchmark of ten vision models): Qwen3-VL 2B Instruct,
+    # Apache-2.0, a 1.9 GB download and ~3.2 GB in memory, and it reads
+    # screenshots, receipts and charts well at the 1280 px the chat sends.
+    # The exact -instruct tag, never a bare one: the bare qwen3-vl tags are
+    # the thinking builds. On a box with an NVIDIA GPU, pick qwen2.5vl:7b
+    # (Settings → Models, the Vision row; minutes per picture on a CPU).
+    # scripts/linux/provision.sh writes its tier's pin here and pulls it.
+    ollama_vision_model: str = "qwen3-vl:2b-instruct-q4_K_M"
     # Per-request read timeout (seconds) for Ollama. A stalled Ollama (model
     # still loading, GPU wedged) must not pin a user-facing voice turn open
     # forever — this bounds the wait so the turn fails gracefully instead.

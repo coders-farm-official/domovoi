@@ -365,11 +365,12 @@ table.tbl .actions { text-align: right; }
 .empty .s { font-size: 11px; color: var(--fg-faint); font-family: var(--ff-mono); }
 
 /* Mobile -------------------------------------------------------- */
-/* The sidebar becomes a bottom strip of the five PRIMARY tabs — home,
-   music, satellites, calendar, chat (CORE_NAV_ITEMS `primary`, the
-   Android app's compact routes). Every other page, plugin pages
-   included, is on Home's "everything" grid; the strip used to squeeze
-   all of them into one 10px row with no overflow handling.
+/* The sidebar becomes a bottom strip of this device's phone bar — home,
+   music, videos, chat unless someone here picked others (components.jsx
+   phoneBarRoutes marks those rows `primary`; the Android app's bottom bar
+   does the same). Every other page, plugin pages included, is on Home's
+   "everything" grid; the strip used to squeeze all of them into one 10px
+   row with no overflow handling.
 
    The docked mini-player (player.jsx, position:fixed) sits ON TOP of the
    strip rather than over it: `--dock-bottom` lifts it by the strip's
@@ -399,9 +400,9 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }
   .sidebar .nav { flex-direction: row; flex: 1; gap: 0; justify-content: space-around; }
   .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; min-width: 0; }
-  /* The strip reads home · music · satellites · calendar · chat, whatever
-     the sidebar's published nav order (components.jsx sets --strip-order
-     on the five primary items). */
+  /* The strip reads in the phone bar's order (home · music · videos · chat
+     by default), whatever the sidebar's published nav order: components.jsx
+     sets --strip-order on the items that are on the bar (2 to 5). */
   .sidebar .nav-item.primary { order: var(--strip-order, 9); }
   .sidebar .nav-item:not(.primary) { display: none; }
   .sidebar .nav-item.brand-link { display: flex; }
@@ -736,6 +737,34 @@ button.lyr-line:hover { background: var(--brand-soft); }
      get there, so the queue tab is at least a screen tall on a phone. */
   .music-tabs-queue { min-height: calc(var(--app-h) - var(--topbar-h) - var(--phone-nav-h) - 16px); }
   .music-tabs-queue > .card { min-height: inherit; }
+}
+
+/* --- Files page rows (files.jsx BrowserRow, DocRow) ---
+   Checkbox, icon, name over size · age, then the actions (Open or Edit,
+   Download, Import, Delete). On a desktop everything sits on one line. On
+   a phone a folder's three actions (305px of a 313px row at 375px) ran
+   past the card and left the name 0px wide, so there, as in the Room
+   queue, they take a line of their own under the name (a fourth wraps),
+   each a 44px target, and the name gets two lines before its ellipsis. */
+.files-row {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 12px; align-items: center; padding: 11px 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.files-row-main { min-width: 0; }
+.files-row-name {
+  font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.files-row-acts { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+@media (max-width: 760px) {
+  .files-row { grid-template-columns: auto auto minmax(0, 1fr); row-gap: 8px; }
+  .files-row-name {
+    white-space: normal; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .files-row-acts { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
+  .files-row-acts .btn { height: 44px; }
 }
 
 /* ================================================================
@@ -1433,6 +1462,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
 /* Chat message stamp, actions menu and details (chat.jsx, chat_details.js) */
 .chat-stamp { display: flex; align-items: center; gap: 4px; min-height: 22px; margin-top: -2px; padding-left: 24px; font-size: 10px; color: var(--fg-faint); }
 .chat-stamp.mine { padding-left: 0; }
+/* Who Domovoi heard on a spoken message (the app's chat mic): softer for a weak match. */
+.chat-speaker { display: flex; align-items: center; gap: 4px; margin-top: -1px; padding-right: 8px; max-width: 100%; white-space: nowrap; font-size: 10px; color: var(--fg-muted); }
+.chat-speaker.soft { opacity: 0.55; color: var(--fg-faint); }
+.chat-speaker .ava { width: 14px; height: 14px; font-size: 8px; border: 0; }
 .chat-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--fg-faint); cursor: pointer; opacity: 0.55; }
 .chat-more:hover, .chat-more:focus-visible { opacity: 1; background: var(--sunken); color: var(--fg); }
 .chat-menu { position: fixed; z-index: 95; min-width: 150px; padding: 4px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-md), var(--inner-highlight); }
@@ -1447,9 +1480,24 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-details-rows dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
 .chat-details-rows dd.err { color: var(--err); }
 .chat-details-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-soft); }
+/* A plain answer instead of a reply (a reply's error with a code), and the
+ * composer's note on why a picture can't be read here. */
+.chat-note { margin-top: 4px; padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--fg); background: var(--err-soft); border-left: 2px solid var(--err); border-radius: var(--r-sm); }
+.chat-note.info { background: var(--sunken); border-left-color: var(--border-strong); }
+.chat-note-row { display: flex; align-items: flex-start; gap: 8px; }
+.chat-note-sub { margin-top: 4px; color: var(--fg-muted); }
+.chat-note-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--fg); text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 2px; }
 @media (max-width: 760px) {
   .chat-more { width: 36px; height: 36px; }
   .chat-menu-item { min-height: 44px; }
   .chat-details-bg { align-items: flex-end; padding: 0; }
   .chat-details { width: 100%; border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Settings → Satellites (satellites.jsx SatellitesPanel): the roster's
+   counts, where the old Satellites page had them in its header. */
+.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 14px 0; }
+/* Settings → Phone bar (settings.jsx PhoneBarCard). */
+@media (max-width: 760px) {
+  .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
 }

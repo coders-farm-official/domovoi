@@ -4,13 +4,17 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.alerts.IncidentAlerts
+import com.domovoi.app.assistant.AssistantBench
+import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.DeviceAuthInterceptor
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.NetworkWatch
+import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
@@ -18,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
 class AppContainer(context: Context) {
@@ -69,9 +74,30 @@ class AppContainer(context: Context) {
      *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
 
+    /** Phone files on their way to the server ("Your device" → upload),
+     *  by row; they run in [scope], so leaving the page doesn't stop one. */
+    val uploads = PhoneUploads()
+
     /** App-lifetime scope for fire-and-forget work that must outlive a
      *  composable (e.g. the video position save on player dispose). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    /** The on-device assistant's benchmark (Settings → About; M0 of the
+     *  phone assistant). Built on first use. Its only network use is the
+     *  model download the user starts, on a copy of the app's client WITHOUT
+     *  the household token (the models come from public hosts): the same
+     *  redirect and cleartext rules, no device token. */
+    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader) }
+
+    /** The model download's client, used by the download job
+     *  (assistant/ModelDownloadWork.kt). */
+    val modelDownloader: ModelDownloader by lazy {
+        val modelHttp = api.http.newBuilder()
+            .apply { interceptors().removeAll { it is DeviceAuthInterceptor } }
+            .pingInterval(0, TimeUnit.SECONDS)
+            .build()
+        ModelDownloader(modelHttp)
+    }
 }
 
 val LocalApp = staticCompositionLocalOf<AppContainer> {

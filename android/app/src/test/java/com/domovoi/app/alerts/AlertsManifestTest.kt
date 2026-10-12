@@ -65,13 +65,16 @@ class AlertsManifestTest {
             0, r.getElementsByTagName("intent-filter").length)
     }
 
-    /** The background sync runs from an alarm chain, not a service: no
-     *  foreground service type beyond media playback, and no permission a
-     *  data-sync service would need. */
+    /** The background sync runs from an alarm chain, not a service: the
+     *  app's own services are media playback only. The one data-sync
+     *  foreground service is WorkManager's, for the on-device assistant's
+     *  model download (assistant/ModelDownloadWork.kt), not the alerts. */
     @Test fun theBackgroundSyncNeedsNoForegroundService() {
+        val workManager = "androidx.work.impl.foreground.SystemForegroundService"
         val services = elements("service")
-        assertEquals(listOf(".player.PlaybackService"), services.map { it.attr("name") })
-        assertEquals(null, permission("FOREGROUND_SERVICE_DATA_SYNC"))
+        assertEquals(listOf(".player.PlaybackService"), services.map { it.attr("name") }.filter { it != workManager })
+        val dataSync = services.filter { it.attr("foregroundServiceType")?.contains("dataSync") == true }
+        assertEquals(listOf(workManager), dataSync.map { it.attr("name") })
     }
 
     @Test fun theBootReceiverIsNotExportedAndHearsBootAndUpdate() {

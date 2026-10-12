@@ -861,6 +861,9 @@ def test_the_unbuildable_list_comes_from_the_fetcher():
         assert line == f'SDIST_ONLY="{" ".join(SDIST_ONLY_PACKAGES)}"', line
 
 
+# The rendered helper works in a fixed /tmp/domovoi-req-core.txt: two of
+# these at once (pytest -n) would read each other's file. One worker.
+@pytest.mark.xdist_group("tmp-domovoi-req-core")
 def test_the_filter_drops_spidev_and_keeps_everything_else(tmp_path):
     """Exercise the rendered shell, not a Python re-implementation of it."""
     import shutil
@@ -906,6 +909,9 @@ def test_the_filter_drops_spidev_and_keeps_everything_else(tmp_path):
     ], kept
 
 
+# The rendered helper works in a fixed /tmp/domovoi-req-core.txt: two of
+# these at once (pytest -n) would read each other's file. One worker.
+@pytest.mark.xdist_group("tmp-domovoi-req-core")
 def test_the_real_requirements_still_yield_the_client_imports(tmp_path):
     """The filter must not eat anything the client actually imports."""
     import shutil

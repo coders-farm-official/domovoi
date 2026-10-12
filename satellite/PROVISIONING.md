@@ -9,11 +9,11 @@
 > below remains the bench and manufacturing route.
 >
 > **Zero-touch path first (USB adoption).** If your SD card was prepared
-> with the Domovoi satellite payload (dashboard → Satellites → prepare
+> with the Domovoi satellite payload (dashboard → Settings → Satellites → prepare
 > media, or an image that boots into provisioning mode), you don't need
 > most of this checklist: **boot the device, plug it into the Domovoi
-> server's USB port**, and an "adopt" card appears on the dashboard's
-> Satellites page. Name it, enter Wi-Fi, done — the device configures
+> server's USB port**, and an "adopt" card appears in the dashboard's
+> Settings → Satellites. Name it, enter Wi-Fi, done — the device configures
 > itself, pre-paired, and reboots onto your network. The device presents
 > as a `DOMOVOI-SET` flash drive while waiting (see
 > `satellite/provisioning_mode.py`; requires `mtools`/`dosfstools` on the
@@ -469,7 +469,7 @@ After this, **`unplug → plug back in`** brings the Pi up, joins WiFi, and reco
 
 ### 8.1 Sudoers entry for self-restart
 
-The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button on the Satellites page. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
+The satellite can restart **its own** service when you change a config that only takes effect on a fresh process — an audio-device or LED change pushed from the web dashboard's per-satellite Settings, or the **Restart satellite** button in Settings → Satellites. `systemctl` needs root, so — exactly as with the WiFi entry in §6.7 — we add one no-password, single-command sudoers line: this one lets the account restart its own unit, and the posture note in §6.7 applies.
 
 > **Who can ask for it:** both buttons are admin actions on the server — the config push and the restart require an admin sign-in on the dashboard (`401` without one), as does pushing a wake model. Everyday room control — volume, playback, announcements — needs the household device token instead, which every satellite and app already carries. See [SECURITY_PRIVACY.md](../docs/SECURITY_PRIVACY.md#the-tiers).
 
@@ -618,7 +618,7 @@ printf '[Manager]\nRuntimeWatchdogSec=15\n' | sudo tee /etc/systemd/system.conf.
 sudo reboot
 ```
 
-After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Satellites page → room → Overview) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
+After the next boot `journalctl -b | grep -i watchdog` shows systemd arming it (`Using hardware watchdog`). The **Health** card on the room's drawer (Settings → Satellites → room → Overview) shows what the client sees of itself, and its **Last outage** block shows what the previous life left behind — see `docs/TROUBLESHOOTING.md`.
 
 ## 9. Label the hardware
 
@@ -690,7 +690,7 @@ The server requires a token for **every** room by default (`SATELLITE_PAIRING_ST
 
 If you **re-flash the SD card**, **replace the Pi**, or **move a room to a new device**, the new device generates a *fresh* token that won't match the one the server has on file for that room — so its `hello` is refused (case: token mismatch) and it can't connect. Clear the old pairing so the new device can re-pair:
 
-- **From the dashboard:** Satellites page → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
+- **From the dashboard:** Settings → Satellites → open the room → **Overview** → **Reset pairing**. The pairing status line shows "paired since …" / "unpaired". (Admin login required — resetting pairing is a security action.)
 - **Effect:** the server deletes the room's `satellite_pairings` row; the next `hello` from that room is a first pairing again: it waits on the dashboard for you to approve it by the six-digit code the new device says (or, where strict pairing is turned off, claims the room with the new device's token).
 
 You do **not** need to reset pairing for a normal `restart`, `upgrade`, or `reboot` — the token sidecar survives those (it lives in `~/.domovoi/`, outside the code tree). Only a wiped config dir / new device needs a reset.

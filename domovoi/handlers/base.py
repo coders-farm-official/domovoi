@@ -53,6 +53,22 @@ FastPathMethod = Callable[
 ]
 RequiresNetwork = Literal["no", "degraded", "yes"]
 
+# What a phone turn hears when it asks for a satellite's own setting — its
+# Wi-Fi, its voice (owner decisions 2026-10-08: "refuse politely").
+SATELLITE_SETTING_TEXT = (
+    "That's a satellite setting, so I can't change it from a phone. "
+    "Ask the satellite in that room instead."
+)
+
+
+def satellite_setting_refusal(handler_name: str, ctx: Context) -> Response:
+    """The reply to a phone turn that reached a satellite-only command."""
+    return Response(
+        text=SATELLITE_SETTING_TEXT,
+        session_id=ctx.session_id,
+        matched_handler=handler_name,
+    )
+
 
 @dataclass(frozen=True)
 class HandlerDisplay:
@@ -163,6 +179,10 @@ class Handler(ABC):
     # transactional command. Requires execute_from_tool + a usable tool_schema.
     # See letta_tools.build_chat_tool_sources + the /v1/admin/chat-tool endpoint.
     chat_exposed: bool = False
+    # Everything this handler does is about the satellite the turn came
+    # from (its Wi-Fi link, say). A turn from a phone (Context.from_phone)
+    # never reaches it: the router answers SATELLITE_SETTING_TEXT instead.
+    satellite_only: bool = False
 
     @abstractmethod
     async def execute(self, intent: Intent, ctx: Context, session: AsyncSession) -> Response:

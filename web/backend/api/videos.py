@@ -8,7 +8,10 @@ which is also the key for the ``video_positions`` resume store (V005).
 
 Endpoints:
 
-* ``GET /list`` — bounded recursive walk of every library for video files.
+* ``GET /list`` — a recursive walk of every library for video files (no
+  count cap; a time budget), cached between requests (``listing_cache``)
+  and served a page at a time with the sort / filter / search applied here
+  (``paging``).
 * ``GET /stream`` — Range/206 playback via the shared ``audio_serve``
   machinery with video MIME types (``.mkv`` rides as x-matroska; Chromium
   demuxes Matroska, other browsers fall back to save-to-device).
@@ -39,8 +42,9 @@ import asyncio
 import hashlib
 import logging
 import subprocess
+import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -62,6 +66,7 @@ from web.backend.api.files_security import (
     is_sensitive_name,
     safe_join,
 )
+from web.backend.api import listing_cache, paging
 from web.backend.api.media_walk import walk_library_files
 from web.backend.db import session_scope
 
@@ -75,8 +80,12 @@ router = APIRouter(
     dependencies=[Depends(require_device_read)],
 )
 
-# Walk bound — bounded fan-out per library (media_walk caps dirs too).
-_MAX_VIDEOS_PER_LIBRARY = 2000
+# The walk has no count cap (owner decision 2026-10-12: every list pages, and
+# the walk is cached between pages); media_walk keeps a time budget. An
+# UNPAGED answer — a client from before paging, the Android app installed
+# before 2026-10-11 — still gets at most this many videos per library, the
+# bound it was built against: a 50,000-video library is not one JSON answer.
+LEGACY_UNPAGED_PER_LIBRARY = 2000
 
 # ffmpeg poster extraction: frame size + subprocess wall-clock cap.
 # CREATE_NO_WINDOW keeps ffprobe/ffmpeg from opening a console window per
@@ -110,28 +119,172 @@ def _resolve_video(lib: MediaLibrary, path: str) -> Path:
 
 
 # ─── GET /list ───────────────────────────────────────────────────────────────
+# Sorts, as ascending key tuples (a descending field is negated). Every key
+# ends in (library_id, rel) — unique — so a cursor names exactly one place.
+VideoSort = Literal["library", "name", "newest", "oldest", "largest"]
+_VIDEO_SORT_KEYS: dict[str, Any] = {
+    "library": lambda v: (v["library_id"], v["rel"].lower(), v["rel"]),
+    "name": lambda v: (v["name"].lower(), v["name"], v["library_id"], v["rel"]),
+    "newest": lambda v: (-float(v["mtime"]), v["library_id"], v["rel"]),
+    "oldest": lambda v: (float(v["mtime"]), v["library_id"], v["rel"]),
+    "largest": lambda v: (-int(v["size"]), v["library_id"], v["rel"]),
+}
+
+
+def _library_snapshot(lib: MediaLibrary, force: bool) -> listing_cache.Snapshot:
+    """This library's cached walk (listing_cache: re-walked only when a
+    folder it read changed, it aged out, or a write invalidated it)."""
+
+    def build() -> listing_cache.Snapshot:
+        meta: dict[str, Any] = {}
+        rows = walk_library_files(lib, VIDEO_EXTENSIONS, None, meta)
+        hay = [f"{r['name']}\n{r['rel']}".lower() for r in rows]
+        return listing_cache.Snapshot(
+            rows=rows, hay=hay, dirs=meta.get("dirs", {}),
+            truncated=bool(meta.get("truncated")), stopped=meta.get("stopped"),
+        )
+
+    key = (lib.id, str(lib.root_path), "videos")
+    return listing_cache.get(key, build, force=force)
+
+
+# The every-library list, joined from the per-library snapshots. Rebuilt
+# only when one of them was (identity, not equality: a snapshot is never
+# mutated, it is replaced). Worker threads share it, hence the lock.
+_combined: dict[str, Any] = {"parts": (), "snap": None}
+_combined_lock = threading.Lock()
+
+
+def _combined_snapshot(parts: list[listing_cache.Snapshot]) -> listing_cache.Snapshot:
+    with _combined_lock:
+        prev_parts = _combined["parts"]
+        if (
+            _combined["snap"] is not None
+            and len(prev_parts) == len(parts)
+            and all(a is b for a, b in zip(prev_parts, parts))
+        ):
+            return _combined["snap"]
+        rows: list[dict[str, Any]] = []
+        hay: list[str] = []
+        for p in parts:
+            rows.extend(p.rows)
+            hay.extend(p.hay)
+        snap = listing_cache.Snapshot(
+            rows=rows, hay=hay, dirs={}, truncated=any(p.truncated for p in parts),
+            stopped=next((p.stopped for p in parts if p.stopped), None),
+        )
+        _combined["parts"] = tuple(parts)
+        _combined["snap"] = snap
+        return snap
+
+
+def _videos_answer(
+    libs: list[MediaLibrary],
+    parts: list[tuple[MediaLibrary, listing_cache.Snapshot]],
+    *,
+    sort: str,
+    needle: str,
+    library_id: Optional[str],
+    limit: Optional[int],
+    cursor: Optional[str],
+    offset: Optional[int],
+) -> dict[str, Any]:
+    """The whole /list answer, computed in a worker thread: with 50,000
+    videos the sort, a search's scan and the per-library counts are tens of
+    milliseconds the event loop must not wait for. A search's matches are
+    memoised on the snapshot, so its later pages are lookups too."""
+    snap = _combined_snapshot([p for _, p in parts])
+    rows, keys, order = snap.view(sort, _VIDEO_SORT_KEYS[sort])
+
+    def scan() -> tuple[Optional[list[int]], dict[str, int]]:
+        if not needle and not library_id:
+            return None, {lib.id: len(p.rows) for lib, p in parts}
+        hay = snap.hay
+        counts: dict[str, int] = {}
+        hits: list[int] = []
+        for i in range(len(rows)):
+            if needle and needle not in hay[order[i]]:
+                continue
+            lid = rows[i]["library_id"]
+            counts[lid] = counts.get(lid, 0) + 1
+            if not library_id or lid == library_id:
+                hits.append(i)
+        return hits, counts
+
+    matches, counts = snap.memo(("videos", sort, needle, library_id), scan)
+    libraries = [
+        {"library_id": lib.id, "library_label": lib.label, "total": counts.get(lib.id, 0)}
+        for lib in libs
+    ]
+    extra = {"libraries": libraries, "truncated": snap.truncated,
+             "truncated_reason": snap.stopped if snap.truncated else None}
+
+    if not paging.wants_page(limit, cursor, offset):
+        # An old client: every match, as /list always answered, within the
+        # per-library bound it was built against.
+        taken: dict[str, int] = {}
+        every: list[dict[str, Any]] = []
+        clipped = False
+        for i in (matches if matches is not None else range(len(rows))):
+            lid = rows[i]["library_id"]
+            if taken.get(lid, 0) >= LEGACY_UNPAGED_PER_LIBRARY:
+                clipped = True
+                continue
+            taken[lid] = taken.get(lid, 0) + 1
+            every.append(rows[i])
+        if clipped:
+            extra.update(truncated=True, truncated_reason="unpaged")
+        return {"videos": every, "total": len(every), "limit": None, "has_more": False,
+                "next_cursor": None, **extra}
+    page, fields = paging.page_view(
+        rows, keys, sort=sort, limit=limit or paging.DEFAULT_LIMIT,
+        cursor=cursor, offset=offset, matches=matches,
+    )
+    return {"videos": page, **fields, **extra}
+
+
 @router.get("/list")
-async def list_videos() -> dict[str, Any]:
-    """Every video across every present library. Bounded per library; the
-    walk runs in worker threads (one per library, gathered)."""
+async def list_videos(
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Case-insensitive substring of the file name or its path"),
+    library_id: Optional[str] = Query(None, description="Only this library"),
+    sort: VideoSort = Query("library", description="library (default) · name · newest · oldest · largest"),
+    limit: Optional[int] = paging.limit_query(),
+    cursor: Optional[str] = paging.cursor_query(),
+    offset: Optional[int] = paging.offset_query(),
+    refresh: bool = Query(False, description="Re-walk the libraries instead of using the cached walk"),
+) -> dict[str, Any]:
+    """Videos across every present library, sorted and filtered here, one
+    page at a time.
+
+    Paged (``limit`` / ``cursor`` / ``offset`` sent): ``videos`` is one page
+    and ``total`` / ``has_more`` / ``next_cursor`` say where it sits
+    (``web/backend/api/paging.py``). ``libraries`` counts the matches per
+    library (the search applied, the library filter not), for the section
+    headers. Unpaged (an old client): every match, as before, with the same
+    extra fields, at most :data:`LEGACY_UNPAGED_PER_LIBRARY` per library.
+
+    Every library is walked whole — no count cap — and the walk is cached
+    between requests (``listing_cache``). ``truncated`` says the listing is
+    short of the disk: ``truncated_reason`` "time" (a walk ran past
+    media_walk's time budget) or "unpaged" (the old-client bound)."""
     libs = await build_libraries()
     results = await asyncio.gather(
-        *(
-            anyio.to_thread.run_sync(
-                walk_library_files, lib, VIDEO_EXTENSIONS, _MAX_VIDEOS_PER_LIBRARY
-            )
-            for lib in libs
-        ),
+        *(anyio.to_thread.run_sync(_library_snapshot, lib, refresh) for lib in libs),
         return_exceptions=True,
     )
-    videos: list[dict[str, Any]] = []
+    parts: list[tuple[MediaLibrary, listing_cache.Snapshot]] = []
     for lib, res in zip(libs, results):
         if isinstance(res, BaseException):
             log.warning("videos: walk failed for %s: %s", lib.id, res)
             continue
-        videos.extend(res)
-    videos.sort(key=lambda v: (v["library_id"], v["rel"].lower()))
-    return {"videos": videos}
+        parts.append((lib, res))
+    return await anyio.to_thread.run_sync(
+        lambda: _videos_answer(
+            libs, parts, sort=sort, needle=(q or "").strip().lower(), library_id=library_id,
+            limit=limit, cursor=cursor, offset=offset,
+        )
+    )
 
 
 # ─── GET /stream ─────────────────────────────────────────────────────────────

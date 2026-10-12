@@ -205,6 +205,21 @@ def _decide(scores: dict[int, float]) -> _Decision:
     return verdict(best_person, False, confident)
 
 
+def speaker_is_confident(score: float | None) -> bool:
+    """Whether a stored match score is one to show at full strength: the
+    bar a match has to clear to count as *confident* here (the threshold
+    plus ``drift_near_threshold_margin``, :func:`_decide`). The chat's
+    speaker marker (a phone's voice turns, domovoi/phone_voice.py) is drawn
+    softer below it. Judged from the score alone, so a message read back
+    later is drawn the way it was when it arrived."""
+    if score is None:
+        return False
+    return float(score) >= (
+        settings.voice_profile_match_threshold
+        + settings.voice_profile_drift_near_threshold_margin
+    )
+
+
 def _presence_tier_from_last_seen(last_seen) -> str:
     if last_seen is None:
         return "high"

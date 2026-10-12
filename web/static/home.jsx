@@ -11,7 +11,8 @@
  *   rooms            one row per room: pause / resume / stop / play
  *   announce         say something in every room
  *   today            today's and tomorrow's events
- *   everything       every page that is not one of the strip's five tabs
+ *   everything       every page that is not on this phone's bar (and a
+ *                    link to pick the bar's tabs)
  *
  * On a desktop the same sections sit in two columns (styles.css, "Home").
  *
@@ -333,7 +334,8 @@ const HomeHooks = (() => {
  * never even made for anyone else). When the core or the database is
  * down that is the only story: every rule that reads through them would
  * just repeat it, so they wait. Home never fixes anything itself — each
- * row links to the page that does. */
+ * row links to the page that does (#satellites is Settings → Satellites:
+ * the shell opens that tab, components.jsx settingsTabRoute). */
 const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
                              approvals, pending, version, hardware, config, guard }) => {
   const rows = [];
@@ -760,16 +762,28 @@ const HomeRoomRank = (s) => {
   return 4;
 };
 
+/* What a room is playing, or null. Only a room that is playing or paused
+ * has a song: a STOPPED room's player keeps the last song loaded, and the
+ * now-playing read still names it (state "stop", song set), which made a
+ * room nobody was listening to look like it was playing that song at 0:00
+ * here while Music and Settings → Satellites said nothing (2026-10-11).
+ * A stopped room is quiet, as everywhere else. */
+const HomeRoomSong = (s) => {
+  const np = s && s.now_playing;
+  if (!s || s.status !== 'online' || !np || !np.song) return null;
+  return np.state === 'play' || np.state === 'pause' ? np.song : null;
+};
+
 /* One room. Not SatCard: that is a single <button>, and a button can't
- * hold the transport buttons. The left part is a link to Satellites; the
- * buttons sit apart on the right edge, in thumb reach on a phone, while
- * something is playing or paused. A quiet room has none: starting
- * something in a room belongs to the Music page, which picks the room and
- * the track together. */
+ * hold the transport buttons. The left part is a link to Settings →
+ * Satellites (#satellites, which opens that tab); the buttons sit apart on
+ * the right edge, in thumb reach on a phone, while something is playing or
+ * paused. A quiet room has none: starting something in a room belongs to
+ * the Music page, which picks the room and the track together. */
 const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) => {
   const online = s.status === 'online';
   const np = s.now_playing;
-  const song = online && np && np.song ? np.song : null;
+  const song = HomeRoomSong(s);
   const playing = !!song && np.state === 'play';
   const paused = !!song && np.state === 'pause';
   const dur = song && song.duration_sec ? song.duration_sec : 0;
@@ -851,7 +865,7 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
 
   return (
     <div className={`home-room${online && !stale ? '' : ' dim'}`} data-room={s.room_id}>
-      <a className="home-room-main" href="#satellites" title={`${s.room_id} on the satellites page`}>
+      <a className="home-room-main" href="#satellites" title={`${s.room_id} in Settings → Satellites`}>
         <div className="home-room-top">
           <StatusDot tone={online ? 'ok' : s.status === 'waiting' ? 'warn' : 'idle'} live={online && !stale}/>
           <span className="home-room-name">{s.room_id}</span>
@@ -1128,25 +1142,32 @@ const HomeFirstRun = ({ manual }) => (
 
 /* ---- everything (phones) -------------------------------------------- */
 
-/* Every page that is not one of the phone strip's five tabs — plugin
- * pages included, with their badges — plus Settings and the manual. The
- * phone's "more" menu. `counts` and `badges` are App's one
- * useSidebarCounts and usePluginBadges results, handed down rather than
- * fetched again (a grid rendered without `badges` polls for itself). A
- * shared screen leaves the same pages off as the sidebar and the strip
- * (navItemsFor). On a desktop the sidebar already lists everything and
- * this is not mounted. */
+/* Every page that is not on this phone's bar (components.jsx
+ * phoneBarRoutes) — plugin pages included, with their badges — plus
+ * Settings and the manual. The phone's "more" menu, and the way to the
+ * bar's editor (Settings → Phone bar). `counts` and `badges` are
+ * App's one useSidebarCounts and usePluginBadges results, handed down
+ * rather than fetched again (a grid rendered without `badges` polls for
+ * itself). A shared screen leaves the same pages off as the sidebar and the
+ * strip (navItemsFor). On a desktop the sidebar already lists everything
+ * and this is not mounted. */
 const HomeEverything = ({ counts, badges: given, shared }) => {
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const c = counts || {};
-  const tiles = navItemsFor(manifest, { shared })
-    .filter((it) => !it.primary)
-    .concat(HOME_EXTRA_TILES);
+  const items = navItemsFor(manifest, { shared });
+  const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
+  const tiles = items.filter((it) => !onBar.has(it.route)).concat(HOME_EXTRA_TILES);
+  const edit = (
+    <a href="#settings" className="home-link home-bar-edit"
+       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab('phonebar'); }}>
+      edit the bar
+    </a>
+  );
   return (
     <div className="home-sec home-sec-everything">
-      <Card title="everything">
+      <Card title="everything" action={edit}>
         <div className="home-grid">
           {tiles.map((it) => {
             const badge = it.core ? (it.countKey ? c[it.countKey] : null) : badges[it.route];

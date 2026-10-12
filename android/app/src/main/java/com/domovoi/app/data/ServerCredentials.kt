@@ -101,6 +101,28 @@ object ServerCredentials {
         Json.decodeFromString(kotlinx.serialization.builtins.SetSerializer(String.serializer()), raw ?: "[]")
     }.getOrDefault(emptySet())
 
+    // ── "This phone belongs to", one per server ────────────────────────
+
+    /** The person (a `people.id` on THAT server) this phone belongs to at
+     *  [url], looked up by the normalised address like every per-server
+     *  answer: a person id means nothing on another server. */
+    fun ownerFor(owners: Map<String, String>, url: String): String? = owners[normalize(url)]
+
+    /** [owners] with [url]'s owner set to [personId] (null removes it). */
+    fun withOwner(owners: Map<String, String>, url: String, personId: String?): Map<String, String> {
+        val key = normalize(url)
+        if (key.isBlank()) return owners
+        return if (personId == null) owners - key else owners + (key to personId)
+    }
+
+    fun encodeOwners(owners: Map<String, String>): String =
+        Json.encodeToString(MapSerializer(String.serializer(), String.serializer()), owners)
+
+    /** Never throws: a corrupt or absent blob means "no owner anywhere". */
+    fun decodeOwners(raw: String?): Map<String, String> = runCatching {
+        Json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw ?: "{}")
+    }.getOrDefault(emptyMap())
+
     // ── Shared-screen answers, one per server ──────────────────────────
 
     /** [url]'s last answer (null: it has never answered), looked up the way

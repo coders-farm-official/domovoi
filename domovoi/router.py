@@ -28,7 +28,7 @@ from domovoi.db.repositories import (
     WebSearchPrefsRepository,
 )
 from domovoi.handlers import HANDLER_BY_NAME, HANDLERS
-from domovoi.handlers.base import FastPath, Handler, as_fast_path
+from domovoi.handlers.base import FastPath, Handler, as_fast_path, satellite_setting_refusal
 from domovoi.handlers.shared.tool_gate import about_the_house, answers_without_tools
 from domovoi.models import Context, Intent, Response
 from domovoi.profile_context import build_profile_prefix
@@ -252,6 +252,16 @@ def dispatchable_choice(pending: Any) -> tuple[Handler, str] | None:
     return target
 
 
+def phone_refusal(handler: Handler, ctx: Context) -> Response | None:
+    """The polite refusal a phone turn gets instead of a satellite-only
+    handler (``Handler.satellite_only``: the satellite's Wi-Fi), or None
+    when the handler may run. Checked before any of the handler's own code
+    runs, on every way in: a fast path, a tool call, a parked choice."""
+    if ctx.from_phone and getattr(handler, "satellite_only", False):
+        return satellite_setting_refusal(handler.name, ctx)
+    return None
+
+
 def offline_blocked(handler: Handler, fp: FastPath, ctx: Context) -> bool:
     """Whether the offline gate sends this fast path to the handler's
     ``fallback_offline`` instead (see route(), step 1)."""
@@ -273,6 +283,9 @@ async def run_fast_path(
     that hands a reply on to another command (a parked choice answered
     "no, play X"). The caller stamps and records the turn. None: the path
     declined the turn (see ``FastPath``)."""
+    refusal = phone_refusal(handler, ctx)
+    if refusal is not None:
+        return refusal
     if offline_blocked(handler, fp, ctx):
         intent = Intent(transcript=m.string, room_id=ctx.room_id, session_id=ctx.session_id)
         return await handler.fallback_offline(intent, ctx, session)
@@ -497,7 +510,18 @@ def _no_speakers_yet(session_id: UUID | None, ctx: Context) -> Response:
     ordinary first-run state — reachable simply by exercising
     ``/v1/intent`` before building a Pi — not a fault, so answer it the way
     a handler would instead of raising into a 500.
+
+    A phone turn lands here too when it reaches a command that only knows
+    how to play through a room's music player: a phone is never given a
+    room's player (``models.is_phone_room``), so it is told that instead.
     """
+    if ctx.from_phone:
+        return Response(
+            text="I can't play that on this phone yet.",
+            session_id=session_id,
+            online=ctx.online,
+            failure="no_speakers",
+        )
     return Response(
         text=(
             "I can't play anything yet — no satellite has connected, so "
@@ -725,7 +749,7 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
     hit = first_fast_path(transcript)
     if hit is not None:
         handler, fp, m = hit
-        if offline_blocked(handler, fp, ctx):
+        if offline_blocked(handler, fp, ctx) and phone_refusal(handler, ctx) is None:
             response = await handler.fallback_offline(intent, ctx, session)
             response.matched_handler = handler.name
             response.matched_path = "fast_offline"
@@ -744,7 +768,9 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
             return response
 
         try:
-            response = await fp.method(handler, m, ctx, session)
+            response = phone_refusal(handler, ctx)
+            if response is None:
+                response = await fp.method(handler, m, ctx, session)
         except MPDNotProvisioned:
             response = _no_speakers_yet(session_id, ctx)
         if response is not None:
@@ -798,7 +824,10 @@ async def route(intent: Intent, ctx: Context, session: AsyncSession) -> Response
                 if (handler.requires_network == "yes" and not ctx.online)
                 else "llm"
             )
-            if path == "llm_offline":
+            refusal = phone_refusal(handler, ctx)
+            if refusal is not None:
+                response = refusal
+            elif path == "llm_offline":
                 response = await handler.fallback_offline(intent, ctx, session)
             else:
                 try:

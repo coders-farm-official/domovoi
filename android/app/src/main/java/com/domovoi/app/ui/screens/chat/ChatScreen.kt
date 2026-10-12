@@ -1,6 +1,9 @@
 package com.domovoi.app.ui.screens.chat
 
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -41,6 +44,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,6 +53,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.domovoi.app.AppContainer
+import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.decode
@@ -88,6 +94,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -100,7 +107,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 // ---------------------------------------------------------------------------
 
 @Serializable
-private data class ThreadRow(
+internal data class ThreadRow(
     val id: Long = 0,
     val title: String? = null,
     val updated_at: String? = null,
@@ -112,10 +119,10 @@ private data class ThreadRow(
 private data class ThreadList(val threads: List<ThreadRow> = emptyList())
 
 @Serializable
-private data class ImageRef(val token: String = "", val name: String = "")
+internal data class ImageRef(val token: String = "", val name: String = "")
 
 @Serializable
-private data class MessageRow(
+internal data class MessageRow(
     val id: Long = 0,
     val role: String = "",
     val content: String = "",
@@ -126,6 +133,14 @@ private data class MessageRow(
     val stats: ChatStats? = null,
     val device_id: String? = null,
     val device_name: String? = null,
+    /** "typed", or "voice" for both rows of a turn said into the chat mic (V025). */
+    val source: String? = null,
+    /** Who voice identification heard (a voice user row); null when nobody. */
+    val speaker_person_id: Long? = null,
+    val speaker_name: String? = null,
+    val speaker_confidence: Double? = null,
+    /** The match was clear enough to draw the speaker marker at full strength. */
+    val speaker_confident: Boolean = false,
 )
 
 @Serializable
@@ -149,7 +164,7 @@ internal fun attachBudget(attached: Int, picked: Int, cap: Int = MAX_CHAT_IMAGES
 }
 
 /** Mutable transcript entry (the streaming assistant bubble updates live). */
-private class LiveMessage(
+internal class LiveMessage(
     val role: String,
     content: String,
     val images: List<ImageRef> = emptyList(),
@@ -160,15 +175,27 @@ private class LiveMessage(
     createdAt: String? = null,
     stats: ChatStats? = null,
     device: String? = null,
+    errorCode: String? = null,
+    /** "voice" for a turn said into the chat mic; null/"typed" otherwise. */
+    val source: String? = null,
+    speakerPersonId: Long? = null,
+    speakerName: String? = null,
+    speakerConfident: Boolean = false,
 ) {
     var content by mutableStateOf(content)
     var error by mutableStateOf(error)
+    /** The server's code for [error] (`stats.error_code`, or the live
+     *  stream's `error` event); null for an error this phone made. */
+    var errorCode by mutableStateOf(errorCode)
     var pending by mutableStateOf(pending)
     var model by mutableStateOf(model)
     var id by mutableStateOf(id)
     var createdAt by mutableStateOf(createdAt)
     var stats by mutableStateOf(stats)
     var device by mutableStateOf(device)
+    var speakerPersonId by mutableStateOf(speakerPersonId)
+    var speakerName by mutableStateOf(speakerName)
+    var speakerConfident by mutableStateOf(speakerConfident)
     /** Measured on this phone while a reply streams (details dialog only). */
     var sentAtMs: Long? = null
     var firstWordsAtMs: Long? = null
@@ -180,6 +207,8 @@ private class LiveMessage(
         imageNames = images.map { it.name },
         stats = stats,
         device = device,
+        source = source,
+        speaker = speakerPersonId?.let { speakerName ?: "person #$it" },
         firstWordsMs = sentAtMs?.let { s -> firstWordsAtMs?.let { it - s } },
         totalMs = sentAtMs?.let { s -> doneAtMs?.let { it - s } },
     )
@@ -195,7 +224,8 @@ private suspend fun sendStreaming(
     content: String,
     images: List<ImageRef>,
     onDelta: (String) -> Unit,
-    onError: (String) -> Unit,
+    /** (detail, code, model): the server's plain sentence and its code. */
+    onError: (String, String?, String?) -> Unit,
     onDone: (MessageRow) -> Unit = {},
 ) = withContext(Dispatchers.IO) {
     val body = buildJsonObject {
@@ -217,7 +247,7 @@ private suspend fun sendStreaming(
         .build()
     app.api.http.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) {
-            onError("${resp.code} ${resp.message}")
+            onError("${resp.code} ${resp.message}", null, null)
             return@use
         }
         val source = resp.body?.source() ?: return@use
@@ -235,8 +265,10 @@ private suspend fun sendStreaming(
                             "delta" -> payload["text"]?.jsonPrimitive?.content?.let {
                                 withContext(Dispatchers.Main) { onDelta(it) }
                             }
-                            "error" -> payload["detail"]?.jsonPrimitive?.content?.let {
-                                withContext(Dispatchers.Main) { onError(it) }
+                            "error" -> payload["detail"]?.jsonPrimitive?.content?.let { detail ->
+                                val code = payload["code"]?.jsonPrimitive?.contentOrNull
+                                val model = payload["model"]?.jsonPrimitive?.contentOrNull
+                                withContext(Dispatchers.Main) { onError(detail, code, model) }
                             }
                             // The persisted row: its id, timestamp and model.
                             "done" -> payload.decode<MessageRow>().let {
@@ -367,6 +399,24 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     var draft by remember { mutableStateOf("") }
     val attachments = remember { mutableStateListOf<ImageRef>() }
     var sending by remember { mutableStateOf(false) }
+    // What's installed: when the vision model isn't, the paperclip explains
+    // that instead of opening the picker (web chat.jsx parity).
+    val models = rememberApi("chat-models") {
+        it.api.get("/api/chat/models").decode<ChatModelsInfo>()
+    }
+    var pictureNote by remember { mutableStateOf(false) }
+    // The hold-to-talk view (VoiceView.kt), over the conversation.
+    var voiceOpen by remember { mutableStateOf(false) }
+    val micPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) voiceOpen = true else toast("the microphone permission is needed to talk to the domovoi")
+    }
+    val openVoice = {
+        val has = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (has) voiceOpen = true else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
 
     LaunchedEffect(thread.id) {
         runCatching {
@@ -379,10 +429,15 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         it.role, it.content, it.images.orEmpty(), it.model, it.error,
                         id = it.id.takeIf { id -> id > 0 }, createdAt = it.created_at,
                         stats = it.stats,
+                        errorCode = it.stats?.error_code,
                         device = when {
                             it.device_id != null && it.device_id == app.prefs.deviceId -> "this phone"
                             else -> it.device_name ?: it.device_id
                         },
+                        source = it.source,
+                        speakerPersonId = it.speaker_person_id,
+                        speakerName = it.speaker_name,
+                        speakerConfident = it.speaker_confident,
                     ),
                 )
             }
@@ -525,20 +580,34 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
                         live.content += it
                     },
-                    onError = { live.error = it },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
                     onDone = { row ->
                         live.id = row.id.takeIf { it > 0 }
                         live.createdAt = row.created_at
                         live.model = row.model ?: live.model
                         live.stats = row.stats
+                        row.error?.let { live.error = it }
+                        row.stats?.error_code?.let { live.errorCode = it }
                     },
                 )
-            }.onFailure { live.error = it.message ?: "send failed" }
+            }.onFailure { live.error = failureText("send", it) }
+            // Refused for want of the vision model: re-read what's installed,
+            // so the paperclip explains it next time.
+            if (live.errorCode == "vision_model_missing") models.refresh()
             live.doneAtMs = System.currentTimeMillis()
             if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
             sending = false
         }
+    }
+
+    if (voiceOpen) {
+        VoiceView(thread.id, transcript, onClose = { voiceOpen = false })
+        return
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -582,16 +651,30 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             }
         }
 
+        val visionMissing = visionMissing(models.data)
+        if (visionMissing && (pictureNote || attachments.isNotEmpty())) {
+            PictureNote(models.data?.vision_model, onClose = { pictureNote = false })
+        }
+
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            val atCap = attachments.size >= MAX_CHAT_IMAGES
-            IconButton(onClick = { if (atCap) toast(CHAT_IMAGE_CAP_TOAST) else picker.launch("image/*") }) {
+            val action = attachAction(models.data, attachments.size)
+            IconButton(onClick = {
+                when (action) {
+                    // Explain, and read again in case an admin has since
+                    // installed it (the note goes once the read says so).
+                    AttachAction.ExplainVision -> { pictureNote = true; models.refresh() }
+                    AttachAction.AtCap -> toast(CHAT_IMAGE_CAP_TOAST)
+                    AttachAction.Pick -> { pictureNote = false; picker.launch("image/*") }
+                }
+            }) {
                 Icon(
-                    Icons.Outlined.AttachFile, contentDescription = "attach image",
-                    tint = if (atCap) Domovoi.colors.fgFaint else Domovoi.colors.fgMuted,
+                    Icons.Outlined.AttachFile,
+                    contentDescription = if (visionMissing) "attach pictures: the vision model isn't installed" else "attach image",
+                    tint = if (action == AttachAction.Pick) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint,
                 )
             }
             OutlinedTextField(
@@ -600,11 +683,21 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
             )
-            IconButton(onClick = { send() }, enabled = draft.isNotBlank() && !sending) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send, contentDescription = "send",
-                    tint = if (draft.isNotBlank() && !sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
-                )
+            // Nothing typed: the mic, which opens the hold-to-talk view.
+            if (draft.isBlank() && attachments.isEmpty()) {
+                IconButton(onClick = openVoice, enabled = !sending) {
+                    Icon(
+                        Icons.Outlined.Mic, contentDescription = "talk",
+                        tint = if (!sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
+                    )
+                }
+            } else {
+                IconButton(onClick = { send() }, enabled = draft.isNotBlank() && !sending) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send, contentDescription = "send",
+                        tint = if (draft.isNotBlank() && !sending) Domovoi.colors.brand else Domovoi.colors.fgFaint,
+                    )
+                }
             }
         }
         ChatPaneGutter()
@@ -668,7 +761,7 @@ private fun ChatPaneGutter() {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(m: LiveMessage, threadId: Long) {
+internal fun MessageBubble(m: LiveMessage, threadId: Long) {
     val app = LocalApp.current
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
@@ -730,13 +823,17 @@ private fun MessageBubble(m: LiveMessage, threadId: Long) {
                     } else {
                         MarkdownText(m.content, trailing = cursor)
                     }
-                    m.error?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
-                            color = Domovoi.colors.err,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
+                    chatErrorView(m.error, m.errorCode, m.model)?.let { err ->
+                        if (err.code != null) {
+                            ChatErrorNote(err)
+                        } else {
+                            Text(
+                                err.text,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                                color = Domovoi.colors.err,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -758,6 +855,13 @@ private fun MessageBubble(m: LiveMessage, threadId: Long) {
                 )
             }
         }
+        // Who Domovoi heard, on a message said into the chat mic.
+        val owners by app.prefs.owners.collectAsState()
+        val server by app.prefs.serverUrl.collectAsState()
+        val owner = ServerCredentials.ownerFor(owners, server)
+        speakerMark(m.source, m.role, m.speakerPersonId, m.speakerName, m.speakerConfident, owner)
+            ?.takeIf { !m.pending }
+            ?.let { SpeakerMarker(it, Modifier.padding(end = 2.dp)) }
         // Stamp line: when, and (for a reply) which model answered.
         val stamp = chatStamp(m.createdAt)
         val model = m.model.takeIf { !isUser && !m.pending }

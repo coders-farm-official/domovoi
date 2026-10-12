@@ -229,6 +229,10 @@ signing = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # `pytest -n N` (pytest-xdist, MIT; its execnet is MIT too): the suite
+    # on N worker processes, each on its own copy of the test database
+    # (domovoi/tests/xdist_db.py). requirements.lock pins the exact version.
+    "pytest-xdist>=3.8",
     "httpx>=0.27",
     # The suite imports these directly (library enricher + identify-chain
     # tests exercise the real modules with stubbed I/O), so a plain
@@ -251,4 +255,6 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["domovoi/tests", "plugins/radio/tests", "satellite/tests"]
 markers = [
     "spoken_gate: the spoken-name resolver on the frozen held-out audit set (opt-in, DOMOVOI_SPOKEN_GATE_DIR); it measures and never tunes",
+    "bash_harness: runs a whole scripts/linux/tests harness under the host's bash (minutes to an hour on Git Bash); deselected under pytest -n, where scripts/dev/run-linux-harness.sh runs them instead",
+    "xdist_group(name): under pytest -n, tests of one group run on one worker, one at a time (they share something outside the process: Postgres roles, a fixed temp file); see domovoi/tests/conftest.py",
 ]

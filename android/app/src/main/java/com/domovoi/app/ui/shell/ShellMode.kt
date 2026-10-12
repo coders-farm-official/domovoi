@@ -1,6 +1,7 @@
 package com.domovoi.app.ui.shell
 
 import androidx.compose.runtime.compositionLocalOf
+import kotlinx.coroutines.delay
 
 /**
  * Which shell [AppShell] renders: the on-device shell (music + videos from
@@ -109,6 +110,95 @@ internal const val UNREACHABLE_GRACE_MS = 10_000L
 
 /** How often the server is asked while the live socket is down. */
 internal const val REACH_PROBE_EVERY_MS = 4_000L
+
+/**
+ * Whether the saved server counts as out of reach: it has gone unanswered
+ * for [graceMs] of time the app spent ON SCREEN asking it.
+ *
+ * The time in the background does not count. Android freezes a cached app
+ * (the system folder picker in front of it is enough): its live socket
+ * misses a ping, and the first request after the thaw can fail on a stale
+ * connection. Measured by the wall clock, the grace was long over by then,
+ * and one failed probe dropped a phone sitting next to a healthy server to
+ * local media. So the asking pauses when the app leaves the screen
+ * ([pause]) and starts again with a fresh probe when it comes back
+ * ([resume]); only foreground stretches add up, and a result that lands
+ * while the app is away is no evidence either way.
+ *
+ * What it does not change: out of the house, on screen, the server not
+ * answering, the app still falls back after [graceMs]; once out of reach it
+ * stays so until an answer — a spell in the background never brings the
+ * workspace back by itself.
+ */
+internal class Reachability(private val graceMs: Long = UNREACHABLE_GRACE_MS) {
+    var unreachable = false
+        private set
+
+    /** Foreground time spent unanswered before the current stretch. */
+    private var spentMs = 0L
+
+    /** When the current foreground stretch of asking began (or last got an answer); null while not asking. */
+    private var askingSince: Long? = null
+
+    /** The app is on screen with the live socket down: asking starts (or starts again). */
+    fun resume(now: Long) {
+        if (askingSince == null) askingSince = now
+    }
+
+    /** The app left the screen (or the socket came back): asking stops, the stretch so far is kept. */
+    fun pause(now: Long) {
+        askingSince?.let { spentMs += (now - it).coerceAtLeast(0) }
+        askingSince = null
+    }
+
+    /** The server answered: in reach, and the grace starts over. */
+    fun answered(now: Long) {
+        spentMs = 0
+        if (askingSince != null) askingSince = now
+        unreachable = false
+    }
+
+    /** The live socket is up: nothing to ask, nothing owed. */
+    fun connected() {
+        spentMs = 0
+        askingSince = null
+        unreachable = false
+    }
+
+    /** A probe went unanswered. Ignored unless the app is on screen asking. */
+    fun missed(now: Long) {
+        val since = askingSince ?: return
+        if (spentMs + (now - since).coerceAtLeast(0) >= graceMs) unreachable = true
+    }
+}
+
+/**
+ * Ask the server every [REACH_PROBE_EVERY_MS] while the app is on screen,
+ * [publish]ing the verdict after each answer. AppShell runs it under
+ * `repeatOnLifecycle(STARTED)`: leaving the screen cancels it (and [reach]
+ * stops counting, in `finally`), coming back starts it again with a fresh
+ * probe first; a probe still out when the app left is dropped with it.
+ */
+internal suspend fun askWhileOnScreen(
+    reach: Reachability,
+    probe: suspend () -> Boolean,
+    clock: () -> Long,
+    wait: suspend (Long) -> Unit = { delay(it) },
+    publish: (unreachable: Boolean) -> Unit,
+) {
+    reach.resume(clock())
+    try {
+        while (true) {
+            val answered = probe()
+            val now = clock()
+            if (answered) reach.answered(now) else reach.missed(now)
+            publish(reach.unreachable)
+            wait(REACH_PROBE_EVERY_MS)
+        }
+    } finally {
+        reach.pause(clock())
+    }
+}
 
 /** Opens the connection dialog, which AppShell owns above both shells. */
 internal val LocalOpenConnection = compositionLocalOf<() -> Unit> { {} }

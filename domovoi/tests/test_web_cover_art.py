@@ -35,7 +35,7 @@ TRACK = {"id": 6, "title": "Warm Stones", "artist": "Hearth Ensemble", "album": 
          "added_via": "manual", "favorited": False, "source": None, "source_id": None, "enriched_at": None}
 STATS = {"total_tracks": 2, "total_duration_sec": 400, "by_added_via": {"manual": 2},
          "by_source": {"library": 2}, "enriched_count": 0}
-LIB = "GET /api/music/library?sort=added_desc&limit=12&offset=0"
+LIB = "GET /api/music/library?sort=added_desc"
 
 
 def page_api(now_playing=None, items=None) -> dict:

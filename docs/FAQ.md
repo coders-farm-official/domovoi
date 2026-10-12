@@ -15,6 +15,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [Does it support multiple people?](#does-it-support-multiple-people)
 - [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
+- [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
 - [Where is my data?](#where-is-my-data)
 - [How do I back up and restore?](#how-do-i-back-up-and-restore)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
@@ -105,7 +106,7 @@ A room *is* a satellite. To add one:
 
 1. Provision a new Pi (flash, HAT/array setup, install the satellite client — see `satellite/PROVISIONING.md`).
 2. In its `~/.domovoi/config.toml`, set a stable `room_id` (e.g. `kitchen`) and point `domovoi_url` at your server: `ws://your-server.local:6370`.
-3. Start it. That's it — on first connection, the server automatically provisions that room's own music daemon (an MPD container with its own queue and volume) and the room appears on the dashboard's Satellites page.
+3. Start it. That's it — on first connection, the server automatically provisions that room's own music daemon (an MPD container with its own queue and volume) and the room appears in the dashboard's Settings → Satellites.
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by that `room_id`.
 
@@ -115,7 +116,7 @@ Not once the real one has connected. Each satellite generates a random **pairing
 
 Strict pairing (`SATELLITE_PAIRING_STRICT=true`) is the default, and it closes the one gap left: a tokenless connection is refused, and a room's first pairing waits for you to type in the six-digit code the satellite is showing and saying. The honest caveat applies only if you turn strict pairing off: then the *first* token wins, so there's a one-time window when a room has never paired — whoever connects first claims it — and a device with no token at all can connect under any room name nobody has paired. Such a tokenless room can use itself (timers, music, voice commands) but can never drop in on another room or announce into one. An install that upgrades into this release and never set the line becomes strict at its next restart: paired rooms are unaffected, and a satellite that hasn't paired yet asks for approval once.
 
-**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Satellites → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
+**Re-flashed a Pi or moved a room to new hardware?** The new device has a new token that won't match, so it'll be refused. Clear the old pairing from the dashboard: Settings → Satellites → open the room → **Overview → Reset pairing** (admin login required). The next connection re-pairs. Full details: [Security & Privacy](SECURITY_PRIVACY.md#satellite-pairing-ws-auth).
 
 One thing pairing does *not* do: encrypt the audio. LAN traffic is still unencrypted in v1 (TLS is on the hardening backlog), so keep satellites and the server on a network segment you control. See [Is my voice data leaving my network?](#is-my-voice-data-leaving-my-network).
 
@@ -233,6 +234,28 @@ The same honesty note as queue access applies: a device tells the server who it
 is, so this settles a household argument rather than stopping someone
 determined.
 
+## Why do long lists load as I scroll?
+
+The Music library, Videos, Files, Audiobooks and Podcasts (shows and each
+show's episodes) never load a whole list at once — on the dashboard, in the
+Android app, and for the phone's own music, videos and folders in the app.
+Each shows the first 50
+rows and fetches the next 50 as you near the bottom, with a line at the end
+saying how many are showing out of how many there are ("showing 100 of
+5,232"). If a page fails to load, that line offers **retry**.
+
+Search boxes, filters and sorting ask the server, so they cover everything
+— not just the rows already on screen — and changing one starts the list
+again from the top. **Select all** (Music's library table, the Files list)
+selects the rows that are loaded, and its tooltip says how many; scroll
+further first if you want more of them in the selection.
+
+Videos and Files are read straight from disk, and the server remembers each
+listing between pages so scrolling stays quick. It notices files added,
+removed or renamed on its own; a file edited in place by some other program
+can take up to five minutes to show its new size, or press **Rescan** on the
+Files page.
+
 ## What music sources exist out of the box?
 
 - **Your local library** — files in your music folder (`MUSIC_DIR`, default `~/Music`), indexed and playable by voice per room, with playlists, album art in the browser player, and optional automatic metadata cleanup.
@@ -250,6 +273,14 @@ Anything beyond that — pulling music from external sources — is the job of *
 - **Android app** — the file is handed to the system DownloadManager and lands in **`Downloads/Domovoi/`**, with a progress notification; it shows up in your Files app afterwards.
 
 Single-file audiobooks (a `.m4b`, say) save as that one file. **Folder audiobooks** (a book split into per-chapter files) come down as a single **zip** of all the chapters, so on Android you'll see a brief "zipping chapters" note while the server builds it. This is a plain file copy from your own server — nothing goes to the internet.
+
+## Can I send pictures in chat?
+
+**Yes, once the vision model is installed.** The Chat page (dashboard and Android app) takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message and 20 MB each. No other kinds of file. A message with pictures is answered by the **vision model** (Settings → Models, the Vision row; `qwen3-vl:2b-instruct-q4_K_M` unless you picked another), because the chat model can only read text. Each picture reaches it upright and at most 1280 px on its long edge (the thread keeps the one you sent): plenty for screenshots, receipts and photos, and quick enough on a processor alone. Later text-only questions in the same chat go to the chat model with the words of the conversation, not the pictures.
+
+The vision model isn't installed by default (a server set up by `scripts/linux/provision.sh` has it, unless it was run with `--no-vision-model`). Until it is, the paperclip explains that instead of opening the picker ("Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi…"), and a picture sent anyway gets that same answer straight away. An admin installs it in **Settings → Models** on the dashboard, or picks another vision-capable model there (a text-only model can't read pictures, and chat says so). The dashboard shows a signed-in admin a link straight to that tab; the Android app, which has no admin sign-in, opens the dashboard's Settings page instead. Pictures stay on your server: they are read by the model on your own hardware, like everything else in chat.
+
+The default vision model is the pick for a box without a GPU: a 1.9 GB download, about 3 GB of memory while it is loaded. With an NVIDIA GPU, `qwen2.5vl:7b` is the pick for the Vision row instead: quick on the GPU, but minutes per picture on a processor alone. A change in the Vision row reaches the dashboard's chat when the dashboard restarts.
 
 ## Where is my data?
 

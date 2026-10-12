@@ -90,4 +90,13 @@ class FileKindsTest {
         val readOnlyVideos = older + lib("core:videos", editable = false)
         assertEquals("core:documents", defaultHomeLibrary(phoneEntry("clip.mov"), readOnlyVideos))
     }
+
+    @Test fun theSendSheetSaysUploadOnTheYourDeviceSide() {
+        assertEquals(SendHomeWords("upload \"a.pdf\" to…", "upload here", "upload"), SendHomeWords.of("a.pdf", asUpload = true))
+        assertEquals(
+            "the local shell keeps its words",
+            SendHomeWords("send \"a.pdf\" to…", "send here", "send"),
+            SendHomeWords.of("a.pdf", asUpload = false),
+        )
+    }
 }

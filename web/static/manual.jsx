@@ -54,14 +54,14 @@ const UM_TITLES = {
 /* node-scoped how-to: what you can DO with this part, and how to DIAGNOSE it. */
 const UM_HOWTO = {
   satellites: {
-    act: ['Add one: flash the Pi and drop in its config — it shows up here once it connects.',
+    act: ['Add one: flash the Pi and drop in its config — it shows up in Settings → Satellites once it connects.',
           'Change its voice or wake word in Settings, then push to the room.',
           'Set playback volume per room from the Music page.'],
     diag: ['No response? Check the wake loop is running and the mic board matches its trained model.',
            'Choppy audio? Check wi-fi rx rate (iw dev wlan0 link); reassociate if stuck at 1 Mbit/s.',
            "No sound? Make sure nothing else is holding the Pi's single audio card."] },
   web: {
-    act: ['Switch pages from the left nav — each surface manages one area.',
+    act: ['Switch pages from the left nav (on a phone, the bar along the bottom; pick its tabs in Settings → Phone bar) — each surface manages one area.',
           'Change domovoi settings under the gear → Configuration.',
           'Check versions / pull updates under Configuration → Version.'],
     diag: ['Stale data? Hard-refresh (Ctrl+Shift+R).',
@@ -73,12 +73,12 @@ const UM_HOWTO = {
     diag: ['Nothing responds? Confirm the process is up and Postgres is reachable.',
            'Bad routing? Make sure both Ollama models are installed and loaded.'] },
   whisper: {
-    act: ['Switch the speech-to-text model or pre-download a size from the Models page.',
+    act: ['Switch the speech-to-text model or pre-download a size from Settings → Models.',
           'Prefer large-v3 for accuracy; a smaller size if VRAM is tight.'],
     diag: ['Slow or garbled? Confirm it is on CUDA (float16), not the CPU.',
-           'First use slow? The model may be cold-downloading — pre-stage it on the Models page.'] },
+           'First use slow? The model may be cold-downloading — pre-stage it in Settings → Models.'] },
   ollama: {
-    act: ['Switch the Q&A or tool-routing model, or pull a new one, from the Models page.',
+    act: ['Switch the Q&A or tool-routing model, or pull a new one, from Settings → Models.',
           'Two models by design: a fast one answers, a stronger one routes tools.'],
     diag: ['LLM commands failing? Check the Ollama server is reachable and the model is installed.',
            "See what's loaded in VRAM right now on the hardware panel."] },

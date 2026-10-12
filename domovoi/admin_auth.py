@@ -82,7 +82,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1237,6 +1237,38 @@ async def require_device(request: Request) -> None:
         status_code=401,
         detail=f"{DEVICE_TOKEN_HEADER} or admin session required",
     )
+
+
+_DEVICE_AFTER_SETUP_DETAIL = (
+    "auth not configured — complete the first-run admin setup before "
+    "sending voice from a phone (a recording of someone in the house, "
+    "answered as any room would be)"
+)
+
+
+async def require_device_after_setup(
+    request: Request, _device: None = Depends(require_device)
+) -> None:
+    """The device tier WITHOUT the pre-setup LAN grace — the HTTP form of
+    :func:`check_live_mic_websocket`, for the phone's push-to-talk turn
+    (``POST /v1/phone/voice``, domovoi/phone_voice.py), which carries a
+    recording of a household member's voice the way the drop-in socket
+    carries a room's microphone, and is routed like any room's turn.
+
+    :func:`require_device` runs first (a sub-dependency, so a route that
+    wears this one wears the device tier too): after setup it is the
+    whole gate — the household token or an admin Bearer, 401 / 403 / 429
+    as usual. Before setup it would let anyone on the LAN through; this
+    answers 501 instead, the security tier's posture, so ``--reset-admin``
+    never turns every phone's mic into an open door."""
+    try:
+        async with session_scope() as s:
+            configured = await has_admin_auth(s)
+    except Exception as e:  # pragma: no cover — require_device fails first
+        log.warning("device-after-setup check failed: %s", e)
+        raise HTTPException(status_code=503, detail="auth check unavailable") from e
+    if not configured:
+        raise HTTPException(status_code=501, detail=_DEVICE_AFTER_SETUP_DETAIL)
 
 
 # Query parameter carrying the household token for the one class of caller

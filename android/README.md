@@ -232,7 +232,7 @@ app/src/main/java/com/domovoi/app/
     ├── components/        # Pill, StatusDot, cards, dialogs, Domovoi glyphs, fmt helpers
     ├── shell/             # adaptive nav: bottom bar (phone) / rail (medium) / sidebar (tablet)
     └── screens/           # home, chat, music, podcasts, audiobooks, videos, images,
-                           # news, people, satellites, calendar, stations, documents,
+                           # news, people, satellites (a Settings tab), calendar, stations, documents,
                            # local (offline MediaStore music+videos), settings, manual
 ```
 
@@ -245,10 +245,16 @@ leads back to it: the "domovoi" crumb in the topbar, the rail's glyph,
 the drawer's brand row.
 
 Responsive behavior: compact widths get the web phone strip as a bottom
-bar (Home / Music / Satellites / Calendar / Chat); every other screen,
-Settings and the manual included, is a tile on Home's "everything"
-grid, and the home tab stays lit while one of them is open. List→detail
-screens stack full-screen. Medium gets a navigation rail (Home first);
+bar — the phone bar, Home / Music / Videos / Chat until someone picks two
+to five others for that phone in Settings → Phone bar (Home is always
+first; kept in the app's Prefs, so each phone has its own; a shared screen
+never shows its personal screens there). Every other screen, Settings and
+the manual included, is a tile on Home's "everything" grid (whose "edit
+the bar" link opens that editor), and the home tab stays lit while one of
+them is open. Satellites is a tab of Settings, as on the dashboard
+(Settings → Satellites); Home's rooms and problem rows open it there.
+List→detail screens stack full-screen. Medium gets a navigation rail
+(Home first);
 expanded gets the web's permanent sidebar with badge counts and
 side-by-side list + detail panes, and Home spreads into the web
 desktop's two columns once its pane is wide enough. The mini player

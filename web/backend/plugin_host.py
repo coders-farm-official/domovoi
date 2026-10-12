@@ -68,7 +68,7 @@ log = logging.getLogger(__name__)
 # Plugins slot anywhere; equal values sort core-first then slug.
 CORE_NAV: dict[str, int] = {
     # Home, the default page. First in order; on a desktop its row is the
-    # sidebar's brand row, on a phone the first of the five strip tabs.
+    # sidebar's brand row, on a phone the first tab of the phone bar.
     "home": 1,
     "chat": 8,
     "music": 10,
@@ -77,6 +77,9 @@ CORE_NAV: dict[str, int] = {
     "videos": 15,
     "news": 18,
     "people": 20,
+    # No sidebar row since 2026-10-11 (a Settings tab; #satellites opens it),
+    # like settings below: the published order stays, so a plugin that
+    # slotted itself against it sorts as before.
     "satellites": 30,
     "calendar": 40,
     "files": 45,
