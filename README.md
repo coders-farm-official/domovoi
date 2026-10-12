@@ -82,8 +82,9 @@ Domovoi is early, and we build it in public. Here's where it stands.
    in airplane mode.
 2. **One download for Windows.** An installer that turns the household gaming
    PC into a Domovoi server. It's being built now.
-3. **Satellites for first-time builders.** A step-by-step guide with photos
-   and a current parts list.
+3. **A voice in every room with what you already own.** Satellites on an old
+   laptop running Linux or on an old Android phone or tablet, alongside the
+   Raspberry Pi, plus a step-by-step guide for each.
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written
