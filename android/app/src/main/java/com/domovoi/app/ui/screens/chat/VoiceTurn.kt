@@ -1,8 +1,10 @@
 package com.domovoi.app.ui.screens.chat
 
 import com.domovoi.app.AppContainer
+import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.DomovoiJson
+import com.domovoi.app.net.isDeviceTokenRefusal
 import com.domovoi.app.player.PlayItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -107,25 +109,37 @@ internal suspend fun sendVoiceTurn(
     threadId: Long,
     pcm: ByteArray,
     player: JsonObject?,
+): VoiceTurnReply = sendVoiceTurn(app.api, app.prefs.deviceId, threadId, pcm, player)
+
+/** [sendVoiceTurn] on a bare [ApiClient] (the JVM tests' shape). */
+internal suspend fun sendVoiceTurn(
+    api: ApiClient,
+    deviceId: String,
+    threadId: Long,
+    pcm: ByteArray,
+    player: JsonObject?,
 ): VoiceTurnReply = withContext(Dispatchers.IO) {
     val form = MultipartBody.Builder().setType(MultipartBody.FORM)
         .addFormDataPart("audio", "turn.pcm", pcm.toRequestBody("application/octet-stream".toMediaType()))
-        .addFormDataPart("phone_id", app.prefs.deviceId)
+        .addFormDataPart("phone_id", deviceId)
         .apply { if (player != null) addFormDataPart("player", player.toString()) }
         .build()
     val req = Request.Builder()
-        .url(app.api.absolute("/api/chat/threads/$threadId/voice"))
+        .url(api.absolute("/api/chat/threads/$threadId/voice"))
         // The same preflight-forcing header every write carries (WEB-6).
         .header("X-Requested-With", "DomovoiApp")
         .post(form)
         .build()
-    val client = app.api.http.newBuilder().readTimeout(VOICE_READ_TIMEOUT_SEC, TimeUnit.SECONDS).build()
+    val client = api.http.newBuilder().readTimeout(VOICE_READ_TIMEOUT_SEC, TimeUnit.SECONDS).build()
     client.newCall(req).execute().use { resp ->
         val body = resp.body?.string().orEmpty()
         if (!resp.isSuccessful) {
-            app.api.notePossiblePairingRefusal(resp.code, body)
+            api.notePossiblePairingRefusal(resp.code, body)
             if (resp.code == 401 || resp.code == 403) {
-                throw ApiException(resp.code, "${resp.code} ${resp.message}: ${body.take(200)}", body = body.take(4096))
+                throw ApiException(
+                    resp.code, "${resp.code} ${resp.message}: ${body.take(200)}",
+                    deviceTokenRequired = isDeviceTokenRefusal(resp.code, body), body = body.take(4096),
+                )
             }
             throw voiceRefusal(resp.code, body)
         }
