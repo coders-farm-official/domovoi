@@ -1,5 +1,11 @@
 package com.domovoi.app.ui.screens.local
 
+import com.domovoi.app.ui.components.rememberPager
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.LoadMoreNearEnd
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.collectAsState
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -130,21 +136,21 @@ internal fun LocalMusicScreen(
 private fun LocalMusicList(upload: DeviceUploader?) {
     val app = LocalApp.current
     val context = LocalContext.current
-    var tracks by remember { mutableStateOf<List<LocalTrack>?>(null) }
     var filter by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        tracks = withContext(Dispatchers.IO) { LocalMedia.queryTracks(context) }
+    var needle by remember { mutableStateOf("") }
+    LaunchedEffect(filter) {
+        kotlinx.coroutines.delay(250)
+        needle = filter.trim()
     }
-
-    val q = filter.trim().lowercase()
-    val shown = remember(tracks, q) {
-        tracks.orEmpty().filter {
-            q.isBlank() || it.title.lowercase().contains(q)
-                || it.artist?.lowercase()?.contains(q) == true
-                || it.album?.lowercase()?.contains(q) == true
-        }
+    // The phone's music a page at a time (data/LocalMedia.kt), the filter
+    // applied by MediaStore over every track.
+    val pager = rememberPager<LocalTrack>(needle, keyOf = { it.id }) { _, req ->
+        withContext(Dispatchers.IO) { LocalMedia.pageTracks(context, needle, req) }
     }
+    val tracks by pager.state.collectAsState()
+    val shown = tracks.items
+    val listState = rememberLazyListState()
+    LoadMoreNearEnd(listState, pager)
 
     // The tapped track plus its neighbours, not every track on the phone: a
     // whole-device queue (thousands of songs) stalled playback start and,
@@ -167,15 +173,16 @@ private fun LocalMusicList(upload: DeviceUploader?) {
         )
         Spacer(Modifier.height(10.dp))
         when {
-            tracks == null -> Text(
+            !tracks.loaded -> Text(
                 "reading device library…",
                 style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
             )
+            shown.isEmpty() && needle.isNotEmpty() -> EmptyState("no tracks match", "filter = \"$needle\"")
             shown.isEmpty() -> EmptyState(
                 "no music on this device",
                 "downloads from a domovoi land in Downloads/Domovoi and show up here",
             )
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 items(shown, key = { it.id }) { t ->
                     val key = trackUploadKey(t.id)
                     LocalTrackRow(
@@ -183,6 +190,9 @@ private fun LocalMusicList(upload: DeviceUploader?) {
                         upload = upload?.state(key),
                         onUpload = { upload?.upload(key, Uri.parse(t.uri), t.title) },
                     ) { play(t) }
+                }
+                item(key = "local-tracks-footer") {
+                    PagedFooter(tracks, "tracks", onRetry = pager::retry, onLoadMore = pager::loadMore)
                 }
             }
         }
@@ -283,15 +293,17 @@ internal fun LocalVideosScreen(
 @Composable
 private fun LocalVideosGrid(upload: DeviceUploader?) {
     val context = LocalContext.current
-    var videos by remember { mutableStateOf<List<LocalVideo>?>(null) }
     /** Index of the tapped video; the feed's order is the grid's. */
     var feedStart by remember { mutableStateOf<Int?>(null) }
     var centerKey by remember { mutableStateOf<String?>(null) }
     val gridState = rememberLazyGridState()
-
-    LaunchedEffect(Unit) {
-        videos = withContext(Dispatchers.IO) { LocalMedia.queryVideos(context) }
+    // The phone's videos a page at a time (data/LocalMedia.kt).
+    val pager = rememberPager<LocalVideo>("local-videos", keyOf = { it.id }) { _, req ->
+        withContext(Dispatchers.IO) { LocalMedia.pageVideos(context, req) }
     }
+    val paged by pager.state.collectAsState()
+    val videos: List<LocalVideo>? = if (paged.loaded) paged.items else null
+    LoadMoreNearEnd(gridState, pager)
     // Back from the feed: put the video it ended on in the middle of the grid.
     LaunchedEffect(centerKey) {
         val key = centerKey ?: return@LaunchedEffect
@@ -329,6 +341,9 @@ private fun LocalVideosGrid(upload: DeviceUploader?) {
                     }
                 }
             }
+            item(key = "local-videos-footer", span = { GridItemSpan(maxLineSpan) }) {
+                PagedFooter(paged, "videos", onRetry = pager::retry, onLoadMore = pager::loadMore)
+            }
         }
     }
 
@@ -362,6 +377,8 @@ private fun LocalVideosGrid(upload: DeviceUploader?) {
                 feedStart = null
                 centerKey = key
             },
+            // The feed follows the grid's pages: nearing its end loads the next.
+            onNearEnd = pager::loadMore,
         )
     }
 }

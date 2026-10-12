@@ -236,7 +236,9 @@ determined.
 ## Why do long lists load as I scroll?
 
 The Music library, Videos, Files, Audiobooks and Podcasts (shows and each
-show's episodes) never load a whole list at once. Each shows the first 50
+show's episodes) never load a whole list at once — on the dashboard, in the
+Android app, and for the phone's own music, videos and folders in the app.
+Each shows the first 50
 rows and fetches the next 50 as you near the bottom, with a line at the end
 saying how many are showing out of how many there are ("showing 100 of
 5,232"). If a page fails to load, that line offers **retry**.

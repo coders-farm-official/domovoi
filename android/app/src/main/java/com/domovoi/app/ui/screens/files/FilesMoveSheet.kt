@@ -87,6 +87,8 @@ internal fun FilesMoveSheet(
     LaunchedEffect(libId) { if (libId != sourceLibraryId) path = "" }
 
     var entries by remember { mutableStateOf<List<FileEntry>>(emptyList()) }
+    /** The destination has more folders than one listing shows (`browse` reads one page). */
+    var moreFolders by remember { mutableStateOf<Int?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(libId, path) {
@@ -94,8 +96,11 @@ internal fun FilesMoveSheet(
         loading = true
         error = null
         runCatching { browse(id, path) }
-            .onSuccess { entries = it.entries.filter { e -> e.isDir } }
-            .onFailure { error = it.message ?: "couldn't open folder"; entries = emptyList() }
+            .onSuccess {
+                entries = it.entries.filter { e -> e.isDir }
+                moreFolders = if (it.hasMore) it.total else null
+            }
+            .onFailure { error = it.message ?: "couldn't open folder"; entries = emptyList(); moreFolders = null }
         loading = false
     }
 
@@ -206,6 +211,13 @@ internal fun FilesMoveSheet(
                         }
                     }
                 }
+            }
+            moreFolders?.let { n ->
+                Text(
+                    "showing the first ${entries.size} of $n folders here",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.fgMuted,
+                )
             }
 
             Spacer(Modifier.size(2.dp))

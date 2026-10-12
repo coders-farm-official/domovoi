@@ -119,6 +119,9 @@ private enum class FeedSheet { Options, Playlist, Details }
 
 private const val SEEK_STEP_MS = 15_000L
 
+/** How close to the end of the loaded videos the feed asks for more. */
+private const val FEED_PREFETCH = 3
+
 /**
  * Full-screen vertical swipe feed (ported from the owner's ScrollPlayer):
  * swipe up / down for the next / previous video in the list it was opened
@@ -147,13 +150,29 @@ fun VideoFeedPlayer(
     onUpload: ((FeedVideo) -> Unit)? = null,
     onPersist: (suspend (video: FeedVideo, posSec: Long, durSec: Long?, ended: Boolean) -> Unit)? = null,
     onClose: (currentKey: String?) -> Unit,
+    /**
+     * The list behind the feed has more past the end of [videos] (it loads a
+     * page at a time): asked for as the viewer nears the last few, and the
+     * new ones join the end of the feed when [videos] grows.
+     */
+    onNearEnd: (() -> Unit)? = null,
 ) {
     val app = LocalApp.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     val queue = remember { mutableStateListOf<FeedVideo>().apply { addAll(videos) } }
+    /** Every video the feed was ever given, so one removed from the session queue isn't added back. */
+    val known = remember { HashSet<String>().apply { videos.forEach { add(it.key) } } }
     var current by remember { mutableIntStateOf(startIndex.coerceIn(0, (videos.size - 1).coerceAtLeast(0))) }
+    // The list behind the feed loaded another page: its new videos join the end.
+    LaunchedEffect(videos) {
+        videos.forEach { if (known.add(it.key)) queue.add(it) }
+    }
+    // Nearing the end of what is loaded: ask the list for its next page.
+    LaunchedEffect(current, queue.size) {
+        if (onNearEnd != null && queue.isNotEmpty() && current >= queue.size - FEED_PREFETCH) onNearEnd()
+    }
     var resumeUsed by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var keepScreenOn by remember { mutableStateOf(false) }

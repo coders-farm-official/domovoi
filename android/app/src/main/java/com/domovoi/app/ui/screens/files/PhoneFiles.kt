@@ -116,8 +116,12 @@ internal fun PhotoGrid(
     model: (FileEntry) -> Any?,
     onOpen: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
+    state: androidx.compose.foundation.lazy.grid.LazyGridState =
+        androidx.compose.foundation.lazy.grid.rememberLazyGridState(),
+    footer: (@Composable () -> Unit)? = null,
 ) {
     LazyVerticalGrid(
+        state = state,
         columns = GridCells.Adaptive(104.dp),
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -139,6 +143,9 @@ internal fun PhotoGrid(
                     error = { Icon(Icons.Outlined.Image, null, tint = Domovoi.colors.fgFaint) },
                 )
             }
+        }
+        footer?.let { f ->
+            item(key = "photos-footer", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { f() }
         }
     }
 }
@@ -302,7 +309,14 @@ internal fun SendHomeSheet(
         sourceLibraryId = "",
         sourcePath = "",
         libraries = libraries,
-        browse = { id, p -> app.api.get(filesBrowsePath(id, p, app.prefs.deviceId)).decode<FileBrowse>() },
+        browse = { id, p ->
+            app.api.get(
+                com.domovoi.app.net.Paging.path(
+                    com.domovoi.app.net.filesBrowseQueryPath(id, p, app.prefs.deviceId, foldersOnly = true),
+                    com.domovoi.app.net.PageRequest(null, 0, com.domovoi.app.net.SERVER_MAX_PAGE),
+                ),
+            ).decode<FileBrowse>()
+        },
         onMove = { libId, p -> libraries.firstOrNull { it.id == libId }?.let { onSend(it, p) } },
         onDismiss = onDismiss,
         title = words.title,

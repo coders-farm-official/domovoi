@@ -1,5 +1,12 @@
 package com.domovoi.app.ui.screens.podcasts
 
+import com.domovoi.app.ui.components.rememberPager
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.LoadMoreNearEnd
+import com.domovoi.app.net.toPage
+import com.domovoi.app.net.Paging
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -88,13 +95,23 @@ internal fun EpisodeOverlay(
         toast(err ?: "saving \"$name\" to Downloads/Domovoi")
     }
 
-    val episodes = rememberApi(
-        sub.id,
-        eventTypes = setOf("podcasts.changed", "podcast_positions.changed"),
-    ) {
-        it.api.get("/api/podcasts/subscriptions/${sub.id}/episodes")
-            .decode<List<PodcastEpisode>>()
+    // A long back catalogue arrives a page at a time as the list scrolls
+    // (net/Paging.kt); the search runs on the server over every episode.
+    var search by remember { mutableStateOf("") }
+    var needle by remember { mutableStateOf("") }
+    LaunchedEffect(search) {
+        kotlinx.coroutines.delay(250)
+        needle = search.trim()
     }
+    val episodesPath = "/api/podcasts/subscriptions/${sub.id}/episodes" +
+        (if (needle.isNotEmpty()) "?q=" + android.net.Uri.encode(needle) else "")
+    val pager = rememberPager<PodcastEpisode>(
+        episodesPath, keyOf = { it.id },
+        eventTypes = setOf("podcasts.changed", "podcast_positions.changed"),
+    ) { a, req -> a.api.get(Paging.path(episodesPath, req)).toPage<PodcastEpisode>(loadedBefore = req.offset) }
+    val episodes by pager.state.collectAsState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    LoadMoreNearEnd(listState, pager)
 
     BackHandler(onBack = onClose)
 
@@ -146,16 +163,26 @@ internal fun EpisodeOverlay(
                     }
                 }
                 HorizontalDivider(color = Domovoi.colors.border)
+                androidx.compose.material3.OutlinedTextField(
+                    value = search, onValueChange = { search = it },
+                    placeholder = { Text("search episodes…") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
 
                 when {
-                    episodes.data == null && episodes.loading -> LoadingState()
-                    episodes.data == null && episodes.error != null ->
-                        ErrorState(episodes.error ?: "request failed", episodes.refresh)
-                    episodes.data.isNullOrEmpty() ->
+                    episodes.items.isEmpty() && episodes.loading -> LoadingState()
+                    episodes.items.isEmpty() && episodes.error != null ->
+                        ErrorState(episodes.error ?: "request failed", pager::retry)
+                    episodes.items.isEmpty() && needle.isNotEmpty() ->
+                        EmptyState("no episodes match", "search = \"$needle\"")
+                    episodes.items.isEmpty() ->
                         EmptyState("no episodes yet", "try \"poll now\"")
-                    else -> LazyColumn(Modifier.weight(1f)) {
-                        items(episodes.data.orEmpty(), key = { it.id }) { ep ->
+                    else -> LazyColumn(Modifier.weight(1f), state = listState) {
+                        items(episodes.items, key = { it.id }) { ep ->
                             EpisodeRow(ep, onDownload = { saveToDevice(ep) }) { onPlay(ep) }
+                        }
+                        item(key = "episodes-footer") {
+                            PagedFooter(episodes, "episodes", onRetry = pager::retry, onLoadMore = pager::loadMore)
                         }
                     }
                 }

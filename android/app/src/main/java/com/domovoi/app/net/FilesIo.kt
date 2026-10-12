@@ -48,6 +48,18 @@ internal fun filesBrowsePath(libraryId: String, path: String, deviceId: String):
     "/api/files/browse?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(path) +
         "&device_id=" + Uri.encode(deviceId)
 
+/** [filesBrowsePath] with the server-side name filter ([q]) and, for a
+ *  destination picker, folders only. Paging params go on top (Paging.path). */
+internal fun filesBrowseQueryPath(
+    libraryId: String,
+    path: String,
+    deviceId: String,
+    q: String = "",
+    foldersOnly: Boolean = false,
+): String = filesBrowsePath(libraryId, path, deviceId) +
+    (if (q.isNotBlank()) "&q=" + Uri.encode(q.trim()) else "") +
+    (if (foldersOnly) "&kind=folder" else "")
+
 /** Absolute /api/files/download URL for a file or directory (dir → server zip). */
 internal fun filesDownloadUrl(app: AppContainer, libraryId: String, rel: String): String =
     app.api.absolute("/api/files/download?library_id=" + Uri.encode(libraryId) + "&path=" + Uri.encode(rel))

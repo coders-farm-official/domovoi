@@ -1,5 +1,11 @@
 package com.domovoi.app.ui.screens.podcasts
 
+import com.domovoi.app.ui.components.rememberPager
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.LoadMoreNearEnd
+import com.domovoi.app.net.toPage
+import com.domovoi.app.net.Paging
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -72,9 +78,22 @@ fun PodcastsScreen() {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
 
-    val subs = rememberApi("podcast-subs", eventTypes = setOf("podcasts.changed")) {
-        it.api.get("/api/podcasts/subscriptions").decode<List<PodcastSubscription>>()
+    // A page of shows at a time as the grid scrolls (net/Paging.kt); the
+    // search is the server's, over every subscription.
+    var search by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    var needle by remember { mutableStateOf(search.trim()) }
+    LaunchedEffect(search) {
+        kotlinx.coroutines.delay(250)
+        needle = search.trim()
     }
+    val subsPath = "/api/podcasts/subscriptions" +
+        (if (needle.isNotEmpty()) "?q=" + android.net.Uri.encode(needle) else "")
+    val pager = rememberPager<PodcastSubscription>(
+        subsPath, keyOf = { it.id }, eventTypes = setOf("podcasts.changed"),
+    ) { a, req -> a.api.get(Paging.path(subsPath, req)).toPage<PodcastSubscription>(loadedBefore = req.offset) }
+    val subs by pager.state.collectAsState()
+    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+    LoadMoreNearEnd(gridState, pager)
 
     var selected by remember { mutableStateOf<PodcastSubscription?>(null) }
     var showSubscribe by remember { mutableStateOf(false) }
@@ -90,7 +109,7 @@ fun PodcastsScreen() {
                     val downloaded = r["downloaded"]?.jsonPrimitive?.intOrNull ?: 0
                     val fresh = r["new"]?.jsonPrimitive?.intOrNull ?: 0
                     toast("Polled — $downloaded downloaded, $fresh new")
-                    subs.refresh()
+                    pager.reload()
                 }
                 .onFailure { toast(failureText("Poll", it)) }
             polling = false
@@ -110,13 +129,19 @@ fun PodcastsScreen() {
                 },
             )
             ListeningAsChip(Modifier.padding(top = 8.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = search, onValueChange = { search = it },
+                placeholder = { Text("search shows…") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
             Spacer(Modifier.height(12.dp))
 
             when {
-                subs.data == null && subs.loading -> LoadingState()
-                subs.data == null && subs.error != null ->
-                    ErrorState(subs.error ?: "request failed", subs.refresh)
-                subs.data.isNullOrEmpty() -> EmptyState(
+                subs.items.isEmpty() && subs.loading -> LoadingState()
+                subs.items.isEmpty() && subs.error != null ->
+                    ErrorState(subs.error ?: "request failed", pager::retry)
+                subs.items.isEmpty() && needle.isNotEmpty() -> EmptyState("no shows match", "search = \"$needle\"")
+                subs.items.isEmpty() -> EmptyState(
                     "no subscriptions yet",
                     "subscribe to a podcast by RSS URL or search by name",
                     action = {
@@ -124,13 +149,17 @@ fun PodcastsScreen() {
                     },
                 )
                 else -> LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Adaptive(220.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.weight(1f),
                 ) {
-                    items(subs.data.orEmpty(), key = { it.id }) { sub ->
+                    items(subs.items, key = { it.id }) { sub ->
                         SubscriptionCard(sub) { selected = sub }
+                    }
+                    item(key = "subs-footer", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        PagedFooter(subs, "shows", onRetry = pager::retry, onLoadMore = pager::loadMore)
                     }
                 }
             }
@@ -143,7 +172,7 @@ fun PodcastsScreen() {
                     onClose = { selected = null },
                     onUnsubscribed = {
                         selected = null
-                        subs.refresh()
+                        pager.remove(sub.id)
                     },
                     onPlay = { ep -> playEpisode(app, scope, sub, ep) { resume = it } },
                 )
@@ -156,7 +185,7 @@ fun PodcastsScreen() {
             onClose = { showSubscribe = false },
             onDone = {
                 showSubscribe = false
-                subs.refresh()
+                pager.reload()
             },
         )
     }

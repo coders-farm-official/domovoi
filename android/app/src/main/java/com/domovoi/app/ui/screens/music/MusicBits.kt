@@ -61,7 +61,6 @@ internal class MusicUi {
     var source by mutableStateOf("all")
     var sort by mutableStateOf("added_desc")
     var favoritedOnly by mutableStateOf(false)
-    var page by mutableIntStateOf(0)
     val selectedIds = mutableStateListOf<Long>()
     var bulkPid by mutableStateOf<Long?>(null)
 
@@ -80,14 +79,16 @@ internal class MusicUi {
 
     companion object {
         /**
-         * Where the page is — tab, search, filters, page of tracks — kept
-         * when the workspace goes away and comes back (a spell in the
-         * background drops to local media and back; the "your device"
-         * switch keeps this side alive, but not through that). Selections
-         * and open drawers are not kept.
+         * Where the page is — tab, search, filters — kept when the
+         * workspace goes away and comes back (a spell in the background
+         * drops to local media and back; the "your device" switch keeps
+         * this side alive, but not through that). The library list loads as
+         * it scrolls now, so there is no page number to keep; the scroll
+         * position is the LazyColumn's own saved state. Selections and open
+         * drawers are not kept.
          */
         val Saver: Saver<MusicUi, Any> = listSaver(
-            save = { listOf(it.tab, it.q, it.source, it.sort, it.favoritedOnly, it.page) },
+            save = { listOf(it.tab, it.q, it.source, it.sort, it.favoritedOnly) },
             restore = { saved ->
                 MusicUi().apply {
                     tab = saved[0] as Int
@@ -95,7 +96,6 @@ internal class MusicUi {
                     source = saved[2] as String
                     sort = saved[3] as String
                     favoritedOnly = saved[4] as Boolean
-                    page = saved[5] as Int
                 }
             },
         )

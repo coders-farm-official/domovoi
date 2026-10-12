@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,6 +53,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -72,7 +75,13 @@ import com.domovoi.app.LocalToast
 import com.domovoi.app.data.LocalMedia
 import com.domovoi.app.data.PhoneFolders
 import com.domovoi.app.net.ApiException
+import com.domovoi.app.net.Page
+import com.domovoi.app.net.PageRequest
+import com.domovoi.app.net.SERVER_MAX_PAGE
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.ui.components.LoadMoreNearEnd
+import com.domovoi.app.ui.components.PagedFooter
+import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.net.uploadFiles
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
@@ -174,12 +183,41 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
         ActivityResultContracts.RequestPermission(),
     ) { permissionTick++ }
 
-    val browse = rememberApi(selectedId, path, source, permitted, eventTypes = source.browseEvents) {
-        val id = selectedId
-        if (id.isNullOrBlank() || !permitted) null
-        else source.browse(id, path)
+    // The folder, a page at a time as it scrolls (net/Paging.kt). The name
+    // filter is applied to the whole folder (the server's, or the phone
+    // source's); a new folder, library or filter is a new list.
+    var filter by rememberSaveable { mutableStateOf("") }
+    var needle by remember { mutableStateOf(filter.trim()) }
+    LaunchedEffect(filter) {
+        kotlinx.coroutines.delay(250)
+        needle = filter.trim()
     }
-    val data = browse.data?.takeIf { it.libraryId == selectedId || !source.onPhone }
+    /** The folder's own fields (breadcrumb, writable, grid…) from its latest page. */
+    var meta by remember { mutableStateOf<FileBrowse?>(null) }
+    val pager = rememberPager<FileEntry>(
+        selectedId, path, source, permitted, needle,
+        keyOf = { it.rel }, eventTypes = source.browseEvents,
+    ) { _, req ->
+        val id = selectedId
+        if (id.isNullOrBlank() || !permitted) {
+            Page(emptyList(), 0, false, null)
+        } else {
+            val fb = source.browsePage(id, path, req, needle)
+            meta = fb.copy(entries = emptyList())
+            Page(
+                fb.entries,
+                fb.total ?: if (fb.hasMore) null else req.offset + fb.entries.size,
+                fb.hasMore,
+                fb.nextCursor,
+            )
+        }
+    }
+    val listing by pager.state.collectAsState()
+    val data = meta?.takeIf { (it.libraryId == selectedId || !source.onPhone) && listing.loaded }
+    val listState = rememberLazyListState()
+    val gridState = rememberLazyGridState()
+    LoadMoreNearEnd(listState, pager)
+    LoadMoreNearEnd(gridState, pager)
     // Two different "no": the LIBRARY is read-only (editable=false), or THIS
     // DEVICE has been blocked by an admin (writable=false). Upload / move /
     // import need both. Delete is admin-gated server-side and this app can't
@@ -226,7 +264,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     if (r.skipped > 0) parts.append(" · ${r.skipped} skipped")
                     if (r.reindexTriggered) parts.append(" · indexing…")
                     toast(parts.toString())
-                    browse.refresh()
+                    pager.reload()
                 }
                 .onFailure { toast("${if (source.onPhone) "copy" else "upload"} failed: ${it.message}") }
             busy = null
@@ -250,6 +288,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
 
     fun onEntryPrimary(e: FileEntry) {
         if (e.isDir) {
+            filter = ""
             path = e.rel
             return
         }
@@ -278,7 +317,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                         "deleted ${r.deleted}" +
                             if (r.failed > 0) " · ${r.failed} failed" else "",
                     )
-                    browse.refresh()
+                    pager.reload()
                 }
                 .onFailure {
                     // Delete is the one Files verb behind the admin password,
@@ -317,7 +356,7 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     // Name the reason — "1 failed" alone is useless when the
                     // cause is a collision the user can act on.
                     r.firstFailure?.let { toast(it.take(120)) }
-                    browse.refresh()
+                    pager.reload()
                 }
                 .onFailure { toast("move failed: ${it.message}") }
             busy = null
@@ -407,7 +446,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                         // Picking the library already open re-lists it: the
                         // phone has no change events to say a folder moved on.
                         onSelect = {
-                            if (it == selectedId && path.isEmpty()) browse.refresh()
+                            // ...and past the server's cached listing too.
+                            if (it == selectedId && path.isEmpty()) pager.reload(fresh = true)
+                            if (it != selectedId) filter = ""
                             selectedId = it
                             path = ""
                         },
@@ -455,13 +496,24 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                 Breadcrumb(
                     label = currentLib?.label ?: "root",
                     segments = data?.breadcrumb ?: emptyList(),
-                    onHome = { path = "" },
+                    onHome = { filter = ""; path = "" },
                     onSegment = { i ->
                         val crumbs = data?.breadcrumb ?: emptyList()
+                        filter = ""
                         path = data?.crumbPaths?.getOrNull(i) ?: crumbs.take(i + 1).joinToString("/")
                     },
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
+                if (permitted) {
+                    OutlinedTextField(
+                        value = filter,
+                        onValueChange = { filter = it },
+                        placeholder = { Text("filter this folder…", color = Domovoi.colors.fgSubtle) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
             }
 
             val errorTitle = if (source.onPhone) "couldn't open this folder" else "couldn't reach the server"
@@ -483,10 +535,19 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                         }
                     },
                 )
-                data == null && browse.loading -> LoadingState()
-                data == null && browse.error != null ->
-                    ErrorState(browse.error ?: "request failed", browse.refresh, title = errorTitle)
-                data != null && data.entries.isEmpty() -> EmptyState(
+                listing.items.isEmpty() && listing.loading -> LoadingState()
+                listing.items.isEmpty() && listing.error != null ->
+                    ErrorState(listing.error ?: "request failed", pager::retry, title = errorTitle)
+                data != null && listing.items.isEmpty() && needle.isNotEmpty() -> EmptyState(
+                    "nothing matches",
+                    "filter = \"$needle\"",
+                    action = {
+                        androidx.compose.material3.TextButton(onClick = { filter = "" }) {
+                            Text("clear filter", color = Domovoi.colors.brand)
+                        }
+                    },
+                )
+                data != null && listing.items.isEmpty() -> EmptyState(
                     "empty folder",
                     when {
                         source.onPhone && canWrite -> "add files, or pick another folder"
@@ -496,17 +557,19 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                     },
                 )
                 data != null && data.grid -> PhotoGrid(
-                    entries = data.entries,
+                    entries = listing.items,
                     model = { e -> source.imageModel(selectedId ?: "", e) },
                     onOpen = { e -> onEntryPrimary(e) },
                     modifier = Modifier.fillMaxWidth().weight(1f),
+                    state = gridState,
+                    footer = { PagedFooter(listing, "photos", onRetry = pager::retry, onLoadMore = pager::loadMore) },
                 )
                 data != null -> DomovoiCard(
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     padding = 0,
                 ) {
-                    LazyColumn(Modifier.fillMaxWidth()) {
-                        items(data.entries, key = { it.rel }) { e ->
+                    LazyColumn(Modifier.fillMaxWidth(), state = listState) {
+                        items(listing.items, key = { it.rel }) { e ->
                             FileRow(
                                 entry = e,
                                 onOpen = { onEntryPrimary(e) },
@@ -520,6 +583,9 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
                                 onDelete = if (editable) ({ confirmDelete = e }) else null,
                             )
                         }
+                        item(key = "files-footer") {
+                            PagedFooter(listing, "items", onRetry = pager::retry, onLoadMore = pager::loadMore)
+                        }
                     }
                 }
                 else -> LoadingState()
@@ -529,13 +595,13 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
         textEditorRel?.let { rel ->
             TextEditorOverlay(source, selectedId ?: "", rel) {
                 textEditorRel = null
-                browse.refresh()
+                pager.reload()
             }
         }
         sheetEditorRel?.let { rel ->
             SheetEditorOverlay(source, selectedId ?: "", rel) {
                 sheetEditorRel = null
-                browse.refresh()
+                pager.reload()
             }
         }
         imageEntry?.let { e ->
@@ -589,7 +655,8 @@ internal fun FilesBrowser(source: FileSource, uploadMode: Boolean = false) {
             sourceLibraryId = selectedId ?: "",
             sourcePath = path,
             libraries = libraries,
-            browse = { id, p -> source.browse(id, p) },
+            // A destination's folders: one page of up to 200 (the sheet says when there are more).
+            browse = { id, p -> source.browsePage(id, p, PageRequest(null, 0, SERVER_MAX_PAGE), foldersOnly = true) },
             onMove = { targetLibraryId, targetPath ->
                 moveEntry = null
                 doMove(e, targetLibraryId, targetPath)

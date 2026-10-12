@@ -6,19 +6,26 @@ a way that would otherwise get reported as a bug.
 
 ## 2026-10-11 — Long lists load as you scroll
 
-Nothing to do beyond the usual update. The Android app already installed
-keeps working against the updated server (it gets the answers it was built
-for); a new Android build that pages the same way follows.
+New Android build; on the server, the usual update. Update the server
+first: the Android app already installed keeps working against it (it gets
+the answers it was built for), and the new app still works against a
+server that hasn't been updated (Music still pages there, by offset; the
+other lists arrive whole, as before).
 
-* **Music, Videos, Files, Audiobooks and Podcasts load a page at a time.**
-  The first 50 rows show at once; the next 50 load as you near the bottom,
-  with "showing N of M" and a **retry** when a page fails. Music's library
-  table loses its page arrows for the same scrolling, and its page grew
-  from 12 rows to 50.
+* **Music, Videos, Files, Audiobooks and Podcasts load a page at a time**,
+  on the dashboard and in the app. The first 50 rows show at once; the
+  next 50 load as you near the bottom, with "showing N of M" and a
+  **retry** when a page fails. Music's library loses its page arrows for
+  the same scrolling (web and app), and a page grew from 12 rows to 50.
+* **The app's video feed keeps going past the first page**: as you near
+  the end of what is loaded, the next page joins the feed.
+* **The phone's own lists page too** ("your device" and the offline app):
+  music, videos and photo albums are read a page at a time off the phone's
+  media index, and a picked folder builds its rows a page at a time.
 * **Every search, filter and sort runs on the server** and covers the
   whole list. New: a search box on Audiobooks, Podcasts (shows, and the
-  episodes of one show) and in the Files list (this folder), and sort
-  choices on Videos, Files and Audiobooks.
+  episodes of one show) and in the Files list (this folder), on the web and
+  in the app, and sort choices on the web's Videos, Files and Audiobooks.
 * **Select all** on Music and Files selects the loaded rows; its tooltip
   says how many.
 * **API:** every list behind those pages takes `limit` (default 50, max

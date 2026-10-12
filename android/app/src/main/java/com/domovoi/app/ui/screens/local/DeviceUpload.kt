@@ -299,7 +299,8 @@ private suspend fun fetchWriteStatus(app: AppContainer, kind: UploadKind): Serve
     }
     val probe = probeLibrary(kind, libs) ?: return ServerWriteStatus(libs, error = error)
     val browse = try {
-        app.api.get(filesBrowsePath(probe, "", app.prefs.deviceId)).decode<FileBrowse>()
+        // One row is plenty: only `writable` / `blocked_reason` are read.
+        app.api.get(filesBrowsePath(probe, "", app.prefs.deviceId) + "&limit=1").decode<FileBrowse>()
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
