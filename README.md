@@ -290,8 +290,10 @@ text-to-speech, satellite WebSockets, background workers, the plugin runtime
 — while the **dashboard** (`:6369`) serves the web UI and proxies
 live-state/admin actions to the core. Each room gets its own MPD music
 daemon, provisioned lazily in Docker when the room's satellite first
-connects. TTS is local by default — neural **Piper** voices rendered on the
-server, so Domovoi's replies are spoken on your own hardware. Microsoft's
+connects. TTS is local by default — three public-domain neural **Piper**
+voices rendered on the server through Domovoi's own permissively licensed
+text-to-phoneme converter, so Domovoi's replies are spoken on your own
+hardware. Microsoft's
 online Edge voices are available as a deliberate opt-in for anyone who
 prefers them, and the engine chain falls back gracefully (`piper → system`
 by default, `edge → piper → system` if you choose Edge) so the house keeps
@@ -413,5 +415,13 @@ Domovoi is [MIT licensed](LICENSE) — copyright © 2026
 Built on the shoulders of excellent open source: Whisper &
 faster-whisper, Ollama, Piper, openWakeWord, MPD, Postgres, Flyway, and
 FastAPI, among others.
+
+Domovoi's voices are three public-domain Piper voices by Bryce Beattie
+(Norman and Kristin from LibriVox recordings, Linda from the LJ Speech
+dataset), run on ONNX Runtime (MIT). The text-to-phoneme converter that
+feeds them (`domovoi/phonemizer`) is Domovoi's own (MIT) on the Carnegie
+Mellon Pronouncing Dictionary (BSD-2-Clause style; its licence ships in
+`domovoi/phonemizer/data/cmudict/LICENSE`); no espeak-ng code or data is
+used.
 
 *May your stove stay warm and your wake word never misfire.* 🐈

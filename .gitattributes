@@ -1,0 +1,5 @@
+# The phonemizer's data and golden fixture are checked byte for byte (their
+# SHA-256 are pinned in data/SHA256SUMS and golden.json), so no line-ending
+# conversion on checkout, whatever core.autocrlf says.
+domovoi/phonemizer/data/** -text
+domovoi/phonemizer/golden.json -text

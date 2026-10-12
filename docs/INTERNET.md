@@ -223,8 +223,10 @@ stays yours to do:
 
 - **Microsoft Edge voices** (Settings → Voices, or `TTS_ENGINE=edge`):
   nicer voices, but the text of every reply goes to Microsoft.
-- **Extra voices** (`SEED_VOICE_CATALOG=true`): 9 more Piper voices (about
-  0.7 GB) and 19 Microsoft Edge voices registered at startup.
+- **Extra voices** (`SEED_VOICE_CATALOG=true`): the other two of Domovoi's
+  three Piper voices (about 130 MB, downloaded on first use unless the
+  provisioning fetched them) and 19 Microsoft Edge voices registered at
+  startup.
 - **Topic news every morning** (`NEWS_AUTO_FETCH`).
 - **A custom wake word.** The trainer downloads about 8 GB of training
   data the first time. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).

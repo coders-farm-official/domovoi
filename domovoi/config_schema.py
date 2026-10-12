@@ -39,8 +39,9 @@ Sections:
 
 Deliberately EXCLUDED: ``tts_edge_voice`` / ``tts_piper_voice``. The
 voice a satellite actually speaks is resolved from the Voices registry
-table (managed on the Voices page), not from these settings — editing
-them here would be a silent no-op in normal operation.
+table (managed on the Voices page; "Domovoi's voice" there picks among the
+three Piper voices), not from these settings — editing them here would be
+a silent no-op in normal operation.
 
 Also deliberately EXCLUDED, and for a different reason: the two keys
 that decide who may talk to this box and what it may reach out to —
@@ -324,7 +325,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "Microsoft's cloud voices — nicer sounding and free of CPU cost, "
         "but the TEXT OF EVERY SPOKEN RESPONSE is sent to Microsoft, so "
         "choose it deliberately. 'system' = the OS's own synthesizer "
-        "(espeak-ng on Linux, SAPI on Windows), robotic but always there. "
+        "(SAPI on Windows, say on macOS, espeak-ng on Linux when you "
+        "installed it), robotic. "
         "Falls through the chain if the preferred one fails.",
         "choice", tier="reapply", choices=["piper", "edge", "system"],
         needs_internet_choices=("edge",),

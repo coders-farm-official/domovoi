@@ -1653,6 +1653,11 @@ class VoicesRepository:
         )
         return True
 
+    async def clear_default(self) -> None:
+        """Leave no default (the caller sets another one in the same
+        transaction): what lets :meth:`delete` take out a former default."""
+        await self.s.execute(text("UPDATE voices SET is_default = FALSE WHERE is_default"))
+
     async def update(
         self,
         voice_id: int,
@@ -1698,6 +1703,70 @@ class VoicesRepository:
         )
         r = row.first()
         return self._row(r) if r else None
+
+
+class PronunciationsRepository:
+    """The owner's changes to the "say it like" list (table
+    ``pronunciations``, V027): one row per word, keyed by the converter's
+    normalized form. ``say_like`` None marks a shipped default the owner
+    removed. ``pronunciations_changed`` holds when the list last changed
+    (:meth:`touch` after every change, deletions included). The effective
+    list (defaults + these rows) is built by :mod:`domovoi.voice_settings`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def all(self) -> list[dict]:
+        row = await self.s.execute(
+            text("SELECT key, word, say_like, updated_at FROM pronunciations ORDER BY lower(word), key")
+        )
+        return [
+            {"key": r[0], "word": r[1], "say_like": r[2], "updated_at": r[3]} for r in row.all()
+        ]
+
+    async def put(self, *, key: str, word: str, say_like: str | None) -> None:
+        """Insert or replace the row for ``key``; None removes the word
+        from the effective list (a default) or keeps it out."""
+        await self.s.execute(
+            text(
+                """
+                INSERT INTO pronunciations (key, word, say_like, updated_at)
+                VALUES (:key, :word, :say_like, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET word = EXCLUDED.word, say_like = EXCLUDED.say_like, updated_at = NOW()
+                """
+            ),
+            {"key": key, "word": word, "say_like": say_like},
+        )
+
+    async def delete(self, keys) -> int:
+        """Delete the rows of ``keys``; how many went."""
+        keys = list(keys)
+        if not keys:
+            return 0
+        row = await self.s.execute(
+            text("DELETE FROM pronunciations WHERE key = ANY(:keys)"), {"keys": keys}
+        )
+        return int(row.rowcount or 0)
+
+    async def count(self) -> int:
+        row = await self.s.execute(text("SELECT COUNT(*) FROM pronunciations"))
+        return int(row.scalar_one())
+
+    async def touch(self) -> None:
+        """Record that the list changed, now."""
+        await self.s.execute(
+            text(
+                """
+                INSERT INTO pronunciations_changed (id, changed_at) VALUES (1, NOW())
+                ON CONFLICT (id) DO UPDATE SET changed_at = NOW()
+                """
+            )
+        )
+
+    async def last_change(self):
+        row = await self.s.execute(text("SELECT changed_at FROM pronunciations_changed WHERE id = 1"))
+        return row.scalar()
 
 
 class WakeWordsRepository:

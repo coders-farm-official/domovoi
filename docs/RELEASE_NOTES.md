@@ -4,6 +4,52 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — A new voice, and words it says the way you tell it
+
+A server update (it adds migration **V027**; the update runs it, and its
+dependency change needs the internet once).
+
+* **Domovoi sounds different after this update.** It now speaks with one
+  of three public-domain voices: **Norman** (male, the new default),
+  **Kristin** or **Linda** (female). A server that spoke with the old
+  default (`en_US-lessac-medium`) or a voice of the old catalog built on
+  it (amy, ryan, kusal, joe, kathleen, alan, alba) moves to Norman at its
+  first start: `TTS_PIPER_VOICE` in `domovoi/.env` is rewritten, the old
+  voices leave the Voices list (a room that had picked one speaks in the
+  default), their model files are deleted from `~/.domovoi/piper_voices/`
+  (nothing outside that folder), and Norman is downloaded (63 MB, checked
+  against its pinned SHA-256). The greetings and clips re-render in it. A
+  server already set to one of the three keeps it, and so does one set to
+  the old catalog's Cori (public domain too, no longer offered); your own
+  uploaded voices stay (one trained on other than British-English "en"
+  phonemes, such as most `en_US` voices, now falls through to the system
+  voice: the new converter writes only that set).
+* **To pick another:** Settings → Voices → **Domovoi's voice**, with a play
+  button for each. The phone app offers the same three, so the house and
+  the phone can sound alike.
+* **Say it like.** When a word comes out wrong, add it under Settings →
+  Voices → **Say it like**: the word and how it sounds in plain letters,
+  stressed syllable in capitals (`Siobhan` = `shiv-AWN`); play it before
+  you save. Three entries ship and can be changed or removed: Domovoi =
+  `DOH-moe-voy`, Domo = `DOH-moe`, Nguyen = `win`. The list is stored in
+  the database (V027) and read by the phone (`GET /api/voice`).
+* **Why:** the old voice engine, `piper-tts`, is GPL-3.0 and carries
+  espeak-ng (GPL-3.0), and the old voices' licences don't allow every use.
+  Domovoi now turns text into speech sounds with its own converter
+  (`domovoi/phonemizer`: CMUdict, BSD-style; the rest MIT) and runs the
+  voice on ONNX Runtime (MIT). The update **uninstalls `piper-tts`** from
+  the venv (a step on the Version card says so). If you install by hand,
+  `pip uninstall -y piper-tts piper-phonemize` after updating.
+* **`espeak-ng` is no longer installed** by the Linux provisioning; it was
+  only the robotic last-resort voice. A server that has it keeps it, and
+  uses it if the Piper voice is ever missing.
+* **The fast lane's `fastlane` extra is gone.** Its recognizer,
+  sherpa-onnx, compiles espeak-ng into its PyPI wheels. To keep trying the
+  lane, install sherpa-onnx yourself ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane));
+  a copy already in your venv stays.
+* Text with no Latin letters at all (another script) is answered with
+  "Sorry, I can't read that out loud." instead of silence.
+
 ## 2026-10-12 — Satellites: ready for spare devices (nothing changes for a Pi)
 
 Server and dashboard update; no migration, no satellite upgrade needed.

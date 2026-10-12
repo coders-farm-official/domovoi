@@ -21,7 +21,7 @@
 #        --constraint /tmp/tested.txt --output-file requirements.lock pyproject.toml
 #
 # Not locked here, on purpose: the hardware-dependent extras (`real-clients`,
-# `cuda`, `voice-profile`, `fingerprint`, `shazam`, `chat`, `fastlane`). Their wheels
+# `cuda`, `voice-profile`, `fingerprint`, `shazam`, `chat`). Their wheels
 # differ per platform and GPU, so pinning them from one machine would break
 # installs on the next; install them with pip's own resolver as documented
 # in the README and docs/CPU_HOST.md.
@@ -372,6 +372,9 @@ fastapi==0.139.0 \
     --hash=sha256:99ab7b2d92223c76d6cf10757ab3f89d45b38267fc20b2a136cf02f6beac3145 \
     --hash=sha256:cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189
     # via domovoi (pyproject.toml)
+flatbuffers==25.12.19 \
+    --hash=sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4
+    # via onnxruntime
 greenlet==3.5.3 \
     --hash=sha256:0909f9355a9f24845d3299f3112e266a06afb68302041989fd26bd68894933db \
     --hash=sha256:0f41e4a05a3c0cb31b17023eff28dd111e1d16bf7d7d00406cd7df23f31398a7 \
@@ -786,10 +789,38 @@ numpy==2.4.6 \
     --hash=sha256:f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda \
     --hash=sha256:f407cb6b8e9d6d8c626bc73c945db1706035af8fd632295547bf1c9e46d092d6 \
     --hash=sha256:f74a575920ab21fe304421a3fc28793d82e299cae9eccb37084e9fc7f3617c20
-    # via domovoi (pyproject.toml)
+    # via
+    #   domovoi (pyproject.toml)
+    #   onnxruntime
 ollama==0.6.2 \
     --hash=sha256:3ad7daab28e5a973445c36a73882a3ef698c2ebb00e21e308652741577509f7d \
     --hash=sha256:936d55daa684f474364c098611c933626f8d6c7d67065c5b7ae0c477b508b07f
+    # via domovoi (pyproject.toml)
+onnxruntime==1.28.0 \
+    --hash=sha256:07fb3cbe990d6bf0ab3c22bfbbfb0e314151266046ea6edb4a07f556b4258c5f \
+    --hash=sha256:0a83bdb70d143cede762b677789bf2a7acca54b3fb82565601d5c30695aa933c \
+    --hash=sha256:0d650aeee29368414367b65529e90afe4bf1bab76254789063b8b2f7ea3013c8 \
+    --hash=sha256:0faf85fb447a663c9cdadc39bd6b19bdf7bedded6699e45731b9b36c46fd993d \
+    --hash=sha256:1a1a19175464665c9b8d50bc916f216cc0b569110045b7bbca8f9f290b186f58 \
+    --hash=sha256:26ff0fdd06efb6c155bae95387a09db1a2be89c7a03e4d0bffd5a171cc2826da \
+    --hash=sha256:31410f544674f534c2f27348af52ef81682ca9c8719154bf4d48f0ef23823b1e \
+    --hash=sha256:4e81a23df16e7acb9d51b06d30cc098e49315ef9180f97bc2221d167b4b04d9c \
+    --hash=sha256:4f6e92367ddce1e4d33cf295024f40192be6c6171a09208f515ba169ced06c8e \
+    --hash=sha256:54fa221d669282bd8f582708ce4c96010a7e9fb0661f9006b37fe2fedafb73fe \
+    --hash=sha256:6afdc83f1317c136e92fc29f5ee9f058de59d87c0b22cee3fdbfbaa0ccc2098a \
+    --hash=sha256:8adff67a3f28257b37cfe945a7e952e4122666aa8c91a0380862e9fd4c2ed19f \
+    --hash=sha256:8d66f9ceb29909c70839e4e4fb3435c7b490050d8f162bd5f3aba4ca01ee517f \
+    --hash=sha256:a166b78ee04f3a37fa1ef82034b6a3ce96d9684e582d4d30b296de83e9998bb5 \
+    --hash=sha256:ac301f53b1930402fc46c368e268acfed02f3207272aaff05070d7e09f96f031 \
+    --hash=sha256:bc2565e487b4896fb988d6383577d875d958e071fc5f6c3550bd5d02ae98264b \
+    --hash=sha256:c35064f9b3c43c81c5d5d282091401d0f1ff22796d93ccade4ea2ece5e137ab8 \
+    --hash=sha256:cfab507abe09d6ffeb817eee07944d452fdc0b00fdcef34cab4db10a45e378c7 \
+    --hash=sha256:e02feeb0165c5f13b4cc954738078d59b90128516ac12b671ee24a530242bf02 \
+    --hash=sha256:e562d6e36a749f6764481c0ddb0f2af3d0b5a3c164291361d08803c557f369af \
+    --hash=sha256:f2a3b9e30ce880d4ca54999cb313569e36da4f62eefe25f87be18f43e9a3a4d5 \
+    --hash=sha256:f5c5daabd28aad610f83fdcf32acec8fb57e6adc6c6a39fe2a3c755db957b410 \
+    --hash=sha256:f649dd6f6452d12a8059888aa489fe519e062e18793dac72b9efa0f9fdb64135 \
+    --hash=sha256:f7f022a1103cae591c75fc4565589a515f2ddd14a6ac8e8a05812dfeda142e28
     # via domovoi (pyproject.toml)
 openpyxl==3.1.5 \
     --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2 \
@@ -798,7 +829,9 @@ openpyxl==3.1.5 \
 packaging==26.2 \
     --hash=sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e \
     --hash=sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661
-    # via pytest
+    # via
+    #   onnxruntime
+    #   pytest
 pillow==12.3.0 \
     --hash=sha256:00808c5e14ef63ac5161091d242999076604ff74b883423a11e5d7bbb38bf756 \
     --hash=sha256:04f01d28a6aaff387bf842a13be313df23ba0597a44f1a976c9feb3c6ff4711a \
@@ -892,6 +925,16 @@ pluggy==1.6.0 \
     --hash=sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3 \
     --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
     # via pytest
+protobuf==7.34.1 \
+    --hash=sha256:34b84ce27680df7cca9f231043ada0daa55d0c44a2ddfaa58ec1d0d89d8bf60a \
+    --hash=sha256:403b093a6e28a960372b44e5eb081775c9b056e816a8029c61231743d63f881a \
+    --hash=sha256:5185e0e948d07abe94bb76ec9b8416b604cfe5da6f871d67aad30cbf24c3110b \
+    --hash=sha256:8ff40ce8cd688f7265326b38d5a1bed9bfdf5e6723d49961432f83e21d5713e4 \
+    --hash=sha256:9ce42245e704cc5027be797c1db1eb93184d44d1cdd71811fb2d9b25ad541280 \
+    --hash=sha256:bb3812cd53aefea2b028ef42bd780f5b96407247f20c6ef7c679807e9d188f11 \
+    --hash=sha256:d8b2cc79c4d8f62b293ad9b11ec3aebce9af481fa73e64556969f7345ebf9fc7 \
+    --hash=sha256:e97b55646e6ce5cbb0954a8c28cd39a5869b59090dfaa7df4598a7fba869468c
+    # via onnxruntime
 psutil==7.2.2 \
     --hash=sha256:0746f5f8d406af344fd547f1c8daa5f5c33dbc293bb8d6a16d80b4bb88f59372 \
     --hash=sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9 \

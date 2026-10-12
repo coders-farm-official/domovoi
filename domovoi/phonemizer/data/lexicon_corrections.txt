@@ -1,0 +1,46 @@
+# Built-in corrections and additions to CMUdict, in CMUdict's own form:
+# WORD PHONES..., ARPAbet with CMUdict stress digits (1 primary, 2 secondary,
+# 0 none), lower-case word. The first line for a word replaces every CMUdict
+# variant of it. Part of Domovoi (MIT).
+#
+# These are the converter's own fixes (days, tens, weak "minute", names it
+# kept getting wrong). An owner's "say it like" list (pronunciations_default.txt
+# and Settings) sits above this file and wins over it.
+siobhan SH IH0 V AO1 N
+beyonce B IY0 Y AA1 N S EY0
+joaquin W AA0 K IY1 N
+suicideboys S UW1 AH0 S AY2 D B OY2 Z
+piper P AY1 P ER0
+ollama OW0 L AA1 M AH0
+jellyfin JH EH1 L IY0 F IH0 N
+wi-fi W AY1 F AY2
+wifi W AY1 F AY2
+bluetooth B L UW1 T UW2 TH
+okay OW2 K EY1
+ok OW2 K EY1
+bass B EY1 S
+does D AH1 Z
+tomato T AH0 M EY1 T OW2
+data D EY1 T AH0
+route R UW1 T
+either IY1 DH ER0
+neither N IY1 DH ER0
+one W AA1 N
+monday M AH1 N D EY2
+tuesday T UW1 Z D EY2
+wednesday W EH1 N Z D EY2
+thursday TH ER1 Z D EY2
+friday F R AY1 D EY2
+saturday S AE1 T ER0 D EY2
+sunday S AH1 N D EY2
+twenty T W EH1 N T IY0
+thirty TH ER1 T IY0
+forty F AO1 R T IY0
+fifty F IH1 F T IY0
+sixty S IH1 K S T IY0
+seventy S EH1 V AH0 N T IY0
+eighty EY1 T IY0
+ninety N AY1 N T IY0
+minute M IH1 N IH0 T
+minutes M IH1 N IH0 T S
+kamron K AE1 M R AA2 N

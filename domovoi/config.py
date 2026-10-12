@@ -597,7 +597,11 @@ class Settings(BaseSettings):
     # Hugging Face once, on first render.
     tts_engine: str = "piper"                        # preferred engine
     tts_edge_voice: str = "en-US-AriaNeural"
-    tts_piper_voice: str = "en_US-lessac-medium"
+    # One of the three public-domain voices Domovoi offers (SHIPPED_VOICES in
+    # domovoi/clients/tts.py): en_US-norman-medium, en_US-kristin-medium,
+    # en_US-ljspeech-medium. An install still set to a voice Domovoi no
+    # longer offers moves to this default at boot (domovoi/voice_migration.py).
+    tts_piper_voice: str = "en_US-norman-medium"
     tts_speed: float = 1.0
     # Wall-clock cap on the `system` engine's subprocess (espeak-ng / say on
     # non-Windows; the Windows SAPI path is in-process and unaffected). This

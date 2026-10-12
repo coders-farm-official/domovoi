@@ -7114,6 +7114,258 @@
         }
       }
     },
+    "/api/voice": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Get Voice",
+        "description": "The three voices, the one the server speaks with, and the effective\n\"say it like\" list (the shipped entries with the owner's changes).\n``updated_at`` changes whenever the list or the server's voice does.",
+        "operationId": "get_voice_api_voice_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/sample/{voice_id}": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Sample Voice",
+        "description": "A freshly synthesized sample (intro + a fun fact) in one of the three\nvoices, for the play buttons beside them.",
+        "operationId": "sample_voice_api_voice_sample__voice_id__get",
+        "parameters": [
+          {
+            "name": "voice_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Voice Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/server": {
+      "put": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Set Server Voice",
+        "description": "Make one of the three voices the server's: the voice registry's\ndefault, so every room without a voice of its own speaks in it. The\nclips re-render in it in the background.",
+        "operationId": "set_server_voice_api_voice_server_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerVoiceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Put Pronunciation",
+        "description": "Add a word to the list, or change how a listed word is said. 400 with\nthe reason when the converter can't use the entry.",
+        "operationId": "put_pronunciation_api_voice_pronunciations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PronunciationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations/{word}": {
+      "delete": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Delete Pronunciation",
+        "description": "Take a word off the list: the converter decides how to say it again.\nA shipped entry stays off until it is added again or the defaults are\nput back.",
+        "operationId": "delete_pronunciation_api_voice_pronunciations__word__delete",
+        "parameters": [
+          {
+            "name": "word",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Word"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations/defaults": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Restore Default Pronunciations",
+        "description": "Put every shipped entry back as it shipped. The owner's own words\nstay.",
+        "operationId": "restore_default_pronunciations_api_voice_pronunciations_defaults_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations/preview": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Preview Pronunciation",
+        "description": "Hear a word said as ``say_like`` asks, without saving it, in\n``voice`` (one of the three) or the server's voice. The phonemes come\nback in ``X-Phonemes``.",
+        "operationId": "preview_pronunciation_api_voice_pronunciations_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words": {
       "get": {
         "tags": [
@@ -17112,6 +17364,80 @@
         "type": "object",
         "title": "PrepareRequest"
       },
+      "PreviewBody": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Say Like"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PreviewBody"
+      },
+      "PronunciationBody": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Say Like"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PronunciationBody"
+      },
+      "PronunciationEntry": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "title": "Say Like"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PronunciationEntry"
+      },
       "PullBody": {
         "properties": {
           "model": {
@@ -18148,6 +18474,21 @@
           "content"
         ],
         "title": "SendBody"
+      },
+      "ServerVoiceBody": {
+        "properties": {
+          "voice": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Voice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "voice"
+        ],
+        "title": "ServerVoiceBody"
       },
       "Session": {
         "properties": {
@@ -19267,6 +19608,44 @@
         ],
         "title": "Voice"
       },
+      "VoiceInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sex": {
+            "type": "string",
+            "title": "Sex"
+          },
+          "sample_rate": {
+            "type": "integer",
+            "title": "Sample Rate"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "sex",
+          "sample_rate",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "VoiceInfo"
+      },
       "VoiceNote": {
         "properties": {
           "id": {
@@ -19387,6 +19766,40 @@
           "enrolled_at"
         ],
         "title": "VoiceProfile"
+      },
+      "VoiceSettings": {
+        "properties": {
+          "voices": {
+            "items": {
+              "$ref": "#/components/schemas/VoiceInfo"
+            },
+            "type": "array",
+            "title": "Voices"
+          },
+          "server_voice": {
+            "type": "string",
+            "title": "Server Voice"
+          },
+          "pronunciations": {
+            "items": {
+              "$ref": "#/components/schemas/PronunciationEntry"
+            },
+            "type": "array",
+            "title": "Pronunciations"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "voices",
+          "server_voice",
+          "pronunciations",
+          "updated_at"
+        ],
+        "title": "VoiceSettings"
       },
       "VolumeRequest": {
         "properties": {

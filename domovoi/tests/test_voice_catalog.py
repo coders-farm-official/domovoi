@@ -21,8 +21,10 @@ from domovoi.tests.conftest import requires_db
 def test_labels():
     assert edge_label("en-US-AriaNeural") == "Aria"
     assert edge_label("en-GB-SoniaNeural") == "Sonia"
-    assert piper_label("en_US-lessac-medium") == "Lessac"
-    assert piper_label("en_US-kusal-medium") == "Kusal"
+    assert piper_label("en_US-norman-medium") == "Norman"
+    assert piper_label("en_US-kristin-medium") == "Kristin"
+    assert piper_label("en_US-ljspeech-medium") == "Linda"   # a shipped voice's own name
+    assert piper_label("en_US-custom-medium") == "Custom"
 
 
 def test_catalog_names_unique_across_engines():
@@ -32,13 +34,13 @@ def test_catalog_names_unique_across_engines():
 
 def test_planned_voices_dedupes_configured_into_catalog():
     plan = planned_voices(
-        include_catalog=True, edge_voice="en-US-AriaNeural", piper_voice="en_US-kusal-medium",
+        include_catalog=True, edge_voice="en-US-AriaNeural", piper_voice="en_US-kristin-medium",
         include_edge_voice=True,
     )
     refs = [(e, r) for e, _, r in plan]
     # Configured voices already in the catalog → not doubled.
     assert refs.count(("edge", "en-US-AriaNeural")) == 1
-    assert refs.count(("piper", "en_US-kusal-medium")) == 1
+    assert refs.count(("piper", "en_US-kristin-medium")) == 1
     assert len(plan) == len(EDGE_CATALOG) + len(PIPER_CATALOG)
 
 
@@ -65,18 +67,18 @@ async def repo(db_session):
 async def test_seed_fresh_creates_catalog_and_default(repo):
     n = await seed_voices(
         repo, include_catalog=True, edge_voice="en-US-AriaNeural",
-        piper_voice="en_US-kusal-medium", default_is_piper=True,
+        piper_voice="en_US-kristin-medium", default_is_piper=True,
     )
     assert n == len(EDGE_CATALOG) + len(PIPER_CATALOG)
     default = await repo.get_default()
-    assert default is not None and default["model_ref"] == "en_US-kusal-medium"  # configured engine
+    assert default is not None and default["model_ref"] == "en_US-kristin-medium"  # configured engine
 
 
 @requires_db
 @pytest.mark.asyncio
 async def test_seed_is_idempotent(repo):
     kw = dict(include_catalog=True, edge_voice="en-US-AriaNeural",
-              piper_voice="en_US-kusal-medium", default_is_piper=True)
+              piper_voice="en_US-kristin-medium", default_is_piper=True)
     first = await seed_voices(repo, **kw)
     second = await seed_voices(repo, **kw)
     assert first > 0
@@ -93,7 +95,7 @@ async def test_seed_preserves_existing_default(repo):
     # Now run the catalog seed with piper as the configured engine.
     await seed_voices(
         repo, include_catalog=True, edge_voice="en-US-AriaNeural",
-        piper_voice="en_US-kusal-medium", default_is_piper=True,
+        piper_voice="en_US-kristin-medium", default_is_piper=True,
     )
     default = await repo.get_default()
     assert default["id"] == aria_id  # existing default untouched
@@ -107,11 +109,11 @@ async def test_seed_catalog_off_only_configured(repo, monkeypatch):
     monkeypatch.setattr(settings, "tts_engine", "edge")
     n = await seed_voices(
         repo, include_catalog=False, edge_voice="en-US-AriaNeural",
-        piper_voice="en_US-lessac-medium", default_is_piper=False,
+        piper_voice="en_US-norman-medium", default_is_piper=False,
     )
     assert n == 2
     rows = await repo.all()
-    assert {r["name"] for r in rows} == {"Aria", "Lessac"}
+    assert {r["name"] for r in rows} == {"Aria", "Norman"}
     assert (await repo.get_default())["model_ref"] == "en-US-AriaNeural"
 
 
@@ -120,15 +122,15 @@ async def test_seed_catalog_off_only_configured(repo, monkeypatch):
 
 def test_planned_voices_without_the_edge_voice():
     plan = planned_voices(
-        include_catalog=False, edge_voice="en-US-AriaNeural", piper_voice="en_US-lessac-medium",
+        include_catalog=False, edge_voice="en-US-AriaNeural", piper_voice="en_US-norman-medium",
         include_edge_voice=False,
     )
-    assert plan == [("piper", "Lessac", "en_US-lessac-medium")]
+    assert plan == [("piper", "Norman", "en_US-norman-medium")]
 
 
 def test_planned_voices_catalog_without_its_edge_half():
     plan = planned_voices(
-        include_catalog=True, edge_voice="en-US-AriaNeural", piper_voice="en_US-kusal-medium",
+        include_catalog=True, edge_voice="en-US-AriaNeural", piper_voice="en_US-kristin-medium",
         include_edge_voice=False, include_edge_catalog=False,
     )
     assert {e for e, _, _ in plan} == {"piper"}
@@ -157,8 +159,18 @@ class _FakeVoicesRepo:
         for r in self.rows:
             r["is_default"] = r["id"] == vid
 
+    async def clear_default(self):
+        for r in self.rows:
+            r["is_default"] = False
 
-_BOOT_KW = dict(edge_voice="en-US-AriaNeural", piper_voice="en_US-lessac-medium")
+    async def delete(self, vid):
+        row = next((r for r in self.rows if r["id"] == vid and not r["is_default"]), None)
+        if row is not None:
+            self.rows.remove(row)
+        return row
+
+
+_BOOT_KW = dict(edge_voice="en-US-AriaNeural", piper_voice="en_US-norman-medium")
 
 
 @pytest.mark.parametrize("answer", ["", "always", "sometimes"])
@@ -170,8 +182,8 @@ async def test_seed_catalog_off_with_piper_registers_no_edge_voice(monkeypatch, 
     with egress.override_policy(answer):
         n = await seed_voices(repo, include_catalog=False, default_is_piper=True, **_BOOT_KW)
     assert n == 1
-    assert [(r["engine"], r["model_ref"]) for r in repo.rows] == [("piper", "en_US-lessac-medium")]
-    assert (await repo.get_default())["model_ref"] == "en_US-lessac-medium"
+    assert [(r["engine"], r["model_ref"]) for r in repo.rows] == [("piper", "en_US-norman-medium")]
+    assert (await repo.get_default())["model_ref"] == "en_US-norman-medium"
 
 
 @pytest.mark.parametrize("answer", ["", "always", "sometimes"])
@@ -183,7 +195,7 @@ async def test_seed_registers_the_edge_voice_when_tts_engine_is_edge(monkeypatch
     with egress.override_policy(answer):
         await seed_voices(repo, include_catalog=False, default_is_piper=False, **_BOOT_KW)
     assert {(r["engine"], r["model_ref"]) for r in repo.rows} == {
-        ("edge", "en-US-AriaNeural"), ("piper", "en_US-lessac-medium"),
+        ("edge", "en-US-AriaNeural"), ("piper", "en_US-norman-medium"),
     }
     assert (await repo.get_default())["model_ref"] == "en-US-AriaNeural"
 
@@ -239,8 +251,53 @@ async def test_seed_catalog_off_piper_household_against_the_db(repo, monkeypatch
     monkeypatch.setattr(settings, "tts_engine", "piper")
     n = await seed_voices(
         repo, include_catalog=False, edge_voice="en-US-AriaNeural",
-        piper_voice="en_US-lessac-medium", default_is_piper=True,
+        piper_voice="en_US-norman-medium", default_is_piper=True,
     )
     assert n == 1
     rows = await repo.all()
-    assert {(r["engine"], r["name"]) for r in rows} == {("piper", "Lessac")}
+    assert {(r["engine"], r["name"]) for r in rows} == {("piper", "Norman")}
+
+
+# ─── 2026-10: the voices Domovoi no longer offers leave the registry ──────
+
+
+def test_the_catalog_is_the_three_public_domain_voices():
+    from domovoi.clients.tts import RETIRED_PIPER_VOICES, SHIPPED_VOICES
+
+    assert [r for _, r in PIPER_CATALOG] == [v.model_ref for v in SHIPPED_VOICES] == [
+        "en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"]
+    assert not {r for _, r in PIPER_CATALOG} & RETIRED_PIPER_VOICES
+    assert {"en_US-lessac-medium", "en_US-amy-medium", "en_US-ryan-high"} <= RETIRED_PIPER_VOICES
+
+
+async def test_seed_removes_the_retired_voices_and_moves_their_default(monkeypatch):
+    from domovoi import egress
+
+    monkeypatch.setattr(settings, "tts_engine", "piper")
+    repo = _FakeVoicesRepo([
+        {"id": 1, "name": "Lessac", "engine": "piper", "model_ref": "en_US-lessac-medium", "is_default": True},
+        {"id": 2, "name": "Ryan", "engine": "piper", "model_ref": "en_US-ryan-high", "is_default": False},
+        {"id": 3, "name": "Mine", "engine": "piper", "model_ref": "mine", "is_default": False},
+        {"id": 4, "name": "Aria", "engine": "edge", "model_ref": "en-US-AriaNeural", "is_default": False},
+    ])
+    with egress.override_policy("always"):
+        await seed_voices(repo, include_catalog=True, default_is_piper=True, **_BOOT_KW)
+    refs = {r["model_ref"] for r in repo.rows}
+    assert not refs & {"en_US-lessac-medium", "en_US-ryan-high"}
+    assert {"mine", "en-US-AriaNeural", "en_US-norman-medium", "en_US-kristin-medium",
+            "en_US-ljspeech-medium"} <= refs   # an owner's own voice and Edge stay
+    assert (await repo.get_default())["model_ref"] == "en_US-norman-medium"
+
+
+async def test_seed_keeps_a_default_that_is_still_offered(monkeypatch):
+    from domovoi import egress
+
+    monkeypatch.setattr(settings, "tts_engine", "piper")
+    repo = _FakeVoicesRepo([
+        {"id": 1, "name": "Kristin", "engine": "piper", "model_ref": "en_US-kristin-medium", "is_default": True},
+        {"id": 2, "name": "Amy", "engine": "piper", "model_ref": "en_US-amy-medium", "is_default": False},
+    ])
+    with egress.override_policy("always"):
+        await seed_voices(repo, include_catalog=True, default_is_piper=True, **_BOOT_KW)
+    assert (await repo.get_default())["model_ref"] == "en_US-kristin-medium"
+    assert "en_US-amy-medium" not in {r["model_ref"] for r in repo.rows}

@@ -36,26 +36,26 @@ Four differences. Two need something from you; two are already handled
 in-repo and are listed so you know why you don't have to think about
 them.
 
-### 1. The system-voice fallback needs a package installed
+### 1. The system-voice fallback is optional on Linux
 
 TTS falls back through `piper → system` (`edge → piper → system` if you
 chose Edge; Edge is never a fallback for Piper). The `system` rung is the
-OS's own synthesizer —
-pyttsx3/SAPI on Windows, and **`espeak-ng` on Linux**. It's
-robotic, and that's the point: it's the floor that still talks when the
-network is down *and* the Piper voice is missing or broken.
+OS's own synthesizer — pyttsx3/SAPI on Windows, `say` on macOS, and on
+Linux **`espeak-ng` if you install it**. It's robotic, and it is only the
+floor beneath the Piper voice for when that voice is missing or broken.
 
-`espeak-ng` isn't installed by default on a server image, and without it
-the chain ends at Piper with nothing beneath it. One package:
+Domovoi no longer installs `espeak-ng` (since 2026-10): its voices are
+spoken by its own text-to-phoneme converter on ONNX Runtime, with no
+espeak-ng anywhere, and espeak-ng is GPL. Without a system synthesizer
+the chain simply ends at Piper. If you want the floor anyway:
 
 ```bash
 sudo apt install -y espeak-ng
 ```
 
-(It's already in the [prerequisites](#install) below. `espeak` works too if
-that's what your distro carries.) Either way, download a Piper voice and
-confirm it renders — `espeak-ng` is a safety net, not a voice you want the
-house to hear day to day.
+(`espeak` works too if that's what your distro carries.) What matters
+more is that the Piper voices are on disk: the provisioning script fetches
+all three, and the core fetches a missing one on first use.
 
 ### 2. USB satellite adoption needs auto-mounting
 
@@ -189,8 +189,9 @@ If your target Python's tag is in all three lists, you're clear.
 Every compiled dependency had cp314 manylinux x86_64 wheels: `torch`
 2.13.0, `ctranslate2` 4.8.2, `numba` 0.67.0, `numpy` 2.5.2, `scipy`
 1.18.1, `asyncpg` 0.31.0, plus `pillow`, `psutil`, `sqlalchemy`,
-`miniaudio`, `lameenc`, `soxr`, `llvmlite`. `piper-tts` ships `cp39-abi3`,
-which is forward-compatible with every CPython from 3.9 on. The NVIDIA
+`miniaudio`, `lameenc`, `soxr`, `llvmlite`. `piper-tts` (the voice engine
+until 2026-10) shipped `cp39-abi3`; its replacement, `onnxruntime`, has
+cp314 wheels. The NVIDIA
 CUDA wheels are `py3-none-manylinux` — no Python tag at all.
 
 Two dependencies still compile from source, and both are worth knowing
@@ -331,12 +332,12 @@ Follow them instead if you prefer, or to see what a step changed.
 Prerequisites:
 
 ```bash
-sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools espeak-ng
+sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential pkg-config libasound2-dev git ffmpeg mpg123 libchromaprint-tools
 ```
 
-`libchromaprint-tools` provides `fpcalc` for library enrichment,
-`espeak-ng` is the last-resort TTS voice, and `python3-dev` +
-`build-essential` are what let `webrtcvad` compile.
+`libchromaprint-tools` provides `fpcalc` for library enrichment, and
+`python3-dev` + `build-essential` are what let `webrtcvad` compile. (No
+`espeak-ng`: see [the system-voice fallback](#1-the-system-voice-fallback-is-optional-on-linux).)
 
 `pkg-config` and `libasound2-dev` are there for **`shazamio-core`** — a
 Rust/pyo3 extension that binds ALSA. It's a transitive dependency of
@@ -505,22 +506,21 @@ change to `pyproject.toml`, and commit both.
 > recognizer that follows each command while it is spoken; today it only
 > runs in *shadow* mode, logging what it would have done next to what
 > Whisper heard ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane)).
-> Nothing about it installs unless you ask:
+> Domovoi does not install its recognizer, `sherpa-onnx`, any more
+> (2026-10): the `sherpa-onnx` wheels on PyPI compile in espeak-ng
+> (GPL-3.0) for their own text to speech. To try the lane, install a
+> sherpa-onnx built with `SHERPA_ONNX_ENABLE_TTS=OFF`, or the PyPI wheel
+> knowing it carries that GPL code ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane)):
 >
 > ```bash
-> pip install -e ".[fastlane]"
+> pip install "sherpa-onnx>=1.13.8,<2"     # the PyPI wheel: includes espeak-ng (GPL-3.0)
 > python -m domovoi.fast_lane fetch      # optional: the 103 MB model now, not on first enable
 > ```
 >
-> `sherpa-onnx` ships binary wheels for CPython 3.14 on x86_64 and
-> aarch64 (and carries its own onnxruntime), so there is nothing to
-> build. Then set `FASTLANE_MODE=shadow` in `domovoi/.env`, or pick
-> **shadow** under Settings → Speech-to-text → *Fast lane*, which applies
-> without a restart. If the [update unit](#updates-from-the-dashboard)
-> manages this box, add `fastlane` to `DOMOVOI_PIP_EXTRAS` so a venv
-> re-sync keeps it installed. Like `cuda`, it is outside the lock: pip
-> resolves it from the index and checks no hashes, and the update unit's
-> step says so.
+> Then set `FASTLANE_MODE=shadow` in `domovoi/.env`, or pick **shadow**
+> under Settings → Speech-to-text → *Fast lane*, which applies without a
+> restart. It is outside the lock and outside pyproject: an update's venv
+> re-sync leaves it installed but does not install it.
 
 Bring it up — `dev.sh` is the bash twin of `dev.ps1`:
 
@@ -1441,8 +1441,9 @@ take them:
   If one of these fails it stops and says why. Three things only warn: a
   venv the service user doesn't wholly own (it prints the `chown` that
   fixes it, and `--fix-ownership` runs it, last, and only on a directory
-  with a `pyvenv.cfg`), `piper-tts` older than 1.3 in the venv, and signed
-  updates not set up yet. It also says whether an update re-syncs the venv
+  with a `pyvenv.cfg`), the voice's runtime (`onnxruntime` missing or older
+  than 1.28, or `piper-tts` still in the venv), and signed updates not set
+  up yet. It also says whether an update re-syncs the venv
   from the hash-pinned lock (`dependency lock: on`) or through pip's
   resolver (`off`, the default; [The hash-pinned lock](#the-hash-pinned-lock)),
   and warns when the lock is opted into but an update could not use it.

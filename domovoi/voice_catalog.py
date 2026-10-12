@@ -2,9 +2,16 @@
 
 The core pre-populates the voices registry with a curated
 set of known-good voices: Edge cloud voices (download on demand, no file) and
-single-speaker Piper local voices (auto-downloaded by HF name on first
-synth). Multi-speaker Piper voices (libritts/arctic/…) need a speaker id
-the synth path doesn't take, so they're intentionally omitted.
+the three public-domain Piper voices Domovoi speaks with locally
+(``SHIPPED_VOICES`` in domovoi/clients/tts.py, auto-downloaded on first
+synth, or fetched ahead by the Linux provisioning).
+
+The Piper voices Domovoi used to offer (``RETIRED_PIPER_VOICES``: lessac and
+the voices fine-tuned from it or from ryan, whose licences aren't
+permissive) are taken OUT of the registry at boot: their rows are deleted,
+and a default that pointed at one moves to the configured Piper voice. A
+room set to a removed voice then speaks in the default (the resolver falls
+back to it), and its clips are pruned with the row.
 
 Controlled by ``SEED_VOICE_CATALOG`` (default on). Seeding is **idempotent
 by name + model_ref**, so it augments an existing registry on the next boot
@@ -16,7 +23,8 @@ informed opt-in. The configured Edge voice (``TTS_EDGE_VOICE``) is
 registered only when the catalog is on or ``TTS_ENGINE=edge`` — a household
 that never chose Edge gets no Edge voice in its registry — and no Edge
 voice at all (configured or catalog) is registered under
-``INTERNET_ACCESS=never``. Rows already in the registry are never removed.
+``INTERNET_ACCESS=never``. Rows already in the registry are never removed,
+the retired Piper voices excepted.
 
 Labels are the unique first-names you say ("switch to Jenny"); they're kept
 distinct across both engines so the DB's UNIQUE(name) is always satisfied.
@@ -27,6 +35,7 @@ from __future__ import annotations
 import logging
 
 from domovoi import egress
+from domovoi.clients.tts import RETIRED_PIPER_VOICES, SHIPPED_VOICES
 from domovoi.config import settings
 
 log = logging.getLogger(__name__)
@@ -55,19 +64,8 @@ EDGE_CATALOG: list[tuple[str, str]] = [
     ("Neerja", "en-IN-NeerjaNeural"),    # Indian female
 ]
 
-# (label, Piper HF model_ref). Single-speaker only. Curated from
-# yt_pipeline.py / README.md's Piper table.
-PIPER_CATALOG: list[tuple[str, str]] = [
-    ("Kusal", "en_US-kusal-medium"),
-    ("Lessac", "en_US-lessac-medium"),
-    ("Amy", "en_US-amy-medium"),
-    ("Ryan", "en_US-ryan-high"),
-    ("Joe", "en_US-joe-medium"),
-    ("Kathleen", "en_US-kathleen-low"),
-    ("Alan", "en_GB-alan-medium"),       # British male
-    ("Alba", "en_GB-alba-medium"),       # Scottish female
-    ("Cori", "en_GB-cori-high"),         # British female
-]
+# (label, Piper HF model_ref): the three public-domain voices.
+PIPER_CATALOG: list[tuple[str, str]] = [(v.name, v.model_ref) for v in SHIPPED_VOICES]
 
 
 def edge_label(voice_id: str) -> str:
@@ -77,7 +75,11 @@ def edge_label(voice_id: str) -> str:
 
 
 def piper_label(model_ref: str) -> str:
-    """"en_US-lessac-medium" → "Lessac"."""
+    """"en_US-kristin-medium" → "Kristin"; a shipped voice's own name
+    ("en_US-ljspeech-medium" → "Linda")."""
+    for v in SHIPPED_VOICES:
+        if v.model_ref == model_ref:
+            return v.name
     parts = model_ref.split("-")
     core = parts[1] if len(parts) > 1 else parts[0]
     return core.capitalize() or model_ref
@@ -145,6 +147,14 @@ async def seed_voices(
     include_edge_voice = include_edge_voice and edge_allowed
 
     existing = await repo.all()
+    retired = [v for v in existing if v["engine"] == "piper" and v["model_ref"] in RETIRED_PIPER_VOICES]
+    for v in retired:
+        if v["is_default"]:
+            await repo.clear_default()
+        await repo.delete(v["id"])
+        log.info("voice registry: removed %s (%s), a voice Domovoi no longer offers", v["name"], v["model_ref"])
+    if retired:
+        existing = await repo.all()
     names = {v["name"].lower() for v in existing}
     refs = {(v["engine"], v["model_ref"]) for v in existing}
 

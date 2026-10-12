@@ -55,7 +55,8 @@
 #                model.bin checked against its SHA-256; the small files
 #                beside it (config.json, tokenizer.json, vocabulary.*) come
 #                from that revision but are not hashed  (--skip-models: no)
-#   piper        the configured Piper voice, checked against PIPER_PINS
+#   piper        the three Piper voices (SHIPPED_VOICES), each checked against
+#                PIPER_PINS; a configured voice outside them is left to the core
 #   images       the database images the compose file pins, and docker build of
 #                domovoi-mpd exactly as the core builds it
 #   searxng      the search helper, started for always/sometimes, off for never
@@ -1030,9 +1031,11 @@ do_preflight() {
 # curl, gnupg and ca-certificates (Docker's repository), zstd (the Ollama
 # tarball; also in the doc's Ollama steps), tzdata (zone files for
 # --timezone; WSL also needs them to follow Windows' zone), sudo (the
-# dashboard's restart and update grants).
+# dashboard's restart and update grants). Not espeak-ng (GPL): Domovoi's
+# voices no longer need it, and the OS last-resort voice is the owner's
+# choice (docs/LINUX_HOST.md).
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools espeak-ng
+  git ffmpeg mpg123 libchromaprint-tools
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {
@@ -1570,7 +1573,7 @@ PY_IMPORT_CHECK='#provision:import-check
 import importlib, sys
 mods = ["fastapi", "uvicorn", "sqlalchemy", "asyncpg", "pydantic_settings", "ollama",
         "mpd", "argon2", "PIL", "psutil", "httpx", "faster_whisper", "ctranslate2",
-        "piper", "edge_tts", "miniaudio", "lameenc", "mutagen", "acoustid",
+        "onnxruntime", "domovoi.phonemizer", "edge_tts", "miniaudio", "lameenc", "mutagen", "acoustid",
         "feedparser", "librosa", "torch", "resemblyzer", "domovoi.config"]
 bad = []
 for m in mods:
@@ -1620,7 +1623,7 @@ do_venv() {
     die "pip install of the build tools from $LOCK_NAME failed"
   fi
   rm -f "$reqs"
-  emit_frac 100 "Installing the locked packages (CPU torch, Whisper, Piper, ...)"
+  emit_frac 100 "Installing the locked packages (CPU torch, Whisper, ONNX Runtime, ...)"
   pip_svc install --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
   emit_frac 900 "Installing Domovoi"
   pip_svc install --no-deps --no-build-isolation -e . || die "pip install -e . failed"
@@ -2125,12 +2128,13 @@ do_whisper() {
 PY_PIPER_INFO='#provision:piper-info
 from domovoi.config import settings
 from domovoi.clients import tts
-voice = settings.tts_piper_voice
-pin = tts.PIPER_PINS.get(voice)
-print(voice)
 print(settings.voice_models_dir)
-print(pin[0] if pin else "")
-print(pin[1] if pin else 0)'
+wanted = [(settings.tts_piper_voice or "").strip()] + [v.model_ref for v in tts.SHIPPED_VOICES]
+for voice in dict.fromkeys(v for v in wanted if v and "\n" not in v):
+    pin = tts.PIPER_PINS.get(voice)
+    print(voice)
+    print(pin[0] if pin else "-")
+    print(pin[1] if pin else 0)'
 
 # Fetch ahead, whatever the internet answer (PLAN 4.8): provisioning is
 # online by definition, so the egress gate is held open for this one call.
@@ -2144,36 +2148,65 @@ d.mkdir(parents=True, exist_ok=True)
 with egress.override_policy("always"):
     print(tts._piper_download(sys.argv[1], d))'
 
-PIPER_VOICE="" PIPER_DIR="" PIPER_SHA="" PIPER_SIZE=0
+# piper_info: PIPER_DIR, and per voice (the configured one first, then the
+# three Domovoi offers) PIPER_VOICES / PIPER_SHAS ("-": no pin) / PIPER_SIZES.
+# One value per line, three lines a voice, so a name with spaces (the path
+# of an uploaded .onnx) stays whole; an empty name is skipped, and a size
+# that isn't a number counts as 0.
+PIPER_DIR="" PIPER_VOICES=() PIPER_SHAS=() PIPER_SIZES=()
 piper_info() {
-  local out
+  local out i size
+  local -a lines
   out=$(svc_py -c "$PY_PIPER_INFO") || return 1
-  PIPER_VOICE=$(sed -n 1p <<<"$out")
-  PIPER_DIR=$(sed -n 2p <<<"$out")
-  PIPER_SHA=$(sed -n 3p <<<"$out")
-  PIPER_SIZE=$(sed -n 4p <<<"$out")
+  mapfile -t lines <<<"$out"
+  PIPER_DIR=${lines[0]:-}
+  PIPER_VOICES=() PIPER_SHAS=() PIPER_SIZES=()
+  for ((i = 1; i + 2 < ${#lines[@]} + 1; i += 3)); do
+    [ -n "${lines[$i]}" ] || continue
+    size=${lines[$((i + 2))]:-0}
+    [[ $size =~ ^[0-9]+$ ]] || size=0
+    PIPER_VOICES+=("${lines[$i]}") PIPER_SHAS+=("${lines[$((i + 1))]:--}") PIPER_SIZES+=("$size")
+  done
+  [ -n "$PIPER_DIR" ] && [ ${#PIPER_VOICES[@]} -gt 0 ]
 }
-inputs_piper() { piper_info || return 1; printf '%s\n' "$PIPER_VOICE" "$PIPER_DIR" "$PIPER_SHA"; }
+inputs_piper() { piper_info || return 1; printf '%s\n' "$PIPER_DIR" "${PIPER_VOICES[@]}" "${PIPER_SHAS[@]}"; }
+piper_voice_ok() {  # piper_voice_ok I: voice I is on disk and matches its pin
+  sha_ok "$ROOT$PIPER_DIR/${PIPER_VOICES[$1]}.onnx" "${PIPER_SHAS[$1]}" \
+    && [ -f "$ROOT$PIPER_DIR/${PIPER_VOICES[$1]}.onnx.json" ]
+}
 check_piper() {
+  local i
   piper_info || return 1
-  [ -n "$PIPER_SHA" ] || return 0
-  sha_ok "$ROOT$PIPER_DIR/$PIPER_VOICE.onnx" "$PIPER_SHA" && [ -f "$ROOT$PIPER_DIR/$PIPER_VOICE.onnx.json" ]
+  for i in "${!PIPER_VOICES[@]}"; do
+    [ "${PIPER_SHAS[$i]}" = - ] && continue
+    piper_voice_ok "$i" || return 1
+  done
 }
 do_piper() {
+  local i v total=0 done_bytes=0 got=()
   piper_info || die "could not read the Piper voice setting"
-  if [ -z "$PIPER_SHA" ]; then
-    warn "the Piper voice '$PIPER_VOICE' has no pin in PIPER_PINS; the core fetches it on first use, checked against Hugging Face's published digest"
-    STEP_DONE_MSG="Voice $PIPER_VOICE left to the core"
-    return 0
+  for i in "${!PIPER_VOICES[@]}"; do total=$((total + PIPER_SIZES[i])); done
+  for i in "${!PIPER_VOICES[@]}"; do
+    v=${PIPER_VOICES[$i]}
+    if [ "${PIPER_SHAS[$i]}" = - ]; then
+      warn "the Piper voice '$v' has no pin in PIPER_PINS; the core fetches it on first use, checked against Hugging Face's published digest"
+      continue
+    fi
+    if ! piper_voice_ok "$i"; then
+      start_watch "$ROOT$PIPER_DIR/.$v.onnx.part" "${PIPER_SIZES[$i]}" "Downloading the voice $v"
+      svc_py -c "$PY_PIPER_DOWNLOAD" "$v" "$PIPER_DIR" >/dev/null || { stop_watch; die "the Piper voice download failed ($v)"; }
+      stop_watch
+    fi
+    sha_ok "$ROOT$PIPER_DIR/$v.onnx" "${PIPER_SHAS[$i]}" || die "$v.onnx does not match its pin ${PIPER_SHAS[$i]}"
+    done_bytes=$((done_bytes + PIPER_SIZES[i]))
+    emit_bytes "$done_bytes" "$total" "Downloaded the voice $v"
+    got+=("$v")
+  done
+  if [ ${#got[@]} -eq 0 ]; then
+    STEP_DONE_MSG="Voice ${PIPER_VOICES[0]} left to the core"
+  else
+    STEP_DONE_MSG="Voices ${got[*]}"
   fi
-  if ! check_piper; then
-    start_watch "$ROOT$PIPER_DIR/.$PIPER_VOICE.onnx.part" "$PIPER_SIZE" "Downloading the voice $PIPER_VOICE"
-    svc_py -c "$PY_PIPER_DOWNLOAD" "$PIPER_VOICE" "$PIPER_DIR" >/dev/null || { stop_watch; die "the Piper voice download failed"; }
-    stop_watch
-  fi
-  sha_ok "$ROOT$PIPER_DIR/$PIPER_VOICE.onnx" "$PIPER_SHA" || die "$PIPER_VOICE.onnx does not match its pin $PIPER_SHA"
-  emit_bytes "$PIPER_SIZE" "$PIPER_SIZE" "Downloaded the voice $PIPER_VOICE"
-  STEP_DONE_MSG="Voice $PIPER_VOICE"
 }
 
 # ─── images ──────────────────────────────────────────────────────────────

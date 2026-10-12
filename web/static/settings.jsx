@@ -302,6 +302,178 @@ const UploadPiper = ({ onUpload }) => {
   );
 };
 
+/*
+ * Domovoi's own voice (above the registry): which of the three public-
+ * domain voices the server speaks with, and the "say it like" list that
+ * tells the text-to-phoneme converter how to say a word. The phone reads
+ * the same thing (GET /api/voice) so it sounds the same.
+ *
+ * Data:
+ *   GET    /api/voice                          · voices, server_voice, pronunciations (device tier)
+ *   GET    /api/voice/sample/{id}              · a sample in one voice (device tier)
+ *   PUT    /api/voice/server                   · {voice} (admin)
+ *   POST   /api/voice/pronunciations           · {word, say_like} (admin)
+ *   DELETE /api/voice/pronunciations/{word}    · (admin)
+ *   POST   /api/voice/pronunciations/defaults  · put the shipped entries back (admin)
+ *   POST   /api/voice/pronunciations/preview   · {word, say_like, voice?} → WAV (device tier)
+ */
+
+const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters. Split the syllables with hyphens '
+  + 'and write the stressed one in CAPITALS: Domovoi = DOH-moe-voy, Nguyen = win. '
+  + 'Advanced: the voice’s own phonemes between slashes, /wɪn/.';
+
+const VoiceSettingsCards = ({ fire }) => {
+  const { data, loading, error, refresh } = useApiObject('/api/voice');
+  const admin = useAdminSignedIn();
+  const [current, setCurrent] = React.useState(null);
+  const [busy, setBusy] = React.useState(null);      // what is playing / saving
+  const [word, setWord] = React.useState('');
+  const [sayLike, setSayLike] = React.useState('');
+  const audioRef = React.useRef(null);
+  const view = current || data;
+
+  React.useEffect(() => { setCurrent(null); }, [data]);
+
+  const stopAudio = () => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+  };
+  React.useEffect(() => stopAudio, []);
+
+  // Play a WAV the server synthesizes; `key` marks which button is busy.
+  const playFrom = async (key, path, opts) => {
+    stopAudio();
+    setBusy(key);
+    try {
+      const r = await apiFetchRaw(path, opts || {});
+      const phon = r.headers.get('X-Phonemes');
+      if (phon) fire(`🔊 ${decodeURIComponent(phon)}`);
+      const said = r.headers.get('X-Sample-Text');
+      if (said) fire(`🔊 ${decodeURIComponent(said)}`);
+      const url = URL.createObjectURL(await r.blob());
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      const done = () => { setBusy(null); URL.revokeObjectURL(url); };
+      audio.onended = done;
+      audio.onerror = () => { fire('playback failed'); done(); };
+      await audio.play();
+    } catch (e) {
+      reportMutationFailure(fire, 'Play', e);
+      setBusy(null);
+    }
+  };
+
+  const save = async (key, fn, okMsg) => {
+    setBusy(key);
+    try {
+      const next = await fn();
+      if (next) setCurrent(next);
+      if (okMsg) fire(okMsg);
+      return true;
+    } catch (e) {
+      reportMutationFailure(fire, 'Save', e, { kept: true });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pickVoice = (v) => save(`use:${v.id}`,
+    () => apiFetch('/api/voice/server', { method: 'PUT', body: JSON.stringify({ voice: v.id }) }),
+    `${v.name} is now the server's voice; the clips re-render in it`);
+  const preview = (w, s) => playFrom(`say:${w}`, '/api/voice/pronunciations/preview', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ word: w, say_like: s }),
+  });
+  const addEntry = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const w = word.trim(); const s = sayLike.trim();
+    if (!w || !s) return;
+    const ok = await save('add', () => apiPost('/api/voice/pronunciations', { word: w, say_like: s }),
+      `${w} = ${s} saved`);
+    if (ok) { setWord(''); setSayLike(''); }
+  };
+  const removeEntry = (p) => save(`del:${p.word}`,
+    () => apiDelete(`/api/voice/pronunciations/${encodeURIComponent(p.word)}`),
+    `${p.word} is left to the converter again`);
+  const restoreDefaults = () => save('defaults',
+    () => apiPost('/api/voice/pronunciations/defaults', {}), 'the shipped entries are back');
+
+  if (loading && !view) return null;
+  if (!view) {
+    return (
+      <Card title="Domovoi's voice" sub="Could not load the voice settings.">
+        <div style={{ padding: '10px 14px', fontSize: 13 }}>
+          {error ? apiErrorText(error, 160) : 'No answer.'}{' '}
+          <Button variant="ghost" onClick={refresh}>Try again</Button>
+        </div>
+      </Card>
+    );
+  }
+  const lock = admin ? undefined : 'Sign in as an admin to change this';
+  const fieldStyle = { ..._voiceFieldStyle };
+
+  return (
+    <React.Fragment>
+      <Card title="Domovoi's voice"
+            sub="The voice the server speaks in (rooms that picked their own keep it). All three are public domain and run on this server.">
+        {view.voices.map((v) => {
+          const inUse = v.id === view.server_voice;
+          return (
+            <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
+                                     borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+              <IconButton name={busy === `play:${v.id}` ? 'loader' : 'play'} title="Play a sample"
+                          disabled={!!busy} onClick={() => playFrom(`play:${v.id}`, `/api/voice/sample/${v.id}`)}/>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{v.sex} · {v.id}</div>
+              </div>
+              {inUse
+                ? <Pill tone="live">in use</Pill>
+                : <Button variant="ghost" disabled={!admin || !!busy} title={lock}
+                          onClick={() => pickVoice(v)}>use this voice</Button>}
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card title="Say it like"
+            sub="How Domovoi says the words it gets wrong: names, brands, the house's own words."
+            action={admin && <Button variant="ghost" disabled={!!busy} onClick={restoreDefaults}
+                                     title="Domovoi, Domo and Nguyen as shipped">put back the defaults</Button>}>
+        {view.pronunciations.length === 0 && (
+          <div style={{ padding: '10px 14px', fontSize: 13, color: 'var(--fg-muted)' }}>
+            Nothing on the list: the converter decides every word.
+          </div>
+        )}
+        {view.pronunciations.map((p) => (
+          <div key={p.word} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
+                                     borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+            <IconButton name={busy === `say:${p.word}` ? 'loader' : 'play'} title="Hear it"
+                        disabled={!!busy} onClick={() => preview(p.word, p.say_like)}/>
+            <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontWeight: 500 }}>{p.word}</div>
+            <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontFamily: 'var(--font-mono, monospace)' }}>{p.say_like}</div>
+            {admin && <IconButton name="trash-2" title="take it off the list" disabled={!!busy}
+                                  onClick={() => removeEntry(p)}/>}
+          </div>
+        ))}
+        <form onSubmit={addEntry}
+              style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Siobhan)"
+                 aria-label="Word" maxLength={48} style={{ ...fieldStyle, width: 170 }}/>
+          <input value={sayLike} onChange={(e) => setSayLike(e.target.value)} placeholder="Say it like (e.g. shiv-AWN)"
+                 aria-label="Say it like" maxLength={100} style={{ ...fieldStyle, flex: 1, minWidth: 180 }}/>
+          <IconButton name={busy === `say:${word.trim()}` ? 'loader' : 'play'} title="Hear it before saving"
+                      disabled={!!busy || !word.trim() || !sayLike.trim()}
+                      onClick={() => preview(word.trim(), sayLike.trim())}/>
+          <Button variant="primary" type="submit" disabled={!admin || !!busy || !word.trim() || !sayLike.trim()}
+                  title={lock}>Save</Button>
+        </form>
+        <div style={{ padding: '0 14px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>{SAY_LIKE_HELP}</div>
+      </Card>
+    </React.Fragment>
+  );
+};
+
 const VoicesPanel = () => {
   const { items, loading, refresh } = useApiList('/api/voices');
   // Microsoft voices need the internet: greyed under "No" (Settings → Internet).
@@ -377,13 +549,15 @@ const VoicesPanel = () => {
 
   return (
     <React.Fragment>
+      <VoiceSettingsCards fire={fire}/>
+
       <Card title="Add a cloud voice"
             sub="Register a Microsoft Edge neural voice by its id. Needs network to speak.">
         <RegisterEdge onAdd={addEdge} internetOff={internetOff}/>
       </Card>
 
       <Card title="Upload a local voice"
-            sub="A Piper model (.onnx) and its config (.onnx.json). Fully offline once uploaded.">
+            sub="A Piper model (.onnx) and its config (.onnx.json), trained on espeak’s British English (“en”) phonemes, the set Domovoi’s converter writes. Fully offline once uploaded.">
         <UploadPiper onUpload={uploadPiper}/>
       </Card>
 
@@ -3094,7 +3268,7 @@ const SETTINGS_TABS = [
 const SETTINGS_SUB = {
   about: 'What Domovoi is — and a link to the user manual.',
   greetings: 'Lines a satellite says when it hears the wake word, before it listens.',
-  voices: 'The TTS voice registry — each satellite speaks in one.',
+  voices: 'Domovoi’s voice, how it says words, and the voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
   recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',
   devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
