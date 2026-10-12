@@ -1514,3 +1514,17 @@ a.home-att-row:hover { background: var(--brand-soft); }
 @media (max-width: 760px) {
   .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
 }
+
+/* Settings → Models, the Installed list (models.jsx InstalledRow): name and
+   chips on one line on a wide screen; on a phone the name gets its own line
+   and wraps, the chips go under it and the delete button stays at the
+   right edge. */
+.model-inst-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-inst-size { width: 74px; text-align: right; }
+@media (max-width: 760px) {
+  .model-inst-row { flex-wrap: wrap; row-gap: 2px; }
+  .model-inst-name { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .model-inst-meta { flex: 1 1 100%; flex-wrap: wrap; }
+  .model-inst-meta > :last-child { margin-left: auto; }
+  .model-inst-size { width: auto; }
+}

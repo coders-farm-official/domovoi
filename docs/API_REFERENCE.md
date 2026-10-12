@@ -1492,7 +1492,7 @@ conversational one and the tool-routing one — switchable independently.
 |---|---|---|
 | `GET /api/models/catalog` | — | The curated model catalog with size/VRAM hints. Each `whisper` row also carries `cached` (true / false / null): whether that model is already in this host's Hugging Face cache, so the page can grey a size that can't load under `INTERNET_ACCESS=never`. |
 | `GET /api/models/installed` | — | Models present in Ollama. |
-| `GET /api/models/active` | — | Which models are active for each role. The `stt` row also carries `device` and `compute_type` (the Whisper pair). |
+| `GET /api/models/active` | — | Which models are active for each role. The `stt` row also carries `device` and `compute_type` (the Whisper pair). Every row says `installed` (in Ollama's list for an Ollama role, in the model cache for `stt`; null when that can't be told) and `model_source`: `config` (the live config), `startup` (a cookie-only read leaves the Whisper fields out of the config, so the `stt` row takes what the core loaded at boot from `/v1/admin/hardware`) or null (unknown). The `qa` and `vision` rows add `chat_model` and `chat_restart_required`: the dashboard's chat reads those models when the dashboard starts, so a model saved since then reaches the chat after a restart. |
 | `POST /api/models/active` | `SetActiveBody` | Switch the active model for a role. For `stt`, an optional `compute_type` is written as `whisper_compute_type` in the same config write (checked against the device; `400` on any other role). |
 | `GET /api/models/hardware` | — | Proxy → core `GET /v1/admin/hardware` (GPU/CPU/RAM/disk fit badges). |
 | `DELETE /api/models/{name}` | — | **Admin (Bearer).** Remove an installed model. |
