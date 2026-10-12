@@ -343,7 +343,7 @@ async def test_what_it_says_when_it_finds_nothing(faked, mode, reason, said) -> 
 
 
 class _Provider:
-    """A streaming-search provider (the yt-dlp plugin's seam), recording
+    """A streaming-search provider (a media-download plugin's seam), recording
     what it was asked for."""
 
     slug = "fake-stream"

@@ -473,11 +473,12 @@ step. In this order:
    already send it. An unpaired browser's Home shows no rooms and no week.
 7. **Upgrade the sibling plugins you have installed** (Plugins → upgrade,
    with the zip from each repository's `dist/`): Sleep Sounds **1.2.3**,
-   yt-dlp **1.2.2**, Kiwix **1.0.2**, RomM **1.0.2**, Jellyfin **1.0.3**.
-   Their everyday actions (sleep play and stop, yt-dlp search and play, the
-   Kiwix search box and Library tab, the status refreshes) then take the
-   household token, so a paired phone or browser can use them without the
-   admin password, and a caller with no credential gets `401`. yt-dlp's
+   the media-download plugin **1.2.2**, Kiwix **1.0.2**, RomM **1.0.2**,
+   Jellyfin **1.0.3**. Their everyday actions (sleep play and stop, the
+   media-download plugin's search and play, the Kiwix search box and
+   Library tab, the status refreshes) then take the household token, so a
+   paired phone or browser can use them without the admin password, and a
+   caller with no credential gets `401`. The media-download plugin's zip
    also carries `urllib3` 2.8.0. Until a plugin is upgraded its routes keep
    their old tiers. The bundled radio plugin updates with the core.
 8. **Install the new Android app**, then open it once at home. Its
