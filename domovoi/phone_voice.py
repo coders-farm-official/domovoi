@@ -187,21 +187,31 @@ def parse_player(raw: str | None) -> dict[str, Any]:
 
 # ─── The wake phrase ──────────────────────────────────────────────────────
 
+#: What may part a wake phrase from the request: spaces and punctuation,
+#: dashes and an ellipsis included ("Hey Domovoi… play jazz").
+_WAKE_SEP = r"\s,.!?;:\-…—–"
+#: Punctuation proper: what must follow a name said WITHOUT a greeting, so
+#: "Max, turn it up" loses its "Max," but "Max out the volume" is a request.
+_WAKE_PUNCT = ",.!?;:-…—–"
 #: A hesitation, then the greeting the name is said with ("hey", "ok").
 _WAKE_HEAD_RE = re.compile(
-    r"[\s,.!?]*(?:(?:um|uh|oh)[\s,.!?]+)?(?:(?P<greet>hey|hi|hello|ok|okay)\b[\s,.!?]*)?",
+    rf"[{_WAKE_SEP}]*(?:(?:um|uh|oh)[{_WAKE_SEP}]+)?(?:(?P<greet>hey|hi|hello|ok|okay)\b[{_WAKE_SEP}]*)?",
     re.IGNORECASE,
 )
 #: One word and whatever separates it from the next.
-_WAKE_WORD_RE = re.compile(r"(?P<word>[a-z]+)(?P<sep>[\s,.!?;:-]*)", re.IGNORECASE)
+_WAKE_WORD_RE = re.compile(rf"(?P<word>[a-z]+)(?P<sep>[{_WAKE_SEP}]*)", re.IGNORECASE)
 #: The names the wake phrase is said with; the household's own name for the
 #: assistant (``settings.bot_name``) joins them.
 _WAKE_NAMES = ("domovoi", "domo")
+#: Names this long or longer may be heard approximately; a shorter one
+#: ("Domo", a short household name such as "Max") counts only as said:
+#: "dome" and "demo" are words of their own ("OK, dome light on").
+_WAKE_FUZZY_MIN_LEN = 5
 #: How close a heard word must sound to a name (difflib's ratio) after a
-#: greeting: "domavoy" is 0.71 from "domovoi", "dominic" 0.57.
+#: greeting: "domavoy" is 0.71 from "domovoi", "damuvoi" 0.71, "dominic" 0.57.
 _WAKE_NEAR = 0.7
-#: Without a greeting only a near-exact "domovoi" counts ("domovoit", 0.93):
-#: a bare word that merely starts like it may be the request itself.
+#: Without a greeting only a near-exact one counts ("domovoit", 0.93): a bare
+#: word that merely starts like it may be the request itself.
 _WAKE_NEAR_ALONE = 0.8
 
 
@@ -215,18 +225,25 @@ def _sounds_like_the_name(heard: str, *, greeted: bool) -> bool:
     for name in _wake_names():
         if heard == name:
             return True
+        if len(name) < _WAKE_FUZZY_MIN_LEN:
+            continue
         # Speech-to-text keeps the first sound, give or take a d/t.
         if heard[0] != name[0] and {heard[0], name[0]} != {"d", "t"}:
             continue
-        if greeted:
-            near = _WAKE_NEAR
-        elif len(name) >= 6:
-            near = _WAKE_NEAR_ALONE
-        else:
-            continue
+        near = _WAKE_NEAR if greeted else _WAKE_NEAR_ALONE
         if difflib.SequenceMatcher(None, heard, name).ratio() >= near:
             return True
     return False
+
+
+def _name_ends(said: str, word: re.Match[str], *, greeted: bool) -> bool:
+    """Whether the name heard ends where ``word`` does: nothing glued to it
+    ("Domovoi's playlist" is a request about Domovoi), and, said without a
+    greeting, punctuation after it ("Max, turn it up", not "Max out …")."""
+    after = said[word.end("word"):word.end("word") + 1]
+    if after and (after.isalnum() or after in "'’"):
+        return False
+    return greeted or any(ch in _WAKE_PUNCT for ch in word.group("sep"))
 
 
 def _strip_one_wake_phrase(said: str) -> str | None:
@@ -237,7 +254,6 @@ def _strip_one_wake_phrase(said: str) -> str | None:
     first = _WAKE_WORD_RE.match(said, at)
     if first is None:
         return None
-    end = None
     # The name heard as two words ("doma voy", "domo voi"): only a space
     # between them, a short second word, and no longer than the name
     # itself would be heard ("domovoi play" is the name and a request).
@@ -249,11 +265,14 @@ def _strip_one_wake_phrase(said: str) -> str | None:
         and len(second.group("word")) <= 4
         and len(first.group("word")) + len(second.group("word")) <= len("domovoi") + 2
         and _sounds_like_the_name(first.group("word") + second.group("word"), greeted=greeted)
+        and _name_ends(said, second, greeted=greeted)
     ):
-        end = second.end()
-    if end is None and _sounds_like_the_name(first.group("word"), greeted=greeted):
-        end = first.end()
-    return None if end is None else said[end:]
+        return said[second.end():]
+    if _sounds_like_the_name(first.group("word"), greeted=greeted) and _name_ends(
+        said, first, greeted=greeted,
+    ):
+        return said[first.end():]
+    return None
 
 
 def strip_wake_phrase(transcript: str) -> str:
@@ -262,10 +281,13 @@ def strip_wake_phrase(transcript: str) -> str:
     the way it reads a satellite's (see THE WAKE PHRASE above).
 
     Fuzzy, as speech-to-text spells the name: a greeting (hey / hi / hello /
-    ok / okay) and a word that sounds like Domovoi or Domo (or the
-    household's own name for the assistant), or a near-exact "Domovoi" on
-    its own. Said twice, both go. A transcript that is nothing BUT the wake
-    phrase comes back as it was (there is no request to route instead)."""
+    ok / okay) and a word that sounds like Domovoi ("Domovoit", "Domavoy",
+    "doma voy"), or is "Domo" or the household's own name for the assistant
+    (a short name only as said); or, without a greeting, a near-exact name
+    with punctuation after it ("Domovoi, …"). Never a name with something
+    glued to it ("Domovoi's playlist"). Said twice, both go. A transcript
+    that is nothing BUT the wake phrase comes back as it was (there is no
+    request to route instead)."""
     rest = transcript
     for _ in range(2):
         after = _strip_one_wake_phrase(rest)

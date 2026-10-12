@@ -518,6 +518,12 @@ async def test_music_from_a_phone_never_touches_a_rooms_player(
         ("Domovoi, what time is it?", "what time is it?"),
         ("Domovoit, stop.", "stop."),
         ("Hey Domovoi. Hey Domovoi, play jazz.", "play jazz."),
+        ("Hey Damuvoi, what time is it?", "what time is it?"),
+        # An ellipsis or a dash parts the name from the request too.
+        ("Hey Domovoi\u2026 play jazz", "play jazz"),
+        ("Hey Domovoi \u2014 play jazz", "play jazz"),
+        ("Hey Domovoi \u2013 play jazz", "play jazz"),
+        ("Domovoi\u2026 what time is it?", "what time is it?"),
     ],
 )
 def test_a_leading_wake_phrase_is_taken_off(said, routed) -> None:
@@ -539,6 +545,22 @@ def test_a_leading_wake_phrase_is_taken_off(said, routed) -> None:
         # Nothing but the wake phrase: there is no request to route instead.
         "Hey Domovoi.",
         "Hey Domovoi",
+        # The review's must-keep list (2026-10-12).
+        "Hello, Dolly!",
+        "Hello Dolly by Louis Armstrong",
+        "Domino effect",
+        "Dominic is home",
+        "Hey, Jude",
+        "Hi Tom, set a timer",
+        # Words of their own, not a short name heard approximately.
+        "OK, dome light on",
+        "Hey, demo mode on",
+        # A name with something glued to it is part of the request.
+        "Hey Domovoi's playlist",
+        "Domovoi's playlist, please",
+        # Without a greeting, only a name punctuation parts from the rest.
+        "Domovoi play jazz",
+        "Domo arigato",
     ],
 )
 def test_anything_else_is_routed_as_it_was_said(said) -> None:
@@ -551,6 +573,13 @@ def test_the_households_own_name_for_the_assistant_counts_too(monkeypatch) -> No
     monkeypatch.setattr(settings, "bot_name", "Jarvis")
     assert phone_voice.strip_wake_phrase("Hey Jarvis, play jazz.") == "play jazz."
     assert phone_voice.strip_wake_phrase("Hey Domovoi, play jazz.") == "play jazz."
+    # Said alone, the household's name goes only when punctuation follows:
+    # "Max out the volume" is a request.
+    monkeypatch.setattr(settings, "bot_name", "Max")
+    assert phone_voice.strip_wake_phrase("Max, turn it up") == "turn it up"
+    assert phone_voice.strip_wake_phrase("Hey Max turn it up") == "turn it up"
+    assert phone_voice.strip_wake_phrase("Max out the volume") == "Max out the volume"
+    assert phone_voice.strip_wake_phrase("Hey Maxine, hi") == "Hey Maxine, hi"
 
 
 class _ToolModelThatLosesTheName(OllamaStubClient):
