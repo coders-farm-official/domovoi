@@ -12,10 +12,16 @@ against the same file; its format is described in domovoi/phonemizer/README.md.
 
 Regenerate only on purpose (a converter or data change you mean), and read
 the diff: every changed line is a word the voices will now say differently.
+Write it with ONNX Runtime 1.28 or newer (what the phone and a server run;
+pyproject's real-clients floor): the out-of-dictionary model's near ties
+can fall the other way on an older runtime (1.24 reads "shiv" as SH IY1 V,
+1.28 and 1.30 as SH IH1 V). --check tolerates exactly that: on a case
+marked near_tie, one phoneme of difference per near-tie word.
 """
 import hashlib
 import json
 import os
+import platform
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -88,6 +94,20 @@ def margin(ph, word):
     return float((s[:, -1] - s[:, -2]).min())
 
 
+def respelling_model_words(ph, text):
+    """[piece, ARPAbet] for every syllable of a "say it like" entry that
+    ``text`` uses and that the out-of-dictionary model read."""
+    pron = ph.pronunciations()
+    out = []
+    for key in [e.split("=", 1)[0] for e in ph.pronunciation_tag(text).split(";") if e]:
+        entry = pron[key]
+        for piece in entry.pieces:
+            arpa, src = ph.word_arpa(piece.lower())
+            if src == "model" and [piece.lower(), " ".join(arpa)] not in out:
+                out.append([piece.lower(), " ".join(arpa)])
+    return out
+
+
 def case(ph, group, n, text, pron=None):
     detailed = ph.phonemize_detailed(text)
     phon = [p for p, _ in detailed]
@@ -105,9 +125,12 @@ def case(ph, group, n, text, pron=None):
     model = [[it["w"], " ".join(it["ph"])] for _, items in detailed for it in items if it.get("src") == "model"]
     if model:
         c["model"] = model
-        ties = [w for w, _ in model if margin(ph, w) < NEAR_TIE]
-        if ties:
-            c["near_tie"] = ties
+    respelled = respelling_model_words(ph, text)
+    if respelled:
+        c["respelling_model"] = respelled
+    ties = [w for w, _ in model + respelled if margin(ph, w) < NEAR_TIE]
+    if ties:
+        c["near_tie"] = ties
     return c
 
 
@@ -158,11 +181,36 @@ def build():
             "rule": "NFD-normalize the phoneme string; ids = map['^'] + map['_'], then for each code point "
                     "in the map: map[c] + map['_'] (code points not in the map are skipped), then map['$'].",
         },
+        "made_with": {"onnxruntime": _ort_version(), "machine": f"{platform.system()} {platform.machine()}"},
         "near_tie_margin": NEAR_TIE,
         "near_tie_words": ties,
         "counts": counts,
     }
     return header, cases
+
+
+def _ort_version():
+    import onnxruntime
+
+    return onnxruntime.__version__
+
+
+def edit_distance(a, b):
+    d = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        p, d[0] = d[0], i
+        for j, y in enumerate(b, 1):
+            p, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, p + (x != y))
+    return d[-1]
+
+
+def near_tie_ok(expected, got, case):
+    """A near-tie case may differ by one phoneme (at most two code points,
+    "iː" against "ɪ") per near-tie word, nothing else: same sentence count."""
+    ties = case.get("near_tie") or []
+    if not ties or len(expected) != len(got):
+        return False
+    return edit_distance(" | ".join(expected), " | ".join(got)) <= 2 * len(ties)
 
 
 def render(header, cases):
@@ -182,16 +230,28 @@ def render(header, cases):
 
 
 def main():
-    text = render(*build())
+    header, cases = build()
+    text = render(header, cases)
     json.loads(text)
     if "--check" in sys.argv:
         with open(OUT, encoding="utf-8") as f:
-            same = f.read() == text
-        print("golden.json is up to date" if same else "golden.json is OUT OF DATE (run make_golden.py)")
-        sys.exit(0 if same else 1)
-    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
+            committed = json.load(f)
+        old = {c["id"]: c for c in committed["cases"]}
+        bad = []
+        for c in cases:
+            o = old.get(c["id"])
+            if o is None or o["text"] != c["text"]:
+                bad.append(c["id"])
+            elif o["phonemes"] != c["phonemes"] and not near_tie_ok(o["phonemes"], c["phonemes"], o):
+                bad.append(c["id"])
+        if len(old) != len(cases) or committed["data_sha256"] != header["data_sha256"]:
+            bad.append("(cases or data files)")
+        print("golden.json is up to date" if not bad else f"golden.json is OUT OF DATE (run make_golden.py): {bad[:10]}")
+        sys.exit(0 if not bad else 1)
+    out = sys.argv[sys.argv.index("--out") + 1] if "--out" in sys.argv else OUT
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
-    print(f"wrote {OUT}: {text.count(chr(10))} lines")
+    print(f"wrote {out}: {text.count(chr(10))} lines")
 
 
 if __name__ == "__main__":

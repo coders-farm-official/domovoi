@@ -59,11 +59,34 @@ def test_default_list_in_the_fixture_is_the_shipped_one():
     assert [list(x) for x in load_default_pronunciations(DATA_DIR)] == GOLDEN["default_pronunciations"]
 
 
+def _edit(a, b) -> int:
+    d = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        p, d[0] = d[0], i
+        for j, y in enumerate(b, 1):
+            p, d[j] = d[j], min(d[j] + 1, d[j - 1] + 1, p + (x != y))
+    return d[-1]
+
+
+def _same(case, got, expected=None) -> bool:
+    """Exact, or (a case marked near_tie only) one phoneme of difference per
+    near-tie word: the out-of-dictionary model's near ties may fall the
+    other way on a runtime other than the one the fixture was made with
+    (made_with; ONNX Runtime 1.24 reads "shiv" as SH IY1 V, 1.28 as SH IH1 V).
+    The same rule as scripts/g2p/make_golden.py --check and the Kotlin port."""
+    expected = case["phonemes"] if expected is None else expected
+    if got == expected:
+        return True
+    ties = case.get("near_tie") or []
+    return bool(ties) and len(got) == len(expected) and         _edit(" | ".join(expected), " | ".join(got)) <= 2 * len(ties)
+
+
 @pytest.mark.parametrize("case", DEFAULT_CASES, ids=[c["id"] for c in DEFAULT_CASES])
 def test_phonemes_and_ids(ph, case):
     got = ph.phonemize(case["text"])
-    assert got == case["phonemes"], case["text"]
-    assert [phoneme_ids(p) for p in got] == case["ids"]
+    assert _same(case, got), (case["text"], got, case["phonemes"])
+    assert [phoneme_ids(p) for p in got] == (case["ids"] if got == case["phonemes"]
+                                             else [phoneme_ids(p) for p in got])
 
 
 @pytest.mark.parametrize("case", LIST_CASES, ids=[c["id"] for c in LIST_CASES])
@@ -71,10 +94,26 @@ def test_say_it_like_cases(case):
     p = Phonemizer(pronunciations=[tuple(x) for x in case["pronunciations"]])
     resolved = {k: ("/" + v.ipa + "/" if v.ipa is not None else " ".join(v.phones))
                 for k, v in p.pronunciations().items()}
-    assert resolved == case["resolved"]
     got = p.phonemize(case["text"])
-    assert got == case["phonemes"], case["text"]
-    assert [phoneme_ids(s) for s in got] == case["ids"]
+    assert _same(case, got), (case["text"], got, case["phonemes"])
+    if got == case["phonemes"]:
+        assert resolved == case["resolved"]
+        assert [phoneme_ids(s) for s in got] == case["ids"]
+    else:   # a near tie fell the other way: the respelling differs by as much
+        assert resolved.keys() == case["resolved"].keys()
+        for k, arpa in resolved.items():
+            assert _edit(arpa.split(), case["resolved"][k].split()) <= len(case["near_tie"])
+
+
+def test_near_ties_are_marked_in_respellings_too():
+    """A syllable of a "say it like" entry that the model reads is checked
+    for near ties like any word of the text (say_it_like-004: "shiv")."""
+    case = next(c for c in LIST_CASES if c["pronunciations"] == [["Siobhan", "shiv-AWN"]])
+    assert case["respelling_model"][0][0] == "shiv" and case["near_tie"] == ["shiv"]
+    assert "shiv" in GOLDEN["near_tie_words"]
+    # The shipped defaults have none: one voice says Domovoi the same everywhere.
+    default_ties = {w for c in DEFAULT_CASES for w in c.get("near_tie", [])}
+    assert not default_ties & {"voy", "doh", "moe", "win"}
 
 
 @pytest.mark.parametrize("word,say", [tuple(x) for x in GOLDEN["invalid_say_it_like"]])

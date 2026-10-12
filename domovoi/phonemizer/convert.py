@@ -144,18 +144,46 @@ class Phonemizer:
         return self.g2p is not None
 
     # ---------------- the owner's "say it like" list ----------------
-    def set_pronunciations(self, entries):
+    def set_pronunciations(self, entries, *, skip_bad=False):
         """Replace the "say it like" list. ``entries``: a mapping of word ->
         say-it-like text, or an iterable of (word, say_it_like) pairs (a
         later pair for the same word wins). Raises
         :class:`PronunciationError` naming the first entry it can't use;
-        the old list stays in force then."""
+        the old list stays in force then. With ``skip_bad`` an unusable
+        entry is left out instead, and the list of their errors (strings)
+        is returned."""
         pairs = entries.items() if hasattr(entries, "items") else entries
-        resolved = {}
+        resolved, errors = {}, []
         for word, say in pairs:
-            p = self.resolve_pronunciation(word, say)
+            try:
+                p = self.resolve_pronunciation(word, say)
+            except PronunciationError as e:
+                if not skip_bad:
+                    raise
+                errors.append(str(e))
+                continue
             resolved[p.key] = p
         self._pron = resolved
+        return errors
+
+    def pronunciation_tag(self, text):
+        """The list entries that change how ``text`` is said, as one string
+        ("" when none do): a cache key for audio rendered from ``text``, so
+        a changed entry re-renders exactly the clips that use it."""
+        pron = self._pron
+        if not pron:
+            return ""
+        used = set()
+        for sent in normalize(text):
+            for t in sent:
+                if t[0] != "w":
+                    continue
+                w = t[1]
+                if w in pron:
+                    used.add(w)
+                elif w.endswith("'s") and w[:-2] in pron:
+                    used.add(w[:-2])
+        return ";".join(f"{k}={pron[k].say_it_like}" for k in sorted(used))
 
     def pronunciations(self):
         """The list in force: key (normalized word) -> :class:`Pronunciation`."""
@@ -467,16 +495,20 @@ class Phonemizer:
         return "ə"
 
     # ---------------- sentences ----------------
-    def phonemize(self, text):
-        """Text -> one Piper phoneme string per sentence."""
-        return [p for p, _ in self.phonemize_detailed(text)]
+    def phonemize(self, text, extra=None):
+        """Text -> one Piper phoneme string per sentence. ``extra``: resolved
+        :class:`Pronunciation` entries to use over the list for this call
+        only (a preview of an entry not saved yet)."""
+        return [p for p, _ in self.phonemize_detailed(text, extra)]
 
-    def phonemize_detailed(self, text):
+    def phonemize_detailed(self, text, extra=None):
         """Text -> [(sentence phoneme string, word details)]. Each word's
         ``src`` says where its pronunciation came from: say (the owner's
         list), rule, lex, lex+s, fw (weak form), hyphen, compound, model,
         spell."""
         pron = self._pron
+        if extra:
+            pron = {**pron, **{p.key: p for p in extra}}
         res = []
         for sent in normalize(text):
             # group consecutive spelled letters into one word

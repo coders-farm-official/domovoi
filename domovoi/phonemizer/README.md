@@ -144,6 +144,7 @@ Top level:
 |---|---|
 | `format` | `domovoi-phonemizer-golden/1` |
 | `data_sha256` | SHA-256 of each data file the fixture was made from (paths under `data/`) |
+| `made_with` | the ONNX Runtime version and machine that wrote it (1.28.0, Linux x86_64: the phone's runtime; a server's lock runs 1.30.0, which reads every model word here the same) |
 | `default_pronunciations` | the list in force for every case without its own: `[[word, say_it_like], ...]` |
 | `ids` | which voice the ids are for (`en_US-norman-medium`; the same for kristin and ljspeech), the map file, and the id rule |
 | `near_tie_margin`, `near_tie_words` | see below |
@@ -166,18 +167,28 @@ A case:
   this case, replacing the default list completely (`[]` means none; a
   later entry for the same word wins). `resolved` gives each entry's
   ARPAbet (or `/phonemes/`), keyed by the normalized word.
-- `model` (informational): the words the out-of-dictionary model
-  pronounced, with its ARPAbet, to tell a model difference from a rules
-  difference.
-- `near_tie` (informational): model words whose output is within
-  `near_tie_margin` (0.1) logits of a different phoneme. They match
-  exactly on x86-64 ONNX Runtime; another runtime or CPU may pick the other
-  phoneme for them (`oluwaseun` flips between the int8 and float models),
-  so a port may allow those cases one phoneme of difference.
+- `model` (informational): the words of the text the out-of-dictionary
+  model pronounced, with its ARPAbet, to tell a model difference from a
+  rules difference. `respelling_model`: the same for the syllables of a
+  "say it like" entry the case uses (`voy` in `DOH-moe-voy`).
+- `near_tie`: model words (of the text or of a respelling) whose output
+  is within `near_tie_margin` (0.1) logits of a different phoneme. The
+  case may then differ by **one phoneme per near-tie word** (at most two
+  code points each in the joined sentences, `iː` against `ɪ`), and nothing
+  else: a runtime other than `made_with` may pick the other phoneme
+  (ONNX Runtime 1.24 reads `shiv` as SH IY1 V, 1.28 and 1.30 as SH IH1 V;
+  `oluwaseun` flips between the int8 and float models). The ids then
+  follow the phonemes actually produced. The Python test, `make_golden.py
+  --check` and the Kotlin port apply this same rule. The shipped "say it
+  like" entries have no near tie, so Domovoi's own name sounds the same
+  on every runtime.
 
-Regenerate only on purpose: `python scripts/g2p/make_golden.py`, then
-read the diff (each changed line is something the voices will say
-differently). `--check` exits 1 when the fixture is out of date. The test
+Regenerate only on purpose, with ONNX Runtime 1.28 or newer (pyproject's
+real-clients floor; in a throwaway `python:3.14-slim` container with
+`pip install onnxruntime==1.28.0 numpy`, then `python -I
+scripts/g2p/make_golden.py --out <file>`), and read the diff: each changed
+line is something the voices will say differently. `--check` exits 1 when
+the fixture is out of date. The test
 `domovoi/tests/test_phonemizer_golden.py` also fails when any data file's
 hash differs from `data_sha256`.
 
