@@ -80,6 +80,14 @@ async def list_models(base_url: str | None = None, timeout: float = 5.0) -> list
     the caller renders an empty "no models installed / Ollama offline" state
     rather than erroring.
     """
+    return await tags_or_none(base_url, timeout) or []
+
+
+async def tags_or_none(base_url: str | None = None, timeout: float = 5.0) -> list[dict[str, Any]] | None:
+    """:func:`list_models`, but None when Ollama couldn't be asked — which,
+    unlike an empty list, doesn't mean "nothing is installed". For a caller
+    that refuses something because a model is missing (the text chat's
+    vision check) and must not do so just because Ollama is down."""
     import httpx
 
     url = f"{_ollama_base(base_url)}/api/tags"
@@ -90,9 +98,24 @@ async def list_models(base_url: str | None = None, timeout: float = 5.0) -> list
             payload = resp.json()
     except Exception as e:
         log.warning("ollama /api/tags failed: %s", e)
-        return []
+        return None
     models = payload.get("models") if isinstance(payload, dict) else None
-    return models if isinstance(models, list) else []
+    return models if isinstance(models, list) else None
+
+
+def model_installed(name: str | None, installed: Any) -> bool:
+    """Is ``name`` among ``installed`` (model names, or ``/api/tags`` rows)?
+    Compared the way Ollama names them: case aside, and a bare name means
+    ``:latest`` ("llava" is "llava:latest"). An empty name is never
+    installed."""
+    if not (name or "").strip():
+        return False
+    keys = set()
+    for m in installed or ():
+        n = (m.get("name") or m.get("model")) if isinstance(m, dict) else m
+        if n:
+            keys.add(_model_key(str(n)))
+    return _model_key(name) in keys
 
 
 async def _ps_or_none(base_url: str | None, timeout: float) -> list[dict[str, Any]] | None:
@@ -221,7 +244,9 @@ async def chat_stream(
     web text-chat surface (module-level like :func:`pull_model`; the voice
     pipeline's Protocol clients are untouched). No overall read timeout — a
     long completion on a big model is legitimate; only connect is bounded.
-    Raises on transport errors so the caller can surface the failure.
+    Raises on transport errors (httpx's own) so the caller can surface the
+    failure, and :class:`OllamaChatError` when Ollama answers with an error
+    — a status of 400 or more, or an ``error`` line mid-stream.
 
     Pass a dict as ``stats`` to get Ollama's closing figures for the reply
     copied into it when the stream ends: ``done_reason``, the token counts
@@ -244,7 +269,11 @@ async def chat_stream(
     timeout = httpx.Timeout(connect=connect_timeout, read=None, write=30.0, pool=connect_timeout)
     async with httpx.AsyncClient(timeout=timeout) as c:
         async with c.stream("POST", url, json=body) as resp:
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # Ollama says what went wrong in the body ({"error": "model
+                # \"x\" not found, try pulling it first"}); raise_for_status
+                # would throw that away and keep only the status and the URL.
+                raise OllamaChatError(resp.status_code, _error_detail(await resp.aread()))
             async for line in resp.aiter_lines():
                 line = line.strip()
                 if not line:
@@ -254,7 +283,7 @@ async def chat_stream(
                 except json.JSONDecodeError:
                     continue
                 if chunk.get("error"):
-                    raise RuntimeError(str(chunk["error"]))
+                    raise OllamaChatError(None, str(chunk["error"]))
                 delta = (chunk.get("message") or {}).get("content")
                 if delta:
                     yield delta
@@ -262,6 +291,36 @@ async def chat_stream(
                     if stats is not None:
                         stats.update({k: chunk[k] for k in _DONE_STATS if chunk.get(k) is not None})
                     return
+
+
+class OllamaChatError(RuntimeError):
+    """Ollama refused or broke off a :func:`chat_stream` reply. ``status``
+    is the HTTP status (404 for a model that isn't installed), or None for
+    an error Ollama sent inside an otherwise good stream; ``detail`` is
+    Ollama's own words. Both are for the server log and for telling the
+    cases apart, not for showing to a user."""
+
+    def __init__(self, status: int | None, detail: str) -> None:
+        self.status = status
+        self.detail = detail
+        super().__init__(f"{status} {detail}" if status is not None else detail)
+
+
+def _error_detail(body: bytes) -> str:
+    """The message of an Ollama error body, else the body itself (cut).
+    Ollama sends ``{"error": "..."}``, or, for some refusals (an image
+    handed to a text-only model), ``{"error": {"message": "...", ...}}``."""
+    text = body.decode("utf-8", "replace").strip()
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text[:500]
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(err, dict) and err.get("message"):
+        return str(err["message"])[:500]
+    if err:
+        return str(err)[:500]
+    return text[:500]
 
 
 # The closing figures of a streamed chat reply (see chat_stream's ``stats``).

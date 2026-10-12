@@ -12,7 +12,16 @@ events per token chunk, one final ``done`` event carrying the persisted
 message). The full assistant row is written when the stream ends, so an
 interrupted stream loses nothing but the tail. Vision: a message carrying
 image uploads is answered by ``ollama_vision_model`` instead of the QA
-model; images ride base64 in the Ollama chat payload.
+model; images ride base64 in the Ollama chat payload. A message with
+images whose vision model isn't installed (or isn't set) is answered at
+once with a plain refusal and no Ollama call (:func:`send_message`).
+
+Failures (:func:`_failure`): whatever stopped a reply — the model missing,
+Ollama unreachable or too slow, any other error it reported — reaches the
+user as a plain sentence with a machine-readable code (``event: error``
+``{detail, code, model}``, kept on the row as ``error`` plus
+``stats.error_code``). The exception itself goes to the server log only:
+its text names internal hosts, ports and library help URLs.
 
 Uploads land in ``~/.domovoi/chat_uploads/<token><ext>`` (token = uuid hex,
 server-generated — the client never names files here) and are referenced
@@ -53,6 +62,7 @@ import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -216,7 +226,137 @@ def _msg_dict(r: Any) -> dict[str, Any]:
     d["created_at"] = d["created_at"].isoformat()
     if isinstance(d.get("stats"), str):
         d["stats"] = json.loads(d["stats"])
+    stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
+    if d.get("role") == "assistant" and d.get("error") and not stats.get("error_code"):
+        # A row from before the plain answers kept the exception's own
+        # text ("Client error '404 Not Found' for url 'http://localhost:
+        # 11434/api/chat' ..."). Read it out as a plain answer too; the
+        # row itself is left as it was.
+        role = stats.get("model_role") or (
+            "vision" if d.get("model") and d.get("model") == core_settings.ollama_vision_model else "chat"
+        )
+        code, d["error"] = _legacy_failure(str(d["error"]), d.get("model") or "", role)
+        d["stats"] = {**stats, "error_code": code}
     return d
+
+
+# ─── Plain answers for what stopped a reply ─────────────────────────────────
+# The codes the clients key their own wording on (web chat_details.js,
+# Android ChatErrors.kt). Kept on the assistant row as ``stats.error_code``.
+ERR_VISION_MODEL_MISSING = "vision_model_missing"  # pictures, and no vision model to read them
+ERR_MODEL_MISSING = "model_missing"                # the model for a text turn isn't installed
+ERR_VISION_UNSUPPORTED = "vision_unsupported"      # the vision model can't take pictures
+ERR_MODEL_MEMORY = "model_memory"                  # not enough memory to load the model
+ERR_UNREACHABLE = "model_unreachable"              # Ollama down, or the connection dropped
+ERR_TIMEOUT = "model_timeout"                      # Ollama took too long to take the request
+ERR_MODEL = "model_error"                          # anything else Ollama reported
+ERR_EMPTY = "empty_reply"                          # the model answered with nothing
+
+_SETTINGS_MODELS = "Settings → Models"
+
+
+def vision_missing_text(model: str) -> str:
+    """Why a message with pictures can't be answered here. Worded the same
+    in both clients, which say it before a picture is even attached."""
+    if not (model or "").strip():
+        return (
+            "Pictures need a vision model, and none is set on this Domovoi. "
+            f"An admin can pick one in {_SETTINGS_MODELS}."
+        )
+    return (
+        f"Pictures need the vision model {model}, which isn't installed on this "
+        f"Domovoi. An admin can install it in {_SETTINGS_MODELS}, or pick another "
+        "vision model there."
+    )
+
+
+def _missing_text(model: str, role: str) -> tuple[str, str]:
+    if role == "vision":
+        return ERR_VISION_MODEL_MISSING, vision_missing_text(model)
+    if not (model or "").strip():
+        return ERR_MODEL_MISSING, (
+            f"No chat model is set on this Domovoi. An admin can pick one in {_SETTINGS_MODELS}."
+        )
+    return ERR_MODEL_MISSING, (
+        f"The model {model} isn't installed on this Domovoi. An admin can install it "
+        f"in {_SETTINGS_MODELS}, or pick another model there."
+    )
+
+
+def _plain(code: str, model: str, role: str) -> tuple[str, str]:
+    """(code, the sentence the user reads) for a failure class."""
+    if code in (ERR_MODEL_MISSING, ERR_VISION_MODEL_MISSING):
+        return _missing_text(model, role)
+    name = f"model {model}" if model else "model"
+    return code, {
+        ERR_VISION_UNSUPPORTED: (
+            f"The vision {name} can't read pictures. An admin can pick one that "
+            f"does in {_SETTINGS_MODELS}."
+        ),
+        ERR_MODEL_MEMORY: (
+            f"The {name} needs more memory than this Domovoi has free right now. Try again "
+            f"in a few minutes; if it keeps happening, an admin can pick a smaller model "
+            f"in {_SETTINGS_MODELS}."
+        ),
+        ERR_UNREACHABLE: (
+            "Domovoi couldn't reach its language model. It may be restarting; "
+            "try again in a minute."
+        ),
+        ERR_TIMEOUT: (
+            "The language model took too long to respond. It may still be loading; "
+            "try again in a minute."
+        ),
+        ERR_EMPTY: "The model returned an empty answer. Try again, or ask it another way.",
+    }.get(code, (
+        "The language model couldn't answer this message. Try again; if it keeps "
+        "happening, an admin can find the reason in the server log."
+    ))
+
+
+def _failure(exc: BaseException, model: str, role: str) -> tuple[str, str]:
+    """(code, plain sentence) for whatever stopped a reply. Never the
+    exception's text: that is for the log."""
+    if isinstance(exc, ollama_client.OllamaChatError):
+        said = exc.detail.lower()
+        if exc.status == 404 or "not found" in said:
+            code = ERR_MODEL_MISSING
+        elif "image input" in said or "multimodal" in said or (
+            "not support" in said and ("image" in said or "vision" in said)
+        ):
+            code = ERR_VISION_UNSUPPORTED
+        elif "memory" in said:
+            code = ERR_MODEL_MEMORY
+        else:
+            code = ERR_MODEL
+    elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        code = ERR_UNREACHABLE
+    elif isinstance(exc, httpx.TimeoutException):
+        code = ERR_TIMEOUT
+    elif isinstance(exc, (httpx.TransportError, OSError)):
+        # The connection broke mid-reply (Ollama stopped, or crashed).
+        code = ERR_UNREACHABLE
+    else:
+        code = ERR_MODEL
+    return _plain(code, model, role)
+
+
+def _legacy_failure(text: str, model: str, role: str) -> tuple[str, str]:
+    """(code, plain sentence) for an error kept as raw text by an older
+    server, read from the words alone."""
+    said = text.lower()
+    if "returned nothing" in said:
+        code = ERR_EMPTY
+    elif "404" in said or "not found" in said:
+        code = ERR_MODEL_MISSING
+    elif "memory" in said:
+        code = ERR_MODEL_MEMORY
+    elif "timed out" in said or "timeout" in said:
+        code = ERR_TIMEOUT
+    elif "connect" in said:
+        code = ERR_UNREACHABLE
+    else:
+        code = ERR_MODEL
+    return _plain(code, model, role)
 
 
 def _ms(ns: Any) -> float | None:
@@ -298,9 +438,15 @@ def _upload_path(token: str) -> Path | None:
     return None
 
 
-async def _history_for_model(thread_id: int) -> list[dict[str, Any]]:
+async def _history_for_model(thread_id: int, with_images: bool = True) -> list[dict[str, Any]]:
     """The last N persisted turns in Ollama chat shape, images inlined as
-    base64 (vision context survives across turns within the window)."""
+    base64 (vision context survives across turns within the window).
+
+    ``with_images=False`` leaves the pictures out — for a turn answered by
+    the text model, which can't read them: Ollama refuses a request that
+    hands a text-only model an image (400, "Multimodal data provided, but
+    model does not support multimodal requests." on 0.34), so one picture
+    early in a thread would otherwise break every text question after it."""
     async with session_scope() as s:
         rows = (
             await s.execute(
@@ -318,7 +464,7 @@ async def _history_for_model(thread_id: int) -> list[dict[str, Any]]:
     for role, content, images in reversed(rows):
         msg: dict[str, Any] = {"role": role, "content": content}
         b64s = []
-        for img in images or []:
+        for img in (images or []) if with_images else []:
             p = _upload_path(img.get("token", ""))
             if p is not None:
                 try:
@@ -338,7 +484,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
 
       ``event: delta``  data: {"text": "..."}
       ``event: done``   data: {<the persisted assistant message row>}
-      ``event: error``  data: {"detail": "..."}    (also persisted on the row)
+      ``event: error``  data: {"detail": "...", "code": "...", "model": "..."}
+                        (also persisted on the row: ``error``, ``stats.error_code``)
+
+    A message with pictures whose vision model isn't installed — or none
+    is set — gets its answer up front: the user turn is kept, the reply is
+    the refusal (``vision_model_missing``) and Ollama is never asked. When
+    Ollama can't be asked whether the model is there, the send goes ahead
+    and a failure is reported as it happens.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}
@@ -385,7 +538,20 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         await _notify_chat(s, "message")
         await s.commit()
 
-    history = await _history_for_model(thread_id)
+    refusal: tuple[str, str] | None = None
+    if model_role == "vision":
+        if not model.strip():
+            refusal = _missing_text(model, model_role)
+        else:
+            tags = await ollama_client.tags_or_none()
+            if tags is not None and not ollama_client.model_installed(model, tags):
+                refusal = _missing_text(model, model_role)
+
+    # The text model can't read pictures, so a text turn leaves the
+    # thread's earlier ones out (see _history_for_model).
+    history = [] if refusal else await _history_for_model(
+        thread_id, with_images=model_role != "chat",
+    )
     async with session_scope() as s:
         in_thread = (
             await s.execute(
@@ -397,30 +563,46 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     async def sse() -> AsyncIterator[str]:
         chunks: list[str] = []
         error: str | None = None
+        code: str | None = None
         ollama_stats: dict[str, Any] = {}
         started = time.monotonic()
         first_token_ms: float | None = None
-        try:
-            async for delta in ollama_client.chat_stream(history, model=model, stats=ollama_stats):
-                if first_token_ms is None:
-                    first_token_ms = (time.monotonic() - started) * 1000
-                chunks.append(delta)
-                yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
-        except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
-            log.warning("chat stream failed (thread %s, model %s): %s", thread_id, model, e)
-            error = str(e)[:500]
+        if refusal is not None:
+            code, error = refusal
+            log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
+        else:
+            try:
+                async for delta in ollama_client.chat_stream(history, model=model, stats=ollama_stats):
+                    if first_token_ms is None:
+                        first_token_ms = (time.monotonic() - started) * 1000
+                    chunks.append(delta)
+                    yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+            except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
+                code, error = _failure(e, model, model_role)
+                # The detail is for whoever reads the log; the user gets
+                # the plain sentence (it would name hosts, ports, URLs).
+                log.warning(
+                    "chat stream failed (thread %s, model %s, %s): %s: %s",
+                    thread_id, model, code, type(e).__name__, str(e)[:500],
+                )
 
         content = "".join(chunks)
         if not content and error is None:
-            error = "the model returned nothing"
-        stats = _reply_stats(
-            ollama_stats,
-            first_token_ms=first_token_ms,
-            wall_ms=(time.monotonic() - started) * 1000,
-            context_sent=len(history),
-            context_in_thread=int(in_thread),
-            model_role=model_role,
-        )
+            code, error = _plain(ERR_EMPTY, model, model_role)
+        if refusal is not None:
+            # No reply was attempted, so there are no reply figures.
+            stats: dict[str, Any] = {"model_role": model_role}
+        else:
+            stats = _reply_stats(
+                ollama_stats,
+                first_token_ms=first_token_ms,
+                wall_ms=(time.monotonic() - started) * 1000,
+                context_sent=len(history),
+                context_in_thread=int(in_thread),
+                model_role=model_role,
+            )
+        if code is not None:
+            stats["error_code"] = code
         async with session_scope() as s:
             row = (
                 await s.execute(
@@ -441,7 +623,8 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             await _notify_chat(s, "message")
             await s.commit()
         if error is not None:
-            yield f"event: error\ndata: {json.dumps({'detail': error})}\n\n"
+            payload = {"detail": error, "code": code, "model": model}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
         yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
 
     return StreamingResponse(
@@ -492,12 +675,17 @@ async def get_upload(token: str):
 @router.get("/models")
 async def chat_models() -> dict[str, Any]:
     """Installed Ollama models + the configured defaults, for the composer's
-    model picker."""
-    tags = await ollama_client.list_models()
+    model picker. ``vision_installed`` says whether a picture can be
+    answered: false when the vision model isn't installed (or none is
+    set), null when Ollama couldn't be asked — the clients explain the
+    first before a picture is attached, and leave the second to the send."""
+    tags = await ollama_client.tags_or_none()
+    vision = core_settings.ollama_vision_model
     return {
         "installed": sorted(
-            {m.get("name") or m.get("model") for m in tags if (m.get("name") or m.get("model"))}
+            {m.get("name") or m.get("model") for m in tags or [] if (m.get("name") or m.get("model"))}
         ),
         "default_model": core_settings.ollama_model,
-        "vision_model": core_settings.ollama_vision_model,
+        "vision_model": vision,
+        "vision_installed": None if tags is None else ollama_client.model_installed(vision, tags),
     }
