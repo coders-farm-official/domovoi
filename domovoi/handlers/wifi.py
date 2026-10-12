@@ -86,6 +86,24 @@ def _format_rate(mbits: float) -> str:
     return f"{mbits:.1f} megabits per second"
 
 
+# Signal bands (received signal strength at the satellite, dBm), the same
+# ones the dashboard colours by (web/static/satellites.jsx wifiSignalTone):
+# at or above -60 good, -60 to -70 fair, below -70 weak. A typical 2.4 GHz
+# link wants about -67 dBm for steady real-time audio; below -70 it starts
+# losing frames and retrying, which is when a voice satellite drops out.
+SIGNAL_GOOD_DBM = -60
+SIGNAL_FAIR_DBM = -70
+
+
+def signal_quality(dbm: float) -> str:
+    """'good' / 'fair' / 'weak' for a received signal in dBm."""
+    if dbm >= SIGNAL_GOOD_DBM:
+        return "good"
+    if dbm >= SIGNAL_FAIR_DBM:
+        return "fair"
+    return "weak"
+
+
 # ─── Handler ──────────────────────────────────────────────────────────────
 
 
@@ -203,6 +221,21 @@ class WifiHandler(Handler):
             )
         rx_mbits = status.get("rx_mbits")
         ssid = status.get("ssid")
+        dbm = status.get("signal_dbm")
+        if isinstance(dbm, (int, float)) and not isinstance(dbm, bool) and rx_mbits is not None:
+            # The signal says whether the link is good; the rate does not
+            # (an idle link reads the 1 Mbit/s beacon rate), so a satellite
+            # that reports a signal is answered by it.
+            quality = signal_quality(float(dbm))
+            where = f" to {ssid}" if ssid else ""
+            text = f"WiFi is connected{where} with a {quality} signal."
+            if quality == "weak":
+                text += " Moving the satellite or the router closer together would help."
+            return Response(
+                text=text,
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         if rx_mbits is None:
             # A degraded Pi may have pushed a partial status (e.g., link
             # down). Surface what we can without crashing.

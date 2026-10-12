@@ -162,11 +162,13 @@ Client → Server
                            detected an unusably-loud capture and bailed.
                            Server should respond with a stock apology TTS
                            rather than transcribing the audio buffer.
-  text  wifi_status        {"type":"wifi_status","rx_mbits":N,"tx_mbits":N,"ssid":...}
-                           — Pi pushes its current link rate every poll
+  text  wifi_status        {"type":"wifi_status","rx_mbits":N,"tx_mbits":N,"ssid":...,
+                            "signal_dbm":N,"mode":"managed"|"ap"}
+                           — Pi pushes its current link every poll
                            (60 s default) so WifiHandler's diagnostic
                            ("how's your wifi?") can answer without a
-                           round-trip. Server caches per-room.
+                           round-trip. Server caches per-room. signal_dbm
+                           and mode since 2026-10-12 (absent = older Pi).
   text  volume_status      {"type":"volume_status","level":N} — Pi reports
                            its current hardware output volume (0-100) on
                            connect and after each set_volume. Server caches
@@ -242,7 +244,8 @@ Client → Server
 
 Server → Client
   text  ready              {"type":"ready","protocol_version":"0.1","room_id":...,"bot_name":...,"audio_sample_rate_in":16000,
-                            "features":["speech_pause","end_capture","music_failed"]}
+                            "features":["speech_pause","end_capture","music_failed"],
+                            "server_names":["<host>.local"]}
                            — sent only AFTER the client's hello was accepted
                            (and the room's MPD daemon provisioned). A socket
                            that never says hello never receives it.
@@ -434,6 +437,7 @@ import json
 import logging
 import re
 import secrets
+import socket
 import time
 import wave
 from dataclasses import dataclass, field
@@ -601,6 +605,40 @@ def _is_missing_satellites_table(exc: Exception) -> bool:
         return "satellites" in str(orig)
     text = str(exc).lower()
     return "satellites" in text and "does not exist" in text
+
+
+def _signal_dbm(value: Any) -> float | int | None:
+    """A received-signal reading from a satellite: a number between -120
+    and 0 dBm, or None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or not -120 <= value <= 0:
+        return None
+    return value
+
+
+def _wifi_mode(value: Any) -> str | None:
+    """``managed`` / ``ap`` (or another short `iw` type) from a satellite."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value.strip().lower()[:16] or None
+
+
+_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def advertised_server_names() -> list[str]:
+    """``<hostname>.local`` — the mDNS name avahi publishes for this host —
+    when the host name is a usable single label (an FQDN's first label
+    otherwise). Empty when it is not (``localhost``, an address)."""
+    try:
+        host = socket.gethostname().strip().rstrip(".").lower()
+    except OSError:
+        return []
+    first = host.split(".", 1)[0]
+    if not first or first in ("localhost", "localhost-localdomain") or not _HOST_LABEL.match(first):
+        return []
+    return [f"{first}.local"]
 
 
 PROTOCOL_VERSION = "0.1"
@@ -1691,6 +1729,11 @@ class StreamSession:
             "bot_name": settings.bot_name,
             "audio_sample_rate_in": PCM_INPUT_SAMPLE_RATE,
             "features": self._ready_features(),
+            # The names this server answers to on the LAN, so a satellite
+            # can find it again by name when its address moves. A hint the
+            # satellite resolves itself and then holds to the server
+            # identity like any address (satellite/discovery.py).
+            "server_names": advertised_server_names(),
         })
         self._connected_at = time.monotonic()
         # A timer or reminder that went off while this room was away (or
@@ -3136,6 +3179,13 @@ class StreamSession:
                     "rx_mbits": float(rx) if rx is not None else None,
                     "tx_mbits": float(tx) if tx is not None else None,
                     "ssid": str(ssid) if ssid else None,
+                    # 2026-10-12: the received signal (dBm), which is what
+                    # says whether the link is good (the rates are of the
+                    # last frame: an idle link reads the 1 Mbit/s beacon
+                    # rate), and "ap" when the radio is hosting the setup
+                    # hotspot. Absent from an older satellite: None.
+                    "signal_dbm": _signal_dbm(ctrl.get("signal_dbm")),
+                    "mode": _wifi_mode(ctrl.get("mode")),
                 }
             except (TypeError, ValueError) as e:
                 log.debug("ignoring malformed wifi_status from %s: %s", self.room_id, e)

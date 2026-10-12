@@ -418,6 +418,12 @@ class WifiStatus(BaseModel):
     rx_mbits: float | None = None
     tx_mbits: float | None = None
     ssid: str | None = None
+    # 2026-10-12: received signal strength at the satellite (dBm, -120..0),
+    # the dashboard's main Wi-Fi indicator; null from an older satellite,
+    # which keeps the rate display. `mode` is "ap" when the radio is
+    # hosting the setup hotspot instead of being on the house network.
+    signal_dbm: float | None = None
+    mode: str | None = None
 
 
 class MpdPorts(BaseModel):
