@@ -15,6 +15,15 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+        // The on-device assistant's native libraries: LiteRT-LM ships only
+        // arm64-v8a and x86_64, so a 32-bit build could not load it.
+        // arm64-v8a is every phone it targets; x86_64 is the emulator.
+        // `-Pdomovoi.abis=arm64-v8a` builds a phone-only APK about half
+        // the size (the libraries are stored uncompressed).
+        ndk {
+            abiFilters += (findProperty("domovoi.abis") as String?)?.split(',')?.map { it.trim() }
+                ?: listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -29,6 +38,14 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    packaging {
+        jniLibs {
+            // sherpa-onnx's C and C++ API libraries are for native callers;
+            // the Kotlin API loads libsherpa-onnx-jni.so, which needs
+            // neither (its only sherpa dependency is libonnxruntime.so).
+            excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
+        }
     }
     testOptions {
         // JVM unit tests: stub android.* so pure-Kotlin helpers that touch
@@ -68,6 +85,13 @@ dependencies {
     implementation(libs.media3.datasource.okhttp)
     implementation(libs.media3.ui)
     implementation(libs.coil.video)
+    // On-device assistant: LiteRT-LM runs the language model, sherpa-onnx
+    // the speech (recognition, voice detection, synthesis). The sherpa-onnx
+    // AAR comes from its GitHub release (settings.gradle.kts).
+    implementation(libs.litertlm.android)
+    implementation(libs.sherpa.onnx) {
+        artifact { type = "aar"; extension = "aar" }
+    }
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
