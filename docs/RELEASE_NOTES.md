@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — Chat: pictures say what they need, and failures read in plain words
+
+New Android build and a server update; nothing else to do, unless you want
+chat to read pictures.
+
+* **Pictures need the vision model, and chat now says so.** A message with
+  pictures is answered by the vision model (Settings → Models, the Vision
+  row: `qwen2.5vl:7b` unless you picked another), which is not installed
+  by default. A picture used to come back with Ollama's raw error in red
+  ("Client error '404 Not Found' for url 'http://localhost:11434/api/chat'
+  …"). Now, on the dashboard and in the app, the paperclip explains instead
+  of opening the picker, and a picture sent anyway is answered at once with
+  "Pictures need the vision model qwen2.5vl:7b, which isn't installed on
+  this Domovoi. An admin can install it in Settings → Models, or pick
+  another vision model there." Ollama is not asked. A signed-in admin on
+  the dashboard gets a link to that tab; the app opens the dashboard's
+  Settings page. **To read pictures, install the vision model there.**
+* **Every chat failure reads as a plain sentence**: model not installed,
+  vision model that can't read pictures, not enough memory, Ollama
+  unreachable or too slow, anything else it reported, an empty answer. The
+  exception, with Ollama's address, goes to the web backend log only.
+  Replies saved before this update are read out the same way.
+* **Text questions after a picture work.** The thread's earlier pictures
+  went to the chat model with every later question, and Ollama refuses a
+  picture handed to a text-only model, so one picture broke the rest of the
+  chat. Pictures now go only to the vision model.
+* **For clients:** the send stream's `error` event is `{detail, code,
+  model}`; a reply row keeps the code as `stats.error_code`; `GET
+  /api/chat/models` adds `vision_installed` (`false`: a picture would be
+  refused; `null`: Ollama couldn't be asked). The codes are in
+  API_REFERENCE.md §3.18.
+
 ## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
 
 New Android build; nothing to do on the server beyond the usual update.

@@ -15,6 +15,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [Does it support multiple people?](#does-it-support-multiple-people)
 - [What music sources exist out of the box?](#what-music-sources-exist-out-of-the-box)
 - [Can I save music, podcasts, or audiobooks to my phone or computer?](#can-i-save-music-podcasts-or-audiobooks-to-my-phone-or-computer)
+- [Can I send pictures in chat?](#can-i-send-pictures-in-chat)
 - [Where is my data?](#where-is-my-data)
 - [How do I back up and restore?](#how-do-i-back-up-and-restore)
 - [Linux or Windows for the server?](#linux-or-windows-for-the-server)
@@ -250,6 +251,12 @@ Anything beyond that — pulling music from external sources — is the job of *
 - **Android app** — the file is handed to the system DownloadManager and lands in **`Downloads/Domovoi/`**, with a progress notification; it shows up in your Files app afterwards.
 
 Single-file audiobooks (a `.m4b`, say) save as that one file. **Folder audiobooks** (a book split into per-chapter files) come down as a single **zip** of all the chapters, so on Android you'll see a brief "zipping chapters" note while the server builds it. This is a plain file copy from your own server — nothing goes to the internet.
+
+## Can I send pictures in chat?
+
+**Yes, once the vision model is installed.** The Chat page (dashboard and Android app) takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message and 20 MB each. No other kinds of file. A message with pictures is answered by the **vision model** (Settings → Models, the Vision row; `qwen2.5vl:7b` unless you picked another), because the chat model can only read text. Later text-only questions in the same chat go to the chat model with the words of the conversation, not the pictures.
+
+The vision model isn't installed by default. Until it is, the paperclip explains that instead of opening the picker ("Pictures need the vision model qwen2.5vl:7b, which isn't installed on this Domovoi…"), and a picture sent anyway gets that same answer straight away. An admin installs it in **Settings → Models** on the dashboard, or picks another vision-capable model there (a text-only model can't read pictures, and chat says so). The dashboard shows a signed-in admin a link straight to that tab; the Android app, which has no admin sign-in, opens the dashboard's Settings page instead. Pictures stay on your server: they are read by the model on your own hardware, like everything else in chat.
 
 ## Where is my data?
 

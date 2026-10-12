@@ -1324,8 +1324,13 @@ Claude-desktop-style threaded text chat answered by the local Ollama
 mode (Letta, per-room sessions); `chat_threads.letta_agent_id` is the
 parked bridge for backing a thread with a stateful agent later. A message
 carrying image uploads is answered by `ollama_vision_model` (the Vision
-role slot on the Models page) instead of the Q&A model. Mutations fire the
-`chat.changed` WS event.
+role slot on the Models page) instead of the Q&A model. When that model is
+not installed, or none is set, such a message is answered at once with the
+`vision_model_missing` refusal and Ollama is never asked; when Ollama can't
+be asked what is installed, the send goes ahead. A text turn sends the
+thread's earlier pictures to no one: they ride along only to the vision
+model, because Ollama refuses a request that hands a text-only model an
+image. Mutations fire the `chat.changed` WS event.
 
 Reads are **Device read** — the thread list (titles and snippets are message
 text), a thread's transcript and the images sent into it are the household's
@@ -1341,10 +1346,10 @@ upload — is **Device** tier.
 | `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
 | `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files are removed. |
 | `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time). |
-| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
+| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` `{detail, code, model}` when there is no reply or it broke off — see the codes below). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
-| `GET /api/chat/models` | Open | Installed Ollama models + configured default/vision models for the composer. |
+| `GET /api/chat/models` | Open | `{installed, default_model, vision_model, vision_installed}`: the installed Ollama models and the configured defaults. `vision_installed` is `false` when a picture would be refused (the vision model isn't installed, or none is set), `null` when Ollama couldn't be asked; the clients explain the first before a picture is attached. |
 
 A reply's `stats` (V017) is an object whose keys are all optional:
 `prompt_tokens`, `output_tokens`, `tokens_per_sec`; `total_ms`, `load_ms`,
@@ -1353,8 +1358,29 @@ means the model had to be loaded first); `first_token_ms`, `wall_ms`
 (measured by the server); `done_reason` (`stop`, or `length` when the reply
 was cut off); `context_sent`, `context_in_thread`, `context_limit` (messages
 sent to the model against those in the thread — fewer sent means older ones
-fell out of what it saw); `num_ctx`; and `model_role` (`chat`, `vision` when
-images were attached, `override` when the request named a model).
+fell out of what it saw); `num_ctx`; `model_role` (`chat`, `vision` when
+images were attached, `override` when the request named a model); and
+`error_code` when the reply has an `error`.
+
+A failed reply never carries the exception's own text (it named internal
+hosts, ports and library help URLs); that goes to the web process's log.
+`error` is a plain sentence, and `code` / `stats.error_code` says which:
+
+| Code | When |
+|---|---|
+| `vision_model_missing` | Pictures, and the vision model isn't installed or none is set (answered up front) — or Ollama said it is not found. |
+| `model_missing` | The model for a text turn isn't installed (Ollama `404`). |
+| `vision_unsupported` | The vision model can't take pictures (it is a text-only model). |
+| `model_memory` | Not enough free memory to load the model. |
+| `model_unreachable` | Ollama could not be reached, or the connection broke mid-reply. |
+| `model_timeout` | Ollama took too long to take the request. |
+| `model_error` | Anything else Ollama reported. |
+| `empty_reply` | The model answered with nothing. |
+
+The first four are fixed in Settings → Models; both clients word
+`vision_model_missing` themselves and link an admin there. A row written
+before the codes existed is read out the same way (the code worked out from
+its text); the row itself is not changed.
 
 ### 3.19 Models (LLM management)
 
