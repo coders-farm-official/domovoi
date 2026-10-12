@@ -908,12 +908,15 @@ async def phone_voice_turn(
     # rather than reaching the database as an overflow.
     thread_id: int = Form(..., ge=1, le=2**63 - 1),
     player: str | None = Form(None, max_length=2048),
+    # False: the phone speaks the reply itself (its own voice pick), so no
+    # audio is rendered for it. Default true, as before.
+    speak: bool = Form(True),
 ) -> Any:
     """One push-to-talk turn from the app's chat mic: speech-to-text, voice
-    identification, the router satellites use, text-to-speech, and both
-    turns written into chat thread ``thread_id``. Never registers a
-    satellite session. See ``domovoi/phone_voice.py`` for the request and
-    the answer."""
+    identification, the router satellites use, text-to-speech (unless
+    ``speak`` is false), and both turns written into chat thread
+    ``thread_id``. Never registers a satellite session. See
+    ``domovoi/phone_voice.py`` for the request and the answer."""
     from domovoi import phone_voice
 
     data = await audio.read(phone_voice.MAX_CLIP_BYTES + 4096)
@@ -924,6 +927,7 @@ async def phone_voice_turn(
             thread_id=thread_id,
             audio=data,
             player=phone_voice.parse_player(player),
+            speak=speak,
         )
     except phone_voice.PhoneTurnRefused as e:
         return JSONResponse(status_code=e.status, content={"detail": e.detail, "code": e.code})

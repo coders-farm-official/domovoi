@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.AppContainer
 import com.domovoi.app.LocalApp
+import com.domovoi.app.assistant.PhoneSpeech
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.failureText
 import com.domovoi.app.ui.theme.Domovoi
@@ -73,7 +74,11 @@ import com.domovoi.app.voice.HoldToTalkRecorder
 import com.domovoi.app.voice.ReplyPlayer
 import com.domovoi.app.voice.VoiceFocus
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import java.io.IOException
 import java.time.Instant
@@ -178,6 +183,15 @@ internal class VoiceController(
     private val player = ReplyPlayer(context)
     private val focus = VoiceFocus(context)
 
+    /** The phone's own voice getting ready while the button is held, when
+     *  the reply is to be spoken on the phone (its own pick, downloaded:
+     *  PhoneVoiceChoice.replyVoiceOnPhone); null: the server's audio. */
+    private var ownVoice: Deferred<PhoneSpeech?>? = null
+
+    /** The reply being spoken on the phone, so a press can stop it. */
+    @Volatile private var speaking: PhoneSpeech? = null
+    @Volatile private var cutOff = false
+
     /** Whether the phone's own player was playing as the button went down
      *  (before the capture focus paused it): what the turn reports. */
     private var playingAtPress = false
@@ -192,7 +206,17 @@ internal class VoiceController(
         // Already listening (a second finger): the first press owns the turn.
         if (phase == TalkPhase.Recording || phase == TalkPhase.CancelArmed) return false
         val interrupted = phase == TalkPhase.Speaking
-        if (interrupted) player.stop()
+        if (interrupted) {
+            cutOff = true
+            player.stop()
+            speaking?.stop()
+        }
+        // Loads the phone's own voice (and the converter) while the person
+        // talks, when the reply is to be spoken in it.
+        discardOwnVoice()
+        ownVoice = scope.async(Dispatchers.Default) {
+            runCatching { app.phoneVoice.replyVoiceOnPhone()?.let { app.phoneVoice.open() } }.getOrNull()
+        }
         val r = HoldToTalkRecorder()
         recorder = r
         note = null
@@ -212,8 +236,12 @@ internal class VoiceController(
                 if (recorder === r) recorder = null
             }
             when {
-                rec == null -> phase = TalkPhase.Idle
+                rec == null -> {
+                    discardOwnVoice()
+                    phase = TalkPhase.Idle
+                }
                 rec.seconds < HoldToTalkRecorder.MIN_SECONDS -> {
+                    discardOwnVoice()
                     phase = TalkPhase.Idle
                     // A tap that only stopped the reply needs no advice.
                     if (!interrupted) note = "hold the button while you talk"
@@ -241,7 +269,19 @@ internal class VoiceController(
     fun dispose() {
         recorder?.cancel()
         player.stop()
+        speaking?.stop()
+        discardOwnVoice()
         focus.release()
+    }
+
+    /** Lets go of a voice loaded for a turn that is not sent. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun discardOwnVoice() {
+        val pending = ownVoice ?: return
+        ownVoice = null
+        // Closed when it has loaded, even after the view's scope is gone.
+        pending.invokeOnCompletion { cause -> if (cause == null) runCatching { pending.getCompleted()?.close() } }
+        pending.cancel()
     }
 
     private suspend fun send(pcm: ByteArray) {
@@ -256,20 +296,27 @@ internal class VoiceController(
         transcript.add(user)
         transcript.add(reply)
         val playerNow = playerStateForTurn(app.player.current, playingAtPress, app.player.isPlaying.value)
+        // The phone's own pick, downloaded: it speaks the reply text itself,
+        // so the server is asked not to render audio for it.
+        val own = runCatching { ownVoice?.await() }.getOrNull()
+        ownVoice = null
         val turn = try {
-            sendVoiceTurn(app, threadId, pcm, playerNow)
+            sendVoiceTurn(app, threadId, pcm, playerNow, speak = own == null)
         } catch (e: VoiceTurnException) {
+            own?.close()
             transcript.remove(user); transcript.remove(reply)
             note = e.message
             phase = TalkPhase.Idle
             return
         } catch (e: Exception) {
+            own?.close()
             transcript.remove(user); transcript.remove(reply)
             note = failureText("voice", e)
             phase = TalkPhase.Idle
             return
         }
         if (!turn.heard) {
+            own?.close()
             transcript.remove(user); transcript.remove(reply)
             note = "didn't catch that — hold the button while you talk"
             phase = TalkPhase.Idle
@@ -285,14 +332,44 @@ internal class VoiceController(
         actions.filterNot { it.afterReply }.forEach(::apply)
         val wav = turn.wavBytes()
         var heardToTheEnd = true
-        if (wav != null && phase == TalkPhase.Sending) {
-            phase = TalkPhase.Speaking
-            heardToTheEnd = player.play(wav)
+        when (replyPlayback(own != null, wav != null, turn.reply)) {
+            ReplyPlayback.PHONE_VOICE -> if (phase == TalkPhase.Sending) {
+                phase = TalkPhase.Speaking
+                heardToTheEnd = speakOnPhone(own!!, turn.reply)
+            }
+            ReplyPlayback.SERVER_AUDIO -> if (phase == TalkPhase.Sending) {
+                phase = TalkPhase.Speaking
+                heardToTheEnd = player.play(wav!!)
+            }
+            ReplyPlayback.NONE -> {}
         }
+        own?.close()
         // As on a satellite: music asked for starts once the reply has been
         // heard; a reply cut off by a new press leaves it (the person moved on).
         if (heardToTheEnd) actions.filter { it.afterReply }.forEach(::apply)
         if (phase == TalkPhase.Speaking || phase == TalkPhase.Sending) phase = TalkPhase.Idle
+    }
+
+    /** The reply spoken on the phone in its own voice, the phone's music
+     *  ducked under it as under the server's audio; a press stops it.
+     *  False when it was cut off (or could not be spoken). */
+    private suspend fun speakOnPhone(out: PhoneSpeech, text: String): Boolean {
+        cutOff = false
+        speaking = out
+        val duck = VoiceFocus(context)
+        duck.hold(VoiceFocus.Kind.REPLY)
+        return try {
+            out.speak(text)
+            !cutOff
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            note = "the reply couldn't be spoken: ${e.message ?: e.javaClass.simpleName}"
+            false
+        } finally {
+            speaking = null
+            duck.release()
+        }
     }
 
     private fun fill(m: LiveMessage, row: MessageRow?, fallback: String) {

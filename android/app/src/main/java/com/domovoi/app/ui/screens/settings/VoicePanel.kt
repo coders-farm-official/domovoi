@@ -79,12 +79,16 @@ internal fun voiceChoiceLabel(choice: String, ui: PhoneVoiceUi): String {
 internal fun voiceSourceNote(ui: PhoneVoiceUi): String {
     val unknown = PhoneVoiceChoice.unknownServerVoice(ui.serverVoice)
     return when {
-        ui.choice != PhoneVoiceChoice.SAME_AS_SERVER -> "This phone's own pick; the server keeps its own voice."
+        ui.choice != PhoneVoiceChoice.SAME_AS_SERVER && ui.effectiveInstalled ->
+            "This phone's own pick: it also speaks the chat mic's replies, on the phone. The server keeps its own voice."
+        ui.choice != PhoneVoiceChoice.SAME_AS_SERVER ->
+            "This phone's own pick: once it is downloaded it also speaks the chat mic's replies (until then they come " +
+                "in the server's voice). The server keeps its own voice."
         unknown != null -> "The server speaks with $unknown, which this app does not have, so the phone speaks with " +
             "${ModelCatalog.defaultVoice.name}."
         ui.serverVoice == null -> "No server has said which voice it uses yet, so the phone speaks with " +
             "${ModelCatalog.defaultVoice.name}."
-        else -> "The voice your Domovoi speaks with."
+        else -> "The voice your Domovoi speaks with, on the phone and in the chat mic's replies."
     }
 }
 
@@ -145,7 +149,8 @@ internal fun VoiceCard() {
     val model = ModelCatalog.voice(ui.effective) ?: ModelCatalog.defaultVoice
     PanelCard(
         "Voice",
-        "The voice this phone speaks with: the same voice as your Domovoi, downloaded to the phone once.",
+        "The voice this phone speaks with, the chat mic's replies included: the same voice as your Domovoi, " +
+            "downloaded to the phone once.",
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SettingsDropdown(

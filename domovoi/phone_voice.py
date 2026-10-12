@@ -43,6 +43,9 @@ REQUEST (multipart/form-data):
   thread_id   the chat thread the two messages go into
   player      optional JSON: what the phone's own player is doing,
               {"title", "artist", "kind", "playing"} — for "what's playing"
+  speak       optional, "true" (default) or "false": "false" when the phone
+              speaks the reply itself (its own voice pick, downloaded): no
+              text-to-speech here, and ``audio`` comes back null
 
 RESPONSE (200, JSON): see :func:`run_phone_turn`.
 
@@ -615,9 +618,12 @@ async def run_phone_turn(
     thread_id: int,
     audio: bytes,
     player: dict[str, Any] | None = None,
+    speak: bool = True,
 ) -> dict[str, Any]:
     """Answer one push-to-talk turn. Raises :class:`PhoneTurnRefused` for
-    a turn refused before anything was written. Otherwise returns::
+    a turn refused before anything was written. ``speak=False``: the phone
+    speaks the reply itself, so none is synthesized (``audio`` is null).
+    Otherwise returns::
 
         {
           "heard": true,               # false: nothing to answer (no rows)
@@ -651,7 +657,7 @@ async def run_phone_turn(
     _BUSY.add(room)
     try:
         return await _answer(app, room=room, phone_id=phone_id, thread_id=thread_id,
-                             pcm=pcm, player=player or {})
+                             pcm=pcm, player=player or {}, speak=speak)
     finally:
         _BUSY.discard(room)
 
@@ -664,6 +670,7 @@ async def _answer(
     thread_id: int,
     pcm: bytes,
     player: dict[str, Any],
+    speak: bool = True,
 ) -> dict[str, Any]:
     from domovoi.router import route
     from domovoi.streaming import run_voice_profile_hooks
@@ -722,7 +729,9 @@ async def _answer(
         remember_session(room, thread_id, response.session_id)
 
     t0 = time.perf_counter()
-    wav = await _synthesize(response) if response is not None else None
+    # The phone that speaks the reply itself (its own voice pick) asked for
+    # no audio: none is rendered, saving the time and the bytes.
+    wav = await _synthesize(response) if response is not None and speak else None
     stages["tts_ms"] = int((time.perf_counter() - t0) * 1000)
 
     actions = list(getattr(response, "device_actions", None) or []) if response is not None else []

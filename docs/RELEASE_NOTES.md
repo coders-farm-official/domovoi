@@ -17,6 +17,12 @@ a way that would otherwise get reported as a bug.
 * **Play buttons play the voice they name.** A voice not downloaded yet
   plays a short built-in clip of itself (web and phone); a voice with
   neither shows no play button.
+* **The phone's own voice pick speaks the chat mic's replies.** With
+  Settings → Voice on a voice of its own (not "same as the server") and
+  that voice downloaded, the phone speaks each reply itself, with the
+  server's "say it like" list, and asks the server for no audio
+  (`speak=false` on the voice turn; an older app or server keeps today's
+  behaviour).
 
 ## 2026-10-12 — A new voice, and words it says the way you tell it
 

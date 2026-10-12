@@ -777,6 +777,8 @@ async def send_voice(
     audio: UploadFile = File(..., description="16 kHz mono PCM16, raw or as a WAV file"),
     phone_id: str = Form(..., max_length=64),
     player: Optional[str] = Form(None, max_length=2048),
+    # False: the phone speaks the reply itself, so the core renders none.
+    speak: bool = Form(True),
 ):
     """One push-to-talk turn from the app's chat mic, answered in this
     thread: forwarded with the caller's credentials to the core's
@@ -797,6 +799,8 @@ async def send_voice(
     form = {"phone_id": phone_id, "thread_id": str(thread_id)}
     if player:
         form["player"] = player
+    if not speak:
+        form["speak"] = "false"
     files = {
         "audio": (
             audio.filename or "turn.pcm", data, audio.content_type or "application/octet-stream",

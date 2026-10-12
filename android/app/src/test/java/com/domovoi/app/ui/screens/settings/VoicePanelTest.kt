@@ -22,10 +22,17 @@ class VoicePanelTest {
     }
 
     @Test fun itSaysWhereTheVoiceComesFrom() {
-        assertEquals("The voice your Domovoi speaks with.", voiceSourceNote(PhoneVoiceUi(serverVoice = "en_US-norman-medium")))
+        assertEquals("The voice your Domovoi speaks with, on the phone and in the chat mic's replies.",
+            voiceSourceNote(PhoneVoiceUi(serverVoice = "en_US-norman-medium")))
         assertTrue(voiceSourceNote(PhoneVoiceUi(serverVoice = null)).contains("speaks with Norman"))
         assertTrue(voiceSourceNote(PhoneVoiceUi(serverVoice = "en_US-lessac-medium")).contains("en_US-lessac-medium, which this app does not have"))
         assertTrue(voiceSourceNote(PhoneVoiceUi(choice = "en_US-kristin-medium")).startsWith("This phone's own pick"))
+        // The pick says it covers the chat mic's replies (Kamron's test, 2026-10-12).
+        val kristin = "en_US-kristin-medium"
+        val ready = voiceSourceNote(PhoneVoiceUi(choice = kristin, effective = kristin, installed = setOf(kristin)))
+        assertTrue(ready, ready.contains("also speaks the chat mic's replies, on the phone"))
+        val notYet = voiceSourceNote(PhoneVoiceUi(choice = kristin, effective = kristin))
+        assertTrue(notYet, notYet.contains("once it is downloaded") && notYet.contains("in the server's voice"))
     }
 
     @Test fun itSaysWhichListIsInForce() {

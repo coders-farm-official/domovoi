@@ -135,6 +135,19 @@ object PhoneVoiceChoice {
     /** A server voice the app does not know (so it speaks Norman instead). */
     fun unknownServerVoice(serverVoice: String?): String? =
         serverVoice?.takeIf { it.isNotBlank() && ModelCatalog.voice(it) == null }
+
+    /**
+     * How the chat mic's reply is heard (owner, 2026-10-12): spoken ON the
+     * phone, from the reply text, in the phone's own pick when it has one
+     * and that voice is downloaded — the returned voice; else null, and the
+     * audio the server sends plays ("same as the server" is that voice
+     * anyway; a pick not downloaded yet has nothing to speak with).
+     */
+    fun replyVoiceOnPhone(choice: String?, installed: (CatalogModel) -> Boolean): CatalogModel? {
+        if (choice == null || choice == SAME_AS_SERVER) return null
+        val voice = ModelCatalog.voice(choice) ?: return null
+        return voice.takeIf(installed)
+    }
 }
 
 /** What Settings → Voice shows. */
@@ -287,6 +300,13 @@ class PhoneVoice(
         val s = _state.value
         val voice = PhoneVoiceChoice.effective(prefs.voiceChoice.value, cachedInfo()?.server_voice)
         return if (store.isInstalled(voice) || voice.id in s.installed) voice.id else VoiceSource.ANDROID
+    }
+
+    /** The phone's own pick when the chat mic's replies are spoken on the
+     *  phone with it ([PhoneVoiceChoice.replyVoiceOnPhone]); null: play the
+     *  server's audio. Reads the disk. */
+    suspend fun replyVoiceOnPhone(): CatalogModel? = withContext(Dispatchers.IO) {
+        PhoneVoiceChoice.replyVoiceOnPhone(prefs.voiceChoice.value) { store.isInstalled(it) }
     }
 
     /** The Domovoi voice ready to speak, or null when the voice in use is
