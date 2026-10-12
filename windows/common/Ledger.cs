@@ -34,6 +34,8 @@ namespace Domovoi.Windows
         public List<MediaFolderRecord> Media = new List<MediaFolderRecord>();
         public int JobGeneration;
         public int JobAttempt;
+        // Uninstall runs so far (UninstallRunner.MaxRuns).
+        public int UninstallRuns;
         public string Updated;
 
         public MediaFolderRecord MediaFor(string path)
@@ -71,6 +73,7 @@ namespace Domovoi.Windows
             d["media"] = media.ToArray();
             d["job_generation"] = JobGeneration;
             d["job_attempt"] = JobAttempt;
+            d["uninstall_runs"] = UninstallRuns;
             d["updated"] = Updated;
             return d;
         }
@@ -105,6 +108,7 @@ namespace Domovoi.Windows
             }
             l.JobGeneration = Json.Int(d, "job_generation") ?? 0;
             l.JobAttempt = Json.Int(d, "job_attempt") ?? 0;
+            l.UninstallRuns = Json.Int(d, "uninstall_runs") ?? 0;
             l.Updated = Json.Str(d, "updated");
             return l;
         }

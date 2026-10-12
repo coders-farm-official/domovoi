@@ -119,7 +119,7 @@ def test_the_doc_names_every_machine_change():
         "Domovoi-Dashboard-6369", "SeServiceLogonRight", ".wslconfig", "C:\\Users\\Public\\Domovoi",
         "SpecialAccounts\\UserList", "trust boundary", "DHCP reservation", "HKLM\\SOFTWARE\\Domovoi",
         "Smart App Control", "VerifiedAndReputablePolicyState", "Windows protected your PC", "More info", "Run anyway",
-        "every WSL VM on the PC",
+        "every WSL VM on the PC", "Domovoi-kept-", "The **third** run",
     ):
         assert needle in doc, needle
 

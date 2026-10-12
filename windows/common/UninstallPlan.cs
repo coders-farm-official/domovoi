@@ -18,8 +18,8 @@
 // * an account, a service, a folder or a registry key Setup did not make
 //   is left alone (a domovoi-svc someone made by hand has no Setup marker);
 // * every step is safe when its target is already gone, and the install
-//   record, which holds the account's SID, goes last and only when
-//   nothing is left over.
+//   record, which holds the account's SID, goes last, when a run finishes
+//   (UninstallRunner says when leftovers no longer hold that up).
 
 using System;
 using System.Collections.Generic;
@@ -109,6 +109,20 @@ namespace Domovoi.Windows
         public bool? DistroDiskExists;
         // Media folders from the record that exist now.
         public HashSet<string> MediaExisting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // With the account gone, the record's SID is trusted only if its
+        // profile entry points at a folder named domovoi-svc (or
+        // domovoi-svc.<something>, Windows' name when the folder existed).
+        public bool LedgerSidHasDomovoiProfile;
+
+        public static bool IsDomovoiProfilePath(string profileImagePath)
+        {
+            if (string.IsNullOrEmpty(profileImagePath)) return false;
+            string leaf = profileImagePath.TrimEnd('\\');
+            int slash = leaf.LastIndexOf('\\');
+            leaf = slash >= 0 ? leaf.Substring(slash + 1) : leaf;
+            return string.Equals(leaf, Paths.AccountName, StringComparison.OrdinalIgnoreCase)
+                || leaf.StartsWith(Paths.AccountName + ".", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     public static class UninstallPlan
@@ -158,7 +172,10 @@ namespace Domovoi.Windows
                 }
             }
             if (serviceOurs) steps.Add(new UninstallStep(UninstallKind.DeleteService, Paths.ServiceName));
-            if (sid != null && (accountOurs || !f.AccountExists))
+            // The account's own SID when it is Setup's; with the account gone,
+            // the record's SID only when its profile is domovoi-svc's.
+            bool sidOurs = sid != null && (accountOurs || (!f.AccountExists && f.LedgerSidHasDomovoiProfile));
+            if (sidOurs)
                 steps.Add(new UninstallStep(UninstallKind.StopAccountProcesses, sid));
 
             var rules = new List<string>(f.FirewallRules);
@@ -186,7 +203,6 @@ namespace Domovoi.Windows
                 }
             }
 
-            bool sidOurs = sid != null && (accountOurs || !f.AccountExists);
             if (sidOurs && f.ProfileExists)
                 steps.Add(new UninstallStep(UninstallKind.DeleteProfile, sid));
             if (sidOurs && (f.Rights.Count > 0 || f.RightsUnknown || (ledger != null && ledger.Rights.Count > 0)))
@@ -213,36 +229,107 @@ namespace Domovoi.Windows
         }
     }
 
+    public sealed class UninstallLeftover
+    {
+        public UninstallStep Step;
+        public string What;
+
+        public UninstallLeftover(UninstallStep step, string what) { Step = step; What = what; }
+
+        // How to remove it by hand, for the message and the log.
+        public string HowToRemove()
+        {
+            switch (Step == null ? UninstallKind.Blocked : Step.Kind)
+            {
+                case UninstallKind.DeleteService: return "it goes at the next restart; or, as an administrator: sc.exe delete " + Paths.ServiceName;
+                case UninstallKind.DeleteProgramData: return "files still in use go at the next restart; if any are left after it, delete " + Paths.ProgramData + " as an administrator";
+                case UninstallKind.DeleteProfile: return "after a restart: Settings > System > About > Advanced system settings > User Profiles > Settings, delete the domovoi-svc profile";
+                case UninstallKind.RemoveMediaAccess: return "as an administrator: icacls \"" + Step.Target + "\" /remove *" + string.Join(" *", Step.Sids.ToArray());
+                case UninstallKind.UnhideAccount: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList\" /v " + Paths.AccountName + " /f";
+                case UninstallKind.RemoveRunOnce: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce\" /v DomovoiSetupResume /f";
+                case UninstallKind.RemoveFirewallRules: return "in an administrator PowerShell: Get-NetFirewallHyperVRule -Name 'Domovoi-*' | Remove-NetFirewallHyperVRule";
+                case UninstallKind.RemoveRights: return "the rights of " + Step.Target + " are inert once the account is gone; on Pro, Local Security Policy > User Rights Assignment lists them";
+                case UninstallKind.DeleteAccount: return "as an administrator: net user " + Paths.AccountName + " /delete";
+                case UninstallKind.StopAccountProcesses: return "end the programs running as " + Paths.AccountName + " (Task Manager > Details), then delete the account";
+                case UninstallKind.RemoveRecord: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Domovoi\" /f";
+                default: return "see docs/WINDOWS_HOST.md, Uninstalling";
+            }
+        }
+    }
+
     public static class UninstallRunner
     {
         public const int ExitDone = 0;
         public const int ExitStopped = 1;
+        // Leftovers that may still clear: the uninstaller stays for another run.
         public const int ExitLeftovers = 3;
+        // Finished with leftovers listed for removal by hand: the uninstaller goes.
+        public const int ExitFinishedWithLeftovers = 4;
+        // The run that finishes whatever is left.
+        public const int MaxRuns = 3;
 
-        // Runs the plan. doStep returns null when the step is done, or what
-        // is left. A critical step that doesn't finish stops the run (exit
-        // 1); other leftovers are collected (exit 3), and then the install
-        // record stays, so a second run still knows the account's SID.
-        public static int Run(List<UninstallStep> plan, Func<UninstallStep, string> doStep, List<string> leftovers, List<UninstallStep> ran)
+        // Leftovers that hold none of Domovoi's data and give nothing access
+        // once the account is gone: the service marked for deletion, files
+        // that go at the next restart, the profile folder of a deleted
+        // account, an access rule for a deleted account's SID, the sign-in
+        // entry, the resume entry, an empty folder. They never keep Domovoi
+        // in Installed apps. The account itself, its rights, its processes
+        // and the firewall rules do, until the MaxRuns-th run.
+        public static readonly UninstallKind[] Inert =
         {
+            UninstallKind.DeleteService, UninstallKind.DeleteProgramData, UninstallKind.DeleteProfile,
+            UninstallKind.RemoveMediaAccess, UninstallKind.RemoveFolderIfEmpty, UninstallKind.UnhideAccount,
+            UninstallKind.RemoveRunOnce, UninstallKind.RemoveRecord,
+        };
+
+        public static bool IsInert(UninstallKind k) { return Array.IndexOf(Inert, k) >= 0; }
+
+        // Runs the plan; run is this uninstall's number (1 for the first).
+        // doStep returns null when the step is done, or what is left. A
+        // critical step that doesn't finish stops the run (exit 1). Other
+        // leftovers: when they are all inert, or this is run MaxRuns, the
+        // run finishes (exit 4: the record goes, the leftovers are listed
+        // with how to remove them by hand); otherwise exit 3 and the record
+        // stays, so the next run still knows the account's SID.
+        public static int Run(List<UninstallStep> plan, Func<UninstallStep, string> doStep, List<UninstallLeftover> left, List<UninstallStep> ran, int run)
+        {
+            UninstallStep record = null;
             foreach (var s in plan)
             {
-                if (s.Kind == UninstallKind.RemoveRecord && leftovers.Count > 0) continue;
-                string left;
-                try
-                {
-                    left = s.Kind == UninstallKind.Blocked ? s.Reason : doStep(s);
-                }
-                catch (Exception e)
-                {
-                    left = s + ": " + e.Message;
-                }
-                if (ran != null) ran.Add(s);
-                if (left == null) continue;
-                leftovers.Add(left);
+                if (s.Kind == UninstallKind.RemoveRecord) { record = s; continue; }
+                string what = Do(s, doStep, ran);
+                if (what == null) continue;
+                left.Add(new UninstallLeftover(s, what));
                 if (s.Critical) return ExitStopped;
             }
-            return leftovers.Count == 0 ? ExitDone : ExitLeftovers;
+            bool finish = left.Count == 0 || run >= MaxRuns;
+            if (!finish)
+            {
+                finish = true;
+                foreach (var l in left) if (!IsInert(l.Step.Kind)) finish = false;
+            }
+            if (!finish) return ExitLeftovers;
+            if (record != null)
+            {
+                string what = Do(record, doStep, ran);
+                if (what != null) left.Add(new UninstallLeftover(record, what));
+            }
+            return left.Count == 0 ? ExitDone : ExitFinishedWithLeftovers;
+        }
+
+        static string Do(UninstallStep s, Func<UninstallStep, string> doStep, List<UninstallStep> ran)
+        {
+            string what;
+            try
+            {
+                what = s.Kind == UninstallKind.Blocked ? s.Reason : doStep(s);
+            }
+            catch (Exception e)
+            {
+                what = s + ": " + e.Message;
+            }
+            if (ran != null) ran.Add(s);
+            return what;
         }
     }
 }

@@ -515,6 +515,20 @@ end;
 
 { -- the install (after the files are copied) -------------------------- }
 
+{ True when the user clicked Stop Setup and confirmed. }
+function StopConfirmed: Boolean;
+begin
+  Result := False;
+  if not StopRequested then
+    Exit;
+  StopRequested := False;
+  if MsgBox('Stop Setup now? Domovoi is not finished. You can run Setup again later and it carries on, or remove what Setup did.', mbConfirmation, MB_YESNO) = IDYES then
+  begin
+    FailureText := 'You stopped Setup before Domovoi was ready.';
+    Result := True;
+  end;
+end;
+
 { One helper step with Retry and Stop. False: the user stopped Setup. }
 function Step(const Title, Params: String; Percent: Integer; var Lines: TArrayOfString): Boolean;
 var
@@ -525,6 +539,11 @@ begin
   begin
     ProgressPage.SetText(Title, '');
     ProgressPage.SetProgress(Percent, 100);
+    if StopConfirmed then
+    begin
+      Result := False;
+      Exit;
+    end;
     Log('Step: ' + Title);
     if RunHelper(AppHelper, Params, Lines, Code) and (Code = 0) then
     begin
@@ -571,23 +590,13 @@ var
 begin
   Result := False;
   WantAttempt := 0;
-  StopRequested := False;
   Started := GetTickCount;
   { Four hours: far more than a slow line needs for 8-9 GB. }
   LimitMs := 4 * 3600 * 1000;
-  StopButton.Visible := True;
-  try
   while True do
   begin
-    if StopRequested then
-    begin
-      StopRequested := False;
-      if MsgBox('Stop Setup now? Domovoi''s Linux system is not finished. You can run Setup again later and it carries on, or remove what Setup did.', mbConfirmation, MB_YESNO) = IDYES then
-      begin
-        FailureText := 'You stopped Setup before Domovoi was ready.';
-        Exit;
-      end;
-    end;
+    if StopConfirmed then
+      Exit;
     if GetTickCount - Started > LimitMs then
     begin
       if MsgBox('Domovoi is still not ready after ' + IntToStr(LimitMs div 3600000) + ' hours. Keep waiting another hour?' + #13#10#13#10 +
@@ -646,9 +655,6 @@ begin
     end;
     Wait(1500, Percent);
   end;
-  finally
-    StopButton.Visible := False;
-  end;
 end;
 
 function ReadSetupCode: String;
@@ -678,7 +684,9 @@ var
   Deny: String;
 begin
   Result := False;
+  StopRequested := False;
   ProgressPage.Show;
+  StopButton.Visible := True;
   try
     if not Step('Recording your answers', 'prepare --internet ' + InternetAnswer + ' --media-root ' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0])) + ' --commit {#DomovoiCommit}', 2, Lines) then Exit;
     Deny := '';
@@ -693,9 +701,11 @@ begin
     if not Step('Starting DomovoiHost', 'host-start', 14, Lines) then Exit;
     if not WaitForHost then Exit;
     ProgressPage.SetProgress(100, 100);
+    StopButton.Visible := False;
     SetupCodeText := ReadSetupCode;
     Result := True;
   finally
+    StopButton.Visible := False;
     ProgressPage.Hide;
   end;
 end;
@@ -711,8 +721,10 @@ var
   Data, ResumeExe: String;
 begin
   ResumeExe := ExpandConstant('{app}\resume\DomovoiSetup.exe');
-  if not ForceDirectories(ExtractFileDir(ResumeExe)) or not FileCopy(ExpandConstant('{srcexe}'), ResumeExe, False) then
-    RaiseException('Setup could not copy itself to ' + ResumeExe + ' to carry on after the restart.');
+  { A second restart: Setup already runs from that copy. }
+  if not SameText(ExpandConstant('{srcexe}'), ResumeExe) then
+    if not ForceDirectories(ExtractFileDir(ResumeExe)) or not FileCopy(ExpandConstant('{srcexe}'), ResumeExe, False) then
+      RaiseException('Setup could not copy itself to ' + ResumeExe + ' to carry on after the restart.');
   Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer +
     ' /mediaroot=' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0]));
   if NoDenyLogon then
@@ -949,7 +961,7 @@ var
   Code: Integer;
   HelperExe: String;
   Lines: TArrayOfString;
-  Left: TArrayOfString;
+  Left, Kept: TArrayOfString;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
@@ -968,15 +980,27 @@ begin
     Code := -1;
   end;
   Log('Uninstall helper exit code ' + IntToStr(Code) + '; record: ' + KvValue(Lines, 'log'));
+  Left := KvValues(Lines, 'leftover');
+  Kept := KvValues(Lines, 'kept');
+  if GetArrayLength(Kept) > 0 then
+    SuppressibleMsgBox('Kept on purpose:' + #13#10#13#10 + JoinLines(Kept, '- '), mbInformation, MB_OK, IDOK);
   if Code = 0 then
     Exit;
-  { Anything short of "all gone": stop here, before Uninstall deletes
+  { 4: finished; what is left holds no data and grants nothing (or this was
+    the third try): list it with how to remove it by hand, and let Uninstall
+    remove the program. }
+  if Code = 4 then
+  begin
+    SuppressibleMsgBox('Domovoi is removed. A few things could not be, and are safe to leave or remove by hand:' + #13#10#13#10 +
+      JoinLines(Left, '- ') + #13#10 + 'The same list is in ' + KvValue(Lines, 'log'), mbInformation, MB_OK, IDOK);
+    Exit;
+  end;
+  { Anything else short of "all gone": stop here, before Uninstall deletes
     C:\Program Files\Domovoi and the Apps entry, so the uninstaller (and the
     helper it runs) stay for the retry. }
-  Left := KvValues(Lines, 'leftover');
   if Code = 3 then
-    SuppressibleMsgBox('Domovoi is not fully removed yet. Still there:' + #13#10#13#10 + JoinLines(Left, '- ') + #13#10 +
-      'Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped.' + #13#10#13#10 +
+    SuppressibleMsgBox('Domovoi is not fully removed yet (try ' + KvValue(Lines, 'run') + '). Still there:' + #13#10#13#10 + JoinLines(Left, '- ') + #13#10 +
+      'Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped. On the third try it finishes and lists whatever is left.' + #13#10#13#10 +
       'Details: ' + KvValue(Lines, 'log'), mbInformation, MB_OK, IDOK)
   else
     SuppressibleMsgBox('The uninstaller stopped before removing Domovoi''s account, service or data: ' + KvValue(Lines, 'error') + #13#10#13#10 +

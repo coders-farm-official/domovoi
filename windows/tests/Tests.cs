@@ -720,8 +720,20 @@ static class Tests
             var f = new UninstallFacts();
             f.ProfileExists = true; f.Rights = new List<string> { "SeServiceLogonRight" };
             f.ProgramDataExists = true; f.RunOnceValuePresent = true; f.RecordExists = true; f.DistroDiskExists = true;
+            f.LedgerSidHasDomovoiProfile = true;
             var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind.ToString()).ToList();
             SeqEq(new[] { "StopAccountProcesses", "RemoveFirewallRules", "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteProgramData", "RemoveRunOnce", "RemoveRecord" }, kinds, "steps (the ledger's rule list counts)");
+        });
+        Run("uninstall: a record SID whose profile isn't domovoi-svc's is never acted on", delegate
+        {
+            var l = FullLedger();
+            var f = new UninstallFacts();
+            f.ProfileExists = true; f.Rights = new List<string> { "SeServiceLogonRight" }; f.DistroDiskExists = false;
+            f.LedgerSidHasDomovoiProfile = false;
+            var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind).ToList();
+            True(!kinds.Contains(UninstallKind.DeleteProfile) && !kinds.Contains(UninstallKind.RemoveRights) && !kinds.Contains(UninstallKind.StopAccountProcesses), "left alone");
+            True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc") && UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.MY-PC\"), "domovoi-svc folders");
+            True(!UninstallFacts.IsDomovoiProfilePath(@"C:\Users\Kamron") && !UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svcx") && !UninstallFacts.IsDomovoiProfilePath(null), "others");
         });
         Run("uninstall: ProgramData Setup didn't make is never deleted (review #4)", delegate
         {
@@ -759,56 +771,76 @@ static class Tests
         });
     }
 
+    static int RunPlan(List<UninstallStep> plan, Func<UninstallStep, string> doStep, int run, out List<UninstallLeftover> left, out List<UninstallStep> ran)
+    {
+        left = new List<UninstallLeftover>(); ran = new List<UninstallStep>();
+        return UninstallRunner.Run(plan, doStep, left, ran, run);
+    }
+
     static void Runner()
     {
+        List<UninstallLeftover> left; List<UninstallStep> ran;
         Run("runner: everything works: exit 0, record removed", delegate
         {
             var l = FullLedger();
             var plan = UninstallPlan.Make(l, FullFacts(l));
-            var left = new List<string>(); var ran = new List<UninstallStep>();
-            Eq(0, UninstallRunner.Run(plan, s => null, left, ran), "exit");
+            Eq(0, RunPlan(plan, s => null, 1, out left, out ran), "exit");
             Eq(plan.Count, ran.Count, "all ran");
+            Eq(UninstallKind.RemoveRecord, ran.Last().Kind, "record last");
         });
         Run("runner: unregister fails: exit 1, nothing that could strand the distro ran (review #2)", delegate
         {
             var l = FullLedger();
             var plan = UninstallPlan.Make(l, FullFacts(l));
-            var left = new List<string>(); var ran = new List<UninstallStep>();
-            int code = UninstallRunner.Run(plan, s => s.Kind == UninstallKind.UnregisterDistro ? "the distro (WSL said no)" : null, left, ran);
-            Eq(1, code, "exit");
+            int code = RunPlan(plan, s => s.Kind == UninstallKind.UnregisterDistro ? "the distro (WSL said no)" : null, 3, out left, out ran);
+            Eq(1, code, "exit, even on the third run");
             SeqEq(new[] { "StopService", "RotatePassword", "UnregisterDistro" }, ran.Select(s => s.Kind.ToString()), "ran");
-            Eq("the distro (WSL said no)", left.Single(), "leftover");
+            Eq("the distro (WSL said no)", left.Single().What, "leftover");
         });
         Run("runner: a throwing step counts as not done", delegate
         {
             var l = FullLedger();
             var plan = UninstallPlan.Make(l, FullFacts(l));
-            var left = new List<string>(); var ran = new List<UninstallStep>();
-            int code = UninstallRunner.Run(plan, delegate (UninstallStep s) { if (s.Kind == UninstallKind.StopService) throw new InvalidOperationException("stuck"); return null; }, left, ran);
+            int code = RunPlan(plan, delegate (UninstallStep s) { if (s.Kind == UninstallKind.StopService) throw new InvalidOperationException("stuck"); return null; }, 1, out left, out ran);
             Eq(1, code, "a critical step threw");
             Eq(1, ran.Count, "stopped right there");
         });
-        Run("runner: a non-critical leftover: exit 3, the rest runs, the record stays", delegate
+        Run("runner: only inert leftovers: finished (exit 4), record gone, listed with how to remove them", delegate
         {
             var l = FullLedger();
             var plan = UninstallPlan.Make(l, FullFacts(l));
-            var left = new List<string>(); var ran = new List<UninstallStep>();
-            int code = UninstallRunner.Run(plan, s => s.Kind == UninstallKind.DeleteProfile ? "the profile (in use)" : null, left, ran);
-            Eq(3, code, "exit");
-            True(ran.Any(s => s.Kind == UninstallKind.DeleteProgramData), "went on");
-            True(!ran.Any(s => s.Kind == UninstallKind.RemoveRecord), "the record stays for the next run");
+            int code = RunPlan(plan, s => s.Kind == UninstallKind.DeleteProfile || s.Kind == UninstallKind.DeleteProgramData ? "in use" : null, 1, out left, out ran);
+            Eq(4, code, "exit");
+            True(ran.Any(s => s.Kind == UninstallKind.RemoveRecord), "the record goes");
+            Eq(2, left.Count, "two leftovers");
+            True(left.All(x => x.HowToRemove().Length > 20), "each says how to remove it");
+        });
+        Run("runner: a leftover that may clear keeps the uninstaller until the third run", delegate
+        {
+            var l = FullLedger();
+            var plan = UninstallPlan.Make(l, FullFacts(l));
+            Func<UninstallStep, string> rules = s => s.Kind == UninstallKind.RemoveFirewallRules ? "firewall rules Domovoi-Core-6370" : null;
+            Eq(3, RunPlan(plan, rules, 1, out left, out ran), "first run");
+            True(!ran.Any(s => s.Kind == UninstallKind.RemoveRecord), "the record stays");
+            Eq(3, RunPlan(plan, rules, 2, out left, out ran), "second run");
+            Eq(4, RunPlan(plan, rules, UninstallRunner.MaxRuns, out left, out ran), "third run finishes");
+            True(left.Single().HowToRemove().Contains("Remove-NetFirewallHyperVRule"), "how to remove it: " + left.Single().HowToRemove());
         });
         Run("runner: blocked plans stop at once", delegate
         {
             var l = FullLedger();
             var f = FullFacts(l); f.ServiceExists = false; f.ServiceRunning = false;
-            var left = new List<string>(); var ran = new List<UninstallStep>();
-            int code = UninstallRunner.Run(UninstallPlan.Make(l, f), s => null, left, ran);
-            Eq(1, code, "exit");
+            Eq(1, RunPlan(UninstallPlan.Make(l, f), s => null, 3, out left, out ran), "exit");
             Eq(1, ran.Count, "only the block");
         });
+        Run("runner: which leftovers count as inert", delegate
+        {
+            foreach (var k in new[] { UninstallKind.DeleteService, UninstallKind.DeleteProgramData, UninstallKind.DeleteProfile, UninstallKind.RemoveMediaAccess, UninstallKind.RemoveFolderIfEmpty, UninstallKind.UnhideAccount, UninstallKind.RemoveRunOnce })
+                True(UninstallRunner.IsInert(k), "inert: " + k);
+            foreach (var k in new[] { UninstallKind.DeleteAccount, UninstallKind.RemoveRights, UninstallKind.RemoveFirewallRules, UninstallKind.StopAccountProcesses, UninstallKind.UnregisterDistro, UninstallKind.StopService })
+                True(!UninstallRunner.IsInert(k), "not inert: " + k);
+        });
     }
-
     static void WslListing()
     {
         Run("wsl --list: names, none, or unknown (review #3)", delegate

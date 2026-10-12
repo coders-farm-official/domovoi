@@ -108,13 +108,13 @@ that:
 
 | Change | Uninstall |
 |---|---|
-| Setup's install record: value `Install` under **`HKLM\SOFTWARE\Domovoi`** (what Setup changed, the account's SID; no secrets). Written before each change it records. | Deleted last, and only when everything else is gone, so a second uninstall run still knows what to undo. |
+| Setup's install record: value `Install` under **`HKLM\SOFTWARE\Domovoi`** (what Setup changed, the account's SID; no secrets). Written before each change it records. | Deleted last, when an uninstall run finishes (see [Uninstalling](#uninstalling)); until then a second run still knows what to undo. |
 | Local account **`domovoi-svc`**: standard user (member of Users only), a random 40-character password generated in memory and never shown, logged or stored outside Windows' own account and service databases, password never expires, user can't change it. Its comment marks it as Setup's. | Deleted (only if it carries Setup's mark or Setup recorded making it). |
 | Its sign-in screen entry: DWORD `domovoi-svc = 0` in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList` (Setup makes the `SpecialAccounts` and `UserList` keys if they are missing). | The value is deleted; the keys too if Setup made them and they are empty. |
 | Account rights through LSA: `SeServiceLogonRight`, and `SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyNetworkLogonRight`. Run `DomovoiSetup.exe /nodenylogon=1` to leave the three deny rights out, on a first install or over an existing one (it takes back ones granted before). | Every right of the account's SID is removed, with its entry in the policy. |
 | Its profile, `C:\Users\domovoi-svc`, made by Windows when the service first signs in; it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted (it waits up to three minutes for WSL to let go). |
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on `WSLService`, restarts after 10, 30 and 60 s on failure), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
-| WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. |
+| WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
 | `C:\ProgramData\Domovoi` (`distro`, `wsl`, `backups`, `logs`, `state`, `host`): SYSTEM and Administrators only, with `domovoi-svc` allowed where it needs it. Household accounts can't open it. Setup only uses this folder if it made it. | Made administrators-only again, then deleted, only if Setup made it (files still in use are deleted at the next restart). |
 | The media folder and its `Music`, `Pictures`, `Videos`, `Documents`, `Audiobooks`: made if missing; `domovoi-svc` may read and write them (an inherited rule); a root folder Setup makes also lets every user of the PC (Users) read and write. An existing folder keeps all its own rules. | Setup's rule for `domovoi-svc` comes off. A folder Setup made is removed **only if it is empty**. No file in a media folder is ever deleted. |
@@ -139,13 +139,34 @@ purpose).
 
 It works after a half-finished setup, and running it again is safe: it
 looks at what is on the PC as well as Setup's install record, and skips
-what is already gone. **It only removes the program once everything else
-is gone.** If stopping the service or unregistering the distro fails, it
-stops before touching the account, the service or any data and says why.
-If something else is left (a profile or a file still in use), it says
-what, keeps the record, and asks you to restart Windows and uninstall
-again; files still in use are deleted at the restart. Either way Domovoi
-stays in Installed apps until a run finishes.
+what is already gone.
+
+- **If stopping the service or unregistering the distro fails**, it stops
+  before touching the account, the service or any data, says why, and
+  Domovoi stays in Installed apps for another try.
+- **If something else is left**, it depends on what:
+  - Left over but harmless (nothing of Domovoi's data in it, no access
+    granted once the account is gone): the service marked for deletion,
+    files still in use in `C:\ProgramData\Domovoi`, the deleted account's
+    profile folder, an access rule for its SID on a media folder, the
+    sign-in screen entry, the resume entry. The uninstall finishes, lists
+    each one with the command or setting that removes it by hand, and
+    removes the program. Files still in use and the service go at the next
+    restart by themselves.
+  - Left over and still active (the account itself, its rights, a
+    program running as it, a firewall rule): the uninstall keeps Domovoi
+    in Installed apps and asks you to restart Windows and uninstall again.
+    The **third** run finishes whatever is left and lists it the same way,
+    so Domovoi never stays in Installed apps for good.
+- **The distro's disk, when WSL no longer lists the distro**
+  (`C:\ProgramData\Domovoi\distro\ext4.vhdx` is there, but the service says
+  there is nothing to unregister): if DomovoiHost never recorded an import
+  as finished, it is a half-finished import and is deleted with
+  `C:\ProgramData\Domovoi`. If it did record one, the disk holds your
+  database and the server's identity, so it is neither deleted nor left in
+  the way: it is moved to `C:\ProgramData\Domovoi-kept-<date>-<time>\ext4.vhdx`
+  (administrators only), the uninstall carries on, and its last message
+  names that folder. Delete it when you no longer need it.
 
 This build has no "keep my data" uninstall: uninstalling deletes the
 database, history, voice profiles and the server's identity, so satellites

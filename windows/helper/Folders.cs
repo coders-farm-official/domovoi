@@ -147,6 +147,16 @@ namespace Domovoi.Windows.Helper
             say("made " + root + " administrators-only before deleting it");
         }
 
+        // A new folder only administrators and SYSTEM can open (for a kept
+        // distro disk).
+        public static void CreateAdminOnly(string path)
+        {
+            if (Directory.Exists(path)) throw new InvalidOperationException(path + " already exists");
+            Directory.CreateDirectory(path, RootSecurity());
+            RefuseReparse(path);
+            if (!OwnerTrusted(path)) throw new InvalidOperationException(path + " is not owned by Administrators");
+        }
+
         // -- media ------------------------------------------------------
 
         // The folders a media root may not be, be inside or hold, on this PC.
