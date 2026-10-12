@@ -27,9 +27,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
     }
@@ -37,6 +34,14 @@ android {
         // JVM unit tests: stub android.* so pure-Kotlin helpers that touch
         // framework classes indirectly (icons, Log) don't throw.
         unitTests.isReturnDefaultValues = true
+    }
+}
+
+// Kotlin 2.4 makes the old `android { kotlinOptions { jvmTarget } }` block an
+// error; this is the same setting in the compilerOptions DSL.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
