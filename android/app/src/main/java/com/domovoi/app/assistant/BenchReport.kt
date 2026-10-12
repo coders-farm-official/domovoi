@@ -264,7 +264,10 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
 
     // Only the traffic DURING a test: each "before …" reading paired with
     // the one that ends that test, not the idle time between tests.
-    val during = results.traffic.zipWithNext().filter { (a, _) -> a.label.startsWith("before ") }
+    // A test that failed before its closing reading leaves two "before"
+    // readings in a row; that pair is not a test either.
+    val during = results.traffic.zipWithNext()
+        .filter { (a, b) -> a.label.startsWith("before ") && !b.label.startsWith("before ") }
     if (during.isNotEmpty()) {
         appendLine()
         appendLine("NETWORK (this app's traffic, all of it, including a connected server)")

@@ -67,6 +67,7 @@ class BenchReportTest {
             traffic = listOf(
                 TrafficReading("before the text test", 1_000, 500, false),
                 TrafficReading("text test", 1_000, 500, false),
+                TrafficReading("before the heat loop", 2_000, 1_000, true),    // failed: no closing reading
                 TrafficReading("before the voice test", 9_000, 4_500, true),   // idle time between tests: not shown
                 TrafficReading("voice test", 9_300, 4_700, true),
             ),
@@ -93,6 +94,8 @@ class BenchReportTest {
             "voice test stopped",
         ).forEach { assertTrue("missing: $it\n---\n$text", text.contains(it)) }
         assertFalse(text.contains("8000 B in"))
+        assertFalse(text.contains("7000 B in"))
+        assertFalse(text.contains("during the before"))
     }
 
     @Test fun anEmptyRunRendersJustTheHeader() {
