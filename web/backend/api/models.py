@@ -52,6 +52,8 @@ from sqlalchemy import text
 from domovoi import egress, net_safety, whisper_cache
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.clients import ollama as ollama_client
+from domovoi.config import settings as core_settings
+from domovoi.config_schema import EDITABLE_FIELDS
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -72,6 +74,17 @@ ROLE_TO_FIELD = {
     "vision": "ollama_vision_model",
     "stt": "whisper_model",
 }
+
+# Each slot's change tier, from the schema: a cookie-only read of the
+# config registry leaves the advanced fields out (CORE-6), so the row can't
+# take the tier from the read.
+_FIELD_TIERS = {spec.name: spec.tier for spec in EDITABLE_FIELDS}
+
+# The roles the dashboard's own text chat answers with
+# (web/backend/api/chat.py): its default model and its model for pictures.
+# The chat reads them from THIS process's settings copy, which is loaded
+# when the dashboard starts and isn't touched by a config save.
+_CHAT_ROLES = ("qa", "vision")
 
 _CATALOG_PATH = Path(__file__).resolve().parent.parent / "model_catalog.json"
 
@@ -154,36 +167,113 @@ async def get_installed() -> dict[str, Any]:
 
 @router.get("/active")
 async def get_active(request: Request) -> Any:
-    """The three role slots (Q&A / tool / STT) with their LIVE current model
-    and change-tier, derived from the Domovoi server's editable-config registry.
-    Proxied so the values reflect the Domovoi server's singleton, not the web
-    process's stale copy."""
+    """The role slots (Q&A / tool / vision / STT) with their LIVE current
+    model and change-tier, derived from the Domovoi server's editable-config
+    registry. Proxied so the values reflect the Domovoi server's singleton,
+    not the web process's stale copy.
+
+    Each row also says:
+
+    * ``model_source`` — where ``model`` came from: ``config`` (the live
+      registry), ``startup`` or ``None``. The Whisper fields are in the
+      registry's advanced section, which the core leaves out of a read that
+      carries only the dashboard cookie (CORE-6: a reloaded tab keeps the
+      cookie and loses the in-memory Bearer). The STT row then takes the
+      Whisper settings the core read at boot from ``/v1/admin/hardware``'s
+      ``stt`` block — the same open read the page's speech-recognition
+      banner shows — so ``startup``. A setting saved since the boot isn't
+      in that answer. ``None``: neither said, the model is unknown.
+    * ``installed`` — Ollama roles: whether the model is in Ollama's
+      installed list, compared the way the chat's vision check compares
+      (``ollama_client.model_installed``); ``None`` when Ollama couldn't be
+      asked or no model is set. STT: whether the Whisper model is in this
+      host's model cache (``whisper_cache``); ``None`` for a name it
+      doesn't know.
+    * ``chat_model`` / ``chat_restart_required`` — Q&A and vision only: the
+      model the dashboard's text chat uses for that role. The chat reads it
+      from this process's settings, loaded when the dashboard started, so a
+      model saved since then reaches the chat only after a restart. An
+      install needs no restart: the chat asks Ollama on every send.
+    """
     # Forward the caller's credentials: /v1/admin/config is admin-gated on
     # the core, and both processes validate against the same admin_sessions
     # table (design §7.3). Without this the hop is anonymous and the core
     # answers 401 no matter how many times the user logs in.
-    status, payload = await get_admin(
-        "/v1/admin/config", headers=auth_forward_headers(request)
+    headers = auth_forward_headers(request)
+    (status, payload), tags = await asyncio.gather(
+        get_admin("/v1/admin/config", headers=headers),
+        ollama_client.tags_or_none(),
     )
     if status != 200 or not isinstance(payload, dict):
         return bridge_response(status, payload)
     by_name = {f["name"]: f for f in payload.get("fields", [])}
     roles = []
     for role, field_name in ROLE_TO_FIELD.items():
-        spec = by_name.get(field_name) or {}
+        spec = by_name.get(field_name)
         row = {
             "role": role,
             "field": field_name,
-            "model": spec.get("value"),
-            "tier": spec.get("tier"),
+            "model": (spec or {}).get("value"),
+            "tier": (spec or {}).get("tier") or _FIELD_TIERS.get(field_name),
+            "model_source": "config" if spec is not None else None,
         }
         if role == "stt":
             # Whisper is a model AND a device/compute pair; the STT catalog
             # marks the row that matches all of it as active.
             row["device"] = (by_name.get("whisper_device") or {}).get("value")
             row["compute_type"] = (by_name.get("whisper_compute_type") or {}).get("value")
+            if spec is None:
+                boot = await _whisper_at_startup(headers)
+                if boot is not None:
+                    row.update(
+                        model=boot["model"],
+                        device=boot.get("device"),
+                        compute_type=boot.get("compute_type"),
+                        model_source="startup",
+                    )
+            row["installed"] = _whisper_on_disk(row["model"])
+        else:
+            model = row["model"]
+            row["installed"] = (
+                ollama_client.model_installed(model, tags) if tags is not None and model else None
+            )
+            if role in _CHAT_ROLES:
+                chat_model = getattr(core_settings, field_name, None)
+                row["chat_model"] = chat_model
+                row["chat_restart_required"] = bool(model) and not _same_ollama_model(
+                    model, chat_model
+                )
         roles.append(row)
     return {"roles": roles}
+
+
+async def _whisper_at_startup(headers: dict[str, str]) -> dict[str, Any] | None:
+    """The Whisper settings the core read at boot (``model``, ``device``,
+    ``compute_type``), from ``/v1/admin/hardware``'s ``stt.configured``;
+    None when the core didn't say."""
+    status, payload = await get_admin("/v1/admin/hardware", headers=headers)
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    stt = payload.get("stt")
+    configured = stt.get("configured") if isinstance(stt, dict) else None
+    if not isinstance(configured, dict) or not configured.get("model"):
+        return None
+    return configured
+
+
+def _whisper_on_disk(model: Any) -> bool | None:
+    if not model:
+        return None
+    try:
+        return whisper_cache.whisper_model_cached(str(model))
+    except Exception:  # noqa: BLE001 — a hint, never a failure
+        return None
+
+
+def _same_ollama_model(a: str | None, b: str | None) -> bool:
+    """The same model the way Ollama names them (case aside, a bare name
+    is ``:latest``)."""
+    return bool(b) and ollama_client.model_installed(a, [b])
 
 
 class SetActiveBody(BaseModel):

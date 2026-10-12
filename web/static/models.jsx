@@ -3,9 +3,11 @@
  * One page, top-down:
  *   1. Hardware panel   — per-GPU VRAM/util/temp + CPU/RAM/disk. The
  *                         denominator for every fit badge.
- *   2. Active models    — Q&A / tool-routing / speech-to-text role slots,
- *                         each with the current model + a switch picker
- *                         (restart badge where the tier needs it).
+ *   2. Active models    — Q&A / tool-routing / vision / speech-to-text role
+ *                         slots, each with the current model + a switch
+ *                         picker (restart badge where the tier needs it), and
+ *                         for an Ollama role whether the model is installed,
+ *                         with an inline Install (the catalog's pull job).
  *   3. Installed        — on-disk Ollama models, loaded-in-VRAM marker, delete.
  *   4. Browse & install — curated catalog cards (fit badge + install) and a
  *                         pull-by-name box; installs run as background jobs
@@ -284,72 +286,170 @@ const activeMessage = (data, error) => {
   return `couldn't load active models (${error.status || 'no response'}): ${detail}`;
 };
 
-const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch }) => {
-  const [pick, setPick] = React.useState(r.model || '');
-  React.useEffect(() => { setPick(r.model || ''); }, [r.model]);
+/* A model name the way Ollama compares them (domovoi/clients/ollama.py
+ * _model_key): case aside, and a bare name means ":latest". Two spellings
+ * of one model are one choice. */
+const _ollamaKey = (name) => {
+  const n = String(name || '').trim().toLowerCase();
+  return !n || n.includes(':') ? n : `${n}:latest`;
+};
 
-  const options = r.role === 'stt'
+/* One role slot. `r` is a row of GET /api/models/active: the model (and
+ * where it was read from, `model_source`), whether it is `installed`, and
+ * for the chat's roles whether the chat needs a restart to use it. `job` is
+ * the latest pull of this model (the same model_jobs the catalog's Install
+ * starts), so an install begun here or on a catalog card shows its progress
+ * on the row. */
+const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, onInstall,
+                     job, internetOff, sttLoaded }) => {
+  const isStt = r.role === 'stt';
+  const current = r.model || '';
+  const [pick, setPick] = React.useState(current);
+  React.useEffect(() => { setPick(current); }, [current]);
+
+  const sameKey = isStt ? (n) => n : _ollamaKey;
+  const options = isStt
     ? whisperNames
     : installed.map((m) => m.name);
-  // Always include the current model even if it isn't in the option source
-  // (e.g. active-but-not-installed, or a whisper size not in the catalog).
-  const opts = Array.from(new Set([r.model, ...options].filter(Boolean)));
+  // The current model heads the list even if it isn't in the option source
+  // (e.g. active-but-not-installed, or a whisper size not in the catalog);
+  // one entry per model.
+  const seen = new Set();
+  const opts = [current, ...options].filter((o) => {
+    if (!o || seen.has(sameKey(o))) return false;
+    seen.add(sameKey(o));
+    return true;
+  });
 
   const est = (() => {
     const c = catalogByName[r.model];
     if (c) return c.est_vram_gb;
-    if (r.role !== 'stt') {
+    if (!isStt) {
       const inst = installed.find((m) => m.name === r.model);
       return inst ? _gb(inst.size_bytes) : null;
     }
     return null;
   })();
 
-  const changed = pick && pick !== r.model;
+  // Switch stays off until the picker names a different model from the
+  // current one. With the current model unknown nothing is preselected, so
+  // it waits for a deliberate pick.
+  const changed = !!pick && sameKey(pick) !== sameKey(current);
+
+  // Installed or not, for an Ollama role (STT downloads on first load —
+  // there is nothing to install ahead of the restart).
+  const pulling = !!job && (job.status === 'pending' || job.status === 'running');
+  const failed = !!job && job.status === 'failed';
+  const blocked = internetOff && !_modelsLanRegistryRef(r.model);
+  const missing = !isStt && !!r.model && r.installed === false && !pulling;
+  let status = null;
+  if (!isStt && r.model) {
+    if (pulling) status = <Pill tone="live" live>{job.pct != null ? `installing ${job.pct}%` : 'installing…'}</Pill>;
+    else if (r.installed === false) status = <Pill tone="warn">not installed</Pill>;
+    else if (r.installed === true) {
+      status = (
+        <span title={r.chat_restart_required ? 'installed in Ollama' : 'installed — this role uses it now'}>
+          <Pill tone="ok">{r.chat_restart_required ? 'installed' : 'ready'}</Pill>
+        </span>
+      );
+    }
+  } else if (isStt && r.installed === false && sttLoaded !== r.model) {
+    // (The model the core is transcribing with is on ITS disk, whatever
+    // this process's cache check says.)
+    status = (
+      <span className="stt-role-not-cached"
+            title="not in this host's model cache: Whisper downloads it when it loads, at the next restart">
+        <Pill tone="warn">not downloaded</Pill>
+      </span>
+    );
+  }
+  const chatRestart = !isStt && !!r.chat_restart_required && r.installed !== false && !pulling;
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
+    <div className="model-role-row"
+         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
       <div style={{ minWidth: 130 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{ROLE_LABEL[r.role]}</div>
         <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{ROLE_SUB[r.role]}</div>
       </div>
-      <div style={{ flex: 1, minWidth: 160, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="mono" style={{ fontSize: 13, fontWeight: 500 }}>{r.model || '—'}</span>
+      <div style={{ flex: 1, minWidth: 160, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {r.model
+          ? <span className="mono model-role-current" style={{ fontSize: 13, fontWeight: 500, overflowWrap: 'anywhere' }}
+                  title={r.model_source === 'startup'
+                    ? 'as the Domovoi server loaded it at startup — sign in again to see a change saved since'
+                    : undefined}>{r.model}</span>
+          : <span className="model-role-current" style={{ fontSize: 13, color: 'var(--fg-muted)' }}
+                  title={r.model_source === 'config' ? 'no model is set for this role'
+                    : "the Domovoi server didn't say which model this is"}>
+              {r.model_source === 'config' ? 'not set' : 'unknown'}
+            </span>}
         {est != null && <FitBadge estGb={Math.round(est * 10) / 10} hw={hw}/>}
+        {status}
+        {chatRestart && (
+          <span title={`The dashboard's chat still uses ${r.chat_model || 'no model'} for this until the Domovoi server restarts.`}>
+            <Pill tone="warn">restart for chat</Pill>
+          </span>
+        )}
         {r.tier === 'restart' && <Pill tone="warn">restart to apply</Pill>}
+        {missing && (
+          <Button variant="primary" icon="download" disabled={blocked}
+                  title={blocked ? NEEDS_INTERNET_TEXT : `download ${r.model} into Ollama`}
+                  onClick={() => onInstall(r.model)}>Install</Button>
+        )}
+        {missing && blocked && <NeedsInternetNote compact/>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <select value={pick} onChange={(e) => setPick(e.target.value)}
+                aria-label={`${ROLE_LABEL[r.role]} model`}
                 style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 8px',
                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                          background: 'var(--card)', color: 'var(--fg)', maxWidth: 220 }}>
+          {!current && <option value="" disabled>choose a model</option>}
           {opts.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
         <Button variant={changed ? 'primary' : 'secondary'} icon="check"
                 disabled={!changed} onClick={() => onSwitch(r, pick)}>Switch</Button>
       </div>
+      {pulling && (
+        <div style={{ flexBasis: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {_bar(job.pct, 'brand')}
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{job.status_text || 'starting…'}</div>
+        </div>
+      )}
+      {failed && r.installed === false && (
+        <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--err)' }}>
+          install failed{job.error ? `: ${job.error}` : ''}
+        </div>
+      )}
     </div>
   );
 };
 
 /* ---- installed list ------------------------------------------- */
 
+/* The name and the meta chips sit on one line on a wide screen; on a phone
+ * (styles.css, .model-inst-*) the name takes its own line and wraps, and
+ * the chips go under it — at 375 px one line left the name a single
+ * letter. */
 const InstalledRow = ({ m, hw, onDelete }) => {
   const gb = _gb(m.size_bytes);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
+    <div className="model-inst-row"
+         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
                   borderBottom: '1px solid var(--border-soft)' }}>
-      <span className="mono" style={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0,
-                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span className="mono model-inst-name" style={{ fontSize: 13, fontWeight: 500 }} title={m.name}>
         {m.name}
       </span>
-      {m.loaded && <Pill tone="live" live>loaded</Pill>}
-      {m.quant && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.quant}</span>}
-      <span className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', width: 74, textAlign: 'right' }}>
-        {_fmtGb(gb)}
+      <span className="model-inst-meta" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {m.loaded && <Pill tone="live" live>loaded</Pill>}
+        {m.quant && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.quant}</span>}
+        <span className="mono model-inst-size" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          {_fmtGb(gb)}
+        </span>
+        {gb != null && <FitBadge estGb={Math.round(gb * 10) / 10} hw={hw}/>}
+        <IconButton name="trash-2" title="delete from disk" onClick={() => onDelete(m)}/>
       </span>
-      {gb != null && <FitBadge estGb={Math.round(gb * 10) / 10} hw={hw}/>}
-      <IconButton name="trash-2" title="delete from disk" onClick={() => onDelete(m)}/>
     </div>
   );
 };
@@ -570,6 +670,13 @@ const ModelsPanel = () => {
   // Models with a live/recent pull job, so catalog cards show "installing…".
   const pulling = new Set(jobs.filter((j) => j.status === 'pending' || j.status === 'running')
     .map((j) => j.model));
+  // The latest pull of a role's model (jobs come newest first), for the
+  // row's own progress.
+  const jobFor = (model) => (model
+    ? jobs.find((j) => _ollamaKey(j.model) === _ollamaKey(model)) || null : null);
+  // A finished pull changes a row's `installed`: read the roles again.
+  const doneJobs = jobs.filter((j) => j.status === 'done').map((j) => j.id).join(',');
+  React.useEffect(() => { if (doneJobs) refreshActive(); }, [doneJobs, refreshActive]);
 
   const guard = async (fn, okMsg) => {
     try {
@@ -615,6 +722,7 @@ const ModelsPanel = () => {
     guard(async () => {
       await apiDelete(`/api/models/${encodeURIComponent(m.name)}`);
       await refreshInstalled();
+      refreshActive();   // a role's model may be the one that went
     }, `deleted ${m.name}`));
   const del = (m) => delConfirm.request(m, {
     title: `Delete ${m.name} from disk?`,
@@ -642,7 +750,10 @@ const ModelsPanel = () => {
             </div>
           : roles.map((r) => (
               <ActiveRow key={r.role} r={r} installed={installed} whisperNames={whisperNames}
-                         hw={hw} catalogByName={catalogByName} onSwitch={switchModel}/>
+                         hw={hw} catalogByName={catalogByName} onSwitch={switchModel}
+                         onInstall={install} job={r.role === 'stt' ? null : jobFor(r.model)}
+                         internetOff={internetOff}
+                         sttLoaded={hwData && hwData.stt && hwData.stt.loaded ? hwData.stt.loaded.model : null}/>
             ))}
       </Card>
 
