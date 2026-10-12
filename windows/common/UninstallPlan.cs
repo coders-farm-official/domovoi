@@ -203,8 +203,6 @@ namespace Domovoi.Windows
                 }
             }
 
-            if (sidOurs && f.ProfileExists)
-                steps.Add(new UninstallStep(UninstallKind.DeleteProfile, sid));
             if (sidOurs && (f.Rights.Count > 0 || f.RightsUnknown || (ledger != null && ledger.Rights.Count > 0)))
             {
                 var r = new UninstallStep(UninstallKind.RemoveRights, sid);
@@ -220,6 +218,12 @@ namespace Domovoi.Windows
                 steps.Add(u);
             }
             if (accountOurs) steps.Add(new UninstallStep(UninstallKind.DeleteAccount, Paths.AccountName));
+            // The profile after the account (DeleteProfile works by SID on a
+            // deleted account's profile too): when Windows still holds it,
+            // its removal at the next restart is scheduled only once the
+            // account is gone, which is when that task deletes it.
+            if (sidOurs && f.ProfileExists)
+                steps.Add(new UninstallStep(UninstallKind.DeleteProfile, sid));
             // Only a ProgramData folder Setup made (it refuses to use one it didn't).
             if (f.ProgramDataExists && ledger != null && ledger.ProgramDataCreated)
                 steps.Add(new UninstallStep(UninstallKind.DeleteProgramData, Paths.ProgramData));

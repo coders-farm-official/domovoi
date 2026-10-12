@@ -313,9 +313,15 @@ namespace Domovoi.Windows.Helper
             }
             if (!ProfileTask.IsLocalAccountSid(sid))
                 return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + ")";
+            // The task deletes the profile only once its account is gone, so
+            // it is scheduled only then (this step comes after DeleteAccount);
+            // an account that couldn't be deleted keeps the uninstaller for
+            // another run anyway, and that run deletes the profile.
+            if (!AccountGone(sid))
+                return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + "; Windows still had it open, and its account is still there)";
             try
             {
-                string outText = Steps.PowerShell(ProfileTask.RegisterScript(sid), o);
+                string outText = Steps.PowerShell(ProfileTask.RegisterScript(sid, Environment.SystemDirectory), o);
                 if (outText.IndexOf("scheduled", StringComparison.Ordinal) < 0) throw new InvalidOperationException("the task did not register");
             }
             catch (Exception e)
@@ -328,6 +334,18 @@ namespace Domovoi.Windows.Helper
             o.Say(note);
             atRestart.Add(note);
             return null;
+        }
+
+        // The SID maps to no account any more (the startup task's own rule).
+        static bool AccountGone(string sid)
+        {
+            try
+            {
+                new SecurityIdentifier(sid).Translate(typeof(NTAccount));
+                return false;
+            }
+            catch (IdentityNotMappedException) { return true; }
+            catch (SystemException) { return false; }
         }
 
         static string DeleteProgramData(string sid, List<string> atRestart, Output o)

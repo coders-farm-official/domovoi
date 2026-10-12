@@ -219,6 +219,17 @@ end;
 
 { -- logs the household can open (owner fixes 2026-10-12, item 4) ------- }
 
+function GetFileAttributesW(lpFileName: String): Cardinal; external 'GetFileAttributesW@kernel32.dll stdcall';
+
+{ A folder that is not a link (no reparse point). }
+function IsPlainDir(const Path: String): Boolean;
+var
+  A: Cardinal;
+begin
+  A := GetFileAttributesW(Path);
+  Result := (A <> $FFFFFFFF) and ((A and $10) <> 0) and ((A and $400) = 0);
+end;
+
 { The logs are in C:\ProgramData\Domovoi, which only administrators can
   open. The helper copies them (redacted: no setup code, no password in a
   URL) to a new folder under Documents\Domovoi logs, and Explorer opens
@@ -245,10 +256,17 @@ begin
   end;
   Folder := KvValue(Lines, 'folder');
   Log('Copied the logs to ' + Folder);
-  if IsUninstaller then
-    ShellExec('open', Folder, '', '', SW_SHOWNORMAL, ewNoWait, Err)
+  { The uninstaller runs elevated and has no way to start anything as the
+    signed-in user: opening a path in the user's Documents from there
+    would run as administrator whatever answers to it (a missing folder
+    with a .bat of the same name beside it, say), so it only says where
+    the copy is. Setup opens it as the original user, and only a real
+    folder (not a link), with a trailing backslash so nothing but the
+    folder can answer. }
+  if not IsUninstaller and IsPlainDir(Folder) then
+    ShellExecAsOriginalUser('open', AddBackslash(Folder), '', '', SW_SHOWNORMAL, ewNoWait, Err)
   else
-    ShellExecAsOriginalUser('open', Folder, '', '', SW_SHOWNORMAL, ewNoWait, Err);
+    MsgBox('The logs are copied to:' + #13#10#13#10 + Folder + #13#10#13#10 + 'Open that folder in Explorer.', mbInformation, MB_OK);
 end;
 
 { An install error with Retry, Copy logs and Stop Setup; Copy logs copies

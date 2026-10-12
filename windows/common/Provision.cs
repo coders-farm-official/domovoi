@@ -174,6 +174,55 @@ namespace Domovoi.Windows
         }
     }
 
+    // The port check right before provision.sh starts Domovoi (owner fixes
+    // 2026-10-12, item 2), as DomovoiHost runs it: while Pending, a pass
+    // runs with --stop-before start; that pass ending "stopped" is the cue
+    // to wait for the ports (WaitUntilFree), and the next pass runs without
+    // it. Only for a pinned provision.sh that has the option.
+    public sealed class PortGate
+    {
+        public const string Step = "start";
+        public bool Pending;
+
+        public PortGate(bool scriptHasStopBefore) { Pending = scriptHasStopBefore; }
+
+        // The provision.sh arguments for the next pass.
+        public List<string> Args(List<string> jobArgs)
+        {
+            var a = new List<string>(jobArgs);
+            if (Pending) { a.Add("--stop-before"); a.Add(Step); }
+            return a;
+        }
+
+        // A pass ended "stopped": true when that was this gate (now wait for
+        // the ports, then run again without it); false when nobody asked
+        // for a stop, which is a failure.
+        public bool OnStopped()
+        {
+            if (!Pending) return false;
+            Pending = false;
+            return true;
+        }
+
+        // Looks at the ports every pollMs until no Windows program holds one
+        // Domovoi needs. owners: the check (null: it can't be made, go on);
+        // taken: told once per different answer while waiting; sleep: true
+        // when the host is stopping. True: free; false: stopping.
+        public static bool WaitUntilFree(Func<List<PortOwner>> owners, Action<string> taken, Func<int, bool> sleep, int pollMs)
+        {
+            string last = null;
+            while (true)
+            {
+                List<PortOwner> now = owners();
+                if (now == null || now.Count == 0) return true;
+                string text = PortCheck.Summary(now);
+                if (text != last) taken(text);
+                last = text;
+                if (sleep(pollMs)) return false;
+            }
+        }
+    }
+
     // The installer's one progress bar across everything the host does.
     public static class HostProgress
     {

@@ -488,12 +488,12 @@ namespace Domovoi.Windows.Host
             bool verifying = false;
             // The port check right before the start step (owner fixes
             // 2026-10-12, item 2): the first pass stops before "start".
-            bool portGate = canStopBeforeStart;
-            if (!portGate) log.Write("the pinned provision.sh has no --stop-before: the ports are checked again only if the start fails");
+            var gate = new PortGate(canStopBeforeStart);
+            if (!gate.Pending) log.Write("the pinned provision.sh has no --stop-before: the ports are checked again only if the start fails");
             while (!Stopping)
             {
                 ProvisionLine final;
-                int code = RunProvision(job, verifying, portGate ? "start" : null, out final);
+                int code = RunProvision(job, verifying, gate.Args(job.ProvisionArgs), out final);
                 if (Stopping) return false;
                 if (final != null)
                 {
@@ -525,9 +525,8 @@ namespace Domovoi.Windows.Host
                         if (++lost > 1) { Fail(why, null); return false; }
                         continue;
                     case ProvisionVerdict.Stopped:
-                        if (!portGate) { Fail("provisioning stopped though nobody asked it to: " + why, null); return false; }
+                        if (!gate.OnStopped()) { Fail("provisioning stopped though nobody asked it to: " + why, null); return false; }
                         if (!WaitForFreePorts()) return false;
-                        portGate = false;
                         continue;
                     default:
                         Fail(why, final != null ? final.FailedStep : null);
@@ -537,11 +536,9 @@ namespace Domovoi.Windows.Host
             return false;
         }
 
-        int RunProvision(HostJob job, bool verifying, string stopBefore, out ProvisionLine final)
+        int RunProvision(HostJob job, bool verifying, List<string> scriptArgs, out ProvisionLine final)
         {
             var args = new List<string> { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/bash", InDistroScript };
-            var scriptArgs = new List<string>(job.ProvisionArgs);
-            if (stopBefore != null) { scriptArgs.Add("--stop-before"); scriptArgs.Add(stopBefore); }
             args.AddRange(scriptArgs);
             plog.Write("---- provision.sh " + string.Join(" ", scriptArgs.ToArray()) + (verifying ? " (after a restart)" : ""));
             var psi = Wsl.Start(args);
@@ -615,29 +612,32 @@ namespace Domovoi.Windows.Host
         // (PortScan). False: the service is stopping.
         bool WaitForFreePorts()
         {
-            string last = null;
-            while (!Stopping)
-            {
-                List<PortOwner> owners;
-                try { owners = PortCheck.Owners(PortScan.Listeners(), null); }
-                catch (System.ComponentModel.Win32Exception e)
+            bool waited = false;
+            bool free = PortGate.WaitUntilFree(
+                delegate
                 {
-                    log.Write("can't read Windows' port table (" + e.Message + "); starting Domovoi without the check");
-                    return true;
-                }
-                if (owners.Count == 0)
+                    try { return PortCheck.Owners(PortScan.Listeners(), null); }
+                    catch (System.ComponentModel.Win32Exception e)
+                    {
+                        log.Write("can't read Windows' port table (" + e.Message + "); starting Domovoi without the check");
+                        return null;
+                    }
+                },
+                delegate (string text)
                 {
-                    log.Write(last == null ? "the ports Domovoi needs are free" : "the ports Domovoi needs are free again");
-                    return true;
-                }
-                string text = PortCheck.Summary(owners);
-                if (text != last) log.Write("ports Domovoi needs are taken: " + text + "; waiting before starting Domovoi");
-                last = text;
-                Status("ports", HostProgress.PhaseProvision, 0, "Waiting for port " + text + " to be free");
-                ProcessRequests(false);
-                if (Sleep(3000)) return false;
-            }
-            return false;
+                    waited = true;
+                    log.Write("ports Domovoi needs are taken: " + text + "; waiting before starting Domovoi");
+                    Status("ports", HostProgress.PhaseProvision, 0, "Waiting for port " + text + " to be free");
+                },
+                delegate (int ms)
+                {
+                    ProcessRequests(false);
+                    WriteStatus(false);
+                    return Sleep(ms);
+                },
+                3000);
+            if (free) log.Write(waited ? "the ports Domovoi needs are free again" : "the ports Domovoi needs are free");
+            return free && !Stopping;
         }
 
         bool WaitHealthy(int seconds)

@@ -41,6 +41,7 @@ namespace Domovoi.Windows.Helper
         {
             Ports(o, installing);
             if (portsOnly) return;
+            EarlierUninstall(o);
             Os(o);
             SmartAppControl(o);
             Memory(o);
@@ -96,6 +97,45 @@ namespace Domovoi.Windows.Helper
             var owners = PortCheck.Owners(PortScan.Listeners(), installing ? null : ExcludedRanges());
             o.Kv("ports_taken", owners.Count > 0 ? "1" : "0");
             foreach (var w in owners) o.Kv("port_owner", w.Kind + "|" + w.Title + "|" + w.Advice);
+        }
+
+        // -- an uninstall Windows finishes at the next restart -----------
+
+        // An earlier uninstall may have left files for Windows to delete at
+        // the next restart (still open then) and the account's profile for a
+        // startup task. Those deletes go by path: a new install before that
+        // restart would lose its own files at it. So Setup asks for the
+        // restart first (the review of 2026-10-12).
+        static void EarlierUninstall(Output o)
+        {
+            var entries = new List<string>();
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(PendingDeletes.Key))
+            {
+                if (k != null)
+                    foreach (string v in PendingDeletes.Values)
+                    {
+                        var list = k.GetValue(v) as string[];
+                        if (list != null) entries.AddRange(list);
+                    }
+            }
+            string programFiles = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Domovoi");
+            int n = PendingDeletes.Under(entries, new[] { Paths.ProgramData, programFiles });
+            bool task = ProfileTaskPending();
+            o.Kv("pending_restart", n > 0 || task ? "1" : "0");
+            if (n > 0 || task)
+                o.Kv("fatal", "An earlier Domovoi is still being removed: Windows finishes that at the next restart ("
+                    + (n > 0 ? Inv.S(n) + " file(s) in " + Paths.ProgramData + " or " + programFiles : "")
+                    + (n > 0 && task ? ", and " : "") + (task ? "its old account's profile" : "")
+                    + "). Restart Windows, then run Setup again.");
+        }
+
+        // The uninstall's one-time startup task (ProfileTask) is registered.
+        static bool ProfileTaskPending()
+        {
+            using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+            using (var k = hklm.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree\" + ProfileTask.TaskName))
+                return k != null;
         }
 
         // -- the machine ------------------------------------------------

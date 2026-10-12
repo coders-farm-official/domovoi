@@ -76,17 +76,46 @@ namespace Domovoi.Windows
     }
 
     // Every line that goes into a log, or into the copies "Copy logs"
-    // makes for the household: no setup code (SetupCode.Scrub) and no
-    // password in a URL (scheme://user:password@host, the same rule as
-    // provision.sh's scrub_log).
+    // makes for the household: secrets blanked as far as they can be
+    // recognised. A setup code (SetupCode.Scrub); what sits before the @ of
+    // a URL (scheme://user:password@, scheme://:password@, a bare
+    // scheme://token@), keeping a user name; the value of a key that names
+    // a password, token, secret or API key (password=..., POSTGRES_PASSWORD
+    // =..., "token": "...", api_key: ...); and an Authorization header or a
+    // Bearer token. A pattern match, not a guarantee.
     public static class Redact
     {
-        static readonly Regex UrlPassword = new Regex(@"(://[^:/@\s]+:)[^@/\s]+@");
+        // Up to the first @ after the scheme, '/' included (a password may
+        // hold one); over-blanking an @ in a path is the safe mistake.
+        static readonly Regex UrlUserInfo = new Regex(@"(?i)\b([a-z][a-z0-9+.\-]*://)([^\s@""'<>]+)@");
+        static readonly Regex KeyValue = new Regex(
+            @"(?i)\b((?:[a-z0-9]+[_-])*(?:password|passwd|pwd|passphrase|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)(?:[_-][a-z0-9]+)*[""']?\s*[=:]\s*)(""[^""]*""|'[^']*'|\S+)");
+        static readonly Regex Authorization = new Regex(@"(?i)\b(authorization\s*[=:]\s*)(?:(bearer|basic|token|digest)\s+)?\S+");
+        static readonly Regex Bearer = new Regex(@"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=\-]{8,}");
 
         public static string Line(string line)
         {
             if (string.IsNullOrEmpty(line)) return line;
-            return UrlPassword.Replace(SetupCode.Scrub(line), "$1[hidden]@");
+            string s = SetupCode.Scrub(line);
+            s = UrlUserInfo.Replace(s, delegate (Match m)
+            {
+                string info = m.Groups[2].Value;
+                int colon = info.IndexOf(':');
+                return m.Groups[1].Value + (colon >= 0 ? info.Substring(0, colon + 1) : "") + "[hidden]@";
+            });
+            s = Authorization.Replace(s, delegate (Match m)
+            {
+                return m.Groups[1].Value + (m.Groups[2].Success ? m.Groups[2].Value + " " : "") + "[hidden]";
+            });
+            s = Bearer.Replace(s, "$1[hidden]");
+            s = KeyValue.Replace(s, delegate (Match m)
+            {
+                string v = m.Groups[2].Value;
+                if (v.StartsWith("[hidden]", StringComparison.Ordinal)) return m.Value;
+                string q = v.Length > 1 && (v[0] == '"' || v[0] == '\'') ? v.Substring(0, 1) : "";
+                return m.Groups[1].Value + q + "[hidden]" + q;
+            });
+            return s;
         }
     }
 }

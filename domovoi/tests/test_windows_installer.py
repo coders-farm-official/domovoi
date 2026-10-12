@@ -247,6 +247,19 @@ def test_every_error_offers_copy_logs():
     assert s.count("copy-logs --kind ") == 1
 
 
+def test_copy_logs_never_opens_a_folder_elevated():
+    """Review of 2026-10-12, item 1: the elevated uninstaller only names the
+    folder; Setup opens it as the original user, and only a real folder
+    (not a link), with a trailing backslash."""
+    s = SCRIPT.read_text(encoding="ascii")
+    body = s[s.index("procedure CopyLogs"):]
+    body = body[: body.index("\nend;")]
+    assert "ShellExec(" not in body.replace("ShellExecAsOriginalUser(", "")
+    assert "if not IsUninstaller and IsPlainDir(Folder) then" in body
+    assert "ShellExecAsOriginalUser('open', AddBackslash(Folder)," in body
+    assert "((A and $400) = 0)" in s  # IsPlainDir: no reparse point
+
+
 @requires_windows_build
 def test_build_script_parses():
     cmd = (

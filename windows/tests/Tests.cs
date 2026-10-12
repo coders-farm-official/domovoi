@@ -89,7 +89,7 @@ static class Tests
         FirewallFilter();
         Links();
         ServiceWaits();
-        PortGate();
+        PortGateTests();
         ProfileCleanup();
         LogCopies();
         UninstallTexts();
@@ -664,7 +664,7 @@ static class Tests
                 "StopService", "RotatePassword", "UnregisterDistro", "DeleteService", "StopAccountProcesses", "RemoveFirewallRules",
                 "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess", "RemoveMediaAccess",
                 "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty", "RemoveFolderIfEmpty",
-                "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProgramData", "RemoveRecord",
+                "RemoveRights", "UnhideAccount", "DeleteAccount", "DeleteProfile", "DeleteProgramData", "RemoveRecord",
             }, kinds, "steps");
             SeqEq(new[] { "StopService", "RotatePassword", "UnregisterDistro" }, plan.Where(s => s.Critical).Select(s => s.Kind.ToString()), "critical steps");
             var folders = plan.Where(s => s.Kind == UninstallKind.RemoveFolderIfEmpty).Select(s => s.Target).ToList();
@@ -728,7 +728,7 @@ static class Tests
             f.ProgramDataExists = true; f.RunOnceValuePresent = true; f.RecordExists = true; f.DistroDiskExists = true;
             f.LedgerSidHasDomovoiProfile = true;
             var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind.ToString()).ToList();
-            SeqEq(new[] { "StopAccountProcesses", "RemoveFirewallRules", "DeleteProfile", "RemoveRights", "UnhideAccount", "DeleteProgramData", "RemoveRunOnce", "RemoveRecord" }, kinds, "steps (the ledger's rule list counts)");
+            SeqEq(new[] { "StopAccountProcesses", "RemoveFirewallRules", "RemoveRights", "UnhideAccount", "DeleteProfile", "DeleteProgramData", "RemoveRunOnce", "RemoveRecord" }, kinds, "steps (the ledger's rule list counts)");
         });
         Run("uninstall: a record SID whose profile isn't domovoi-svc's is never acted on", delegate
         {
@@ -1068,6 +1068,12 @@ static class Tests
             var f = new FakeService(ServiceControllerStatus.StopPending, ServiceControllerStatus.Stopped);
             Eq(OneShotResult.Finished, PlayOneShot(f, 120, 900), "finished");
         });
+        Run("service wait: Started() takes StopPending as started at once, without waiting (review C2)", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.StopPending);
+            Eq((ServiceControllerStatus?)ServiceControllerStatus.Running, ServiceWait.Started(f.Read, f.Sleep, f.Clock, TimeSpan.FromSeconds(120)), "running");
+            Eq(1, f.Reads, "one look");
+        });
         Run("service wait: never past StartPending is NeverStarted, at the start limit", delegate
         {
             var f = new FakeService(ServiceControllerStatus.StartPending);
@@ -1117,7 +1123,7 @@ static class Tests
         return null;
     }
 
-    static void PortGate()
+    static void PortGateTests()
     {
         string why;
         Run("port gate: a run stopped before start is Stopped, not done or failed (item 2)", delegate
@@ -1136,6 +1142,39 @@ static class Tests
             True(!ProvisionScript.SupportsStopBefore(old), "an older one does not");
             True(!ProvisionScript.SupportsStopBefore("# mentions --stop-before STEP in a comment only"), "a mention is not the option");
             True(!ProvisionScript.SupportsStopBefore(null), "null");
+        });
+        Run("port gate: the first pass stops before start, the one after the gate runs to the end (review C19)", delegate
+        {
+            var job = new List<string> { "--internet", "never" };
+            var gate = new PortGate(ProvisionScript.SupportsStopBefore(System.IO.File.ReadAllText(RepoFile(@"scripts\linux\provision.sh"))));
+            SeqEq(new[] { "--internet", "never", "--stop-before", "start" }, gate.Args(job), "first pass");
+            True(gate.OnStopped(), "its stop is the gate");
+            SeqEq(new[] { "--internet", "never" }, gate.Args(job), "the next pass");
+            True(!gate.OnStopped(), "a second stop is nobody's");
+            var old = new PortGate(false);
+            SeqEq(new[] { "--internet", "never" }, old.Args(job), "an older provision.sh gets no --stop-before");
+            True(!old.OnStopped(), "and a stop from it is a failure");
+            SeqEq(new[] { "--internet", "never" }, job, "the job's own list is untouched");
+        });
+        Run("port gate: waits while a port is taken, says so once per answer, goes on when free (review C20)", delegate
+        {
+            var docker = PortCheck.Owners(new[] { new Listener(6432, 35452, "com.docker.backend") }, null);
+            var both = PortCheck.Owners(new[] { new Listener(6432, 35452, "com.docker.backend"), new Listener(11434, 7, "ollama") }, null);
+            var answers = new Queue<List<PortOwner>>(new[] { docker, docker, both, new List<PortOwner>() });
+            var said = new List<string>();
+            int sleeps = 0;
+            True(PortGate.WaitUntilFree(() => answers.Dequeue(), t => said.Add(t), ms => { sleeps++; return false; }, 3000), "free in the end");
+            SeqEq(new[] { "6432 (Docker Desktop)", "6432 (Docker Desktop); 11434 (Ollama)" }, said, "told once per answer");
+            Eq(3, sleeps, "looked again three times");
+            Eq(0, answers.Count, "asked until free");
+        });
+        Run("port gate: stops waiting when the host stops; goes on when the table can't be read", delegate
+        {
+            var docker = PortCheck.Owners(new[] { new Listener(6432, 35452, "com.docker.backend") }, null);
+            True(!PortGate.WaitUntilFree(() => docker, t => { }, ms => true, 3000), "stopping");
+            int asked = 0;
+            True(PortGate.WaitUntilFree(() => { asked++; return null; }, t => { throw new InvalidOperationException("nothing taken"); }, ms => { throw new InvalidOperationException("no wait"); }, 3000), "no table");
+            Eq(1, asked, "asked once");
         });
         Run("port gate: the summary names each port and its program", delegate
         {
@@ -1156,15 +1195,21 @@ static class Tests
     // profile Get-CimInstance returns, and what got removed and unregistered.
     static List<string> RunCleanup(string sid, string localPath, bool loaded)
     {
-        string fakes =
-            "$script:log = New-Object System.Collections.ArrayList\n" +
+        return RunCleanup(sid, localPath, loaded, false);
+    }
+
+    static List<string> RunCleanup(string sid, string localPath, bool loaded, bool lookupFails)
+    {
+        // The failing New-Object comes after the log list is made with the real one.
+        string fakes = "$script:log = New-Object System.Collections.ArrayList\n" +
+            (lookupFails ? "function New-Object { throw 'the LSA did not answer' }\n" : "") +
             "function Get-CimInstance { param($ClassName, $Filter) " +
             (localPath == null ? "$null" : "[pscustomobject]@{ SID = '" + sid + "'; LocalPath = '" + localPath + "'; Loaded = $" + (loaded ? "true" : "false") + " }") + " }\n" +
             "function Remove-CimInstance { param($InputObject) [void]$script:log.Add('removed ' + $InputObject.LocalPath) }\n" +
             "function Unregister-ScheduledTask { param($TaskName, $TaskPath, $Confirm, $ErrorAction) [void]$script:log.Add('unregistered ' + $TaskPath + $TaskName) }\n";
         using (var ps = PowerShell.Create())
         {
-            ps.AddScript(fakes + ProfileTask.CleanupScript(sid) + "\n$script:log");
+            ps.AddScript(fakes + "& {\n" + ProfileTask.CleanupScript(sid) + "\n}\n$script:log");
             var outp = ps.Invoke();
             if (ps.HadErrors) throw new InvalidOperationException("script errors: " + string.Join("; ", ps.Streams.Error.Select(e => e.ToString()).ToArray()));
             return outp.Where(x => x != null).Select(x => x.ToString()).ToList();
@@ -1189,12 +1234,17 @@ static class Tests
         {
             SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\Kamron", false), "another profile");
             SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svcx", false), "a look-alike");
-            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc", true), "a loaded profile");
+            Eq(0, RunCleanup(RealSid, @"C:\Users\domovoi-svc", true).Count, "a loaded profile: nothing, and the task stays for the next boot");
             SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, null, false), "no profile");
             // This PC's own account resolves: its profile is never touched.
             string mine = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
             if (ProfileTask.IsLocalAccountSid(mine))
                 SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(mine, @"C:\Users\domovoi-svc", false), "an account that exists");
+        });
+        Run("profile task: a lookup that fails any other way than 'no such account' does nothing and keeps the task (review item 4)", delegate
+        {
+            Eq(0, RunCleanup(RealSid, @"C:\Users\domovoi-svc", false, true).Count, "nothing removed, not unregistered");
+            True(ProfileTask.CleanupScript(RealSid).Contains("catch [System.Security.Principal.IdentityNotMappedException]"), "only that exception means gone");
         });
         Run("profile task: only a local account's SID goes into the scripts", delegate
         {
@@ -1204,7 +1254,11 @@ static class Tests
         });
         Run("profile task: registered at startup as SYSTEM, running the cleanup encoded", delegate
         {
-            string reg = ProfileTask.RegisterScript(RealSid);
+            string reg = ProfileTask.RegisterScript(RealSid, Environment.SystemDirectory);
+            True(reg.Contains("-Execute '" + Environment.SystemDirectory + @"\WindowsPowerShell\v1.0\powershell.exe'"), "Windows' own powershell.exe, by the helper's path");
+            True(!reg.Contains("$env:"), "nothing from the environment (review item 3)");
+            Throws<ArgumentException>(delegate { ProfileTask.RegisterScript(RealSid, @"C:\Win'dows\System32"); }, "a quote in the folder");
+            Throws<ArgumentException>(delegate { ProfileTask.RegisterScript(RealSid, @"%SystemRoot%\System32"); }, "a variable");
             ParsesAsPowerShell(reg, "the register script");
             ParsesAsPowerShell(ProfileTask.CleanupScript(RealSid), "the cleanup script");
             True(reg.Contains("New-ScheduledTaskTrigger -AtStartup") && reg.Contains("-UserId 'S-1-5-18'") && reg.Contains("-TaskName 'DomovoiRemoveProfile'"), "startup, SYSTEM, its name");
@@ -1222,6 +1276,31 @@ static class Tests
             Eq("postgresql://domovoi:[hidden]@127.0.0.1:6432/domovoi", Redact.Line("postgresql://domovoi:s3cret-Pass@127.0.0.1:6432/domovoi"), "URL password");
             Eq("https://github.com/coders-farm-official/domovoi", Redact.Line("https://github.com/coders-farm-official/domovoi"), "a plain URL stays");
             Eq("installed /etc/sudoers.d/domovoi-update: domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl", Redact.Line("installed /etc/sudoers.d/domovoi-update: domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl"), "an ordinary line stays");
+        });
+        Run("redact: keys, headers and the other URL forms (review item 5)", delegate
+        {
+            Eq("password=[hidden] next", Redact.Line("password=hunter2 next"), "password=");
+            Eq("POSTGRES_PASSWORD=[hidden]", Redact.Line("POSTGRES_PASSWORD=Xy7%q"), "*_PASSWORD=");
+            Eq("LETTA_TOKEN = [hidden]", Redact.Line("LETTA_TOKEN = abc123"), "*_TOKEN with spaces");
+            Eq("token=[hidden] rest", Redact.Line("token=abc rest"), "token=");
+            Eq("secret: [hidden]", Redact.Line("secret: s3cr3t"), "secret:");
+            Eq("{\"api_key\": \"[hidden]\", \"n\": 1}", Redact.Line("{\"api_key\": \"k-123\", \"n\": 1}"), "a JSON key, quoted");
+            Eq("Authorization: Bearer [hidden]", Redact.Line("Authorization: Bearer eyJhbGciOi.abc.def"), "Authorization: Bearer");
+            Eq("Authorization: Basic [hidden]", Redact.Line("Authorization: Basic ZG9tb3ZvaTpwdw=="), "Authorization: Basic");
+            Eq("sent bearer [hidden] to x", Redact.Line("sent bearer abcdefghijkl to x"), "a bare Bearer token");
+            Eq("postgresql://:[hidden]@127.0.0.1/db", Redact.Line("postgresql://:pw@127.0.0.1/db"), "no user name");
+            Eq("https://[hidden]@github.com/x", Redact.Line("https://ghp_abc123@github.com/x"), "a token alone");
+            Eq("postgresql://domovoi:[hidden]@h/db", Redact.Line("postgresql://domovoi:pa/ss@h/db"), "a / in the password");
+            foreach (string keep in new[]
+            {
+                "provision: created the service user domovoi (password login locked)",
+                "Collecting tokenizers==0.23.2 (from -r requirements-linux-py314.lock (line 2816))",
+                "Please set a HF_TOKEN to enable higher rate limits",
+                "/opt/domovoi/domovoi/.env: LETTA_TOKEN and SEARXNG_SECRET already set; left untouched",
+                "Downloading https://download-r2.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp314-cp314-manylinux_2_28_x86_64.whl (196.3 MB)",
+                "authorization failed for the request",
+            })
+                Eq(keep, Redact.Line(keep), "kept: " + keep);
         });
         Run("copy logs: a new folder the user can open, every line redacted, links refused", delegate
         {
@@ -1253,6 +1332,81 @@ static class Tests
                 Domovoi.Windows.Helper.Folders.DeleteTree(root);
                 if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
             }
+        });
+        Run("copy logs: the folder and the sources are checked on their handles, never through a link (review item 2, C12)", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                string link = System.IO.Path.Combine(root, "link");
+                Junction(link, victim);
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenDir(link).Dispose(); }, "a junction as a folder");
+                using (var h = Domovoi.Windows.Helper.Logs.OpenDir(victim)) True(!h.IsInvalid, "a real folder opens");
+                // Held without delete sharing: it can't be moved or swapped for a link.
+                bool moved = true;
+                using (Domovoi.Windows.Helper.Logs.OpenDir(victim))
+                {
+                    try { System.IO.Directory.Move(victim, victim + "-moved"); }
+                    catch (Exception) { moved = false; }
+                }
+                True(!moved && System.IO.Directory.Exists(victim), "can't be moved while held");
+                string x = System.IO.Path.Combine(victim, "x.log");
+                System.IO.File.WriteAllText(x, "secret");
+                using (var h = Domovoi.Windows.Helper.Logs.OpenSource(x)) True(!h.IsInvalid, "a plain file opens");
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(System.IO.Path.Combine(link, "x.log")).Dispose(); }, "a source through a junction");
+                string hard = System.IO.Path.Combine(root, "hard.log");
+                var psi = new System.Diagnostics.ProcessStartInfo(System.IO.Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+                    "/c mklink /H " + CommandLine.Quote(hard) + " " + CommandLine.Quote(x));
+                psi.UseShellExecute = false; psi.CreateNoWindow = true; psi.RedirectStandardOutput = true;
+                using (var pr = System.Diagnostics.Process.Start(psi)) { pr.StandardOutput.ReadToEnd(); pr.WaitForExit(); }
+                True(System.IO.File.Exists(hard), "made a hard link");
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(hard).Dispose(); }, "a source with a second name");
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.OpenSource(x).Dispose(); }, "its other name too");
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+        });
+        Run("copy logs: a link already at the new folder's name is never written through (review C12)", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            try
+            {
+                var at = new DateTime(2099, 12, 31, 23, 59, 59);
+                string dest = System.IO.Path.Combine(root, "Domovoi logs");
+                System.IO.Directory.CreateDirectory(dest);
+                Junction(System.IO.Path.Combine(dest, "install-20991231-235959"), victim);
+                Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, "install", null, at);
+                Eq(0, System.IO.Directory.GetFileSystemEntries(victim).Length, "nothing written through the link");
+                True(System.IO.File.Exists(System.IO.Path.Combine(dest, "install-20991231-235959-2", "README.txt")), "the copy went to the next name");
+                string readme = System.IO.File.ReadAllText(System.IO.Path.Combine(dest, "install-20991231-235959-2", "README.txt"));
+                True(readme.Contains("copied by Domovoi Setup on") && readme.Contains("as far as Setup can recognise them"), "README: " + readme);
+                Domovoi.Windows.Helper.Logs.Copy(new Domovoi.Windows.Helper.Output(null), dest, "uninstall", null, at);
+                True(System.IO.File.ReadAllText(System.IO.Path.Combine(dest, "uninstall-20991231-235959", "README.txt")).Contains("copied by Domovoi's uninstaller on"), "the uninstaller's wording (review item 8)");
+            }
+            finally
+            {
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+        });
+        Run("pending deletes: an earlier uninstall's restart work under Domovoi's folders is found (review item 7)", delegate
+        {
+            var roots = new[] { @"C:\ProgramData\Domovoi", @"C:\Program Files\Domovoi" };
+            var entries = new List<string>
+            {
+                @"\??\C:\ProgramData\Domovoi\logs\host.log", "",
+                @"\??\C:\ProgramData\Domovoi", "",
+                @"\??\C:\Windows\Temp\x.tmp", "",
+                @"\??\C:\ProgramData\Domovoi-kept-20261012\ext4.vhdx", "",
+                @"\??\C:\Temp\new.dll", @"!\??\C:\Program Files\Domovoi\DomovoiHost.exe",
+            };
+            Eq(3, PendingDeletes.Under(entries, roots), "two deletes and a rename into Program Files");
+            Eq(0, PendingDeletes.Under(new List<string> { @"\??\C:\Users\Kamron\x", "" }, roots), "someone else's");
+            Eq(0, PendingDeletes.Under(null, roots), "none");
+            Eq(1, PendingDeletes.Under(new List<string> { @"\??\c:\programdata\domovoi\state\install.log" }, roots), "case, and a list cut short");
         });
         Run("copy logs: only the uninstall's own log from the temp folder", delegate
         {
