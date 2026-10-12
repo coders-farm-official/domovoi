@@ -54,6 +54,17 @@ data class VoiceTurnResult(
     val error: String? = null,
 )
 
+/** One line of the voice samples. */
+data class VoiceSampleResult(
+    val line: String,
+    /** Asked to speak to its first spoken word. */
+    val firstWordMs: Long?,
+    /** Asked to speak to done. */
+    val totalMs: Long,
+    /** Length of the speech (0 when the engine does not say). */
+    val audioS: Double,
+)
+
 data class AudioInResult(
     val source: String,
     val instruction: String,
@@ -95,6 +106,7 @@ data class BenchResults(
     val voiceTurns: List<VoiceTurnResult> = emptyList(),
     val audioIn: List<AudioInResult> = emptyList(),
     val heat: HeatResult? = null,
+    val samples: List<VoiceSampleResult> = emptyList(),
     /** Which engine and voice spoke (SpeechVoiceInfo.describe). */
     val voice: String? = null,
     val memory: List<MemoryReading> = emptyList(),
@@ -103,7 +115,7 @@ data class BenchResults(
 ) {
     val isEmpty: Boolean
         get() = loads.isEmpty() && textTurns.isEmpty() && voiceTurns.isEmpty() && audioIn.isEmpty() &&
-            heat == null && notes.isEmpty()
+            heat == null && samples.isEmpty() && notes.isEmpty()
 }
 
 /** Peak and current resident memory from `/proc/self/status` (kB). */
@@ -227,6 +239,18 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
                 "${ms(v.llmFirstTextMs)}; first sentence ${ms(v.firstSentenceMs)}; voice to its first word ${ms(v.ttsFirstAudioMs)}")
             appendLine("     heard: ${clip(v.transcript, 100)}")
             appendLine("     said: ${clip(v.reply)}")
+        }
+    }
+
+    if (results.samples.isNotEmpty()) {
+        val samples = results.samples
+        appendLine()
+        appendLine("VOICE SAMPLES (this phone's voice reading the comparison lines)")
+        appendLine("  median to the first word: ${ms(median(samples.mapNotNull { it.firstWordMs?.toDouble() })?.toLong())}")
+        samples.forEach { s ->
+            val n = VoiceSamples.LINES.indexOf(s.line).takeIf { it >= 0 }?.let { "${it + 1}" } ?: "-"
+            appendLine("  $n. first word ${ms(s.firstWordMs)}, done ${ms(s.totalMs)}" +
+                (if (s.audioS > 0) ", ${f1(s.audioS)} s of speech" else "") + ": ${clip(s.line, 70)}")
         }
     }
 

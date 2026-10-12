@@ -53,6 +53,7 @@ import com.domovoi.app.assistant.LlmBackend
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.ModelState
 import com.domovoi.app.assistant.ModelStatus
+import com.domovoi.app.assistant.VoiceSamples
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.Pill
@@ -215,6 +216,23 @@ fun AssistantBenchmarkCard() {
             modifier = Modifier.padding(top = 6.dp),
         )
 
+        Spacer(Modifier.height(12.dp))
+        SectionLabel("voice samples")
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "This phone's voice reads the ${VoiceSamples.LINES.size} comparison lines one by one, to compare " +
+                "with other voices reading the same lines. Tap a number for one line.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Domovoi.colors.fgMuted,
+        )
+        Spacer(Modifier.height(6.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            OutlinedButton(enabled = idle, onClick = { bench.speakSamples() }) { Text("read all") }
+            VoiceSamples.LINES.indices.forEach { i ->
+                FilterChip(selected = false, enabled = idle, onClick = { bench.speakSamples(only = i) },
+                    label = { Text("${i + 1}", style = MaterialTheme.typography.labelMedium) })
+            }
+        }
 
         if (!idle || ui.loaded != null) {
             Spacer(Modifier.height(8.dp))

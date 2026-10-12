@@ -335,6 +335,29 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
         traffic("heat loop")
     }
 
+    /**
+     * The voice samples: this phone's voice reads [VoiceSamples.LINES] one
+     * by one (or only line [only]), so it can be compared with other
+     * voices reading the same lines. No model is needed.
+     */
+    fun speakSamples(only: Int? = null) {
+        val lines = if (only == null) VoiceSamples.LINES else listOf(VoiceSamples.LINES[only])
+        launchRun(if (only == null) "voice samples" else "voice sample ${only + 1}", emptyList()) {
+            val voice = ensureTts()
+            runVoiceSamples(
+                voice = voice,
+                lines = lines,
+                stop = { stopRequested },
+                onLine = { i, line ->
+                    step("line ${(only ?: i) + 1} of ${VoiceSamples.LINES.size}")
+                    live(line)
+                },
+                onSpoken = { sample -> record { it.copy(samples = it.samples + sample) } },
+            )
+            noteVoice()
+        }
+    }
+
     /** Stops the run in progress: the mic, the model and the voice. The
      *  heat loop ends after the reply it is on and keeps its readings. */
     fun stop() {

@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -109,6 +110,39 @@ suspend fun runVoiceTurn(
     }
     speaker.join()
     result(reply.toString(), firstText, firstSentence, firstAudio)
+}
+
+/**
+ * The voice samples: [voice] reads [lines] one by one, [gapMs] apart, each
+ * reported to [onSpoken] as soon as it has been said (so a stop keeps the
+ * lines already read). [stop] ends it between lines; [SpeechOut.stop] cuts
+ * the line being read.
+ */
+suspend fun runVoiceSamples(
+    voice: SpeechOut,
+    lines: List<String>,
+    stop: () -> Boolean = { false },
+    gapMs: Long = 600,
+    onLine: (index: Int, line: String) -> Unit = { _, _ -> },
+    onSpoken: (VoiceSampleResult) -> Unit = {},
+): List<VoiceSampleResult> {
+    val out = mutableListOf<VoiceSampleResult>()
+    for ((i, line) in lines.withIndex()) {
+        currentCoroutineContext().ensureActive()
+        if (stop()) break
+        if (i > 0 && gapMs > 0) delay(gapMs)
+        onLine(i, line)
+        val said = voice.speak(line)
+        val result = VoiceSampleResult(
+            line = line,
+            firstWordMs = said.firstAudioNs?.let { msBetween(said.startedNs, it) },
+            totalMs = msBetween(said.startedNs, said.endedNs),
+            audioS = said.audioSeconds,
+        )
+        out += result
+        onSpoken(result)
+    }
+    return out
 }
 
 /**
