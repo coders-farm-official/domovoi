@@ -227,6 +227,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
             if (!fromMic) add(ModelCatalog.piperTimingVoice)
         }
         launchRun("audio input experiment", needed) {
+            traffic("before the audio input experiment")
             val engine = ensureLlm(_state.value.backend, audio = true)
             memory("model loaded with its audio encoder")
             val detector = ensureVad()
@@ -261,6 +262,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
                 record { it.copy(audioIn = it.audioIn + result) }
             }
             memory("after the audio input experiment")
+            traffic("audio input experiment")
         }
     }
 
@@ -323,7 +325,9 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
             _messages.tryEmit("a test is already running")
             return
         }
-        val missing = needs.filterNot { store.isInstalled(it) }
+        // From the last refresh, not the disk: this runs on the main thread.
+        // The engines check their files again before they load.
+        val missing = needs.filter { _state.value.models[it.id]?.status != ModelStatus.READY }
         if (missing.isNotEmpty()) {
             _messages.tryEmit("download first: ${missing.joinToString { it.name }}")
             return

@@ -145,7 +145,10 @@ class PiperSpeechOut(model: String, tokens: String, dataDir: String, threads: In
             ),
         )
         sampleRate = tts.sampleRate()
+        // At least a quarter second, in whole 4-byte float frames (AudioTrack
+        // refuses a size that is not a multiple of the frame size).
         val minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+        val bufferBytes = (maxOf(minBuffer, sampleRate) + 3) / 4 * 4
         track = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -161,7 +164,7 @@ class PiperSpeechOut(model: String, tokens: String, dataDir: String, threads: In
                     .build(),
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .setBufferSizeInBytes(maxOf(minBuffer, sampleRate * 4 / 4))
+            .setBufferSizeInBytes(bufferBytes)
             .build()
     }
 
@@ -171,17 +174,16 @@ class PiperSpeechOut(model: String, tokens: String, dataDir: String, threads: In
     override suspend fun speak(sentence: String): SpokenSentence = withContext(Dispatchers.IO) {
         stopped = false
         val started = System.nanoTime()
-        var firstAudio: Long? = null
-        var frames = 0L
         val headAtStart = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
         track.play()
-        tts.generateWithCallback(sentence, 0, 1f) { chunk ->
-            if (stopped) return@generateWithCallback 0
-            if (firstAudio == null) firstAudio = System.nanoTime()
+        val sink = ChunkSink { chunk ->
+            if (stopped) return@ChunkSink false
             track.write(chunk, 0, chunk.size, AudioTrack.WRITE_BLOCKING)
-            frames += chunk.size
-            if (stopped) 0 else 1
+            !stopped
         }
+        tts.generateWithCallback(sentence, 0, 1f, sink)
+        val firstAudio = sink.firstChunkNs
+        val frames = sink.frames
         // Wait for the speaker to play what was written (or a stop).
         val deadline = System.nanoTime() + ((frames * 1_000_000_000L) / sampleRate) + 1_000_000_000L
         while (!stopped && System.nanoTime() < deadline) {
@@ -216,5 +218,27 @@ class PiperSpeechOut(model: String, tokens: String, dataDir: String, threads: In
                 dataDir = store.path(voice, "espeak-ng-data"),
             )
         }
+    }
+}
+
+/**
+ * The per-chunk callback sherpa-onnx's TTS calls from native code. It must
+ * be a real class: the JNI side looks up `invoke([F)Ljava/lang/Integer;` on
+ * the object it is handed, and a Kotlin 2 lambda (compiled through
+ * invokedynamic) has only the erased `invoke(Object)`, so the lookup fails
+ * and the app aborts (found on the emulator). Returns 1 to continue, 0 to
+ * stop synthesis.
+ */
+internal class ChunkSink(private val write: (FloatArray) -> Boolean) : (FloatArray) -> Int {
+    @Volatile var firstChunkNs: Long? = null
+        private set
+    @Volatile var frames: Long = 0
+        private set
+
+    override fun invoke(samples: FloatArray): Int {
+        if (firstChunkNs == null) firstChunkNs = System.nanoTime()
+        val keepGoing = write(samples)
+        frames += samples.size
+        return if (keepGoing) 1 else 0
     }
 }

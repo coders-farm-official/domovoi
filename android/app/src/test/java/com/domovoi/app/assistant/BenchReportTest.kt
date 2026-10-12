@@ -64,7 +64,12 @@ class BenchReportTest {
             audioIn = listOf(AudioInResult("spoken by the phone", "Answer the question in this audio.", 1_400, 3_000, "Everest.", stats)),
             heat = HeatResult(10, listOf(HeatSample(30.0, 11.0, 31.0, 0, true), HeatSample(600.0, 8.0, 40.0, 2, false)), false),
             memory = listOf(MemoryReading("model loaded (CPU)", 1_900_000, 1_700_000, 5_000_000_000)),
-            traffic = listOf(TrafficReading("before", 1_000, 500, true), TrafficReading("text test", 1_000, 500, false)),
+            traffic = listOf(
+                TrafficReading("before the text test", 1_000, 500, false),
+                TrafficReading("text test", 1_000, 500, false),
+                TrafficReading("before the voice test", 9_000, 4_500, true),   // idle time between tests: not shown
+                TrafficReading("voice test", 9_300, 4_700, true),
+            ),
             notes = listOf("voice test stopped"),
         )
         val text = renderBenchReport(device, results, "2026-10-12 09:30")
@@ -83,9 +88,11 @@ class BenchReportTest {
             "worst thermal status moderate",
             "1 of 2 replies ran with no network",
             "model loaded (CPU): peak 1855 MB",
-            "text test: 0 B in, 0 B out (no network)",
+            "during the text test: 0 B in, 0 B out (no network)",
+            "during the voice test: 300 B in, 200 B out",
             "voice test stopped",
         ).forEach { assertTrue("missing: $it\n---\n$text", text.contains(it)) }
+        assertFalse(text.contains("8000 B in"))
     }
 
     @Test fun anEmptyRunRendersJustTheHeader() {

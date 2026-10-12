@@ -262,12 +262,19 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
         }
     }
 
-    if (results.traffic.size >= 2) {
+    // Only the traffic DURING a test: each "before …" reading paired with
+    // the one that ends that test, not the idle time between tests.
+    val during = results.traffic.zipWithNext().filter { (a, _) -> a.label.startsWith("before ") }
+    if (during.isNotEmpty()) {
         appendLine()
         appendLine("NETWORK (this app's traffic, all of it, including a connected server)")
-        results.traffic.zipWithNext().forEach { (a, b) ->
-            appendLine("  ${b.label}: ${b.rxBytes - a.rxBytes} B in, ${b.txBytes - a.txBytes} B out" +
-                if (!b.online) " (no network)" else "")
+        during.forEach { (a, b) ->
+            appendLine("  during the ${b.label}: ${b.rxBytes - a.rxBytes} B in, ${b.txBytes - a.txBytes} B out" +
+                when {
+                    !a.online && !b.online -> " (no network)"
+                    !b.online -> " (network gone by the end)"
+                    else -> ""
+                })
         }
     }
 
