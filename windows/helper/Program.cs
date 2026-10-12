@@ -1,0 +1,171 @@
+// DomovoiSetupHelper.exe: the work Domovoi Setup and its uninstaller do on
+// Windows, one verb per call, so Setup's Pascal script stays a UI. It is
+// installed in C:\Program Files\Domovoi (admin-owned) and every verb that
+// changes the PC runs from there, elevated, as Setup's child. Only the
+// read-only preflight also runs from Setup's temporary folder, before
+// anything is installed, the way Setup's own engine does.
+//
+// Output: key=value lines on stdout (Setup reads them); "error=" and exit
+// code 1 on failure. install.log gets a line per change. The account's
+// password and the setup code never reach either (the setup-code verb
+// prints the code to stdout only, for Setup's finish page).
+//
+//   preflight [--ports-only] [--skip-internet]     read-only
+//   vmp-status | wsl-status | host-status | plan    read-only
+//   host-stop
+//   prepare --internet A --media-root DIR --commit SHA
+//   account --exe PATH [--no-deny-logon]
+//   media
+//   firewall [--subnet CIDR]
+//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--lan-ip IP|auto|none]
+//   host-start | host-retry | setup-code
+//   uninstall [--dry-run]                           exit 3: done, with leftovers
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Security.Principal;
+using System.Text;
+
+namespace Domovoi.Windows.Helper
+{
+    sealed class Output
+    {
+        readonly Log log;
+
+        public Output(Log log) { this.log = log; }
+
+        public void Kv(string key, string value)
+        {
+            string v = (value ?? "").Replace("\r", " ").Replace("\n", " ");
+            Console.Out.WriteLine(key + "=" + v);
+            Console.Out.Flush();
+        }
+
+        // A change made, or a step taken: stdout and the log.
+        public void Say(string message)
+        {
+            Kv("info", message);
+            if (log != null) log.Write(message);
+        }
+
+        public void LogOnly(string message)
+        {
+            if (log != null) log.Write(message);
+        }
+    }
+
+    static class Program
+    {
+        static readonly HashSet<string> ReadOnly = new HashSet<string> { "preflight", "vmp-status", "wsl-status", "host-status", "plan", "help" };
+
+        static int Main(string[] argv)
+        {
+            Console.OutputEncoding = new UTF8Encoding(false);
+            if (argv.Length == 0 || argv[0] == "help" || argv[0] == "--help")
+            {
+                Console.Out.WriteLine("DomovoiSetupHelper: run by Domovoi Setup and its uninstaller; see docs/WINDOWS_HOST.md.");
+                return argv.Length == 0 ? 2 : 0;
+            }
+            string verb = argv[0];
+            Args a;
+            try { a = new Args(argv); }
+            catch (ArgumentException e) { Console.Out.WriteLine("error=" + e.Message); return 2; }
+
+            bool dry = a.Flag("--dry-run");
+            bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
+            if (!ReadOnly.Contains(verb) && !(verb == "uninstall" && dry) && !elevated)
+            {
+                Console.Out.WriteLine("error=this needs an elevated (administrator) prompt");
+                return 2;
+            }
+            Log log = null;
+            if (verb == "uninstall" && !dry)
+            {
+                // install.log goes with C:\ProgramData\Domovoi; the uninstall's
+                // own record stays in the caller's temp folder.
+                string tmp = Path.Combine(Path.GetTempPath(), "domovoi-uninstall-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log");
+                log = new Log(tmp, 10L * 1024 * 1024);
+                Console.Out.WriteLine("log=" + tmp);
+            }
+            else if (!ReadOnly.Contains(verb) && Directory.Exists(Paths.Logs))
+            {
+                log = new Log(Paths.InstallLog, 10L * 1024 * 1024);
+            }
+            var o = new Output(log);
+            try
+            {
+                if (log != null) log.Write("helper " + verb + " (" + WindowsIdentity.GetCurrent().Name + ")");
+                switch (verb)
+                {
+                    case "preflight": Preflight.Run(o, a.Flag("--ports-only"), a.Flag("--skip-internet")); return 0;
+                    case "vmp-status": o.Kv("vmp", Preflight.VmpEnabled() ? "enabled" : "disabled"); return 0;
+                    case "wsl-status":
+                        {
+                            string v = Preflight.WslVersion();
+                            o.Kv("wsl_version", v ?? "");
+                            o.Kv("wsl", Preflight.WslStatus(v));
+                            return 0;
+                        }
+                    case "host-stop": HostService.Stop(180, o.Say); return 0;
+                    case "prepare": Steps.Prepare(o, a.Req("--internet"), a.Req("--media-root"), a.Req("--commit")); return 0;
+                    case "account": Steps.AccountAndService(o, a.Req("--exe"), !a.Flag("--no-deny-logon")); return 0;
+                    case "media": Steps.Media(o); return 0;
+                    case "firewall": Steps.FirewallRules(o, a.Opt("--subnet")); return 0;
+                    case "job":
+                        Steps.WriteJob(o, a.Req("--image"), a.Req("--image-sha256"), a.Req("--provision"), a.Req("--provision-sha256"),
+                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--lan-ip") ?? "auto");
+                        return 0;
+                    case "host-start": Steps.HostStart(o); return 0;
+                    case "host-status": Steps.HostStatusOut(o); return 0;
+                    case "host-retry": Steps.HostRetry(o); return 0;
+                    case "setup-code": return Steps.ReadSetupCode(o);
+                    case "plan": Steps.Plan(o); return 0;
+                    case "uninstall": return Uninstall.Run(o, dry);
+                    default:
+                        o.Kv("error", "unknown verb: " + verb);
+                        return 2;
+                }
+            }
+            catch (Exception e)
+            {
+                o.Kv("error", e.Message);
+                if (log != null) log.Write("ERROR " + verb + ": " + e);
+                return 1;
+            }
+        }
+    }
+
+    sealed class Args
+    {
+        readonly Dictionary<string, string> values = new Dictionary<string, string>();
+        readonly HashSet<string> flags = new HashSet<string>();
+
+        public Args(string[] argv)
+        {
+            for (int i = 1; i < argv.Length; i++)
+            {
+                string k = argv[i];
+                if (!k.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("unexpected argument: " + k);
+                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--no-deny-logon") { flags.Add(k); continue; }
+                if (i + 1 >= argv.Length) throw new ArgumentException(k + " needs a value");
+                values[k] = argv[++i];
+            }
+        }
+
+        public bool Flag(string k) { return flags.Contains(k); }
+
+        public string Opt(string k)
+        {
+            string v;
+            return values.TryGetValue(k, out v) ? v : null;
+        }
+
+        public string Req(string k)
+        {
+            string v = Opt(k);
+            if (string.IsNullOrEmpty(v)) throw new ArgumentException(k + " is required");
+            return v;
+        }
+    }
+}
