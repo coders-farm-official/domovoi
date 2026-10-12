@@ -186,6 +186,78 @@ class ModelDownloaderTest {
         assertFalse(store.dir(m).exists())
     }
 
+    @Test fun aConnectionLostMidFileKeepsThePartAndTheNextRunResumes() = runBlocking {
+        // First answer: headers, then the socket drops part-way through the body.
+        server.enqueue(
+            MockResponse().setBody(Buffer().write(bytesA))
+                .throttleBody(64 * 1024, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+        )
+        val m = model(file("a.bin", bytesA))
+        val store = ModelStore(dir)
+        val first = runCatching { ModelDownloader(http).install(m, store) }.exceptionOrNull()
+        assertTrue("expected the cut connection to fail: $first", first is java.io.IOException)
+        val part = ModelDownloader.partOf(store.fileFor(m, m.files[0]))
+        val kept = part.length()
+        assertTrue("kept $kept bytes", kept in 1 until bytesA.size)
+        server.takeRequest()
+
+        serve(mapOf("a.bin" to bytesA))
+        ModelDownloader(http).install(m, store)
+        assertEquals("bytes=$kept-", server.takeRequest().getHeader("Range"))
+        assertArrayEquals(bytesA, store.fileFor(m, m.files[0]).readBytes())
+        assertTrue(store.isInstalled(m))
+    }
+
+    /** The app's client follows redirects itself (net/RedirectPolicy.kt):
+     *  a CDN hop is followed... */
+    private val appStyle = OkHttpClient.Builder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .addInterceptor(com.domovoi.app.net.RedirectPolicy.interceptor)
+        .build()
+
+    @Test fun aRedirectIsFollowed() = runBlocking {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/a.bin" -> MockResponse().setResponseCode(302).setHeader("Location", "/cdn/blob-123")
+                "/cdn/blob-123" -> MockResponse().setBody(Buffer().write(bytesA))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        val m = model(file("a.bin", bytesA))
+        val store = ModelStore(dir)
+        ModelDownloader(appStyle).install(m, store)
+        assertTrue(store.isInstalled(m))
+        assertEquals(listOf("/a.bin", "/cdn/blob-123"), List(2) { server.takeRequest().path })
+    }
+
+    /** ...but never from https down to plain http: the 302 comes back
+     *  unfollowed and the download fails without touching the http host. */
+    @Test fun anHttpsToHttpRedirectIsRefused() = runBlocking {
+        serve(mapOf("a.bin" to bytesA))
+        val downgrade = server.url("/a.bin").toString()
+        val client = appStyle.newBuilder()
+            .addInterceptor { chain ->
+                val url = chain.request().url
+                if (url.isHttps) {
+                    okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                        .code(302).message("Found").header("Location", downgrade)
+                        .body(okhttp3.ResponseBody.Companion.run { "".toByteArray().toResponseBody(null) })
+                        .build()
+                } else {
+                    chain.proceed(chain.request())
+                }
+            }
+            .build()
+        val m = model(ModelFile("a.bin", "https://models.example/a.bin", bytesA.size.toLong(), sha(bytesA)))
+        val store = ModelStore(dir)
+        val thrown = runCatching { ModelDownloader(client).install(m, store) }.exceptionOrNull()
+        assertTrue("expected a refusal, got $thrown", thrown is java.io.IOException && thrown.message!!.contains("302"))
+        assertEquals(0, server.requestCount)
+        assertFalse(store.isInstalled(m))
+    }
+
     @Test fun contentRangeStartIsParsed() {
         assertEquals(100L, ModelDownloader.contentRangeStart("bytes 100-999/1000"))
         assertEquals(0L, ModelDownloader.contentRangeStart("bytes 0-9/10"))

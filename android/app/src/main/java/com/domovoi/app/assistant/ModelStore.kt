@@ -1,5 +1,6 @@
 package com.domovoi.app.assistant
 
+import android.content.Context
 import java.io.File
 
 /**
@@ -43,8 +44,18 @@ class ModelStore(val root: File) {
     /** Free space where the models go. */
     fun usableBytes(): Long = root.apply { mkdirs() }.usableSpace
 
+    /** Removes the `.part` files a paused or cancelled download left. */
+    fun deletePartials(model: CatalogModel) {
+        model.files.forEach { File(fileFor(model, it).path + ".part").delete() }
+    }
+
     private fun marker(model: CatalogModel) = File(dir(model), ".installed")
 
     private fun fingerprint(model: CatalogModel): String =
         model.files.joinToString("\n") { "${it.path} ${it.size} ${it.sha256}" }
+
+    companion object {
+        /** The app's store: `filesDir/models`. */
+        fun forApp(context: Context): ModelStore = ModelStore(File(context.filesDir, "models"))
+    }
 }

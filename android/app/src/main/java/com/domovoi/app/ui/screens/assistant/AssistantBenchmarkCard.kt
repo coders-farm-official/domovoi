@@ -2,6 +2,7 @@ package com.domovoi.app.ui.screens.assistant
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -24,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -81,6 +83,25 @@ fun AssistantBenchmarkCard() {
         afterMicGrant = null
         if (granted) then?.invoke() else toast("microphone permission denied")
     }
+    // The download runs as a foreground job with a progress notification;
+    // Android 13+ shows it only with this permission. Asked once, on the
+    // first download; the download runs either way.
+    var afterNotifyAsk by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val askNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        val then = afterNotifyAsk
+        afterNotifyAsk = null
+        then?.invoke()
+    }
+    fun withNotifications(action: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            afterNotifyAsk = action
+            askNotify.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            action()
+        }
+    }
     fun withMic(action: () -> Unit) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             action()
@@ -126,7 +147,7 @@ fun AssistantBenchmarkCard() {
                     model = m,
                     state = ui.models[m.id],
                     busy = ui.downloading || !idle,
-                    onDownload = { bench.download(listOf(m)) },
+                    onDownload = { withNotifications { bench.download(listOf(m)) } },
                     onDelete = { confirmDelete = m },
                 )
             }
@@ -135,15 +156,25 @@ fun AssistantBenchmarkCard() {
         val missing = ModelCatalog.all.filter { ui.models[it.id]?.status != ModelStatus.READY }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (ui.downloading) {
-                OutlinedButton(onClick = { bench.cancelDownload() }) { Text("pause download") }
+                OutlinedButton(onClick = { bench.pauseDownload() }) { Text("pause download") }
+                TextButton(onClick = { bench.cancelDownload() }) { Text("cancel", color = Domovoi.colors.fgMuted) }
             } else if (missing.isNotEmpty()) {
-                Button(onClick = { bench.download(missing) }, enabled = idle) {
+                Button(onClick = { withNotifications { bench.download(missing) } }, enabled = idle) {
                     Text("download all (${fmtBytes(missing.sumOf { it.totalBytes - (ui.models[it.id]?.bytesDone ?: 0) })})")
                 }
             }
         }
+        ui.downloadNote?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall,
+                color = if (ui.downloading) Domovoi.colors.fgMuted else Domovoi.colors.err,
+                modifier = Modifier.padding(top = 4.dp))
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+            Switch(checked = ui.allowMobileData, onCheckedChange = { bench.setAllowMobileData(it) })
+            Text("  allow mobile data", style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted)
+        }
         ui.freeBytes?.let {
-            Text("free space ${fmtBytes(it)} · Wi-Fi recommended", style = MaterialTheme.typography.labelSmall,
+            Text("free space ${fmtBytes(it)} · the download carries on if you leave the app", style = MaterialTheme.typography.labelSmall,
                 color = Domovoi.colors.fgFaint, modifier = Modifier.padding(top = 4.dp))
         }
 

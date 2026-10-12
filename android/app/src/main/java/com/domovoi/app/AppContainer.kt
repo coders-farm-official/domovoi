@@ -82,12 +82,16 @@ class AppContainer(context: Context) {
      *  model download the user starts, on a copy of the app's client WITHOUT
      *  the household token (the models come from public hosts): the same
      *  redirect and cleartext rules, no device token. */
-    val assistantBench: AssistantBench by lazy {
+    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader) }
+
+    /** The model download's client, used by the download job
+     *  (assistant/ModelDownloadWork.kt). */
+    val modelDownloader: ModelDownloader by lazy {
         val modelHttp = api.http.newBuilder()
             .apply { interceptors().removeAll { it is DeviceAuthInterceptor } }
             .pingInterval(0, TimeUnit.SECONDS)
             .build()
-        AssistantBench(context, ModelDownloader(modelHttp))
+        ModelDownloader(modelHttp)
     }
 }
 

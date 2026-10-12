@@ -10,9 +10,12 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import androidx.work.WorkInfo
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -25,7 +28,12 @@ data class ModelState(val status: ModelStatus, val bytesDone: Long = 0, val erro
 /** Everything the benchmark card shows. */
 data class BenchUi(
     val models: Map<String, ModelState> = emptyMap(),
+    /** The download job is queued or running. */
     val downloading: Boolean = false,
+    /** Why it is waiting, or why it failed. */
+    val downloadNote: String? = null,
+    /** Off: Wi-Fi only (the default). */
+    val allowMobileData: Boolean = false,
     val freeBytes: Long? = null,
     val backend: LlmBackend = LlmBackend.CPU,
     val sttModelId: String = ModelCatalog.moonshineTinyEn.id,
@@ -47,7 +55,7 @@ data class BenchUi(
  */
 class AssistantBench(context: Context, private val downloader: ModelDownloader) {
     private val app = context.applicationContext
-    val store = ModelStore(File(app.filesDir, "models"))
+    val store = ModelStore.forApp(app)
     private val probe = DeviceProbe(app)
     private val mic = MicCapture()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -59,8 +67,12 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages
 
-    private var downloadJob: Job? = null
     private var runJob: Job? = null
+    /** What the last download asked for (to restart it under a new network rule). */
+    private var requested: List<CatalogModel> = emptyList()
+    /** The unfinished download job this process has seen, to announce its end once. */
+    private var watchedWork: java.util.UUID? = null
+    private var progressModel: String? = null
     @Volatile private var stopRequested = false
     @Volatile private var keepResultsOnStop = false
 
@@ -73,6 +85,10 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
     private var tts: PiperSpeechOut? = null
 
     val device: DeviceFacts by lazy { probe.facts() }
+
+    init {
+        scope.launch { ModelDownloads.watch(app).collect { onWork(it) } }
+    }
 
     // ── Models ──────────────────────────────────────────────────────────
 
@@ -95,53 +111,50 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
         _state.update { it.copy(models = models, freeBytes = runCatching { store.usableBytes() }.getOrNull()) }
     }
 
-    /** Downloads [models] one after another (the user started it). */
+    /** Starts the download job for [models] (the user started it). It runs
+     *  in WorkManager, so it carries on when the app leaves the screen. */
     fun download(models: List<CatalogModel>) {
-        if (downloadJob?.isActive == true) return
-        downloadJob = scope.launch(Dispatchers.IO) {
-            _state.update { it.copy(downloading = true) }
-            val failed = mutableMapOf<String, String>()
-            try {
-                for (m in models) {
-                    if (store.isInstalled(m)) continue
-                    refreshModels(downloadingId = m.id, failed = failed)
-                    try {
-                        // Four progress updates a second, not one per 256 KB
-                        // chunk: each one recomposes the card.
-                        var shownAt = 0L
-                        downloader.install(m, store) { done, total ->
-                            val now = System.nanoTime()
-                            if (now - shownAt < PROGRESS_EVERY_NS && done < total) return@install
-                            shownAt = now
-                            _state.update { s ->
-                                s.copy(models = s.models + (m.id to ModelState(ModelStatus.DOWNLOADING, done)))
-                            }
-                        }
-                        _messages.tryEmit("${m.name}: downloaded and verified")
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        failed[m.id] = e.message ?: e.javaClass.simpleName
-                        _messages.tryEmit("${m.name}: download failed: ${e.message}")
-                    }
-                }
-            } finally {
-                withContext(kotlinx.coroutines.NonCancellable) {
-                    _state.update { it.copy(downloading = false) }
-                    refreshModels(failed = failed)
-                }
-            }
+        val wanted = models.filter { _state.value.models[it.id]?.status != ModelStatus.READY }
+        if (wanted.isEmpty()) return
+        requested = wanted
+        ModelDownloads.start(app, wanted, _state.value.allowMobileData)
+        _state.update { it.copy(downloading = true, downloadNote = "starting") }
+        _messages.tryEmit("download started; it carries on if you leave the app")
+    }
+
+    /** Wi-Fi only (the default) or any network; a running job restarts
+     *  under the new rule and resumes where it was. */
+    fun setAllowMobileData(allow: Boolean) {
+        _state.update { it.copy(allowMobileData = allow) }
+        if (_state.value.downloading) {
+            val again = requested.ifEmpty { ModelCatalog.all }
+                .filter { _state.value.models[it.id]?.status != ModelStatus.READY }
+            if (again.isNotEmpty()) ModelDownloads.start(app, again, allow)
         }
     }
 
-    fun cancelDownload() {
-        downloadJob?.cancel()
+    /** Stops the job; the partial files stay, so download resumes them. */
+    fun pauseDownload() {
+        ModelDownloads.pause(app)
         _messages.tryEmit("download paused; it resumes where it stopped")
+    }
+
+    /** Stops the job and deletes what it had not finished. */
+    fun cancelDownload() {
+        scope.launch(Dispatchers.IO) {
+            ModelDownloads.pause(app)
+            withTimeoutOrNull(10_000) {
+                ModelDownloads.watch(app).first { it == null || it.state.isFinished }
+            }
+            ModelCatalog.all.filterNot { store.isInstalled(it) }.forEach { store.deletePartials(it) }
+            refreshModels()
+            _messages.tryEmit("download cancelled")
+        }
     }
 
     fun delete(model: CatalogModel) {
         scope.launch(Dispatchers.IO) {
-            if (_state.value.running != null || downloadJob?.isActive == true) {
+            if (_state.value.running != null || _state.value.downloading) {
                 _messages.tryEmit("stop the run or download first")
                 return@launch
             }
@@ -149,6 +162,45 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
             val ok = store.delete(model)
             _messages.tryEmit(if (ok) "${model.name} deleted" else "could not delete ${model.name}")
             refreshModels()
+        }
+    }
+
+    /** The download job's state, as WorkManager reports it. */
+    private fun onWork(info: WorkInfo?) {
+        val status = describeDownload(
+            state = info?.state,
+            attempts = info?.runAttemptCount ?: 0,
+            mobileData = info?.tags?.contains(ModelDownloads.TAG_MOBILE_DATA) == true,
+            error = info?.let(ModelDownloads::errorOf),
+        )
+        val progress = info?.takeIf { it.state == WorkInfo.State.RUNNING }?.progress?.let(DownloadProgress::from)
+        _state.update { s ->
+            val models = if (progress?.modelId != null) {
+                s.models + (progress.modelId to ModelState(ModelStatus.DOWNLOADING, progress.modelDone))
+            } else {
+                s.models
+            }
+            s.copy(downloading = status.active, downloadNote = status.note, models = models)
+        }
+        // A model finished inside a multi-model job: show it ready.
+        if (progress?.modelId != null && progress.modelId != progressModel) {
+            progressModel = progress.modelId
+            scope.launch(Dispatchers.IO) { refreshModels(downloadingId = progress.modelId) }
+        }
+        if (info == null) return
+        if (!info.state.isFinished) {
+            watchedWork = info.id
+            return
+        }
+        progressModel = null
+        scope.launch(Dispatchers.IO) { refreshModels() }
+        if (info.id == watchedWork) {
+            watchedWork = null
+            when (info.state) {
+                WorkInfo.State.SUCCEEDED -> _messages.tryEmit("models downloaded and verified")
+                WorkInfo.State.FAILED -> _messages.tryEmit("download failed: ${status.note}")
+                else -> {}
+            }
         }
     }
 
@@ -443,7 +495,6 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
 
     companion object {
         const val HEAT_MINUTES = 10
-        private const val PROGRESS_EVERY_NS = 250_000_000L
 
         val TEXT_PROMPTS = listOf(
             "What's a good way to keep bread fresh?",
