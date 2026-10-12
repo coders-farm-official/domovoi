@@ -226,9 +226,14 @@ Git Bash; in PowerShell, `bash` is WSL's launcher, so call Git Bash by its
 path (`& "C:\Program Files\Git\bin\bash.exe" scripts/dev/run-linux-harness.sh all`).
 
 In the container the harnesses take one to two minutes each; under Git Bash
-the same cases take half an hour to over an hour, because every case forks
-thousands of small processes and process creation is what MSYS is slowest
-at. Git Bash still runs them directly, with the same options:
+the same cases take from half an hour to two hours on a busy Windows box
+(2026-10-12, same commit: apply-update 72 s against 2 h 06 min,
+provision 128 s against 2 h 05 min, install-update-unit 19 s against
+41 min), because every case forks thousands of small processes and process
+creation is what MSYS is slowest at. Under that load Git Bash also fails
+cases whose steps have time bounds, and skips the ones that need symlinks;
+the container runs them all. Git Bash still runs them directly, with the
+same options:
 
 ```bash
 bash scripts/linux/tests/test-apply-update.sh --case noop_restart --case 'searxng_*'
