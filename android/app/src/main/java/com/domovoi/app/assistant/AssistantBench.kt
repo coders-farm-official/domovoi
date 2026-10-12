@@ -106,7 +106,13 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
                     if (store.isInstalled(m)) continue
                     refreshModels(downloadingId = m.id, failed = failed)
                     try {
-                        downloader.install(m, store) { done, _ ->
+                        // Four progress updates a second, not one per 256 KB
+                        // chunk: each one recomposes the card.
+                        var shownAt = 0L
+                        downloader.install(m, store) { done, total ->
+                            val now = System.nanoTime()
+                            if (now - shownAt < PROGRESS_EVERY_NS && done < total) return@install
+                            shownAt = now
                             _state.update { s ->
                                 s.copy(models = s.models + (m.id to ModelState(ModelStatus.DOWNLOADING, done)))
                             }
@@ -433,6 +439,7 @@ class AssistantBench(context: Context, private val downloader: ModelDownloader) 
 
     companion object {
         const val HEAT_MINUTES = 10
+        private const val PROGRESS_EVERY_NS = 250_000_000L
 
         val TEXT_PROMPTS = listOf(
             "What's a good way to keep bread fresh?",
