@@ -40,12 +40,16 @@
 #     (1.3.0), or not at all when piper-missing is set, and the version
 #     query (-c ...version_info...) with py-version (3.14).
 #
-# Usage: bash scripts/linux/tests/test-install-update-unit.sh
+# Usage: bash scripts/linux/tests/test-install-update-unit.sh [--case NAME|GLOB]... [--list]
+# (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
+# runs this in a pinned Linux container, much faster than Git Bash.)
 # Exit status is non-zero if any case failed.
 
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$HERE/case-filter.sh"
+harness_parse_args "$@"
 SCRIPT=$(cd "$HERE/.." && pwd)/install-update-unit.sh
 WORK=$(mktemp -d)
 KEEP_WORK=${KEEP_WORK:-0}
@@ -1310,12 +1314,12 @@ CASES=(
   case_upstream_pin_that_matches_is_reported
 )
 
-# ONLY=<regex> runs the cases whose names match it (a quick look while
-# working on one); the suite runs them all.
-for c in "${CASES[@]}"; do
-  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+# --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
+# runs them all.
+harness_select
+for c in ${SELECTED_CASES[@]+"${SELECTED_CASES[@]}"}; do
   "$c"
 done
 
-echo "install-update-unit harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
+echo "install-update-unit harness: $PASSED passed, $FAILED failed, $SKIPPED skipped$(harness_selection_note)"
 [ "$FAILED" -eq 0 ]

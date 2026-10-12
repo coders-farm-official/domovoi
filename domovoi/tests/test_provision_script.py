@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from domovoi.tests.test_apply_update_script import BASH, requires_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +50,7 @@ def test_scripts_parse():
 
 
 @requires_bash
+@pytest.mark.bash_harness
 def test_provision_harness():
     # In the suite like test_apply_update_harness, the same way: Git Bash,
     # HARNESS_PYTHON, and a bound that is for a hang, not a measure of

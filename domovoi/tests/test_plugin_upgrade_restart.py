@@ -41,7 +41,9 @@ from domovoi.plugins_runtime.loader import LOADER, code_imported
 from domovoi.plugins_runtime.workers import WORKERS
 from domovoi.tests.conftest import requires_db
 
-pytestmark = [pytest.mark.asyncio, requires_db]
+# Postgres roles are server-wide, not per database: under `pytest -n` the
+# modules that create or drop plugin roles share one worker (conftest.py).
+pytestmark = [pytest.mark.asyncio, requires_db, pytest.mark.xdist_group("pg-roles")]
 
 FIXTURE = Path(__file__).parent / "fixtures" / "compliments"
 SLUG = "compliments"

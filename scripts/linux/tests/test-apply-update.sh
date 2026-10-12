@@ -39,13 +39,17 @@
 #     reports searxng-running; a systemd-run shim (write_systemd_run) logs
 #     the detached start.
 #
-# Usage: bash scripts/linux/tests/test-apply-update.sh
+# Usage: bash scripts/linux/tests/test-apply-update.sh [--case NAME|GLOB]... [--list]
+# (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
+# runs this in a pinned Linux container, much faster than Git Bash.)
 # Exit status is non-zero if any case failed. Set HARNESS_PYTHON to a Python
 # interpreter to also check that every result file is valid JSON.
 
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$HERE/case-filter.sh"
+harness_parse_args "$@"
 SCRIPT=$HERE/../apply-update.sh
 WORK=$(mktemp -d)
 KEEP_WORK=${KEEP_WORK:-0}
@@ -2683,12 +2687,12 @@ CASES=(
   case_upstream_pin_that_matches_goes_on
 )
 
-# ONLY=<regex> runs the cases whose names match it (a quick look while
-# working on one); the suite runs them all.
-for c in "${CASES[@]}"; do
-  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+# --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
+# runs them all.
+harness_select
+for c in ${SELECTED_CASES[@]+"${SELECTED_CASES[@]}"}; do
   "$c"
 done
 
-echo "apply-update harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
+echo "apply-update harness: $PASSED passed, $FAILED failed, $SKIPPED skipped$(harness_selection_note)"
 [ "$FAILED" -eq 0 ]

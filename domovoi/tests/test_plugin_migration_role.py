@@ -41,6 +41,10 @@ SLUG = "migrole"
 SCHEMA = f"plugin_{SLUG}"
 ROLE = f"plugin_{SLUG}"
 
+# Postgres roles are server-wide, not per database: under `pytest -n` the
+# modules that create or drop plugin roles share one worker (conftest.py).
+pytestmark = pytest.mark.xdist_group("pg-roles")
+
 
 # ─── the lint (DB-free) ───────────────────────────────────────────────────
 
