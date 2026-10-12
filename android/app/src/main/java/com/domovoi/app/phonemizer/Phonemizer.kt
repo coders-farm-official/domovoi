@@ -35,6 +35,9 @@ class Phonemizer(
 
     val idMap: Map<String, IntArray> get() = data.idMap
 
+    /** The shipped "say it like" list (pronunciations_default.txt). */
+    val defaultPronunciations: List<Pair<String, String>> get() = data.defaultPronunciations
+
     // ---------------- the owner's "say it like" list ----------------
 
     /** Replaces the list ((word, say it like) pairs; a later pair for the

@@ -18,6 +18,7 @@ import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.voice.PhoneVoice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -87,7 +88,13 @@ class AppContainer(context: Context) {
      *  model download the user starts, on a copy of the app's client WITHOUT
      *  the household token (the models come from public hosts): the same
      *  redirect and cleartext rules, no device token. */
-    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader) }
+    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader, phoneVoice) }
+
+    /** The phone's own voice (Settings → Voice): Domovoi's Piper voice
+     *  through the Kotlin phonemizer once downloaded, the server's "say it
+     *  like" list from `GET /api/voice` (cached per server), Android's
+     *  TextToSpeech until then. Built on first use. */
+    val phoneVoice: PhoneVoice by lazy { PhoneVoice(context, api, prefs) }
 
     /** The model download's client, used by the download job
      *  (assistant/ModelDownloadWork.kt). */

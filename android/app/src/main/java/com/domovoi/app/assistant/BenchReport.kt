@@ -177,6 +177,9 @@ fun thermalName(status: Int?): String = when (status) {
     else -> "status $status"
 }
 
+/** How [PiperSpeechOut.describe] starts, so the report can tell the voices apart. */
+const val DOMOVOI_VOICE = "Domovoi voice"
+
 private fun ms(v: Long?): String = v?.let { "$it ms" } ?: "—"
 private fun f1(v: Double?): String = v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
 private fun gb(bytes: Long?): String = bytes?.let { String.format(Locale.US, "%.1f GB", it / 1e9) } ?: "—"
@@ -195,8 +198,13 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
     appendLine("Android ${device.android} (API ${device.api}), ${device.abi}, RAM ${gb(device.totalRamBytes)}" +
         if (device.lowRamDevice) ", low-RAM device" else "")
     appendLine("app ${device.app}")
+    val speaking = if (results.voice?.startsWith(DOMOVOI_VOICE) == true) {
+        "the Domovoi voice (Piper, on ONNX Runtime 1.28.0)"
+    } else {
+        "Android TextToSpeech"
+    }
     appendLine("models: ${ModelCatalog.gemma4E2b.name} (LiteRT-LM 0.18.0); listening: sherpa-onnx 1.13.8 " +
-        "built without text to speech, on ONNX Runtime 1.28.0; speaking: Android TextToSpeech")
+        "built without text to speech, on ONNX Runtime 1.28.0; speaking: $speaking")
     results.voice?.let { appendLine("voice: $it") }
 
     if (results.loads.isNotEmpty()) {
