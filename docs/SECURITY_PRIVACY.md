@@ -1974,8 +1974,18 @@ only until adoption: it applies three network settings
 (`satellite/net_settings.py`) — it deletes the `domovoi-setup` hotspot
 profile (by that name only), turns Wi-Fi power saving off on the house
 profile and the radio, and sets the host name to `domovoi-<room>` (with
-`/etc/hosts`' `127.0.1.1` line, restarting avahi when it runs), then
-records what it changed in `~/.domovoi/net-settings.json`. This is how a
+`/etc/hosts`' `127.0.1.1` line, restarting avahi when it runs; a name it
+did not set itself is left alone), keeps root's server-address record
+(`/etc/domovoi/server.url`) with a server that moved — only after the new
+address, read from the satellite user's `config.toml`, signs a fresh
+challenge for itself with the root-owned identity pin, checked by root —
+then records what it changed in `/var/lib/domovoi/net-settings.json`,
+root's own directory. Root writes nothing into the satellite user's home
+for this, and the files it does hand that user at adoption are chowned
+without following a link (a planted link is refused): a reviewer showed
+the first version overwriting and chowning a root helper through one. The
+clock helper on a card prepared since then follows a moved server the same
+way, checking the signature itself before it updates its record. This is how a
 satellite prepared before those settings gets them: the satellite upgrade
 replaces the code this root service runs, and the next boot applies it.
 The owner accepted that on 2026-10-12, knowing it widens what the

@@ -15,7 +15,9 @@ server. What changes:
   as a dead network, and drop and rejoin the house Wi-Fi (a fresh DHCP
   exchange every time, and again every 5 minutes while the server stayed
   down). It now touches the Wi-Fi only when neither the server's machine
-  nor the router answers.
+  nor the router answers — plus, for a lossy link, once (at most once an
+  hour) after the server has been silent for 10 minutes while the router
+  answers.
 * **A satellite never falls back onto its own setup hotspot.** Wi-Fi
   recovery brings back the house network's profile by name; the setup
   hotspot's saved profile (`domovoi-setup`) is deleted once setup is over.
@@ -60,8 +62,9 @@ server. What changes:
 3. **Reboot each satellite once** (unplug it for a few seconds and plug it
    back in). The upgrade restarts only the satellite program; the three
    settings that need root (hotspot profile gone, power saving off, host
-   name) are applied at boot. Until it has rebooted, its Health card says
-   **reboot needed**. What the reboot changed is in the room's retained log
+   name) are applied at boot. Until it has rebooted (or while that step
+   reports an error), its Health card and the Android app say **reboot
+   needed**, with the reason. What the reboot changed is in the room's retained log
    (`network settings (applied as root at boot): changed: …`).
 
 A newly prepared card has all of this from its first boot; nothing to do.
