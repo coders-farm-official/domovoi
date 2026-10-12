@@ -28,7 +28,10 @@ import com.domovoi.app.net.Capabilities
  * top-left brand (the "domovoi" crumb, the rail glyph, the drawer's brand
  * row) leads back to it. The web sidebar order is preserved; Settings
  * comes from Home's "everything" grid (and the rail/drawer), Manual from
- * the grid and Settings > About.
+ * the grid and Settings > About. Satellites is a Settings tab since
+ * 2026-10-11 (the web's Settings → Satellites): [Route.Satellites] stays as
+ * the way a link names it, and the shell opens Settings on that tab
+ * ([settingsTabFor]).
  *
  * The table stays a compiled-in enum, but *visibility* is data-driven
  * (design §8): routes backed by a plugin declare a required capability
@@ -44,6 +47,10 @@ enum class Route(val label: String, val icon: ImageVector) {
     Images("Images", Icons.Filled.Image),
     News("News", Icons.Filled.Newspaper),
     People("People", Icons.Filled.Groups),
+
+    /** Not a screen of its own any more: navigating here opens Settings on
+     *  its Satellites tab ([settingsTabFor]), as the web's old #satellites
+     *  opens Settings → Satellites. On no launcher ([LauncherlessRoutes]). */
     Satellites("Satellites", Icons.Filled.CellTower),
     Calendar("Calendar", Icons.Filled.CalendarMonth),
     Stations("Stations", Icons.Filled.Radio),
@@ -91,30 +98,42 @@ fun Route.visibleOn(caps: Capabilities, shared: Boolean): Boolean =
 
 /** Routes no launcher offers (not the bottom bar, the rail, the drawer or
  *  Home's grid): the Containers screen, which the banner and a container
- *  incident's notification open, as the web's banner opens #containers. */
-val LauncherlessRoutes: Set<Route> = setOf(Route.Containers)
+ *  incident's notification open, as the web's banner opens #containers;
+ *  and Satellites, a Settings tab, which Settings and Home's rooms open. */
+val LauncherlessRoutes: Set<Route> = setOf(Route.Containers, Route.Satellites)
+
+/** Routes that are a Settings tab, by the tab's key ([settingsTabFor]). */
+private val SettingsTabRoutes: Map<Route, String> = mapOf(Route.Satellites to "satellites")
+
+/** The Settings tab [route] stands for, or null for a screen of its own:
+ *  navigating to such a route opens Settings on that tab (the web's
+ *  SETTINGS_TAB_ROUTES / settingsTabRoute). */
+fun settingsTabFor(route: Route): String? = SettingsTabRoutes[route]
 
 /** Everything shown in the web sidebar "workspace" section, in order.
  *  Home is not in it: in the drawer, as on the web desktop, the brand row
  *  is the link home. Filter with [visibleOn] before rendering. */
 val WorkspaceRoutes = listOf(
     Route.Chat, Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos,
-    Route.Images, Route.News, Route.People, Route.Satellites, Route.Calendar,
+    Route.Images, Route.News, Route.People, Route.Calendar,
     Route.Stations, Route.Files,
 )
 
-/** Bottom navigation (compact width): the web phone strip's five tabs,
- *  left to right — home · music · satellites · calendar · chat. */
-val CompactRoutes = listOf(Route.Home, Route.Music, Route.Satellites, Route.Calendar, Route.Chat)
+/** Bottom navigation (compact width) until someone picks their own (the
+ *  phone bar, [PhoneBar]): the web phone strip's default, left to right —
+ *  home · music · videos · chat. */
+val DefaultPhoneBar = listOf(Route.Home, Route.Music, Route.Videos, Route.Chat)
 
 /**
- * Destinations on Home's "everything" grid, which is the compact width's
- * "more" menu — in the web grid's order (nav order: Stations is the radio
- * plugin's nav_order 50, after Files), then Settings and the manual, which
- * have no bottom-bar tab. While one of these is open, the home tab is the
- * one lit.
+ * Every destination Home's "everything" grid may hold — the compact
+ * width's "more" menu — in the web grid's order (nav order: Stations is
+ * the radio plugin's nav_order 50, after Files), then Settings and the
+ * manual, which are never on the bottom bar. The grid shows the ones that
+ * are not on this phone's bar ([everythingTiles][com.domovoi.app.ui.screens.home.everythingTiles]);
+ * while one of those is open, the home tab is the one lit.
  */
 val EverythingRoutes = listOf(
-    Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Images, Route.News,
-    Route.People, Route.Files, Route.Stations, Route.Settings, Route.Manual,
+    Route.Chat, Route.Music, Route.Podcasts, Route.Audiobooks, Route.Videos,
+    Route.Images, Route.News, Route.People, Route.Calendar, Route.Files,
+    Route.Stations, Route.Settings, Route.Manual,
 )

@@ -237,11 +237,25 @@ private fun ShellContent() {
     }
     var route by rememberSaveable { mutableStateOf(StartRoute) }
     val backStack = remember { mutableStateListOf<Route>() }
-    val navigate: (Route) -> Unit = { r ->
+    val go: (Route) -> Unit = { r ->
         if (r != route) {
             backStack.add(route)
             route = r
         }
+    }
+    // A Settings tab asked for by a link (Home's rooms → Satellites, the
+    // grid's "edit the bar"): Settings opens on it and takes it, as the
+    // web's openSettingsTab does through sessionStorage.
+    var settingsTab by rememberSaveable { mutableStateOf<String?>(null) }
+    val openSettingsTab: (String) -> Unit = { tab ->
+        settingsTab = tab
+        go(Route.Settings)
+    }
+    val settingsRequest = remember(settingsTab) { SettingsTabRequest(settingsTab) { settingsTab = null } }
+    // A route that is a Settings tab (Satellites) opens Settings on it.
+    val navigate: (Route) -> Unit = { r ->
+        val tab = settingsTabFor(r)
+        if (tab != null) openSettingsTab(tab) else go(r)
     }
     BackHandler(enabled = backStack.isNotEmpty()) {
         route = backStack.removeAt(backStack.lastIndex)
@@ -323,7 +337,12 @@ private fun ShellContent() {
         }
     }
 
-    CompositionLocalProvider(LocalCapabilities provides caps, LocalSharedScreen provides shared) {
+    CompositionLocalProvider(
+        LocalCapabilities provides caps,
+        LocalSharedScreen provides shared,
+        LocalOpenSettingsTab provides openSettingsTab,
+        LocalSettingsTabRequest provides settingsRequest,
+    ) {
         val counts = rememberSidebarCounts()
         val widthClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
 
@@ -619,15 +638,18 @@ private fun OfflineShell(choice: ServerChoice) {
 }
 
 // ---------------------------------------------------------------------------
-// Compact: bottom bar (the web phone strip: home, music, satellites,
-// calendar, chat), mini player docked above it. Everything else is on
-// Home's "everything" grid, and while one of those screens is open the home
-// tab is the one lit, as on the web strip (and as the More tab was).
+// Compact: bottom bar (this phone's phone bar, PhoneBar.kt: home, music,
+// videos, chat unless picked otherwise in Settings → Phone bar), mini player
+// docked above it. Everything else is on Home's "everything" grid, and while
+// one of those screens is open the home tab is the one lit, as on the web
+// strip (and as the More tab was).
 // ---------------------------------------------------------------------------
 @Composable
 private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
     val shared = LocalSharedScreen.current
+    val savedBar by LocalApp.current.prefs.phoneBar.collectAsState()
+    val bar = PhoneBar.routes(PhoneBar.decode(savedBar), caps, shared)
     Scaffold(
         containerColor = Domovoi.colors.canvas,
         topBar = { TopChrome { Topbar(route, navigate) } },
@@ -635,9 +657,10 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
             BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
-                    // A shared screen keeps four: Chat is one person's own.
-                    CompactRoutes.filter { it.visibleOn(caps, shared) }.forEach { r ->
-                        val selected = route == r || (r == Route.Home && route in EverythingRoutes)
+                    // A shared screen never shows a personal tab, whatever
+                    // the bar says (PhoneBar.routes filters with visibleOn).
+                    bar.forEach { r ->
+                        val selected = route == r || (r == Route.Home && route !in bar)
                         NavigationBarItem(
                             selected = selected,
                             onClick = { navigate(r) },
