@@ -717,3 +717,139 @@ async def test_v025_applies_again_cleanly_and_holds_its_rules(db_session) -> Non
     rows = await _rows(tid)
     assert [r["source"] for r in rows] == ["typed", "voice"]
     assert rows[1]["content"] == "yo" and rows[1]["speaker_person_id"] is None
+
+
+# ─── Media from a phone plays on the phone (device actions) ───────────────
+
+
+async def _tracks(*rows: tuple[str, str, str]) -> list[int]:
+    """library_tracks rows (title, artist, album); their ids, in order."""
+    from domovoi.handlers.shared import library_match
+
+    ids = []
+    async with SessionLocal() as s:
+        for i, (title, artist, album) in enumerate(rows):
+            ids.append(int((
+                await s.execute(
+                    text(
+                        "INSERT INTO library_tracks (file_path, title, artist, album) "
+                        "VALUES (:f, :t, :a, :al) RETURNING id"
+                    ),
+                    {"f": f"/music/{i}-{title}.mp3", "t": title, "a": artist, "al": album},
+                )
+            ).scalar_one()))
+        await s.commit()
+    library_match.reset_for_tests()
+    return ids
+
+
+@pytest.fixture
+def room_player(monkeypatch):
+    """A room's music player that records every call: a phone turn must
+    never reach it."""
+    calls: list[str] = []
+
+    class _RoomPlayer(mpd_mod.MPDStubClient):
+        def __getattribute__(self, name):
+            attr = super().__getattribute__(name)
+            if callable(attr) and not name.startswith("_"):
+                calls.append(name)
+            return attr
+
+    monkeypatch.setitem(mpd_mod._clients, "kitchen", _RoomPlayer())
+    monkeypatch.setattr(mpd_mod, "_room_ports", {"kitchen": (6651, 8051)})
+    return calls
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_song_asked_for_plays_on_the_phone(
+    db_session, open_gate, whisper, heard_as, room_player,
+) -> None:
+    ids = await _tracks(("Glass Harbor", "Velvet Kites", "Tide"), ("Other Song", "Someone", "X"))
+    whisper.texts = ["play glass harbor"]
+    tid = await _thread()
+    async with _client() as c:
+        body = (await _turn(c, tid)).json()
+    assert body["matched_handler"] == "music", body
+    assert body["reply"].startswith("Playing")
+    (action,) = body["actions"]
+    assert action["type"] == "play"
+    assert action["items"][0] == {
+        "kind": "track", "id": ids[0], "title": "Glass Harbor", "artist": "Velvet Kites", "album": "Tide",
+    }
+    assert room_player == []
+    async with SessionLocal() as s:
+        played = (await s.execute(text("SELECT room_id, library_track_id FROM media_plays"))).all()
+    assert [tuple(r) for r in played] == [(ROOM, ids[0])]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_song_the_library_lacks_is_said_plainly(
+    db_session, open_gate, whisper, heard_as, room_player,
+) -> None:
+    await _tracks(("Glass Harbor", "Velvet Kites", "Tide"))
+    whisper.texts = ["play the moonlight serenade"]
+    tid = await _thread()
+    async with _client() as c:
+        body = (await _turn(c, tid)).json()
+    assert body["actions"] == []
+    assert "couldn't find" in body["reply"] and "library" in body["reply"]
+    assert room_player == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_something_random_and_a_playlist_play_on_the_phone(
+    db_session, open_gate, whisper, heard_as, room_player,
+) -> None:
+    ids = await _tracks(("One", "A", "X"), ("Two", "B", "X"), ("Three", "C", "X"))
+    async with SessionLocal() as s:
+        pid = (
+            await s.execute(text("INSERT INTO playlists (name) VALUES ('road trip') RETURNING id"))
+        ).scalar_one()
+        for pos, track in enumerate(ids):
+            await s.execute(
+                text("INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (:p, :t, :pos)"),
+                {"p": pid, "t": track, "pos": pos},
+            )
+        await s.commit()
+    whisper.texts = ["play something", "play the road trip playlist"]
+    tid = await _thread()
+    async with _client() as c:
+        anything = (await _turn(c, tid)).json()
+        playlist = (await _turn(c, tid)).json()
+    assert anything["actions"][0]["type"] == "play"
+    assert len(anything["actions"][0]["items"]) == 1
+    assert anything["actions"][0]["items"][0]["id"] in ids
+    assert playlist["matched_handler"] == "playlist"
+    assert playlist["reply"] == "Playing road trip."
+    # The whole list, in order, for the phone's own queue.
+    assert [i["id"] for i in playlist["actions"][0]["items"]] == ids
+    assert room_player == []
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_transport_volume_and_whats_playing_act_on_the_phone(
+    db_session, open_gate, whisper, heard_as, room_player,
+) -> None:
+    playing = '{"title": "Glass Harbor", "artist": "Velvet Kites", "playing": true}'
+    whisper.texts = ["pause", "next", "what's playing", "volume 6", "turn it up", "pause"]
+    tid = await _thread()
+    async with _client() as c:
+        pause = (await _turn(c, tid, player=playing)).json()
+        nxt = (await _turn(c, tid, player=playing)).json()
+        what = (await _turn(c, tid, player=playing)).json()
+        vol = (await _turn(c, tid, player=playing)).json()
+        up = (await _turn(c, tid, player=playing)).json()
+        idle = (await _turn(c, tid)).json()
+    assert pause["actions"] == [{"type": "pause"}] and pause["reply"] == "Paused."
+    assert nxt["actions"] == [{"type": "next"}]
+    assert what["reply"] == "This is Glass Harbor by Velvet Kites." and what["actions"] == []
+    assert vol["actions"] == [{"type": "volume", "change": "set", "percent": 60}]
+    assert up["actions"] == [{"type": "volume", "change": "up"}]
+    # Nothing playing on the phone: said so, nothing to do.
+    assert idle["reply"] == "Nothing is playing on this phone." and idle["actions"] == []
+    assert room_player == []

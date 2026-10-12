@@ -21,6 +21,7 @@ from domovoi.clients.mpd import (
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.handlers.music_choice import MusicChoiceMixin
+from domovoi.handlers.shared import phone_play
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
 from domovoi.music_pause import note_paused_by_person
@@ -578,6 +579,10 @@ class MusicHandler(MusicChoiceMixin, Handler):
                 reply = await ask(res, query, ctx, session)
                 if reply is not None:
                     return reply
+        if ctx.from_phone:
+            return await self._play_search_on_phone(
+                query, ctx, session, allow_choice=allow_choice, avoid=avoid, said=said,
+            )
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             song = await mpd.prepare_search(query)
@@ -787,9 +792,11 @@ class MusicHandler(MusicChoiceMixin, Handler):
         ``lyrics_note``: the song was found by words from its lyrics when the
         request named nothing (lyric search's last resort), and the reply
         says so — "Playing X by Y, the song with those words." — so a
-        person who meant a title they don't have hears why this plays."""
+        person who meant a title they don't have hears why this plays.
+
+        On a phone (the chat mic) the rows go to the phone to play
+        (``phone_play``), with the same reply."""
         from domovoi.handlers.shared import library_match
-        from domovoi.handlers.shared.spoken_names import speakable
 
         ref = candidate.ref
         rows = (
@@ -810,6 +817,11 @@ class MusicHandler(MusicChoiceMixin, Handler):
         )
         if not rows:
             return self._reply(ctx, missing)
+        if ctx.from_phone:
+            # The phone plays the rows itself: no room's player, no MPD paths.
+            return await self._play_rows_on_phone(
+                rows, candidate, name, said_artist, ctx, session, lyrics_note=lyrics_note,
+            )
         mpd = get_mpd_client_for(ctx.room_id)
         uris = [library_match.mpd_file_for_library_path(r.file_path) for r in rows]
         try:
@@ -850,23 +862,9 @@ class MusicHandler(MusicChoiceMixin, Handler):
             artist=row.artist or first.get("artist"),
             library_track_id=row.id,
         )
-        if ref.type in ("artist", "credit"):
-            if n > 1:
-                text_ = f"Playing {name}, shuffled."
-            else:
-                text_ = f"Playing {speakable(row.title or first.get('title') or 'a song')} by {name}."
-        elif ref.type == "album":
-            by = said_artist or (
-                library_match.speak_label("artist", ref.artist_label) if ref.artist_label else ""
-            )
-            text_ = f"Playing the album {name}" + (f" by {by}" if by else "") + "."
-        else:
-            by = said_artist or (
-                library_match.speak_label("artist", ref.artist_label) if ref.artist_label else ""
-            )
-            text_ = f"Playing {name} by {by}." if by else f"Playing {name}."
-            if lyrics_note:
-                text_ = text_[:-1] + ", the song with those words."
+        text_ = self._candidate_text(
+            ref, n, row.title or first.get("title"), name, said_artist, lyrics_note=lyrics_note,
+        )
         resolved = candidate.to_dict()
         resolved["queued"] = n
         return Response(
@@ -876,6 +874,118 @@ class MusicHandler(MusicChoiceMixin, Handler):
             data={"song": first, "resolved": resolved},
             music_action="start",
             music_stream_url=mpd_stream_url_for(ctx.room_id),
+        )
+
+    @staticmethod
+    def _candidate_text(
+        ref: Any, n: int, first_title: str | None, name: str, said_artist: str,
+        *, lyrics_note: bool = False,
+    ) -> str:
+        """What a play of a resolved entity says: "Playing X, shuffled.",
+        "Playing the album X by Y.", "Playing X by Y." — the same in a room
+        and on a phone."""
+        from domovoi.handlers.shared import library_match
+        from domovoi.handlers.shared.spoken_names import speakable
+
+        if ref.type in ("artist", "credit"):
+            if n > 1:
+                return f"Playing {name}, shuffled."
+            return f"Playing {speakable(first_title or 'a song')} by {name}."
+        by = said_artist or (
+            library_match.speak_label("artist", ref.artist_label) if ref.artist_label else ""
+        )
+        if ref.type == "album":
+            return f"Playing the album {name}" + (f" by {by}" if by else "") + "."
+        text_ = f"Playing {name} by {by}." if by else f"Playing {name}."
+        if lyrics_note:
+            text_ = text_[:-1] + ", the song with those words."
+        return text_
+
+    # ─── Playing on a phone (the chat mic) ──────────────────────────────
+    async def _remember_phone_play(
+        self, ctx: Context, session: AsyncSession, row: Any,
+    ) -> None:
+        """What a room's play records, for a phone's: the session's last
+        track (for "add it to my library" and "what's this") and one
+        media_plays row under the phone's own room id."""
+        get = row.get if isinstance(row, dict) else (lambda k, d=None: getattr(row, k, d))
+        song = {"title": get("title"), "artist": get("artist"), "file": get("file_path")}
+        if ctx.session_id:
+            try:
+                repo = SessionRepository(session)
+                await repo.set_context_key(ctx.session_id, "last_played_track", song)
+                await repo.set_context_key(ctx.session_id, _LAST_PLAY_SOURCE_KEY, "local")
+                await self._clear_stream_state(repo, ctx.session_id)
+            except Exception as e:
+                log.warning("couldn't save last_played_track: %s", e)
+        await record_media_play(
+            session,
+            room_id=ctx.room_id,
+            source="library",
+            title=get("title"),
+            artist=get("artist"),
+            library_track_id=get("id"),
+        )
+
+    async def _play_rows_on_phone(
+        self,
+        rows: list,
+        candidate: Any,
+        name: str,
+        said_artist: str,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        lyrics_note: bool = False,
+    ) -> Response:
+        rows = list(rows)[: phone_play.PHONE_QUEUE_CAP]
+        first = rows[0]
+        await self._remember_phone_play(ctx, session, first)
+        text_ = self._candidate_text(
+            candidate.ref, len(rows), first.title, name, said_artist, lyrics_note=lyrics_note,
+        )
+        resolved = candidate.to_dict()
+        resolved["queued"] = len(rows)
+        return phone_play.play_on_phone(
+            self.name, ctx, text_, [phone_play.track_item(r) for r in rows],
+            data={"song": {"title": first.title, "artist": first.artist}, "resolved": resolved},
+        )
+
+    async def _play_search_on_phone(
+        self,
+        query: dict,
+        ctx: Context,
+        session: AsyncSession,
+        *,
+        allow_choice: bool,
+        avoid: tuple,
+        said: str | None,
+    ) -> Response:
+        """``_play``'s search half for a phone: the library's own table
+        stands in for a room's MPD search, then the lyric last resort.
+        Podcasts and a streaming provider play through a room's player, so
+        a phone that found nothing here is told so plainly."""
+        rows = await phone_play.search_library(session, query)
+        if rows:
+            row = rows[0]
+            await self._remember_phone_play(ctx, session, row)
+            return phone_play.play_on_phone(
+                self.name, ctx, f"Playing {_format_song(row)}.", [phone_play.track_item(row)],
+                data={"song": {"title": row.get("title"), "artist": row.get("artist")}},
+            )
+        lyric_reply = await self._lyrics_last_resort(
+            query, ctx, session, allow_choice=allow_choice, avoid=avoid, said=said,
+        )
+        if lyric_reply is not None:
+            return lyric_reply
+        q_display = " by ".join(v for v in (query.get("title"), query.get("artist")) if v) or query.get("any", "")
+        return Response(
+            text=(
+                f"I couldn't find {q_display} in your library."
+                if q_display else "I couldn't find that in your library."
+            ),
+            session_id=ctx.session_id,
+            matched_handler=self.name,
         )
 
     # ─── A song asked for by words from its lyrics ─────────────────────
@@ -988,7 +1098,8 @@ class MusicHandler(MusicChoiceMixin, Handler):
         (it was a plain "play <anything>"). None when there is no provider,
         the box is offline, or the provider has nothing: the caller then
         says it found nothing. Never logs the words."""
-        if not ctx.online:
+        if not ctx.online or ctx.from_phone:
+            # A provider plays through a room's player, which a phone has not.
             return None
         provider = CAPABILITIES.resolve(STREAMING_SEARCH_PROVIDER)
         if provider is None:
@@ -1034,6 +1145,13 @@ class MusicHandler(MusicChoiceMixin, Handler):
                 ),
                 session_id=ctx.session_id,
                 matched_handler=self.name,
+            )
+        if ctx.from_phone:
+            picked = dict(row._mapping)
+            await self._remember_phone_play(ctx, session, picked)
+            return phone_play.play_on_phone(
+                self.name, ctx, f"Playing {_format_song(picked)}.", [phone_play.track_item(picked)],
+                data={"song": {"title": picked.get("title"), "artist": picked.get("artist")}},
             )
         mpd = get_mpd_client_for(ctx.room_id)
         # Three-stage search, falling back on each miss:
@@ -1160,7 +1278,11 @@ class MusicHandler(MusicChoiceMixin, Handler):
         timeout first. Before this, a skip on a frozen MPD took three
         timeouts from the dashboard (~15 s) and two by voice (~10.5 s)
         before it said the same "I couldn't reach the music player.".
+
+        **From a phone** it is the phone player's own next.
         """
+        if ctx.from_phone:
+            return phone_play.phone_transport(self.name, ctx, "next")
         try:
             place = await self._queue_place(ctx.room_id)
         except _PlayerUnreachable as e:
@@ -1603,6 +1725,8 @@ class MusicHandler(MusicChoiceMixin, Handler):
         )
 
     async def _simple_ack(self, action: str, ctx: Context) -> Response:
+        if ctx.from_phone:
+            return phone_play.phone_transport(self.name, ctx, action)
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             if action == "pause":
@@ -1658,6 +1782,8 @@ class MusicHandler(MusicChoiceMixin, Handler):
         )
 
     async def _now_playing(self, ctx: Context) -> Response:
+        if ctx.from_phone:
+            return phone_play.phone_now_playing(self.name, ctx)
         mpd = get_mpd_client_for(ctx.room_id)
         try:
             song = await mpd.current_song()
@@ -1700,6 +1826,8 @@ class MusicHandler(MusicChoiceMixin, Handler):
     async def _volume_set(self, number: int, ctx: Context) -> Response:
         # `number` is a spoken 1-10 knob value: below 1 floors at 1 (50%),
         # above 10 caps at 10 (100%).
+        if ctx.from_phone:
+            return phone_play.phone_volume_set(self.name, ctx, number)
         level = _clamp_level(number)
         await self._pin_mpd_full(ctx)
         return Response(
@@ -1713,6 +1841,8 @@ class MusicHandler(MusicChoiceMixin, Handler):
         # Step one notch on the 1-10 scale from the satellite's real level
         # (default to 10 if it hasn't reported its % yet). "Turn it down"
         # bottoms out at level 1 (50%) — never quieter.
+        if ctx.from_phone:
+            return phone_play.phone_volume_bump(self.name, ctx, delta_levels)
         current_level = (
             percent_to_level(ctx.satellite_volume)
             if ctx.satellite_volume is not None
