@@ -877,9 +877,22 @@ def give_to_satellite_user(path: Path) -> bool:
     chown = getattr(os, "chown", None)
     if chown is None:          # Windows dev host — no ownership to hand over
         return False
+    # Never through a link. These paths are in the satellite user's home,
+    # and root following a link planted there hands that user whatever it
+    # points at (a reviewer had root chown a root helper to uid 1000 that
+    # way, 2026-10-12). A link is refused outright, and the chown itself
+    # does not follow one either, so a swap in between changes only the
+    # link.
+    path = Path(path)
+    if path.is_symlink():
+        log.warning("not handing %s to the satellite user: it is a symbolic link", path)
+        return False
     try:
         st = Path.home().stat()
-        chown(path, st.st_uid, st.st_gid)
+        if chown in os.supports_follow_symlinks:
+            chown(path, st.st_uid, st.st_gid, follow_symlinks=False)
+        else:
+            chown(path, st.st_uid, st.st_gid)
         return True
     except OSError as e:
         log.warning(
@@ -1513,7 +1526,13 @@ def apply_network_settings(room_id: str | None, when: str) -> dict[str, Any] | N
     try:
         from satellite import net_settings
 
-        return net_settings.apply(room_id, when=when)
+        # At boot, root's record of the server's address also follows a
+        # move the client made — after root checks the new address itself
+        # (net_settings.refresh_server_pin). At setup it was just written.
+        return net_settings.apply(
+            room_id, when=when,
+            server_pin=net_settings.refresh_server_pin if when == "boot" else None,
+        )
     except Exception as e:  # noqa: BLE001 — never take setup or boot down
         log.warning("network settings could not be applied: %s", e)
         return None

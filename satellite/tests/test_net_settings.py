@@ -124,6 +124,7 @@ def host(tmp_path):
 
 
 def _apply(fake, room="kitchen", **kw):
+    kw.setdefault("suffix", "")
     return ns.apply(room, run=fake, nmcli="/usr/bin/nmcli", sleep=lambda s: None,
                     nm_wait=0.0, **fake.paths, **kw)
 
@@ -153,7 +154,9 @@ def test_the_host_name_is_a_valid_dns_label(room, name):
 def test_a_name_somebody_chose_is_never_renamed():
     assert ns.may_rename("raspberrypi", "domovoi-kitchen")
     assert ns.may_rename("", "domovoi-kitchen")
-    assert ns.may_rename("domovoi-den", "domovoi-kitchen"), "the room was renamed"
+    assert ns.may_rename("domovoi-den", "domovoi-kitchen", set_before="domovoi-den"),         "the room was renamed, and this step had set the old name"
+    assert not ns.may_rename("domovoi-den", "domovoi-kitchen"), "a domovoi-* name a person chose"
+    assert not ns.may_rename("domovoi-pi", "domovoi-kitchen", set_before="domovoi-den")
     assert not ns.may_rename("kamrons-pi", "domovoi-kitchen")
     assert not ns.may_rename("domovoi-kitchen", "domovoi-kitchen")
 
@@ -294,10 +297,25 @@ def test_the_room_comes_from_config_toml(tmp_path):
 
 
 def test_off_the_satellite_it_is_a_no_op(monkeypatch):
-    """A developer's machine or a test: never root on a satellite, so the
-    step must not even import its way to a command."""
+    """A developer's machine or a test: not root on a Linux satellite, so
+    the step must not even import its way to a command."""
     monkeypatch.setattr(ns, "apply", lambda *a, **k: pytest.fail("ran off a satellite"))
+    monkeypatch.setattr(pm.os, "geteuid", lambda: 1000, raising=False)
     assert pm.apply_network_settings("kitchen", "boot") is None
+    monkeypatch.setattr(pm.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(pm.sys, "platform", "win32")
+    assert pm.apply_network_settings("kitchen", "boot") is None
+
+
+def test_as_root_on_a_satellite_it_runs_with_the_server_record_at_boot(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ns, "apply", lambda room, **k: seen.append((room, k)) or {})
+    monkeypatch.setattr(pm.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(pm.sys, "platform", "linux")
+    pm.apply_network_settings("kitchen", "boot")
+    pm.apply_network_settings("kitchen", "setup")
+    assert seen[0][1]["server_pin"] is ns.refresh_server_pin
+    assert seen[1][1]["server_pin"] is None
 
 
 def test_every_provisioned_boot_runs_the_step(monkeypatch):
@@ -307,3 +325,188 @@ def test_every_provisioned_boot_runs_the_step(monkeypatch):
     assert "is_provisioned()" in src
     assert 'apply_network_settings(net_settings.read_room_id(CONFIG_PATH), "boot")' in src
     assert src.index("apply_network_settings") < src.index("return run()")
+
+
+# ─── review fixes (2026-10-12) ────────────────────────────────────────────
+
+
+def test_a_room_with_nothing_usable_gets_a_name_of_its_own():
+    """Two rooms named in a script with no ASCII letters must not both be
+    domovoi-satellite.local."""
+    assert ns.hostname_for_room("Кухня", "a1b2c3") == "domovoi-a1b2c3"
+    assert ns.hostname_for_room("!!!", "a1b2c3") == "domovoi-a1b2c3"
+    assert ns.hostname_for_room("kitchen", "a1b2c3") == "domovoi-kitchen"
+
+
+def test_the_suffix_comes_from_the_mac_then_the_machine_id(tmp_path):
+    mac = tmp_path / "address"
+    mac.write_text("b8:27:eb:12:34:56\n", encoding="utf-8")
+    mid = tmp_path / "machine-id"
+    mid.write_text("0123456789abcdef0123456789abcdef\n", encoding="utf-8")
+    assert ns.unit_suffix(mac, mid) == "123456"
+    assert ns.unit_suffix(tmp_path / "none", mid) == "012345"
+    assert ns.unit_suffix(tmp_path / "none", tmp_path / "none") == ""
+
+
+def test_only_a_name_this_step_set_is_renamed_again(host):
+    """A person's `domovoi-pi` is theirs; the name this step set for the den
+    follows the room to the kitchen."""
+    host.paths["hostname_path"].write_text("domovoi-pi\n", encoding="utf-8")
+    doc = _apply(host)
+    assert not host.ran("hostnamectl")
+    assert any("domovoi-pi" in s for s in doc["skipped"])
+
+    host.paths["hostname_path"].write_text("raspberrypi\n", encoding="utf-8")
+    _apply(host, room="den")
+    assert host.paths["hostname_path"].read_text().strip() == "domovoi-den"
+    assert ns.HOSTNAME_RECORD.read_text(encoding="utf-8").strip() == "domovoi-den"
+    _apply(host, room="kitchen")
+    assert host.paths["hostname_path"].read_text().strip() == "domovoi-kitchen"
+
+
+def test_power_saving_is_changed_on_the_house_profile_only(host):
+    """Not every saved client profile: the one named domovoi-home, or on an
+    older card the one in use."""
+    host.profiles = [
+        {"name": "Kamber Wifi 2.0", "uuid": "u-home", "mode": "infrastructure", "ssid": "Kamber Wifi 2.0"},
+        {"name": "Cafe", "uuid": "u-cafe", "mode": "infrastructure", "ssid": "Cafe"},
+    ]
+    host.powersave = {"u-home": 0, "u-cafe": 0}
+    doc = _apply(host)
+    assert not host.ran("connection", "modify"), "two client profiles, none in use: no guess"
+    assert any("no profile is clearly the house network" in s for s in doc["skipped"])
+    host.profiles.append({"name": "domovoi-home", "uuid": "u-dh", "mode": "infrastructure", "ssid": "Kamber"})
+    host.powersave["u-dh"] = 0
+    _apply(host)
+    assert [c[4] for c in host.ran("connection", "modify")] == ["u-dh"]
+
+
+def test_reboot_needed_stays_until_a_run_without_errors():
+    current = {"version": ns.NET_SETTINGS_VERSION}
+    assert ns.reboot_needed(dict(current, errors=[]), unit_installed=True) is None
+    why = ns.reboot_needed(dict(current, errors=["delete the setup hotspot profile: denied"]),
+                           unit_installed=True)
+    assert why and "denied" in why and "reboot" in why
+
+
+# ─── root never writes through a link ─────────────────────────────────────
+
+needs_symlinks = pytest.mark.skipif(
+    not hasattr(ns.os, "O_NOFOLLOW") or ns.os.open not in ns.os.supports_dir_fd,
+    reason="needs O_NOFOLLOW and dir_fd (Linux); run in the Linux container",
+)
+
+
+@needs_symlinks
+def test_a_planted_link_is_never_written_through(tmp_path):
+    """The reviewer's attack, 2026-10-12: a link planted under the record's
+    name (or its temporary name) pointing at a file root owns. The write
+    replaces the LINK and leaves its target alone."""
+    target = tmp_path / "helper"
+    target.write_text("original\n", encoding="utf-8")
+    d = tmp_path / "state"
+    d.mkdir()
+    (d / "net-settings.json").symlink_to(target)
+    (d / f".net-settings.json.tmp{ns.os.getpid()}").symlink_to(target)
+    assert ns.write_report({"version": 1}, d / "net-settings.json") is True
+    assert target.read_text(encoding="utf-8") == "original\n"
+    assert not (d / "net-settings.json").is_symlink()
+    assert '"version": 1' in (d / "net-settings.json").read_text(encoding="utf-8")
+
+
+@needs_symlinks
+def test_a_directory_that_is_a_link_is_refused(tmp_path):
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    link = tmp_path / "state"
+    link.symlink_to(real, target_is_directory=True)
+    with pytest.raises(OSError):
+        ns.safe_write(link, "x", b"y")
+    assert not (real / "x").exists()
+
+
+@needs_symlinks
+def test_handing_a_file_to_the_satellite_user_never_follows_a_link(tmp_path, monkeypatch):
+    target = tmp_path / "root-helper"
+    target.write_text("x", encoding="utf-8")
+    link = tmp_path / "config.toml"
+    link.symlink_to(target)
+    calls = []
+    monkeypatch.setattr(pm.os, "chown", lambda *a, **k: calls.append((a, k)))
+    assert pm.give_to_satellite_user(link) is False
+    assert calls == []
+
+
+def test_handing_a_file_over_does_not_follow_links_in_the_call(tmp_path, monkeypatch):
+    """Even between the check and the call: the chown itself is lchown."""
+    f = tmp_path / "pairing_token"
+    f.write_text("t", encoding="utf-8")
+    calls = []
+
+    def chown(*a, **k):
+        calls.append(k)
+
+    monkeypatch.setattr(pm.os, "chown", chown, raising=False)
+    monkeypatch.setattr(pm.os, "supports_follow_symlinks", {chown}, raising=False)
+    assert pm.give_to_satellite_user(f) is True
+    assert calls == [{"follow_symlinks": False}]
+
+
+# ─── root's record of the server address follows a proven move ────────────
+
+
+@pytest.fixture
+def pins(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (etc / "server-identity.json").write_text('{"fingerprint": "SHA256:ours"}', encoding="utf-8")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[satellite]\ndomovoi_url = "ws://192.168.0.50:6370"\n', encoding="utf-8")
+    return {"pin_path": etc / "server.url", "identity_path": etc / "server-identity.json",
+            "config_path": cfg}
+
+
+def test_root_follows_a_move_only_after_checking_it_itself(pins):
+    asked = []
+
+    def probe(host, *, port, timeout, expected_fingerprint):
+        asked.append((host, port, expected_fingerprint))
+        return True
+
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=probe, sleep=lambda s: None, **pins)
+    assert asked == [("192.168.0.50", 6370, "SHA256:ours")], "root's own pin, root's own probe"
+    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.0.50:6370"
+    assert any("192.168.0.117 -> ws://192.168.0.50" in c or "-> ws://192.168.0.50:6370" in c
+               for c in report.changed)
+
+
+def test_an_address_that_cannot_prove_itself_leaves_roots_record(pins):
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=lambda *a, **k: False, attempts=2, sleep=lambda s: None, **pins)
+    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.0.117:6370"
+    assert report.errors == [], "a server that is down this boot is retried, not an error"
+    assert report.skipped
+
+
+def test_without_roots_identity_pin_nothing_moves(pins):
+    pins["identity_path"].unlink()
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=lambda *a, **k: pytest.fail("asked"), **pins)
+    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.0.117:6370"
+
+
+def test_a_current_record_is_left_alone(pins):
+    pins["config_path"].write_text('[satellite]\ndomovoi_url = "ws://192.168.0.117:6370"\n',
+                                   encoding="utf-8")
+    report = ns.Report()
+    ns.refresh_server_pin(report, probe=lambda *a, **k: pytest.fail("asked"), **pins)
+    assert report.changed == []
+
+
+def test_the_boot_step_includes_the_record_and_setup_does_not(monkeypatch):
+    import inspect
+
+    src = inspect.getsource(pm.apply_network_settings)
+    assert 'server_pin=net_settings.refresh_server_pin if when == "boot" else None' in src

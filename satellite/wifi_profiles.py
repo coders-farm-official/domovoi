@@ -19,11 +19,15 @@ guesses when it cannot:
   :data:`HOME_CONNECTION` and a sudoers line for exactly
   ``nmcli connection up id domovoi-home``;
 * an older unit has neither (its profile is named after the network, and
-  its sudoers allows only ``nmcli device connect wlan0``). It keeps that
-  command, but only where it cannot land on an access point: no AP profile
-  is left on the unit (the boot-time step deletes ``domovoi-setup`` after
-  the upgrade and a reboot), or the house network is in the last scan, in
-  which case NetworkManager prefers the house profile it used last.
+  its sudoers allows only ``nmcli device connect wlan0``). The house
+  profile by uuid is tried first anyway (a unit whose owner allowed it gets
+  it); then the old command, but only where it cannot land on an access
+  point: no AP profile is left on the unit (the boot-time step deletes
+  ``domovoi-setup`` after the upgrade and a reboot), or the house network
+  is in the last scan AND its profile was used more recently than every AP
+  profile — NetworkManager picks the most recently used available profile,
+  and an AP is always available. Once the radio has hosted an AP, that AP
+  is the most recent, so the old command cannot run again: no loop.
 
 And never at all while the link is up and the house network is not in the
 last scan: reconnecting then can only drop a working association.
@@ -51,6 +55,8 @@ WIFI_IFACE = "wlan0"
 NMCLI = "/usr/bin/nmcli"
 
 _TIMEOUT_SEC = 10.0
+#: The mode of a profile whose details nmcli would not give.
+UNKNOWN_MODE = "?"
 
 
 def split_terse(line: str) -> list[str]:
@@ -82,14 +88,22 @@ class Profile:
     name: str
     uuid: str
     # 802-11-wireless.mode: "infrastructure" (a client of an AP), "ap",
-    # "adhoc", "mesh", or "" when nmcli did not say.
+    # "adhoc", "mesh", "" when the profile leaves it unset (NetworkManager's
+    # default, a client), or UNKNOWN_MODE when nmcli could not be asked.
     mode: str = ""
     ssid: str = ""
     active: bool = False
+    # When NetworkManager last activated it (connection.timestamp, epoch
+    # seconds; 0 = never or unknown). It picks the most recent of the
+    # profiles available when nobody names one.
+    timestamp: int = 0
 
     @property
     def is_ap(self) -> bool:
-        return self.mode == "ap" or self.name == AP_CONNECTION
+        # Unknown counts as an AP: a profile whose mode could not be read
+        # must never be taken for the house network, nor let `device
+        # connect` run as if no AP profile were there.
+        return self.mode in ("ap", UNKNOWN_MODE) or self.name == AP_CONNECTION
 
 
 def _run(run: Callable[..., Any], argv: list[str]) -> str | None:
@@ -131,7 +145,7 @@ def list_wifi_profiles(run: Callable[..., Any] = subprocess.run,
                        nmcli: str = "nmcli") -> list[Profile] | None:
     """Every saved Wi-Fi profile, or None when NetworkManager could not be
     asked (and nothing may be decided from an empty list)."""
-    out = _run(run, [nmcli, "-t", "-f", "NAME,UUID,TYPE,ACTIVE", "connection", "show"])
+    out = _run(run, [nmcli, "-t", "-f", "NAME,UUID,TYPE,ACTIVE,TIMESTAMP", "connection", "show"])
     if out is None:
         return None
     profiles: list[Profile] = []
@@ -141,9 +155,14 @@ def list_wifi_profiles(run: Callable[..., Any] = subprocess.run,
             continue
         name, uuid = row[0], row[1]
         active = len(row) > 3 and row[3].strip().lower() == "yes"
+        try:
+            stamp = int(row[4]) if len(row) > 4 and row[4].strip() else 0
+        except ValueError:
+            stamp = 0
         details = profile_details(uuid, run, nmcli) if uuid else None
-        mode, ssid = details if details is not None else ("", "")
-        profiles.append(Profile(name=name, uuid=uuid, mode=mode, ssid=ssid, active=active))
+        mode, ssid = details if details is not None else (UNKNOWN_MODE, "")
+        profiles.append(Profile(name=name, uuid=uuid, mode=mode, ssid=ssid,
+                                active=active, timestamp=stamp))
     return profiles
 
 
@@ -164,10 +183,13 @@ def visible_ssids(run: Callable[..., Any] = subprocess.run, nmcli: str = "nmcli"
     return seen
 
 
-def home_profile(profiles: list[Profile], last_ssid: str | None = None) -> Profile | None:
+def home_profile(profiles: list[Profile], last_ssid: str | None = None, *,
+                 strict: bool = False) -> Profile | None:
     """The house network's profile: the one named :data:`HOME_CONNECTION`;
     else the client profile for the network the radio was last on; else the
-    active client profile; else the only one. Never an access point."""
+    active client profile; else the only one. Never an access point.
+    ``strict`` (root's boot-time step): none rather than a guess among
+    several."""
     clients = [p for p in profiles if not p.is_ap]
     if not clients:
         return None
@@ -183,9 +205,11 @@ def home_profile(profiles: list[Profile], last_ssid: str | None = None) -> Profi
             return p
     if len(clients) == 1:
         return clients[0]
+    if strict:
+        return None
     # Several client profiles and nothing to choose by. Any of them is
-    # "home" to NetworkManager; the first keeps the log readable.
-    return clients[0]
+    # "home" to NetworkManager; the most recently used is the likeliest.
+    return max(clients, key=lambda p: p.timestamp)
 
 
 @dataclass(frozen=True)
@@ -212,6 +236,10 @@ def connection_up_argv() -> list[str]:
 
 def device_connect_argv() -> list[str]:
     return [NMCLI, "device", "connect", WIFI_IFACE]
+
+
+def connection_up_uuid_argv(uuid: str) -> list[str]:
+    return [NMCLI, "connection", "up", "uuid", uuid]
 
 
 def plan_recovery(
@@ -243,16 +271,24 @@ def plan_recovery(
         return plan
     if home.name == HOME_CONNECTION:
         plan.steps.append(Step(f"connection up id {HOME_CONNECTION}", connection_up_argv()))
+    elif home.uuid:
+        # An older card's house profile, by its uuid: sudo refuses it
+        # unless the owner allowed it, and the next step is tried then.
+        plan.steps.append(Step(f"connection up uuid {home.uuid}", connection_up_uuid_argv(home.uuid)))
     # The pre-2026-10-12 command, for units whose sudoers allows nothing
-    # else: only where NetworkManager's own choice cannot be an AP.
-    if not aps or (home_visible and not ap_active):
+    # else: only where NetworkManager's own choice cannot be an AP. With AP
+    # profiles saved it picks the most recently used AVAILABLE profile, so
+    # the house network must be in sight AND newer than every AP profile.
+    newest_ap = max((p.timestamp for p in profiles if p.is_ap), default=0)
+    if not aps or (home_visible and not ap_active and home.timestamp > newest_ap):
         plan.steps.append(Step(f"device connect {WIFI_IFACE}", device_connect_argv()))
     if not plan.steps:
         plan.reason = (
             f"the setup hotspot profile ({', '.join(aps)}) is still on this unit "
-            f"and the house network is not in the last scan, so `nmcli device "
-            f"connect` could raise the hotspot instead; not running it (a reboot "
-            f"after the satellite upgrade removes that profile)"
+            f"and the house network is not in the last scan (or was used less "
+            f"recently than it), so `nmcli device connect` could raise the "
+            f"hotspot instead; not running it (a reboot after the satellite "
+            f"upgrade removes that profile)"
         )
     else:
         plan.reason = (

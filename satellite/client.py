@@ -165,7 +165,8 @@ REBOOT_HELPER = Path("/usr/local/sbin/domovoi-reboot")
 # The self-restart budget (satellite/health.py RestartBudget): when this
 # unit last exited or rebooted itself for a self-check, kept across lives.
 SELF_RESTARTS_PATH = CONFIG_DIR / "self-restarts.json"
-# Which net-settings.json run (satellite/net_settings.py) this client has
+# Which /var/lib/domovoi/net-settings.json run (satellite/net_settings.py)
+# this client has
 # already put in its log, so a restart does not log the same run twice.
 NET_SETTINGS_LOGGED = CONFIG_DIR / "net-settings.logged"
 # A self-check exit that has not finished its graceful shutdown in this
@@ -3432,7 +3433,9 @@ class Satellite:
     # ── The network settings root applies at boot ─────────────────────
     # satellite/net_settings.py runs as root from domovoi-provisioning.service
     # before this process (and at the end of setup) and records what it did
-    # in ~/.domovoi/net-settings.json. Its journal is not the core's: the
+    # in /var/lib/domovoi/net-settings.json (root's directory; never the
+    # satellite user's home, where root would follow a planted link). Its
+    # journal is not the core's: the
     # record is read here and logged, so the change lands in the log the
     # core retains for this room (the spool while disconnected, the live
     # push after). And while the record is older than this code, the unit
@@ -3572,14 +3575,10 @@ class Satellite:
     def _relocate_server(self) -> None:
         """The core has been unreachable for a while: look for it again, in
         the usual order (its name, this address, the sweep), and switch to
-        what proves to be this device's server. Skipped while the old
-        address's machine REFUSES the connect — the server is there and
-        merely not listening (a restart), so there is nothing to find."""
-        host, port = self._core_endpoint()
-        if host and port and health.probe_service(host, port) == "refused":
-            log.info("server search skipped: %s refuses on %s, so the server's "
-                     "machine is still there", host, port)
-            return
+        what proves to be this device's server. When the old address's
+        machine REFUSES the connect only the sweep is skipped: the names are
+        cheap and key-checked, and a refusal can come from whatever took the
+        old address after the core moved (`_locate_server`)."""
         try:
             found, is_auto, _last = _locate_server(self.cfg)
         except Exception as e:  # noqa: BLE001 — never take the connect loop down
@@ -4205,12 +4204,18 @@ class Satellite:
         gateway_ok = self._gateway_ok() if outcome == "silent" else None
         return health.path_verdict(outcome, gateway_ok)
 
+    _ap_said_at: float | None = None
+
     def _note_ap_mode(self, link: dict[str, Any]) -> None:
         """The radio is hosting an access point (the setup hotspot) on a
-        satellite that was set up long ago. Said loudly every time it is
-        seen (the health sample carries it too, as `wifi.mode`), because
-        the last unit in this state sat there for 18 days looking
-        "connected"."""
+        satellite that was set up long ago. Said loudly — at most every 10
+        minutes — because the last unit in this state sat there for 18 days
+        looking "connected" (the health sample carries it too, as
+        `wifi.mode`)."""
+        now = time.monotonic()
+        if self._ap_said_at is not None and now - self._ap_said_at < 600.0:
+            return
+        self._ap_said_at = now
         log.error(
             "wifi: this satellite is HOSTING an access point (the setup "
             "hotspot) instead of being on the house network; bringing the "
@@ -4258,6 +4263,11 @@ class Satellite:
             log.info("wifi watcher disabled by config")
             return
         last_reassociate = 0.0  # monotonic; 0 means "never"
+        # The lossy-link allowance: since when the core has been SILENT
+        # (timeouts, not refusals) while the gateway answers, and when that
+        # allowance was last spent.
+        silent_since: float | None = None
+        last_lossy = 0.0
         while not self.shutdown_event.is_set():
             # Interruptible sleep — shutdown_event.wait returns True
             # when the event flips, False on timeout.
@@ -4300,7 +4310,10 @@ class Satellite:
             if shared is not None and shared > last_reassociate:
                 last_reassociate = shared
 
-            if link.get("mode") == "ap":
+            # Only while the core is out of reach: a unit whose core session
+            # is up (over another interface) is not stranded by it.
+            core_unreachable = ws_down_for is not None or getattr(self, "ws", None) is None
+            if link.get("mode") == "ap" and core_unreachable:
                 self._note_ap_mode(link)
                 now = time.monotonic()
                 if last_reassociate > 0 and self.cfg.wifi_cooldown_sec - (now - last_reassociate) > 0:
@@ -4320,6 +4333,7 @@ class Satellite:
                 continue
 
             if ws_down_for is None:
+                silent_since = None
                 # A live session is riding this link. Nothing the watcher
                 # could do beats that, so it does nothing - the rate is
                 # information for the dashboard, not a verdict.
@@ -4337,6 +4351,33 @@ class Satellite:
                 continue
 
             verdict = self._core_path()
+            if verdict == health.PATH_LAN_UP:
+                # The router answers and the core's machine is silent: not a
+                # dead radio, so not the usual recovery. But a lossy link
+                # (2026-05-06: the AP's rate control wedged, frames to the
+                # core lost while the router still answered) looks exactly
+                # like this, and only a reassociation cures it. So: ONE, after
+                # LOSSY_LINK_AFTER_SEC of uninterrupted silence, at most every
+                # LOSSY_LINK_EVERY_SEC — never for a refusal (a core restart).
+                now = time.monotonic()
+                silent_since = silent_since or now
+                if (
+                    now - silent_since >= LOSSY_LINK_AFTER_SEC
+                    and (last_lossy == 0.0 or now - last_lossy >= LOSSY_LINK_EVERY_SEC)
+                    and (last_reassociate == 0.0 or now - last_reassociate >= self.cfg.wifi_cooldown_sec)
+                ):
+                    last_lossy = now
+                    log.warning(
+                        "the core has been silent for %.0f min while the gateway "
+                        "answers (rx=%.1f Mbit/s, signal=%s dBm): one Wi-Fi "
+                        "recovery for a possibly lossy link (at most once an hour)",
+                        (now - silent_since) / 60.0, rx, link.get("signal_dbm"),
+                    )
+                    self._reassociate_wifi()
+                    last_reassociate = time.monotonic()
+                    continue
+            else:
+                silent_since = None
             if verdict != health.PATH_DOWN:
                 # The path works; the core itself is what's not talking (or
                 # there is no address to ask yet). Recovering the Wi-Fi
@@ -7384,6 +7425,11 @@ def _list_devices() -> None:
 # a normal reconnect never shows, short enough that someone standing in front
 # of a dead satellite is not left guessing.
 _UNREACHABLE_AFTER = 3
+# The lossy-link allowance (`_wifi_watcher_thread_run`): the core silent
+# (timeouts) this long while the gateway answers earns one Wi-Fi recovery,
+# at most this often.
+LOSSY_LINK_AFTER_SEC = 600.0
+LOSSY_LINK_EVERY_SEC = 3600.0
 # Consecutive failed connects before the client looks for its server again
 # (satellite/discovery.py `locate`), and how often it may while they last.
 _RELOCATE_AFTER = 5
@@ -8201,6 +8247,10 @@ def _locate_server(cfg: "Config") -> "tuple[Any, bool, str | None]":
         names=discovery.server_names(),
         last_known=last_known,
         expected_fingerprint=expected,
+        # A refusal at the last-known address: its machine is there and not
+        # listening (the core restarting). Sweeping a /24 for ~20 s finds
+        # nothing then; the names are still asked.
+        refused=lambda host, port: health.probe_service(host, port, timeout=2.0) == "refused",
     )
     return found, is_auto, last_known
 
@@ -8226,14 +8276,31 @@ def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) 
     if is_auto:
         server_identity.write_pending_server(found.url, expected)
         return
+    tmp = config_path.with_name(config_path.name + ".tmp")
     try:
         original = config_path.read_text(encoding="utf-8")
-        config_path.write_text(
+        # Atomic: a power cut mid-write must not leave a satellite with half
+        # a config.toml and no way back to its server.
+        tmp.write_text(
             config_writer.apply_changes(original, {"satellite.domovoi_url": found.url}),
             encoding="utf-8", newline="\n",
         )
+        os.replace(tmp, config_path)
     except OSError as e:
         log.warning("could not save the server address %s: %s", found.url, e)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    # The kiosk browser on a video satellite read the dashboard address from
+    # config.toml when it launched; it follows the move only if relaunched.
+    if getattr(cfg, "sat_type", "voice") == "video":
+        if kiosk.restart_kiosk():
+            log.info("kiosk restarted to follow the server to %s", found.url)
+        else:
+            log.warning("could not restart the kiosk for the new server address; "
+                        "it shows the old one until it is restarted")
 
 
 def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:

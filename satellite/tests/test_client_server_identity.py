@@ -106,6 +106,7 @@ def test_a_pending_address_that_does_not_answer_is_still_used_when_nothing_else_
 
     monkeypatch.setattr(discovery, "probe", lambda host, **k: False)
     monkeypatch.setattr(discovery, "find_core", lambda **k: None)
+    monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
     cfg = _cfg()
     assert client._resolve_server_url(cfg, config_file) is True
     assert cfg.domovoi_url == "ws://192.168.0.117:6370"

@@ -605,3 +605,58 @@ def test_the_zone_is_still_checked_against_this_devices_tzdata(helper):
     assert helper.zone_is_installed("../../etc/shadow") is False
     assert helper.zone_is_installed("/etc/localtime") is False
     assert helper.zone_is_installed("") is False
+
+
+# --- the server moved: followed only when it proves itself to root ---------
+
+
+def test_a_moved_server_that_proves_itself_is_followed_and_recorded(
+    helper, monkeypatch, capsys, _pins_in_tmp,
+):
+    """The client found the core again at a new address (a new DHCP lease).
+    The helper does not take its word: the new address must sign a fresh
+    nonce for itself with the pinned key, to THIS run. Then the clock is
+    copied and root's record follows."""
+    (_pins_in_tmp / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (_pins_in_tmp / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8")
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(helper, "_verifier", lambda *a, **k: object())
+    checked = []
+    monkeypatch.setattr(helper, "verify_identity",
+                        lambda url, pin, **k: checked.append(url) or "")
+    monkeypatch.setattr(helper, "fetch", lambda url: ({"tz": "America/New_York", "epoch": 1000.0}, 0.0))
+    monkeypatch.setattr(helper, "current_zone", lambda: "America/New_York")
+    monkeypatch.setattr(helper.time, "time", lambda: 1000.1)
+    assert helper.main(["ws://192.168.0.50:6370"]) == 0
+    assert checked == ["ws://192.168.0.50:6370"], "proved once, by this run"
+    assert (_pins_in_tmp / "server.url").read_text(encoding="utf-8").strip() == "ws://192.168.0.50:6370"
+    assert "moved to http://192.168.0.50:6370" in capsys.readouterr().out
+
+
+def test_a_moved_address_that_cannot_prove_itself_is_refused(
+    helper, monkeypatch, capsys, _pins_in_tmp,
+):
+    (_pins_in_tmp / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (_pins_in_tmp / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8")
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(helper, "_verifier", lambda *a, **k: object())
+    monkeypatch.setattr(helper, "verify_identity", lambda url, pin, **k: "a different server")
+    monkeypatch.setattr(helper, "fetch", lambda url: pytest.fail("must not fetch"))
+    assert helper.main(["ws://192.168.0.66:6370"]) == 2
+    assert (_pins_in_tmp / "server.url").read_text(encoding="utf-8").strip() == "ws://192.168.0.117:6370"
+    assert "did not prove" in capsys.readouterr().out
+
+
+def test_without_a_verifier_a_moved_address_is_refused_as_before(
+    helper, monkeypatch, capsys, _pins_in_tmp,
+):
+    (_pins_in_tmp / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (_pins_in_tmp / "server-identity.json").write_text(
+        json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8")
+    monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(helper, "_verifier", lambda *a, **k: None)
+    monkeypatch.setattr(helper, "verify_identity", lambda *a, **k: pytest.fail("no verifier"))
+    assert helper.main(["ws://192.168.0.50:6370"]) == 2
+    assert "this device's time source is" in capsys.readouterr().out

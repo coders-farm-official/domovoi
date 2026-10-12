@@ -2,7 +2,7 @@
 # On every provisioned boot it checks the network settings in
 # satellite/net_settings.py (no setup hotspot profile, Wi-Fi power saving
 # off, host name domovoi-<room>), applies whichever is missing, records
-# what it changed in ~/.domovoi/net-settings.json, and exits 0. On an
+# what it changed in /var/lib/domovoi/net-settings.json, and exits 0. On an
 # UNPROVISIONED boot it owns the box: exposes the DOMOVOI-SET gadget
 # volume (or the setup portal) and waits for the adopt flow (see
 # satellite/provisioning_mode.py).

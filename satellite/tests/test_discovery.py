@@ -674,3 +674,41 @@ def test_setup_looks_for_the_server_by_name_first(cfgfile, monkeypatch):
     monkeypatch.setattr(discovery, "find_core", _no_sweep)
     assert pm.resolve_auto_url("auto") == "ws://192.168.0.50:6370"
     assert asked == ["192.168.0.50"]
+
+
+def test_a_core_found_by_name_keeps_the_configured_scheme_and_port():
+    """`wss://` or a custom port typed into config.toml is not traded for
+    `ws://<ip>:6370` when the name finds the core."""
+    asked = []
+
+    def probe_fn(host, *, port=6370, timeout=None, expected_fingerprint=None, scheme="http"):
+        asked.append((host, port, scheme))
+        return host == "192.168.0.50"
+
+    found = discovery.locate(
+        names=["domovoi.local"], last_known="wss://192.168.0.117:7443",
+        expected_fingerprint=OURS[2],
+        resolver=_resolver({"domovoi.local": ["192.168.0.50"]}),
+        probe_fn=probe_fn, finder=_no_sweep,
+    )
+    assert found.url == "wss://192.168.0.50:7443"
+    assert asked == [("192.168.0.50", 7443, "https")]
+
+
+def test_a_refusing_last_address_skips_the_sweep_but_not_the_names():
+    asked = []
+    found = discovery.locate(
+        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        expected_fingerprint=OURS[2],
+        resolver=_resolver({}),
+        probe_fn=_lan({}, asked), finder=_no_sweep,
+        refused=lambda host, port: (host, port) == ("192.168.0.117", 6370),
+    )
+    assert found is None
+    assert asked == ["192.168.0.117"]
+
+
+def test_the_http_base_of_a_core_address():
+    assert discovery.http_base_of("ws://192.168.0.5:6370") == "http://192.168.0.5:6370"
+    assert discovery.http_base_of("wss://domovoi.local") == "https://domovoi.local:6370"
+    assert discovery.host_port_of("ws://10.0.0.2") == ("10.0.0.2", 6370)

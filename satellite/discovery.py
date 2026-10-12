@@ -110,7 +110,8 @@ def candidate_hosts(ip: str, prefix: int = 24) -> list[str]:
 
 
 def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_SEC,
-          opener=None, expected_fingerprint: str | None = None) -> bool:
+          opener=None, expected_fingerprint: str | None = None,
+          scheme: str = "http") -> bool:
     """Whether ``host`` answers /v1/health as **this device's** Domovoi core.
 
     The bot_name check keeps us from adopting some unrelated service that
@@ -136,7 +137,7 @@ def probe(host: str, *, port: int = CORE_PORT, timeout: float = _PROBE_TIMEOUT_S
     opener = opener or urllib.request.urlopen
     challenge = server_identity.new_challenge() if expected_fingerprint else None
     addr = f"{host}:{port}"
-    url = f"http://{host}:{port}{HEALTH_PATH}"
+    url = f"{'https' if scheme == 'https' else 'http'}://{host}:{port}{HEALTH_PATH}"
     if challenge:
         url = f"{url}?challenge={challenge}&addr={urllib.parse.quote(addr, safe='')}"
     try:
@@ -359,6 +360,24 @@ def _host_port(url: str, default_port: int) -> tuple[str | None, int]:
     return parts.hostname, port
 
 
+def host_port_of(url: str, default_port: int = CORE_PORT) -> tuple[str | None, int]:
+    """``(host, port)`` a ``ws://`` / ``wss://`` / bare address dials."""
+    return _host_port(url, default_port)
+
+
+def _secure(url: str | None) -> bool:
+    return (url or "").strip().lower().startswith(("wss://", "https://"))
+
+
+def http_base_of(url: str, default_port: int = CORE_PORT) -> str:
+    """The ``http(s)://host:port`` a core address answers HTTP on."""
+    host, port = _host_port(url, default_port)
+    host = host or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{'https' if _secure(url) else 'http'}://{host}:{port}"
+
+
 def locate(
     *,
     names: list[str] | tuple[str, ...] = DEFAULT_NAMES,
@@ -369,16 +388,33 @@ def locate(
     finder: Callable[..., str | None] | None = None,
     resolver: Callable[..., Any] | None = None,
     scan: bool = True,
+    refused: Callable[[str, int], bool] | None = None,
 ) -> Located | None:
     """Find this device's core: by name, then at the last-known address,
     then by sweeping the subnet. Every candidate must pass ``probe_fn``
     (:func:`probe`: answers as Domovoi and, when a fingerprint is pinned,
     signs a fresh nonce bound to the address dialled with the pinned key)
-    before it is returned. None when nothing did."""
+    before it is returned. None when nothing did.
+
+    An address found by name keeps the last-known address's scheme and
+    port (a ``wss://`` core or a custom port stays so). ``refused(host,
+    port)`` asks whether the last-known address's machine REFUSES the
+    connect; when it does, the server's machine is right there and merely
+    not listening (a restart), and the sweep is skipped — the names are
+    still asked, being cheap and key-checked, so a core that moved while
+    something else took its old address is still followed."""
     probe_fn = probe if probe_fn is None else probe_fn
-    kwargs: dict[str, Any] = {"port": port, "timeout": _SINGLE_PROBE_TIMEOUT_SEC}
+    last_host: str | None = None
+    last_port = port
+    if last_known and last_known.strip().lower() != AUTO:
+        last_host, last_port = _host_port(last_known, port)
+    secure = _secure(last_known) if last_host else False
+    scheme = "wss" if secure else "ws"
+    kwargs: dict[str, Any] = {"port": last_port, "timeout": _SINGLE_PROBE_TIMEOUT_SEC}
     if expected_fingerprint:
         kwargs["expected_fingerprint"] = expected_fingerprint
+    if secure:
+        kwargs["scheme"] = "https"
 
     def verified(host: str) -> bool:
         try:
@@ -399,32 +435,34 @@ def locate(
             tried.add(addr)
             if verified(addr):
                 log.info("found the Domovoi server by name: %s -> %s", name, addr)
-                return Located(f"ws://{addr}:{port}", "name", f"{name} -> {addr}")
+                return Located(f"{scheme}://{addr}:{last_port}", "name", f"{name} -> {addr}")
         log.info("server name %s resolved to %s, none of which proved to be "
                  "this device's server", name, ", ".join(addrs))
 
-    if last_known and last_known.strip().lower() != AUTO:
-        host, last_port = _host_port(last_known, port)
-        if host and host not in tried:
-            tried.add(host)
-            k = dict(kwargs, port=last_port)
-            try:
-                ok = bool(probe_fn(host, **k))
-            except Exception:  # noqa: BLE001
-                ok = False
-            if ok:
-                return Located(last_known.strip(), "last-known", host)
-            log.info("the last-known server address %s did not answer as this "
-                     "device's server", last_known)
+    if last_host and last_host not in tried:
+        tried.add(last_host)
+        if verified(last_host):
+            return Located(last_known.strip(), "last-known", last_host)
+        log.info("the last-known server address %s did not answer as this "
+                 "device's server", last_known)
 
     if not scan:
         return None
+    if last_host and refused is not None:
+        try:
+            refusing = bool(refused(last_host, last_port))
+        except Exception:  # noqa: BLE001
+            refusing = False
+        if refusing:
+            log.info("%s:%s refuses the connect: the server's machine is there and "
+                     "not listening (restarting?), so no sweep", last_host, last_port)
+            return None
     # Resolved at CALL time (see resolve_url).
     finder = find_core if finder is None else finder
-    fkw: dict[str, Any] = {"port": port}
+    fkw: dict[str, Any] = {"port": last_port}
     if expected_fingerprint:
         fkw["expected_fingerprint"] = expected_fingerprint
     host = finder(**fkw)
     if host is None:
         return None
-    return Located(f"ws://{host}:{port}", "scan", host)
+    return Located(f"{scheme}://{host}:{last_port}", "scan", host)

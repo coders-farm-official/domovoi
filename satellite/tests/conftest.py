@@ -76,6 +76,8 @@ from satellite.tests._client_import import (
 REAL_HOME = Path.home()
 REAL_CONFIG_DIR = REAL_HOME / ".domovoi"
 ROOT_CONFIG_DIR = Path("/etc/domovoi")
+# Root's state directory (satellite/net_settings.py keeps its record there).
+ROOT_STATE_DIR = Path("/var/lib/domovoi")
 
 
 @pytest.fixture(scope="session")
@@ -116,7 +118,8 @@ def _relocate(value: Path, home: Path) -> Path | None:
     relocating the source tree would take the bundled sounds and greetings
     with it."""
     for root, stand_in in ((REAL_CONFIG_DIR, home / ".domovoi"),
-                           (ROOT_CONFIG_DIR, home / "etc-domovoi")):
+                           (ROOT_CONFIG_DIR, home / "etc-domovoi"),
+                           (ROOT_STATE_DIR, home / "var-lib-domovoi")):
         try:
             rel = value.relative_to(root)
         except ValueError:

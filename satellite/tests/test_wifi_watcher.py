@@ -341,3 +341,50 @@ def test_the_backoff_is_capped_at_a_minute(monkeypatch, caplog):
     run_sessions(rec, [_session(parked()) for _ in range(9)], monkeypatch)
     assert _waits(caplog)[-3:] == [60.0, 60.0, 60.0]
     assert client._BACKOFF_MAX_SEC == 60.0
+
+
+# ─── review fixes (2026-10-12) ────────────────────────────────────────────
+
+
+def test_a_long_silence_behind_an_answering_gateway_earns_one_recovery(monkeypatch):
+    """The lossy-link class (2026-05-06): the router answers, the core's
+    machine has gone silent (timeouts, not refusals). One recovery after
+    LOSSY_LINK_AFTER_SEC of it, and no more than one per LOSSY_LINK_EVERY_SEC."""
+    monkeypatch.setattr(client, "LOSSY_LINK_AFTER_SEC", 0.0)
+    sat = make_sat(ws_up=False, rx=1.0, core="silent", gateway_ok=True, ticks=5)
+    sat._wifi_watcher_thread_run()
+    assert sat.calls.count(("reassociate",)) == 1
+
+
+def test_a_refusing_core_never_earns_the_lossy_link_recovery(monkeypatch):
+    monkeypatch.setattr(client, "LOSSY_LINK_AFTER_SEC", 0.0)
+    sat = make_sat(ws_up=False, rx=1.0, core="refused", gateway_ok=True, ticks=5)
+    sat._wifi_watcher_thread_run()
+    assert not reassociated(sat)
+
+
+def test_the_lossy_link_allowance_waits_for_a_sustained_silence():
+    assert client.LOSSY_LINK_AFTER_SEC == 600.0 and client.LOSSY_LINK_EVERY_SEC == 3600.0
+    sat = make_sat(ws_up=False, rx=1.0, core="silent", gateway_ok=True, ticks=5)
+    sat._wifi_watcher_thread_run()
+    assert not reassociated(sat)
+
+
+def test_the_hotspot_is_not_acted_on_while_the_core_session_is_up(caplog):
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    sat = make_sat(ws_up=True, rx=None, mode="ap", ticks=3)
+    sat.ws = object()
+    sat._wifi_watcher_thread_run()
+    assert not reassociated(sat)
+    assert not any("HOSTING" in r.getMessage() for r in caplog.records)
+
+
+def test_the_hotspot_error_is_said_at_most_every_ten_minutes(caplog):
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    sat = make_sat(ws_up=False, rx=None, mode="ap", ticks=4)
+    sat._wifi_watcher_thread_run()
+    assert sum("HOSTING" in r.getMessage() for r in caplog.records) == 1

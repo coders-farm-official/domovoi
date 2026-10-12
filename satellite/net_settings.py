@@ -36,9 +36,12 @@ Who runs it, as root:
   code path, and that the owner accepted it for these three settings.
 
 Every run says exactly what it changed: in the journal, and in
-``~/.domovoi/net-settings.json``, which the client reads and logs — so the
-change reaches the log the core retains for the room. A run that changes
-nothing writes the record (the version it holds is how the client knows
+``/var/lib/domovoi/net-settings.json`` — root's own directory, 0644, which
+the client reads and logs, so the change reaches the log the core retains
+for the room. Never in the satellite user's home: root writing there
+follows whatever link that user planted (the first version did, and a
+reviewer had it overwrite a root helper). A run that changes nothing writes
+the record (the version it holds, with no errors, is how the client knows
 the settings are in place) and logs one quiet line.
 
 Stdlib only, like everything provisioning mode imports.
@@ -69,7 +72,18 @@ NET_SETTINGS_VERSION = 1
 
 CONFIG_DIR = Path("~/.domovoi").expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.toml"
-REPORT_PATH = CONFIG_DIR / "net-settings.json"
+#: Root's own state directory (stage 1 made it for its step markers).
+STATE_DIR = Path("/var/lib/domovoi")
+REPORT_PATH = STATE_DIR / "net-settings.json"
+#: The host name this step set, so it renames only a name it set itself.
+HOSTNAME_RECORD = STATE_DIR / "hostname-set"
+WLAN_MAC_PATH = Path("/sys/class/net/wlan0/address")
+MACHINE_ID_PATH = Path("/etc/machine-id")
+#: Root's record of the server's address (provisioning_mode
+#: ROOT_SERVER_URL_PIN), which the clock helper trusts over its caller, and
+#: the root-owned server identity pin first boot installed.
+ROOT_SERVER_URL_PIN = Path("/etc/domovoi/server.url")
+ROOT_IDENTITY_PIN = Path("/etc/domovoi/server-identity.json")
 HOSTS_PATH = Path("/etc/hosts")
 HOSTNAME_PATH = Path("/etc/hostname")
 #: Present when this unit runs the boot-time step at all (a prepared card;
@@ -91,25 +105,46 @@ _LABEL_MAX = 63
 # ─── the host name ─────────────────────────────────────────────────────────
 
 
-def hostname_for_room(room_id: str | None) -> str:
+def unit_suffix(mac_path: Path | None = None, machine_id_path: Path | None = None) -> str:
+    """Six hex digits that stay with this unit: the end of the Wi-Fi MAC,
+    else the start of the machine id; "" when neither can be read."""
+    for path, take in ((mac_path or WLAN_MAC_PATH, lambda t: t[-6:]),
+                       (machine_id_path or MACHINE_ID_PATH, lambda t: t[:6])):
+        try:
+            text = re.sub(r"[^0-9a-f]", "", path.read_text(encoding="utf-8").strip().lower())
+        except OSError:
+            continue
+        if len(text) >= 6:
+            return take(text)
+    return ""
+
+
+def hostname_for_room(room_id: str | None, suffix: str = "") -> str:
     """``domovoi-<room>`` as a valid DNS label: lowercase letters, digits and
-    dashes, no leading or trailing dash, at most 63 characters."""
+    dashes, no leading or trailing dash, at most 63 characters. A room with
+    nothing usable in it (no ASCII letter or digit) is ``domovoi-<suffix>``
+    instead — a stable piece of this unit (:func:`unit_suffix`) — so two
+    such rooms do not both claim one mDNS name."""
     room = (room_id or "").strip().lower()
     room = re.sub(r"[^a-z0-9-]+", "-", room)
     room = re.sub(r"-{2,}", "-", room).strip("-")
-    name = (HOSTNAME_PREFIX + room)[:_LABEL_MAX].rstrip("-")
-    if name == HOSTNAME_PREFIX.rstrip("-") or not room:
-        return HOSTNAME_PREFIX + "satellite"
-    return name
+    if not room:
+        tail = re.sub(r"[^a-z0-9]", "", (suffix or "").lower())[:12]
+        return HOSTNAME_PREFIX + (tail or "satellite")
+    return (HOSTNAME_PREFIX + room)[:_LABEL_MAX].rstrip("-")
 
 
-def may_rename(current: str, wanted: str) -> bool:
+def may_rename(current: str, wanted: str, set_before: str | None = None) -> bool:
     """Whether this step may change ``current`` to ``wanted``: only from a
-    name nobody chose, or from an earlier room's ``domovoi-*`` name."""
+    name nobody chose (the stock one, a blank), or from the name this step
+    itself set earlier (the room was renamed). A ``domovoi-pi`` a person
+    typed is theirs."""
     cur = (current or "").strip().lower()
     if cur == wanted:
         return False
-    return cur in STOCK_HOSTNAMES or cur.startswith(HOSTNAME_PREFIX)
+    if cur in STOCK_HOSTNAMES:
+        return True
+    return bool(set_before) and cur == set_before.strip().lower()
 
 
 def rewrite_hosts(text: str, old: str, new: str) -> str | None:
@@ -280,9 +315,13 @@ def disable_powersave(nmcli: str | None, profiles: list[wifi_profiles.Profile],
                       run: Callable[..., Any], report: Report,
                       iface: str = wifi_profiles.WIFI_IFACE) -> None:
     if nmcli is not None:
-        clients = [p for p in profiles if not p.is_ap]
+        # The HOUSE profile only (`domovoi-home`, or the one in use on an
+        # older card) — not every saved client profile on the unit.
+        home = wifi_profiles.home_profile(profiles, strict=True)
+        clients = [home] if home is not None else []
         if not clients:
-            report.same("no house Wi-Fi profile to set power saving on")
+            report.skip("power saving: no profile is clearly the house network "
+                        "(none named domovoi-home, none active); left for the next boot")
         for p in clients:
             current = _powersave_of(nmcli, p.uuid, run)
             if current == POWERSAVE_DISABLE:
@@ -320,17 +359,23 @@ def disable_powersave(nmcli: str | None, profiles: list[wifi_profiles.Profile],
 
 
 def set_hostname(room_id: str | None, run: Callable[..., Any], report: Report, *,
-                 hostname_path: Path | None = None, hosts_path: Path | None = None) -> str | None:
+                 hostname_path: Path | None = None, hosts_path: Path | None = None,
+                 record_path: Path | None = None, suffix: str | None = None) -> str | None:
     hostname_path = hostname_path or HOSTNAME_PATH
     hosts_path = hosts_path or HOSTS_PATH
+    record_path = record_path or HOSTNAME_RECORD
     if not room_id:
         report.skip("host name: no room_id in config.toml")
         return None
-    wanted = hostname_for_room(room_id)
+    wanted = hostname_for_room(room_id, unit_suffix() if suffix is None else suffix)
     current = read_hostname(hostname_path).strip().lower()
+    try:
+        set_before: str | None = record_path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        set_before = None
     renamed = False
     if current != wanted:
-        if not may_rename(current, wanted):
+        if not may_rename(current, wanted, set_before):
             report.skip(
                 f"host name {current!r} looks chosen by a person; not renaming it "
                 f"to {wanted!r}"
@@ -348,6 +393,12 @@ def set_hostname(room_id: str | None, run: Callable[..., Any], report: Report, *
             _call(run, ["hostname", wanted])
         report.change(f"host name {current!r} -> {wanted!r}")
         renamed = True
+    if renamed:
+        try:
+            record_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            safe_write(record_path.parent, record_path.name, (wanted + "\n").encode("utf-8"))
+        except OSError as e:
+            report.error(f"record the host name this step set: {e}")
     else:
         report.same(f"host name already {wanted!r}")
     try:
@@ -396,6 +447,99 @@ def read_room_id(config_path: Path | None = None) -> str | None:
     return str(room) if room else None
 
 
+def _pinned_fingerprint_root(path: Path) -> str | None:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    fp = doc.get("fingerprint") if isinstance(doc, dict) else None
+    return fp if isinstance(fp, str) and fp.startswith("SHA256:") else None
+
+
+def _configured_url(config_path: Path) -> str | None:
+    import tomllib
+
+    try:
+        with open(config_path, "rb") as f:
+            doc = tomllib.load(f)
+    except (OSError, ValueError):
+        return None
+    url = (doc.get("satellite") or {}).get("domovoi_url")
+    url = str(url).strip() if url else ""
+    return url if url and url.lower() != "auto" else None
+
+
+def refresh_server_pin(
+    report: Report, *,
+    config_path: Path | None = None,
+    pin_path: Path | None = None,
+    identity_path: Path | None = None,
+    probe: Callable[..., bool] | None = None,
+    attempts: int = 6,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Keep root's record of the server's address with the server when it
+    moves (a new DHCP lease): the client finds it again by name and saves
+    the new address in config.toml, but the clock helper believes only
+    ``/etc/domovoi/server.url`` and would refuse the time from then on.
+
+    Root does not take the satellite user's config.toml for it: the
+    address there has to prove, to THIS process, that it is the server the
+    root-owned identity pin names (a fresh nonce signed for the address
+    dialled). Without that pin nothing is changed. A server that does not
+    answer this boot is left for the next one (not an error: the core may
+    be restarting)."""
+    from satellite import discovery, server_identity
+
+    pin_path = pin_path or ROOT_SERVER_URL_PIN
+    try:
+        pinned = pin_path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        pinned = None
+    if pinned is None:
+        report.same("no root server-address record (the clock helper is unpinned)")
+        return
+    fingerprint = _pinned_fingerprint_root(identity_path or ROOT_IDENTITY_PIN)
+    configured = _configured_url(config_path or CONFIG_PATH)
+    if configured is None:
+        report.same("no server address in config.toml to compare with root's record")
+        return
+    dialed = server_identity.dialed_address
+    if dialed(discovery.http_base_of(configured)) == dialed(discovery.http_base_of(pinned)):
+        report.same("root's server address is current")
+        return
+    if fingerprint is None:
+        report.skip(f"the server address moved to {configured}, but there is no root-owned "
+                    "identity pin to check it against; root's record left at " + pinned)
+        return
+    host, port = discovery.host_port_of(configured)
+    probe = discovery.probe if probe is None else probe
+    ok = False
+    for i in range(max(1, attempts)):
+        try:
+            ok = bool(host) and bool(probe(host, port=port, timeout=3.0,
+                                           expected_fingerprint=fingerprint))
+        except Exception:  # noqa: BLE001
+            ok = False
+        if ok:
+            break
+        if i + 1 < attempts:
+            sleep(5.0)
+    if not ok:
+        report.skip(f"the server address moved to {configured}, but it did not prove to root "
+                    f"that it is this device's server this boot; root's record stays {pinned} "
+                    "(tried again next boot)")
+        return
+    try:
+        pin_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        safe_write(pin_path.parent, pin_path.name, (configured + "\n").encode("utf-8"))
+    except OSError as e:
+        report.error(f"update root's server address to {configured}: {e}")
+        return
+    report.change(f"root's server address {pinned} -> {configured} (it signed for that "
+                  "address with the pinned key); the clock follows it")
+
+
 def apply(
     room_id: str | None,
     *,
@@ -404,9 +548,12 @@ def apply(
     report_path: Path | None = None,
     hostname_path: Path | None = None,
     hosts_path: Path | None = None,
+    record_path: Path | None = None,
+    suffix: str | None = None,
     sleep: Callable[[float], None] = time.sleep,
     nmcli: str | None = None,
     nm_wait: float = _NM_WAIT_SEC,
+    server_pin: Callable[[Report], None] | None = None,
 ) -> dict[str, Any]:
     """Apply the three settings; return (and record) what changed. Never
     raises: a satellite must boot whatever this step manages."""
@@ -431,9 +578,15 @@ def apply(
             report.same("no NetworkManager: no setup hotspot profile to delete")
         disable_powersave(nm, profiles, run, report)
         hostname = set_hostname(room_id, run, report,
-                                hostname_path=hostname_path, hosts_path=hosts_path)
+                                hostname_path=hostname_path, hosts_path=hosts_path,
+                                record_path=record_path, suffix=suffix)
     except Exception as e:  # noqa: BLE001 — never take the boot down
         report.error(f"unexpected failure: {e!r}")
+    if server_pin is not None:
+        try:
+            server_pin(report)
+        except Exception as e:  # noqa: BLE001
+            report.error(f"server address record: unexpected failure: {e!r}")
     doc = report.document(room_id=room_id, hostname=hostname, when=when)
     write_report(doc, report_path or REPORT_PATH)
     if not report.changed and not report.errors:
@@ -441,27 +594,81 @@ def apply(
     return doc
 
 
-def write_report(doc: dict[str, Any], path: Path) -> bool:
-    """Atomically, and handed to the satellite user (who reads it)."""
-    tmp = path.with_name(path.name + ".tmp")
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+
+
+def safe_write(directory: Path, name: str, data: bytes, *, mode: int = 0o644,
+               owner: tuple[int, int] | None = None) -> None:
+    """Write ``directory/name`` atomically without following a link anywhere.
+
+    The directory is opened once, refusing a symlink (``O_NOFOLLOW |
+    O_DIRECTORY``), and everything after happens relative to that open
+    directory: the temporary file is created ``O_CREAT | O_EXCL |
+    O_NOFOLLOW`` (a link planted under its name is removed, never written
+    through), its mode and owner are set on the open file (``fchmod`` /
+    ``fchown``, never by path), and it is renamed over ``name`` — which
+    replaces a link planted there rather than writing to its target.
+    Running as root, the directory must also be root's. Raises OSError."""
+    tmp = f".{name}.tmp{os.getpid()}"
+    if os.open in os.supports_dir_fd and _NOFOLLOW and _DIRECTORY:
+        dfd = os.open(directory, os.O_RDONLY | _DIRECTORY | _NOFOLLOW)
+        try:
+            geteuid = getattr(os, "geteuid", None)
+            if geteuid is not None and geteuid() == 0 and owner is None:
+                if os.fstat(dfd).st_uid != 0:
+                    raise PermissionError(f"{directory} is not root's; not writing into it as root")
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW, mode, dir_fd=dfd)
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fchmod(fd, mode)
+                if owner is not None:
+                    os.fchown(fd, owner[0], owner[1])
+                try:
+                    os.fsync(fd)
+                except OSError:
+                    pass
+            finally:
+                os.close(fd)
+            try:
+                os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            except OSError:
+                try:
+                    os.unlink(tmp, dir_fd=dfd)
+                except OSError:
+                    pass
+                raise
+        finally:
+            os.close(dfd)
+        return
+    # A platform without dir_fd / O_NOFOLLOW (a developer's Windows box):
+    # the same sequence by path. Nothing here runs as root there.
+    target = Path(directory) / name
+    tmp_path = Path(directory) / tmp
+    tmp_path.unlink(missing_ok=True)
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), mode)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(doc, indent=1), encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+    os.replace(tmp_path, target)
+
+
+def write_report(doc: dict[str, Any], path: Path) -> bool:
+    """Atomically, into root's own directory (made 0755 if it is missing),
+    0644 so the satellite user can read it. Never through a link."""
+    try:
+        path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        safe_write(path.parent, path.name, json.dumps(doc, indent=1).encode("utf-8"))
     except OSError as e:
         log.warning("could not write %s: %s", path, e)
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
         return False
-    chown = getattr(os, "chown", None)
-    if chown is not None:
-        try:
-            st = path.parent.stat()
-            chown(path, st.st_uid, st.st_gid)
-        except OSError:
-            pass
     return True
 
 
@@ -478,16 +685,25 @@ def read_report(path: Path | None = None) -> dict[str, Any] | None:
 
 def reboot_needed(report: dict[str, Any] | None, *, unit_installed: bool) -> str | None:
     """Why this unit needs a reboot for its network settings, or None. Only
-    a unit that runs the boot-time step can be asked to reboot for it."""
+    a unit that runs the boot-time step can be asked to reboot for it, and
+    it stays asked until a run at the current version had no errors."""
     if not unit_installed:
         return None
     version = (report or {}).get("version")
-    if isinstance(version, int) and not isinstance(version, bool) and version >= NET_SETTINGS_VERSION:
-        return None
-    return (
-        "network settings (no setup hotspot, Wi-Fi power saving off, host name "
-        "domovoi-<room>) are applied at boot: reboot this satellite once"
-    )
+    current = isinstance(version, int) and not isinstance(version, bool) and version >= NET_SETTINGS_VERSION
+    if not current:
+        return (
+            "network settings (no setup hotspot, Wi-Fi power saving off, host name "
+            "domovoi-<room>) are applied at boot: reboot this satellite once"
+        )
+    errors = [e for e in (report or {}).get("errors") or [] if isinstance(e, str)]
+    if errors:
+        return (
+            f"the boot-time network settings did not all apply ({errors[0][:120]}"
+            f"{f' and {len(errors) - 1} more' if len(errors) > 1 else ''}); "
+            "reboot this satellite to retry"
+        )
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:

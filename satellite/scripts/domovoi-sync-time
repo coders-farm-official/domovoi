@@ -21,7 +21,11 @@ sets the clock and the zone as root. So when the root-owned pins written at
 adoption exist, they decide:
 
   * /etc/domovoi/server.url - the address. An argument naming a different
-    host is refused (exit 2) and nothing is applied.
+    host is refused (exit 2) and nothing is applied - unless the server
+    has moved: with the identity pin and the verifier below in place, a
+    different address that proves to THIS run that it is the pinned
+    server (a fresh nonce signed for that address) is followed, and
+    becomes the recorded address. The caller's word is never enough.
   * /etc/domovoi/server-identity.json - the server's Ed25519 fingerprint.
     The host has to sign a nonce this run invents - and the address this
     run dialed - before its clock is copied, checked with the root-owned
@@ -167,6 +171,28 @@ def authorized_url(requested: str, pin: str | None) -> tuple[str | None, str]:
             f"{http_base(pin)}"
         )
     return pin, "pinned"
+
+
+def write_url_pin(url: str, path: str | None = None) -> bool:
+    """Record the address the server proved itself at. /etc/domovoi is
+    root's; the new record replaces the old one atomically."""
+    path = SERVER_URL_PIN if path is None else path
+    tmp = path + ".tmp"
+    try:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                     | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        try:
+            os.write(fd, (url.strip() + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
 
 
 def _verifier(directory: str | None = None):
@@ -439,11 +465,24 @@ def main(argv: list[str] | None = None) -> int:
     # caller's. Both refusals happen before anything is fetched, so a
     # refused run leaves the clock and the zone exactly as they were.
     server_url, why = authorized_url(args[0], read_url_pin())
-    if server_url is None:
-        print(why)
-        return 2
     identity_pin = read_identity_pin()
-    if identity_pin is not None:
+    moved = False
+    if server_url is None:
+        # Not the address root recorded. The server may have moved (a new
+        # DHCP lease) and the client found it again: follow it only when it
+        # proves, to this run, that it is the server the identity pin names
+        # - and only with a verifier to check that with.
+        if identity_pin is None or _verifier() is None:
+            print(why)
+            return 2
+        problem = verify_identity(args[0], identity_pin)
+        if problem:
+            print(f"{why}; and it did not prove it is this device's server: {problem}")
+            return 2
+        server_url, moved = args[0], True
+        if not dry_run:
+            write_url_pin(server_url)
+    if identity_pin is not None and not moved:
         problem = verify_identity(server_url, identity_pin)
         if problem:
             print(f"refusing the time from {http_base(server_url)}: {problem}")
@@ -456,6 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     summary, failed = apply(
         plan(doc, rtt, current_tz=current_zone()), dry_run=dry_run
     )
+    if moved:
+        summary = f"the server moved to {http_base(server_url)} (it proved it); {summary}"
     print(summary)
     return 2 if failed else 0
 

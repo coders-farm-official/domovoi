@@ -21,8 +21,11 @@ import pytest
 from satellite import portal_transport, provisioning_mode, wifi_profiles as wp
 
 HOME = wp.Profile(name="domovoi-home", uuid="u-home", mode="infrastructure", ssid="HomeNet", active=True)
-OLD_HOME = wp.Profile(name="HomeNet", uuid="u-old", mode="infrastructure", ssid="HomeNet", active=True)
-SETUP = wp.Profile(name="domovoi-setup", uuid="u-setup", mode="ap", ssid="Domovoi-Setup-AB12")
+# Timestamps as NetworkManager keeps them: the house profile was used last.
+OLD_HOME = wp.Profile(name="HomeNet", uuid="u-old", mode="infrastructure", ssid="HomeNet",
+                      active=True, timestamp=200)
+SETUP = wp.Profile(name="domovoi-setup", uuid="u-setup", mode="ap", ssid="Domovoi-Setup-AB12",
+                   timestamp=100)
 
 
 def _argvs(plan):
@@ -50,10 +53,22 @@ def test_no_plan_ever_names_the_setup_profile(associated, visible, ap_active):
             assert not plan.home.is_ap
 
 
+def _device_connect(plan) -> bool:
+    return wp.device_connect_argv() in _argvs(plan)
+
+
 def test_the_old_command_is_refused_while_the_hotspot_profile_exists_and_home_is_out_of_sight():
     """The trap itself: router rebooting (home not in the scan), link down,
-    hotspot profile saved. `device connect` here IS the hotspot."""
+    hotspot profile saved. `device connect` here IS the hotspot. Only the
+    house profile by its uuid is offered (an older sudoers refuses it)."""
     plan = wp.plan_recovery([OLD_HOME, SETUP], visible=set(), associated=False)
+    assert not _device_connect(plan)
+    assert _argvs(plan) == [wp.connection_up_uuid_argv("u-old")]
+
+
+def test_with_nothing_but_the_old_command_allowed_nothing_runs():
+    home = wp.Profile(name="HomeNet", uuid="", mode="infrastructure", ssid="HomeNet")
+    plan = wp.plan_recovery([home, SETUP], visible=set(), associated=False)
     assert plan.steps == []
     assert "setup hotspot" in plan.reason
 
@@ -61,24 +76,53 @@ def test_the_old_command_is_refused_while_the_hotspot_profile_exists_and_home_is
 def test_the_old_command_is_allowed_once_the_hotspot_profile_is_gone():
     """An older unit after the upgrade and a reboot: the boot-time step
     deleted the hotspot profile, so NetworkManager's choice can only be a
-    client profile."""
+    client profile. The house profile by uuid is still tried first."""
     plan = wp.plan_recovery([OLD_HOME], visible=set(), associated=False)
-    assert _argvs(plan) == [wp.device_connect_argv()]
+    assert _argvs(plan) == [wp.connection_up_uuid_argv("u-old"), wp.device_connect_argv()]
 
 
-def test_the_old_command_is_allowed_when_the_house_network_is_in_sight():
-    """With the house network in the scan its profile is available, and
-    NetworkManager prefers the one it used last over a setup profile last
-    used during setup."""
+def test_the_old_command_is_allowed_when_home_is_in_sight_and_newer_than_the_hotspot():
+    """NetworkManager picks the most recently used AVAILABLE profile, and an
+    AP is always available: the house profile must be in sight AND newer."""
     plan = wp.plan_recovery([OLD_HOME, SETUP], visible={"HomeNet"}, associated=False)
-    assert _argvs(plan) == [wp.device_connect_argv()]
+    assert _device_connect(plan)
+
+
+def test_the_old_command_is_refused_when_the_hotspot_was_used_more_recently():
+    """Before its first reboot an old card whose radio hosted the hotspot
+    last would get it back from `device connect`. And once it has hosted
+    it, the hotspot is the newest profile: the old command can never run
+    twice into it (no loop)."""
+    hot = wp.Profile(name="domovoi-setup", uuid="u-setup", mode="ap", ssid="X", timestamp=300)
+    plan = wp.plan_recovery([OLD_HOME, hot], visible={"HomeNet"}, associated=False)
+    assert not _device_connect(plan)
 
 
 def test_while_hosting_the_hotspot_the_old_command_is_never_used():
     """The radio cannot scan while it hosts, and the active AP is the
     profile `device connect` would pick again."""
     plan = wp.plan_recovery([OLD_HOME, SETUP], visible={"HomeNet"}, associated=False, ap_active=True)
-    assert plan.steps == []
+    assert not _device_connect(plan)
+
+
+def test_a_profile_whose_mode_cannot_be_read_counts_as_an_access_point():
+    """Fail safe: an unreadable profile is never home, and it blocks the old
+    command exactly as a known AP does."""
+    mystery = wp.Profile(name="Travel", uuid="u-x", mode=wp.UNKNOWN_MODE, ssid="")
+    assert mystery.is_ap
+    assert wp.home_profile([mystery]) is None
+    plan = wp.plan_recovery([OLD_HOME, mystery], visible=set(), associated=False)
+    assert not _device_connect(plan)
+    # An unset mode, read fine, is NetworkManager's default: a client.
+    assert not wp.Profile(name="HomeNet", uuid="u", mode="", ssid="HomeNet").is_ap
+
+
+def test_root_never_guesses_which_profile_is_home():
+    a = wp.Profile(name="A", uuid="a", mode="infrastructure", ssid="NetA")
+    b = wp.Profile(name="B", uuid="b", mode="infrastructure", ssid="NetB")
+    assert wp.home_profile([a, b], strict=True) is None
+    assert wp.home_profile([a, wp.Profile(name="B", uuid="b", mode="infrastructure",
+                                          ssid="NetB", active=True)], strict=True).name == "B"
 
 
 def test_a_new_card_brings_home_back_by_name():
@@ -155,8 +199,9 @@ class FakeNmcli:
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
         joined = " ".join(argv)
-        if "NAME,UUID,TYPE,ACTIVE" in joined:
+        if "NAME,UUID,TYPE,ACTIVE,TIMESTAMP" in joined:
             rows = [f"{p['name'].replace(':', chr(92) + ':')}:{p['uuid']}:{p['type']}:{p.get('active', 'no')}"
+                    f":{p.get('ts', 0)}"
                     for p in self.profiles]
             return subprocess.CompletedProcess(argv, 0, "\n".join(rows) + "\n", "")
         if "802-11-wireless.mode,802-11-wireless.ssid" in joined:
@@ -177,9 +222,9 @@ def test_profiles_are_read_with_their_mode_and_ssid():
         {"name": "Wired", "uuid": "u3", "type": "802-3-ethernet", "mode": "", "ssid": ""},
     ])
     profiles = wp.list_wifi_profiles(nm)
-    assert [(p.name, p.mode, p.ssid, p.active) for p in profiles] == [
-        ("domovoi-home", "infrastructure", "Guest:5G", True),
-        ("domovoi-setup", "ap", "Domovoi-Setup-X", False),
+    assert [(p.name, p.mode, p.ssid, p.active, p.timestamp) for p in profiles] == [
+        ("domovoi-home", "infrastructure", "Guest:5G", True, 0),
+        ("domovoi-setup", "ap", "Domovoi-Setup-X", False, 0),
     ]
     assert wp.visible_ssids(nm) == {"HomeNet", "Neighbour"}
 

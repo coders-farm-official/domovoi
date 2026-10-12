@@ -280,6 +280,7 @@ def _lan_probe(owners):
 
 
 def test_a_paired_satellite_follows_its_core_by_name_and_saves_it(sidecars, monkeypatch):
+    monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
     monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
                         lambda name, *a, **k: [(2, 1, 6, "", ("192.168.0.50", 6370))])
     monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.0.50": OURS}))
@@ -295,6 +296,7 @@ def test_a_paired_satellite_follows_its_core_by_name_and_saves_it(sidecars, monk
 
 def test_an_impostor_answering_the_name_changes_nothing(sidecars, monkeypatch):
     theirs = _server(2)
+    monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
     monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
                         lambda name, *a, **k: [(2, 1, 6, "", ("192.168.0.66", 6370))])
     monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.0.66": theirs}))
@@ -307,14 +309,66 @@ def test_an_impostor_answering_the_name_changes_nothing(sidecars, monkeypatch):
     assert sidecars.read_text(encoding="utf-8") == before
 
 
-def test_a_core_that_is_merely_down_is_not_searched_for(monkeypatch):
+def test_a_core_that_is_merely_down_is_not_swept_for(sidecars, monkeypatch):
     """Its machine refuses at the old address: the server is there, just
-    not listening (a restart). No name lookups, no sweep."""
-    sat = object.__new__(client.Satellite)
-    sat.cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2])
+    not listening (a restart). The names are asked (cheap, key-checked);
+    the /24 sweep — ~20 s at every start while the core is down — is not."""
+    asked = []
+    monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
+                        lambda name, *a, **k: asked.append(name) or [])
+    monkeypatch.setattr(discovery, "probe", lambda *a, **k: False)
     monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "refused")
-    monkeypatch.setattr(client, "_locate_server", lambda cfg: pytest.fail("searched"))
+    monkeypatch.setattr(discovery, "find_core", lambda **k: pytest.fail("swept while refused"))
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+                                room_id="kitchen")
+    assert client._resolve_server_url(cfg, sidecars) is True
+    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert asked == ["domovoi.local"]
+
+
+def test_the_core_is_followed_even_when_its_old_address_now_refuses(sidecars, monkeypatch):
+    """The core moved .117 -> .50 and a phone took .117 and resets 6370.
+    The refusal must not stop the search: the name finds .50, which proves
+    it holds the pinned key."""
+    monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
+                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.0.50", 6370))])
+    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.0.50": OURS}))
+    monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "refused")
+    monkeypatch.setattr(discovery, "find_core", lambda **k: pytest.fail("swept"))
+    monkeypatch.setattr(client, "CONFIG_PATH", sidecars)
+    sat = object.__new__(client.Satellite)
+    sat.cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+                                    room_id="kitchen", sat_type="voice")
     sat._relocate_server()
+    assert sat.cfg.domovoi_url == "ws://192.168.0.50:6370"
+    assert 'domovoi_url = "ws://192.168.0.50:6370"' in sidecars.read_text(encoding="utf-8")
+
+
+def test_a_video_satellite_s_kiosk_follows_the_move(sidecars, monkeypatch):
+    restarted = []
+    monkeypatch.setattr(client.kiosk, "restart_kiosk", lambda: restarted.append(1) or True)
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+                                room_id="kitchen", sat_type="video")
+    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.0.50:6370", "name", "x"), False)
+    assert restarted == [1]
+    cfg.sat_type = "voice"
+    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.0.51:6370", "name", "x"), False)
+    assert restarted == [1]
+
+
+def test_the_config_write_is_atomic(sidecars, monkeypatch):
+    """A failed write leaves the old config.toml whole, and no temp behind."""
+    before = sidecars.read_text(encoding="utf-8")
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(client.os, "replace", boom)
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+                                room_id="kitchen", sat_type="voice")
+    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.0.50:6370", "name", "x"), False)
+    assert sidecars.read_text(encoding="utf-8") == before
+    assert not sidecars.with_name(sidecars.name + ".tmp").exists()
 
 
 def test_the_connect_loop_searches_again_when_the_core_stays_dark():

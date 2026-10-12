@@ -31,6 +31,14 @@ set -eu
 VENV_PY="${DOMOVOI_VENV_PY:-$HOME/satellite-venv/bin/python}"
 URL="$("$VENV_PY" -m satellite.kiosk --print-url)"
 
+PROFILE="$HOME/.domovoi/kiosk-profile"
+# Chromium's profile lock names the host that holds it. A host-name change
+# (satellite/net_settings.py names the unit domovoi-<room>) leaves a lock
+# naming the OLD host, and Chromium then stops on "profile in use on
+# another computer" - a frozen kiosk. Nothing else uses this profile and
+# the browser is not running yet, so the lock is stale by definition.
+rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonSocket" "$PROFILE/SingletonCookie"
+
 BROWSER="${DOMOVOI_KIOSK_BROWSER:-chromium}"
 command -v "$BROWSER" >/dev/null 2>&1 || BROWSER=chromium-browser
 
@@ -39,7 +47,7 @@ exec cage -- "$BROWSER" \
   --noerrdialogs \
   --disable-session-crashed-bubble \
   --autoplay-policy=no-user-gesture-required \
-  --user-data-dir="$HOME/.domovoi/kiosk-profile" \
+  --user-data-dir="$PROFILE" \
   --disable-background-networking \
   --disable-component-update \
   --no-pings \
