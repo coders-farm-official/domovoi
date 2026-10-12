@@ -73,34 +73,6 @@ class PhonemizerGoldenTest {
 
     private fun JsonElement.idLists(): List<List<Int>> = jsonArray.map { l -> l.jsonArray.map { it.jsonPrimitive.int } }
 
-    /**
-     * Cases whose one difference is a near tie of the model that the fixture
-     * does not mark: scripts/g2p/make_golden.py records `near_tie` for the
-     * model words of a case's text, not for the syllables of a "say it like"
-     * respelling, which go through the same model. "shiv" (Siobhan =
-     * shiv-AWN) is IY1 17.983 against IH1 17.937 on ONNX Runtime 1.24.4,
-     * 0.046 apart; ONNX Runtime 1.28.0 here picks IH1. Reported as a fixture
-     * gap, not patched here. Each entry is checked to really be within the
-     * fixture's margin and one phone of the fixture's answer.
-     */
-    private val unmarkedNearTies = mapOf("say_it_like-004" to "shiv")
-
-    /** The smallest gap, over the model's frames, between the phone it
-     *  picks and the runner-up. */
-    private fun modelMargin(word: String): Float {
-        val ids = word.mapNotNull { data.vocab.letters[it] }.take(data.vocab.maxChars).toLongArray()
-        return model.logits(ids).minOf { f -> f.sortedArrayDescending().let { it[0] - it[1] } }
-    }
-
-    private fun withinUnmarkedNearTie(case: JsonObject, id: String, p: Phonemizer): Boolean {
-        val word = unmarkedNearTies[id] ?: return false
-        val margin = golden.getValue("near_tie_margin").jsonPrimitive.content.toFloat()
-        if (modelMargin(word) >= margin) return false
-        val want = case.getValue("resolved").jsonObject.mapValues { it.value.jsonPrimitive.content.split(' ') }
-        val got = p.pronunciations().mapValues { it.value.resolved.split(' ') }
-        return want.keys == got.keys && want.all { (k, v) -> distance(v, got.getValue(k)) <= 1 }
-    }
-
     /** Levenshtein distance over phone tokens. */
     private fun distance(a: List<String>, b: List<String>): Int {
         val d = Array(a.size + 1) { IntArray(b.size + 1) }
@@ -113,12 +85,27 @@ class PhonemizerGoldenTest {
     }
 
     /**
-     * The fixture's allowance for a near-tie case that did not match
-     * exactly: the only differences are in the model's output for the
-     * case's near-tie words, each at most one phone from the fixture's.
+     * The fixture's allowance, for a case the fixture marks `near_tie` only,
+     * that did not match exactly: the only differences are in the model's
+     * output for the case's near-tie words, each at most one phone from the
+     * fixture's. A near tie in a "say it like" respelling (`respelling_model`,
+     * say_it_like-004's "shiv") is held to the rule the Python test uses:
+     * the same entries, each at most one phone per tie from the fixture's,
+     * and the sentences within two characters per tie.
      */
     private fun withinNearTie(case: JsonObject, p: Phonemizer): Boolean {
         val nearTie = case["near_tie"]?.strings()?.toSet() ?: return false
+        if (nearTie.isEmpty()) return false
+        val respelled = case["respelling_model"]?.jsonArray?.map { it.jsonArray[0].jsonPrimitive.content }.orEmpty()
+        if (nearTie.any { it in respelled }) {
+            val want = case.getValue("resolved").jsonObject.mapValues { it.value.jsonPrimitive.content.split(' ') }
+            val got = p.pronunciations().mapValues { it.value.resolved.split(' ') }
+            if (want.keys != got.keys || !want.all { (k, v) -> distance(v, got.getValue(k)) <= nearTie.size }) return false
+            val wantText = case.getValue("phonemes").strings()
+            val gotText = p.phonemize(case.getValue("text").jsonPrimitive.content)
+            return wantText.size == gotText.size &&
+                distance(wantText.joinToString(" | ").map { it.toString() }, gotText.joinToString(" | ").map { it.toString() }) <= 2 * nearTie.size
+        }
         val want = case["model"]?.jsonArray?.associate { e ->
             e.jsonArray[0].jsonPrimitive.content to e.jsonArray[1].jsonPrimitive.content.split(' ')
         } ?: return false
@@ -185,7 +172,7 @@ class PhonemizerGoldenTest {
                 exact++
                 val ids = got.map { PhonemeIds.ids(it, data.idMap).toList() }
                 if (ids != case.getValue("ids").idLists()) failures += "$id ids differ for $got"
-            } else if (withinNearTie(case, p) || withinUnmarkedNearTie(case, id, p)) {
+            } else if (withinNearTie(case, p)) {
                 allowed += "$id: want $want, got $got" + if (resolvedOk) "" else " (resolved $gotResolved)"
             } else {
                 failures += "$id $text\n    want $want\n    got  $got" +
@@ -226,6 +213,43 @@ class PhonemizerGoldenTest {
         val voices = meta.getValue("voice_configs_sha256").jsonObject.keys.map { it.removeSuffix(".onnx.json") }.toSet()
         val ids = golden.getValue("ids").jsonObject
         assertEquals(voices, setOf(ids.getValue("voice").jsonPrimitive.content) + ids.getValue("same_for").strings())
+    }
+
+    /** A syllable of a "say it like" entry the model reads is marked like any
+     *  word of the text (say_it_like-004: "shiv"), so the allowance above
+     *  needs no list of its own. */
+    @Test fun nearTiesInRespellingsAreMarkedInTheFixture() {
+        val case = cases.first { it.getValue("id").jsonPrimitive.content == "say_it_like-004" }
+        assertEquals(listOf("shiv"), case.getValue("near_tie").strings())
+        assertEquals("shiv", case.getValue("respelling_model").jsonArray[0].jsonArray[0].jsonPrimitive.content)
+        assertTrue("shiv" in golden.getValue("near_tie_words").strings())
+    }
+
+    /** normalize.py's long-number pass (review 2026-10-12): more than 30
+     *  digits are read digit by digit before anything else; 30 and fewer as
+     *  before (test_phonemizer.py, the same cases). */
+    @Test fun aLongNumberIsReadDigitByDigit() {
+        val ws = Regex("""\s+""")
+        assertEquals(List(31) { "seven" }, Normalize.prenormalize("7".repeat(31)).trim().split(ws))
+        assertEquals("dollars", Normalize.prenormalize("\$" + "1".repeat(18)).trim().split(ws).last())
+        // read before the money pattern sees it, as normalize.py does
+        assertEquals(listOf("\$") + List(31) { "one" }, Normalize.prenormalize("\$" + "1".repeat(31)).trim().split(ws))
+        assertEquals(4400, Regex("wˈɒn").findAll(ph.phonemize("1".repeat(4400))[0]).count())
+    }
+
+    @Test fun aVeryLongNumberIsQuickAndNeverThrows() {
+        val texts = listOf(
+            "1".repeat(16000), "1".repeat(16000) + "%", "1".repeat(16000) + " km", "1".repeat(16000) + "°C",
+            "x " + "1".repeat(4400), "\$" + "1".repeat(5000), "3." + "1".repeat(16000), "1".repeat(16000) + ".5",
+            "1".repeat(16000) + "th", "1,".repeat(8000),
+        )
+        for (text in texts) {
+            val t0 = System.nanoTime()
+            val words = Normalize.prenormalize(text)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+            assertTrue("${text.take(12)}... took $ms ms", ms < 2000)
+            assertTrue(words.isNotBlank())
+        }
     }
 
     /** The benchmark's voice samples are the fixture's 13 comparison sentences. */

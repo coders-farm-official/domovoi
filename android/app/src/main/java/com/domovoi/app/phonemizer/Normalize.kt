@@ -75,19 +75,25 @@ internal object Normalize {
     private const val KEEP_PUNCT = ",.!?;:"
     private val TITLES = setOf("mr.", "mrs.", "ms.", "dr.", "prof.", "mt.", "no.")
 
+    /** A number longer than this many digits is read digit by digit before
+     *  anything else looks at it: no number word exists for it, and every
+     *  later pattern then sees short runs only (normalize.py). */
+    const val LONG_NUMBER_DIGITS = 30
+
     // The patterns, in prenormalize's order.
+    private val LONG_NUMBER = Regex("""$D[$D,]*(?:\.$D+)?""")
     private val STYLIZED = Regex("""(?<=[A-Za-z])\$|\$(?=[A-Za-z])""")
     private val MONEY = Regex(
         """([$£€])$S?($D[$D,]*)(?:\.($D+))?(?:$S?(thousand|million|billion|trillion|[KMB]$B))?""",
     )
-    private val TEMP = Regex("""(-?$D+(?:\.$D+)?)$S?°$S?([FC])?$B""")
-    private val PERCENT = Regex("""(-?$D+(?:\.$D+)?)$S?%""")
+    private val TEMP = Regex("""(?<!$D)(-?$D+(?:\.$D+)?)$S?°$S?([FC])?$B""")
+    private val PERCENT = Regex("""(?<!$D)(-?$D+(?:\.$D+)?)$S?%""")
     private val TIME = Regex("""$B($D{1,2}):($D{2})(?:$S*([AaPp]\.?$S?[Mm]\.?)(?![A-Za-z]))?""")
     private val AMPM = Regex("""$B($D{1,2})$S*([AaPp])\.?$S?[Mm]$B\.?""")
     private val PHONE = Regex("""(?:\($D{3}\)$S?|$B$D{3}[-.])?$B$D{3}[-.]$D{4}$B""")
     private val DATE_MD = Regex("""$B($D{1,2})/($D{1,2})(?:/($D{4}|$D{2}))?$B""")
     private val UNIT_RE = Regex(
-        """(?i)($D+(?:\.$D+)?)$S?(""" +
+        """(?i)(?<!$D)($D+(?:\.$D+)?)$S?(""" +
             UNITS.keys.sortedByDescending { it.length }.joinToString("|") + """)$B""",
     )
     private val ORDINAL = Regex("""$B($D+)(st|nd|rd|th)$B""")
@@ -183,6 +189,16 @@ internal object Normalize {
         return N.cardinal(Py.int(s))
     }
 
+    private fun longNumber(m: MatchResult): String {
+        val dot = m.value.indexOf('.')
+        val whole = if (dot < 0) m.value else m.value.substring(0, dot)
+        val frac = if (dot < 0) "" else m.value.substring(dot + 1)
+        if (whole.count { it.isDigit() } <= LONG_NUMBER_DIGITS) return m.value
+        var out = " " + N.digits(whole)
+        if (frac.isNotEmpty()) out += " point " + frac.map { N.ONES[Character.digit(it, 10)] }.joinToString(" ")
+        return "$out "
+    }
+
     private fun plainNumber(s: String): String {
         if (FOURDIGITS.matches(s)) {
             val n = Py.int(s).toInt()
@@ -228,6 +244,8 @@ internal object Normalize {
         var t = Py.nfc(text)
         t = t.replace("’", "'").replace("‘", "'").replace("“", "\"").replace("”", "\"")
         t = t.replace("—", ", ").replace("–", " to ").replace("…", "...")
+        // very long numbers: digit by digit, first (LONG_NUMBER_DIGITS)
+        t = LONG_NUMBER.sub(t) { m, _ -> longNumber(m) }
         // stylized names: $ glued to letters is an S ($uicideboy$ -> suicideboys)
         t = STYLIZED.replace(t, "s")
         t = MONEY.sub(t) { m, _ -> money(m) }

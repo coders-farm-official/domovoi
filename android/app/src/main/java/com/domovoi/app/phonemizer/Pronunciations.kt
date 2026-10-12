@@ -55,7 +55,7 @@ object Pronunciations {
         if (w.codePointCount(0, w.length) > MAX_WORD_CHARS) {
             throw PronunciationException("${w.take(20)}...: a word is at most $MAX_WORD_CHARS letters")
         }
-        if (!Normalize.TOKEN_RE.matches(w) || w.startsWith("<")) {
+        if (!Normalize.TOKEN_RE.matches(w) || w.startsWith("<") || w.none { it.isLetter() }) {
             throw PronunciationException("$w: one word only (letters, with ' or - inside), as it is written in text")
         }
         return Py.stripAccents(Py.nfc(w)).lowercase()
