@@ -193,3 +193,43 @@ def test_db_page_dicts_strips_key_columns():
     assert more is True and [p["id"] for p in page] == [0, 1, 2]
     assert all("_pk0" not in p for p in page)
     assert json.loads(base64.urlsafe_b64decode(nxt + "==").decode()) == {"s": "x", "k": ["v2", 2]}
+
+
+# ─── listing_cache bookkeeping (DB-free) ─────────────────────────────────────
+def _snap(n: int):
+    from web.backend.api import listing_cache
+
+    return listing_cache.Snapshot(rows=[{"i": i} for i in range(n)], hay=[""] * n, dirs={})
+
+
+def test_the_cache_is_bounded_by_rows_and_keeps_the_newest(monkeypatch):
+    from web.backend.api import listing_cache
+
+    listing_cache.clear()
+    monkeypatch.setattr(listing_cache, "MAX_CACHED_ROWS", 25)
+    for name in ("a", "b", "c"):
+        listing_cache.get((f"lib:{name}", "/r"), lambda: _snap(10))
+    kept = [k[0] for k in listing_cache._snapshots]
+    assert kept == ["lib:b", "lib:c"]
+    listing_cache.get(("lib:huge", "/r"), lambda: _snap(100))
+    assert [k[0] for k in listing_cache._snapshots] == ["lib:huge"]   # alone, never evicted
+    listing_cache.clear()
+
+
+def test_invalidate_drops_a_library_and_an_in_flight_build_is_not_kept():
+    from web.backend.api import listing_cache
+
+    listing_cache.clear()
+    first = listing_cache.get(("lib:x", "/r"), lambda: _snap(1))
+    assert listing_cache.get(("lib:x", "/r"), lambda: _snap(2)) is first      # cached
+    listing_cache.invalidate("lib:x")
+    assert first.expired
+
+    def build_while_a_write_lands():
+        listing_cache.invalidate("lib:x")
+        return _snap(3)
+
+    got = listing_cache.get(("lib:x", "/r"), build_while_a_write_lands)
+    assert len(got.rows) == 3                     # the caller gets its answer...
+    assert ("lib:x", "/r") not in listing_cache._snapshots   # ...but it isn't kept
+    listing_cache.clear()

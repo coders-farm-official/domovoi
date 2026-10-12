@@ -25,15 +25,17 @@ built lazily, once per sort, and kept on the snapshot.
   directory mtime records (a file rewritten in place changes its own size
   and mtime but not its folder's; some removable-drive filesystems don't
   keep folder mtimes);
-* :func:`invalidate` — every write this process makes into a library
-  (Files upload / delete / move / import, document saves, Music upload and
-  delete) drops that library's snapshots at once, so the writer's next page
-  shows its own change even when no folder mtime moved;
+* :func:`invalidate` — the Files writes (upload / delete / move / import)
+  and every Documents save drop that library's snapshots at once, so the
+  writer's next page shows its own change even when no folder mtime moved
+  (a document saved in place). The Music upload and delete only add or
+  remove files, which their folder's mtime already says;
 * ``refresh=true`` on the request (the pages' Rescan / pull-to-refresh).
 
 The existing bounds stay where they were (``media_walk``'s directory and
 file caps); the cache only stops the same bounded work being repeated.
-Memory is bounded by :data:`MAX_SNAPSHOTS` (least recently used goes).
+Memory is bounded by :data:`MAX_SNAPSHOTS` and :data:`MAX_CACHED_ROWS`
+(least recently used goes first).
 """
 
 from __future__ import annotations
@@ -47,6 +49,11 @@ from typing import Any, Callable, Hashable, Optional
 
 MAX_AGE_SEC = 300.0
 MAX_SNAPSHOTS = 64
+# And at most this many rows across all of them (~1 KB a row with its
+# sorted views): a few huge folders browsed in a row must not pin hundreds
+# of MB. The least recently used snapshots go first; the one just built
+# always stays.
+MAX_CACHED_ROWS = 60_000
 
 
 @dataclass
@@ -136,8 +143,12 @@ def get(
             if now == gen:
                 _snapshots[key] = snap
                 _snapshots.move_to_end(key)
-                while len(_snapshots) > MAX_SNAPSHOTS:
-                    old, _ = _snapshots.popitem(last=False)
+                rows = sum(len(x.rows) for x in _snapshots.values())
+                while len(_snapshots) > 1 and (
+                    len(_snapshots) > MAX_SNAPSHOTS or rows > MAX_CACHED_ROWS
+                ):
+                    old, gone = _snapshots.popitem(last=False)
+                    rows -= len(gone.rows)
                     _build_locks.pop(old, None)
         return snap
 
