@@ -88,6 +88,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
@@ -160,9 +161,13 @@ private class LiveMessage(
     createdAt: String? = null,
     stats: ChatStats? = null,
     device: String? = null,
+    errorCode: String? = null,
 ) {
     var content by mutableStateOf(content)
     var error by mutableStateOf(error)
+    /** The server's code for [error] (`stats.error_code`, or the live
+     *  stream's `error` event); null for an error this phone made. */
+    var errorCode by mutableStateOf(errorCode)
     var pending by mutableStateOf(pending)
     var model by mutableStateOf(model)
     var id by mutableStateOf(id)
@@ -195,7 +200,8 @@ private suspend fun sendStreaming(
     content: String,
     images: List<ImageRef>,
     onDelta: (String) -> Unit,
-    onError: (String) -> Unit,
+    /** (detail, code, model): the server's plain sentence and its code. */
+    onError: (String, String?, String?) -> Unit,
     onDone: (MessageRow) -> Unit = {},
 ) = withContext(Dispatchers.IO) {
     val body = buildJsonObject {
@@ -217,7 +223,7 @@ private suspend fun sendStreaming(
         .build()
     app.api.http.newCall(req).execute().use { resp ->
         if (!resp.isSuccessful) {
-            onError("${resp.code} ${resp.message}")
+            onError("${resp.code} ${resp.message}", null, null)
             return@use
         }
         val source = resp.body?.source() ?: return@use
@@ -235,8 +241,10 @@ private suspend fun sendStreaming(
                             "delta" -> payload["text"]?.jsonPrimitive?.content?.let {
                                 withContext(Dispatchers.Main) { onDelta(it) }
                             }
-                            "error" -> payload["detail"]?.jsonPrimitive?.content?.let {
-                                withContext(Dispatchers.Main) { onError(it) }
+                            "error" -> payload["detail"]?.jsonPrimitive?.content?.let { detail ->
+                                val code = payload["code"]?.jsonPrimitive?.contentOrNull
+                                val model = payload["model"]?.jsonPrimitive?.contentOrNull
+                                withContext(Dispatchers.Main) { onError(detail, code, model) }
                             }
                             // The persisted row: its id, timestamp and model.
                             "done" -> payload.decode<MessageRow>().let {
@@ -367,6 +375,12 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     var draft by remember { mutableStateOf("") }
     val attachments = remember { mutableStateListOf<ImageRef>() }
     var sending by remember { mutableStateOf(false) }
+    // What's installed: when the vision model isn't, the paperclip explains
+    // that instead of opening the picker (web chat.jsx parity).
+    val models = rememberApi("chat-models") {
+        it.api.get("/api/chat/models").decode<ChatModelsInfo>()
+    }
+    var pictureNote by remember { mutableStateOf(false) }
 
     LaunchedEffect(thread.id) {
         runCatching {
@@ -379,6 +393,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         it.role, it.content, it.images.orEmpty(), it.model, it.error,
                         id = it.id.takeIf { id -> id > 0 }, createdAt = it.created_at,
                         stats = it.stats,
+                        errorCode = it.stats?.error_code,
                         device = when {
                             it.device_id != null && it.device_id == app.prefs.deviceId -> "this phone"
                             else -> it.device_name ?: it.device_id
@@ -525,15 +540,24 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         if (live.firstWordsAtMs == null) live.firstWordsAtMs = System.currentTimeMillis()
                         live.content += it
                     },
-                    onError = { live.error = it },
+                    onError = { detail, code, model ->
+                        live.error = detail
+                        live.errorCode = code
+                        if (model != null) live.model = model
+                    },
                     onDone = { row ->
                         live.id = row.id.takeIf { it > 0 }
                         live.createdAt = row.created_at
                         live.model = row.model ?: live.model
                         live.stats = row.stats
+                        row.error?.let { live.error = it }
+                        row.stats?.error_code?.let { live.errorCode = it }
                     },
                 )
-            }.onFailure { live.error = it.message ?: "send failed" }
+            }.onFailure { live.error = failureText("send", it) }
+            // Refused for want of the vision model: re-read what's installed,
+            // so the paperclip explains it next time.
+            if (live.errorCode == "vision_model_missing") models.refresh()
             live.doneAtMs = System.currentTimeMillis()
             if (live.createdAt == null) live.createdAt = Instant.now().toString()
             live.pending = false
@@ -582,16 +606,30 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             }
         }
 
+        val visionMissing = visionMissing(models.data)
+        if (visionMissing && (pictureNote || attachments.isNotEmpty())) {
+            PictureNote(models.data?.vision_model, onClose = { pictureNote = false })
+        }
+
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            val atCap = attachments.size >= MAX_CHAT_IMAGES
-            IconButton(onClick = { if (atCap) toast(CHAT_IMAGE_CAP_TOAST) else picker.launch("image/*") }) {
+            val action = attachAction(models.data, attachments.size)
+            IconButton(onClick = {
+                when (action) {
+                    // Explain, and read again in case an admin has since
+                    // installed it (the note goes once the read says so).
+                    AttachAction.ExplainVision -> { pictureNote = true; models.refresh() }
+                    AttachAction.AtCap -> toast(CHAT_IMAGE_CAP_TOAST)
+                    AttachAction.Pick -> { pictureNote = false; picker.launch("image/*") }
+                }
+            }) {
                 Icon(
-                    Icons.Outlined.AttachFile, contentDescription = "attach image",
-                    tint = if (atCap) Domovoi.colors.fgFaint else Domovoi.colors.fgMuted,
+                    Icons.Outlined.AttachFile,
+                    contentDescription = if (visionMissing) "attach pictures: the vision model isn't installed" else "attach image",
+                    tint = if (action == AttachAction.Pick) Domovoi.colors.fgMuted else Domovoi.colors.fgFaint,
                 )
             }
             OutlinedTextField(
@@ -730,13 +768,17 @@ private fun MessageBubble(m: LiveMessage, threadId: Long) {
                     } else {
                         MarkdownText(m.content, trailing = cursor)
                     }
-                    m.error?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
-                            color = Domovoi.colors.err,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
+                    chatErrorView(m.error, m.errorCode, m.model)?.let { err ->
+                        if (err.code != null) {
+                            ChatErrorNote(err)
+                        } else {
+                            Text(
+                                err.text,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                                color = Domovoi.colors.err,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
                     }
                 }
             }

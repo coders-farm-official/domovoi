@@ -54,6 +54,8 @@ internal data class ChatStats(
     val context_limit: Int? = null,
     val num_ctx: Long? = null,
     val model_role: String? = null,
+    /** Why a reply has an error, for the clients' own wording (ChatErrors.kt). */
+    val error_code: String? = null,
 )
 
 /** What the details dialog knows about one message. [firstWordsMs] and
