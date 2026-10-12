@@ -204,7 +204,9 @@ def test_declared_confirmation_kinds_cover_known_flows() -> None:
     # kind now raises in domovoi.confirmations.request_confirmation, so
     # this doubles as documentation of the live set.
     expected = {
-        "voice_profile": {"core.self_intro", "core.third_party_intro_confirm"},
+        "voice_profile": {
+            "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
+        },
         "double_check": {"core.self_doubt_offer", "core.prefs_offer"},
         "memory": {"core.pending_memory_offer"},
         "music": {"core.music_choice"},

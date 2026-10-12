@@ -25,6 +25,21 @@ re-embedding on confirmation) because re-embedding the *next*
 utterance — likely "yes" — produces a different vector. The original
 intro utterance is the one we actually want to enroll against.
 
+From the app's chat mic (:func:`phone_chat_mic`; owner decision
+2026-10-12) the voice goes into the person's PHONE samples
+(``voice_profiles.source = 'phone'``, V026), which satellites never match:
+
+  * "my name is X" where X is already someone → "Add this phone's voice
+    to X?", and "yes" on the next press adds a phone sample to X (at most
+    ``voice_profile_phone_sample_cap``, oldest dropped). No second X.
+  * a new name → the usual "Did I get that right?", and the new person's
+    sample is a phone sample.
+
+Only the chat mic does this. A future "phone as a satellite" mode must
+neither create nor extend phone profiles. (On a satellite, "my name is X"
+for an X who exists still enrols a second X — the known duplicate-name
+gap, left as it is.)
+
 Fully local (`requires_network="no"`); embedding + match are CPU-only,
 DB writes go to the same Postgres the rest of the system uses.
 """
@@ -49,9 +64,23 @@ from domovoi.db.repositories import (
 )
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
-from domovoi.models import Context, Intent, Response
+from domovoi.models import Context, Intent, Response, is_phone_room
 
 log = logging.getLogger(__name__)
+
+
+def phone_chat_mic(ctx: Context) -> bool:
+    """Whether this turn's voice may go into a person's PHONE samples: a
+    push-to-talk turn from the app's chat mic (domovoi/phone_voice.py sets
+    all three). Nothing else may. In particular a future "phone as a
+    satellite" mode — whose turns would come through a satellite's stream,
+    not the chat mic — must neither create nor extend phone profiles
+    (owner decision 2026-10-12): it must not set ``device_kind="phone"``."""
+    return (
+        ctx.device_kind == "phone"
+        and is_phone_room(ctx.room_id)
+        and ctx.trigger == "push_to_talk"
+    )
 
 
 # ─── Fast-path regexes ────────────────────────────────────────────────────
@@ -427,7 +456,9 @@ class VoiceProfileHandler(Handler):
     #   dismiss (100), which owns the closed "I'm good"/"I'm fine" set.
     priority_band = 110
     display = HandlerDisplay(label="Voice Profile", tone="info")
-    confirmation_kinds = ("core.self_intro", "core.third_party_intro_confirm")
+    confirmation_kinds = (
+        "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
+    )
     requires_network = "no"
 
     tool_schema = {
@@ -539,6 +570,8 @@ class VoiceProfileHandler(Handler):
             return await self._handle_third_party_confirm(
                 data, affirmative, ctx, session
             )
+        if kind == "core.phone_voice_add":
+            return await self._handle_phone_voice_add(data, affirmative, ctx, session)
         # Unknown kind — fall through silently rather than spook the
         # user with a "what kind?" answer.
         return Response(
@@ -744,6 +777,21 @@ class VoiceProfileHandler(Handler):
                 )
 
         embedding = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
+        if phone_chat_mic(ctx):
+            # From the chat mic, a name someone already has is that person
+            # asking for their phone voice, not a second person.
+            try:
+                known = await PeopleRepository(session).find_by_name(name)
+            except Exception as e:
+                # Never guess "new person" here: that is the duplicate.
+                log.warning("PeopleRepository.find_by_name failed: %s", e)
+                return Response(
+                    text="Something went wrong there — try saying your name again.",
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
+            if known is not None:
+                return await self._offer_phone_voice(known, embedding, ctx, session)
         try:
             await request_confirmation(
                 session,
@@ -770,6 +818,123 @@ class VoiceProfileHandler(Handler):
             # `handle_confirmation` regardless, but without this flag
             # the user would have to re-engage with "Hey Jarvis" first.
             expect_followup=True,
+        )
+
+    # ─── Phone voice (the chat mic) ───────────────────────────────────
+    async def _offer_phone_voice(
+        self,
+        known: tuple[int, str],
+        embedding: np.ndarray,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """ "my name is X" from the chat mic, for an X who exists: ask
+        before adding this clip to X's phone samples. The next press in
+        the thread answers (the routing session is the phone's and the
+        thread's, domovoi/phone_voice.py)."""
+        person_id, name = known
+        payload = _confirmation_payload(name, embedding, "core.phone_voice_add")
+        payload["person_id"] = int(person_id)
+        try:
+            await request_confirmation(
+                session,
+                ctx.session_id,
+                kind="core.phone_voice_add",
+                handler=self.name,
+                data=payload,
+            )
+        except Exception as e:
+            log.warning("couldn't park the phone voice offer: %s", e)
+            return Response(
+                text="Something went wrong there — try saying your name again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        return Response(
+            text=f"Add this phone's voice to {name}?",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            expect_followup=True,
+        )
+
+    async def _handle_phone_voice_add(
+        self,
+        data: dict,
+        affirmative: bool,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """The answer to "Add this phone's voice to X?". No changes
+        nothing. Yes adds the clip from the question's turn to X's PHONE
+        samples — never to their satellite samples, never a new person —
+        if the answer, too, came from the chat mic."""
+        name = str(data.get("name") or "")
+        if not affirmative:
+            return Response(
+                text="Okay, I won't add it.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        if not phone_chat_mic(ctx):
+            # The question is only ever asked on a phone's own session;
+            # nothing else may write a phone sample.
+            return Response(
+                text="I can only add a phone's voice from the phone's chat mic.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        try:
+            person_id = int(data.get("person_id"))
+        except (TypeError, ValueError):
+            person_id = None
+        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        if person_id is None or embedding is None or not name:
+            return Response(
+                text="Something went wrong storing that — try saying your name again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        if await self._is_denylisted(embedding, session):
+            return Response(
+                text="I wasn't able to save that voice profile.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        try:
+            person = await PeopleRepository(session).get(person_id)
+        except Exception as e:
+            log.warning("phone voice add: PeopleRepository.get failed: %s", e)
+            person = None
+        if person is None:
+            # Forgotten (or deleted by an admin) since the question.
+            return Response(
+                text=f"I can't find {name} any more, so I didn't save that.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        try:
+            _new_id, dropped = await VoiceProfilesRepository(session).add_phone_sample(
+                person_id=person_id,
+                embedding=embedding.astype(np.float32).tobytes(),
+                model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                room_id=ctx.room_id,
+                cap=settings.voice_profile_phone_sample_cap,
+            )
+        except Exception as e:
+            log.warning("phone voice add failed for person_id=%s: %s", person_id, e)
+            return Response(
+                text="Something went wrong saving that — your voice wasn't added.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        log.info(
+            "phone voice sample added: person_id=%d from %s (%d older dropped)",
+            person_id, ctx.room_id, dropped,
+        )
+        return Response(
+            text=f"Done — I'll know your voice on the phone now, {person[1]}.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
         )
 
     async def _is_denylisted(
@@ -838,13 +1003,24 @@ class VoiceProfileHandler(Handler):
             people = PeopleRepository(session)
             voice_profiles = VoiceProfilesRepository(session)
             person_id = await people.create(name=name)
-            await voice_profiles.add(
-                person_id=person_id,
-                embedding=embedding.astype(np.float32).tobytes(),
-                model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
-                room_id=ctx.room_id,
-                sample_seconds=None,
-            )
+            if phone_chat_mic(ctx):
+                # Enrolled from the chat mic: their first sample is a
+                # phone sample, which satellites never match (V026).
+                await voice_profiles.add_phone_sample(
+                    person_id=person_id,
+                    embedding=embedding.astype(np.float32).tobytes(),
+                    model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                    room_id=ctx.room_id,
+                    cap=settings.voice_profile_phone_sample_cap,
+                )
+            else:
+                await voice_profiles.add(
+                    person_id=person_id,
+                    embedding=embedding.astype(np.float32).tobytes(),
+                    model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                    room_id=ctx.room_id,
+                    sample_seconds=None,
+                )
         except Exception as e:
             log.warning("voice enrollment failed for name=%s: %s", name, e)
             return Response(

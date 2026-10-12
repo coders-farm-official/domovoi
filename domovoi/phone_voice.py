@@ -311,17 +311,19 @@ def reset_for_tests() -> None:
 
 
 async def _identify(pcm: bytes, room: str) -> Any:
-    """Who spoke — matching only. No ``room_id`` goes to the identifier,
-    so a phone never feeds its passive learning (``_learn_room``: after a
-    run of confident matches it saves the clip as that person's sample for
-    the "room"). A phone id is self-asserted and changes with every
-    reinstall, so each would add a sample, and phone-mic samples move the
-    centroid every satellite matches against. Until the owner decides how
-    phone audio should enrol, only an explicit "my name is …" does."""
-    from domovoi.voice_identifier import identify
+    """Who spoke — matching only, against each person's PHONE samples
+    when they have any, else their satellite samples
+    (``samples="phone"``, V026). No ``room_id`` goes to the identifier,
+    and a phone match never learns anyway: a phone never feeds the passive
+    learning (``_learn_room``: after a run of confident matches it saves
+    the clip as that person's sample for the "room"). A phone id is
+    self-asserted and changes with every reinstall, so each would add a
+    sample. Phone samples are added only on purpose: "my name is …" said
+    here, then "yes" (handlers/voice_profile.py)."""
+    from domovoi.voice_identifier import PHONE_SAMPLES, identify
 
     try:
-        return await identify(pcm, room_id=None)
+        return await identify(pcm, room_id=None, samples=PHONE_SAMPLES)
     except Exception as e:  # noqa: BLE001 — best-effort, as on a satellite
         log.warning("phone voice: voice identification failed: %s", e)
         return None

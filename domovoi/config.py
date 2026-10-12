@@ -1145,6 +1145,15 @@ class Settings(BaseSettings):
     voice_profile_drift_near_threshold_margin: float = 0.05
     voice_profile_drift_reenroll_after: int = 3
 
+    # ─── Phone-mic voice samples (V026) ─────────────────────────────
+    # A person's samples from the app's chat mic are kept apart from
+    # their satellite samples (``voice_profiles.source = 'phone'``):
+    # satellites never match them, and a phone turn matches them first.
+    # They are only ever added on purpose ("my name is …" said into the
+    # chat mic, then "yes"), never learned passively. At most this many
+    # per person; adding one more drops their oldest phone sample.
+    voice_profile_phone_sample_cap: int = 3
+
     # ─── Third-party intro flow ────────────────────────────────────────
     # When a known speaker says "Domovoi, this is Alex," we park an
     # expectation in sessions.context for the rest of the window and

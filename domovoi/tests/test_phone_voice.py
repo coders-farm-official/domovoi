@@ -93,9 +93,10 @@ def heard_as(monkeypatch):
     ``.score``) before a turn; None is nobody."""
     state = SimpleNamespace(person=None, score=None, calls=0)
 
-    async def _identify(pcm, *, embedding=None, room_id=None):
+    async def _identify(pcm, *, embedding=None, room_id=None, samples="satellite"):
         state.calls += 1
         state.room = room_id
+        state.samples = samples
         return SimpleNamespace(
             person_id=state.person,
             presence_tier="low",
@@ -262,6 +263,8 @@ async def test_a_turn_is_answered_and_both_rows_land_in_the_thread(
     # Voice identification ran without a room: a phone never feeds the
     # identifier's passive learning (see test_phone_turns_never_learn_...).
     assert heard_as.room is None
+    # ...and against the phone set first (V026, test_phone_voice_profile).
+    assert heard_as.samples == "phone"
 
     user, assistant = await _rows(tid)
     assert (user["role"], user["content"], user["source"]) == ("user", "What time is it?", "voice")
