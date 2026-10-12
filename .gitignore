@@ -266,3 +266,6 @@ allowed_signers
 # Aider's chat history and caches (its config, .aider.conf.yml, is tracked).
 .aider*
 !.aider.conf.yml
+
+# Test-run output (scripts/dev/run-linux-harness.sh logs, and the like)
+.test-results/

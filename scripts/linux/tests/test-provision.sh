@@ -33,12 +33,16 @@
 #     manifest pins (whisper-content and piper-content override them);
 #     `-m pip install -r` fails when pip-fail is set.
 #
-# Usage: bash scripts/linux/tests/test-provision.sh   (ONLY=<regex> runs some)
+# Usage: bash scripts/linux/tests/test-provision.sh [--case NAME|GLOB]... [--list]
+# (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
+# runs this in a pinned Linux container, much faster than Git Bash.)
 # Exit status is non-zero if any case failed.
 
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$HERE/case-filter.sh"
+harness_parse_args "$@"
 SCRIPT=$(cd "$HERE/.." && pwd)/provision.sh
 REAL_REPO=$(cd "$HERE/../../.." && pwd)
 WORK=$(mktemp -d)
@@ -1830,8 +1834,6 @@ case_bare_metal_media_paths() {
   end_case
 }
 
-build_origin
-
 CASES=(
   case_help_and_usage_errors
   case_harness_vars_need_each_other
@@ -1882,10 +1884,14 @@ CASES=(
   case_os_jobs_opt_out_is_honoured
 )
 
-for c in "${CASES[@]}"; do
-  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+# --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
+# runs them all. The origin every case clones is built once, and only when
+# something is going to run.
+harness_select
+if [ ${#SELECTED_CASES[@]} -gt 0 ]; then build_origin; fi
+for c in ${SELECTED_CASES[@]+"${SELECTED_CASES[@]}"}; do
   "$c"
 done
 
-echo "provision harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
+echo "provision harness: $PASSED passed, $FAILED failed, $SKIPPED skipped$(harness_selection_note)"
 [ "$FAILED" -eq 0 ]
