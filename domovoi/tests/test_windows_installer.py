@@ -55,7 +55,7 @@ def _pins() -> dict[str, str]:
 
 def test_sources_exist():
     names = {p.name for p in SOURCES}
-    for n in ("DomovoiSetup.iss", "pins.iss", "build.ps1", "Tests.cs", "Host.cs", "Uninstall.cs", "UninstallPlan.cs"):
+    for n in ("DomovoiSetup.iss", "pins.iss", "build.ps1", "Tests.cs", "Host.cs", "Uninstall.cs", "UninstallPlan.cs", "WslList.cs", "Processes.cs"):
         assert n in names, n
 
 
@@ -117,9 +117,38 @@ def test_the_doc_names_every_machine_change():
     for needle in (
         "domovoi-svc", "DomovoiHost", "C:\\ProgramData\\Domovoi", "C:\\Program Files\\Domovoi",
         "Domovoi-Dashboard-6369", "SeServiceLogonRight", ".wslconfig", "C:\\Users\\Public\\Domovoi",
-        "SpecialAccounts\\UserList", "trust boundary", "DHCP reservation",
+        "SpecialAccounts\\UserList", "trust boundary", "DHCP reservation", "HKLM\\SOFTWARE\\Domovoi",
+        "Smart App Control", "VerifiedAndReputablePolicyState", "Windows protected your PC", "More info", "Run anyway",
+        "every WSL VM on the PC",
     ):
         assert needle in doc, needle
+
+
+def test_nothing_promises_a_signature():
+    """Code signing is on hold (owner, 2026-10-11): no "signed helper",
+    "signed installer" or "signed binaries" anywhere in the installer or its
+    doc ("unsigned" is fine)."""
+    claim = re.compile(r"(?<![A-Za-z])signed (helper|installer|binar|exe|setup|build)", re.I)
+    for path in [*SOURCES, DOC]:
+        text = path.read_text(encoding="utf-8")
+        assert not claim.search(text), f"{path.name}: {claim.search(text).group(0)!r}"
+
+
+def test_smart_app_control_is_checked_before_anything_else():
+    s = SCRIPT.read_text(encoding="ascii")
+    init = s[s.index("function InitializeSetup"):]
+    init = init[: init.index("\nend;")]
+    assert "VerifiedAndReputablePolicyState" in init and "(Sac = 1)" in init
+    assert init.index("VerifiedAndReputablePolicyState") < init.index("ExtractTemporaryFile")
+
+
+def test_uninstall_aborts_unless_the_helper_finished():
+    """Review finding 1: any non-zero exit of the helper's uninstall stops
+    Inno before it deletes the program and the Apps entry."""
+    s = SCRIPT.read_text(encoding="ascii")
+    body = s[s.index("procedure CurUninstallStepChanged"):]
+    assert "if Code = 0 then\n    Exit;" in body
+    assert body.rstrip().endswith("Abort;\nend;")
 
 
 @requires_windows_build
