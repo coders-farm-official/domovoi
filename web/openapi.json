@@ -7267,7 +7267,7 @@
           "voice"
         ],
         "summary": "Delete Pronunciation",
-        "description": "Take a word off the list: the converter decides how to say it again.\nA shipped entry stays off until it is added again or the defaults are\nput back.",
+        "description": "Take a word off the list: the converter decides how to say it again.\nThe owner's own word's row is deleted; a shipped entry is marked\nremoved, and stays off until it is added again or the defaults are put\nback.",
         "operationId": "delete_pronunciation_api_voice_pronunciations__word__delete",
         "parameters": [
           {
@@ -7310,7 +7310,7 @@
           "voice"
         ],
         "summary": "Restore Default Pronunciations",
-        "description": "Put every shipped entry back as it shipped. The owner's own words\nstay.",
+        "description": "Put every shipped entry back as it shipped: the owner's rows for the\ndefault words (changes and removals) are deleted, so the defaults of\nthe release the box runs apply, now and after later updates. The\nowner's own words stay.",
         "operationId": "restore_default_pronunciations_api_voice_pronunciations_defaults_post",
         "responses": {
           "200": {
