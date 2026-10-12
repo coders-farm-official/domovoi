@@ -66,6 +66,11 @@ that:
    Domovoi needs (6369, 6370, 6432, 6650-6699, 8050-8099, 8096, 7676, 9467,
    11434). A taken port gets one pop-up per program holding ports (Docker
    Desktop, Ollama, or the program's name), with **Retry** and **Cancel**.
+   If an earlier uninstall left work for Windows to finish at the next
+   restart (files still in use in `C:\ProgramData\Domovoi` or
+   `C:\Program Files\Domovoi`, or the `DomovoiRemoveProfile` task), Setup
+   asks you to restart first: Windows deletes those by path, and would take
+   a new install's files of the same name with them.
 2. **Lists every change it will make** (the table below) before it makes
    any.
 3. **Asks whether this PC will have internet after setup** (Yes, always /
@@ -116,8 +121,11 @@ that:
    `C:\ProgramData\Domovoi\logs`, which only administrators can open, so
    **Copy logs** (on Setup's error pop-ups, its last page after a failure,
    and the uninstaller's messages) copies them to a new folder in
-   `Documents\Domovoi logs` and opens it. The copies hold no password and
-   no setup code (every line is filtered again on the way).
+   `Documents\Domovoi logs`. Setup opens that folder for you; the
+   uninstaller, which runs as administrator, only names it (opening it from
+   there would run as administrator too). Every line is filtered on the
+   way: passwords, tokens and setup codes are blanked as far as Setup can
+   recognise them.
 8. **Shows your setup code** once, with a **Copy** button, and **Open
    Domovoi**. Use the code there to make the admin account; it works for
    24 hours (a restart of the service writes a fresh one). Open Domovoi
@@ -135,7 +143,7 @@ that:
 | Local account **`domovoi-svc`**: standard user (member of Users only), a random 40-character password generated in memory and never shown, logged or stored outside Windows' own account and service databases, password never expires, user can't change it. Its comment marks it as Setup's. | Deleted (only if it carries Setup's mark or Setup recorded making it). |
 | Its sign-in screen entry: DWORD `domovoi-svc = 0` in `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList` (Setup makes the `SpecialAccounts` and `UserList` keys if they are missing). | The value is deleted; the keys too if Setup made them and they are empty. |
 | Account rights through LSA: `SeServiceLogonRight`, and `SeDenyInteractiveLogonRight`, `SeDenyRemoteInteractiveLogonRight`, `SeDenyNetworkLogonRight`. Run `DomovoiSetup.exe /nodenylogon=1` to leave the three deny rights out, on a first install or over an existing one (it takes back ones granted before). | Every right of the account's SID is removed, with its entry in the policy. |
-| Its profile, `C:\Users\domovoi-svc`, made by Windows when the service first signs in; it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. If Windows still holds it, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself; it touches only that profile, and only once its account is gone. |
+| Its profile, `C:\Users\domovoi-svc`, made by Windows when the service first signs in; it holds the account's `.wslconfig` (mirrored networking, `instanceIdleTimeout=-1`, memory cap, swap in `C:\ProgramData\Domovoi\wsl`) and its WSL registration. | Deleted. Right after unregistering the distro the service ends that account's own WSL session (`wsl --shutdown` run as `domovoi-svc`, see below), then the uninstaller waits up to two minutes for Windows to let go of the profile. This comes after the account is deleted; if Windows still holds the profile then, a one-time startup task, **`DomovoiRemoveProfile`** (runs as SYSTEM), deletes it at the next restart and then deletes itself. It touches only that profile, only once its account is gone, and if it can't tell (or the profile is in use) it waits for the next boot. |
 | Service **`DomovoiHost`** (Automatic, runs as `.\domovoi-svc`, depends on `WSLService`, restarts after 10, 30 and 60 s on failure), binary `C:\Program Files\Domovoi\DomovoiHost.exe`. | Stopped (it stops Domovoi's units in the distro first), then deleted. |
 | WSL distro **`domovoi`** of `domovoi-svc` (Ubuntu 26.04.1 plus everything `provision.sh` installs), disk in `C:\ProgramData\Domovoi\distro`. Once imported, the service never deletes or re-imports over that disk, even if WSL stops listing it. Your own distros and `.wslconfig` are not touched. | Unregistered by the service, as its owner, first. Until that has worked (or the disk is gone), nothing else that could strand it is touched: not the service, the account, its profile or rights, nor ProgramData. If it fails, the uninstaller stops, says why, and stays installed for another try. A disk WSL no longer lists is deleted or kept aside, see [Uninstalling](#uninstalling). |
 | Hyper-V firewall rules for WSL's VM creator (`{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`), inbound TCP from your subnet only: `Domovoi-Dashboard-6369`, `Domovoi-Core-6370`, `Domovoi-MPD-8050-8099`, `Domovoi-Jellyfin-8096`, `Domovoi-RomM-7676`, `Domovoi-Kiwix-9467`. They apply to **every WSL VM on the PC**, your own WSL distros and Docker Desktop's included: anything of yours that listens on those ports in a mirrored-mode distro becomes reachable from your home network too. None if the PC has no private (RFC 1918) address. | Every `Domovoi-` rule for WSL's VM creator is removed (and listing them again must work, or the uninstaller says so). |
@@ -241,7 +249,8 @@ people outside the household sign in to.
 Logs are in `C:\ProgramData\Domovoi\logs` (administrators only). The
 **Copy logs** button on Setup's error pop-ups, on its last page after a
 failure, and on the uninstaller's messages copies them to a new folder in
-`Documents\Domovoi logs` (of the account that ran Setup) and opens it:
+`Documents\Domovoi logs` (of the account that ran Setup); Setup opens it,
+the uninstaller names it:
 
 | File | What |
 |---|---|
@@ -253,11 +262,15 @@ failure, and on the uninstaller's messages copies them to a new folder in
 Setup's own record of the changes it made is `C:\ProgramData\Domovoi\state\install.log`
 (administrators only; `domovoi-svc` can't write there).
 
-None of them holds the account's password or the setup code: the code
+None of them is given the account's password or the setup code: the code
 travels from the distro to Setup encrypted to a one-time key Setup holds
-in memory, and lines shaped like a setup code, or a password inside an
-address (`scheme://user:password@host`), are blanked, once when written and
-again in the copies.
+in memory. Beyond that, passwords, tokens and setup codes are blanked as
+far as Setup can recognise them, once when a line is written and again in
+the copies: anything shaped like a setup code, what comes before the `@` of
+an address (`scheme://user:password@host`), the value of a key that names a
+password, token, secret or API key, and `Authorization` / `Bearer` values.
+That is a pattern match, not a guarantee: look through the copies before
+you share them.
 
 - **Setup stopped partway:** run Setup again; it carries on, and
   `provision.sh` resumes where it stopped. Or uninstall, which undoes a
