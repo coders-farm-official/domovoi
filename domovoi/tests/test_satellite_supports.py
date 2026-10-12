@@ -658,3 +658,29 @@ async def test_the_dashboard_row_shows_board_and_supports(device, monkeypatch):
     assert sat.board == (board or "raspberry_pi_zero_2_w")
     offline = await web_sats._satellite_for(row, {"active_rooms": []}, {}, meta, {})
     assert offline.supports is None, "supports is what the CONNECTED device said"
+
+
+# ─── review follow-ups (mutants that survived) ────────────────────────────
+
+
+@pytest.mark.parametrize("bad", [101, -1, True, "50", float("nan"), 1e300],
+                         ids=["101", "-1", "true", "str50", "nan", "1e300"])
+def test_a_battery_percent_outside_0_to_100_or_not_a_number_is_dropped(bad):
+    alone = sh.validate_sample({"rss_kb": 1, "battery": {"percent": bad}})
+    assert alone["battery"] is None, "nothing usable left: no battery at all"
+    kept = sh.validate_sample({"rss_kb": 1, "battery": {"percent": bad, "charging": True}})
+    assert kept["battery"] == {"percent": None, "charging": True, "on_power": None}
+    for good in (0, 64, 100):
+        assert sh.validate_sample({"rss_kb": 1, "battery": {"percent": good}})["battery"]["percent"] == good
+
+
+async def test_wake_models_changed_skips_a_device_without_wake_models(paired, inventory):
+    ws = FakeWS()
+    bare = StreamSession(ws, "attic")  # type: ignore[arg-type]
+    await bare._on_control({"type": "hello", "supports": ["restart"]})
+    ws.sent.clear()
+    await bare.notify_wake_models_changed()
+    assert ws.sent == []
+    pi, pi_ws = await _hello("pi_2mic_hat")
+    await pi.notify_wake_models_changed()
+    assert pi_ws.types() == ["wake_models_changed"]
