@@ -42,9 +42,10 @@ data class CatalogModel(
  * taken from the Hugging Face API (LFS files) or the downloaded file
  * (small files) on 2026-10-12.
  *
- * M0 (benchmark) catalog. It has no voice: the phone speaks with Android's
- * own TextToSpeech (AndroidSpeechOut), and a downloadable voice, if one is
- * chosen later, would be a [ModelKind.TTS] entry here.
+ * The assistant's models ([assistant], the benchmark's list) and the
+ * phone's voices ([voices]): the three public-domain Piper voices the server
+ * speaks with, of which only the one in use is downloaded (Settings ->
+ * Voice). Until it is, the phone speaks with Android's own TextToSpeech.
  */
 object ModelCatalog {
     private const val GEMMA_REV = "b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1"
@@ -124,5 +125,47 @@ object ModelCatalog {
 
     val speechModels: List<CatalogModel> = listOf(moonshineTinyEn, moonshineBaseEn)
 
-    val all: List<CatalogModel> = listOf(gemma4E2b, moonshineTinyEn, moonshineBaseEn, sileroVad)
+    /** What the assistant's benchmark downloads and runs. */
+    val assistant: List<CatalogModel> = listOf(gemma4E2b, moonshineTinyEn, moonshineBaseEn, sileroVad)
+
+    private const val PIPER_REV = "c10ece1aade47bb51c153c893d14e5bf8e5b7117"
+    private const val PIPER = "https://huggingface.co/rhasspy/piper-voices/resolve/$PIPER_REV/en/en_US"
+
+    /** One of Bryce Beattie's Piper voices (medium, 22,050 Hz): the model and
+     *  its config, pinned to the revision the server pins. Trained from
+     *  scratch on public-domain recordings (no lessac data); the author
+     *  releases them into the public domain (brycebeattie.com/files/tts/,
+     *  checked 2026-10-12). Sizes and hashes from the downloaded files; the
+     *  model's SHA-256 is its Hugging Face LFS id. */
+    private fun piperVoice(speaker: String, name: String, onnxSha: String, jsonSize: Long, jsonSha: String) =
+        CatalogModel(
+            id = "en_US-$speaker-medium",
+            name = name,
+            kind = ModelKind.TTS,
+            files = listOf(
+                ModelFile("en_US-$speaker-medium.onnx", "$PIPER/$speaker/medium/en_US-$speaker-medium.onnx",
+                    63_531_379, onnxSha),
+                ModelFile("en_US-$speaker-medium.onnx.json", "$PIPER/$speaker/medium/en_US-$speaker-medium.onnx.json",
+                    jsonSize, jsonSha),
+            ),
+            license = "public domain",
+            licenseUrl = "https://brycebeattie.com/files/tts/",
+        )
+
+    val norman = piperVoice("norman", "Norman", "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71",
+        4_968, "6c2db7f558a4a8deb9fe822583c1c5105f6c4e834dd0f9de8ad17a888ee9fe1d")
+    val kristin = piperVoice("kristin", "Kristin", "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4",
+        4_968, "5681426d4aead22195de70531eeeeddb46493cfaffc5764b2ea3db73428b651c")
+    val ljspeech = piperVoice("ljspeech", "Linda", "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22",
+        4_972, "141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860")
+
+    /** The phone's voices, the server's three; Norman is the default. */
+    val voices: List<CatalogModel> = listOf(norman, kristin, ljspeech)
+
+    val defaultVoice: CatalogModel get() = norman
+
+    fun voice(id: String?): CatalogModel? = voices.firstOrNull { it.id == id }
+
+    /** Everything the download job may fetch. */
+    val all: List<CatalogModel> = assistant + voices
 }

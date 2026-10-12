@@ -138,6 +138,7 @@ suspend fun runVoiceSamples(
             firstWordMs = said.firstAudioNs?.let { msBetween(said.startedNs, it) },
             totalMs = msBetween(said.startedNs, said.endedNs),
             audioS = said.audioSeconds,
+            voice = (voice as? PhoneSpeech)?.voiceKey,
         )
         out += result
         onSpoken(result)

@@ -113,9 +113,13 @@ suspend fun fetchModels(
  * runs in the foreground with a progress notification. Wi-Fi only unless
  * the user allows mobile data. Pausing cancels the job; the `.part` files
  * stay and the next start resumes them.
+ *
+ * The phone's voice downloads the same way as a job of its own
+ * ("phone-voice"), so starting one never replaces the other.
  */
 object ModelDownloads {
     const val UNIQUE_WORK = "assistant-models"
+    const val UNIQUE_VOICE = "phone-voice"
     const val TAG_MOBILE_DATA = "assistant-models-mobile-data"
     internal const val KEY_MODELS = "models"
     internal const val KEY_ERROR = "error"
@@ -145,6 +149,20 @@ object ModelDownloads {
     /** The job's latest state, or null when there has been none. */
     fun watch(context: Context): Flow<WorkInfo?> =
         WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(UNIQUE_WORK).map { it.lastOrNull() }
+
+    /** Downloads [voice] (only that one) as the voice's own job. */
+    fun startVoice(context: Context, voice: CatalogModel, allowMobileData: Boolean) {
+        require(voice.kind == ModelKind.TTS) { "${voice.id} is not a voice" }
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork(UNIQUE_VOICE, ExistingWorkPolicy.REPLACE, request(listOf(voice), allowMobileData))
+    }
+
+    fun pauseVoice(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_VOICE)
+    }
+
+    fun watchVoice(context: Context): Flow<WorkInfo?> =
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(UNIQUE_VOICE).map { it.lastOrNull() }
 
     fun errorOf(info: WorkInfo): String? = info.outputData.getString(KEY_ERROR)
 }
@@ -202,6 +220,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
     override suspend fun getForegroundInfo(): ForegroundInfo = foregroundInfo(null, emptyList())
 
     private fun foregroundInfo(p: DownloadProgress?, models: List<CatalogModel>): ForegroundInfo {
+        val voice = models.isNotEmpty() && models.all { it.kind == ModelKind.TTS }
         val manager = applicationContext.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.getNotificationChannel(CHANNEL) == null) {
             manager.createNotificationChannel(
@@ -212,6 +231,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         val text = when {
             p == null -> "starting"
             p.allDone >= p.allTotal -> "verifying"
+            voice -> "${current?.name ?: "voice"}: ${mb(p.allDone)} of ${mb(p.allTotal)}"
             else -> "${current?.name ?: "models"}: ${gb(p.allDone)} of ${gb(p.allTotal)}"
         }
         val percent = if (p == null || p.allTotal <= 0) 0 else (p.allDone * 100 / p.allTotal).toInt()
@@ -219,7 +239,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             ?.let { PendingIntent.getActivity(applicationContext, 0, it, PendingIntent.FLAG_IMMUTABLE) }
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading the on-device assistant")
+            .setContentTitle(if (voice) "Downloading the voice" else "Downloading the on-device assistant")
             .setContentText(text)
             .setProgress(100, percent, p == null)
             .setOngoing(true)
@@ -227,18 +247,22 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             .setContentIntent(open)
             .addAction(0, "pause", WorkManager.getInstance(applicationContext).createCancelPendingIntent(id))
             .build()
+        val id = if (voice) VOICE_NOTIFICATION_ID else NOTIFICATION_ID
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            ForegroundInfo(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            ForegroundInfo(NOTIFICATION_ID, notification)
+            ForegroundInfo(id, notification)
         }
     }
 
     private fun gb(bytes: Long) = String.format(java.util.Locale.US, "%.2f GB", bytes / 1e9)
 
+    private fun mb(bytes: Long) = String.format(java.util.Locale.US, "%.0f MB", bytes / 1e6)
+
     companion object {
         const val CHANNEL = "assistant-models"
         private const val NOTIFICATION_ID = 0x0D0E
+        private const val VOICE_NOTIFICATION_ID = 0x0D0F
         private const val PROGRESS_EVERY_MS = 500L
     }
 }

@@ -98,6 +98,17 @@ internal fun playerState(item: PlayItem?, playing: Boolean): JsonObject? {
     }
 }
 
+/**
+ * The player state a turn sends. [playingAtPress]: the phone's player was
+ * playing when the talk button went down. The mic's exclusive audio focus
+ * (VoiceFocus) pauses the player for the recording, and when the turn is
+ * sent it has not come back yet, so the player read then says paused:
+ * "what's playing" answered "… is paused on this phone" over music that
+ * was playing (emulator, 2026-10-12).
+ */
+internal fun playerStateForTurn(item: PlayItem?, playingAtPress: Boolean, playingNow: Boolean): JsonObject? =
+    playerState(item, playingAtPress || playingNow)
+
 /** How long the server may take: speech-to-text, the router (a cold model
  *  can take most of a minute on an all-CPU box) and text-to-speech. Above
  *  the web hop's own 180 s so the server's 504 is what the phone reads. */

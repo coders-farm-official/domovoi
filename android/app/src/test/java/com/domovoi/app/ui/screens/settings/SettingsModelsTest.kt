@@ -16,9 +16,10 @@ class SettingsModelsTest {
         // Greetings / Voices / Wake Words / Models / Configuration are gone by
         // design: the app has no admin session, so they could never apply.
         // Satellites moved in from the nav (2026-10-11, the web's Settings →
-        // Satellites), and the phone bar's editor lives here too.
+        // Satellites), and the phone bar's editor lives here too. Voice is
+        // the phone's own voice (2026-10-12), not the server's Voices tab.
         assertEquals(
-            listOf("Connection", "Phone bar", "Satellites", "Server settings", "About"),
+            listOf("Connection", "Phone bar", "Voice", "Satellites", "Server settings", "About"),
             SettingsTab.entries.map { it.label },
         )
         assertEquals(SettingsTab.Connection, SettingsTab.entries.first())

@@ -45,6 +45,9 @@ media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasourc
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
+# The same ONNX Runtime for the JVM: only the unit tests use it (the
+# phonemizer's golden test runs its out-of-dictionary model on the PC).
+onnxruntime-jvm = { group = "com.microsoft.onnxruntime", name = "onnxruntime", version.ref = "onnxruntime" }
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -18,10 +18,15 @@ import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.player.ServerScope
+import com.domovoi.app.voice.PhoneVoice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
@@ -82,12 +87,31 @@ class AppContainer(context: Context) {
      *  composable (e.g. the video position save on player dispose). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    init {
+        // What the phone queued from a server belongs to that server
+        // (player/ServerScope.kt): the player hears which server the app
+        // talks to — by its pinned identity, else its address — now, and on
+        // every change, and clears the old one's media on a move to another.
+        player.serverChanged(ServerScope.of(prefs.serverUrl.value, prefs.pinForServer(prefs.serverUrl.value)))
+        scope.launch {
+            combine(prefs.serverUrl, prefs.identityPins) { url, pins ->
+                ServerScope.of(url, IdentityGate.pinKey(url)?.let { pins[it] })
+            }.distinctUntilChanged().collect { player.serverChanged(it) }
+        }
+    }
+
     /** The on-device assistant's benchmark (Settings → About; M0 of the
      *  phone assistant). Built on first use. Its only network use is the
      *  model download the user starts, on a copy of the app's client WITHOUT
      *  the household token (the models come from public hosts): the same
      *  redirect and cleartext rules, no device token. */
-    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader) }
+    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader, phoneVoice) }
+
+    /** The phone's own voice (Settings → Voice): Domovoi's Piper voice
+     *  through the Kotlin phonemizer once downloaded, the server's "say it
+     *  like" list from `GET /api/voice` (cached per server), Android's
+     *  TextToSpeech until then. Built on first use. */
+    val phoneVoice: PhoneVoice by lazy { PhoneVoice(context, api, prefs) }
 
     /** The model download's client, used by the download job
      *  (assistant/ModelDownloadWork.kt). */

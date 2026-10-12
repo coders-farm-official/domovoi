@@ -178,6 +178,10 @@ internal class VoiceController(
     private val player = ReplyPlayer(context)
     private val focus = VoiceFocus(context)
 
+    /** Whether the phone's own player was playing as the button went down
+     *  (before the capture focus paused it): what the turn reports. */
+    private var playingAtPress = false
+
     /** The finger went down on the button. False when nothing started (a
      *  reply is still being worked out). */
     fun press(): Boolean {
@@ -193,6 +197,7 @@ internal class VoiceController(
         recorder = r
         note = null
         phase = TalkPhase.Recording
+        playingAtPress = app.player.isPlaying.value
         // The phone's own music pauses while the mic is open.
         focus.hold(VoiceFocus.Kind.CAPTURE)
         recording = scope.launch {
@@ -250,7 +255,7 @@ internal class VoiceController(
         reply.sentAtMs = System.currentTimeMillis()
         transcript.add(user)
         transcript.add(reply)
-        val playerNow = playerState(app.player.current, app.player.isPlaying.value)
+        val playerNow = playerStateForTurn(app.player.current, playingAtPress, app.player.isPlaying.value)
         val turn = try {
             sendVoiceTurn(app, threadId, pcm, playerNow)
         } catch (e: VoiceTurnException) {

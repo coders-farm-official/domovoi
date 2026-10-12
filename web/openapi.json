@@ -3240,6 +3240,7 @@
           "people"
         ],
         "summary": "List Profiles",
+        "description": "A person's voice samples (metadata only, never an embedding),\nnewest first, each with its ``source``: ``satellite`` or ``phone``\n(V026). The dashboard's People page lists the two sets apart; an\nadmin deletes one with ``DELETE \u2026/profiles/{profile_id}``.",
         "operationId": "list_profiles_api_people__person_id__profiles_get",
         "parameters": [
           {
@@ -7099,6 +7100,258 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Get Voice",
+        "description": "The three voices, the one the server speaks with, and the effective\n\"say it like\" list (the shipped entries with the owner's changes).\n``updated_at`` changes whenever the list or the server's voice does.",
+        "operationId": "get_voice_api_voice_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/sample/{voice_id}": {
+      "get": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Sample Voice",
+        "description": "A freshly synthesized sample (intro + a fun fact) in one of the three\nvoices, for the play buttons beside them.",
+        "operationId": "sample_voice_api_voice_sample__voice_id__get",
+        "parameters": [
+          {
+            "name": "voice_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Voice Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/server": {
+      "put": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Set Server Voice",
+        "description": "Make one of the three voices the server's: the voice registry's\ndefault, so every room without a voice of its own speaks in it. The\nclips re-render in it in the background.",
+        "operationId": "set_server_voice_api_voice_server_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServerVoiceBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Put Pronunciation",
+        "description": "Add a word to the list, or change how a listed word is said. 400 with\nthe reason when the converter can't use the entry.",
+        "operationId": "put_pronunciation_api_voice_pronunciations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PronunciationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations/{word}": {
+      "delete": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Delete Pronunciation",
+        "description": "Take a word off the list: the converter decides how to say it again.\nThe owner's own word's row is deleted; a shipped entry is marked\nremoved, and stays off until it is added again or the defaults are put\nback.",
+        "operationId": "delete_pronunciation_api_voice_pronunciations__word__delete",
+        "parameters": [
+          {
+            "name": "word",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Word"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations/defaults": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Restore Default Pronunciations",
+        "description": "Put every shipped entry back as it shipped: the owner's rows for the\ndefault words (changes and removals) are deleted, so the defaults of\nthe release the box runs apply, now and after later updates. The\nowner's own words stay.",
+        "operationId": "restore_default_pronunciations_api_voice_pronunciations_defaults_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSettings"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/voice/pronunciations/preview": {
+      "post": {
+        "tags": [
+          "voice"
+        ],
+        "summary": "Preview Pronunciation",
+        "description": "Hear a word said as ``say_like`` asks, without saving it, in\n``voice`` (one of the three) or the server's voice. The phonemes come\nback in ``X-Phonemes``.",
+        "operationId": "preview_pronunciation_api_voice_pronunciations_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -11720,7 +11973,7 @@
           "models"
         ],
         "summary": "Get Active",
-        "description": "The three role slots (Q&A / tool / STT) with their LIVE current model\nand change-tier, derived from the Domovoi server's editable-config registry.\nProxied so the values reflect the Domovoi server's singleton, not the web\nprocess's stale copy.",
+        "description": "The role slots (Q&A / tool / vision / STT) with their LIVE current\nmodel and change-tier, derived from the Domovoi server's editable-config\nregistry. Proxied so the values reflect the Domovoi server's singleton,\nnot the web process's stale copy.\n\nEach row also says:\n\n* ``model_source`` \u2014 where ``model`` came from: ``config`` (the live\n  registry), ``startup`` or ``None``. The Whisper fields are in the\n  registry's advanced section, which the core leaves out of a read that\n  carries only the dashboard cookie (CORE-6: a reloaded tab keeps the\n  cookie and loses the in-memory Bearer). The STT row then takes the\n  Whisper settings the core read at boot from ``/v1/admin/hardware``'s\n  ``stt`` block \u2014 the same open read the page's speech-recognition\n  banner shows \u2014 so ``startup``. A setting saved since the boot isn't\n  in that answer. ``None``: neither said, the model is unknown.\n* ``installed`` \u2014 Ollama roles: whether the model is in Ollama's\n  installed list, compared the way the chat's vision check compares\n  (``ollama_client.model_installed``); ``None`` when Ollama couldn't be\n  asked or no model is set. STT: whether the Whisper model is in this\n  host's model cache (``whisper_cache``); ``None`` for a name it\n  doesn't know.\n* ``chat_model`` / ``chat_restart_required`` \u2014 Q&A and vision only: the\n  model the dashboard's text chat uses for that role. The chat reads it\n  from this process's settings, loaded when the dashboard started, so a\n  model saved since then reaches the chat only after a restart. An\n  install needs no restart: the chat asks Ollama on every send.",
         "operationId": "get_active_api_models_active_get",
         "responses": {
           "200": {
@@ -17111,6 +17364,80 @@
         "type": "object",
         "title": "PrepareRequest"
       },
+      "PreviewBody": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Say Like"
+          },
+          "voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PreviewBody"
+      },
+      "PronunciationBody": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Say Like"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PronunciationBody"
+      },
+      "PronunciationEntry": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "title": "Word"
+          },
+          "say_like": {
+            "type": "string",
+            "title": "Say Like"
+          }
+        },
+        "type": "object",
+        "required": [
+          "word",
+          "say_like"
+        ],
+        "title": "PronunciationEntry"
+      },
       "PullBody": {
         "properties": {
           "model": {
@@ -17960,6 +18287,31 @@
             "type": "boolean",
             "title": "Timers Own Only",
             "default": false
+          },
+          "board": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Board"
+          },
+          "supports": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supports"
           }
         },
         "type": "object",
@@ -18122,6 +18474,21 @@
           "content"
         ],
         "title": "SendBody"
+      },
+      "ServerVoiceBody": {
+        "properties": {
+          "voice": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Voice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "voice"
+        ],
+        "title": "ServerVoiceBody"
       },
       "Session": {
         "properties": {
@@ -19241,6 +19608,44 @@
         ],
         "title": "Voice"
       },
+      "VoiceInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sex": {
+            "type": "string",
+            "title": "Sex"
+          },
+          "sample_rate": {
+            "type": "integer",
+            "title": "Sample Rate"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "sex",
+          "sample_rate",
+          "size_bytes",
+          "sha256"
+        ],
+        "title": "VoiceInfo"
+      },
       "VoiceNote": {
         "properties": {
           "id": {
@@ -19346,6 +19751,11 @@
               }
             ],
             "title": "Sample Seconds"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "satellite"
           }
         },
         "type": "object",
@@ -19356,6 +19766,40 @@
           "enrolled_at"
         ],
         "title": "VoiceProfile"
+      },
+      "VoiceSettings": {
+        "properties": {
+          "voices": {
+            "items": {
+              "$ref": "#/components/schemas/VoiceInfo"
+            },
+            "type": "array",
+            "title": "Voices"
+          },
+          "server_voice": {
+            "type": "string",
+            "title": "Server Voice"
+          },
+          "pronunciations": {
+            "items": {
+              "$ref": "#/components/schemas/PronunciationEntry"
+            },
+            "type": "array",
+            "title": "Pronunciations"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "voices",
+          "server_voice",
+          "pronunciations",
+          "updated_at"
+        ],
+        "title": "VoiceSettings"
       },
       "VolumeRequest": {
         "properties": {

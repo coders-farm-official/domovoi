@@ -61,6 +61,7 @@ import com.domovoi.app.ui.theme.Domovoi
 internal enum class SettingsTab(val key: String, val label: String, val sub: String) {
     Connection("connection", "Connection", "Which server this app talks to, and who's listening."),
     PhoneBar("phonebar", "Phone bar", "The tabs along the bottom of this phone, left to right."),
+    Voice("voice", "Voice", "How this phone speaks: your Domovoi's voice, downloaded once, or the phone's own."),
     Satellites("satellites", "Satellites", "The Pi in each room: status, announcements, and each room's details."),
     Server("server", "Server settings", "Greetings, voices, wake words, models and configuration are managed on the dashboard."),
     About("about", "About", "What Domovoi is, a link to the user manual, and this phone's problem reports.");
@@ -107,6 +108,7 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
         when (tab) {
             SettingsTab.Connection -> ConnectionPanel()
             SettingsTab.PhoneBar -> PhoneBarPanel()
+            SettingsTab.Voice -> VoicePanel()
             SettingsTab.Satellites -> SatellitesScreen(embedded = true)
             SettingsTab.Server -> ServerSettingsPanel()
             SettingsTab.About -> AboutPanel(navigate)
@@ -142,7 +144,8 @@ private fun ServerSettingsPanel() {
                     Text(
                         "Greetings, voices, wake words, models and configuration are managed " +
                             "on the Domovoi dashboard, so changes are handled properly. This app " +
-                            "keeps only the settings that belong to this phone — Connection and About.",
+                            "keeps only the settings that belong to this phone — its connection, its " +
+                            "bar, the voice it speaks with, and About.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Domovoi.colors.fgMuted,
                     )
@@ -262,5 +265,6 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
         }
         item { ProblemReportsCard() }
         item { AssistantBenchmarkCard() }
+        item { LicencesCard() }
     }
 }

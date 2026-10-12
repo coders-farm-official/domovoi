@@ -143,7 +143,7 @@ fun AssistantBenchmarkCard() {
         SectionLabel("models")
         Spacer(Modifier.height(4.dp))
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ModelCatalog.all.forEach { m ->
+            ModelCatalog.assistant.forEach { m ->
                 ModelRow(
                     model = m,
                     state = ui.models[m.id],
@@ -154,7 +154,7 @@ fun AssistantBenchmarkCard() {
             }
         }
         Spacer(Modifier.height(8.dp))
-        val missing = ModelCatalog.all.filter { ui.models[it.id]?.status != ModelStatus.READY }
+        val missing = ModelCatalog.assistant.filter { ui.models[it.id]?.status != ModelStatus.READY }
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (ui.downloading) {
                 OutlinedButton(onClick = { bench.pauseDownload() }) { Text("pause download") }
@@ -210,7 +210,8 @@ fun AssistantBenchmarkCard() {
         Text(
             "Voice test: tap, then ask a question out loud. Self-tests have the phone speak a question to " +
                 "itself instead. The heat loop keeps the model busy for ten minutes; leave the screen on. " +
-                "Answers are spoken by this phone's own text-to-speech voice.",
+                "Answers are spoken by the Domovoi voice once it is downloaded (Settings, Voice), " +
+                "otherwise by this phone's own text-to-speech voice.",
             style = MaterialTheme.typography.bodySmall,
             color = Domovoi.colors.fgMuted,
             modifier = Modifier.padding(top = 6.dp),

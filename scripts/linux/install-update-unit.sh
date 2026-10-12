@@ -19,8 +19,9 @@
 #      leave a unit that refuses every run. Three things only warn: a venv
 #      the service user doesn't wholly own (an update that changes
 #      dependencies would abort; the chown that fixes it is printed, and
-#      --fix-ownership runs it), piper-tts older than 1.3 in the venv, and
-#      signed updates not set up. It also says whether an update re-syncs
+#      --fix-ownership runs it), the voice's runtime (onnxruntime missing or
+#      older than 1.28 in the venv, or piper-tts, which Domovoi no longer
+#      uses, still there), and signed updates not set up. It also says whether an update re-syncs
 #      the venv from the hash-pinned lock (DOMOVOI_USE_LOCK=1, opt-in) or
 #      through pip's resolver as before, and warns when the lock is opted
 #      into but an update could not use it.
@@ -565,27 +566,40 @@ check_docker() {
   line ok "docker compose works for $SVC_USER"
 }
 
-# Warn only: the Piper voice needs piper-tts 1.3 (clients/tts.py imports
-# SynthesisConfig, new in 1.3), and on an older one every Piper render falls
-# through to the next engine without an error.
-check_piper() {
+# Warn only: Domovoi's voice runs on ONNX Runtime (domovoi/clients/tts.py
+# and domovoi/phonemizer, both on 1.28 and newer); without it every Piper
+# render falls through to the next engine without an error. And piper-tts,
+# which it replaced in 2026-10 (GPL-3.0, espeak-ng inside), should not
+# linger: an update that re-syncs the venv uninstalls it
+# (apply-update.sh, drop_retired_packages), and the line printed here does
+# it now.
+venv_pkg_version() {
+  as_user "$VENV/bin/python" -m pip --disable-pip-version-check show "$1" 2>/dev/null \
+    | sed -n 's/^Version:[[:space:]]*//p' | head -n 1 | tr -d '\r'
+}
+check_voice_runtime() {
   local v
   [ "$VENV_OK" = 1 ] || return 0
-  v=$(as_user "$VENV/bin/python" -m pip --disable-pip-version-check show piper-tts 2>/dev/null \
-      | sed -n 's/^Version:[[:space:]]*//p' | head -n 1 | tr -d '\r') || v=""
+  v=$(venv_pkg_version onnxruntime) || v=""
   if [ -z "$v" ]; then
-    line warning "piper-tts isn't installed in $VENV, so the Piper voice can't render"
-    more "It comes with the real-clients extra (piper-tts>=1.3). To install it now:"
-    more "  sudo -u $SVC_USER $VENV/bin/python -m pip install 'piper-tts>=1.3'"
+    line warning "onnxruntime isn't installed in $VENV, so the voice can't render"
+    more "It comes with the real-clients extra (onnxruntime>=1.28). To install it now:"
+    more "  sudo -u $SVC_USER $VENV/bin/python -m pip install 'onnxruntime>=1.28'"
   elif ! [[ $v =~ ^[0-9][0-9A-Za-z.+!-]*$ ]]; then
-    line warning "can't read the version of piper-tts in $VENV"
-  elif version_ge "$v" 1.3; then
-    line ok "piper-tts $v"
+    line warning "can't read the version of onnxruntime in $VENV"
+  elif version_ge "$v" 1.28; then
+    line ok "onnxruntime $v"
   else
-    line warning "piper-tts $v in $VENV is older than 1.3: every Piper render falls through"
+    line warning "onnxruntime $v in $VENV is older than 1.28: every Piper render falls through"
     more "to the next voice. An update re-syncs the venv when pyproject.toml changed since the"
     more "recorded SHA; to fix it now:"
-    more "  sudo -u $SVC_USER $VENV/bin/python -m pip install 'piper-tts>=1.3'"
+    more "  sudo -u $SVC_USER $VENV/bin/python -m pip install 'onnxruntime>=1.28'"
+  fi
+  v=$(venv_pkg_version piper-tts) || v=""
+  if [ -n "$v" ]; then
+    line warning "piper-tts $v is still in $VENV: Domovoi no longer uses it (GPL-3.0, espeak-ng inside)"
+    more "The next update that re-syncs the venv removes it; to remove it now:"
+    more "  sudo -u $SVC_USER $VENV/bin/python -m pip uninstall -y piper-tts piper-phonemize"
   fi
 }
 
@@ -1092,7 +1106,7 @@ main() {
   check_user
   check_venv
   check_docker
-  check_piper
+  check_voice_runtime
   check_deps_lock
   check_baseline
   check_signing

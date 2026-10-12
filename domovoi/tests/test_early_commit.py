@@ -561,9 +561,13 @@ def test_terminal_punctuation_and_decimals_are_fine() -> None:
     assert ec is not None and ec.tier == TIER_B
 
 
-def _pending(handler: str = "voice_profile") -> dict:
+def _pending(handler: str = "voice_profile", *, choice: bool = False) -> dict:
+    """A parked question of ``handler``: its first yes/no kind, or with
+    ``choice`` its first CHOICE kind (which commits early on a whole yes
+    only). voice_profile has both since "Add this phone's voice to …?"
+    (core.phone_voice_add, a choice)."""
     h = next(h for h in HANDLERS if h.name == handler)
-    kind = sorted(h.confirmation_kinds)[0]
+    kind = sorted(k for k in h.confirmation_kinds if (k in h.choice_kinds) == choice)[0]
     return {"handler": handler, "kind": kind, "data": {}}
 
 
@@ -589,7 +593,7 @@ def test_a_parked_music_choice_commits_early_only_on_a_whole_yes() -> None:
     a whole "no" (the test above)."""
     from domovoi.router import goes_to_the_tool_model
 
-    pending = _pending("music")
+    pending = _pending("music", choice=True)
     assert pending["kind"] == "core.music_choice"
     for text in ("yes", "Yeah.", "yeah", "yes please", "Sure, thanks."):
         ec = early_commit_for(text, pending=pending)
@@ -607,6 +611,16 @@ def test_a_parked_music_choice_commits_early_only_on_a_whole_yes() -> None:
     # would go to the tool model if nothing were parked); a yes/no isn't.
     assert goes_to_the_tool_model("velvet kites") is True
     assert goes_to_the_tool_model("no, play the velvet kites") is False
+
+
+def test_the_phone_voice_question_is_a_choice_too() -> None:
+    """"Add this phone's voice to …?" (core.phone_voice_add) is a choice:
+    a whole yes ends the capture early, a bare no runs to the timeout."""
+    pending = _pending("voice_profile", choice=True)
+    assert pending["kind"] == "core.phone_voice_add"
+    ec = early_commit_for("yes", pending=pending)
+    assert ec is not None and ec.tier == TIER_B and ec.plan.path == "confirmation"
+    assert early_commit_for("no", pending=pending) is None
 
 
 def test_a_legacy_unnamespaced_kind_still_plans_as_its_confirmation() -> None:

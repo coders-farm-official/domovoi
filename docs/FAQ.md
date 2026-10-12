@@ -10,6 +10,7 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - [How do I add rooms?](#how-do-i-add-rooms)
 - [Can another device on my network pretend to be one of my rooms?](#can-another-device-on-my-network-pretend-to-be-one-of-my-rooms)
 - [Can I rename the assistant or change the wake word?](#can-i-rename-the-assistant-or-change-the-wake-word)
+- [Which voice does Domovoi speak with, and can I fix how it says a word?](#which-voice-does-domovoi-speak-with-and-can-i-fix-how-it-says-a-word)
 - [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
 - [Can I use it with Home Assistant?](#can-i-use-it-with-home-assistant)
 - [Does it support multiple people?](#does-it-support-multiple-people)
@@ -55,7 +56,7 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
 | Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
-| Extra voices | Downloads of the catalog's Piper voices (about 0.7 GB), and the Edge clips above for 19 Edge voices | Hugging Face; Microsoft | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
+| Extra voices | Downloads of the other two Piper voices (about 130 MB), and the Edge clips above for 19 Edge voices | Hugging Face; Microsoft | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
 | Things an admin starts | Downloads, only when an admin clicks: **Pull the latest** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media | GitHub; PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
@@ -130,6 +131,24 @@ Those are two separate things:
 
 - **The name** — what Domovoi calls itself in speech and on screen — is the `BOT_NAME` setting (dashboard settings gear → Identity, takes effect on restart). Greeting and sample clips re-render with the new name.
 - **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Wake Words → record positive clips *on the actual satellite* (through its real mic), train, then push the model to a room. Training itself needs a Linux toolchain (WSL2 or Docker on your Windows server — see `scripts/wake_word/README.md` and `scripts/wake_word/DOCKER_TRAINER.md`), configured once via `WAKE_WORD_TRAINER_ENABLED` and `WAKE_WORD_TRAIN_COMMAND`.
+
+## Which voice does Domovoi speak with, and can I fix how it says a word?
+
+One of three local voices, all public domain (recorded from LibriVox and the
+LJ Speech set, trained from scratch by Bryce Beattie): **Norman** (male, the
+default), **Kristin** and **Linda** (female). Pick one under Settings →
+Voices → *Domovoi's voice*, where each has a play button; the phone app
+offers the same three. Since October 2026 the words are turned into sounds
+by Domovoi's own converter (a pronouncing dictionary, rules and a small
+model, all permissively licensed), not by espeak-ng, which is GPL; an
+update moves a server off the voices Domovoi used to offer (lessac and the
+voices built on it) to Norman, and fetches it.
+
+When a word comes out wrong, add it under Settings → Voices → *Say it
+like*: the word, and how it sounds in plain letters, with the stressed
+syllable in capitals (`Siobhan` = `shiv-AWN`). The play button lets you
+hear it before you save. Domovoi ships three entries, which you can change
+or remove: Domovoi = `DOH-moe-voy`, Domo = `DOH-moe`, Nguyen = `win`.
 
 ## What are plugins, and are they safe?
 

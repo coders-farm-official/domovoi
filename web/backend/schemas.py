@@ -309,6 +309,11 @@ class VoiceProfile(BaseModel):
     enrolled_at: datetime
     room_id: str | None = None
     sample_seconds: float | None = None
+    # Which set the sample is in (V026): "satellite" (heard by a room's
+    # satellite) or "phone" (said into the app's chat mic). Satellites
+    # match only satellite samples; a phone turn matches phone samples
+    # first.
+    source: str = "satellite"
 
 
 # ─── Profile personalization ─────────────────────────────────────
@@ -514,6 +519,16 @@ class Satellite(BaseModel):
     # by the room they came from. Open like the rest of the row: it says
     # how a room behaves, not what anybody said. False when V018 is missing.
     timers_own_only: bool = False
+    # Spare-device satellites (S0, 2026-10-12). ``board``: the hardware kind
+    # the device named in its hello ("linux_pc", "android_room"), kept in the
+    # inventory row so an offline device still shows it; USB adoption writes
+    # a Pi's (e.g. "raspberry_pi_zero_2_w"). Null when nothing named one.
+    # ``supports``: the abilities the CONNECTED device declared in its hello
+    # (domovoi/satellite_abilities.py) — the dashboard offers only those
+    # actions. Null for a device that sent no list (every Pi: everything, as
+    # before) and for an offline room.
+    board: str | None = None
+    supports: list[str] | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────

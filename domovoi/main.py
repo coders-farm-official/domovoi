@@ -65,7 +65,7 @@ from domovoi.db.repositories import (  # noqa: E402
     SatelliteOutageRepository,
 )
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
-from domovoi import satellite_health  # noqa: E402
+from domovoi import satellite_abilities, satellite_health  # noqa: E402
 from domovoi.guest_queue import (  # noqa: E402
     GUEST_ADD_MAX_TRACKS,
     GUEST_QUEUE_MAX_ENTRIES,
@@ -344,6 +344,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Whisper load (~30 s on large-v3).
     log.info("warming clients (use_stubs=%s)", settings.use_stubs)
     get_ollama_client()
+    # Off the Piper voices Domovoi no longer offers (lessac and co.), before
+    # the TTS client reads the setting: domovoi/voice_migration.py.
+    from domovoi import voice_migration
+
+    try:
+        voice_migration.migrate_configured_voice()
+        voice_migration.remove_retired_voice_files()
+    except Exception as e:  # noqa: BLE001 - never fatal at boot
+        log.warning("voice migration raised: %s", e)
     get_tts_client()
     # Whisper is the slow one; load before accepting traffic. Never fatal:
     # a config that can't load falls back to whisper_cpu_fallback_model on
@@ -364,6 +373,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await seed_voices()
     except Exception as e:
         log.warning("voice registry seed raised: %s", e)
+
+    # The owner's "say it like" list into the text-to-phoneme converter
+    # (domovoi/voice_settings.py). Real speech only: the stub TTS has no
+    # converter to feed.
+    if not settings.use_stubs:
+        from domovoi.voice_settings import apply_pronunciations
+
+        await apply_pronunciations()
 
     # Enabled greeting texts, for stripping a bled-in wake greeting out of
     # transcripts (greeting_filter). Refreshed by the regenerate endpoint
@@ -1529,6 +1546,20 @@ async def admin_snapshot() -> dict[str, Any]:
         # Per-room voice-input state (false = mic-less build) so the web UI
         # can label mic-disabled satellites and hide mic-dependent actions.
         "satellite_mic_enabled": dict(app.state.satellite_mic_enabled),
+        # Spare-device satellites (S0): what each connected device declared
+        # in its hello's `supports`, and the board it named. Only rooms whose
+        # hello carried them are listed — a Pi sends neither, so it is absent
+        # here and the dashboard draws it exactly as before.
+        "satellite_supports": {
+            room: declared
+            for room, sess in app.state.active_sessions.items()
+            if (declared := satellite_abilities.session_abilities(sess).declared_list()) is not None
+        },
+        "satellite_board": {
+            room: board
+            for room, sess in app.state.active_sessions.items()
+            if (board := getattr(sess, "board", None))
+        },
         # Per-room screen/kiosk state ({on, kiosk_alive, brightness,
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.
@@ -1704,6 +1735,20 @@ async def admin_dropin_end(body: _AdminDropInEndBody) -> dict[str, Any]:
     return {"ended": True, "peer": peer_room}
 
 
+def _require_declared(target: Any, ability: str, what: str) -> None:
+    """409 when the connected device's hello declared `supports` without
+    ``ability`` (domovoi/satellite_abilities.py): the action is a frame it
+    never said it handles. A Pi (no list) always passes."""
+    if not satellite_abilities.session_abilities(target).allows(ability):
+        raise HTTPException(
+            status_code=409,
+            detail=satellite_abilities.unsupported_detail(
+                getattr(target, "room_id", "?"), getattr(target, "board", None),
+                what, ability,
+            ),
+        )
+
+
 class _AdminSatelliteRestartBody(BaseModel):
     room_id: str
 
@@ -1732,6 +1777,7 @@ async def admin_satellite_restart(body: _AdminSatelliteRestartBody) -> dict[str,
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
         )
+    _require_declared(target, "restart", "a restart")
 
     started = time.monotonic()
     try:
@@ -1837,6 +1883,7 @@ async def admin_satellite_display(body: _AdminSatelliteDisplayBody) -> dict[str,
             status_code=409,
             detail=f"room {body.room_id!r} is not a video satellite",
         )
+    _require_declared(target, "display", "screen control")
 
     started = time.monotonic()
     try:
@@ -2120,6 +2167,7 @@ async def admin_satellite_upgrade(
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
         )
+    _require_declared(target, "code_sync", "a code sync")
 
     expected_sha = await git_version.current_sha()
     started = time.monotonic()
@@ -2311,6 +2359,9 @@ async def admin_wake_record_start(
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
         )
+    # Before anything is reset: a device that never declared clip
+    # recording would leave the word's clips wiped and nothing recorded.
+    _require_declared(target, "wake_clips", "wake-word clip recording")
     # A mic-disabled satellite (mic-less video build) has no capture stack —
     # it would just ignore the recording frames. Refuse up front.
     if app.state.satellite_mic_enabled.get(body.room_id) is False:
@@ -2428,6 +2479,7 @@ async def admin_wake_push(body: _AdminWakePushBody) -> dict[str, Any]:
         raise HTTPException(
             status_code=404, detail=f"room {body.room_id!r} not connected"
         )
+    _require_declared(target, "wake_models", "a wake-word model")
     async with session_scope() as s:
         row = await WakeWordsRepository(s).get(body.wake_word_id)
     if row is None:
@@ -2548,8 +2600,14 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
     satellite has reported."""
     from domovoi.satellite_config_schema import EDITABLE_FIELDS
 
-    if room_id not in app.state.active_sessions:
+    target = app.state.active_sessions.get(room_id)
+    if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    # A device that declared `supports` (S0) is shown only the settings it
+    # can take: none without "config", and no section whose own ability it
+    # left out (LEDs, mic gain, Wi-Fi, display, sounds). A Pi gets them all.
+    abilities = satellite_abilities.session_abilities(target)
+    _require_declared(target, "config", "remote settings")
     reported: dict[str, Any] = app.state.satellite_config.get(room_id) or {}
     fields = [
         {
@@ -2562,6 +2620,7 @@ async def admin_get_satellite_config(room_id: str) -> dict[str, Any]:
             "supported": (spec.name in reported) if reported else None,
         }
         for spec in EDITABLE_FIELDS
+        if abilities.allows_config_key(spec.name)
     ]
     return {"room_id": room_id, "reported": bool(reported), "fields": fields}
 
@@ -2597,6 +2656,8 @@ async def admin_update_satellite_config(
     target = app.state.active_sessions.get(room_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
+    _require_declared(target, "config", "remote settings")
+    abilities = satellite_abilities.session_abilities(target)
     # A setting missing from the satellite's own report is one its code
     # predates (see admin_get_satellite_config): an older Pi would write it
     # to config.toml and restart, then ignore it.
@@ -2608,6 +2669,11 @@ async def admin_update_satellite_config(
         spec = FIELD_BY_NAME.get(name)
         if spec is None:
             rejected[name] = "not an editable setting"
+            continue
+        if not abilities.allows_config_key(name):
+            section = name.split(".", 1)[0]
+            ability = satellite_abilities.CONFIG_SECTION_ABILITY.get(section, "config")
+            rejected[name] = f"this device doesn't have this setting (it didn't declare {ability!r})"
             continue
         if reported and name not in reported:
             rejected[name] = "this satellite doesn't have this setting yet — upgrade it first"
@@ -2700,12 +2766,18 @@ async def admin_get_satellite_logs(
             log.debug("last outage for %s unavailable: %s", room_id, e)
 
     target = app.state.active_sessions.get(room_id)
-    if target is None:
-        if retained is None and last_outage is None:
+    # A connected device whose hello declared `supports` without "logs"
+    # (S0) has no ring to pull: it is answered like an offline room, with
+    # what the core retains, and `live_supported: false` says why.
+    live_supported = (
+        target is None or satellite_abilities.session_abilities(target).allows("logs")
+    )
+    if target is None or not live_supported:
+        if target is None and retained is None and last_outage is None:
             raise HTTPException(status_code=404, detail=f"room {room_id!r} not connected")
-        return {
+        offline_body: dict[str, Any] = {
             "room_id": room_id,
-            "connected": False,
+            "connected": target is not None,
             "text": "",
             "bytes": 0,
             "requested_max_bytes": max_bytes,
@@ -2718,6 +2790,9 @@ async def admin_get_satellite_logs(
             "retained": retained,
             "last_outage": last_outage,
         }
+        if not live_supported:
+            offline_body["live_supported"] = False
+        return offline_body
     try:
         result = await target.request_logs(max_bytes=max_bytes)
     except TimeoutError:
@@ -3279,6 +3354,78 @@ async def admin_render_setup_clips() -> dict[str, Any]:
 
 class _VoiceSampleBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=80)
+
+
+@app.post(
+    "/v1/admin/pronunciations/reload",
+    # Admin tier: the web backend calls it after an owner edits the list,
+    # with that owner's credentials.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_pronunciations_reload() -> dict[str, Any]:
+    """Load the "say it like" list from the database into the converter
+    (domovoi/voice_settings.py), then re-render, in the background, the
+    clips whose words it changes. ``left_out``: entries it could not use."""
+    from domovoi.voice_settings import apply_pronunciations
+
+    errors = await apply_pronunciations()
+    app.state.sounds_render_task = asyncio.create_task(_run_sounds_regenerate())
+    return {"reloaded": True, "left_out": errors}
+
+
+class _SayLikeBody(BaseModel):
+    word: str = Field(..., min_length=1, max_length=48)
+    say_like: str = Field(..., min_length=1, max_length=100)
+    voice: str | None = Field(default=None, max_length=80)
+
+
+@app.post(
+    "/v1/admin/voice/say-like",
+    # Device tier, like the voice sample: it synthesizes one word.
+    dependencies=[Depends(require_device)],
+)
+async def admin_voice_say_like(body: _SayLikeBody) -> FastAPIResponse:
+    """Say ``word`` the way ``say_like`` asks, without saving it: the play
+    button beside a "say it like" entry. In ``voice`` (a shipped voice id)
+    or the server's voice. 400 with the reason when the entry can't be used;
+    the phonemes go back in ``X-Phonemes``."""
+    from domovoi.clients.tts import PIPER_PINS
+    from domovoi.phonemizer import PronunciationError, get_phonemizer
+
+    ph = await asyncio.to_thread(get_phonemizer)
+    try:
+        entry = ph.resolve_pronunciation(body.word, body.say_like)
+    except PronunciationError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    text = body.word.strip() + "."
+    phonemes = ph.phonemize(text, extra=[entry])
+    if body.voice is not None and body.voice not in PIPER_PINS:
+        raise HTTPException(status_code=400, detail=f"{body.voice!r} is not one of the voices")
+    voice = body.voice
+    if voice is None:
+        from domovoi.voice_settings import server_voice
+
+        async with session_scope() as s:
+            voice = await server_voice(s)
+    wav = await asyncio.to_thread(_say_phonemes_wav, phonemes, voice)
+    if wav is None:
+        raise HTTPException(status_code=502, detail=f"the voice {voice} could not speak")
+    return FastAPIResponse(
+        content=wav, media_type="audio/wav",
+        headers={"X-Phonemes": quote(" | ".join(phonemes), safe="")},
+    )
+
+
+def _say_phonemes_wav(phonemes: list[str], voice: str) -> bytes | None:
+    from domovoi.clients import tts
+
+    try:
+        v = tts._piper_voice(voice)
+        pcm = v.synthesize_pcm(phonemes, settings.tts_speed)
+    except Exception as e:  # noqa: BLE001 - a missing / broken voice is a 502
+        log.warning("say-like preview in %s failed: %s", voice, e)
+        return None
+    return tts._pcm_to_wav_bytes(pcm, v.sample_rate) if pcm else None
 
 
 @app.post(

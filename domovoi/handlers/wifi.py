@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
+from domovoi.satellite_abilities import room_allows
 
 log = logging.getLogger(__name__)
 
@@ -166,6 +167,15 @@ class WifiHandler(Handler):
         # executes wpa_cli reassociate once playback has drained.
         # "OK, reconnecting now." sets user expectation that the bot
         # heard them and the WS may briefly drop in a moment.
+        if not room_allows(ctx.app, ctx.room_id, "wifi"):
+            # A device that declared what it can do (`supports`) without
+            # "wifi" keeps its own network (a laptop, a phone): saying
+            # "reconnecting" would be a promise nothing keeps. Pis pass.
+            return Response(
+                text="This room's device looks after its own Wi-Fi, so I can't reconnect it from here.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         return Response(
             text="OK, reconnecting now.",
             session_id=ctx.session_id,

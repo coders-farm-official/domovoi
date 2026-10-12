@@ -63,6 +63,8 @@ data class VoiceSampleResult(
     val totalMs: Long,
     /** Length of the speech (0 when the engine does not say). */
     val audioS: Double,
+    /** Which voice read it ([PhoneSpeech.voiceKey]); null when not known. */
+    val voice: String? = null,
 )
 
 data class AudioInResult(
@@ -177,6 +179,9 @@ fun thermalName(status: Int?): String = when (status) {
     else -> "status $status"
 }
 
+/** How [PiperSpeechOut.describe] starts, so the report can tell the voices apart. */
+const val DOMOVOI_VOICE = "Domovoi voice"
+
 private fun ms(v: Long?): String = v?.let { "$it ms" } ?: "—"
 private fun f1(v: Double?): String = v?.let { String.format(Locale.US, "%.1f", it) } ?: "—"
 private fun gb(bytes: Long?): String = bytes?.let { String.format(Locale.US, "%.1f GB", it / 1e9) } ?: "—"
@@ -195,8 +200,13 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
     appendLine("Android ${device.android} (API ${device.api}), ${device.abi}, RAM ${gb(device.totalRamBytes)}" +
         if (device.lowRamDevice) ", low-RAM device" else "")
     appendLine("app ${device.app}")
+    val speaking = if (results.voice?.startsWith(DOMOVOI_VOICE) == true) {
+        "the Domovoi voice (Piper, on ONNX Runtime 1.28.0)"
+    } else {
+        "Android TextToSpeech"
+    }
     appendLine("models: ${ModelCatalog.gemma4E2b.name} (LiteRT-LM 0.18.0); listening: sherpa-onnx 1.13.8 " +
-        "built without text to speech, on ONNX Runtime 1.28.0; speaking: Android TextToSpeech")
+        "built without text to speech, on ONNX Runtime 1.28.0; speaking: $speaking")
     results.voice?.let { appendLine("voice: $it") }
 
     if (results.loads.isNotEmpty()) {
@@ -243,14 +253,18 @@ fun renderBenchReport(device: DeviceFacts, results: BenchResults, madeAt: String
     }
 
     if (results.samples.isNotEmpty()) {
-        val samples = results.samples
         appendLine()
         appendLine("VOICE SAMPLES (this phone's voice reading the comparison lines)")
-        appendLine("  median to the first word: ${ms(median(samples.mapNotNull { it.firstWordMs?.toDouble() })?.toLong())}")
-        samples.forEach { s ->
-            val n = VoiceSamples.LINES.indexOf(s.line).takeIf { it >= 0 }?.let { "${it + 1}" } ?: "-"
-            appendLine("  $n. first word ${ms(s.firstWordMs)}, done ${ms(s.totalMs)}" +
-                (if (s.audioS > 0) ", ${f1(s.audioS)} s of speech" else "") + ": ${clip(s.line, 70)}")
+        // One block per voice, in the order they spoke, when more than one did.
+        val byVoice = results.samples.groupBy { it.voice }
+        byVoice.forEach { (voice, samples) ->
+            if (byVoice.size > 1) appendLine("  ${voice ?: "voice not recorded"}:")
+            appendLine("  median to the first word: ${ms(median(samples.mapNotNull { it.firstWordMs?.toDouble() })?.toLong())}")
+            samples.forEach { s ->
+                val n = VoiceSamples.LINES.indexOf(s.line).takeIf { it >= 0 }?.let { "${it + 1}" } ?: "-"
+                appendLine("  $n. first word ${ms(s.firstWordMs)}, done ${ms(s.totalMs)}" +
+                    (if (s.audioS > 0) ", ${f1(s.audioS)} s of speech" else "") + ": ${clip(s.line, 70)}")
+            }
         }
     }
 

@@ -44,10 +44,12 @@ timer``, ``go back a chapter``).
 
 Settings (``domovoi/config.py``): ``fastlane_mode`` off | shadow (off by
 default; applies without a restart), ``fastlane_model`` and
-``fastlane_cpu_threads`` (restart). The recognizer is the ``fastlane``
-extra (``pip install -e ".[fastlane]"``), NOT a core dependency: without
-it, shadow mode logs once that it is unavailable and the core runs as
-before. The model downloads on first enable into
+``fastlane_cpu_threads`` (restart). The recognizer is sherpa-onnx, which
+Domovoi does NOT install (its PyPI wheels compile in espeak-ng, GPL-3.0,
+for their own text to speech): an owner who wants the lane installs a
+sherpa-onnx built without TTS, or the PyPI wheel knowing what it carries
+(docs/CPU_HOST.md). Without it, shadow mode logs once that it is
+unavailable and the core runs as before. The model downloads on first enable into
 ``~/.domovoi/models/fastlane/`` from a pinned URL, checked against a
 pinned SHA-256 (the archive and every file taken from it) before it is
 ever loaded; ``python -m domovoi.fast_lane fetch`` does it ahead of time.
@@ -934,7 +936,7 @@ def _load(gen: int) -> None:
     try:
         import sherpa_onnx  # noqa: F401
     except ImportError:
-        _fail(gen, 'sherpa-onnx is not installed (pip install -e ".[fastlane]")')
+        _fail(gen, "sherpa-onnx is not installed (Domovoi doesn't install it: docs/CPU_HOST.md, the fast lane)")
         return
     except Exception as e:  # a wheel whose native library won't load (OSError)
         _fail(gen, f"sherpa-onnx is installed but won't load: {type(e).__name__}: {e}")

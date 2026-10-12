@@ -96,7 +96,11 @@ class AndroidSpeechOut private constructor(
     private val enginePackage: String,
     private val engineLabel: String,
     val voice: VoiceChoice,
-) : SpeechOut, SpeechSynthesizer {
+) : PhoneSpeech {
+
+    override val voiceKey: String get() = VoiceSource.ANDROID
+
+    override fun describe(): String = info.describe()
 
     private class InFlight {
         /** null: finished; [STOPPED]; anything else is the engine's error code. */

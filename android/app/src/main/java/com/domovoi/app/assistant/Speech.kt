@@ -43,9 +43,9 @@ data class SpokenSentence(
 )
 
 /**
- * Speaks text aloud, one sentence at a time. Android's own TextToSpeech is
- * the implementation today ([AndroidSpeechOut]); an on-device neural voice
- * can plug in behind the same interface later.
+ * Speaks text aloud, one sentence at a time: Domovoi's own voice on the
+ * phone ([PiperSpeechOut]) once it is downloaded, Android's TextToSpeech
+ * ([AndroidSpeechOut]) until then.
  */
 interface SpeechOut : AutoCloseable {
     /** Synthesizes and plays [sentence]; returns when it has been played
@@ -67,6 +67,29 @@ class SynthesizedSpeech(val samples: FloatArray, val sampleRate: Int) {
  *  benchmark's self-tests feed it to the recognizer as if it were the mic. */
 interface SpeechSynthesizer {
     suspend fun synthesize(text: String): SynthesizedSpeech
+}
+
+/** A voice on the phone the benchmark can speak with and name. */
+interface PhoneSpeech : SpeechOut, SpeechSynthesizer {
+    /** [VoiceSource.ANDROID], or the catalog id of a Domovoi voice. */
+    val voiceKey: String
+
+    /** Which engine and voice, for the results. */
+    fun describe(): String
+}
+
+/** Where the phone's voice comes from: the Domovoi voice when the one in
+ *  use is downloaded (voice/PhoneVoice.kt), else Android's TextToSpeech. */
+interface VoiceSource {
+    /** The voice [open] would give now: a catalog id, or [ANDROID]. */
+    fun wantedKey(): String
+
+    /** The Domovoi voice ready to speak, or null when it is not downloaded. */
+    suspend fun open(): PhoneSpeech?
+
+    companion object {
+        const val ANDROID = "android"
+    }
 }
 
 /** PCM16 (what AudioRecord gives) to floats in [-1, 1]. */

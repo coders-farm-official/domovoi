@@ -57,6 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
+from domovoi.satellite_abilities import room_allows
 
 log = logging.getLogger(__name__)
 
@@ -196,6 +197,15 @@ class ChatModeHandler(Handler):
                     "Chat mode needs a satellite with echo cancellation, and "
                     "this room's mic can't do that yet."
                 ),
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        # A device that declared what it can do (`supports`, S0) and left
+        # chat mode out never gets `chat_start`: decline here rather than
+        # promise a chat it would not open. Every Pi passes (no list).
+        if not room_allows(app, ctx.room_id, "chat_mode"):
+            return Response(
+                text="Chat mode isn't available on this room's device.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )

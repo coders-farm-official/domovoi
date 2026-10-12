@@ -33,7 +33,7 @@ WAV = tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 200, 22_050)
 ANSWERS = ("", "always", "sometimes", "never")
 
 
-def _client(preferred: str = "piper", *, piper_voice: str = "en_US-lessac-medium") -> RealTTSClient:
+def _client(preferred: str = "piper", *, piper_voice: str = "en_US-norman-medium") -> RealTTSClient:
     return RealTTSClient(
         preferred_engine=preferred,
         edge_voice="en-US-AriaNeural",
@@ -158,7 +158,7 @@ def test_system_preferred_falls_back_to_piper_not_edge(monkeypatch):
     with egress.override_policy("always"):
         result = _client("system")._synth_detailed_blocking("hi")
     assert result.engine == "piper"
-    assert result.voice == "en_US-lessac-medium"
+    assert result.voice == "en_US-norman-medium"
     assert [c[0] for c in calls] == ["system", "piper"]
 
 
@@ -188,8 +188,8 @@ def test_edge_failing_falls_back_to_piper_with_its_own_voice(monkeypatch):
     calls = _spy(monkeypatch, edge=None, system="fail")
     with egress.override_policy("always"):
         result = _client("edge")._synth_detailed_blocking("hi", voice="en-US-GuyNeural")
-    assert result == SynthResult(wav=WAV, engine="piper", voice="en_US-lessac-medium")
-    assert calls == [("edge", "en-US-GuyNeural"), ("piper", "en_US-lessac-medium")]
+    assert result == SynthResult(wav=WAV, engine="piper", voice="en_US-norman-medium")
+    assert calls == [("edge", "en-US-GuyNeural"), ("piper", "en_US-norman-medium")]
 
 
 def test_edge_preferred_under_never_speaks_piper_without_trying_edge(monkeypatch):
@@ -197,8 +197,8 @@ def test_edge_preferred_under_never_speaks_piper_without_trying_edge(monkeypatch
     with egress.override_policy("never"):
         result = _client("edge")._synth_detailed_blocking("hi", engine="edge", voice="en-US-GuyNeural")
     # Piper with ITS OWN voice: the Edge voice id is not a Piper model.
-    assert result == SynthResult(wav=WAV, engine="piper", voice="en_US-lessac-medium")
-    assert calls == [("piper", "en_US-lessac-medium")]
+    assert result == SynthResult(wav=WAV, engine="piper", voice="en_US-norman-medium")
+    assert calls == [("piper", "en_US-norman-medium")]
 
 
 # ─── The two paths that reach the internet themselves ─────────────────────
@@ -231,25 +231,23 @@ def test_the_real_edge_rung_is_never_reached_under_never(monkeypatch, edge_tts_m
 
 @pytest.fixture
 def fake_piper(monkeypatch, tmp_path):
-    """A stand-in ``piper`` package so ``_synth_piper_sync`` reaches the
-    voice-path resolution (and its download) without a real model."""
-
-    class _Voice:
-        def synthesize(self, text, syn_config=None):
-            yield types.SimpleNamespace(sample_rate=22_050, audio_int16_bytes=b"\x01\x02" * 100)
+    """A stand-in for the ONNX voice (``tts.PiperVoice``) so
+    ``_synth_piper_sync`` reaches the voice-path resolution (and its
+    download) without a real model."""
 
     loaded: list[str] = []
 
-    class _PiperVoice:
-        @staticmethod
-        def load(path):
-            loaded.append(path)
-            return _Voice()
+    class _Voice:
+        sample_rate = 22_050
 
-    fake = types.ModuleType("piper")
-    fake.PiperVoice = _PiperVoice
-    fake.SynthesisConfig = lambda **kw: types.SimpleNamespace(**kw)
-    monkeypatch.setitem(sys.modules, "piper", fake)
+        def __init__(self, path):
+            loaded.append(str(path))
+
+        def synthesize_pcm(self, sentences, speed):
+            return b"" * 100
+
+    monkeypatch.setattr(tts_mod, "PiperVoice", _Voice)
+    monkeypatch.setattr(tts_mod, "_phonemize", lambda text: ["hˈaɪ"])
     monkeypatch.setattr(tts_mod.settings, "voice_models_dir", str(tmp_path / "voices"))
     monkeypatch.setattr(tts_mod, "_piper_voice_cache", {})
     return loaded
@@ -259,7 +257,7 @@ def test_the_piper_download_is_refused_under_never_and_system_speaks(monkeypatch
     monkeypatch.setattr(tts_mod, "_piper_http_client", _must_not_run("the Piper download client"))
     monkeypatch.setattr(tts_mod, "_synth_edge_sync", _must_not_run("the edge engine"))
     monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda text: WAV)
-    client = _client("piper", piper_voice="en_US-ryan-high")
+    client = _client("piper", piper_voice="en_US-kristin-medium")
     with egress.override_policy("never"):
         result = client._synth_detailed_blocking("hello")
     assert result.engine == "system"
@@ -279,7 +277,7 @@ def test_the_piper_download_still_runs_when_allowed(monkeypatch, fake_piper, tmp
     model, config = b"model-bytes", b"{}"
     blob = hashlib.sha1(b"blob %d\0" % len(config) + config).hexdigest()
     monkeypatch.setitem(
-        tts_mod.PIPER_PINS, "en_US-ryan-high",
+        tts_mod.PIPER_PINS, "en_US-kristin-medium",
         (hashlib.sha256(model).hexdigest(), len(model), blob, len(config)),
     )
     fetched: list[str] = []
@@ -296,10 +294,10 @@ def test_the_piper_download_still_runs_when_allowed(monkeypatch, fake_piper, tmp
     )
     monkeypatch.setattr(tts_mod, "_synth_system_sync", _must_not_run("the system engine"))
     with egress.override_policy("always"):
-        result = _client("piper", piper_voice="en_US-ryan-high")._synth_detailed_blocking("hi")
-    assert result.engine == "piper" and result.voice == "en_US-ryan-high"
+        result = _client("piper", piper_voice="en_US-kristin-medium")._synth_detailed_blocking("hi")
+    assert result.engine == "piper" and result.voice == "en_US-kristin-medium"
     assert sorted(u.rsplit("/", 1)[-1] for u in fetched) == [
-        "en_US-ryan-high.onnx", "en_US-ryan-high.onnx.json",
+        "en_US-kristin-medium.onnx", "en_US-kristin-medium.onnx.json",
     ]
     assert all(
         f"/rhasspy/piper-voices/resolve/{tts_mod.PIPER_PINNED_REVISION}/" in u for u in fetched
@@ -310,10 +308,10 @@ def test_a_voice_already_on_disk_loads_under_never(monkeypatch, fake_piper, tmp_
     monkeypatch.setattr(tts_mod, "_piper_http_client", _must_not_run("the Piper download client"))
     vdir = tmp_path / "voices"
     vdir.mkdir()
-    (vdir / "en_US-ryan-high.onnx").write_bytes(b"m")
-    (vdir / "en_US-ryan-high.onnx.json").write_text("{}")
+    (vdir / "en_US-kristin-medium.onnx").write_bytes(b"m")
+    (vdir / "en_US-kristin-medium.onnx.json").write_text("{}")
     with egress.override_policy("never"):
-        result = _client("piper", piper_voice="en_US-ryan-high")._synth_detailed_blocking("hi")
+        result = _client("piper", piper_voice="en_US-kristin-medium")._synth_detailed_blocking("hi")
     assert result.engine == "piper"
 
 
@@ -321,18 +319,18 @@ def test_piper_voice_on_disk(monkeypatch, tmp_path):
     vdir = tmp_path / "voices"
     monkeypatch.setattr(tts_mod.settings, "voice_models_dir", str(vdir))
     monkeypatch.setattr(tts_mod, "_piper_voice_cache", {})
-    assert not tts_mod.piper_voice_on_disk("en_US-ryan-high")
+    assert not tts_mod.piper_voice_on_disk("en_US-kristin-medium")
     assert not vdir.exists()  # judging creates nothing
     vdir.mkdir()
-    (vdir / "en_US-ryan-high.onnx").write_bytes(b"m")
-    assert not tts_mod.piper_voice_on_disk("en_US-ryan-high")  # no .onnx.json yet
-    (vdir / "en_US-ryan-high.onnx.json").write_text("{}")
-    assert tts_mod.piper_voice_on_disk("en_US-ryan-high")
+    (vdir / "en_US-kristin-medium.onnx").write_bytes(b"m")
+    assert not tts_mod.piper_voice_on_disk("en_US-kristin-medium")  # no .onnx.json yet
+    (vdir / "en_US-kristin-medium.onnx.json").write_text("{}")
+    assert tts_mod.piper_voice_on_disk("en_US-kristin-medium")
     uploaded = tmp_path / "mine.onnx"
     uploaded.write_bytes(b"m")
     assert tts_mod.piper_voice_on_disk(str(uploaded))
-    tts_mod._piper_voice_cache["en_US-amy-medium"] = object()
-    assert tts_mod.piper_voice_on_disk("en_US-amy-medium")
+    tts_mod._piper_voice_cache["en_US-ljspeech-medium"] = object()
+    assert tts_mod.piper_voice_on_disk("en_US-ljspeech-medium")
 
 
 # ─── synthesize / synthesize_detailed ──────────────────────────────────────
@@ -360,7 +358,7 @@ def test_the_protocol_has_synthesize_detailed():
     [
         ("always", "edge", "en-US-GuyNeural", ("edge", "en-US-GuyNeural")),
         ("never", "edge", "en-US-GuyNeural", ("piper", None)),
-        ("always", "piper", "en_US-ryan-high", ("piper", "en_US-ryan-high")),
+        ("always", "piper", "en_US-kristin-medium", ("piper", "en_US-kristin-medium")),
         ("always", "system", None, ("system", None)),
         ("always", None, None, ("piper", None)),
     ],

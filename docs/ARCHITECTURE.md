@@ -164,6 +164,11 @@ prose:
    of their samples), yielding `person_id` + `presence_tier` in the turn's
    `Context`. Two people too close to tell apart name nobody, and only
    confident matches ever save a sample (`domovoi/voice_identifier.py`).
+   A person's samples come in two sets (V026): satellite samples, which
+   are all a satellite ever matches, and phone samples from the app's chat
+   mic, which a phone turn matches first (falling back to the satellite
+   set). Phone samples are only added on purpose ("my name is …" said into
+   the chat mic), never learned.
 4. **Chat-mode bypass.** If the session is in conversational chat mode, the
    turn skips the command router entirely and goes to the Letta agent (or ends
    the chat on an exit phrase). Command mode pays only one session-context
@@ -172,7 +177,11 @@ prose:
 6. **TTS.** The response text is split into sentences and synthesized through
    the engine chain **piper → system** (**edge → piper → system** only when
    Edge is the chosen engine and the internet answer isn't `never`; Edge is
-   never a fallback rung) — per-sentence fallback; a sentence rendered at a
+   never a fallback rung) — per-sentence fallback. The Piper rung runs the
+   voice's ONNX model directly, fed by Domovoi's own text-to-phoneme
+   converter (`domovoi/phonemizer`: CMUdict, rules, a small model for
+   unknown words and the owner's "say it like" list; no espeak-ng). A
+   sentence rendered at a
    different native rate is resampled to the announced rate. Sentence synthesis is pipelined so the Pi's playback buffer never
    drains between sentences.
 7. **Post-turn coordination.** `response_end` carries `expect_followup` /

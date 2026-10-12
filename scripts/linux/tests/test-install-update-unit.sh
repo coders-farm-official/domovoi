@@ -36,9 +36,10 @@
 #   * systemctl daemon-reload fails once when reload-fail is set, and
 #     domovoi-update.service never loads when update-unit-unloadable is set;
 #     install fails on the unit's temp file when install-fail-unit is set;
-#   * the venv's python answers `pip show piper-tts` with piper-version
-#     (1.3.0), or not at all when piper-missing is set, and the version
-#     query (-c ...version_info...) with py-version (3.14).
+#   * the venv's python answers `pip show onnxruntime` with onnx-version
+#     (1.30.0), or not at all when onnx-missing is set; `pip show piper-tts`
+#     only when piper-present is set (its version); and the version query
+#     (-c ...version_info...) with py-version (3.14).
 #
 # Usage: bash scripts/linux/tests/test-install-update-unit.sh [--case NAME|GLOB]... [--list]
 # (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
@@ -285,9 +286,13 @@ write_venv() {
   cat >"$venv/bin/python" <<'SH'
 #!/usr/bin/env bash
 echo "python $*" >>"$SHIM_STATE/calls.log"
+if [ "${1-}" = -m ] && [ "${2-}" = pip ] && [[ " $* " == *" show onnxruntime "* ]]; then
+  if [ -f "$SHIM_STATE/onnx-missing" ]; then echo "WARNING: Package(s) not found: onnxruntime" >&2; exit 1; fi
+  printf 'Name: onnxruntime\nVersion: %s\nSummary: ONNX Runtime\n' "$(cat "$SHIM_STATE/onnx-version" 2>/dev/null || echo 1.30.0)"
+fi
 if [ "${1-}" = -m ] && [ "${2-}" = pip ] && [[ " $* " == *" show piper-tts "* ]]; then
-  if [ -f "$SHIM_STATE/piper-missing" ]; then echo "WARNING: Package(s) not found: piper-tts" >&2; exit 1; fi
-  printf 'Name: piper-tts\nVersion: %s\nSummary: fast local TTS\n' "$(cat "$SHIM_STATE/piper-version" 2>/dev/null || echo 1.3.0)"
+  if [ ! -f "$SHIM_STATE/piper-present" ]; then echo "WARNING: Package(s) not found: piper-tts" >&2; exit 1; fi
+  printf 'Name: piper-tts\nVersion: %s\nSummary: fast local TTS\n' "$(cat "$SHIM_STATE/piper-present")"
 fi
 if [ "${1-}" = -c ] && [[ ${2-} == *version_info* ]]; then
   cat "$SHIM_STATE/py-version" 2>/dev/null || echo 3.14
@@ -443,7 +448,9 @@ case_fresh_install() {
   check "systemd loaded it" test -f "$STATE/loaded-update-unit"
   check "docker compose checked as the service user" \
     called "sudo -n -u tester -- docker compose -f $REPO/domovoi/docker-compose.yml ps --quiet"
-  check "piper checked as the service user" called "sudo -n -u tester -- $VENV/bin/python -m pip"
+  check "the voice runtime checked as the service user" called "sudo -n -u tester -- $VENV/bin/python -m pip"
+  check "onnxruntime is fine" said "ok       onnxruntime 1.30.0"
+  check "no piper-tts left, no warning" not_said "piper-tts"
   check "venv ownership checked" called "find $VENV ! -user tester -print -quit"
   check "no update started without --apply" not_called "systemctl start"
   check "no ownership change without --fix-ownership" not_called "chown"
@@ -707,31 +714,41 @@ case_fix_ownership() {
   end_case
 }
 
-case_piper_too_old_warns() {
-  new_case piper_too_old_warns
-  echo 1.2.0 >"$STATE/piper-version"
+case_onnxruntime_too_old_warns() {
+  new_case onnxruntime_too_old_warns
+  echo 1.24.4 >"$STATE/onnx-version"
   run_install
   check "exit 0" eq "$RC" 0
-  check "warns" said "piper-tts 1.2.0 in $VENV is older than 1.3"
-  check "gives the fix" said "sudo -u tester $VENV/bin/python -m pip install 'piper-tts>=1.3'"
+  check "warns" said "onnxruntime 1.24.4 in $VENV is older than 1.28"
+  check "gives the fix" said "sudo -u tester $VENV/bin/python -m pip install 'onnxruntime>=1.28'"
   end_case
 }
 
-case_piper_missing_warns() {
-  new_case piper_missing_warns
-  : >"$STATE/piper-missing"
+case_onnxruntime_missing_warns() {
+  new_case onnxruntime_missing_warns
+  : >"$STATE/onnx-missing"
   run_install
   check "exit 0" eq "$RC" 0
-  check "warns" said "piper-tts isn't installed in $VENV"
+  check "warns" said "onnxruntime isn't installed in $VENV"
   end_case
 }
 
-case_piper_newer_is_fine() {
-  new_case piper_newer_is_fine
-  echo 1.10.2 >"$STATE/piper-version"
+case_onnxruntime_newer_is_fine() {
+  new_case onnxruntime_newer_is_fine
+  echo 1.31.2 >"$STATE/onnx-version"
   run_install
   check "exit 0" eq "$RC" 0
-  check "1.10 counts as newer than 1.3" said "ok       piper-tts 1.10.2"
+  check "1.31 counts as newer than 1.28" said "ok       onnxruntime 1.31.2"
+  end_case
+}
+
+case_piper_tts_left_over_warns() {
+  new_case piper_tts_left_over_warns
+  echo 1.8.0 >"$STATE/piper-present"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "warns" said "piper-tts 1.8.0 is still in $VENV: Domovoi no longer uses it"
+  check "gives the fix" said "sudo -u tester $VENV/bin/python -m pip uninstall -y piper-tts piper-phonemize"
   end_case
 }
 
@@ -1272,9 +1289,10 @@ CASES=(
   case_help_needs_no_root
   case_venv_owned_by_root_warns
   case_fix_ownership
-  case_piper_too_old_warns
-  case_piper_missing_warns
-  case_piper_newer_is_fine
+  case_onnxruntime_too_old_warns
+  case_onnxruntime_missing_warns
+  case_onnxruntime_newer_is_fine
+  case_piper_tts_left_over_warns
   case_docker_denied_stops
   case_missing_unit_stops
   case_no_systemd_stops
