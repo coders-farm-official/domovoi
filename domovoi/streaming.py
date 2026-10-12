@@ -56,6 +56,24 @@ Client → Server
                            server logs a WARNING per connection without it:
                            it cannot hear that such a satellite played
                            silence and records the announcement as spoken.
+                           `supports` (optional list, 2026-10-12) names what
+                           the device can do (domovoi/satellite_abilities.py:
+                           restart, code_sync, plugin_payloads, config, wifi,
+                           mic_gain, leds, display, logs, wake_clips,
+                           wake_models, sounds, voice, time_sync, chat_mode,
+                           announce_after_session_end, full_duplex,
+                           speech_pause, capture_control). The server sends a
+                           frame, or offers a dashboard action, only when its
+                           ability is listed. WITHOUT the key — every Pi — it
+                           assumes everything it has always sent, and reads
+                           the three negotiated behaviours (full duplex,
+                           speech pause, capture control) from their boolean
+                           keys exactly as before. The boolean keys above
+                           still work and count the same as listing the name.
+                           `board` (optional, e.g. "linux_pc",
+                           "android_room") names the hardware kind; kept in
+                           `satellites.board` on approval and on every hello
+                           that carries it. Neither bumps PROTOCOL_VERSION.
   text  utterance_start    {"type":"utterance_start","trigger":"wake_word"|"barge_in"|"push_to_talk"|"followup"|"wake_clip",
                             "utt":N,"backlog_ms":N,"wake_ms":N}
                            — `utt` (optional): the satellite's own number for
@@ -469,7 +487,8 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
-from domovoi import satellite_health
+from domovoi import satellite_abilities, satellite_health
+from domovoi.satellite_abilities import Abilities, NotDeclared
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
 from domovoi.turn_timings import (
@@ -1447,6 +1466,13 @@ class StreamSession:
         # (V002) — the receive loop breaks so a rejected impostor's socket
         # tears down promptly after the error frame + close.
         self._pairing_refused = False
+        # What the hello declared it can do (`supports`, and the boolean
+        # keys before it) and the board it named (domovoi/satellite_abilities.py).
+        # A hello without `supports` is a Pi: every frame the core has
+        # always sent goes to it, exactly as before. Read by every send
+        # below that a device may not handle.
+        self.abilities: Abilities = satellite_abilities.LEGACY
+        self.board: str | None = None
         # Whether the hello's pairing check matched (or claimed) this room
         # with a token. False for a socket accepted with none (strict
         # pairing off, or the check could not run): such a socket announces
@@ -2604,7 +2630,9 @@ class StreamSession:
             token_hash=token_hash,
             code=code,
             mac=ctrl.get("mac"),
-            board=ctrl.get("board"),
+            # Bounded like the accepted hello's (it is shown on the
+            # approval card and kept on approval).
+            board=satellite_abilities.clean_board(ctrl.get("board")),
             sat_type=ctrl.get("sat_type") or "voice",
             takeover_after_sec=APPROVAL_TAKEOVER_SEC,
         )
@@ -2804,6 +2832,54 @@ class StreamSession:
                     self.room_id, e,
                 )
 
+    async def _persist_board(self, board: str) -> None:
+        """Best-effort upsert of the hello's ``board`` into the `satellites`
+        inventory row (V003), like :meth:`_persist_sat_type`: approval
+        keeps it too (``SatelliteApprovalRepository.approve``), so the
+        dashboard names the device kind while it is offline. Never raises."""
+        try:
+            async with session_scope() as s:
+                await SatellitesRepository(s).upsert_board(self.room_id, board)
+        except Exception as e:
+            if _is_missing_satellites_table(e):
+                global _satellites_table_warned
+                if not _satellites_table_warned:
+                    _satellites_table_warned = True
+                    log.warning(
+                        "satellites: the satellites table is missing — run DB "
+                        "migrations (docker compose run --rm flyway) to persist "
+                        "satellite boards. Continuing without persistence."
+                    )
+            else:
+                log.warning(
+                    "satellites: board persist failed for room=%s: %s",
+                    self.room_id, e,
+                )
+
+    def _declared_pi_action(
+        self, pi_action: str | None, pi_action_arg: str | None
+    ) -> tuple[str | None, str | None]:
+        """The `pi_action` a `response_end` may carry to this device: as
+        given, or ``(None, None)`` when the ability behind it
+        (:data:`satellite_abilities.PI_ACTION_ABILITY`) was not declared.
+        The handlers refuse these for such a room up front; this is the
+        backstop for one that didn't. A Pi keeps every action."""
+        needed = satellite_abilities.PI_ACTION_ABILITY.get(pi_action or "")
+        if needed is not None and not self.abilities.allows(needed):
+            log.warning(
+                "room %s did not declare %r: dropping pi_action %r",
+                self.room_id, needed, pi_action,
+            )
+            return None, None
+        return pi_action, pi_action_arg
+
+    def _require(self, ability: str, frame: str) -> None:
+        """Raise :class:`NotDeclared` (nothing is sent) when this device's
+        hello didn't declare ``ability``. Always passes for a hello without
+        `supports`: a Pi gets every frame it always got."""
+        if not self.abilities.allows(ability):
+            raise NotDeclared(self.room_id, ability, frame)
+
     async def _on_control(self, ctrl: dict[str, Any]) -> None:
         t = ctrl.get("type")
         if t == "hello":
@@ -2816,11 +2892,29 @@ class StreamSession:
                 self._pairing_refused = True
                 await self._close_quietly(1008)
                 return
+            # What this device can do (S0, 2026-10-12): `supports`, unioned
+            # with the boolean keys below. Without `supports` (every Pi) the
+            # result allows exactly what the core has always sent, and the
+            # three negotiated behaviours (full duplex, speech pause,
+            # capture control) come from their booleans as before.
+            self.abilities = satellite_abilities.from_hello(ctrl, room_id=self.room_id)
+            raw_board = ctrl.get("board")
+            self.board = satellite_abilities.clean_board(raw_board)
+            if raw_board is not None and self.board is None:
+                log.warning(
+                    "hello: room=%s sent a board that is not a short slug — ignored",
+                    self.room_id,
+                )
+            if self.abilities.declared:
+                log.info(
+                    "hello: room=%s board=%s supports=%s", self.room_id,
+                    self.board, ",".join(self.abilities.declared_list() or []) or "-",
+                )
             # Cache whether this room's board has on-chip AEC (full duplex),
             # so drop-in / open-mic gating can refuse a no-AEC board rather
             # than let it howl. Cleared on disconnect.
-            self.ws.app.state.satellite_full_duplex[self.room_id] = bool(
-                ctrl.get("supports_full_duplex", False)
+            self.ws.app.state.satellite_full_duplex[self.room_id] = (
+                self.abilities.allows("full_duplex")
             )
             # Cache the code version the Pi recorded after its last
             # satellite-code sync (None if never synced), so the dashboard can
@@ -2849,15 +2943,17 @@ class StreamSession:
             # Optional, absent on older clients: this satellite reports its
             # own pauses and last voiced frame, and honours `end_capture`
             # (see the module docstring).
-            self._speech_hints = bool(ctrl.get("speech_pause", False))
-            self._capture_control = bool(ctrl.get("capture_control", False))
+            # A `supports` list naming them counts the same as the booleans.
+            self._speech_hints = self.abilities.allows("speech_pause")
+            self._capture_control = self.abilities.allows("capture_control")
             # A satellite from before 06f486b drops the audio of every
             # announcement after a reconnect (its stop_playback latch stays
             # set) while the core records it as spoken — and a reconnect is
             # exactly when a timer's grace delivery lands. Its hello lacks
             # this flag; say so once per connection, next to the release
-            # note's "Upgrade each satellite".
-            if not ctrl.get("announce_after_session_end"):
+            # note's "Upgrade each satellite". A device that declares
+            # `supports` without it is simply never sent an announcement.
+            if not self.abilities.declared and not ctrl.get("announce_after_session_end"):
                 log.warning(
                     "room %s runs satellite code without the announcement fix: "
                     "timer and reminder announcements after a reconnect will be "
@@ -2879,6 +2975,11 @@ class StreamSession:
             # the field never resets an adoption-preseeded row to 'voice'.
             if raw_sat_type is not None:
                 await self._persist_sat_type(raw_sat_type)
+            # Same rule for the board: persisted when the hello names one,
+            # never cleared by a hello that doesn't (no Pi sends it today,
+            # and USB adoption's board must survive their hellos).
+            if self.board is not None:
+                await self._persist_board(self.board)
             return
         if t == "ping":
             await self._safe_send_text({"type": "pong"})
@@ -4022,6 +4123,7 @@ class StreamSession:
             "interrupted": interrupted,
             "expect_followup": expect_followup,
         }
+        pi_action, pi_action_arg = self._declared_pi_action(pi_action, pi_action_arg)
         if pi_action is not None:
             end_frame["pi_action"] = pi_action
             if pi_action_arg is not None:
@@ -4748,6 +4850,22 @@ class StreamSession:
         except Exception as e:
             log.warning("chat: reading chat_start_pending failed: %s", e)
             return
+        if not self.abilities.allows_chat():
+            # ChatModeHandler refuses such a room up front; this is the
+            # backstop. No chat_start for a device that never said it
+            # handles one, and no chat mode left parked for its next turn.
+            log.warning(
+                "chat: room=%s did not declare chat_mode + full_duplex; "
+                "not opening chat mode", self.room_id,
+            )
+            try:
+                async with session_scope() as s:
+                    await SessionRepository(s).set_context_key(
+                        self.session_id, "conversational_mode", None  # type: ignore[arg-type]
+                    )
+            except Exception as e:  # noqa: BLE001
+                log.warning("chat: clearing conversational_mode failed: %s", e)
+            return
         log.info("chat: opening chat mode on room=%s", self.room_id)
         await self.send_chat_start()
         # Arm the abandoned-chat watchdog: if no conversational turn lands within
@@ -5100,7 +5218,11 @@ class StreamSession:
         (Feature 8). Mirrors ``request_restart``'s raw send — raises on a dead
         socket so the caller can react (here ``_maybe_send_chat_start`` lets it
         propagate into the response task's logging). The Pi opens its mic and
-        loops STT→reply turns without re-waking until a ``chat_end`` arrives."""
+        loops STT→reply turns without re-waking until a ``chat_end`` arrives.
+        :class:`NotDeclared` for a device that didn't declare both
+        "chat_mode" and "full_duplex"."""
+        if not self.abilities.allows_chat():
+            raise NotDeclared(self.room_id, "chat_mode", "chat_start")
         await self.ws.send_text(json.dumps({"type": "chat_start"}))
 
     async def send_chat_end(self, *, reason: str = "ended") -> None:
@@ -5432,6 +5554,15 @@ class StreamSession:
         ``announced_to`` list. The dead session is also removed from
         ``active_sessions`` so the next broadcast doesn't try again.
         """
+        # A device whose hello declared `supports` without
+        # "announce_after_session_end" never said it plays out-of-turn
+        # speech: nothing is sent, and `reason='unsupported'` tells the
+        # timer delivery not to wait for it (a Pi always passes).
+        if not self.abilities.allows("announce_after_session_end"):
+            raise AnnounceNotStarted(
+                f"room {self.room_id} did not declare announcements",
+                reason="unsupported",
+            )
         # Counted from the call, not from the lock: a music restart that
         # follows the announcement before this one waits while any are
         # still to come (`_restart_music_after_announce`).
@@ -5758,7 +5889,10 @@ class StreamSession:
     async def notify_sounds_changed(self) -> None:
         """Tell this satellite its sound clips changed (greetings edited +
         re-rendered) so it re-syncs them from the core without
-        waiting for a reconnect."""
+        waiting for a reconnect. Not to a device whose hello declared
+        `supports` without "sounds": it keeps no clip cache to re-sync."""
+        if not self.abilities.allows("sounds"):
+            return
         await self._safe_send_text({"type": "sounds_changed"})
 
     # ── Wake-word clip recording / model push (Feature 5) ─────────────────
@@ -5835,7 +5969,9 @@ class StreamSession:
         """Begin collecting positive training clips from this satellite
         (dashboard "Record on <room>"). Arms the server-side recording state
         and tells the Pi to enter its clip-capture loop. Raw send so a dead
-        socket propagates to the admin caller."""
+        socket propagates to the admin caller. :class:`NotDeclared`, with
+        nothing armed or sent, for a device that didn't declare "wake_clips"."""
+        self._require("wake_clips", "start_wake_recording")
         self.wake_recording = WakeRecordingState(
             wake_word_id=wake_word_id,
             slug=slug,
@@ -5858,8 +5994,11 @@ class StreamSession:
         """Stop an in-progress wake-word recording and tell the Pi to leave
         its clip-capture loop (and resume the normal wake loop). Idempotent —
         clears the state whether or not one was active. Raw send so a dead
-        socket propagates to the admin caller."""
+        socket propagates to the admin caller. A device that didn't declare
+        "wake_clips" was never recording: the state clears, nothing is sent."""
         self.wake_recording = None
+        if not self.abilities.allows("wake_clips"):
+            return
         await self.ws.send_text(json.dumps({"type": "stop_wake_recording"}))
 
     async def request_set_wake_word(self, *, slug: str, threshold: float | None = None) -> None:
@@ -5870,7 +6009,9 @@ class StreamSession:
         openWakeWord prediction-dict key all equal it. ``threshold`` carries the
         registry's per-word detection threshold so the Pi applies it instead of
         its local config default (None → the Pi keeps its config threshold).
-        Raw send so a dead socket propagates to the admin caller."""
+        Raw send so a dead socket propagates to the admin caller.
+        :class:`NotDeclared` for a device that didn't declare "wake_models"."""
+        self._require("wake_models", "set_wake_word")
         frame: dict[str, Any] = {"type": "set_wake_word", "slug": slug}
         if threshold is not None:
             frame["threshold"] = threshold
@@ -5880,7 +6021,9 @@ class StreamSession:
         """Tell this satellite the served wake models changed so it re-syncs
         its ~/.domovoi/wake_models cache from /v1/wake-models without waiting
         for a reconnect. Safe-send — a transient miss is recoverable on the
-        next sync."""
+        next sync. Skipped for a device that didn't declare "wake_models"."""
+        if not self.abilities.allows("wake_models"):
+            return
         await self._safe_send_text({"type": "wake_models_changed"})
 
     async def request_restart(self) -> None:
@@ -5888,7 +6031,9 @@ class StreamSession:
         change that needs a fresh process. The Pi drains TTS playback then
         runs a sudo'ed `systemctl --no-block restart` (see the self-restart
         sudoers entry in satellite/PROVISIONING.md). Raises on a dead
-        socket so the caller can report the failure."""
+        socket so the caller can report the failure, and
+        :class:`NotDeclared` for a device that didn't declare "restart"."""
+        self._require("restart", "restart")
         await self.ws.send_text(json.dumps({"type": "restart"}))
 
     async def set_output_volume(self, level: int) -> None:
@@ -5909,7 +6054,9 @@ class StreamSession:
         optimistically update the cached state so the dashboard toggle
         reflects immediately. Raises on a dead socket so the admin endpoint
         can report it. The admin endpoint refuses non-video rooms before
-        this is ever reached."""
+        this is ever reached, and a device that didn't declare "display"
+        (:class:`NotDeclared`)."""
+        self._require("display", "set_display")
         await self.ws.send_text(
             json.dumps({"type": "set_display", "action": action})
         )
@@ -5928,18 +6075,23 @@ class StreamSession:
         the HTTP base from its own live WS URL, exactly as the sound sync does.
         `expected_sha` is a version label the Pi records on success;
         integrity is the per-file manifest sha256, not this SHA. Raises on a
-        dead socket so the admin endpoint reports the failure."""
-        await self.ws.send_text(
-            json.dumps(
-                {
-                    "type": "upgrade",
-                    "expected_sha": expected_sha,
-                    "manifest_path": "/v1/satellite-code/manifest",
-                    "files_base": "/v1/satellite-code",
-                    "reconnect_timeout_sec": reconnect_timeout,
-                }
-            )
-        )
+        dead socket so the admin endpoint reports the failure, and
+        :class:`NotDeclared` for a device that didn't declare "code_sync".
+
+        A device that declared "code_sync" but not "plugin_payloads" is told
+        ``"plugin_payloads": false``: sync the code, apply no plugin
+        payload (they run as root on a Pi). A Pi's frame is unchanged."""
+        self._require("code_sync", "upgrade")
+        frame: dict[str, Any] = {
+            "type": "upgrade",
+            "expected_sha": expected_sha,
+            "manifest_path": "/v1/satellite-code/manifest",
+            "files_base": "/v1/satellite-code",
+            "reconnect_timeout_sec": reconnect_timeout,
+        }
+        if not self.abilities.allows("plugin_payloads"):
+            frame["plugin_payloads"] = False
+        await self.ws.send_text(json.dumps(frame))
 
     def _on_logs_chunk(self, ctrl: dict[str, Any]) -> None:
         """Reassemble one `logs_chunk` frame into its pending request.
@@ -5987,8 +6139,10 @@ class StreamSession:
         the difference between "offline" and "stopped answering" — and
         (ADD-2) if the answer comes to more than ``max_bytes`` allows for,
         rather than letting the reassembly buffer follow whatever the
-        session decides to send.
+        session decides to send. :class:`NotDeclared` for a device that
+        didn't declare "logs".
         """
+        self._require("logs", "get_logs")
         request_id = secrets.token_hex(8)
         cap = max(
             LOG_REASSEMBLY_FLOOR, int(int(max_bytes) * LOG_REASSEMBLY_SLACK)
@@ -6011,7 +6165,18 @@ class StreamSession:
         """Push web-edited config ({"section.key": value}) to this
         satellite. The Pi merges it into config.toml (preserving comments),
         validates it parses + backs up the old file, then self-restarts to
-        apply. Raises on a dead socket so the caller can report it."""
+        apply. Raises on a dead socket so the caller can report it, and
+        :class:`NotDeclared` (nothing sent) when any key needs an ability
+        the device didn't declare ("config", or its section's own)."""
+        self._require("config", "set_config")
+        for key in changes:
+            if not self.abilities.allows_config_key(key):
+                section = key.split(".", 1)[0]
+                raise NotDeclared(
+                    self.room_id,
+                    satellite_abilities.CONFIG_SECTION_ABILITY.get(section, "config"),
+                    f"set_config {key}",
+                )
         await self.ws.send_text(
             json.dumps({"type": "set_config", "changes": changes})
         )

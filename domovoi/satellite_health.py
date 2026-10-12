@@ -120,6 +120,18 @@ def _counts(v: Any) -> dict[str, int] | None:
     return out or None
 
 
+def _battery(v: Any) -> dict[str, Any] | None:
+    """A spare device's battery (S0): ``percent`` 0-100, ``charging`` and
+    ``on_power``. A Pi has none and sends none."""
+    if not isinstance(v, dict):
+        return None
+    pct = _num(v.get("percent"))
+    if pct is not None and not 0 <= pct <= 100:
+        pct = None
+    out = {"percent": pct, "charging": _bool(v.get("charging")), "on_power": _bool(v.get("on_power"))}
+    return out if any(x is not None for x in out.values()) else None
+
+
 def _flags(v: Any) -> list[str]:
     if not isinstance(v, list):
         return []
@@ -142,6 +154,10 @@ SAMPLE_FIELDS: dict[str, Any] = {
     "send_q": _int, "wake_loop_age_s": _num, "idle": _bool,
     "ws": lambda v: _str(v, 8), "ws_down_for_s": _num, "reconnects": _int,
     "wifi": _wifi, "log_ring": _counts, "log_spool": _counts,
+    # Spare-device satellites (S0, 2026-10-12): a laptop's or a phone's
+    # battery, and "the mic is on but the OS hands it silence" (Android's
+    # mic privacy toggle records zeros). No Pi sends either.
+    "battery": _battery, "mic_blocked": _bool,
 }
 
 
@@ -309,7 +325,22 @@ def format_health_line(room: str, s: dict[str, Any]) -> str:
         f"throttled={hex(throttled) if isinstance(throttled, int) else None} "
         f"wifi_rx={wifi.get('rx_mbits')} mic_fps={s.get('mic_fps')} "
         f"fds={s.get('fds')} up={s.get('uptime_s')}s reconnects={s.get('reconnects')}"
+        + _spare_device_tail(s)
     )
+
+
+def _spare_device_tail(s: dict[str, Any]) -> str:
+    """Battery and a blocked mic on the journal line, only when the sample
+    carries them (a Pi's line is unchanged)."""
+    tail = ""
+    battery = s.get("battery")
+    if isinstance(battery, dict):
+        state = "charging" if battery.get("charging") else (
+            "on power" if battery.get("on_power") else "on battery")
+        tail += f" battery={battery.get('percent')}% {state}"
+    if s.get("mic_blocked"):
+        tail += " mic=BLOCKED"
+    return tail
 
 
 def outage_summary(report: dict[str, Any], last_n: int = 3) -> str:

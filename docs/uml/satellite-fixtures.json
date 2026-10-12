@@ -1,0 +1,923 @@
+{
+  "about": [
+    "Shared satellite-protocol fixtures (spare-device satellites S0, 2026-10-12).",
+    "Each device's hello, the ready the core answers a paired one with (bot_name left out:",
+    "it is the household's), a health frame and what the core keeps of it, and what the core",
+    "may send it. Read by domovoi/tests/test_satellite_supports.py, satellite/tests/",
+    "test_protocol_fixtures.py and (later) the Android room mode's JVM tests.",
+    "Documented in docs/uml/satellite-protocol.md, 'Declared abilities'. Pairing tokens and",
+    "codes here are placeholders, not secrets."
+  ],
+  "fixture_version": 1,
+  "protocol_version": "0.1",
+  "abilities": {
+    "restart": {
+      "unlocks": "`restart` frame; the dashboard's Restart satellite",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "code_sync": {
+      "unlocks": "`upgrade` frame; the dashboard's Upgrade satellite",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "plugin_payloads": {
+      "unlocks": "plugin payloads applied during a code sync; without it `upgrade` carries plugin_payloads:false",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "config": {
+      "unlocks": "`set_config` frame; the dashboard's Settings tab",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "wifi": {
+      "unlocks": "pi_action reassociate_wifi; wifi.* settings",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "mic_gain": {
+      "unlocks": "mic_gain.* settings",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "leds": {
+      "unlocks": "leds.* settings",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "display": {
+      "unlocks": "`set_display` frame (also needs sat_type video); display.* settings",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "logs": {
+      "unlocks": "`get_logs` frame; the dashboard's live log ring",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "wake_clips": {
+      "unlocks": "`start_wake_recording` / `stop_wake_recording`",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "wake_models": {
+      "unlocks": "`set_wake_word`, `wake_models_changed`",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "sounds": {
+      "unlocks": "`sounds_changed`; sounds.* settings",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "voice": {
+      "unlocks": "pi_action set_voice",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "time_sync": {
+      "unlocks": "nothing pushed: the device steps its own clock from GET /v1/time after ready",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "chat_mode": {
+      "unlocks": "`chat_start` / `chat_end` (needs full_duplex too)",
+      "assumed_without_supports": true,
+      "hello_key": null
+    },
+    "announce_after_session_end": {
+      "unlocks": "out-of-turn announcements (timers, reminders, intercom, broadcasts)",
+      "assumed_without_supports": true,
+      "hello_key": "announce_after_session_end"
+    },
+    "full_duplex": {
+      "unlocks": "drop-in calls; chat mode with chat_mode",
+      "assumed_without_supports": false,
+      "hello_key": "supports_full_duplex"
+    },
+    "speech_pause": {
+      "unlocks": "the server reads the device's speech_pause / speech_resume",
+      "assumed_without_supports": false,
+      "hello_key": "speech_pause"
+    },
+    "capture_control": {
+      "unlocks": "`end_capture` (early commit; also needs speech_pause)",
+      "assumed_without_supports": false,
+      "hello_key": "capture_control"
+    }
+  },
+  "always_sent": [
+    "ready",
+    "error",
+    "pong",
+    "transcript",
+    "response_start",
+    "response_end",
+    "set_volume",
+    "music_start",
+    "music_stop"
+  ],
+  "frame_gates": {
+    "restart": [
+      "restart"
+    ],
+    "upgrade": [
+      "code_sync"
+    ],
+    "set_config": [
+      "config"
+    ],
+    "get_logs": [
+      "logs"
+    ],
+    "start_wake_recording": [
+      "wake_clips"
+    ],
+    "stop_wake_recording": [
+      "wake_clips"
+    ],
+    "set_wake_word": [
+      "wake_models"
+    ],
+    "wake_models_changed": [
+      "wake_models"
+    ],
+    "sounds_changed": [
+      "sounds"
+    ],
+    "set_display": [
+      "display"
+    ],
+    "chat_start": [
+      "chat_mode",
+      "full_duplex"
+    ],
+    "dropin_start": [
+      "full_duplex"
+    ],
+    "end_capture": [
+      "capture_control",
+      "speech_pause"
+    ],
+    "announcement": [
+      "announce_after_session_end"
+    ]
+  },
+  "config_section_ability": {
+    "wifi": "wifi",
+    "mic_gain": "mic_gain",
+    "leds": "leds",
+    "display": "display",
+    "sounds": "sounds"
+  },
+  "pi_action_ability": {
+    "reassociate_wifi": "wifi",
+    "set_voice": "voice",
+    "restart": "restart"
+  },
+  "devices": {
+    "pi_2mic_hat": {
+      "about": "A Raspberry Pi with the ReSpeaker 2-Mic HAT running today's satellite code: no `supports`, no `board`. Everything it always got, nothing more; no echo cancellation, so no drop-in and no chat mode, exactly as before.",
+      "hello": {
+        "type": "hello",
+        "room_id": "kitchen",
+        "wake_word": "hey_jarvis",
+        "synced_sha": "44f0fff",
+        "supports_full_duplex": false,
+        "pairing_token": "fixture-pairing-token-kitchen-0000000000000000000000",
+        "approval_code": null,
+        "sat_type": "voice",
+        "mic_enabled": true,
+        "speech_pause": true,
+        "capture_control": true,
+        "announce_after_session_end": true
+      },
+      "ready": {
+        "type": "ready",
+        "protocol_version": "0.1",
+        "room_id": "kitchen",
+        "audio_sample_rate_in": 16000,
+        "features": [
+          "speech_pause",
+          "end_capture",
+          "music_failed",
+          "health",
+          "log_push"
+        ]
+      },
+      "expect": {
+        "declared": false,
+        "supports_shown": null,
+        "board": null,
+        "unknown_abilities": [],
+        "allowed": [
+          "announce_after_session_end",
+          "capture_control",
+          "chat_mode",
+          "code_sync",
+          "config",
+          "display",
+          "leds",
+          "logs",
+          "mic_gain",
+          "plugin_payloads",
+          "restart",
+          "sounds",
+          "speech_pause",
+          "time_sync",
+          "voice",
+          "wake_clips",
+          "wake_models",
+          "wifi"
+        ],
+        "not_allowed": [
+          "full_duplex"
+        ],
+        "frames_sent": [
+          "restart",
+          "upgrade",
+          "set_config",
+          "get_logs",
+          "start_wake_recording",
+          "stop_wake_recording",
+          "set_wake_word",
+          "wake_models_changed",
+          "sounds_changed",
+          "set_display",
+          "end_capture",
+          "announcement"
+        ],
+        "frames_never": [
+          "chat_start",
+          "dropin_start"
+        ],
+        "upgrade_extra": {},
+        "config_hidden_sections": [],
+        "pi_actions_kept": [
+          "reassociate_wifi",
+          "set_voice",
+          "restart"
+        ],
+        "dashboard": {
+          "board_badge": null,
+          "restart": true,
+          "upgrade": true,
+          "settings_tab": true,
+          "live_logs": true,
+          "announce": true,
+          "drop_in": false,
+          "wake_record": true,
+          "wake_push": true
+        }
+      },
+      "health": {
+        "frame": {
+          "type": "health",
+          "seq": 42,
+          "ts": 1760280000.0,
+          "rss_kb": 61234,
+          "hwm_kb": 70100,
+          "threads": 14,
+          "fds": 38,
+          "cpu_pct": 11.5,
+          "sys_cpu_pct": 23.0,
+          "load1": 0.42,
+          "load5": 0.39,
+          "load15": 0.35,
+          "mem_free_kb": 120000,
+          "mem_avail_kb": 250000,
+          "swap_free_kb": 0,
+          "soc_temp_c": 52.1,
+          "throttled": 0,
+          "throttled_flags": [],
+          "uptime_s": 86400,
+          "proc_uptime_s": 3600,
+          "boot_id": "0f8c5a3e-pi-kitchen",
+          "nm_state": {
+            "code": 100,
+            "state": "connected"
+          },
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "core_host_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "mic_q": 0,
+          "playback_q": 0,
+          "send_q": 0,
+          "wake_loop_age_s": 0.1,
+          "idle": true,
+          "ws": "up",
+          "ws_down_for_s": 0,
+          "reconnects": 1,
+          "wifi": {
+            "rx_mbits": 72.2,
+            "tx_mbits": 65.0,
+            "ssid": "home"
+          },
+          "gpu_mhz": 500
+        },
+        "stored": {
+          "seq": 42,
+          "ts": 1760280000.0,
+          "rss_kb": 61234,
+          "hwm_kb": 70100,
+          "threads": 14,
+          "fds": 38,
+          "cpu_pct": 11.5,
+          "sys_cpu_pct": 23.0,
+          "load1": 0.42,
+          "load5": 0.39,
+          "load15": 0.35,
+          "mem_free_kb": 120000,
+          "mem_avail_kb": 250000,
+          "swap_free_kb": 0,
+          "soc_temp_c": 52.1,
+          "throttled": 0,
+          "throttled_flags": [],
+          "uptime_s": 86400,
+          "proc_uptime_s": 3600,
+          "boot_id": "0f8c5a3e-pi-kitchen",
+          "nm_state": {
+            "code": 100,
+            "state": "connected"
+          },
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "core_host_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "mic_q": 0,
+          "playback_q": 0,
+          "send_q": 0,
+          "wake_loop_age_s": 0.1,
+          "idle": true,
+          "ws": "up",
+          "ws_down_for_s": 0,
+          "reconnects": 1,
+          "wifi": {
+            "rx_mbits": 72.2,
+            "tx_mbits": 65.0,
+            "ssid": "home"
+          }
+        }
+      }
+    },
+    "pi_xvf3800": {
+      "about": "A Raspberry Pi with the XVF3800 USB array: the same hello with supports_full_duplex true, so drop-in and chat mode too, as before.",
+      "hello": {
+        "type": "hello",
+        "room_id": "living-room",
+        "wake_word": "hey_jarvis",
+        "synced_sha": "44f0fff",
+        "supports_full_duplex": true,
+        "pairing_token": "fixture-pairing-token-living-room-0000000000000000000000",
+        "approval_code": null,
+        "sat_type": "voice",
+        "mic_enabled": true,
+        "speech_pause": true,
+        "capture_control": true,
+        "announce_after_session_end": true
+      },
+      "ready": {
+        "type": "ready",
+        "protocol_version": "0.1",
+        "room_id": "living-room",
+        "audio_sample_rate_in": 16000,
+        "features": [
+          "speech_pause",
+          "end_capture",
+          "music_failed",
+          "health",
+          "log_push"
+        ]
+      },
+      "expect": {
+        "declared": false,
+        "supports_shown": null,
+        "board": null,
+        "unknown_abilities": [],
+        "allowed": [
+          "announce_after_session_end",
+          "capture_control",
+          "chat_mode",
+          "code_sync",
+          "config",
+          "display",
+          "full_duplex",
+          "leds",
+          "logs",
+          "mic_gain",
+          "plugin_payloads",
+          "restart",
+          "sounds",
+          "speech_pause",
+          "time_sync",
+          "voice",
+          "wake_clips",
+          "wake_models",
+          "wifi"
+        ],
+        "not_allowed": [],
+        "frames_sent": [
+          "restart",
+          "upgrade",
+          "set_config",
+          "get_logs",
+          "start_wake_recording",
+          "stop_wake_recording",
+          "set_wake_word",
+          "wake_models_changed",
+          "sounds_changed",
+          "set_display",
+          "chat_start",
+          "dropin_start",
+          "end_capture",
+          "announcement"
+        ],
+        "frames_never": [],
+        "upgrade_extra": {},
+        "config_hidden_sections": [],
+        "pi_actions_kept": [
+          "reassociate_wifi",
+          "set_voice",
+          "restart"
+        ],
+        "dashboard": {
+          "board_badge": null,
+          "restart": true,
+          "upgrade": true,
+          "settings_tab": true,
+          "live_logs": true,
+          "announce": true,
+          "drop_in": true,
+          "wake_record": true,
+          "wake_push": true
+        }
+      },
+      "health": {
+        "frame": {
+          "type": "health",
+          "seq": 42,
+          "ts": 1760280000.0,
+          "rss_kb": 61234,
+          "hwm_kb": 70100,
+          "threads": 14,
+          "fds": 38,
+          "cpu_pct": 11.5,
+          "sys_cpu_pct": 23.0,
+          "load1": 0.42,
+          "load5": 0.39,
+          "load15": 0.35,
+          "mem_free_kb": 120000,
+          "mem_avail_kb": 250000,
+          "swap_free_kb": 0,
+          "soc_temp_c": 52.1,
+          "throttled": 0,
+          "throttled_flags": [],
+          "uptime_s": 86400,
+          "proc_uptime_s": 3600,
+          "boot_id": "0f8c5a3e-pi-kitchen",
+          "nm_state": {
+            "code": 100,
+            "state": "connected"
+          },
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "core_host_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "mic_q": 0,
+          "playback_q": 0,
+          "send_q": 0,
+          "wake_loop_age_s": 0.1,
+          "idle": true,
+          "ws": "up",
+          "ws_down_for_s": 0,
+          "reconnects": 1,
+          "wifi": {
+            "rx_mbits": 72.2,
+            "tx_mbits": 65.0,
+            "ssid": "home"
+          },
+          "gpu_mhz": 500
+        },
+        "stored": {
+          "seq": 42,
+          "ts": 1760280000.0,
+          "rss_kb": 61234,
+          "hwm_kb": 70100,
+          "threads": 14,
+          "fds": 38,
+          "cpu_pct": 11.5,
+          "sys_cpu_pct": 23.0,
+          "load1": 0.42,
+          "load5": 0.39,
+          "load15": 0.35,
+          "mem_free_kb": 120000,
+          "mem_avail_kb": 250000,
+          "swap_free_kb": 0,
+          "soc_temp_c": 52.1,
+          "throttled": 0,
+          "throttled_flags": [],
+          "uptime_s": 86400,
+          "proc_uptime_s": 3600,
+          "boot_id": "0f8c5a3e-pi-kitchen",
+          "nm_state": {
+            "code": 100,
+            "state": "connected"
+          },
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "core_host_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "mic_q": 0,
+          "playback_q": 0,
+          "send_q": 0,
+          "wake_loop_age_s": 0.1,
+          "idle": true,
+          "ws": "up",
+          "ws_down_for_s": 0,
+          "reconnects": 1,
+          "wifi": {
+            "rx_mbits": 72.2,
+            "tx_mbits": 65.0,
+            "ssid": "home"
+          }
+        }
+      }
+    },
+    "linux_pc": {
+      "about": "A Linux laptop running the Python client (S1 draft, 'automatic' mode): the same boolean keys as a Pi plus a `supports` list without Wi-Fi, LEDs, mic gain, plugin payloads, time sync or chat mode. `tray` is a name this core doesn't know: ignored.",
+      "hello": {
+        "type": "hello",
+        "room_id": "study",
+        "wake_word": "hey_jarvis",
+        "synced_sha": "44f0fff",
+        "supports_full_duplex": false,
+        "pairing_token": "fixture-pairing-token-study-0000000000000000000000",
+        "approval_code": "482913",
+        "sat_type": "voice",
+        "mic_enabled": true,
+        "speech_pause": true,
+        "capture_control": true,
+        "announce_after_session_end": true,
+        "board": "linux_pc",
+        "supports": [
+          "restart",
+          "code_sync",
+          "config",
+          "logs",
+          "wake_clips",
+          "wake_models",
+          "sounds",
+          "voice",
+          "tray"
+        ]
+      },
+      "ready": {
+        "type": "ready",
+        "protocol_version": "0.1",
+        "room_id": "study",
+        "audio_sample_rate_in": 16000,
+        "features": [
+          "speech_pause",
+          "end_capture",
+          "music_failed",
+          "health",
+          "log_push"
+        ]
+      },
+      "expect": {
+        "declared": true,
+        "supports_shown": [
+          "announce_after_session_end",
+          "capture_control",
+          "code_sync",
+          "config",
+          "logs",
+          "restart",
+          "sounds",
+          "speech_pause",
+          "voice",
+          "wake_clips",
+          "wake_models"
+        ],
+        "board": "linux_pc",
+        "unknown_abilities": [
+          "tray"
+        ],
+        "allowed": [
+          "announce_after_session_end",
+          "capture_control",
+          "code_sync",
+          "config",
+          "logs",
+          "restart",
+          "sounds",
+          "speech_pause",
+          "voice",
+          "wake_clips",
+          "wake_models"
+        ],
+        "not_allowed": [
+          "chat_mode",
+          "display",
+          "full_duplex",
+          "leds",
+          "mic_gain",
+          "plugin_payloads",
+          "time_sync",
+          "wifi"
+        ],
+        "frames_sent": [
+          "restart",
+          "upgrade",
+          "set_config",
+          "get_logs",
+          "start_wake_recording",
+          "stop_wake_recording",
+          "set_wake_word",
+          "wake_models_changed",
+          "sounds_changed",
+          "end_capture",
+          "announcement"
+        ],
+        "frames_never": [
+          "set_display",
+          "chat_start",
+          "dropin_start"
+        ],
+        "upgrade_extra": {
+          "plugin_payloads": false
+        },
+        "config_hidden_sections": [
+          "display",
+          "leds",
+          "mic_gain",
+          "wifi"
+        ],
+        "pi_actions_kept": [
+          "set_voice",
+          "restart"
+        ],
+        "dashboard": {
+          "board_badge": "Linux PC",
+          "restart": true,
+          "upgrade": true,
+          "settings_tab": true,
+          "live_logs": true,
+          "announce": true,
+          "drop_in": false,
+          "wake_record": true,
+          "wake_push": true
+        }
+      },
+      "health": {
+        "frame": {
+          "type": "health",
+          "seq": 7,
+          "ts": 1760280060.0,
+          "rss_kb": 148000,
+          "hwm_kb": 152000,
+          "threads": 22,
+          "fds": 61,
+          "cpu_pct": 4.0,
+          "sys_cpu_pct": 9.5,
+          "load1": 0.8,
+          "load5": 0.7,
+          "load15": 0.6,
+          "mem_avail_kb": 3900000,
+          "soc_temp_c": 61.0,
+          "uptime_s": 7200,
+          "proc_uptime_s": 1800,
+          "boot_id": "77aa-study-laptop",
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "idle": true,
+          "ws": "up",
+          "reconnects": 0,
+          "wifi": {
+            "rx_mbits": 300.0,
+            "tx_mbits": 270.0,
+            "ssid": "home"
+          },
+          "battery": {
+            "percent": 81,
+            "charging": true,
+            "on_power": true
+          },
+          "mic_blocked": false,
+          "fan_rpm": 2100
+        },
+        "stored": {
+          "seq": 7,
+          "ts": 1760280060.0,
+          "rss_kb": 148000,
+          "hwm_kb": 152000,
+          "threads": 22,
+          "fds": 61,
+          "cpu_pct": 4.0,
+          "sys_cpu_pct": 9.5,
+          "load1": 0.8,
+          "load5": 0.7,
+          "load15": 0.6,
+          "mem_avail_kb": 3900000,
+          "soc_temp_c": 61.0,
+          "uptime_s": 7200,
+          "proc_uptime_s": 1800,
+          "boot_id": "77aa-study-laptop",
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "idle": true,
+          "ws": "up",
+          "reconnects": 0,
+          "wifi": {
+            "rx_mbits": 300.0,
+            "tx_mbits": 270.0,
+            "ssid": "home"
+          },
+          "battery": {
+            "percent": 81,
+            "charging": true,
+            "on_power": true
+          },
+          "mic_blocked": false
+        }
+      }
+    },
+    "android_room": {
+      "about": "An Android phone in room mode (S3 draft): only `supports`, no boolean keys. Echo cancellation for drop-ins but no chat mode; it updates through its app store, so no restart, code sync, settings, live log or clip recording.",
+      "hello": {
+        "type": "hello",
+        "room_id": "nursery",
+        "wake_word": "hey_jarvis",
+        "pairing_token": "fixture-pairing-token-nursery-0000000000000000000000",
+        "approval_code": "305117",
+        "sat_type": "voice",
+        "mic_enabled": true,
+        "board": "android_room",
+        "supports": [
+          "full_duplex",
+          "speech_pause",
+          "capture_control",
+          "announce_after_session_end",
+          "wake_models"
+        ]
+      },
+      "ready": {
+        "type": "ready",
+        "protocol_version": "0.1",
+        "room_id": "nursery",
+        "audio_sample_rate_in": 16000,
+        "features": [
+          "speech_pause",
+          "end_capture",
+          "music_failed",
+          "health",
+          "log_push"
+        ]
+      },
+      "expect": {
+        "declared": true,
+        "supports_shown": [
+          "announce_after_session_end",
+          "capture_control",
+          "full_duplex",
+          "speech_pause",
+          "wake_models"
+        ],
+        "board": "android_room",
+        "unknown_abilities": [],
+        "allowed": [
+          "announce_after_session_end",
+          "capture_control",
+          "full_duplex",
+          "speech_pause",
+          "wake_models"
+        ],
+        "not_allowed": [
+          "chat_mode",
+          "code_sync",
+          "config",
+          "display",
+          "leds",
+          "logs",
+          "mic_gain",
+          "plugin_payloads",
+          "restart",
+          "sounds",
+          "time_sync",
+          "voice",
+          "wake_clips",
+          "wifi"
+        ],
+        "frames_sent": [
+          "set_wake_word",
+          "wake_models_changed",
+          "dropin_start",
+          "end_capture",
+          "announcement"
+        ],
+        "frames_never": [
+          "restart",
+          "upgrade",
+          "set_config",
+          "get_logs",
+          "start_wake_recording",
+          "stop_wake_recording",
+          "sounds_changed",
+          "set_display",
+          "chat_start"
+        ],
+        "upgrade_extra": null,
+        "config_hidden_sections": null,
+        "pi_actions_kept": [],
+        "dashboard": {
+          "board_badge": "Android room",
+          "restart": false,
+          "upgrade": false,
+          "settings_tab": false,
+          "live_logs": false,
+          "announce": true,
+          "drop_in": true,
+          "wake_record": false,
+          "wake_push": true
+        }
+      },
+      "health": {
+        "frame": {
+          "type": "health",
+          "seq": 3,
+          "ts": 1760280120.0,
+          "rss_kb": 98000,
+          "cpu_pct": 6.5,
+          "soc_temp_c": 34.0,
+          "uptime_s": 432000,
+          "proc_uptime_s": 5400,
+          "core_ok": true,
+          "mic_expected": true,
+          "mic_fps": 0.0,
+          "idle": true,
+          "ws": "up",
+          "reconnects": 2,
+          "wifi": {
+            "rx_mbits": 144.0,
+            "ssid": "home"
+          },
+          "battery": {
+            "percent": 64,
+            "charging": false,
+            "on_power": true
+          },
+          "mic_blocked": true,
+          "thermal_status": "moderate"
+        },
+        "stored": {
+          "seq": 3,
+          "ts": 1760280120.0,
+          "rss_kb": 98000,
+          "cpu_pct": 6.5,
+          "soc_temp_c": 34.0,
+          "uptime_s": 432000,
+          "proc_uptime_s": 5400,
+          "core_ok": true,
+          "mic_expected": true,
+          "mic_fps": 0.0,
+          "idle": true,
+          "ws": "up",
+          "reconnects": 2,
+          "wifi": {
+            "rx_mbits": 144.0,
+            "tx_mbits": null,
+            "ssid": "home"
+          },
+          "battery": {
+            "percent": 64,
+            "charging": false,
+            "on_power": true
+          },
+          "mic_blocked": true
+        }
+      }
+    }
+  }
+}

@@ -2196,7 +2196,7 @@ class SatelliteApprovalRepository:
             await self.s.execute(
                 text(
                     "DELETE FROM satellite_approvals WHERE room_id = :r "
-                    "RETURNING token_hash"
+                    "RETURNING token_hash, board, sat_type"
                 ),
                 {"r": room_id},
             )
@@ -2214,6 +2214,24 @@ class SatelliteApprovalRepository:
             ),
             {"r": room_id, "h": row.token_hash},
         )
+        if row.board:
+            # The board the parked hello named (S0): kept on approval, so the
+            # dashboard names the device kind before its next hello. Only a
+            # request that carried one writes anything — no Pi sends a board,
+            # so an approved Pi's inventory row is left exactly as it was.
+            await self.s.execute(
+                text(
+                    "INSERT INTO satellites (room_id, sat_type, board, adopted_via) "
+                    "VALUES (:r, :t, :b, 'hello') "
+                    "ON CONFLICT (room_id) DO UPDATE SET "
+                    "board = EXCLUDED.board, updated_at = now()"
+                ),
+                {
+                    "r": room_id,
+                    "t": row.sat_type if row.sat_type in ("voice", "video") else "voice",
+                    "b": row.board,
+                },
+            )
         return "approved"
 
     async def reject(self, room_id: str) -> bool:
@@ -2298,6 +2316,23 @@ class SatellitesRepository:
                 "sat_type = EXCLUDED.sat_type, updated_at = now()"
             ),
             {"r": room_id, "t": sat_type},
+        )
+
+    async def upsert_board(self, room_id: str, board: str) -> None:
+        """Self-registration of the board slug an accepted `hello` named
+        (S0, spare-device satellites). Same rule as :meth:`upsert_type`:
+        only for a hello that carried one, so a hello without it never
+        clears what USB adoption or an earlier hello stored. The caller
+        bounds the value (``satellite_abilities.clean_board``)."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellites (room_id, board, adopted_via) "
+                "VALUES (:r, :b, 'hello') "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "board = EXCLUDED.board, updated_at = now() "
+                "WHERE satellites.board IS DISTINCT FROM EXCLUDED.board"
+            ),
+            {"r": room_id, "b": board},
         )
 
     async def set_room_label(self, room_id: str, room_label: str | None) -> None:

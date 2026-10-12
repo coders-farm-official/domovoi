@@ -61,6 +61,13 @@ The pieces:
   room speak to the house: a timer or reminder set there is announced
   there only.
 
+* **Only a satellite that plays announcements gets one.** A device whose
+  hello declared ``supports`` without ``announce_after_session_end``
+  (domovoi/satellite_abilities.py) is never added for another room's
+  fire, and a fire set in its own room is recorded ``failed`` /
+  ``unsupported`` there instead of waited on. Every Pi takes them, as
+  before.
+
 The wording (:func:`fire_line`): the origin room hears today's line ("Your
 10 minute timer is done." / "Reminder: call mom"); every other room hears
 where it came from ("From the garage: Your 10 minute timer is done." /
@@ -95,6 +102,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.db.session import session_scope
 from domovoi.events import EVENTS, EventBus
+from domovoi.satellite_abilities import session_abilities
 from domovoi.workers.timer_watcher import _duration_adjective, _timer_subject
 
 log = logging.getLogger(__name__)
@@ -152,7 +160,8 @@ class AnnounceNotStarted(RuntimeError):
     came out silent (``reason='tts_failed'``), or the socket was already
     gone when the first frame went out (``reason='send_failed'`` — a core
     shutdown closes every satellite socket before its teardown). Safe to
-    try again."""
+    try again — except ``reason='unsupported'``: the room's device never
+    declared announcements, so waiting will not change the answer."""
 
     def __init__(self, message: str, *, reason: str) -> None:
         super().__init__(message)
@@ -967,9 +976,12 @@ class TimerDelivery:
         self, room_id: str, origin: str | None, own_only: set[str], sess: Any,
     ) -> bool:
         """R1 plus the pairing rule: the origin always; another room when
-        its "Only reminders for this device" is off and it is paired."""
+        its "Only reminders for this device" is off, it is paired, and its
+        device plays announcements (every Pi does)."""
         if room_id == origin:
             return True
+        if not session_abilities(sess).allows("announce_after_session_end"):
+            return False
         return is_target(room_id, origin, own_only) and self._house_wide(room_id, sess)
 
     def _origin_only(self, origin: str | None) -> bool:
@@ -1277,6 +1289,13 @@ class TimerDelivery:
                     # instead of talking over it.
                     await sess.announce(line, defer_to_capture=True)
                 except AnnounceNotStarted as e:
+                    if e.reason == "unsupported":
+                        # The room's device never declared announcements:
+                        # nothing was sent, and waiting will not change it.
+                        self._coming.discard((fid, room_id))
+                        await self._finish(fire, room_id, "failed", "unsupported",
+                                           retry_until=_end_budget())
+                        return
                     if e.reason == "tts_failed":
                         failures = fire.tts_failures.get(room_id, 0) + 1
                         fire.tts_failures[room_id] = failures
