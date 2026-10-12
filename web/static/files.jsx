@@ -294,35 +294,35 @@ const DocRow = ({ doc, selected, onToggleSelect,
       onClick: () => openDocInNewTab(doc.rel_path) };
   }
 
+  // Layout in styles.css (.files-row): the actions take their own line on a phone.
   return (
-    <div draggable={!!onDragStartEntry}
+    <div className="files-row" draggable={!!onDragStartEntry}
          onDragStart={(e) => onDragStartEntry
            && onDragStartEntry(e, { rel: doc.rel_path, name: doc.name + doc.ext,
                                     is_dir: false })}
-         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
-                  borderTop: '1px solid var(--border-soft)',
-                  background: selected ? 'var(--brand-soft)' : 'transparent',
+         style={{ background: selected ? 'var(--brand-soft)' : 'transparent',
                   cursor: onDragStartEntry ? 'grab' : 'default' }}>
       <input type="checkbox" checked={selected} title="select"
              onChange={() => onToggleSelect(doc.rel_path)}
              style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
       <Icon name={icon} size={18}/>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
-                      overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <div className="files-row-main">
+        <div className="files-row-name">
           {doc.name}<span style={{ color: 'var(--fg-faint)' }}>{doc.ext}</span>
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-faint)' }} className="mono">
           {fmtBytes(doc.size)} · {liveRelTime(new Date(doc.modified_at * 1000).toISOString())}
         </div>
       </div>
-      <Button icon={primary.icon} disabled={primary.disabled} title={primary.title}
-              onClick={primary.onClick}>{primary.label}</Button>
-      {cat !== 'download' && (
-        <Button icon="download" title="download"
-                onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
-      )}
-      <Button icon="trash-2" title="delete" onClick={() => onDelete(doc)}>Delete</Button>
+      <div className="files-row-acts">
+        <Button icon={primary.icon} disabled={primary.disabled} title={primary.title}
+                onClick={primary.onClick}>{primary.label}</Button>
+        {cat !== 'download' && (
+          <Button icon="download" title="download"
+                  onClick={() => downloadDoc(doc.rel_path)}>Download</Button>
+        )}
+        <Button icon="trash-2" title="delete" onClick={() => onDelete(doc)}>Delete</Button>
+      </div>
     </div>
   );
 };
@@ -679,13 +679,12 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
   const openImage = () => window.open(withDeviceToken(
     `${API_BASE}/api/images/raw?library_id=${encodeURIComponent(libraryId)}`
     + `&path=${encodeURIComponent(entry.rel)}`), '_blank', 'noopener');
+  // Layout in styles.css (.files-row): the actions take their own line on a phone.
   return (
-    <div draggable={!!onDragStartEntry}
+    <div className="files-row" draggable={!!onDragStartEntry}
          onDragStart={(e) => onDragStartEntry && onDragStartEntry(e, entry)}
          {...drop.props}
-         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
-                  borderTop: '1px solid var(--border-soft)',
-                  background: drop.active ? 'var(--brand-soft)'
+         style={{ background: drop.active ? 'var(--brand-soft)'
                     : (selected ? 'var(--brand-soft)' : 'transparent'),
                   outline: drop.active ? '2px solid var(--brand)' : 'none',
                   outlineOffset: -2,
@@ -694,29 +693,30 @@ const BrowserRow = ({ entry, libraryId, selected, onToggleSelect, editable, remo
              onChange={() => onToggleSelect(entry.rel)}
              style={{ cursor: 'pointer', width: 15, height: 15, flexShrink: 0 }}/>
       <Icon name={entryIcon(entry.kind)} size={18}/>
-      <div style={{ flex: 1, minWidth: 0, cursor: isDir ? 'pointer' : 'default' }}
+      <div className="files-row-main" style={{ cursor: isDir ? 'pointer' : 'default' }}
            onClick={isDir ? onOpen : undefined}>
-        <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
-                      overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div className="files-row-name">
           {entry.name}
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-faint)' }} className="mono">
           {isDir ? 'folder' : fmtBytes(entry.size)}{iso ? ` · ${liveRelTime(iso)}` : ''}
         </div>
       </div>
-      {isDir && (
-        <Button icon="chevron-right" title="open folder" onClick={onOpen}>Open</Button>
-      )}
-      {!isDir && entry.kind === 'image' && (
-        <Button icon="external-link" title="open in a new tab" onClick={openImage}>Open</Button>
-      )}
-      <Button icon="download" title="download" onClick={onDownload}>Download</Button>
-      {removable && (
-        <ImportMenu importables={importables} onPick={(tid) => onImport(entry, tid)}/>
-      )}
-      {editable && (
-        <Button icon="trash-2" title="delete" onClick={onDelete}>Delete</Button>
-      )}
+      <div className="files-row-acts">
+        {isDir && (
+          <Button icon="chevron-right" title="open folder" onClick={onOpen}>Open</Button>
+        )}
+        {!isDir && entry.kind === 'image' && (
+          <Button icon="external-link" title="open in a new tab" onClick={openImage}>Open</Button>
+        )}
+        <Button icon="download" title="download" onClick={onDownload}>Download</Button>
+        {removable && (
+          <ImportMenu importables={importables} onPick={(tid) => onImport(entry, tid)}/>
+        )}
+        {editable && (
+          <Button icon="trash-2" title="delete" onClick={onDelete}>Delete</Button>
+        )}
+      </div>
     </div>
   );
 };
