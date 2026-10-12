@@ -25,14 +25,19 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `whisper_cpu_threads` | `0` (one per physical core; ignored on `cuda`) | `0` — unchanged |
 | `ollama_tool_model` | `qwen2.5:14b` | **`qwen2.5:7b`** |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
+| `ollama_vision_model` (pictures in chat) | **`qwen2.5vl:7b`** — pick it in **Models** | `qwen3-vl:2b-instruct-q4_K_M` — the default, already the CPU pick |
 | `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
 | Chat mode (Letta) | opt-in | **leave off** |
 
 All of these are dashboard settings — gear → **Advanced** for the Whisper
-ones, **Models** for the Ollama three. The Whisper settings are
-restart-tier (the model loads once at boot). The Ollama model settings are
-hot — they take effect on the next turn with no restart, which makes them
-cheap to experiment with. Try a model, say something, try another.
+ones, **Models** for the Ollama ones. The vision model is the one row where
+the default is already the CPU host's: it answers chat messages with
+pictures, and `qwen2.5vl:7b` takes minutes per picture without a GPU. The
+Whisper settings are restart-tier (the model loads once at boot). The
+Ollama model settings are hot — they take effect on the next turn with no
+restart, which makes them cheap to experiment with. Try a model, say
+something, try another. (The vision model reaches the dashboard's chat when
+the dashboard restarts.)
 
 **Forgot to change them?** The core still starts. When the configured
 Whisper can't load — `cuda` on a machine with no NVIDIA GPU is the usual
@@ -709,7 +714,10 @@ at 32k tokens `llama3.2:3b` alone is ~6 GB and `qwen3:8b` ~10 GB, so leave
 `ollama_num_ctx` / `ollama_tool_num_ctx` (and the server's
 `OLLAMA_CONTEXT_LENGTH`) at 4–8k on a 24 GB box. And a third model — the
 dashboard's vision model, or Letta's — needs its own room: loading it is
-what makes Ollama unload a voice model whatever `keep_alive` says.
+what makes Ollama unload a voice model whatever `keep_alive` says. The
+default vision model, `qwen3-vl:2b-instruct-q4_K_M`, took ~3.2 GB while
+loaded in a test at a 4096-token window; the 8192 that chat gives a
+message with pictures (`ollama_vision_num_ctx`) adds a few hundred MB.
 
 If the box has less than 16 GB, run one Ollama model: point
 `ollama_model` and `ollama_tool_model` at the *same* small model and

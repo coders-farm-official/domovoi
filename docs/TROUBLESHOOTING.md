@@ -8,6 +8,7 @@ Symptom → cause → fix, grouped by area. Start with [Which logs to check](#wh
 - [Music won't play](#music-wont-play)
 - [Acquisitions / downloads stuck](#acquisitions--downloads-stuck)
 - [Dashboard can't reach the core](#dashboard-cant-reach-the-core)
+- [Chat can't answer](#chat-cant-answer)
 - [Admin locked out](#admin-locked-out)
 - [GPU / CUDA issues](#gpu--cuda-issues)
 - [Docker issues](#docker-issues)
@@ -148,6 +149,19 @@ The dashboard (port 6369) is a separate process that reads the shared Postgres a
 | Both on the same box but still unreachable | Core URL override wrong | The web process finds the core via `DOMOVOI_URL` (default `http://localhost:6370`) — unset it or point it at the right host |
 | Dashboard unreachable from another device on the LAN | Bind/firewall | The web backend binds `0.0.0.0:6369` by default (`WEB_HOST` / `WEB_PORT`); allow inbound 6369 in Windows Defender Firewall |
 | Dashboard up but every page errors | Postgres down | See [Docker issues](#docker-issues) — both processes need the `domovoi-postgres` container |
+
+## Chat can't answer
+
+The Chat page (dashboard and Android app) talks to Ollama from the web process. When there is no reply, the message under it says why in plain words; the exception itself, with Ollama's address, is in the web backend log (`chat stream failed (thread …, model …, <code>)`). The codes are listed in [API_REFERENCE.md](API_REFERENCE.md), §3.18.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| "Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi." (also shown by the paperclip) | The vision model isn't pulled; it isn't by default (except by `scripts/linux/provision.sh`) | Settings → Models: install it, or switch the Vision row to a vision-capable model you have. See [FAQ: pictures in chat](FAQ.md#can-i-send-pictures-in-chat) |
+| "The vision model … can't read pictures." | The Vision row names a text-only model | Pick a vision-capable model for the Vision row in Settings → Models |
+| "The model … isn't installed on this Domovoi." | `OLLAMA_MODEL` (the chat model) isn't pulled | Install it, or pick an installed one, in Settings → Models |
+| "… needs more memory than this Domovoi has free right now." | Other models are loaded (the voice models stay loaded for `OLLAMA_KEEP_ALIVE`) | Try again once they unload, shorten the keep-alive, or pick a smaller model; see [CPU_HOST.md](CPU_HOST.md) |
+| "Domovoi couldn't reach its language model." | Ollama is stopped, restarting, or `OLLAMA_URL` points elsewhere | Check `ollama ps` / `systemctl status ollama` on the server, and `OLLAMA_URL` (default `http://localhost:11434`) |
+| An older reply shows a raw "Client error '404 Not Found' for url …" line | The server is older than 2026-10-11 and kept the exception's text | Update the server; older replies are then read out in plain words as well (the stored row is left as it was) |
 
 ## I deployed, and the dashboard still shows the old thing
 

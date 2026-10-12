@@ -168,6 +168,8 @@ def test_catalog_json_valid_and_shaped():
         assert m.get("role") in ("qa", "tool", "both", "embedding", "vision")
         assert isinstance(m.get("est_vram_gb"), (int, float))
         assert m.get("desc")
+        # Optional; when given, the publisher's licence as an SPDX-style id.
+        assert "license" not in m or (isinstance(m["license"], str) and m["license"].strip())
     for m in data["whisper"]:
         assert m.get("name")
         assert m.get("role") == "stt"

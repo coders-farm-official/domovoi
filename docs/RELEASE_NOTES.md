@@ -4,6 +4,74 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Chat: a vision model that suits a processor, and pictures shrunk for it
+
+A server update. To read pictures in chat, install the new default vision
+model (below) unless you already picked one.
+
+* **The default vision model is now `qwen3-vl:2b-instruct-q4_K_M`**
+  (Qwen3-VL 2B Instruct, Apache-2.0: a 1.9 GB download, ~3.2 GB in
+  memory), not `qwen2.5vl:7b`, which takes minutes per picture without a
+  GPU. It came out on top of a benchmark of ten vision models on a
+  processor alone: it reads screenshots, receipts and charts well, and it
+  started answering in about half a minute rather than minutes. **If you never
+  picked a vision model**, chat now names this one: install it in
+  Settings → Models (its card in the catalog, or pull it by name). If you
+  picked one, nothing changes. **On a box with an NVIDIA GPU**, pick
+  `qwen2.5vl:7b` there instead (the catalog calls it the GPU pick). Also in
+  the catalog now: `qwen3-vl:4b-instruct-q4_K_M` (better answers, ~1.5x
+  slower, for a box with 24 GB or more) and `gemma4:e2b-it-q4_K_M`
+  (quickest, but misreads small text at the size chat sends). The vision
+  cards show each model's licence. A model picked in the Vision row reaches
+  the dashboard's chat when the dashboard restarts.
+* **Pictures reach the model upright and at most 1280 px on the long
+  edge.** A full-size phone photo used to fill the model's whole context,
+  and the reply stopped after a sentence. The shrunk copy is kept beside
+  the upload (`~/.domovoi/chat_uploads/<token>-1280.jpg` or `.png`) and
+  goes with the thread; the thread still shows the picture as it was sent.
+* **A message with pictures gets a context window of its own:**
+  `ollama_vision_num_ctx` (Settings → Models, *Vision context window*,
+  default 8192), so four pictures in one message fit; at Ollama's usual
+  4096 it refused them. The dashboard's chat reads it when it restarts.
+  Those calls also send `think: false`, so a vision model that reasons
+  first by default answers straight away instead of in silence.
+* **`scripts/linux/provision.sh`** writes `OLLAMA_VISION_MODEL` with its
+  tier's pin (both tiers: the 2B above) the way it writes the other model
+  keys (a value the household set is kept), and pulls it: **+1.9 GB**.
+  `--no-vision-model` leaves the pull out.
+
+## 2026-10-11 — Chat: pictures say what they need, and failures read in plain words
+
+New Android build and a server update; nothing else to do, unless you want
+chat to read pictures.
+
+* **Pictures need the vision model, and chat now says so.** A message with
+  pictures is answered by the vision model (Settings → Models, the Vision
+  row: `qwen2.5vl:7b` unless you picked another), which is not installed
+  by default. A picture used to come back with Ollama's raw error in red
+  ("Client error '404 Not Found' for url 'http://localhost:11434/api/chat'
+  …"). Now, on the dashboard and in the app, the paperclip explains instead
+  of opening the picker, and a picture sent anyway is answered at once with
+  "Pictures need the vision model qwen2.5vl:7b, which isn't installed on
+  this Domovoi. An admin can install it in Settings → Models, or pick
+  another vision model there." Ollama is not asked. A signed-in admin on
+  the dashboard gets a link to that tab; the app opens the dashboard's
+  Settings page. **To read pictures, install the vision model there.**
+* **Every chat failure reads as a plain sentence**: model not installed,
+  vision model that can't read pictures, not enough memory, Ollama
+  unreachable or too slow, anything else it reported, an empty answer. The
+  exception, with Ollama's address, goes to the web backend log only.
+  Replies saved before this update are read out the same way.
+* **Text questions after a picture work.** The thread's earlier pictures
+  went to the chat model with every later question, and Ollama refuses a
+  picture handed to a text-only model, so one picture broke the rest of the
+  chat. Pictures now go only to the vision model.
+* **For clients:** the send stream's `error` event is `{detail, code,
+  model}`; a reply row keeps the code as `stats.error_code`; `GET
+  /api/chat/models` adds `vision_installed` (`false`: a picture would be
+  refused; `null`: Ollama couldn't be asked). The codes are in
+  API_REFERENCE.md §3.18.
+
 ## 2026-10-11 — Long lists load as you scroll
 
 New Android build; on the server, the usual update. Update the server

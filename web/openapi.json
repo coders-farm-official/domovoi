@@ -11459,7 +11459,7 @@
           "chat"
         ],
         "summary": "Send Message",
-        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\"}    (also persisted on the row)",
+        "description": "Persist the user turn, stream the assistant reply as SSE, persist the\nassistant turn at stream end. Events:\n\n  ``event: delta``  data: {\"text\": \"...\"}\n  ``event: done``   data: {<the persisted assistant message row>}\n  ``event: error``  data: {\"detail\": \"...\", \"code\": \"...\", \"model\": \"...\"}\n                    (also persisted on the row: ``error``, ``stats.error_code``)\n\nA message with pictures whose vision model isn't installed \u2014 or none\nis set \u2014 gets its answer up front: the user turn is kept, the reply is\nthe refusal (``vision_model_missing``) and Ollama is never asked. When\nOllama can't be asked whether the model is there, the send goes ahead\nand a failure is reported as it happens.",
         "operationId": "send_message_api_chat_threads__thread_id__messages_post",
         "parameters": [
           {
@@ -11595,7 +11595,7 @@
           "chat"
         ],
         "summary": "Chat Models",
-        "description": "Installed Ollama models + the configured defaults, for the composer's\nmodel picker.",
+        "description": "Installed Ollama models + the configured defaults, for the composer's\nmodel picker. ``vision_installed`` says whether a picture can be\nanswered: false when the vision model isn't installed (or none is\nset), null when Ollama couldn't be asked \u2014 the clients explain the\nfirst before a picture is attached, and leave the second to the send.",
         "operationId": "chat_models_api_chat_models_get",
         "responses": {
           "200": {

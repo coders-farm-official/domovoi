@@ -45,6 +45,25 @@ CASES = {
         "id": "u-123", "role": "user", "content": "what is this?", "model": "ignored",
         "error": "500 boom", "device": "Kitchen tablet",
         "images": [{"token": "a", "name": "cat.jpg"}, {"token": "b", "name": ""}]}},
+    # Pictures with no vision model to read them, and coded reply errors
+    # (2026-10-11). Same words as the server and Android's ChatErrors.kt.
+    "vision_text": {"call": "visionMissingText", "args": ["qwen2.5vl:7b"]},
+    "vision_text_unset": {"call": "visionMissingText", "args": [""]},
+    "accepts": {"call": "ACCEPTS"},
+    "missing_false": {"call": "visionMissing", "args": [{"vision_installed": False, "vision_model": "v"}]},
+    "missing_true": {"call": "visionMissing", "args": [{"vision_installed": True}]},
+    "missing_unknown": {"call": "visionMissing", "args": [{"vision_installed": None}]},
+    "missing_unread": {"call": "visionMissing", "args": [None]},
+    "err_vision": {"call": "errorView", "args": [{
+        "role": "assistant", "error": "whatever the server said", "model": "qwen2.5vl:7b",
+        "stats": {"model_role": "vision", "error_code": "vision_model_missing"}}]},
+    "err_live": {"call": "errorView", "args": [{
+        "role": "assistant", "error": "Domovoi couldn't reach its language model.",
+        "error_code": "model_unreachable"}]},
+    "err_missing": {"call": "errorView", "args": [{
+        "role": "assistant", "error": "The model m isn't installed.", "stats": {"error_code": "model_missing"}}]},
+    "err_uncoded": {"call": "errorView", "args": [{"role": "assistant", "error": "Failed to fetch"}]},
+    "err_none": {"call": "errorView", "args": [{"role": "assistant", "content": "hi"}]},
 }
 
 
@@ -105,3 +124,43 @@ def test_a_user_message_not_saved_yet(out) -> None:
     assert rows["images"] == "2 · cat.jpg, image"
     assert rows["error"] == "500 boom"
     assert rows["message"] == "thread #7 (not saved yet)"
+
+
+def test_the_picture_refusal_reads_like_the_server(out) -> None:
+    import web.backend.api.chat as chat_api
+
+    assert out["vision_text"] == chat_api.vision_missing_text("qwen2.5vl:7b")
+    assert out["vision_text_unset"] == chat_api.vision_missing_text("")
+    assert out["accepts"] == (
+        "Chat takes text and pictures: PNG, JPEG, GIF, WebP or BMP, up to 4 a message. No other files."
+    )
+
+
+def test_the_accepted_types_are_the_uploads_own(out) -> None:
+    import web.backend.api.chat as chat_api
+
+    named = {"PNG": ".png", "JPEG": ".jpg", "GIF": ".gif", "WebP": ".webp", "BMP": ".bmp"}
+    assert all(word in out["accepts"] for word in named)
+    assert set(named.values()) | {".jpeg"} == set(chat_api._UPLOAD_EXTS)
+
+
+def test_only_a_server_that_says_so_stops_the_paperclip(out) -> None:
+    assert out["missing_false"] is True
+    assert out["missing_true"] is False
+    assert out["missing_unknown"] is False
+    assert out["missing_unread"] is False
+
+
+def test_coded_errors_read_plainly(out) -> None:
+    import web.backend.api.chat as chat_api
+
+    assert out["err_vision"] == {
+        "text": chat_api.vision_missing_text("qwen2.5vl:7b"),
+        "code": "vision_model_missing", "models": True,
+    }
+    assert out["err_live"] == {
+        "text": "Domovoi couldn't reach its language model.", "code": "model_unreachable", "models": False,
+    }
+    assert out["err_missing"]["models"] is True
+    assert out["err_uncoded"] == {"text": "Failed to fetch", "code": None, "models": False}
+    assert out["err_none"] is None

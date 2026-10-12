@@ -267,6 +267,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "str", tier="reapply",
     ),
     FieldSpec(
+        "ollama_vision_num_ctx", "Vision context window", "Models",
+        "The context window (in tokens) Ollama gives the text chat when a "
+        "message carries pictures. Each picture takes about 1,100 tokens, so "
+        "four in one message need more than Ollama's usual 4096. 0 uses the "
+        "Q&A context window (do that when one model is both the vision and "
+        "the Q&A model, or Ollama reloads it between the two). Uses more "
+        "memory while the vision model is loaded. The text chat picks it up "
+        "when the dashboard restarts.",
+        "int", tier="restart", min=0, max=262144,
+    ),
+    FieldSpec(
         "ollama_keep_alive", "Keep models loaded for", "Models",
         "How long Ollama keeps a model in memory after its last request. "
         "Ollama's own default is only 5 minutes, so on a CPU host the models "
