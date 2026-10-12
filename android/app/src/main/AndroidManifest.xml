@@ -48,6 +48,15 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- The on-device assistant speaks with the phone's text-to-speech
+         engine (assistant/AndroidSpeechOut); from API 30 an app sees the
+         installed engines only when it declares that it looks for them. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
     <!-- allowBackup=false: nothing the app stores (server address, device id,
          the pairing token, the timer alerts' mirror with a reminder's words)
          is ever copied into a cloud or adb backup. From API 31 that flag no
