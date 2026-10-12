@@ -1,7 +1,10 @@
-# Domovoi satellite USB-adoption mode. Runs BEFORE the satellite client;
-# a no-op (exit 0) on every provisioned boot, so it costs nothing once the
-# device is set up. On an UNPROVISIONED boot it owns the box: exposes the
-# DOMOVOI-SET gadget volume and waits for the server's adopt flow (see
+# Domovoi satellite USB-adoption mode. Runs BEFORE the satellite client.
+# On every provisioned boot it checks the network settings in
+# satellite/net_settings.py (no setup hotspot profile, Wi-Fi power saving
+# off, host name domovoi-<room>), applies whichever is missing, records
+# what it changed in ~/.domovoi/net-settings.json, and exits 0. On an
+# UNPROVISIONED boot it owns the box: exposes the DOMOVOI-SET gadget
+# volume (or the setup portal) and waits for the adopt flow (see
 # satellite/provisioning_mode.py).
 #
 # Root on purpose: configfs gadget composition, mkfs.vfat, nmcli,

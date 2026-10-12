@@ -77,6 +77,15 @@ BASE_APT_PACKAGES = (
     # satellite that cannot raise its portal because it has no internet is
     # unrecoverable in a customer's hands.
     "dnsmasq-base",
+    # mDNS, both ways (2026-10-12): avahi-daemon announces the satellite as
+    # domovoi-<room>.local (satellite/net_settings.py sets that host name),
+    # and libnss-mdns lets the satellite resolve the core's own .local name,
+    # which server discovery tries first (satellite/discovery.py). Both are
+    # stock Raspberry Pi OS packages, already on Pi OS Lite; named here so a
+    # card does not depend on that staying true. Stage 1 installs only what
+    # the image lacks.
+    "avahi-daemon",
+    "libnss-mdns",
 )
 
 

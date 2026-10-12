@@ -502,3 +502,175 @@ def test_it_runs_only_after_wifi_joins(monkeypatch, tmp_path):
     join = src.index("apply_wifi(")
     resolve = src.index("resolve_auto_url(")
     assert join < resolve
+
+
+# ─── the order: the core's name, the last-known address, the sweep ────────
+#
+# Kamron, 2026-10-12: "the less the user has to do the better". Before this
+# a satellite used whatever address it had written down, for ever: a core
+# whose DHCP lease moved left every satellite dialling the old address until
+# someone edited each one. The name comes first now, and the sweep last —
+# and every candidate, a name's included, must sign a fresh nonce for the
+# address dialled with the pinned key, so a name can never hand a paired
+# satellite to an impostor.
+
+OURS = _server(1)
+THEIRS = _server(2)
+
+
+def _resolver(table):
+    """getaddrinfo, from a dict of name -> addresses."""
+    def resolve(name, port, family=0, type=0, *a, **k):
+        if name not in table:
+            raise OSError(f"{name} does not resolve")
+        return [(2, 1, 6, "", (addr, port)) for addr in table[name]]
+    return resolve
+
+
+def _lan(owners, asked=None):
+    """A probe over a pretend LAN: ``owners`` maps an address to the
+    server (seed, public, fingerprint) that answers there; anything else
+    is silent. The real `discovery.probe` runs, identity check and all."""
+    def probe_fn(host, *, port=6370, timeout=None, expected_fingerprint=None):
+        if asked is not None:
+            asked.append(host)
+        server = owners.get(host)
+        if server is None:
+            return False
+        seed, public, _fp = server
+        return discovery.probe(host, port=port, opener=_health_opener(seed, public),
+                               expected_fingerprint=expected_fingerprint)
+    return probe_fn
+
+
+def _no_sweep(**k):
+    raise AssertionError("swept the subnet although something earlier answered")
+
+
+def test_the_core_name_comes_before_the_last_known_address():
+    """The core moved from .117 to .50; its name says so."""
+    asked = []
+    found = discovery.locate(
+        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        expected_fingerprint=OURS[2],
+        resolver=_resolver({"domovoi.local": ["192.168.0.50"]}),
+        probe_fn=_lan({"192.168.0.50": OURS, "192.168.0.117": OURS}, asked),
+        finder=_no_sweep,
+    )
+    assert found == discovery.Located("ws://192.168.0.50:6370", "name", "domovoi.local -> 192.168.0.50")
+    assert asked == ["192.168.0.50"]
+
+
+def test_a_name_answered_by_an_impostor_is_refused():
+    """Anyone on the LAN can claim domovoi.local over mDNS. Holding the
+    pinned key is what they cannot do."""
+    asked = []
+    found = discovery.locate(
+        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        expected_fingerprint=OURS[2],
+        resolver=_resolver({"domovoi.local": ["192.168.0.66"]}),
+        probe_fn=_lan({"192.168.0.66": THEIRS, "192.168.0.117": OURS}, asked),
+        finder=_no_sweep,
+    )
+    assert found is not None and found.via == "last-known"
+    assert found.url == "ws://192.168.0.117:6370"
+    assert asked == ["192.168.0.66", "192.168.0.117"]
+
+
+def test_a_name_that_points_at_a_relay_is_refused():
+    """The name resolves to a host that forwards our question to the real
+    core: the core signs for its own address, not the relay's."""
+    seed, public, fp = OURS
+
+    def probe_fn(host, *, port=6370, timeout=None, expected_fingerprint=None):
+        bind = "echo" if host == "192.168.0.117" else "192.168.0.117:6370"
+        return discovery.probe(host, port=port, opener=_health_opener(seed, public, bind=bind),
+                               expected_fingerprint=expected_fingerprint)
+
+    found = discovery.locate(
+        names=["domovoi.local"], last_known=None, expected_fingerprint=fp,
+        resolver=_resolver({"domovoi.local": ["192.168.0.141"]}),
+        probe_fn=probe_fn, finder=lambda **k: None,
+    )
+    assert found is None
+
+
+def test_the_sweep_is_the_last_resort():
+    order = []
+
+    def finder(**k):
+        order.append(("sweep", k.get("expected_fingerprint")))
+        return "192.168.0.50"
+
+    found = discovery.locate(
+        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        expected_fingerprint=OURS[2],
+        resolver=_resolver({}),
+        probe_fn=_lan({}, order), finder=finder,
+    )
+    assert found == discovery.Located("ws://192.168.0.50:6370", "scan", "192.168.0.50")
+    # The name did not resolve, the last-known address was asked, then the sweep.
+    assert order == ["192.168.0.117", ("sweep", OURS[2])]
+
+
+def test_every_address_a_name_resolves_to_is_tried_in_order():
+    asked = []
+    found = discovery.locate(
+        names=["domovoi.local"], expected_fingerprint=OURS[2],
+        resolver=_resolver({"domovoi.local": ["192.168.0.9", "192.168.0.50"]}),
+        probe_fn=_lan({"192.168.0.50": OURS}, asked), finder=_no_sweep,
+    )
+    assert found.url == "ws://192.168.0.50:6370"
+    assert asked == ["192.168.0.9", "192.168.0.50"]
+
+
+def test_nothing_verifying_anywhere_is_none():
+    found = discovery.locate(
+        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        expected_fingerprint=OURS[2],
+        resolver=_resolver({"domovoi.local": ["192.168.0.66"]}),
+        probe_fn=_lan({"192.168.0.66": THEIRS}), finder=lambda **k: None,
+    )
+    assert found is None
+
+
+def test_the_names_are_the_default_then_what_the_core_advertised(tmp_path):
+    path = tmp_path / "server-names.json"
+    assert discovery.server_names(path) == ["domovoi.local"]
+    assert discovery.remember_names(
+        ["Beelink.local.", "not a name!", "192.168.0.5", "localhost", "domovoi.local"], path
+    ) is True
+    assert discovery.server_names(path) == ["domovoi.local", "beelink.local"]
+    # Saying the same thing again writes nothing.
+    assert discovery.remember_names(["beelink.local", "domovoi.local"], path) is False
+    assert discovery.remember_names("beelink.local", path) is False   # not a list
+
+
+def test_a_name_lookup_never_hangs_and_never_returns_loopback():
+    import threading
+
+    gate = threading.Event()
+
+    def slow(*a, **k):
+        gate.wait(5)
+        return []
+
+    assert discovery.resolve_name("domovoi.local", timeout=0.05, resolver=slow) == []
+    gate.set()
+    mixed = _resolver({"domovoi.local": ["127.0.1.1", "192.168.0.50", "192.168.0.50"]})
+    assert discovery.resolve_name("domovoi.local", resolver=mixed) == ["192.168.0.50"]
+
+
+def test_in_tests_a_name_nobody_resolved_does_not_resolve():
+    """satellite/tests/conftest.py: no real mDNS query from the suite."""
+    assert discovery.resolve_name("domovoi.local") == []
+
+
+def test_setup_looks_for_the_server_by_name_first(cfgfile, monkeypatch):
+    """Provisioning mode's discovery after the Wi-Fi join is the same order."""
+    asked = []
+    monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER", _resolver({"domovoi.local": ["192.168.0.50"]}))
+    monkeypatch.setattr(discovery, "probe", lambda host, **k: asked.append(host) or True)
+    monkeypatch.setattr(discovery, "find_core", _no_sweep)
+    assert pm.resolve_auto_url("auto") == "ws://192.168.0.50:6370"
+    assert asked == ["192.168.0.50"]

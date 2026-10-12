@@ -8,8 +8,12 @@
 @USER@ ALL=(root) NOPASSWD: /usr/sbin/wpa_cli -i wlan0 reassociate
 # A portal-onboarded satellite is NetworkManager end to end, and wpa_cli
 # cannot talk to an NM-driven supplicant - so the line above recovers
-# nothing on these units. This is the one that does.
-@USER@ ALL=(root) NOPASSWD: /usr/bin/nmcli device connect wlan0
+# nothing on these units. This is the one that does: the house network's
+# profile, BY NAME. Not `nmcli device connect wlan0` (cards before
+# 2026-10-12): that lets NetworkManager pick any profile, the setup hotspot
+# included, and a satellite recovered onto it and stayed there for weeks.
+# See satellite/wifi_profiles.py.
+@USER@ ALL=(root) NOPASSWD: /usr/bin/nmcli connection up id domovoi-home
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-satellite.service
 @USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block restart domovoi-kiosk.service
 # Installs the packages and runs the post-install script of a plugin the

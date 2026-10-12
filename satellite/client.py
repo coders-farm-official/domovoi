@@ -50,13 +50,16 @@ from satellite import (
     code_sync,
     config_writer,
     devices,
+    discovery,
     display_power,
     kiosk,
     health,
     log_buffer,
     log_spool,
+    net_settings,
     sound_sync,
     wake_model_sync,
+    wifi_profiles,
 )
 from satellite._resample import StreamingResampler
 from satellite.devices import DeviceProfile
@@ -162,6 +165,9 @@ REBOOT_HELPER = Path("/usr/local/sbin/domovoi-reboot")
 # The self-restart budget (satellite/health.py RestartBudget): when this
 # unit last exited or rebooted itself for a self-check, kept across lives.
 SELF_RESTARTS_PATH = CONFIG_DIR / "self-restarts.json"
+# Which net-settings.json run (satellite/net_settings.py) this client has
+# already put in its log, so a restart does not log the same run twice.
+NET_SETTINGS_LOGGED = CONFIG_DIR / "net-settings.logged"
 # A self-check exit that has not finished its graceful shutdown in this
 # many seconds leaves anyway (os._exit), so systemd can restart the unit.
 HEALTH_HARD_EXIT_SEC = 45.0
@@ -426,6 +432,51 @@ def _greetings_dir() -> Path:
 _IW_RX_RE = re.compile(r"rx bitrate:\s*([\d.]+)\s*MBit/s", re.IGNORECASE)
 _IW_TX_RE = re.compile(r"tx bitrate:\s*([\d.]+)\s*MBit/s", re.IGNORECASE)
 _IW_SSID_RE = re.compile(r"^\s*SSID:\s*(.+?)\s*$", re.MULTILINE)
+# The received signal strength of the AP, which is what says whether the
+# link is good. The rates above are of the LAST frame, and an idle link's
+# last frame is a beacon at 1 Mbit/s.
+_IW_SIGNAL_RE = re.compile(r"^\s*signal:\s*(-?\d+(?:\.\d+)?)\s*dBm", re.IGNORECASE | re.MULTILINE)
+# `iw dev wlan0 info`: "type managed" (a client) or "type AP" (hosting).
+_IW_TYPE_RE = re.compile(r"^\s*type\s+(\S+)", re.IGNORECASE | re.MULTILINE)
+
+
+def _parse_iw_link(out: str, mode_of=None) -> dict[str, Any]:
+    """``iw dev wlan0 link`` -> rx/tx bitrate, SSID and signal (dBm). A link
+    that is "Not connected" carries no numbers; ``mode_of()`` is then asked
+    whether the radio is hosting an access point instead (``mode: "ap"``)."""
+    if "Not connected" in out:
+        link: dict[str, Any] = {"rx_mbits": None, "tx_mbits": None, "ssid": None, "signal_dbm": None}
+        mode = mode_of() if mode_of is not None else None
+        if mode:
+            link["mode"] = mode
+        return link
+    rx = _IW_RX_RE.search(out)
+    tx = _IW_TX_RE.search(out)
+    ssid = _IW_SSID_RE.search(out)
+    signal = _IW_SIGNAL_RE.search(out)
+    dbm: float | int | None = None
+    if signal:
+        value = float(signal.group(1))
+        # A real reading is between about -100 and 0 dBm; anything else is
+        # a driver that printed something we do not understand.
+        if -120.0 <= value <= 0.0:
+            dbm = int(value) if value.is_integer() else round(value, 1)
+    return {
+        "rx_mbits": float(rx.group(1)) if rx else None,
+        "tx_mbits": float(tx.group(1)) if tx else None,
+        "ssid": ssid.group(1).strip() if ssid else None,
+        "signal_dbm": dbm,
+        "mode": "managed",
+    }
+
+
+def _sudo_refused(stderr: str) -> bool:
+    """sudo's own refusal (no sudoers line for this exact command), as
+    opposed to the command running and failing."""
+    text = (stderr or "").lower()
+    return "a password is required" in text or "not allowed to execute" in text or (
+        text.startswith("sudo:") and "may not run sudo" in text
+    )
 
 
 # ─── Config ───────────────────────────────────────────────────────────────
@@ -3053,10 +3104,11 @@ class Satellite:
     def _check_wifi_link(self) -> dict[str, Any] | None:
         """Run `iw dev wlan0 link` and parse rx/tx bitrate + SSID.
 
-        Returns ``None`` when iw isn't installed, the call fails, or
-        wlan0 isn't associated (link-down case prints "Not connected.").
-        Otherwise a dict with rx_mbits / tx_mbits / ssid (any of which
-        may be None if that line wasn't present).
+        Returns ``None`` when iw isn't installed or the call fails.
+        Otherwise a dict with rx_mbits / tx_mbits / ssid / signal_dbm (any
+        of which may be None: all of them when wlan0 isn't associated, the
+        "Not connected." case) and ``mode`` ("managed", or "ap" when the
+        radio is hosting an access point — see `_parse_iw_link`).
 
         Used by the WiFi watcher and also by the post-reassociate
         re-sample. Both code paths tolerate None — they just skip the
@@ -3076,17 +3128,27 @@ class Satellite:
             return None
         if result.returncode != 0:
             return None
-        out = result.stdout
-        if "Not connected" in out:
-            return {"rx_mbits": None, "tx_mbits": None, "ssid": None}
-        rx = _IW_RX_RE.search(out)
-        tx = _IW_TX_RE.search(out)
-        ssid = _IW_SSID_RE.search(out)
-        return {
-            "rx_mbits": float(rx.group(1)) if rx else None,
-            "tx_mbits": float(tx.group(1)) if tx else None,
-            "ssid": ssid.group(1).strip() if ssid else None,
-        }
+        return _parse_iw_link(result.stdout or "", self._wifi_mode)
+
+    def _wifi_mode(self) -> str | None:
+        """``"ap"`` when the radio is hosting an access point, ``"managed"``
+        when it is a client, None when ``iw`` would not say. Asked only
+        when ``iw dev wlan0 link`` says "Not connected" — which is also what
+        it says while the radio hosts the setup hotspot."""
+        try:
+            r = subprocess.run(
+                ["iw", "dev", "wlan0", "info"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if r.returncode != 0:
+            return None
+        m = _IW_TYPE_RE.search(r.stdout or "")
+        if not m:
+            return None
+        kind = m.group(1).lower()
+        return "ap" if kind == "ap" else kind[:16]
 
     def _nm_manages_wifi(self) -> bool:
         """Whether NetworkManager owns wlan0 on this device.
@@ -3113,30 +3175,65 @@ class Satellite:
         return False
 
     def _reconnect_wifi_nm(self) -> bool:
-        """Ask NetworkManager to bring wlan0 back up.
+        """Bring the HOUSE network back, through NetworkManager.
 
         NM normally reconnects on its own; this is for the case where it has
         given up, which is what leaves a satellite with no address at all -
         `hostname -I` empty, nothing reaching the core, and every surface an
         operator can see reporting something else entirely.
+
+        Never "whatever NetworkManager picks": `nmcli device connect wlan0`
+        lets it choose any available profile, and the setup hotspot's
+        always is — a satellite that lost its router recovered onto its own
+        setup network and stayed there for 18 days (2026-10-12). What runs
+        is decided by `wifi_profiles.plan_recovery`: the home profile by
+        name where the sudoers allows it, the old command only where it
+        cannot land on an access point, and nothing at all while the link
+        is up and the house network is not in the last scan.
         """
-        try:
-            r = subprocess.run(
-                ["sudo", "-n", "/usr/bin/nmcli", "device", "connect", "wlan0"],
-                capture_output=True, text=True, timeout=30.0,
-            )
-        except (OSError, subprocess.SubprocessError) as e:
-            log.warning("nmcli reconnect: %s", e)
-            return False
-        if r.returncode == 0:
-            log.info("nmcli device connect wlan0: OK")
-            return True
-        log.warning(
-            "nmcli device connect wlan0 failed: rc=%d stderr=%r. Check the "
-            "sudoers entry - `sudo -n /usr/bin/nmcli device connect wlan0` "
-            "should run without prompting.",
-            r.returncode, (r.stderr or "").strip(),
+        link = self._check_wifi_link() if self.cfg.wifi_enabled else None
+        associated = bool(link and link.get("rx_mbits") is not None) or bool(
+            link and link.get("ssid")
         )
+        ap_active = bool(link and link.get("mode") == "ap")
+        last_ssid = (self._last_wifi_link or {}).get("ssid") or (link or {}).get("ssid")
+        plan = wifi_profiles.plan_recovery(
+            wifi_profiles.list_wifi_profiles(),
+            visible=wifi_profiles.visible_ssids(),
+            associated=associated,
+            ap_active=ap_active,
+            last_ssid=last_ssid,
+        )
+        if not plan.steps:
+            log.warning("wifi recovery not run: %s", plan.reason)
+            return False
+        log.info("wifi recovery: %s", plan.reason)
+        for i, step in enumerate(plan.steps):
+            try:
+                r = subprocess.run(
+                    ["sudo", "-n", *step.argv],
+                    capture_output=True, text=True, timeout=30.0,
+                )
+            except (OSError, subprocess.SubprocessError) as e:
+                log.warning("wifi recovery (%s): %s", step.label, e)
+                return False
+            if r.returncode == 0:
+                log.info("wifi recovery: nmcli %s: OK", step.label)
+                return True
+            err = (r.stderr or "").strip()
+            if _sudo_refused(err) and i + 1 < len(plan.steps):
+                # This unit's sudoers predates the command: the next step
+                # is the one it allows.
+                log.info("wifi recovery: sudo does not allow `nmcli %s` on this unit; "
+                         "trying the next way", step.label)
+                continue
+            log.warning(
+                "wifi recovery: nmcli %s failed: rc=%d stderr=%r%s",
+                step.label, r.returncode, err,
+                " (check the sudoers entry: `sudo -n " + " ".join(step.argv)
+                + "` must run without prompting)" if _sudo_refused(err) else "",
+            )
+            return False
         return False
 
     def _reassociate_wifi(self) -> bool:
@@ -3239,12 +3336,18 @@ class Satellite:
             "rx_mbits": link.get("rx_mbits"),
             "tx_mbits": link.get("tx_mbits"),
             "ssid": link.get("ssid"),
+            "signal_dbm": link.get("signal_dbm"),
+            "mode": link.get("mode"),
         }
+        # `signal_dbm` and `mode` are new keys on an existing message: an
+        # older core reads the three it knows and ignores them.
         self._emit_text({
             "type": "wifi_status",
             "rx_mbits": link.get("rx_mbits"),
             "tx_mbits": link.get("tx_mbits"),
             "ssid": link.get("ssid"),
+            "signal_dbm": link.get("signal_dbm"),
+            "mode": link.get("mode"),
         })
 
     # ── Health monitor ────────────────────────────────────────────────
@@ -3326,6 +3429,58 @@ class Satellite:
         the section (older code paths and the field-by-field tests)."""
         return getattr(self.cfg, "health_" + name, default)
 
+    # ── The network settings root applies at boot ─────────────────────
+    # satellite/net_settings.py runs as root from domovoi-provisioning.service
+    # before this process (and at the end of setup) and records what it did
+    # in ~/.domovoi/net-settings.json. Its journal is not the core's: the
+    # record is read here and logged, so the change lands in the log the
+    # core retains for this room (the spool while disconnected, the live
+    # push after). And while the record is older than this code, the unit
+    # has been upgraded but not rebooted: the health sample says so.
+
+    _net_report_mtime: float | None = None
+    _net_reboot_needed: str | None = None
+    _net_reboot_said: bool = False
+
+    def _check_net_settings(self) -> None:
+        try:
+            mtime: float | None = net_settings.REPORT_PATH.stat().st_mtime
+        except OSError:
+            mtime = None
+        if mtime is not None and mtime == self._net_report_mtime:
+            return
+        first = self._net_report_mtime is None and not self._net_reboot_said
+        self._net_report_mtime = mtime
+        report = net_settings.read_report() if mtime is not None else None
+        if report is not None:
+            run_id = f"{report.get('boot_id')}:{report.get('ts')}"
+            try:
+                logged = NET_SETTINGS_LOGGED.read_text(encoding="utf-8").strip()
+            except OSError:
+                logged = ""
+            if run_id != logged:
+                when = report.get("when") or "boot"
+                for what in report.get("changed") or []:
+                    log.info("network settings (applied as root at %s): changed: %s", when, what)
+                for what in report.get("skipped") or []:
+                    log.info("network settings (applied as root at %s): left alone: %s", when, what)
+                for what in report.get("errors") or []:
+                    log.warning("network settings (applied as root at %s): could not: %s", when, what)
+                if not (report.get("changed") or report.get("errors")) and first:
+                    log.info("network settings v%s in place (host name %s)",
+                             report.get("version"), report.get("hostname"))
+                try:
+                    NET_SETTINGS_LOGGED.write_text(run_id + "\n", encoding="utf-8")
+                except OSError:
+                    pass
+        installed = sys.platform == "linux" and net_settings.PROVISIONING_UNIT.exists()
+        self._net_reboot_needed = net_settings.reboot_needed(report, unit_installed=installed)
+        if self._net_reboot_needed and not self._net_reboot_said:
+            self._net_reboot_said = True
+            log.warning("reboot needed: %s", self._net_reboot_needed)
+        elif not self._net_reboot_needed:
+            self._net_reboot_said = False
+
     def _core_endpoint(self) -> tuple[str | None, int | None]:
         """``(host, port)`` of the configured core, or ``(None, None)``
         before discovery has resolved `auto`."""
@@ -3377,6 +3532,10 @@ class Satellite:
             "ws_down_for_s": down_for,
             "reconnects": self._reconnects,
             "wifi": self._last_wifi_link,
+            # Upgraded but not rebooted: the network settings root applies at
+            # boot are not in place yet (satellite/net_settings.py). The
+            # dashboard shows it; absent (None) when nothing is pending.
+            "reboot_needed": self._net_reboot_needed,
             "log_ring": {k: v for k, v in LOG_RING.stats().items() if k != "max_bytes"},
             "log_spool": {k: v for k, v in LOG_SPOOL.stats().items() if k != "max_bytes"},
         }
@@ -3407,6 +3566,30 @@ class Satellite:
             self._last_health.write(self._health_last_sample, extra)
         except Exception as e:  # noqa: BLE001
             log.debug("health: last-health write failed: %s", e)
+
+    _last_relocate_at: float | None = None
+
+    def _relocate_server(self) -> None:
+        """The core has been unreachable for a while: look for it again, in
+        the usual order (its name, this address, the sweep), and switch to
+        what proves to be this device's server. Skipped while the old
+        address's machine REFUSES the connect — the server is there and
+        merely not listening (a restart), so there is nothing to find."""
+        host, port = self._core_endpoint()
+        if host and port and health.probe_service(host, port) == "refused":
+            log.info("server search skipped: %s refuses on %s, so the server's "
+                     "machine is still there", host, port)
+            return
+        try:
+            found, is_auto, _last = _locate_server(self.cfg)
+        except Exception as e:  # noqa: BLE001 — never take the connect loop down
+            log.warning("server search failed: %s", e)
+            return
+        if found is None:
+            log.info("server search: nothing answered as this device's server; "
+                     "keeping %s", self.cfg.domovoi_url)
+            return
+        _adopt_located(self.cfg, CONFIG_PATH, found, is_auto)
 
     def _note_connect_failure(self, exc: BaseException) -> None:
         """One offline_diag entry per failed connect while disconnected,
@@ -3567,6 +3750,7 @@ class Satellite:
             gateway_ok=_flag("gateway_ok"),
             default_route=_flag("default_route"),
             core_host_ok=_flag("core_host_ok"),
+            ap_mode=(self._last_wifi_link or {}).get("mode") == "ap",
             last_wifi_recovery=last_recovery,
             last_reboot_note=self._health_last_reboot_note,
             escalate_after=float(self._hcfg("no_server_escalate_min", 5.0)) * 60.0,
@@ -3749,6 +3933,10 @@ class Satellite:
 
     def _health_tick(self) -> None:
         now = time.monotonic()
+        try:
+            self._check_net_settings()
+        except Exception as e:  # noqa: BLE001
+            log.debug("network settings record: %s", e)
         self._push_live_logs(now)
         interval = float(self._hcfg("sample_interval_sec", 60.0))
         if self._health_last_sample_at is None or now - self._health_last_sample_at >= interval - 1.0:
@@ -3991,63 +4179,77 @@ class Satellite:
         actual = self._read_output_volume()
         self._emit_volume_status(actual if actual is not None else level)
 
-    def _core_reachable(self, timeout: float = 3.0) -> bool:
-        """Can this device open a TCP connection to the core right now?
+    def _core_probe(self, timeout: float = 3.0) -> str | None:
+        """How the core answers a TCP connect right now: ``"accepted"``,
+        ``"refused"`` (its machine answered: the path works, the core is
+        not listening) or ``"silent"`` — `health.probe_service`, the same
+        probe the health sample takes. None when there is nothing to ask
+        (``auto`` before discovery ran): the watcher must not start tearing
+        the link down on a guess."""
+        host, port = self._core_endpoint()
+        if not host or not port:
+            return None
+        return health.probe_service(host, port, timeout=timeout)
 
-        The question the Wi-Fi watcher actually needs answered. A rate read
-        off ``iw`` says what the LAST frame was sent at, and on an idle link
-        that is the 1 Mbit/s beacon rate - it looks "wedged" while working
-        perfectly. Whether the core answers a SYN is a fact about the path.
+    def _gateway_ok(self) -> bool | None:
+        """Whether the default gateway answers (`health.gateway_answers`)."""
+        return health.gateway_answers(health.read_default_gateway())
 
-        A URL that cannot be parsed (``auto`` before discovery ran) answers
-        True: with nothing to test against, the watcher must not start
-        tearing the link down on a guess.
-        """
-        try:
-            from urllib.parse import urlsplit
+    def _core_path(self) -> str | None:
+        """The one reachability rule (`health.path_verdict`), shared with
+        the self-checks: only `health.PATH_DOWN` is a reason to touch the
+        Wi-Fi. The gateway is asked only when the core's host is silent."""
+        outcome = self._core_probe()
+        if outcome is None:
+            return None
+        gateway_ok = self._gateway_ok() if outcome == "silent" else None
+        return health.path_verdict(outcome, gateway_ok)
 
-            parts = urlsplit(self.cfg.domovoi_url)
-            host = parts.hostname
-            port = parts.port or (443 if parts.scheme in ("wss", "https") else 80)
-        except ValueError:
-            host = None
-            port = 0
-        if not host:
-            return True
-        try:
-            with socket.create_connection((host, port), timeout=timeout):
-                return True
-        except OSError:
-            return False
+    def _note_ap_mode(self, link: dict[str, Any]) -> None:
+        """The radio is hosting an access point (the setup hotspot) on a
+        satellite that was set up long ago. Said loudly every time it is
+        seen (the health sample carries it too, as `wifi.mode`), because
+        the last unit in this state sat there for 18 days looking
+        "connected"."""
+        log.error(
+            "wifi: this satellite is HOSTING an access point (the setup "
+            "hotspot) instead of being on the house network; bringing the "
+            "house network back"
+        )
 
     def _wifi_watcher_thread_run(self) -> None:
-        """Periodic link poll + reassociate when the NETWORK is what broke.
+        """Periodic link poll + recovery when the NETWORK is what broke.
 
         Loop:
           1. Wait one poll interval (interruptible by shutdown).
           2. Sample link via `_check_wifi_link`; push it to the server
-             (no-op if WS down) so the dashboard shows the rates.
+             (no-op if WS down) so the dashboard shows signal and rates.
           3. If WS has been disconnected past the degraded threshold,
              arm the local degraded flag so the next wake word plays
              the canned MP3 instead of trying to stream.
-          4. WS up -> the link is carrying a live session. Clear degraded
-             and LEAVE THE LINK ALONE, whatever the rate reads. A low rx
-             rate is logged, nothing more.
-          5. WS down and the link associated -> ask `_core_reachable`.
-             Core answers: the network is fine and the core is what is
-             down; nothing here can help, don't reassociate.
-             Core silent: the path is broken. Honor the cooldown, else
-             reassociate, settle ~3 s, probe again. Still silent -> arm
-             degraded.
+          4. The radio is hosting an access point -> escalate: log, the
+             health sample says so, and recover to the house network
+             (cooldown permitting). That is never a working state.
+          5. WS up -> the link is carrying a live session. Clear degraded
+             and LEAVE THE LINK ALONE, whatever the rate reads.
+          6. WS down and the link associated -> `_core_path`, the rule the
+             self-checks use too. The core accepts, or its machine REFUSES
+             (a core restarting), or the gateway answers: the radio is
+             fine and nothing here can help, so no recovery. Only when
+             nothing answers: honor the cooldown, else recover, settle
+             ~3 s, ask again. Still nothing -> arm degraded.
+
+        Why "refused" is not "unreachable": before 2026-10-12 the watcher
+        counted a refused connect as an unreachable core, so every core
+        restart made every satellite drop and rejoin the Wi-Fi, with a
+        fresh DHCP exchange each time, and again every cooldown while the
+        core stayed down: exactly the churn that filled the router's
+        client list. A refusal comes FROM the core's machine.
 
         Why not the rate: `iw dev wlan0 link` reports the rate of the last
         frame, and an idle link's last frame is a beacon at 1 Mbit/s. The
-        old rule "reassociate below 5 Mbit/s" therefore tore down healthy,
-        idle links every cooldown - a self-inflicted disconnect that both
-        satellites showed on 2026-09-15, each going to the no-server ring
-        with the core up the whole time. The 2026-05-06 wedge this watcher
-        was built for still gets caught: a wedged link cannot reach the
-        core either, and reassociate is still the remedy.
+        old rule "reassociate below 5 Mbit/s" tore down healthy, idle links
+        every cooldown (2026-09-15).
 
         Disabled at runtime when `cfg.wifi_enabled = false` or when
         `iw` isn't installed (single warning logged, then thread exits).
@@ -4063,6 +4265,12 @@ class Satellite:
                 return
             if not self.cfg.wifi_enabled:
                 return  # disabled mid-flight (e.g., iw missing)
+            if not self._hcfg("enabled", False):
+                # The health tick does this when health runs at all.
+                try:
+                    self._check_net_settings()
+                except Exception as e:  # noqa: BLE001
+                    log.debug("network settings record: %s", e)
 
             # WS-disconnect-too-long degraded check. The wifi watcher
             # is the natural place: it's already polling at the right
@@ -4085,12 +4293,30 @@ class Satellite:
                 continue
             self._emit_wifi_status(link)
 
+            # Any recovery counts toward the cooldown, not only this
+            # watcher's own: the health self-check (no server for 5 min,
+            # link down) runs the same `_reassociate_wifi`.
+            shared = self._last_reassociate_at
+            if shared is not None and shared > last_reassociate:
+                last_reassociate = shared
+
+            if link.get("mode") == "ap":
+                self._note_ap_mode(link)
+                now = time.monotonic()
+                if last_reassociate > 0 and self.cfg.wifi_cooldown_sec - (now - last_reassociate) > 0:
+                    self._network_degraded.set()
+                    continue
+                self._reassociate_wifi()
+                last_reassociate = time.monotonic()
+                continue
+
             rx = link.get("rx_mbits")
             if rx is None:
                 # Link is down or output didn't include the rate line
                 # (rare). Don't try to reassociate when there's no
-                # connection at all — wpa_supplicant will be cycling
+                # connection at all — the supplicant will be cycling
                 # through its own reconnect logic and we'd just fight it.
+                # (The health self-check acts on a link that STAYS down.)
                 continue
 
             if ws_down_for is None:
@@ -4110,39 +4336,37 @@ class Satellite:
                     )
                 continue
 
-            if self._core_reachable():
-                # The path works; the core itself is what's not talking.
-                # Reassociating would only add a real outage to a
-                # perceived one. The connect loop keeps retrying.
+            verdict = self._core_path()
+            if verdict != health.PATH_DOWN:
+                # The path works; the core itself is what's not talking (or
+                # there is no address to ask yet). Recovering the Wi-Fi
+                # would only add a real outage to a perceived one. The
+                # connect loop keeps retrying.
                 log.info(
-                    "WS down for %.0fs but the core answers on TCP; network "
-                    "is fine, not reassociating (rx=%.1f Mbit/s)",
-                    ws_down_for, rx,
+                    "WS down for %.0fs but the network is fine (%s); not "
+                    "touching the Wi-Fi (rx=%.1f Mbit/s, signal=%s dBm)",
+                    ws_down_for, verdict or "no core address yet", rx,
+                    link.get("signal_dbm"),
                 )
                 continue
 
             now = time.monotonic()
-            # Any recovery counts toward the cooldown, not only this
-            # watcher's own: the health self-check (no server for 5 min,
-            # link down) runs the same `_reassociate_wifi`.
-            shared = self._last_reassociate_at
-            if shared is not None and shared > last_reassociate:
-                last_reassociate = shared
             cooldown_remaining = self.cfg.wifi_cooldown_sec - (now - last_reassociate)
             if last_reassociate > 0 and cooldown_remaining > 0:
                 log.warning(
-                    "WS down for %.0fs and core unreachable (rx=%.1f Mbit/s); "
-                    "arming degraded mode (cooldown blocks reassociate for "
-                    "%.0fs more)",
+                    "WS down for %.0fs and neither the core's machine nor the "
+                    "gateway answers (rx=%.1f Mbit/s); arming degraded mode "
+                    "(cooldown blocks recovery for %.0fs more)",
                     ws_down_for, rx, cooldown_remaining,
                 )
                 self._network_degraded.set()
                 continue
 
             log.warning(
-                "WS down for %.0fs and core unreachable (rx=%.1f Mbit/s, "
-                "ssid=%r); reassociating",
-                ws_down_for, rx, link.get("ssid"),
+                "WS down for %.0fs and neither the core's machine nor the "
+                "gateway answers (rx=%.1f Mbit/s, signal=%s dBm, ssid=%r); "
+                "recovering the Wi-Fi",
+                ws_down_for, rx, link.get("signal_dbm"), link.get("ssid"),
             )
             ok = self._reassociate_wifi()
             last_reassociate = time.monotonic()
@@ -4158,16 +4382,16 @@ class Satellite:
             link2 = self._check_wifi_link()
             if link2 is not None:
                 self._emit_wifi_status(link2)
-            if self._core_reachable():
+            if self._core_path() != health.PATH_DOWN:
                 log.info(
-                    "wifi reassociate recovered: core reachable again "
+                    "wifi recovery worked: the network answers again "
                     "(rx=%s Mbit/s)",
                     (link2 or {}).get("rx_mbits"),
                 )
-                # Degraded clears once the WS is actually back (step 4).
+                # Degraded clears once the WS is actually back (step 5).
             else:
                 log.warning(
-                    "wifi reassociate did not restore the path to the core "
+                    "wifi recovery did not restore the path "
                     "(rx=%s Mbit/s); arming degraded mode until next try "
                     "after cooldown",
                     (link2 or {}).get("rx_mbits"),
@@ -6151,6 +6375,10 @@ class Satellite:
                 # discovered address into configuration. No-op on a device
                 # that was told its address.
                 _promote_pending_server(CONFIG_PATH)
+                # The names the core answers to (its `ready` lists them
+                # since 2026-10-12): tried first the next time this device
+                # looks for its server, e.g. after the core's address moves.
+                discovery.remember_names(payload.get("server_names"))
                 # The clock and the time zone, from the server we just
                 # proved we can reach. A Pi has no battery clock, NTP needs
                 # internet the house may not have, and nothing else ever
@@ -6987,6 +7215,15 @@ class Satellite:
                 target=self._wifi_watcher_thread_run, daemon=True, name="wifi-watcher"
             )
             self._wifi_thread.start()
+        # What root did to the network settings at this boot (or that it
+        # has not yet, after an upgrade): into the log now, so it reaches
+        # the core with the spool. Re-checked on every health/watcher tick,
+        # because the boot-time step can finish after this process starts.
+        try:
+            self._check_net_settings()
+        except Exception as e:  # noqa: BLE001
+            log.debug("network settings record: %s", e)
+
         # Health telemetry, the last-breath record and the self-checks
         # (satellite/health.py). The previous life's record is read first,
         # so every hello until a `ready` carries it; then the monitor
@@ -7066,6 +7303,19 @@ class Satellite:
                             self.cfg.domovoi_url, unreachable,
                         )
                         _setup_status("no-server")
+                    # Still dark: the core may have moved (a new DHCP lease).
+                    # Look for it again — by name first — at most every
+                    # _RELOCATE_EVERY_SEC, and never while its machine
+                    # refuses at the old address (that is the core down,
+                    # not moved).
+                    if unreachable >= _RELOCATE_AFTER:
+                        now = time.monotonic()
+                        if (
+                            self._last_relocate_at is None
+                            or now - self._last_relocate_at >= _RELOCATE_EVERY_SEC
+                        ):
+                            self._last_relocate_at = now
+                            await asyncio.to_thread(self._relocate_server)
                 if self.shutdown_event.is_set():
                     break
                 log.info("reconnecting in %.1fs", backoff)
@@ -7134,6 +7384,10 @@ def _list_devices() -> None:
 # a normal reconnect never shows, short enough that someone standing in front
 # of a dead satellite is not left guessing.
 _UNREACHABLE_AFTER = 3
+# Consecutive failed connects before the client looks for its server again
+# (satellite/discovery.py `locate`), and how often it may while they last.
+_RELOCATE_AFTER = 5
+_RELOCATE_EVERY_SEC = 600.0
 # The reconnect backoff doubles up to this. It also applies to a session
 # the core closed before `ready` (refused, parked), which used to reset
 # the backoff to 1 s and redial at about 1 Hz for as long as it lasted.
@@ -7927,47 +8181,105 @@ def _promote_pending_server(config_path: Path) -> None:
     log.info("approved on the dashboard — saved the server address %s", pending)
 
 
-def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
-    """Turn an ``auto`` domovoi_url into a real one for THIS boot.
-
-    Returns False when discovery found nothing — the caller exits rather
-    than looping against an address that cannot work. systemd restarts us,
-    so a server that is merely slow to boot gets picked up on the retry.
-
-    What changed: the address is no longer written into config.toml here.
-    It goes to a pending sidecar and is promoted only once the server
-    answers ``ready`` (:func:`_promote_pending_server`). A sweep keeps the
-    fingerprint this device was prepared with, so a host that cannot sign
-    for it is not a candidate at all.
-    """
+def _locate_server(cfg: "Config") -> "tuple[Any, bool, str | None]":
+    """Run the server search in its order (satellite/discovery.py
+    `locate`: the core's name, the last-known address, the subnet sweep)
+    for this device. Returns ``(found, is_auto, last_known)``; ``found`` is
+    None when nothing proved to be this device's server — or when there is
+    nothing to prove it against (no pinned fingerprint and an address
+    someone typed: that address is used as it always was)."""
     from satellite import discovery, server_identity
 
     configured = (cfg.domovoi_url or "").strip()
-    if configured and configured.lower() != discovery.AUTO:
-        return True
-
+    is_auto = not configured or configured.lower() == discovery.AUTO
     expected, _source = _pinned_fingerprint(cfg)
-    # An address discovered on an earlier boot and still waiting for
-    # approval: reuse it rather than sweeping the subnet on every restart.
+    if not is_auto and not expected:
+        return None, is_auto, configured
     pending, _pending_fp = server_identity.read_pending_server()
-    resolved = pending or discovery.resolve_url(
-        discovery.AUTO, expected_fingerprint=expected
+    last_known = pending if is_auto else configured
+    found = discovery.locate(
+        names=discovery.server_names(),
+        last_known=last_known,
+        expected_fingerprint=expected,
     )
-    if resolved is None:
-        log.error(
-            "no Domovoi server found on this network. Set [satellite] "
-            "domovoi_url in %s to the server's address (ws://<ip>:6370).",
-            config_path,
-        )
-        return False
+    return found, is_auto, last_known
 
-    cfg.domovoi_url = resolved
-    server_identity.write_pending_server(resolved, expected)
+
+def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) -> None:
+    """Use what :func:`_locate_server` found, and persist it: config.toml for
+    a device that already has a real address there (it was approved, or
+    told one, and the new address proved to be the SAME server: same
+    pinned key), the pending sidecar before approval — exactly where the
+    address it replaces lived."""
+    from satellite import config_writer, server_identity
+
+    previous = (cfg.domovoi_url or "").strip()
+    cfg.domovoi_url = found.url
+    if found.url == previous:
+        return
     log.info(
-        "discovered the Domovoi server at %s — waiting for approval on the "
-        "dashboard before saving it", resolved,
+        "the Domovoi server is at %s (found by %s: %s)%s",
+        found.url, found.via, found.detail,
+        f"; it was {previous}" if previous and previous.lower() != "auto" else "",
     )
-    return True
+    expected, _source = _pinned_fingerprint(cfg)
+    if is_auto:
+        server_identity.write_pending_server(found.url, expected)
+        return
+    try:
+        original = config_path.read_text(encoding="utf-8")
+        config_path.write_text(
+            config_writer.apply_changes(original, {"satellite.domovoi_url": found.url}),
+            encoding="utf-8", newline="\n",
+        )
+    except OSError as e:
+        log.warning("could not save the server address %s: %s", found.url, e)
+
+
+def _resolve_server_url(cfg: "Config", config_path: Path) -> bool:
+    """Find this boot's server address.
+
+    Returns False when there is nothing to connect to at all (``auto``, and
+    no candidate anywhere) — the caller exits rather than looping against
+    an address that cannot work. systemd restarts us, so a server that is
+    merely slow to boot gets picked up on the retry.
+
+    The order (since 2026-10-12): the core's name (``domovoi.local`` and
+    whatever names it advertised), then the last-known address, then the
+    subnet sweep — every candidate held to the pinned server identity
+    before it is used, so a name can never hand a paired satellite to an
+    impostor. What worked is persisted where the address it replaces lived:
+    config.toml for a device with a real address there, the pending
+    sidecar for one still waiting for approval (promoted only once the
+    server answers ``ready``: :func:`_promote_pending_server`).
+
+    A device with no pinned fingerprint and an address someone typed keeps
+    that address untouched: there is no identity to hold a name to.
+    """
+    found, is_auto, last_known = _locate_server(cfg)
+    if found is not None:
+        _adopt_located(cfg, config_path, found, is_auto)
+        if is_auto:
+            log.info(
+                "using the Domovoi server at %s — waiting for approval on the "
+                "dashboard before saving it", cfg.domovoi_url,
+            )
+        return True
+    if not is_auto:
+        # Nothing answered as this device's server just now (the core is
+        # down, or the network is not up yet): keep the address it had.
+        # The connect loop retries it, and looks again if it stays dark.
+        return True
+    if last_known:
+        # The pending address, unproven but the best there is: as before.
+        cfg.domovoi_url = last_known
+        return True
+    log.error(
+        "no Domovoi server found on this network. Set [satellite] "
+        "domovoi_url in %s to the server's address (ws://<ip>:6370).",
+        config_path,
+    )
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -8024,9 +8336,10 @@ def main(argv: list[str] | None = None) -> int:
     LOG_SPOOL_HANDLER.setFormatter(logging.Formatter(LOG_FORMAT))
     logging.getLogger().addHandler(LOG_SPOOL_HANDLER)
 
-    # A portal-onboarded satellite ships with the `auto` sentinel: the core
-    # was never a participant in its adoption, so nothing ever told it an
-    # address. Resolve once, write the answer back, and never sweep again.
+    # Find this boot's server: the core's name, the last-known address,
+    # then (only then) a subnet sweep; every candidate proves the pinned
+    # identity first. A portal-onboarded satellite ships with the `auto`
+    # sentinel, because the core was never a participant in its adoption.
     if not _resolve_server_url(cfg, args.config):
         return 3
 

@@ -538,3 +538,31 @@ def test_the_verdict_is_logged_and_a_broken_helper_never_strands_a_provision(mon
         verdict = pm.sync_time_with_server("ws://x:6370", run=good)
     assert verdict.startswith("tz America/New_York (unchanged)")
     assert "time sync: tz America/New_York" in caplog.text
+
+
+def test_a_new_card_gets_the_network_settings_before_its_first_reboot(home, monkeypatch):
+    """No setup hotspot profile, Wi-Fi power saving off, the room's host
+    name: applied at the end of setup (satellite/net_settings.py), so a new
+    card has them by default — and before the reboot, so the first boot as
+    a satellite already answers to domovoi-<room>."""
+    backend = FakeBackend()
+    _install_provision_on_first_read(backend)
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (True, None))
+    seen = []
+
+    def after_setup(room_id, when):
+        seen.append((room_id, when, backend.rebooted))
+
+    assert pm.run(backend, poll_sec=0, max_loops=10, after_setup=after_setup) == 0
+    assert seen == [("den", "setup", False)]
+    assert backend.rebooted is True
+
+
+def test_a_failed_join_applies_nothing(home, monkeypatch):
+    backend = FakeBackend()
+    _install_provision_on_first_read(backend)
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (False, "nope"))
+    seen = []
+    pm.run(backend, poll_sec=0, wifi_attempts=1, max_loops=1,
+           after_setup=lambda *a: seen.append(a))
+    assert seen == []

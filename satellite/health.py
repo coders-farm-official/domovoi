@@ -418,6 +418,62 @@ def service_reachable(
     return probe_service(host, port, timeout, connect) == "accepted"
 
 
+def gateway_answers(
+    gateway: str | None,
+    *,
+    connect: Callable[..., Any] = socket.create_connection,
+    ping: Callable[..., bool | None] | None = icmp_echo,
+) -> bool | None:
+    """Does the default gateway answer at all? TCP on :data:`GATEWAY_PORTS`
+    (an accept or a refusal), then one ICMP echo. None when there is no
+    gateway to ask; False only when every probe was silent."""
+    if not gateway:
+        return None
+    if host_answers(gateway, connect=connect):
+        return True
+    if ping is not None and ping(gateway) is True:
+        return True
+    return False
+
+
+# ─── The one reachability rule ────────────────────────────────────────────
+#
+# Shared by the Wi-Fi watcher (client.py `_wifi_watcher_thread_run`) and the
+# self-check table below. Before 2026-10-12 the watcher had its own rule —
+# "the core did not accept a TCP connect" — and a REFUSAL counts as not
+# accepting, so every core restart made every satellite drop and rejoin the
+# house Wi-Fi (a fresh DHCP exchange each time, and a router that counts
+# each one as a new arrival), then again every five minutes for as long as
+# the core stayed down. A refusal is the core's machine answering: the path
+# works and the radio is not what broke.
+
+#: What the path to the core looks like, from the core probe and the gateway.
+PATH_CORE_UP = "core_up"        # the core accepted
+PATH_CORE_DOWN = "core_down"    # its host refused: the path works, the core is not listening
+PATH_LAN_UP = "lan_up"          # its host is silent, the gateway answers: the link works
+PATH_DOWN = "path_down"         # nothing answers: the link is the suspect
+
+
+def link_suspect(core_host_ok: bool | None, gateway_ok: bool | None) -> bool:
+    """Whether the Wi-Fi link itself may be what is broken. Never while the
+    gateway answers, and never while the core's own host answers (an accept
+    or a refusal): either one proves the radio carries traffic."""
+    return gateway_ok is not True and core_host_ok is not True
+
+
+def path_verdict(core: str | None, gateway_ok: bool | None) -> str:
+    """``core`` is a :func:`probe_service` outcome (``accepted``,
+    ``refused``, ``silent``); ``gateway_ok`` is :func:`gateway_answers`.
+    Only :data:`PATH_DOWN` licenses touching the Wi-Fi."""
+    if core == "accepted":
+        return PATH_CORE_UP
+    if core == "refused":
+        return PATH_CORE_DOWN
+    if not link_suspect(None, gateway_ok):
+        return PATH_LAN_UP
+    return PATH_DOWN
+
+
 def classify_connect_failure(exc: BaseException) -> str:
     """One word for why a connect failed, for ``offline_diag``."""
     name = type(exc).__name__
@@ -555,12 +611,7 @@ class Sampler:
         True when the core's host answered at all (accept or refusal: the
         path to it works even if the core is down), ``core_ok`` only when
         the core accepted."""
-        gateway_ok: bool | None = None
-        if gateway:
-            gateway_ok = host_answers(gateway, connect=self.connect)
-            if not gateway_ok and self.ping is not None:
-                if self.ping(gateway) is True:
-                    gateway_ok = True
+        gateway_ok = gateway_answers(gateway, connect=self.connect, ping=self.ping)
         core_ok: bool | None = None
         core_host_ok: bool | None = None
         if probe_core and core_host and core_port:
@@ -803,6 +854,11 @@ class CheckInput:
     default_route: bool | None = None
     # The core's host answered at all (accept or refusal) at the last probe.
     core_host_ok: bool | None = None
+    # The radio is hosting an access point (the setup hotspot) rather than
+    # being a client of the house network. NetworkManager calls that
+    # "connected" and there is no gateway to be silent, so without this the
+    # link checks below never fired for it.
+    ap_mode: bool = False
     last_wifi_recovery: float | None = None
     # The last reboot asked for (helper) or said to be needed (no helper).
     last_reboot_note: float | None = None
@@ -833,7 +889,11 @@ TERMINAL_ACTIONS = frozenset({"exit", "reboot"})
 def gateway_silent(ci: CheckInput) -> bool:
     """The gateway does not answer: every probe was silent, or there is no
     default route at all while NetworkManager does not say connected (a
-    radio that lost its association has no gateway to probe)."""
+    radio that lost its association has no gateway to probe). A radio
+    hosting the setup hotspot counts as silent: it is not on the house
+    network at all, whatever NetworkManager's state says."""
+    if ci.ap_mode:
+        return True
     if ci.gateway_ok is True:
         return False
     if ci.gateway_ok is False:
@@ -902,10 +962,11 @@ def decide(ci: CheckInput) -> list[Decision]:
 
     # 5: no server. Never touch anything while the gateway answers, or
     # while the core's own host answers (a refusal from it proves the path):
-    # a core that is down is the core's problem, not this Pi's.
+    # a core that is down is the core's problem, not this Pi's. The same
+    # rule the Wi-Fi watcher uses (:func:`link_suspect`).
     if (
         ci.no_server_for is not None and ci.no_server_for >= ci.escalate_after
-        and ci.gateway_ok is not True and ci.core_host_ok is not True
+        and (ci.ap_mode or link_suspect(ci.core_host_ok, ci.gateway_ok))
     ):
         silent = gateway_silent(ci)
         if ci.nm_connected is False or silent:
@@ -914,9 +975,13 @@ def decide(ci: CheckInput) -> list[Decision]:
                 or ci.now - ci.last_wifi_recovery >= ci.recovery_cooldown
             )
             if due:
+                what = (
+                    "the radio is hosting the setup hotspot instead of being on "
+                    "the house network" if ci.ap_mode else "the link is down"
+                )
                 out.append(Decision(
                     "wifi_recover",
-                    f"no server for {ci.no_server_for / 60:.0f} min and the link is down "
+                    f"no server for {ci.no_server_for / 60:.0f} min and {what} "
                     f"(nm_connected={ci.nm_connected}, gateway_ok={ci.gateway_ok}, "
                     f"default_route={ci.default_route})",
                     check="no_server_link", basis="sample",
