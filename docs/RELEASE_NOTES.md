@@ -17,11 +17,19 @@ A server update. It adds migration **V026** (the update runs it).
   before.
 * **Saying "my name is …" into the phone no longer makes a second you.**
   If that name is already someone, Domovoi asks "Add this phone's voice
-  to …?"; "yes" on your next press adds it (up to three phone samples per
-  person, the oldest dropped; `VOICE_PROFILE_PHONE_SAMPLE_CAP`), "no"
-  changes nothing. A new name is enrolled as before, from the phone's
-  sample. (On a satellite, "my name is …" for an existing name still
-  enrols a second person; unchanged in this release.)
+  to …?"; "yes" on your very next press (within a minute) adds it, up to
+  three phone samples per person, the oldest dropped
+  (`VOICE_PROFILE_PHONE_SAMPLE_CAP`); "no", or saying anything else,
+  changes nothing. If two people share the name, it won't guess which one
+  you are and says so. A new name is enrolled as before, from the phone's
+  sample. The same goes for "this is …" introductions on the phone.
+* **Someone enrolled only from a phone is unknown to every satellite**:
+  their only samples are phone samples, which satellites never use. If
+  they then introduce themselves at a satellite ("my name is …"), the
+  satellite enrols a second person with the same name, as it does today
+  for any existing name (that duplicate-name gap on satellites is
+  unchanged in this release); an admin can delete the extra one on the
+  People page.
 * **People page:** a person's profile now lists their voice samples in two
   groups, satellite and phone, each with a delete button (admin).
 * **The migration** files any sample a phone enrolled before this update

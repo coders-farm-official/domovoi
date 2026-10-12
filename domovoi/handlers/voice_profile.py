@@ -49,6 +49,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -80,6 +81,50 @@ def phone_chat_mic(ctx: Context) -> bool:
         ctx.device_kind == "phone"
         and is_phone_room(ctx.room_id)
         and ctx.trigger == "push_to_talk"
+    )
+
+
+#: How long "Add this phone's voice to X?" stays answerable, in seconds:
+#: as long as the phone's other follow-up, "did you mean …?"
+#: (handlers/music_choice.py CHOICE_TTL_SEC).
+PHONE_VOICE_ADD_TTL_SEC = 60.0
+
+#: The keys a parked enrolment question carries about where it was asked.
+_ORIGIN_KEY = "origin"
+_ORIGIN_ROOM_KEY = "origin_room"
+#: Said when an answer comes from somewhere other than the question did.
+_ELSEWHERE_TEXT = "I asked that somewhere else, so I won't take the answer here."
+
+
+def _origin(ctx: Context) -> dict:
+    """Where an enrolment question is asked: the chat mic of one phone, or
+    anywhere else (a satellite, /v1/intent). Parked with the question, so
+    the voice it saves goes into the set it was HEARD by."""
+    return {
+        _ORIGIN_KEY: "phone" if phone_chat_mic(ctx) else "satellite",
+        _ORIGIN_ROOM_KEY: ctx.room_id,
+    }
+
+
+def _asked_on_the_phone(data: dict) -> bool:
+    return data.get(_ORIGIN_KEY) == "phone"
+
+
+def _answered_where_asked(data: dict, ctx: Context) -> bool:
+    """A yes counts only from where the question was asked: the same
+    phone's chat mic for a phone question (a /v1/intent "yes" carrying the
+    phone's session id would otherwise file a phone clip as a satellite
+    sample), and anything but a chat mic for the rest. A question parked
+    before this rule says nothing and is a satellite's."""
+    if _asked_on_the_phone(data):
+        return phone_chat_mic(ctx) and data.get(_ORIGIN_ROOM_KEY) == ctx.room_id
+    return not phone_chat_mic(ctx)
+
+
+def _more_than_one(name: str) -> str:
+    return (
+        f"There's more than one {name}, so I won't guess which one is you. "
+        "An admin can sort them out on the People page."
     )
 
 
@@ -430,6 +475,7 @@ async def maybe_inject_third_party_ask(
                 "cluster_centroid_b64": _b64_embedding(centroid),
                 "cluster_idx": best_idx,
                 "created_at": datetime.now(tz=timezone.utc).isoformat(),
+                **_origin(ctx),
             },
         )
     except Exception as e:
@@ -459,6 +505,10 @@ class VoiceProfileHandler(Handler):
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
     )
+    # "Add this phone's voice to X?" is answered by the very next turn or
+    # not at all (handle_choice_reply): a choice, so the router hands it
+    # every next turn, and drops it when that turn is about something else.
+    choice_kinds = ("core.phone_voice_add",)
     requires_network = "no"
 
     tool_schema = {
@@ -548,6 +598,8 @@ class VoiceProfileHandler(Handler):
         confirmation lands in the right code path.
         """
         if kind == "core.self_intro":
+            if not _answered_where_asked(data, ctx):
+                return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
             if not affirmative:
                 return Response(
                     text="Got it — I won't save that.",
@@ -565,7 +617,9 @@ class VoiceProfileHandler(Handler):
                     session_id=ctx.session_id,
                     matched_handler=self.name,
                 )
-            return await self._enroll(name, embedding, ctx, session)
+            return await self._enroll(
+                name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+            )
         if kind == "core.third_party_intro_confirm":
             return await self._handle_third_party_confirm(
                 data, affirmative, ctx, session
@@ -600,6 +654,8 @@ class VoiceProfileHandler(Handler):
         cluster_centroid_b64 = data.get("cluster_centroid_b64", "")
         cluster_idx = data.get("cluster_idx")
 
+        if not _answered_where_asked(data, ctx):
+            return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
         if not affirmative:
             # Drop just the rejected cluster from the expectation, keep
             # everything else (name, introducer, TTL) intact.
@@ -635,7 +691,9 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        response = await self._enroll(name, embedding, ctx, session)
+        response = await self._enroll(
+            name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+        )
         try:
             await clear_third_party_expectation(session, ctx.session_id)
         except Exception as e:
@@ -790,15 +848,24 @@ class VoiceProfileHandler(Handler):
                     session_id=ctx.session_id,
                     matched_handler=self.name,
                 )
-            if known is not None:
-                return await self._offer_phone_voice(known, embedding, ctx, session)
+            if len(known) > 1:
+                # Two people share the name (a parent and child, say):
+                # never guess whose voice this is.
+                return Response(
+                    text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
+                )
+            if known:
+                return await self._offer_phone_voice(known[0], embedding, ctx, session)
         try:
             await request_confirmation(
                 session,
                 ctx.session_id,
                 kind="core.self_intro",
                 handler=self.name,
-                data=_confirmation_payload(name, embedding, "core.self_intro"),
+                data={
+                    **_confirmation_payload(name, embedding, "core.self_intro"),
+                    **_origin(ctx),
+                },
             )
         except Exception as e:
             log.warning("couldn't park pending_confirmation: %s", e)
@@ -829,12 +896,17 @@ class VoiceProfileHandler(Handler):
         session: AsyncSession,
     ) -> Response:
         """ "my name is X" from the chat mic, for an X who exists: ask
-        before adding this clip to X's phone samples. The next press in
-        the thread answers (the routing session is the phone's and the
-        thread's, domovoi/phone_voice.py)."""
+        before adding this clip to X's phone samples. Only the NEXT press
+        in the thread answers it, within :data:`PHONE_VOICE_ADD_TTL_SEC`
+        (it is a choice kind, see :meth:`handle_choice_reply`): a turn
+        about anything else drops the question."""
         person_id, name = known
-        payload = _confirmation_payload(name, embedding, "core.phone_voice_add")
-        payload["person_id"] = int(person_id)
+        payload = {
+            **_confirmation_payload(name, embedding, "core.phone_voice_add"),
+            **_origin(ctx),
+            "person_id": int(person_id),
+            "expires_at": time.time() + PHONE_VOICE_ADD_TTL_SEC,
+        }
         try:
             await request_confirmation(
                 session,
@@ -857,6 +929,39 @@ class VoiceProfileHandler(Handler):
             expect_followup=True,
         )
 
+    async def handle_choice_reply(
+        self,
+        kind: str,
+        data: dict,
+        transcript: str,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response | None:
+        """The next turn after "Add this phone's voice to X?" (the router
+        has already cleared the question). A yes or a no answers it, if it
+        comes in time; anything else is not about it, so the question is
+        dropped and the turn routed as usual (None)."""
+        from domovoi.router import _parse_yes_no, strip_leading_filler
+
+        if kind != "core.phone_voice_add":
+            return None
+        affirmative = _parse_yes_no(transcript)
+        if affirmative is None:
+            affirmative = _parse_yes_no(strip_leading_filler(transcript))
+        if affirmative is None:
+            return None
+        try:
+            expired = time.time() > float(data.get("expires_at"))
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
+            return Response(
+                text="That was a while ago, so I didn't add it. Say your name again if you'd like me to.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        return await self._handle_phone_voice_add(data, affirmative, ctx, session)
+
     async def _handle_phone_voice_add(
         self,
         data: dict,
@@ -867,19 +972,15 @@ class VoiceProfileHandler(Handler):
         """The answer to "Add this phone's voice to X?". No changes
         nothing. Yes adds the clip from the question's turn to X's PHONE
         samples — never to their satellite samples, never a new person —
-        if the answer, too, came from the chat mic."""
+        if the answer came from the same phone's chat mic."""
         name = str(data.get("name") or "")
+        if not _asked_on_the_phone(data) or not _answered_where_asked(data, ctx):
+            # The question is only ever asked on a phone's own session;
+            # nothing else may write a phone sample.
+            return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
         if not affirmative:
             return Response(
                 text="Okay, I won't add it.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
-        if not phone_chat_mic(ctx):
-            # The question is only ever asked on a phone's own session;
-            # nothing else may write a phone sample.
-            return Response(
-                text="I can only add a phone's voice from the phone's chat mic.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
@@ -894,6 +995,19 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        return await self._add_phone_sample(person_id, name, embedding, ctx, session)
+
+    async def _add_phone_sample(
+        self,
+        person_id: int,
+        name: str,
+        embedding: np.ndarray,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """One clip into ``person_id``'s PHONE samples: the opt-out list
+        first, the person re-read (they may have been forgotten since the
+        question), then at most ``voice_profile_phone_sample_cap``."""
         if await self._is_denylisted(embedding, session):
             return Response(
                 text="I wasn't able to save that voice profile.",
@@ -986,7 +1100,13 @@ class VoiceProfileHandler(Handler):
         embedding: np.ndarray,
         ctx: Context,
         session: AsyncSession,
+        *,
+        phone: bool = False,
     ) -> Response:
+        """Save ``embedding`` as ``name``'s voice. ``phone``: the question
+        was asked on a chat mic (its parked origin, never the answering
+        turn's), so the voice goes into the PHONE set, and a name someone
+        already has is not a new person."""
         # Denylist gate FIRST — applies to every enrollment path (self-intro
         # confirmation AND third-party intro confirmation). The response is
         # deliberately neutral: announcing "that voice opted out" would leak
@@ -999,11 +1119,31 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        if phone:
+            # The phone set's no-duplicate rule, as "my name is" has it: a
+            # name someone already has gets this voice as a phone sample
+            # (the yes just given was to "is this X?"), two such people get
+            # a refusal, and only a new name makes a new person.
+            try:
+                known = await PeopleRepository(session).find_by_name(name)
+            except Exception as e:
+                log.warning("PeopleRepository.find_by_name failed: %s", e)
+                return Response(
+                    text="Something went wrong there — try the introduction again.",
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
+            if len(known) > 1:
+                return Response(
+                    text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
+                )
+            if known:
+                return await self._add_phone_sample(known[0][0], name, embedding, ctx, session)
         try:
             people = PeopleRepository(session)
             voice_profiles = VoiceProfilesRepository(session)
             person_id = await people.create(name=name)
-            if phone_chat_mic(ctx):
+            if phone:
                 # Enrolled from the chat mic: their first sample is a
                 # phone sample, which satellites never match (V026).
                 await voice_profiles.add_phone_sample(

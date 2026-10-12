@@ -196,6 +196,7 @@ def test_choice_kinds_are_confirmation_kinds_with_a_reply_handler() -> None:
     assert {h.name: set(h.choice_kinds) for h in HANDLERS if h.choice_kinds} == {
         "music": {"core.music_choice"},
         "music_alias": {"core.alias_target"},
+        "voice_profile": {"core.phone_voice_add"},
     }
 
 

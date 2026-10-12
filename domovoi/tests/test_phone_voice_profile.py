@@ -320,6 +320,219 @@ async def test_on_a_satellite_my_name_still_takes_the_old_path(db_session, open_
     assert r.text == "Nice to meet you, Kamron. Did I get that right?"
 
 
+# ─── Review fixes (2026-10-12) ────────────────────────────────────────────
+
+
+def test_an_enrolment_question_is_answered_only_where_it_was_asked() -> None:
+    from domovoi.handlers.voice_profile import _answered_where_asked, _origin
+
+    chat_mic = Context(room_id=ROOM, device_kind="phone", trigger="push_to_talk")
+    other_phone = chat_mic.model_copy(update={"room_id": "phone-android-other"})
+    kitchen = Context(room_id="kitchen", trigger="wake_word")
+    asked_on_phone = _origin(chat_mic)
+    assert _answered_where_asked(asked_on_phone, chat_mic)
+    assert not _answered_where_asked(asked_on_phone, other_phone)
+    assert not _answered_where_asked(asked_on_phone, kitchen)
+    asked_in_kitchen = _origin(kitchen)
+    assert _answered_where_asked(asked_in_kitchen, kitchen)
+    assert not _answered_where_asked(asked_in_kitchen, chat_mic)
+    # Parked before the rule: a satellite's question.
+    assert _answered_where_asked({}, kitchen) and not _answered_where_asked({}, chat_mic)
+
+
+@pytest.fixture
+def intent_gate():
+    """/v1/intent past its gate, with the connectivity probe the app's
+    startup would have made."""
+    from types import SimpleNamespace
+
+    had_probe = hasattr(core_app.state, "probe")
+    old_probe = getattr(core_app.state, "probe", None)
+    core_app.state.probe = SimpleNamespace(online=False)
+    core_app.dependency_overrides[admin_auth.require_device] = lambda: None
+    yield
+    core_app.dependency_overrides.pop(admin_auth.require_device, None)
+    if had_probe:
+        core_app.state.probe = old_probe
+    else:
+        del core_app.state.probe
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_yes_from_elsewhere_on_the_phones_session_saves_nothing(
+    db_session, open_gate, whisper, intent_gate,
+) -> None:
+    """The review's replay: the phone asks "Did I get that right?" and a
+    /v1/intent "yes" from the kitchen, carrying the phone's session id,
+    answers it. It used to file the phone clip as Ana's SATELLITE sample
+    (a satellite then matched the phone clip as Ana at 1.0)."""
+    tid = await _thread()
+    async with _client() as c:
+        asked = await _say(c, tid, whisper, "My name is Ana.", KAMRON_PHONE)
+        assert asked["reply"] == "Nice to meet you, Ana. Did I get that right?"
+        replay = await c.post(
+            "/v1/intent",
+            json={"transcript": "yes", "room_id": "kitchen", "session_id": asked["session_id"]},
+        )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["text"] == "I asked that somewhere else, so I won't take the answer here."
+    assert await _people_named("Ana") == 0
+    async with SessionLocal() as s:
+        assert (await s.execute(text("SELECT count(*) FROM voice_profiles"))).scalar_one() == 0
+    assert (await identify(KAMRON_PHONE, room_id="kitchen")).person_id is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_add_this_phones_voice_answered_from_elsewhere_saves_nothing(
+    db_session, open_gate, whisper, intent_gate,
+) -> None:
+    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    tid = await _thread()
+    async with _client() as c:
+        asked = await _say(c, tid, whisper, "My name is Kamron.", KAMRON_PHONE)
+        assert asked["reply"] == "Add this phone's voice to Kamron?"
+        replay = await c.post(
+            "/v1/intent",
+            json={"transcript": "yes", "room_id": "kitchen", "session_id": asked["session_id"]},
+        )
+    assert replay.json()["text"] == "I asked that somewhere else, so I won't take the answer here."
+    assert await _samples(kamron) == [("satellite", "kitchen")]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_two_people_with_the_name_are_never_guessed_between(db_session, open_gate, whisper) -> None:
+    """Dad and son are both Alex: the son's "my name is Alex" from the
+    phone used to put his clip on whichever Alex was heard last."""
+    from domovoi.db.repositories import PeopleRepository
+
+    dad = await _person("Alex", satellite=KAMRON_ROOM)
+    son = await _person("alex", satellite=STRANGER)
+    async with SessionLocal() as s:
+        assert [pid for pid, _ in await PeopleRepository(s).find_by_name(" ALEX ")] == [dad, son]
+        assert await PeopleRepository(s).find_by_name("Nobody") == []
+    tid = await _thread()
+    async with _client() as c:
+        asked = await _say(c, tid, whisper, "My name is Alex.", KAMRON_PHONE)
+        yes = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
+    assert asked["reply"] == (
+        "There's more than one Alex, so I won't guess which one is you. "
+        "An admin can sort them out on the People page."
+    )
+    assert asked["expect_followup"] is False
+    assert yes["matched_handler"] != "voice_profile"
+    assert await _samples(dad) == [("satellite", "kitchen")]
+    assert await _samples(son) == [("satellite", "kitchen")]
+    assert await _people_named("Alex") == 2
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_phone_voice_question_is_answered_by_the_next_press_or_not_at_all(
+    db_session, open_gate, whisper,
+) -> None:
+    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    tid = await _thread()
+    async with _client() as c:
+        await _say(c, tid, whisper, "My name is Kamron.", KAMRON_PHONE)
+        other = await _say(c, tid, whisper, "What time is it?", KAMRON_PHONE)
+        assert other["matched_handler"] == "clock"
+        late = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
+    assert late["matched_handler"] != "voice_profile"
+    assert await _samples(kamron) == [("satellite", "kitchen")]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_phone_voice_question_runs_out(db_session, open_gate, whisper, monkeypatch) -> None:
+    from domovoi.handlers import voice_profile
+
+    monkeypatch.setattr(voice_profile, "PHONE_VOICE_ADD_TTL_SEC", -1.0)
+    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    tid = await _thread()
+    async with _client() as c:
+        await _say(c, tid, whisper, "My name is Kamron.", KAMRON_PHONE)
+        late = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
+    assert late["reply"] == (
+        "That was a while ago, so I didn't add it. Say your name again if you'd like me to."
+    )
+    assert await _samples(kamron) == [("satellite", "kitchen")]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_an_opted_out_voice_is_not_added_by_the_phones_yes(db_session, open_gate, whisper) -> None:
+    from domovoi.db.repositories import VoiceDenylistRepository
+
+    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    async with SessionLocal() as s:
+        await VoiceDenylistRepository(s).add(
+            embedding=await _vec(KAMRON_PHONE), model=VoiceDenylistRepository.EMBEDDING_MODEL_TAG,
+        )
+        await s.commit()
+    tid = await _thread()
+    async with _client() as c:
+        asked = await _say(c, tid, whisper, "My name is Kamron.", KAMRON_PHONE)
+        assert asked["reply"] == "Add this phone's voice to Kamron?"
+        no = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
+    assert no["reply"] == "I wasn't able to save that voice profile."
+    assert await _samples(kamron) == [("satellite", "kitchen")]
+
+
+async def _park_was_that(sid: str, name: str, voice: bytes) -> None:
+    """The phone's "By the way, was that <name>?" (third-party intro), as
+    maybe_inject_third_party_ask parks it on a chat-mic turn."""
+    from uuid import UUID
+
+    from domovoi.confirmations import request_confirmation
+    from domovoi.handlers.voice_profile import _b64_embedding
+
+    vec = np.frombuffer(await _vec(voice), dtype=np.float32)
+    async with SessionLocal() as s:
+        await request_confirmation(
+            s, UUID(sid), kind="core.third_party_intro_confirm", handler="voice_profile",
+            data={
+                "name": name, "cluster_centroid_b64": _b64_embedding(vec), "cluster_idx": 0,
+                "origin": "phone", "origin_room": ROOM,
+            },
+        )
+        await s.commit()
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_was_that_x_on_the_phone_adds_to_the_existing_x(db_session, open_gate, whisper) -> None:
+    kamron = await _person("Kamron", satellite=KAMRON_ROOM)
+    tid = await _thread()
+    async with _client() as c:
+        first = await _say(c, tid, whisper, "What time is it?", STRANGER)
+        await _park_was_that(first["session_id"], "Kamron", KAMRON_PHONE)
+        yes = await _say(c, tid, whisper, "Yes.", STRANGER)
+    assert yes["reply"] == "Done — I'll know your voice on the phone now, Kamron."
+    assert await _people_named("Kamron") == 1
+    assert await _samples(kamron) == [("satellite", "kitchen"), ("phone", ROOM)]
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_was_that_x_on_the_phone_never_guesses_between_two(db_session, open_gate, whisper) -> None:
+    await _person("Alex", satellite=KAMRON_ROOM)
+    await _person("Alex", satellite=STRANGER)
+    tid = await _thread()
+    async with _client() as c:
+        first = await _say(c, tid, whisper, "What time is it?", STRANGER)
+        await _park_was_that(first["session_id"], "Alex", KAMRON_PHONE)
+        yes = await _say(c, tid, whisper, "Yes.", STRANGER)
+    assert yes["reply"].startswith("There's more than one Alex")
+    assert await _people_named("Alex") == 2
+    async with SessionLocal() as s:
+        assert (await s.execute(
+            text("SELECT count(*) FROM voice_profiles WHERE source = 'phone'"),
+        )).scalar_one() == 0
+
+
 # ─── V026 ─────────────────────────────────────────────────────────────────
 
 
@@ -340,8 +553,9 @@ async def test_v026_applies_again_cleanly_and_files_old_phone_rows_as_phone(db_s
     assert len(statements) == 3
     pid = await _person("Kamron")
     async with SessionLocal() as s:
-        for room in ("kitchen", "phone-android-1a2b"):
-            # As a phone's "my name is" wrote them before V026.
+        for room in ("kitchen", "phone-android-1a2b", "phone_room", "phonebooth"):
+            # As a phone's "my name is" wrote them before V026 — and two
+            # satellite rooms whose names only start like a phone's.
             await s.execute(
                 text(
                     "INSERT INTO voice_profiles (person_id, embedding, model, room_id) "
@@ -354,7 +568,10 @@ async def test_v026_applies_again_cleanly_and_files_old_phone_rows_as_phone(db_s
         async with engine.begin() as conn:
             for st in statements:
                 await conn.exec_driver_sql(st)
-    assert await _samples(pid) == [("satellite", "kitchen"), ("phone", "phone-android-1a2b")]
+    assert await _samples(pid) == [
+        ("satellite", "kitchen"), ("phone", "phone-android-1a2b"),
+        ("satellite", "phone_room"), ("satellite", "phonebooth"),
+    ]
     async with SessionLocal() as s:
         with pytest.raises(IntegrityError):
             await s.execute(

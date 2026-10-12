@@ -434,24 +434,24 @@ class PeopleRepository:
             return None
         return int(result[0]), result[1], result[2]
 
-    async def find_by_name(self, name: str) -> tuple[int, str] | None:
-        """The person called ``name`` (case and surrounding space aside):
-        ``(id, name)``, or None. When two people share the name (an
-        enrollment from before the phone asked first), the one heard most
-        recently, then the oldest row."""
-        row = await self.s.execute(
+    async def find_by_name(self, name: str) -> list[tuple[int, str]]:
+        """Everyone called ``name`` (case and surrounding space aside), as
+        ``(id, name)``, oldest row first — at most two, which is enough to
+        tell "nobody", "this person" and "more than one" apart. A caller
+        that finds more than one must not pick (a parent and child can
+        share a name)."""
+        rows = await self.s.execute(
             text(
                 """
                 SELECT id, name FROM people
                  WHERE lower(btrim(name)) = lower(btrim(:name))
-                 ORDER BY last_seen_at DESC NULLS LAST, id
-                 LIMIT 1
+                 ORDER BY id
+                 LIMIT 2
                 """
             ),
             {"name": name},
         )
-        result = row.first()
-        return None if result is None else (int(result[0]), result[1])
+        return [(int(r[0]), r[1]) for r in rows.all()]
 
     async def list_recently_seen(
         self, since: datetime

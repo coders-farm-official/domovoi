@@ -103,7 +103,7 @@ const PersonVoiceSampleRow = ({ sample, onDelete }) => (
     <div style={{ minWidth: 0 }}>
       <div style={{ fontSize: 13, overflowWrap: 'anywhere' }}>{sample.room_id || 'no room'}</div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
-        #{sample.id} · {relTime(sample.enrolled_at)}
+        #{sample.id} · added {sample.enrolled_at ? new Date(sample.enrolled_at).toLocaleString() : '—'} ({relTime(sample.enrolled_at)})
       </div>
     </div>
     <Button icon="trash-2" onClick={() => onDelete(sample)}
