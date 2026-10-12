@@ -1,4 +1,4 @@
-/* Prepare-satellite-media card (Satellites page, below Broadcast).
+/* Prepare-satellite-media card (Settings → Satellites, below Broadcast).
  * Flow (portal — the shipped path): flash stock OS, prepare here, boot the
  * device; it raises its own `Domovoi-Setup-<id>` network, the customer sets
  * it up from a phone and approves it on the dashboard. USB adoption instead

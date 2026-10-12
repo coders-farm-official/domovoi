@@ -94,9 +94,15 @@ class TrackPatch(BaseModel):
 class LibraryPage(BaseModel):
     """One page of ``library_tracks`` plus the unbounded count that
     matches the active filters. ``total`` reflects ``q``/``source``;
-    it's what pagination math and the "X results" caption read."""
+    it's what the "showing N of M" caption reads. The paging fields are
+    the shared contract (web/backend/api/paging.py): ``next_cursor`` is
+    null on the last page; ``offset`` is echoed for an offset request."""
     total: int
     items: list[Track]
+    limit: int | None = None
+    offset: int | None = None
+    has_more: bool = False
+    next_cursor: str | None = None
 
 
 class LibraryStats(BaseModel):

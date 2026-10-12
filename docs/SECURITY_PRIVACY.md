@@ -1296,7 +1296,7 @@ is `domovoi/command_captures.py`, `web/backend/api/captures.py` and V016.
 
 | | |
 |---|---|
-| **Off by default** | For every room, including rooms added later. A room records only while it has a row in `command_capture_rooms`, and only an admin can add one (the dashboard's Satellites drawer → *command recordings*, which asks for confirmation). The core also records nothing while no admin credential exists, so `--reset-admin` pauses every room until the server is claimed again. There is no configuration switch that turns it on. |
+| **Off by default** | For every room, including rooms added later. A room records only while it has a row in `command_capture_rooms`, and only an admin can add one (the room's drawer in the dashboard's Settings → Satellites → *command recordings*, which asks for confirmation). The core also records nothing while no admin credential exists, so `--reset-admin` pauses every room until the server is claimed again. There is no configuration switch that turns it on. |
 | **What is kept** | For each **wake-word or follow-up command** that reached the router: the full capture exactly as the satellite streamed it, up to where the core ended it early when it did (`<id>.wav`, 16 kHz mono), and a sidecar (`<id>.json`) with the room, time, trigger, length, why the capture ended (`server_endpoint` for an early commit, `no_speech_after_greeting` for an older satellite's capture that waited out the greeting's reply wait) and its frame counts, the room's listen settings, the final transcript, the handler and path it routed to, the stage timings, and later an admin's label. No person, session or voice embedding. |
 | **What is never kept** | Wake-word **training clips** (their own pipeline, never routed). **Chat-mode** turns (open conversation, not commands; the design never ends those early). **Barge-ins** (the capture opens while the satellite is still talking, so it carries the reply's own audio). **Push-to-talk** (a button ends it, not silence). Any command captured **during a drop-in call**, judged over the whole capture: a call live when it opened, one that started while it was open, or one hung up before it closed (the speaker was playing the other room, whose people never opted in). A blank capture, a self-echo, a turn that was only the wake greeting coming back through the mic, or a turn whose speech-to-text is down. |
 | **Where** | `COMMAND_CAPTURES_DIR`, default `~/.domovoi/captures/<room>/` on the Domovoi server; files `0600` in `0700` directories on Linux. **No web file route serves it**: the only reader is the admin API below. The core refuses to write at all (and the dashboard refuses to turn a room on) when the directory is inside, or around, a media library, the sounds / wake-model / wake-clip channels, the plugin directory, the repo, the home or config directory itself, and when the setting is not an absolute path (the core writes and the dashboard deletes, each from its own working directory). The Files surface refuses any path into `~/.domovoi` except its media subdirectories, even through a library rooted above it, and any path into `COMMAND_CAPTURES_DIR` wherever it points (a removable drive or a plugin's library root included); a folder listing, a folder zip and an import copy leave both out of what they walk. |
@@ -1780,7 +1780,7 @@ it up from its next code sync, then parks).
 
 **The hello gate.** Pairing is checked on the `hello` frame, so the server
 does nothing for a room until an accepted `hello` has arrived: no MPD
-container or `mpd_rooms` row, no entry on the Satellites page, no `ready`.
+container or `mpd_rooms` row, no entry in Settings → Satellites, no `ready`.
 A socket that opens `/v1/stream/<room>` and then says nothing is closed
 after `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s) with nothing created; one
 that sends any other frame first is refused the same way. Without this,
@@ -1848,7 +1848,7 @@ a **boot-time** gate and the edges matter:
 **Re-pairing.** Re-flashing a Pi, swapping the device, or moving a room to
 new hardware gives that room a new token that won't match — so the device is
 refused until you clear the old pairing. **Reset pairing** from the dashboard
-(Satellites → room → Overview → Reset pairing) deletes the room's pairing row
+(Settings → Satellites → room → Overview → Reset pairing) deletes the room's pairing row
 so the next connect re-pairs: under strict pairing it parks for approval by
 the new device's code like any first pairing. That reset is on the
 **security tier** (Bearer-only, `require_admin_security`, `501` before

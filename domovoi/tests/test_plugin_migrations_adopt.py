@@ -28,7 +28,9 @@ from domovoi.db.session import engine
 from domovoi.plugins_runtime.migrations import PluginMigrationRunner
 from domovoi.tests.conftest import requires_db
 
-pytestmark = [pytest.mark.asyncio, requires_db]
+# Postgres roles are server-wide, not per database: under `pytest -n` the
+# modules that create or drop plugin roles share one worker (conftest.py).
+pytestmark = [pytest.mark.asyncio, requires_db, pytest.mark.xdist_group("pg-roles")]
 
 # Its own slug: roles are cluster-wide, and the other plugin-migration
 # modules create and drop theirs.

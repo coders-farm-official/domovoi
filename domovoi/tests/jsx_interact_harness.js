@@ -318,6 +318,34 @@ const run = async ({ files, component, props = {}, fnProps = [], api: table = {}
     const items = error ? [] : (pickItems(hit) || []);
     return { items, loading: false, error, refresh: () => Promise.resolve(), setItems: noop };
   };
+  // data.js usePagedList, scripted the same way: the table entry for the
+  // list's base path (filters + sort, no limit/cursor) is its one loaded
+  // page — `{items|entries|videos…, total, has_more}` or, for a list that
+  // used to be a bare array, the array. Mutations a page makes through the
+  // list (reload / updateItem / removeItem / loadMore) are recorded on
+  // h.global('__pagedCalls').
+  sandbox.__pagedCalls = [];
+  sandbox.usePagedList = (p, { pick = (x) => x && x.items } = {}) => {
+    const { hit, error } = hookLookup(p);
+    let items = error || hit == null ? [] : pick(hit);
+    if (!items && Array.isArray(hit)) items = hit;
+    items = items || [];
+    const rec = (name) => (...args) => {
+      sandbox.__pagedCalls.push({ path: p, name, args: args.map((a) => (a && typeof a === 'object' ? JSON.parse(JSON.stringify(a)) : a)) });
+      return Promise.resolve();
+    };
+    return {
+      items, total: hit && typeof hit.total === 'number' ? hit.total : items.length,
+      hasMore: !!(hit && hit.has_more), loading: false, error,
+      extra: hit && !Array.isArray(hit) ? hit : null,
+      loadMore: rec('loadMore'), reload: rec('reload'), retry: rec('retry'),
+      updateItem: rec('updateItem'), removeItem: rec('removeItem'), pageSize: 50,
+    };
+  };
+  sandbox.PagedListFooter = ({ list, noun = 'items' }) =>
+    React.createElement('div', { 'data-paged-footer': '' },
+      `showing ${list.items.length} of ${list.total} ${noun}`);
+  sandbox.fmtCount = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   if (setup) vm.runInContext(setup, sandbox, { filename: 'setup.js' });

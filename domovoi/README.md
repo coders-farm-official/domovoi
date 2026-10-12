@@ -929,7 +929,12 @@ docker compose run --rm flyway-test  # test
 ```bash
 # pytest runs from the repo root (where pyproject.toml lives):
 pytest
+pytest -n 4     # in parallel: each worker on its own copy of the test DB
 ```
+
+`pytest -n`, the bash harnesses' container runner and the known-failures
+summary are described in
+[docs/CONTRIBUTING.md, "Running the tests"](../docs/CONTRIBUTING.md#running-the-tests).
 
 The conftest's safety belt will refuse to run if the resolved test DB
 name doesn't end in `_test` — the assertion fires before any test

@@ -260,7 +260,11 @@ It clones the repository again into `/opt/domovoi` as the `domovoi` user
 used as it is, and one in `sudo`, `admin` or `wheel` is refused). On top
 of the manual steps it pre-downloads what the core would otherwise fetch
 at its first boot: the Ollama models for the box's memory (`--tier`), the
-Whisper model, the Piper voice and the room image. What it checks:
+Whisper model, the Piper voice and the room image. The models include the
+vision model that reads pictures in chat (`qwen3-vl:2b-instruct-q4_K_M` on
+both tiers, about 1.9 GB more to download); `--no-vision-model` leaves it
+out, and chat then says it isn't installed until an admin installs it from
+Settings → Models. What it checks:
 
 - **Against a pin, stopping on a mismatch:** every Python package (the
   lock's hashes), the Ollama release pinned under [By hand](#by-hand)
@@ -289,7 +293,9 @@ What else it settles, beyond the manual steps:
 - **GPU.** Ollama runs on every GPU it finds, and on the CPU without one;
   the script pins nothing (no `CUDA_VISIBLE_DEVICES`). Inside the Windows
   installer's WSL distro that includes the PC's NVIDIA cards, which WSL
-  hands through. The model tier still follows the box's memory alone.
+  hands through. The model tier still follows the box's memory alone, the
+  vision model's included: on a box with an NVIDIA GPU, pick `qwen2.5vl:7b`
+  for the Vision row in Settings → Models afterwards.
   The script's last progress line lists what Ollama found (`"gpu"`, empty
   on a CPU-only box), and its log says it in words.
 - **Time zone.** On bare metal, `--timezone` sets it (`timedatectl`, and
@@ -798,6 +804,12 @@ masks them (`systemctl mask`, and stops the timers):
 
 Only units that are installed and not masked already are touched, and
 each one it masks is written down in `/var/lib/domovoi-os-jobs/masked`.
+The timers are stopped before systemd reloads and every unit it changes
+has its failed mark cleared, so `systemctl --failed` stays empty and the
+box doesn't report "degraded" over it. `unattended-upgrades.service` is
+only the helper that keeps a shutdown from cutting an upgrade short:
+masked, it keeps running until the next boot, because stopping it would
+stop an upgrade already under way.
 Under **Yes, always** or **Sometimes** it unmasks exactly those (a mask you
 made yourself stays) and starts the enabled ones again, so they run as
 Ubuntu ships them. Not answered yet: left as they are. A unit file of your

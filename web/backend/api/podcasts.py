@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -47,6 +47,8 @@ from domovoi.admin_auth import require_device
 from domovoi.config import settings as core_settings
 from domovoi import spoken_audio as sa
 from web.backend.api.audio_serve import safe_download_name, serve_audio_range
+from web.backend.api import paging
+from web.backend.api.paging import SortKey
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -128,30 +130,85 @@ def _with_server_artwork(row: dict[str, Any]) -> dict[str, Any]:
 
 
 # ─── Subscriptions ──────────────────────────────────────────────────────
+SubscriptionSort = Literal["title", "newest"]
+# Each ends in the row id: unique, so a cursor names one row (paging.py).
+_SUB_SORT_KEYS: dict[str, list[SortKey]] = {
+    "title": [SortKey("LOWER(COALESCE(sub.title, sub.feed_url))"), SortKey("sub.id", kind="int")],
+    "newest": [SortKey("sub.added_at", desc=True, kind="ts"),
+               SortKey("sub.id", desc=True, kind="int")],
+}
+_SUB_SELECT = """
+    SELECT sub.id, sub.feed_url, sub.title, sub.author, sub.artwork,
+           sub.description, sub.keep_n, sub.last_polled_at, sub.added_at,
+           COALESCE(ep.n, 0) AS episode_count,
+           COALESCE(ep.dl, 0) AS downloaded_count{extra}
+      FROM podcast_subscriptions sub
+      LEFT JOIN (
+          SELECT subscription_id,
+                 COUNT(*) AS n,
+                 COUNT(*) FILTER (WHERE download_status = 'downloaded') AS dl
+            FROM podcast_episodes GROUP BY subscription_id
+      ) ep ON ep.subscription_id = sub.id
+"""
+
+
 @router.get("/subscriptions")
-async def list_subscriptions() -> list[dict[str, Any]]:
+async def list_subscriptions(
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Case-insensitive substring of title, author or feed URL"),
+    sort: SubscriptionSort = Query("title", description="title (default) · newest"),
+    limit: Optional[int] = paging.limit_query(),
+    cursor: Optional[str] = paging.cursor_query(),
+    offset: Optional[int] = paging.offset_query(),
+) -> Any:
+    """Subscribed shows with episode counts, sorted and searched here.
+    Paged when ``limit`` / ``cursor`` / ``offset`` is sent (``{items, total,
+    limit, has_more, next_cursor}``, paging.py); the bare list, as before,
+    for a client that sends none of them."""
+    keys = _SUB_SORT_KEYS[sort]
+    params: dict[str, Any] = {}
+    where_parts: list[str] = []
+    if q and q.strip():
+        where_parts.append(
+            "(sub.title ILIKE :q OR sub.author ILIKE :q OR sub.feed_url ILIKE :q)")
+        params["q"] = f"%{q.strip()}%"
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+    if not paging.wants_page(limit, cursor, offset):
+        async with session_scope() as s:
+            rows = (
+                await s.execute(
+                    text(_SUB_SELECT.format(extra="")
+                         + f" {where} ORDER BY {paging.order_sql(keys)}"),
+                    params,
+                )
+            ).mappings().all()
+        return [_with_server_artwork(dict(r)) for r in rows]
+
+    lim = limit or paging.DEFAULT_LIMIT
+    page_where = where
+    if cursor is not None:
+        after = paging.keyset_where(keys, cursor, sort, params)
+        page_where = f"{where} AND {after}" if where else f"WHERE {after}"
+    params.update({"limit": lim + 1, "offset": 0 if cursor is not None else (offset or 0)})
     async with session_scope() as s:
+        total = int((await s.execute(
+            text(f"SELECT COUNT(*) FROM podcast_subscriptions sub {where}"),
+            params)).scalar_one())
         rows = (
             await s.execute(
-                text(
-                    """
-                    SELECT sub.id, sub.feed_url, sub.title, sub.author, sub.artwork,
-                           sub.description, sub.keep_n, sub.last_polled_at, sub.added_at,
-                           COALESCE(ep.n, 0) AS episode_count,
-                           COALESCE(ep.dl, 0) AS downloaded_count
-                      FROM podcast_subscriptions sub
-                      LEFT JOIN (
-                          SELECT subscription_id,
-                                 COUNT(*) AS n,
-                                 COUNT(*) FILTER (WHERE download_status = 'downloaded') AS dl
-                            FROM podcast_episodes GROUP BY subscription_id
-                      ) ep ON ep.subscription_id = sub.id
-                     ORDER BY LOWER(COALESCE(sub.title, sub.feed_url))
-                    """
-                )
+                text(_SUB_SELECT.format(extra=", " + paging.key_columns(keys))
+                     + f" {page_where} ORDER BY {paging.order_sql(keys)}"
+                     " LIMIT :limit OFFSET :offset"),
+                params,
             )
         ).mappings().all()
-    return [_with_server_artwork(dict(r)) for r in rows]
+    page, has_more, nxt = paging.db_page_dicts(rows, keys, limit=lim, sort=sort)
+    return {
+        "items": [_with_server_artwork(r) for r in page],
+        **paging.page_fields(total=total, limit=lim, has_more=has_more, next_cursor=nxt,
+                             offset=None if cursor is not None else (offset or 0)),
+    }
 
 
 @router.post("/subscriptions", dependencies=[Depends(require_device)])
@@ -238,33 +295,89 @@ async def subscription_artwork(sub_id: int) -> FileResponse:
     )
 
 
+EpisodeSort = Literal["newest", "oldest"]
+# Undated episodes last either way, as they always were; ``id`` makes the
+# key unique (paging.py).
+_EP_SORT_KEYS: dict[str, list[SortKey]] = {
+    "newest": [SortKey("published_at", desc=True, nulls_last=True, kind="ts"),
+               SortKey("id", desc=True, kind="int")],
+    "oldest": [SortKey("published_at", nulls_last=True, kind="ts"), SortKey("id", kind="int")],
+}
+_EP_COLUMNS = """id, subscription_id, guid, title, description,
+                 published_at, duration_sec, chapters, download_status,
+                 downloaded_at, file_path, (file_path IS NOT NULL) AS has_file"""
+
+
+def _episode_row(r: Any) -> dict[str, Any]:
+    d = dict(r)
+    # Clients need the extension to name a save-to-device file, but the
+    # server path itself stays private.
+    fp = d.pop("file_path")
+    d["file_ext"] = Path(fp).suffix.lower() if fp else None
+    return d
+
+
 @router.get("/subscriptions/{sub_id}/episodes")
-async def list_episodes(sub_id: int) -> list[dict[str, Any]]:
+async def list_episodes(
+    sub_id: int,
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Case-insensitive substring of the episode title"),
+    downloaded: Optional[bool] = Query(
+        None, description="true → only episodes with a file here; false → only those without"),
+    sort: EpisodeSort = Query("newest", description="newest (default) · oldest"),
+    limit: Optional[int] = paging.limit_query(),
+    cursor: Optional[str] = paging.cursor_query(),
+    offset: Optional[int] = paging.offset_query(),
+) -> Any:
+    """One show's episodes, newest first by default. Paged when ``limit`` /
+    ``cursor`` / ``offset`` is sent (``{items, total, …}``, paging.py — a
+    long back catalogue no longer arrives in one answer); the bare list, as
+    before, for a client that sends none of them."""
+    keys = _EP_SORT_KEYS[sort]
+    params: dict[str, Any] = {"sid": sub_id}
+    where_parts = ["subscription_id = :sid"]
+    if q and q.strip():
+        where_parts.append("title ILIKE :q")
+        params["q"] = f"%{q.strip()}%"
+    if downloaded is not None:
+        where_parts.append("file_path IS NOT NULL" if downloaded else "file_path IS NULL")
+    where = "WHERE " + " AND ".join(where_parts)
+
+    if not paging.wants_page(limit, cursor, offset):
+        async with session_scope() as s:
+            rows = (
+                await s.execute(
+                    text(f"SELECT {_EP_COLUMNS} FROM podcast_episodes {where}"
+                         f" ORDER BY {paging.order_sql(keys)}"),
+                    params,
+                )
+            ).mappings().all()
+        return [_episode_row(r) for r in rows]
+
+    lim = limit or paging.DEFAULT_LIMIT
+    page_where = where
+    if cursor is not None:
+        page_where = f"{where} AND {paging.keyset_where(keys, cursor, sort, params)}"
+    params.update({"limit": lim + 1, "offset": 0 if cursor is not None else (offset or 0)})
     async with session_scope() as s:
+        total = int((await s.execute(
+            text(f"SELECT COUNT(*) FROM podcast_episodes {where}"), params)).scalar_one())
         rows = (
             await s.execute(
                 text(
-                    """
-                    SELECT id, subscription_id, guid, title, description,
-                           published_at, duration_sec, chapters, download_status,
-                           downloaded_at, file_path, (file_path IS NOT NULL) AS has_file
-                      FROM podcast_episodes
-                     WHERE subscription_id = :sid
-                     ORDER BY published_at DESC NULLS LAST, id DESC
-                    """
+                    f"SELECT {_EP_COLUMNS}, {paging.key_columns(keys)} FROM podcast_episodes"
+                    f" {page_where} ORDER BY {paging.order_sql(keys)}"
+                    " LIMIT :limit OFFSET :offset"
                 ),
-                {"sid": sub_id},
+                params,
             )
         ).mappings().all()
-    out = []
-    for r in rows:
-        d = dict(r)
-        # Clients need the extension to name a save-to-device file, but the
-        # server path itself stays private.
-        fp = d.pop("file_path")
-        d["file_ext"] = Path(fp).suffix.lower() if fp else None
-        out.append(d)
-    return out
+    page, has_more, nxt = paging.db_page_dicts(rows, keys, limit=lim, sort=sort)
+    return {
+        "items": [_episode_row(r) for r in page],
+        **paging.page_fields(total=total, limit=lim, has_more=has_more, next_cursor=nxt,
+                             offset=None if cursor is not None else (offset or 0)),
+    }
 
 
 # ─── Discovery (network) ────────────────────────────────────────────────

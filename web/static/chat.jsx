@@ -6,6 +6,10 @@
  * (fetch + ReadableStream — the assistant bubble fills in live). Attach up
  * to 4 images per message; a message with images is answered by the vision
  * model (server-side switch), surfaced with a small pill in the composer.
+ * When that model isn't installed (/api/chat/models `vision_installed:
+ * false`) the paperclip says so instead of opening the picker, and a
+ * reply's error reads as a plain sentence (ChatDetails.errorView), with
+ * Settings → Models one press away for an admin.
  *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
@@ -38,6 +42,8 @@ const chatSendStream = async (threadId, body, onDelta) => {
   let buf = '';
   let done = null;
   let errorDetail = null;
+  let errorCode = null;
+  let errorModel = null;
   for (;;) {
     const { value, done: eof } = await reader.read();
     if (eof) break;
@@ -57,11 +63,58 @@ const chatSendStream = async (threadId, body, onDelta) => {
       try { payload = JSON.parse(data); } catch { continue; }
       if (event === 'delta') onDelta(payload.text || '');
       else if (event === 'done') done = payload;
-      else if (event === 'error') errorDetail = payload.detail || 'model error';
+      else if (event === 'error') {
+        errorDetail = payload.detail || 'model error';
+        errorCode = payload.code || null;
+        errorModel = payload.model || null;
+      }
     }
   }
-  return { done, errorDetail };
+  return { done, errorDetail, errorCode, errorModel };
 };
+
+/* "open Settings → Models", for an admin, where a model is the fix. */
+const ChatModelsLink = () => (
+  <a href="#settings" className="chat-note-link"
+     onClick={(e) => { e.preventDefault(); openSettingsTab('models'); }}>
+    open Settings → Models
+  </a>
+);
+
+/* A reply that failed: the plain sentence (with a code) as a note, the
+ * link for an admin when a model is the fix; an error the server never
+ * coded (the browser's own, "Failed to fetch") stays a small red line. */
+const ChatReplyError = ({ m, admin }) => {
+  const err = ChatDetails.errorView(m);
+  if (!err) return null;
+  if (!err.code) {
+    return (
+      <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>{err.text}</div>
+    );
+  }
+  return (
+    <div className="chat-note" role="note">
+      <div>{err.text}</div>
+      {err.models && admin && <ChatModelsLink/>}
+    </div>
+  );
+};
+
+/* The composer's note when a picture can't be read here: why, what chat
+ * takes, and Settings → Models for an admin. */
+const ChatPictureNote = ({ model, admin, onClose }) => (
+  <div className="chat-note info" role="note">
+    <div className="chat-note-row">
+      <Icon name="image-off" size={14}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div>{ChatDetails.visionMissingText(model)}</div>
+        <div className="chat-note-sub">{ChatDetails.ACCEPTS}</div>
+        {admin && <ChatModelsLink/>}
+      </div>
+      <IconButton name="x" title="close" onClick={onClose}/>
+    </div>
+  </div>
+);
 
 /* ─── Thread list rail ──────────────────────────────────────────────────── */
 
@@ -195,7 +248,7 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -268,11 +321,7 @@ const ChatMessage = ({ m, threadId, onCopy }) => {
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
             <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
-            {m.error && (
-              <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>
-                {m.error}
-              </div>
-            )}
+            <ChatReplyError m={m} admin={admin}/>
           </div>
         </div>
       )}
@@ -304,7 +353,12 @@ const ChatPage = () => {
   const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =
     useApiList('/api/chat/threads', { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
-  const { data: modelsInfo } = useApiObject('/api/chat/models');
+  const { data: modelsInfo, refresh: refreshModels } = useApiObject('/api/chat/models');
+  const admin = useAdminSignedIn();
+  // Pictures can't be read here (the vision model isn't installed): the
+  // paperclip opens this note instead of the picker.
+  const visionMissing = ChatDetails.visionMissing(modelsInfo);
+  const [pictureNote, setPictureNote] = React.useState(false);
 
   const [threadId, setThreadId] = React.useState(null);
   const [messages, setMessages] = React.useState([]);
@@ -381,7 +435,7 @@ const ChatPage = () => {
         const up = await apiUpload('/api/chat/uploads', form);
         setAttachments((cur) => [...cur, up]);
       } catch (e) {
-        fire(e.status === 415 ? 'unsupported image type' : 'upload failed');
+        fire(e.status === 415 ? 'chat takes PNG, JPEG, GIF, WebP or BMP pictures' : 'upload failed');
       }
     }
   };
@@ -410,15 +464,20 @@ const ChatPage = () => {
     try {
       // device_id: which install sent it, for the message's details (V017).
       const body = { content, images, device_id: DeviceIdentity.id() };
-      const { done, errorDetail } = await chatSendStream(id, body, (delta) => {
+      const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
       });
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending'
-          ? (done || { ...m, pending: false, error: errorDetail })
+          ? (done || { ...m, pending: false, error: errorDetail, error_code: errorCode,
+                       model: errorModel || m.model })
           : m));
       refreshThreads();
+      // Refused for want of the vision model: re-read what's installed, so
+      // the paperclip explains it next time instead of opening the picker.
+      const code = (done && done.stats && done.stats.error_code) || errorCode;
+      if (code === 'vision_model_missing') refreshModels();
     } catch (e) {
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending' ? { ...m, pending: false, error: String(e.message || e) } : m));
@@ -430,9 +489,23 @@ const ChatPage = () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  const visionPill = attachments.length > 0 && modelsInfo && (
+  const visionPill = attachments.length > 0 && modelsInfo && !visionMissing && (
     <Pill tone="idle">answers with {modelsInfo.vision_model}</Pill>
   );
+
+  // The paperclip: the picker, or — when a picture would be refused —
+  // the note saying why (and a fresh read, in case an admin has since
+  // installed the model; the note goes once the read says so).
+  const pickPictures = () => {
+    if (visionMissing) {
+      setPictureNote(true);
+      refreshModels();
+      return;
+    }
+    setPictureNote(false);
+    if (fileRef.current) fileRef.current.click();
+  };
+  const showPictureNote = visionMissing && (pictureNote || attachments.length > 0);
 
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(var(--app-h) - var(--topbar-h) - 48px)',
@@ -481,7 +554,9 @@ const ChatPage = () => {
           {threadId == null && messages.length === 0 ? (
             <Empty glyph="sleeping" title="ask anything"
                    sub="chats run on your own hardware — attach an image and the vision model reads it"/>
-          ) : messages.map((m) => <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage}/>)}
+          ) : messages.map((m) => (
+            <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}/>
+          ))}
         </div>
 
         {/* composer */}
@@ -503,6 +578,10 @@ const ChatPage = () => {
               {visionPill}
             </div>
           )}
+          {showPictureNote && (
+            <ChatPictureNote model={modelsInfo.vision_model} admin={admin}
+                             onClose={() => setPictureNote(false)}/>
+          )}
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={onKeyDown} rows={2}
                     placeholder="message the domovoi… (Enter to send, Shift+Enter for a new line)"
@@ -512,8 +591,11 @@ const ChatPage = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <input ref={fileRef} type="file" accept="image/*" multiple hidden
                    onChange={(e) => { attach(e.target.files); e.target.value = ''; }}/>
-            <IconButton name="paperclip" title="attach images (up to 4)"
-                        onClick={() => fileRef.current && fileRef.current.click()}/>
+            <IconButton name="paperclip"
+                        title={visionMissing
+                          ? "attach pictures — the vision model isn't installed"
+                          : 'attach pictures (up to 4)'}
+                        onClick={pickPictures}/>
             <div style={{ flex: 1 }}/>
             <Button variant="primary" icon="send" onClick={send}
                     disabled={sending || !draft.trim()}>

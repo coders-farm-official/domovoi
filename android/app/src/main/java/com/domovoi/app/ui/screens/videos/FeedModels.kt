@@ -106,16 +106,30 @@ internal sealed interface VideoGridEntry {
 
 internal fun videoKey(v: VideoRow): String = "${v.library_id}:${v.rel}"
 
-/** Grid entries in render order: the recent strip (when shown), then each library's header and tiles. */
-internal fun videoGridEntries(showRecent: Boolean, grouped: Map<String, List<VideoRow>>): List<VideoGridEntry> =
+/**
+ * Grid entries in render order: the recent strip (when shown), then each
+ * library's header and tiles. The grid loads a page at a time, so a header
+ * counts the library's videos as the server totals them ([totals], from the
+ * list's `libraries`), not the tiles loaded so far; a library missing from
+ * [totals] (an older server) counts what is loaded.
+ */
+internal fun videoGridEntries(
+    showRecent: Boolean,
+    grouped: Map<String, List<VideoRow>>,
+    totals: Map<String, Int> = emptyMap(),
+): List<VideoGridEntry> =
     buildList {
         if (showRecent) add(VideoGridEntry.Recent)
         grouped.forEach { (libId, vids) ->
             if (vids.isEmpty()) return@forEach
-            add(VideoGridEntry.Header(libId, vids.first().library_label ?: libId, vids.size))
+            add(VideoGridEntry.Header(libId, vids.first().library_label ?: libId, totals[libId] ?: vids.size))
             vids.forEach { add(VideoGridEntry.Tile(it)) }
         }
     }
+
+/** The per-library totals a paged `/api/videos/list` answer carries in `libraries`. */
+@kotlinx.serialization.Serializable
+internal data class LibraryTotal(val library_id: String = "", val total: Int = 0)
 
 /** The feed for a tap in the library grid: every tile, in the order the grid shows them. */
 internal fun gridFeedOrder(entries: List<VideoGridEntry>): List<VideoRow> =

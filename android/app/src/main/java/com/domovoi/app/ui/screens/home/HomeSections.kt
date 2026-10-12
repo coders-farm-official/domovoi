@@ -656,7 +656,8 @@ private fun StopAllButton(count: Int, busy: Boolean, onConfirm: () -> Unit) {
 }
 
 /**
- * One room. The left part leads to Satellites; the transport buttons sit
+ * One room. The left part leads to Settings → Satellites (Route.Satellites,
+ * which the shell opens as that tab); the transport buttons sit
  * apart on the right edge, in thumb reach, while something is playing or
  * paused. A quiet room has none: starting something in a room belongs to
  * the Music page, which picks the room and the track together. Offline
@@ -676,7 +677,8 @@ private fun HomeRoomRow(
 ) {
     val online = r.online
     val np = r.now_playing
-    val song = if (online) np?.song else null
+    // A stopped room keeps its last song loaded; it is quiet, not playing.
+    val song = roomSong(r)
     val playing = song != null && np?.state == "play"
     val paused = song != null && np?.state == "pause"
     val elapsed = roomElapsedSec(r, stale, sinceReadSec)
@@ -991,15 +993,21 @@ internal fun HomeFirstRun(phrase: String, onManual: () -> Unit) {
 // ─── everything (phones) ──────────────────────────────────────────────────
 
 /**
- * Every screen that is not one of the bottom bar's five tabs — the plugin
- * screens this server allows included, with their badges — plus Settings
- * and the manual. The phone's "more" menu; a shared screen leaves the
- * personal ones off, like every other launcher.
+ * Every screen that is not on this phone's bar — the plugin screens this
+ * server allows included, with their badges — plus Settings and the
+ * manual. The phone's "more" menu, and the way to the bar's editor
+ * ([onEditBar]: Settings → Phone bar); a shared screen leaves the personal
+ * ones off, like every other launcher.
  */
 @Composable
-internal fun HomeEverything(tiles: List<Route>, counts: SidebarCounts, onOpen: (Route) -> Unit) {
+internal fun HomeEverything(
+    tiles: List<Route>,
+    counts: SidebarCounts,
+    onEditBar: () -> Unit,
+    onOpen: (Route) -> Unit,
+) {
     if (tiles.isEmpty()) return
-    HomeCard("everything") {
+    HomeCard("everything", action = { HomeLink("edit the bar", onClick = onEditBar) }) {
         Column(
             Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),

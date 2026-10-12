@@ -116,8 +116,12 @@ internal fun PhotoGrid(
     model: (FileEntry) -> Any?,
     onOpen: (FileEntry) -> Unit,
     modifier: Modifier = Modifier,
+    state: androidx.compose.foundation.lazy.grid.LazyGridState =
+        androidx.compose.foundation.lazy.grid.rememberLazyGridState(),
+    footer: (@Composable () -> Unit)? = null,
 ) {
     LazyVerticalGrid(
+        state = state,
         columns = GridCells.Adaptive(104.dp),
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -140,6 +144,9 @@ internal fun PhotoGrid(
                 )
             }
         }
+        footer?.let { f ->
+            item(key = "photos-footer", span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { f() }
+        }
     }
 }
 
@@ -155,6 +162,7 @@ internal fun ImageViewerOverlay(
     onSendHome: (() -> Unit)?,
     onOpenWith: () -> Unit,
     onClose: () -> Unit,
+    sendLabel: String = "send to home",
 ) {
     BackHandler { onClose() }
     var scale by remember { mutableFloatStateOf(1f) }
@@ -179,7 +187,7 @@ internal fun ImageViewerOverlay(
                 )
                 onSendHome?.let {
                     IconButton(onClick = it) {
-                        Icon(Icons.Outlined.CloudUpload, "send to home", tint = Domovoi.colors.fgMuted)
+                        Icon(Icons.Outlined.CloudUpload, sendLabel, tint = Domovoi.colors.fgMuted)
                     }
                 }
                 IconButton(onClick = onOpenWith) {
@@ -261,13 +269,27 @@ internal fun defaultHomeLibrary(entry: FileEntry, libraries: List<FileLibrary>):
         ?: editable.firstOrNull()?.id
 }
 
+/**
+ * The words the send-home sheet uses: "send" in the local shell, "upload" on
+ * the workspace's "your device" side, where the row's button says Upload.
+ */
+internal data class SendHomeWords(val title: String, val action: String, val verb: String) {
+    companion object {
+        fun of(name: String, asUpload: Boolean): SendHomeWords =
+            if (asUpload) SendHomeWords("upload \"$name\" to…", "upload here", "upload")
+            else SendHomeWords("send \"$name\" to…", "send here", "send")
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SendHomeSheet(
     entry: FileEntry,
     onSend: (target: FileLibrary, targetPath: String) -> Unit,
     onDismiss: () -> Unit,
+    asUpload: Boolean = false,
 ) {
+    val words = SendHomeWords.of(entry.name, asUpload)
     val libs = rememberApi("send-home-libraries") {
         it.api.get("/api/files/libraries").decode<LibrariesResponse>().libraries
     }
@@ -276,7 +298,7 @@ internal fun SendHomeSheet(
     if (libraries == null) {
         ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Domovoi.colors.raised) {
             Column(Modifier.padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-                Text("send \"${entry.name}\" to…", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+                Text(words.title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
                 if (libs.error != null) ErrorState(libs.error, libs.refresh) else LoadingState()
             }
         }
@@ -287,12 +309,19 @@ internal fun SendHomeSheet(
         sourceLibraryId = "",
         sourcePath = "",
         libraries = libraries,
-        browse = { id, p -> app.api.get(filesBrowsePath(id, p, app.prefs.deviceId)).decode<FileBrowse>() },
+        browse = { id, p ->
+            app.api.get(
+                com.domovoi.app.net.Paging.path(
+                    com.domovoi.app.net.filesBrowseQueryPath(id, p, app.prefs.deviceId, foldersOnly = true),
+                    com.domovoi.app.net.PageRequest(null, 0, com.domovoi.app.net.SERVER_MAX_PAGE),
+                ),
+            ).decode<FileBrowse>()
+        },
         onMove = { libId, p -> libraries.firstOrNull { it.id == libId }?.let { onSend(it, p) } },
         onDismiss = onDismiss,
-        title = "send \"${entry.name}\" to…",
-        actionLabel = "send here",
-        verb = "send",
+        title = words.title,
+        actionLabel = words.action,
+        verb = words.verb,
         initialLibraryId = defaultHomeLibrary(entry, libraries),
     )
 }

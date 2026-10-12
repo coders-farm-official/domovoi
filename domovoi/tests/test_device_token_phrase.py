@@ -111,9 +111,18 @@ CUSTOM_TOKENS = [
 ]
 
 
+def _generated_ids(n: int) -> list[str]:
+    """Test ids for N freshly generated phrases. The phrases differ on every
+    collection (that is the point: a new sample each run), so the ids must
+    not be the phrases: `pytest -n` collects the module once per worker and
+    refuses to start when the workers' test ids disagree."""
+    return [f"generated-{i}" for i in range(n)]
+
+
 @pytest.mark.parametrize(
     "token",
     [admin_auth.generate_device_token() for _ in range(3)] + CUSTOM_TOKENS,
+    ids=_generated_ids(3) + [None] * len(CUSTOM_TOKENS),
 )
 def test_the_token_survives_every_transport_it_travels_on(token: str) -> None:
     """Header value, query parameter, file mirror and WebSocket
@@ -157,7 +166,9 @@ def test_the_token_survives_every_transport_it_travels_on(token: str) -> None:
     assert len(token) <= admin_auth.DEVICE_TOKEN_MAX_LEN
 
 
-@pytest.mark.parametrize("token", [admin_auth.generate_device_token() for _ in range(5)])
+@pytest.mark.parametrize(
+    "token", [admin_auth.generate_device_token() for _ in range(5)], ids=_generated_ids(5)
+)
 def test_a_generated_phrase_is_also_legal_in_the_raw_subprotocol(token: str) -> None:
     """Split out from the transport test on purpose: this is a property of
     the GENERATOR, not of the token rule. It is what lets the dashboard

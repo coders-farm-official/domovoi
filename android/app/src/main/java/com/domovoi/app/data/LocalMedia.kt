@@ -4,10 +4,13 @@ import android.Manifest
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.ContextCompat
+import com.domovoi.app.net.Page
+import com.domovoi.app.net.PageRequest
 
 /**
  * MediaStore queries for offline/local mode: the on-device music + video
@@ -46,8 +49,14 @@ object LocalMedia {
     fun hasPermission(context: Context, permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
-    fun queryTracks(context: Context): List<LocalTrack> {
-        val out = mutableListOf<LocalTrack>()
+    /**
+     * One page of the phone's music, title order, [q] matching title, artist
+     * or album. Read off MediaStore's cursor from [PageRequest.offset]: the
+     * cursor keeps its rows in the provider's window, so only a page of
+     * tracks is ever built here (owner decision 2026-10-11 — no list holds
+     * everything at once).
+     */
+    fun pageTracks(context: Context, q: String, req: PageRequest): Page<LocalTrack> {
         val proj = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
@@ -56,82 +65,77 @@ object LocalMedia {
             MediaStore.Audio.Media.ALBUM_ID,
             MediaStore.Audio.Media.DURATION,
         )
-        runCatching {
-            context.contentResolver.query(
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                proj,
-                "${MediaStore.Audio.Media.IS_MUSIC} != 0",
-                null,
-                "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC",
-            )?.use { c ->
-                val iId = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
-                val iTitle = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                val iArtist = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                val iAlbum = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
-                val iAlbumId = c.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
-                val iDur = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-                while (c.moveToNext()) {
-                    val id = c.getLong(iId)
-                    val albumId = c.getLong(iAlbumId)
-                    out.add(
-                        LocalTrack(
-                            id = id,
-                            title = c.getString(iTitle) ?: "unknown",
-                            artist = c.getString(iArtist)?.takeIf { it != "<unknown>" },
-                            album = c.getString(iAlbum)?.takeIf { it != "<unknown>" },
-                            durationSec = c.getLong(iDur).takeIf { it > 0 }?.div(1000.0),
-                            uri = ContentUris.withAppendedId(
-                                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id,
-                            ).toString(),
-                            albumArtUri = if (albumId > 0) {
-                                ContentUris.withAppendedId(
-                                    Uri.parse("content://media/external/audio/albumart"), albumId,
-                                ).toString()
-                            } else null,
-                        ),
-                    )
-                }
-            }
+        val needle = q.trim()
+        val sel = "${MediaStore.Audio.Media.IS_MUSIC} != 0" + if (needle.isEmpty()) "" else
+            " AND (${MediaStore.Audio.Media.TITLE} LIKE ? ESCAPE '\\' OR ${MediaStore.Audio.Media.ARTIST} LIKE ? ESCAPE '\\'" +
+            " OR ${MediaStore.Audio.Media.ALBUM} LIKE ? ESCAPE '\\')"
+        val args = if (needle.isEmpty()) null else Array(3) { "%" + likeEscape(needle) + "%" }
+        return pageOf(
+            context, MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, proj, sel, args,
+            "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC, ${MediaStore.Audio.Media._ID} ASC", req,
+        ) { c ->
+            val id = c.getLong(0)
+            val albumId = c.getLong(4)
+            LocalTrack(
+                id = id,
+                title = c.getString(1) ?: "unknown",
+                artist = c.getString(2)?.takeIf { it != "<unknown>" },
+                album = c.getString(3)?.takeIf { it != "<unknown>" },
+                durationSec = c.getLong(5).takeIf { it > 0 }?.div(1000.0),
+                uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id).toString(),
+                albumArtUri = if (albumId > 0) {
+                    ContentUris.withAppendedId(Uri.parse("content://media/external/audio/albumart"), albumId).toString()
+                } else null,
+            )
         }
-        return out
     }
 
-    fun queryVideos(context: Context): List<LocalVideo> {
-        val out = mutableListOf<LocalVideo>()
+    /** One page of the phone's videos, newest first (see [pageTracks]). */
+    fun pageVideos(context: Context, req: PageRequest): Page<LocalVideo> {
         val proj = arrayOf(
             MediaStore.Video.Media._ID,
             MediaStore.Video.Media.DISPLAY_NAME,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.SIZE,
         )
-        runCatching {
-            context.contentResolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                proj,
-                null,
-                null,
-                "${MediaStore.Video.Media.DATE_ADDED} DESC",
-            )?.use { c ->
-                val iId = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                val iName = c.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-                val iDur = c.getColumnIndexOrThrow(MediaStore.Video.Media.DURATION)
-                val iSize = c.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
-                while (c.moveToNext()) {
-                    val id = c.getLong(iId)
-                    out.add(
-                        LocalVideo(
-                            id = id,
-                            name = c.getString(iName) ?: "video",
-                            durationSec = c.getLong(iDur).takeIf { it > 0 }?.div(1000.0),
-                            sizeBytes = c.getLong(iSize),
-                            uri = ContentUris.withAppendedId(
-                                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id,
-                            ).toString(),
-                        ),
-                    )
-                }
+        return pageOf(
+            context, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj, null, null,
+            "${MediaStore.Video.Media.DATE_ADDED} DESC, ${MediaStore.Video.Media._ID} DESC", req,
+        ) { c ->
+            val id = c.getLong(0)
+            LocalVideo(
+                id = id,
+                name = c.getString(1) ?: "video",
+                durationSec = c.getLong(2).takeIf { it > 0 }?.div(1000.0),
+                sizeBytes = c.getLong(3),
+                uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id).toString(),
+            )
+        }
+    }
+
+    private fun <T> pageOf(
+        context: Context,
+        uri: Uri,
+        proj: Array<String>,
+        sel: String?,
+        args: Array<String>?,
+        order: String,
+        req: PageRequest,
+        row: (Cursor) -> T,
+    ): Page<T> {
+        val out = ArrayList<T>(req.limit)
+        var total = 0
+        context.contentResolver.query(uri, proj, sel, args, order)?.use { c ->
+            total = c.count
+            if (c.moveToPosition(req.offset)) {
+                do {
+                    runCatching { row(c) }.getOrNull()?.let { out += it }
+                } while (out.size < req.limit && c.moveToNext())
             }
         }
-        return out
+        return Page(out, total, req.offset + req.limit < total, null)
     }
+
+    /** [s] as a LIKE pattern body: its own %, _ and backslash taken literally. */
+    private fun likeEscape(s: String) = s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 }

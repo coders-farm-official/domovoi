@@ -6,15 +6,16 @@ import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.net.rememberApi
 import kotlinx.serialization.json.JsonArray
 
+/** No satellites count since 2026-10-11: Satellites is a Settings tab, and
+ *  Settings carries no badge (the tab's own first line counts the rooms),
+ *  as on the web. */
 data class SidebarCounts(
     val people: Int? = null,
-    val satellites: Int? = null,
     val calendar: Int? = null,
     val stations: Int? = null,
 ) {
     fun forRoute(r: Route): Int? = when (r) {
         Route.People -> people
-        Route.Satellites -> satellites
         Route.Calendar -> calendar
         Route.Stations -> stations
         else -> null
@@ -34,7 +35,6 @@ fun rememberSidebarCounts(): SidebarCounts {
         }.getOrNull()
         SidebarCounts(
             people = lenOf("/api/people"),
-            satellites = lenOf("/api/satellites"),
             calendar = lenOf("/api/calendar/events"),
             stations = if (hasStations) {
                 lenOf("/api/plugins/radio/stations?favorited_only=true&limit=1000")

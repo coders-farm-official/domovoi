@@ -385,7 +385,7 @@ There are two routes.
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Satellites → prepare satellite media**. It writes a first-boot overlay
+**Settings → Satellites → prepare satellite media**. It writes a first-boot overlay
 and an offline payload (wheels, packages, the satellite code from this
 machine, plugin payloads) to the card. The payload comes from the
 server's caches, which the server fills while it has internet (**Refresh
@@ -393,8 +393,8 @@ caches**; [INTERNET.md](INTERNET.md#before-you-disconnect) has the order).
 If a cache is incomplete the build warns, and the Pi fetches the rest over
 its own connection; its second boot also runs `apt` online to settle
 package dependencies, and tries again on later boots if it can't. Boot the
-Pi, plug it into the server's USB port, and adopt it from the Satellites
-page — name and Wi-Fi, done.
+Pi, plug it into the server's USB port, and adopt it from Settings →
+Satellites — name and Wi-Fi, done.
 
 > ⚠️ **Be aware:** this flow is code-complete but has **not yet been
 > validated on real hardware** —
@@ -465,7 +465,7 @@ domovoi_url = "ws://<your-server>:6370"
 
 Use whatever name resolves reliably on your LAN. On first connection the
 core automatically provisions that room's MPD container and the room
-appears on the dashboard's Satellites page.
+appears in the dashboard's Settings → Satellites.
 
 ---
 

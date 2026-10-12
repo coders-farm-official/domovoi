@@ -8,6 +8,7 @@ Symptom → cause → fix, grouped by area. Start with [Which logs to check](#wh
 - [Music won't play](#music-wont-play)
 - [Acquisitions / downloads stuck](#acquisitions--downloads-stuck)
 - [Dashboard can't reach the core](#dashboard-cant-reach-the-core)
+- [Chat can't answer](#chat-cant-answer)
 - [Admin locked out](#admin-locked-out)
 - [GPU / CUDA issues](#gpu--cuda-issues)
 - [Docker issues](#docker-issues)
@@ -21,7 +22,7 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Room never appears on the Satellites page | Wrong `domovoi_url` in the Pi's `~/.domovoi/config.toml` | It must be a WebSocket URL to the **core**, port **6370**: `ws://<server>.local:6370` — `ws://`, not `http://`, and not the dashboard's 6369 |
+| Room never appears in Settings → Satellites | Wrong `domovoi_url` in the Pi's `~/.domovoi/config.toml` | It must be a WebSocket URL to the **core**, port **6370**: `ws://<server>.local:6370` — `ws://`, not `http://`, and not the dashboard's 6369 |
 | `.local` hostname doesn't resolve from the Pi | mDNS flakiness | Use the server's LAN IP in `domovoi_url`, or fix mDNS; conversely, from Windows, install Bonjour to resolve the Pi's `.local` name |
 | Connection refused | Core not running, or Windows firewall blocking inbound 6370 | Confirm the core is up (`http://<server>:6370/v1/health` from another machine); add an inbound allow rule for the port in Windows Defender Firewall |
 | Service inactive after reboot | systemd unit not enabled | `sudo systemctl enable --now domovoi-satellite` (PROVISIONING.md §8) |
@@ -34,7 +35,7 @@ First stop on the Pi: `systemctl status domovoi-satellite` and `journalctl -u do
 
 ## A satellite died while nobody was using it (the Health card and Last outage)
 
-Two units did this in October 2026: fine for days, then the room offline and the ring orange, and only a power cycle brought them back — with nothing left to read, because the Pi's log ring is RAM. Since 2026-10-09 the satellite explains itself. Open the room on the Satellites page; the **Overview** tab has a **Health** card and, under it, a **Last outage** block; the **Logs** tab has a **retained on the server** view beside the live ring.
+Two units did this in October 2026: fine for days, then the room offline and the ring orange, and only a power cycle brought them back — with nothing left to read, because the Pi's log ring is RAM. Since 2026-10-09 the satellite explains itself. Open the room in Settings → Satellites; the **Overview** tab has a **Health** card and, under it, a **Last outage** block; the **Logs** tab has a **retained on the server** view beside the live ring.
 
 **Reading the Health card.** One sample a minute while the satellite is connected, and the last one is kept when it goes offline (the pill says *kept from before it went offline*). What to look at:
 
@@ -52,7 +53,7 @@ Two units did this in October 2026: fine for days, then the room offline and the
 **Reading Last outage.** It is what the satellite's previous process life wrote to its SD card before it ended, delivered in its next hello:
 
 * **exit reason** — `self-check: …` names the check that restarted it (the table above); `shutdown: requested` is a restart someone asked for (a config save, the Restart button, an upgrade); *unknown* means the process never got to write one: a power cut, the kernel's OOM killer, or a kernel/firmware wedge (then look at *uptime* — a reboot — and the offline table).
-* **the offline table** — one row per failed connect while it was disconnected: the failure (`tcp_refused` = the core's port is closed, the core is down; `tcp_timeout` / `dns` = nothing answers, the network; `closed_before_ready` = the core took the socket and refused the session: pairing, approval — check the Satellites page for a pending approval), whether the **gateway** answered (silent = the Pi's own link or the router), whether the **core** answered, the link state, and the action the client took.
+* **the offline table** — one row per failed connect while it was disconnected: the failure (`tcp_refused` = the core's port is closed, the core is down; `tcp_timeout` / `dns` = nothing answers, the network; `closed_before_ready` = the core took the socket and refused the session: pairing, approval — check Settings → Satellites for a pending approval), whether the **gateway** answered (silent = the Pi's own link or the router), whether the **core** answered, the link state, and the action the client took.
 * **self-checks** — the last actions it took and why. An action ending in `_held` is one the **restart budget** stopped: a satellite restarts or reboots itself at most 3 times in a rolling hour (at most 1 of them a reboot), counted across restarts in `~/.domovoi/self-restarts.json`; past that the check only logs `HELD BACK` (every 10 minutes) and `last-health.json` shows `restart_budget` with `spent: true`. Every check also has to see its condition twice in a row before it acts. A unit that keeps hitting the budget has a real fault the restarts are not fixing — read the retained log for the `self-check:` lines.
 
 **The retained log** (Logs tab → *retained on the server*) is the Pi's own log as it pushed it, including the lines marked `[offline]` that it wrote while it could not reach the core — the part that used to be lost. It survives the Pi dying and the core restarting; the last 1 MB per room is kept.
@@ -109,7 +110,7 @@ but that is a net under the problem, not a fix for it.
 | A turn's `user_text` is the previous turn's `assistant_text` | Barge-in firing on speaker echo | Set `[barge_in] require_wake_word` back to `true` for the room (dashboard → satellite → Settings); it is the default, so someone turned it off. Only the wake word then interrupts, and the echoed frames are not carried into the capture |
 | Same, but you want to keep talk-over interruption | Detector tuned below the residual echo floor | Raise `[barge_in] min_speech_ms` (250 → 500–700), raise `vad_aggressiveness_during_tts` (→ 3), raise `[noise_gate] dbfs` (the XVF3800 profile ships a deliberately permissive −60 dB) |
 | Turns tagged `barge-in` in the Conversations tab that you didn't start | Same root cause; the pill is the diagnostic | The Logs tab shows the matching `barge-in detected` line with its timestamp |
-| The wake greeting appears at the start of transcripts, or a turn is dropped as `greeting echo` | A satellite from before the wake acknowledgement moved ahead of the capture: it plays the greeting over the capture | Upgrade the satellite (Satellites → the satellite → **Upgrade satellite**). A current one plays the greeting to the end, then listens, and its log shows `wake ack: … listening N ms after the wake word`. Until then, check `[music] alsa_device` — on an XVF3800 it must be the array (`plughw:CARD=Array,DEV=0`), not `default` |
+| The wake greeting appears at the start of transcripts, or a turn is dropped as `greeting echo` | A satellite from before the wake acknowledgement moved ahead of the capture: it plays the greeting over the capture | Upgrade the satellite (Settings → Satellites → the satellite → **Upgrade satellite**). A current one plays the greeting to the end, then listens, and its log shows `wake ack: … listening N ms after the wake word`. Until then, check `[music] alsa_device` — on an XVF3800 it must be the array (`plughw:CARD=Array,DEV=0`), not `default` |
 | Long recordings of room conversation as one "command" | A barge opened a capture with no pre-speech timeout | It runs to `[listen] max_record_seconds` (default 30 s). Lower it, or stop the barge from misfiring above |
 
 ## Music won't play
@@ -148,6 +149,19 @@ The dashboard (port 6369) is a separate process that reads the shared Postgres a
 | Both on the same box but still unreachable | Core URL override wrong | The web process finds the core via `DOMOVOI_URL` (default `http://localhost:6370`) — unset it or point it at the right host |
 | Dashboard unreachable from another device on the LAN | Bind/firewall | The web backend binds `0.0.0.0:6369` by default (`WEB_HOST` / `WEB_PORT`); allow inbound 6369 in Windows Defender Firewall |
 | Dashboard up but every page errors | Postgres down | See [Docker issues](#docker-issues) — both processes need the `domovoi-postgres` container |
+
+## Chat can't answer
+
+The Chat page (dashboard and Android app) talks to Ollama from the web process. When there is no reply, the message under it says why in plain words; the exception itself, with Ollama's address, is in the web backend log (`chat stream failed (thread …, model …, <code>)`). The codes are listed in [API_REFERENCE.md](API_REFERENCE.md), §3.18.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| "Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi." (also shown by the paperclip) | The vision model isn't pulled; it isn't by default (except by `scripts/linux/provision.sh`) | Settings → Models: install it, or switch the Vision row to a vision-capable model you have. See [FAQ: pictures in chat](FAQ.md#can-i-send-pictures-in-chat) |
+| "The vision model … can't read pictures." | The Vision row names a text-only model | Pick a vision-capable model for the Vision row in Settings → Models |
+| "The model … isn't installed on this Domovoi." | `OLLAMA_MODEL` (the chat model) isn't pulled | Install it, or pick an installed one, in Settings → Models |
+| "… needs more memory than this Domovoi has free right now." | Other models are loaded (the voice models stay loaded for `OLLAMA_KEEP_ALIVE`) | Try again once they unload, shorten the keep-alive, or pick a smaller model; see [CPU_HOST.md](CPU_HOST.md) |
+| "Domovoi couldn't reach its language model." | Ollama is stopped, restarting, or `OLLAMA_URL` points elsewhere | Check `ollama ps` / `systemctl status ollama` on the server, and `OLLAMA_URL` (default `http://localhost:11434`) |
+| An older reply shows a raw "Client error '404 Not Found' for url …" line | The server is older than 2026-10-11 and kept the exception's text | Update the server; older replies are then read out in plain words as well (the stored row is left as it was) |
 
 ## I deployed, and the dashboard still shows the old thing
 
@@ -283,8 +297,8 @@ poaches it is the deterministic fix. Re-run the corpus after either.
 | Per-plugin logs | `~/.domovoi/logs/plugin_<slug>.log` (5 MB × 3 rotation) | Everything a given plugin does. Also tailed live on that plugin's dashboard detail page. Crank one plugin to DEBUG without drowning the core: `LOG_LEVEL_PLUGIN_<SLUG>=DEBUG` |
 | Web backend log | The `python -m web.backend.main` console (`LOG_LEVEL`) | Dashboard API, realtime listeners, plugin web pages |
 | Satellite log | `journalctl -u domovoi-satellite -f` on the Pi (level via `[log]` in its config) | Wake word, capture, playback, Wi-Fi watcher, sync channels, and one `health:` line every ten minutes |
-| Satellite log, retained on the server | Satellites page → room → Logs → *retained on the server*; the file is `~/.domovoi/satellite-logs/<room>.log` (1 MB, one rotation) | The same lines, as the Pi pushed them — including `[offline]` lines written while it could not reach the core. Survives the Pi dying |
-| Satellite health | Satellites page → room → Overview → Health; `GET /api/satellites/<room>/health`; the core log's `satellite health room=…` lines (one per ten samples) and `reports an outage from its previous life` warnings | Memory, CPU, temperature and throttling, uptime, mic rate, link, reachability — one sample a minute, 24 h kept; and what the previous process life left behind |
+| Satellite log, retained on the server | Settings → Satellites → room → Logs → *retained on the server*; the file is `~/.domovoi/satellite-logs/<room>.log` (1 MB, one rotation) | The same lines, as the Pi pushed them — including `[offline]` lines written while it could not reach the core. Survives the Pi dying |
+| Satellite health | Settings → Satellites → room → Overview → Health; `GET /api/satellites/<room>/health`; the core log's `satellite health room=…` lines (one per ten samples) and `reports an outage from its previous life` warnings | Memory, CPU, temperature and throttling, uptime, mic rate, link, reachability — one sample a minute, 24 h kept; and what the previous process life left behind |
 | MPD (per room) | `docker logs domovoi-mpd-<room>` | Library scan, stream/decoder errors for that room |
 | Postgres / SearXNG / Letta | `docker logs domovoi-postgres` etc. | Infrastructure containers |
 

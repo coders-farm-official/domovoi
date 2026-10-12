@@ -100,6 +100,7 @@ under `~/.domovoi/` on satellites).
 
 ```powershell
 pytest                                   # full suite
+pytest -n 4                              # full suite on 4 workers (see "In parallel")
 pytest domovoi/tests/test_router.py      # one file
 
 domovoi plugin new <slug>                # scaffold a plugin
@@ -144,6 +145,123 @@ Facts about the suite you should know before touching it:
   from the command line via `scripts/eval_routing.py --core URL` or
   `--ollama URL --model NAME`; run it before and after any change to the
   routing prompt, a `tool_schema` description, or an `offers_tool` gate.
+
+### In parallel: `pytest -n`
+
+```powershell
+pytest -n 4                              # 4 worker processes (pytest-xdist, in the dev extra)
+```
+
+* **One database per worker.** Under `-n`, the conftest gives every
+  worker its own copy of the test database the run resolved (the "lane"):
+  lane `domovoi_test` → `domovoi_gw0_test`, `domovoi_gw1_test`, …; lane
+  `domovoi8_test` → `domovoi8_gw0_test`, …. A copy is made with
+  `CREATE DATABASE … TEMPLATE <lane>` the first time a worker needs it and
+  reused after that; when the lane's Flyway history changes (you migrated
+  it), each copy is remade from it on the next run. So keep migrating the
+  lane only, as before. The role needs `CREATEDB` (the compose `domovoi`
+  user has it). Details: `domovoi/tests/xdist_db.py`.
+* **One run per lane at a time** still holds, serial or parallel: copying
+  needs the lane to have no other connections, and two runs on one set of
+  copies truncate each other's tables. Different lanes
+  (`TEST_DATABASE_URL=…/domovoi8_test`) run side by side.
+* **Mind Postgres' connections.** A test that starts the core app opens
+  about 18 connections at once while the lifespan brings its workers up,
+  so each worker can burst to ~20, and N workers can line their bursts up.
+  Against the default `max_connections` of 100, shared with every other
+  run on the same server, that makes `-n 4` the safe choice; past it the
+  server can run out ("too many clients"), which fails tests in your run
+  *and in everyone else's*. The run says so at the start when the numbers
+  don't fit (`pytest -n 8: each worker can open ~20 Postgres connections
+  …`). More workers need a server with more connections.
+* **What doesn't run under `-n`:** tests marked `bash_harness` (in
+  `pyproject.toml`): the three whole-harness wrappers
+  (`test_apply_update_harness`, `test_provision_harness`,
+  `test_install_update_unit_harness`). Each takes 15–70 minutes under
+  Git Bash and would set the wall time of the whole run, so they are
+  deselected there and the summary says so; run the harnesses with the
+  container runner below, beside the pytest run. A serial `pytest` runs them
+  as it always has.
+* **What runs on one worker, in turn:** tests that share something a
+  database per worker doesn't separate carry `@pytest.mark.xdist_group(name)`,
+  and every test of a group runs on the same worker. Today: `pg-roles`, the
+  modules that create or drop plugin roles (`test_plugin_installer`,
+  `test_plugin_loader`, `test_plugin_upgrade_restart`,
+  `test_plugin_migrations*`, `test_plugin_migration_role`), because a
+  Postgres role belongs to the server, not to one database; and
+  `tmp-domovoi-req-core`, the two tests of the satellite image's
+  requirements filter, which writes a fixed `/tmp` file. Groups need
+  `--dist loadgroup`, so the conftest makes that the default under `-n`
+  (an explicit `--dist` wins). A new test that shares a server-wide or
+  machine-wide thing (a role, a fixed path, a fixed port) joins a group,
+  or better, stops sharing it.
+* A test whose parametrize ids differ between two collections (random
+  values in the id) stops an `-n` run before it starts ("Different tests
+  were collected"): give such parameters fixed `ids=`.
+* Remove the copies when you're done with a lane (they are cheap to remake):
+  `python -m domovoi.tests.xdist_db --drop` (the lane `TEST_DATABASE_URL`
+  names; `--list` to look first).
+
+### The bash harnesses
+
+The Linux scripts (`scripts/linux/*.sh`) are tested by hermetic bash
+harnesses in `scripts/linux/tests/`: `test-apply-update.sh`,
+`test-provision.sh` and `test-install-update-unit.sh`. Each case builds a
+throwaway repository and PATH shims; nothing touches the machine. Run them
+in a pinned Linux container (Ubuntu 26.04, as the server; Docker needed):
+
+```bash
+scripts/dev/run-linux-harness.sh apply-update                 # one harness, whole
+scripts/dev/run-linux-harness.sh all                          # all three, side by side
+scripts/dev/run-linux-harness.sh provision --case 'media_*'   # only some cases
+scripts/dev/run-linux-harness.sh apply-update --list          # the case names
+```
+
+The runner builds the image from `scripts/dev/linux-harness.Dockerfile`
+once (cached by a hash of that file), streams a copy of the checkout in —
+tracked files as they are on disk plus new untracked ones — and runs the
+harness with no network. It writes nothing into the checkout but its logs,
+in `.test-results/linux-harness/` (ignored by git). On Windows run it from
+Git Bash; in PowerShell, `bash` is WSL's launcher, so call Git Bash by its
+path (`& "C:\Program Files\Git\bin\bash.exe" scripts/dev/run-linux-harness.sh all`).
+
+In the container the harnesses take one to two minutes each; under Git Bash
+the same cases take from half an hour to two hours on a busy Windows box
+(2026-10-12, same commit: apply-update 72 s against 2 h 06 min,
+provision 128 s against 2 h 05 min, install-update-unit 19 s against
+41 min), because every case forks thousands of small processes and process
+creation is what MSYS is slowest at. Under that load Git Bash also fails
+cases whose steps have time bounds, and skips the ones that need symlinks;
+the container runs them all. Git Bash still runs them directly, with the
+same options:
+
+```bash
+bash scripts/linux/tests/test-apply-update.sh --case noop_restart --case 'searxng_*'
+```
+
+`--case` takes a case name (the function name without its `case_` prefix)
+or a bash glob, and repeats; a `--case` that matches nothing is an error, so
+a typo can't pass as a green run. While working on a script, run the cases
+you added or changed; the whole harness runs once per batch.
+
+### Known failures
+
+`domovoi/tests/known_failures.toml` lists the tests that fail on main for
+a recorded reason (node id, reason, the commit it was first seen on). The
+end of every run sorts the failures against it:
+
+```
+================ known failures: 1 new, 3 known =================
+NEW    domovoi/tests/test_x.py::test_y
+known  domovoi/tests/test_whisper_local_files.py::test_… (error in setup)  [since eb4a497] huggingface_hub is not installed …
+…
+4 failed, 11200 passed, 1 new failure, 3 known failures in 612.3s
+```
+
+Only the `NEW` ones are yours to explain. The list only labels: a known
+failure still fails, prints its traceback and makes the exit status
+non-zero. When a fix lands, take its entry off; the summary prints
+`passed …` for an entry whose test passed.
 
 New code needs tests in the same PR. The house pattern is tiered: pure
 functions get plain unit tests, handler fast-paths get regex + behavior

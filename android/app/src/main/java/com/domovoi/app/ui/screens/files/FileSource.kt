@@ -11,7 +11,9 @@ import com.domovoi.app.net.MoveResult
 import com.domovoi.app.net.UploadResult
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.deleteFiles
-import com.domovoi.app.net.filesBrowsePath
+import com.domovoi.app.net.PageRequest
+import com.domovoi.app.net.Paging
+import com.domovoi.app.net.filesBrowseQueryPath
 import com.domovoi.app.net.importFile
 import com.domovoi.app.net.moveFiles
 import com.domovoi.app.net.openFileDownload
@@ -63,7 +65,18 @@ internal interface FileSource {
 
     suspend fun libraries(): List<FileLibrary>
 
-    suspend fun browse(libraryId: String, path: String): FileBrowse
+    /**
+     * One page of a folder (net/Paging.kt): [FileBrowse.entries] is the page,
+     * folders first. [q] keeps names containing it and [foldersOnly] keeps
+     * folders (a destination picker); both apply to the whole folder.
+     */
+    suspend fun browsePage(
+        libraryId: String,
+        path: String,
+        req: PageRequest,
+        q: String = "",
+        foldersOnly: Boolean = false,
+    ): FileBrowse
 
     /** A runtime permission [libraryId] needs before it can be listed (photos). */
     fun permissionFor(libraryId: String): String? = null
@@ -136,8 +149,15 @@ internal class ServerFileSource(private val app: AppContainer) : FileSource {
     override suspend fun libraries(): List<FileLibrary> =
         app.api.get("/api/files/libraries").decode<LibrariesResponse>().libraries
 
-    override suspend fun browse(libraryId: String, path: String): FileBrowse =
-        app.api.get(filesBrowsePath(libraryId, path, app.prefs.deviceId)).decode<FileBrowse>()
+    override suspend fun browsePage(
+        libraryId: String,
+        path: String,
+        req: PageRequest,
+        q: String,
+        foldersOnly: Boolean,
+    ): FileBrowse = app.api.get(
+        Paging.path(filesBrowseQueryPath(libraryId, path, app.prefs.deviceId, q, foldersOnly), req),
+    ).decode<FileBrowse>()
 
     // The Documents library edits in-app; every other library opens files
     // with the system viewer.

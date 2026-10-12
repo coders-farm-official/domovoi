@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "Curated, hand-maintained recommended-model list for the Models page. Powers fit badges and the browse-and-install cards. VRAM figures are CONSERVATIVE estimates for the default quant with a modest (~4k) context — real usage varies with context length and KV cache. Ollama has no official library-search API, so anything not listed here is installable via the pull-by-name box.",
+  "note": "Curated, hand-maintained recommended-model list for the Models page. Powers fit badges and the browse-and-install cards. VRAM figures are CONSERVATIVE estimates for the default quant with a modest (~4k) context — real usage varies with context length and KV cache. Ollama has no official library-search API, so anything not listed here is installable via the pull-by-name box. A row's license, where it has one, is the licence the model's publisher gives on its model card (checked 2026-10-11).",
   "ollama": [
     {
       "name": "llama3.2:1b",
@@ -99,12 +99,40 @@
       "desc": "Embedding model required by Letta chat mode's archival/recall memory. Tiny; pull it before enabling chat."
     },
     {
+      "name": "qwen3-vl:2b-instruct-q4_K_M",
+      "role": "vision",
+      "params": "2B",
+      "quant": "Q4_K_M",
+      "license": "Apache-2.0",
+      "est_vram_gb": 3.3,
+      "desc": "The default vision model, picked for boxes without a GPU: reads screenshots, receipts and charts well for its size. 1.9 GB download."
+    },
+    {
+      "name": "qwen3-vl:4b-instruct-q4_K_M",
+      "role": "vision",
+      "params": "4B",
+      "quant": "Q4_K_M",
+      "license": "Apache-2.0",
+      "est_vram_gb": 4.6,
+      "desc": "The default's bigger sibling: the best answers in the CPU test, about 1.5x slower. For a box with 24 GB or more. 3.3 GB download."
+    },
+    {
+      "name": "gemma4:e2b-it-q4_K_M",
+      "role": "vision",
+      "params": "E2B",
+      "quant": "Q4_K_M",
+      "license": "Apache-2.0",
+      "est_vram_gb": 5.7,
+      "desc": "Google's Gemma 4 E2B - the quickest to answer on a CPU, but misreads small text at the 1280 px Domovoi sends pictures at. 4.6 GB download."
+    },
+    {
       "name": "qwen2.5vl:7b",
       "role": "vision",
       "params": "7B",
       "quant": "Q4_K_M",
+      "license": "Apache-2.0",
       "est_vram_gb": 6.0,
-      "desc": "Strong open vision-language model - the recommended default for image understanding in chat."
+      "desc": "The GPU pick: strong open vision-language model for a box with an NVIDIA GPU. Minutes per picture on a CPU alone."
     },
     {
       "name": "gemma3:12b",

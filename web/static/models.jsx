@@ -398,6 +398,8 @@ const CatalogCard = ({ m, hw, installedNames, pulling, onInstall, internetOff })
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {m.params && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.params}</span>}
         {m.quant && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.quant}</span>}
+        {m.license && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}
+                            title="The licence the model's publisher gives">{m.license}</span>}
         <FitBadge estGb={m.est_vram_gb} hw={hw}/>
       </div>
       <div style={{ marginTop: 2 }}>

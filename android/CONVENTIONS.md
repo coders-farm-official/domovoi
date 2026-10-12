@@ -59,7 +59,11 @@ Read these core files before writing a screen:
 12. **Launchers use `Route.visibleOn(caps, shared)`** (`ui/shell/Routes.kt`),
     never `visibleWith` alone: a shared screen leaves `SharedScreenHidden`
     (People, Chat, Files, News) off the bottom bar, rail, drawer and Home's
-    grid alike, as the web's SHARED_SCREEN_HIDDEN does.
+    grid alike, as the web's SHARED_SCREEN_HIDDEN does. The bottom bar is
+    the phone's own pick (`ui/shell/PhoneBar.kt`, Settings → Phone bar),
+    filtered the same way, so a saved tab never beats that rule. A screen
+    that became a Settings tab (Satellites) keeps its `Route` as the way a
+    link names it: `settingsTabFor` and the shell open Settings on the tab.
 13. **Plugin-backed screens are capability-gated.** If a screen's endpoints
     come from a plugin router (`/api/plugins/<slug>/...`), declare its
     capability in `Route.requiredCapability()` (`ui/shell/Routes.kt`) and it

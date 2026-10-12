@@ -70,11 +70,14 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Satellites page — per-room Pi grid + drill-in detail + broadcast composer.
- * Android analog of web/static/satellites.jsx.
+ * Satellites — per-room Pi grid + drill-in detail + broadcast composer.
+ * Android analog of web/static/satellites.jsx. Since 2026-10-11 a Settings
+ * tab (Settings → Satellites), [embedded] under the Settings header: the
+ * roster's counts become its first line instead of a page header of its
+ * own. Every read and action is the same either way.
  */
 @Composable
-fun SatellitesScreen() {
+fun SatellitesScreen(embedded: Boolean = false) {
     var openRoom by remember { mutableStateOf<String?>(null) }
 
     val satsState = rememberApi(
@@ -137,10 +140,12 @@ fun SatellitesScreen() {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    PageHeader(
-                        "Satellites",
-                        "$onlineCount online · $offlineCount offline · ${sats.size} provisioned",
-                    )
+                    val summary = "$onlineCount online · $offlineCount offline · ${sats.size} provisioned"
+                    if (embedded) {
+                        Text(summary, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
+                    } else {
+                        PageHeader("Satellites", summary)
+                    }
                 }
                 val err = satsState.error
                 when {

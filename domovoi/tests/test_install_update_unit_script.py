@@ -21,6 +21,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from domovoi import self_restart
 from domovoi.tests.test_apply_update_script import BASH, requires_bash
 
@@ -47,6 +49,7 @@ def test_scripts_parse():
 
 
 @requires_bash
+@pytest.mark.bash_harness
 def test_install_update_unit_harness():
     # 60 cases since the October security round: 219 s alone under Git
     # Bash on the dev box, 8.5 min beside other work. The bound is for a
