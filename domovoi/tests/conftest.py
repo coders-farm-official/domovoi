@@ -9,6 +9,25 @@ import socket
 # the test suite shouldn't require.
 os.environ.setdefault("USE_STUBS", "true")
 
+# The suite never reaches a live service on the machine running it. A
+# Domovoi installed on the same PC answers at the defaults (its core on
+# :6370, Ollama on :11434, SearXNG on :6888), and tests that made the web
+# forward to the core without pointing it anywhere reached that live core.
+# Every service URL a test could fall through to is pinned to a dead port
+# here, before anything imports domovoi (the settings read it once) and
+# whatever the shell exported; a test that wants a service sets it itself
+# (monkeypatch.setenv, or monkeypatch.setattr on settings). A new
+# localhost default in the code must join this list:
+# domovoi/tests/test_service_isolation.py fails until it does. The test
+# database is configured separately, below.
+DEAD_SERVICE_URL = "http://127.0.0.1:9"
+LIVE_SERVICE_ENV = ("DOMOVOI_URL", "OLLAMA_URL", "SEARXNG_URL", "LETTA_BASE_URL")
+for _key in [k for k in os.environ if k.upper() in LIVE_SERVICE_ENV]:
+    os.environ.pop(_key, None)
+for _key in LIVE_SERVICE_ENV:
+    os.environ[_key] = DEAD_SERVICE_URL
+
+
 def _resolve_test_database_url() -> str:
     """Pick the database pytest will run against.
 
