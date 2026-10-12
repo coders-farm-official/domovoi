@@ -414,10 +414,13 @@ internal fun VoiceView(
             }
             val latest = latestExchange(transcript) { it.role == "user" }
             if (latest.isNotEmpty()) {
+                // The thread's own canvas, edged, so a reply reads as it does
+                // in the thread above.
                 Column(
                     Modifier.fillMaxWidth()
                         .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                        .background(Domovoi.colors.sunken)
+                        .border(1.dp, Domovoi.colors.border, RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                        .background(Domovoi.colors.canvas)
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     // The handle says the dock opens.
