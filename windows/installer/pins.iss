@@ -12,11 +12,11 @@
 ; from it. A full SHA, never a branch; release tags and their signers come
 ; with code signing (PLAN 10, section 14 item 29).
 #define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"
-#define DomovoiCommit "eb4a497fe821c08b6b8c39d7603ff7384d696dfc"
+#define DomovoiCommit "44f0fff6822991bbae7cf6d7dc46bf1c4d54e58e"
 
-; scripts/linux/provision.sh at that commit (124,607 bytes).
+; scripts/linux/provision.sh at that commit (126,474 bytes).
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
-#define ProvisionSha256 "373327fe06960ad7ce8fa49e311e76f48a4a7bb0feeec3f2669b40ed81e20a81"
+#define ProvisionSha256 "edd22b2d1a2f8113b73536e606fa51dd63e31478d0e7f54bba7abc102e2ce7bd"
 
 ; Ubuntu 26.04.1's official WSL image, 418,495,746 bytes ([verified]
 ; SHA256SUMS 2026-09-24, PLAN 4.13; matched again 2026-10-11).

@@ -7,12 +7,13 @@
 // (never goes down) and message; download lines add bytes and bytes_total
 // (null when unknown). Every run ends with exactly one line that has
 // "final":true, result (ok, failed, rerun_after_restart, dry_run,
-// usage_error, busy, help), restart_required, exit_code, failed_step,
+// usage_error, busy, help, stopped), restart_required, exit_code, failed_step,
 // head, tier, wsl, gpu (a list, [] for the CPU alone, null when unknown),
 // warnings and dashboard. Only a SIGKILL leaves no final line, and the
 // installer treats that as a failure and runs the script again
-// (step1\REPORT.md). Exit codes: 0 done, 1 failed, 2 bad usage, 3 WSL
-// without systemd as PID 1 (terminate the distro, run again), 4 busy.
+// (step1\REPORT.md). Exit codes: 0 done (or "stopped": the run given
+// --stop-before STEP got there), 1 failed, 2 bad usage, 3 WSL without
+// systemd as PID 1 (terminate the distro, run again), 4 busy.
 
 using System;
 using System.Collections.Generic;
@@ -109,6 +110,9 @@ namespace Domovoi.Windows
         // No final line: killed (SIGKILL) or lost. Run again.
         Lost,
         Failed,
+        // Exit 0, result "stopped": a run given --stop-before STEP got
+        // there and ran nothing from STEP on.
+        Stopped,
     }
 
     public static class ProvisionOutcome
@@ -128,6 +132,11 @@ namespace Domovoi.Windows
             switch (exitCode)
             {
                 case 0:
+                    if (final.Result == "stopped")
+                    {
+                        reason = why;
+                        return ProvisionVerdict.Stopped;
+                    }
                     if (final.Result == "ok")
                     {
                         reason = final.RestartRequired ? "the distro must restart to apply /etc/wsl.conf" : "";
@@ -148,6 +157,20 @@ namespace Domovoi.Windows
                     reason = why.Length > 0 ? why : "provisioning failed (exit " + Inv.S(exitCode) + ")";
                     return ProvisionVerdict.Failed;
             }
+        }
+    }
+
+    // What the pinned provision.sh can do, from its own text: the host
+    // reads the exact file it runs (SHA-256 checked) before it runs it.
+    public static class ProvisionScript
+    {
+        // --stop-before STEP (provision.sh after 2026-10-12): the host stops
+        // the run before "start" and checks the PC's ports. An older pinned
+        // script (44f0fff and before) has no such option and would refuse it
+        // (exit 2), so the host only passes it when the usage text has it.
+        public static bool SupportsStopBefore(string scriptText)
+        {
+            return scriptText != null && scriptText.IndexOf("\n  --stop-before STEP ", StringComparison.Ordinal) >= 0;
         }
     }
 

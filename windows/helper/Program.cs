@@ -10,7 +10,7 @@
 // password and the setup code never reach either (the setup-code verb
 // prints the code to stdout only, for Setup's finish page).
 //
-//   preflight [--ports-only] [--skip-internet]     read-only
+//   preflight [--ports-only] [--skip-internet] [--installing]   read-only
 //   vmp-status | wsl-status | host-status | plan    read-only
 //   host-stop
 //   prepare --internet A --media-root DIR --commit SHA
@@ -21,6 +21,7 @@
 //   check-media --root DIR                          read-only
 //   host-start | host-retry | host-park | setup-code
 //   uninstall [--dry-run]                           exit 3: done, with leftovers
+//   copy-logs --kind install|uninstall --dest DIR [--uninstall-log FILE]
 
 using System;
 using System.Collections.Generic;
@@ -101,7 +102,7 @@ namespace Domovoi.Windows.Helper
                 if (log != null) log.Write("helper " + verb + " (" + WindowsIdentity.GetCurrent().Name + ")");
                 switch (verb)
                 {
-                    case "preflight": Preflight.Run(o, a.Flag("--ports-only"), a.Flag("--skip-internet")); return 0;
+                    case "preflight": Preflight.Run(o, a.Flag("--ports-only"), a.Flag("--skip-internet"), a.Flag("--installing")); return 0;
                     case "vmp-status": o.Kv("vmp", Preflight.VmpEnabled() ? "enabled" : "disabled"); return 0;
                     case "wsl-status":
                         {
@@ -127,6 +128,7 @@ namespace Domovoi.Windows.Helper
                     case "setup-code": return Steps.ReadSetupCode(o);
                     case "plan": Steps.Plan(o); return 0;
                     case "uninstall": return Uninstall.Run(o, dry);
+                    case "copy-logs": Logs.Copy(o, a.Req("--dest"), a.Req("--kind"), a.Opt("--uninstall-log")); return 0;
                     default:
                         o.Kv("error", "unknown verb: " + verb);
                         return 2;
@@ -152,7 +154,7 @@ namespace Domovoi.Windows.Helper
             {
                 string k = argv[i];
                 if (!k.StartsWith("--", StringComparison.Ordinal)) throw new ArgumentException("unexpected argument: " + k);
-                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--no-deny-logon") { flags.Add(k); continue; }
+                if (k == "--dry-run" || k == "--ports-only" || k == "--skip-internet" || k == "--no-deny-logon" || k == "--installing") { flags.Add(k); continue; }
                 if (i + 1 >= argv.Length) throw new ArgumentException(k + " needs a value");
                 values[k] = argv[++i];
             }

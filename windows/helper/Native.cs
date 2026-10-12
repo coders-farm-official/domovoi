@@ -189,14 +189,7 @@ namespace Domovoi.Windows.Helper
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool MoveFileExW(string existing, string newName, int flags);
 
-        // -- sockets, memory, CPU -----------------------------------------
-        public const int AF_INET = 2;
-        public const int AF_INET6 = 23;
-        public const int TCP_TABLE_OWNER_PID_LISTENER = 3;
-
-        [DllImport("iphlpapi.dll", SetLastError = true)]
-        public static extern uint GetExtendedTcpTable(IntPtr table, ref int size, [MarshalAs(UnmanagedType.Bool)] bool order, int af, int tableClass, uint reserved);
-
+        // -- network, memory, CPU (the TCP table is PortScan's, in common) -
         [DllImport("iphlpapi.dll")]
         public static extern int GetBestInterface(uint destAddr, out uint index);
 

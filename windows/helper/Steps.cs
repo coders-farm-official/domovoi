@@ -305,7 +305,7 @@ namespace Domovoi.Windows.Helper
         public static void HostStart(Output o)
         {
             HostService.SetAutomatic(true);
-            HostService.Start(null, 120);
+            HostService.Start(120);
             o.Say("started " + Paths.ServiceName);
         }
 
@@ -330,7 +330,7 @@ namespace Domovoi.Windows.Helper
             job.Attempt = l.JobAttempt;
             Json.WriteFile(Paths.Job, job.ToJson());
             SaveLedger(l);
-            HostService.Start(null, 120);
+            HostService.Start(120);
             o.Say("asked " + Paths.ServiceName + " to try again (attempt " + Inv.S(job.Attempt) + ")");
             o.Kv("attempt", Inv.S(job.Attempt));
         }

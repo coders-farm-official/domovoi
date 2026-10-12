@@ -10,15 +10,23 @@
 ; Flow (PLAN 4.1-4.12): preflight (ports by owner, Retry/Cancel), what
 ; changes, the internet question, the media folder, downloads (pinned,
 ; SHA-256 checked), Virtual Machine Platform and WSL with restart and
-; resume, then the helper's steps and DomovoiHost's progress, then the
-; setup code. Uninstall runs the helper's uninstall, which undoes all of
-; it, and works after a half-finished install too.
+; resume, then the helper's steps and DomovoiHost's progress (the ports
+; checked again right before Domovoi starts, and after a failed step),
+; then the setup code. Uninstall runs the helper's uninstall, which undoes
+; all of it, works after a half-finished install too, and shows each step
+; as it goes. Every error page offers "Copy logs": the logs are in an
+; administrators-only folder, so the helper copies them, redacted, to
+; Documents\Domovoi logs and Explorer opens it.
 ;
 ; Build: windows\build.ps1 (Inno Setup 6). Docs: docs/WINDOWS_HOST.md.
 
 #include "pins.iss"
 #define AppVersion "0.1.0-test"
 #define Helper "DomovoiSetupHelper.exe"
+; Which build this is, for the dashboard link on the last page: a URL no
+; earlier build opened, so an old cache-first service worker of the
+; dashboard can't answer it from its cache.
+#define BuildStamp GetDateTimeString('yyyymmddhhnnss', '', '')
 
 [Setup]
 AppId={{8F3C2A61-5D4B-4E7A-9C1F-2B6D0E4A7C35}
@@ -49,11 +57,19 @@ VersionInfoVersion=0.1.0.0
 VersionInfoCompany=Coders Farm
 VersionInfoDescription=Domovoi Setup (test build)
 VersionInfoProductName=Domovoi
+; Domovoi's own mark, made by art\make_art.py from docs/assets/domovoi-icon.png:
+; Setup's and the uninstaller's icon, the Installed apps entry, and the
+; wizard's pictures at each size Inno Setup 6.6+ uses (100% to 250%).
+SetupIconFile=art\domovoi.ico
+UninstallDisplayIcon={app}\domovoi.ico
+WizardImageFile=art\wizard-202x386.png,art\wizard-269x515.png,art\wizard-336x643.png,art\wizard-403x772.png,art\wizard-430x824.png,art\wizard-498x953.png,art\wizard-534x1022.png
+WizardSmallImageFile=art\small-58.png,art\small-77.png,art\small-97.png,art\small-116.png,art\small-124.png,art\small-143.png,art\small-159.png
 
 [Files]
 ; The helper first: preflight extracts it before anything is installed.
 Source: "..\build\bin\{#Helper}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build\bin\DomovoiHost.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "art\domovoi.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
 ; The copy Setup runs after a restart (CreateRunOnceEntry), if one was made.
@@ -67,8 +83,20 @@ const
   RunOnceKey = 'Software\Microsoft\Windows\CurrentVersion\RunOnce';
   RunOnceName = 'DomovoiSetupResume';
   WM_COPY = $0301;
+  WM_VSCROLL = $0115;
+  SB_BOTTOM = 7;
   InternetDoc = '{#DomovoiRepoUrl}/blob/main/docs/INTERNET.md#what-goes-out';
   DashboardUrl = 'http://localhost:6369';
+  { What "Open Domovoi" opens: the dashboard with this build's mark. A
+    browser that ran an earlier Domovoi on this port may still have that
+    dashboard's service worker, and the old ones answered from their cache
+    first, by exact URL (web/static/sw.js before f4421ab, 2026-09-25); a
+    URL no build opened before misses that cache and gets today's page,
+    which installs the current worker (network-first; it takes over at
+    once: skipWaiting, clients.claim). }
+  OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}';
+  InstallPortCheck = 'preflight --ports-only --installing';
+  LogsHint = 'Logs: C:\ProgramData\Domovoi\logs (only administrators can open it). Copy logs puts a copy in Documents\Domovoi logs and opens it.';
 
 var
   Resumed: Boolean;
@@ -94,9 +122,14 @@ var
   GpuText, TierText: String;
   CodeTitle, CodeHint, LanText: TNewStaticText;
   CodeEdit: TNewEdit;
-  CopyButton, OpenButton: TNewButton;
+  CopyButton, OpenButton, CopyLogsButton: TNewButton;
   StopButton: TNewButton;
   StopRequested: Boolean;
+
+  { The uninstaller: the helper's output lines as they come, and the list
+    of steps under the progress bar. }
+  UninstLines: TArrayOfString;
+  UninstallDetails: TNewMemo;
 
 function GetTickCount: Cardinal; external 'GetTickCount@kernel32.dll stdcall';
 
@@ -184,11 +217,69 @@ begin
   end;
 end;
 
+{ -- logs the household can open (owner fixes 2026-10-12, item 4) ------- }
+
+{ The logs are in C:\ProgramData\Domovoi, which only administrators can
+  open. The helper copies them (redacted: no setup code, no password in a
+  URL) to a new folder under Documents\Domovoi logs, and Explorer opens
+  it. Kind: install or uninstall; UninstallLog: the uninstall's own record
+  in the temp folder, or ''. }
+procedure CopyLogs(const Exe, Kind, UninstallLog: String);
+var
+  Lines: TArrayOfString;
+  Code, Err: Integer;
+  Params, Folder: String;
+begin
+  if not FileExists(Exe) then
+  begin
+    MsgBox('The logs can''t be copied: ' + Exe + ' is missing.', mbError, MB_OK);
+    Exit;
+  end;
+  Params := 'copy-logs --kind ' + Kind + ' --dest ' + AddQuotes(ExpandConstant('{userdocs}\Domovoi logs'));
+  if UninstallLog <> '' then
+    Params := Params + ' --uninstall-log ' + AddQuotes(UninstallLog);
+  if not RunHelper(Exe, Params, Lines, Code) or (Code <> 0) then
+  begin
+    MsgBox('The logs could not be copied: ' + KvValue(Lines, 'error'), mbError, MB_OK);
+    Exit;
+  end;
+  Folder := KvValue(Lines, 'folder');
+  Log('Copied the logs to ' + Folder);
+  if IsUninstaller then
+    ShellExec('open', Folder, '', '', SW_SHOWNORMAL, ewNoWait, Err)
+  else
+    ShellExecAsOriginalUser('open', Folder, '', '', SW_SHOWNORMAL, ewNoWait, Err);
+end;
+
+{ An install error with Retry, Copy logs and Stop Setup; Copy logs copies
+  them and asks again. True: Retry. (MB_ABORTRETRYIGNORE takes its labels
+  in the order Retry, Ignore, Abort.) }
+function RetryOrStop(const Instruction, Text: String): Boolean;
+var
+  R: Integer;
+begin
+  while True do
+  begin
+    { (No line here may start with "[": ISCC would read it as a section.) }
+    R := TaskDialogMsgBox(Instruction, Text + #13#10#13#10 + LogsHint, mbError, MB_ABORTRETRYIGNORE, ['Retry', 'Copy logs', 'Stop Setup'], 0);
+    if R = IDIGNORE then
+      CopyLogs(AppHelper, 'install', '')
+    else
+    begin
+      Result := R = IDRETRY;
+      Exit;
+    end;
+  end;
+end;
+
 { -- preflight (PLAN 4.1) ----------------------------------------------- }
 
 { One pop-up per program that holds a port Domovoi needs, with Retry and
-  Cancel (owner decision 2026-10-09). False: the user cancelled. }
-function ResolvePorts(Lines: TArrayOfString): Boolean;
+  Cancel (owner decision 2026-10-09); Retry checks again with the same
+  helper call. Used by the first check and, during the install, right
+  before Domovoi starts and after a failed step (owner fixes 2026-10-12,
+  item 2). False: the user cancelled. }
+function ResolvePorts(Lines: TArrayOfString; const Exe, Params, CancelLabel: String): Boolean;
 var
   Owners, Parts: TArrayOfString;
   I, Code: Integer;
@@ -206,19 +297,29 @@ begin
         Continue;
       if TaskDialogMsgBox(Parts[1],
         Parts[2] + #13#10#13#10 + 'Domovoi checks only the ports it needs; programs on other ports are fine.',
-        mbError, MB_RETRYCANCEL, ['Retry', 'Cancel Setup'], 0) <> IDRETRY then
+        mbError, MB_RETRYCANCEL, ['Retry', CancelLabel], 0) <> IDRETRY then
       begin
         Result := False;
         Exit;
       end;
     end;
-    if not RunHelper(TmpHelper, 'preflight --ports-only', Lines, Code) then
+    if not RunHelper(Exe, Params, Lines, Code) then
     begin
       MsgBox('Setup could not check the ports again.', mbError, MB_OK);
       Result := False;
       Exit;
     end;
   end;
+end;
+
+{ During the install: True when a Windows program holds a port Domovoi
+  needs now; Lines then has its port_owner lines. }
+function PortsTakenNow(var Lines: TArrayOfString): Boolean;
+var
+  Code: Integer;
+begin
+  Result := RunHelper(AppHelper, InstallPortCheck, Lines, Code) and (Code = 0)
+    and (GetArrayLength(KvValues(Lines, 'port_owner')) > 0);
 end;
 
 function RunPreflight: Boolean;
@@ -254,7 +355,7 @@ begin
         Continue;
       Exit;
     end;
-    if not ResolvePorts(Preflight) then
+    if not ResolvePorts(Preflight, TmpHelper, 'preflight --ports-only', 'Cancel Setup') then
       Exit;
     Break;
   end;
@@ -316,7 +417,7 @@ begin
   S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it). Setup won''t use a C:\ProgramData\Domovoi it didn''t make.' + #13#10#13#10;
   N := N + 1;
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
-  S := S + 'Downloads: about 8-9 GB. Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models, each checked against a pinned hash.' + #13#10#13#10;
+  S := S + 'Downloads: about 10-13 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
   S := S + 'Not changed: power and sleep settings (this test build doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
   S := S + 'This test build is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.';
@@ -375,7 +476,7 @@ var
   Y: Integer;
 begin
   InternetPage := CreateCustomPage(AfterID, 'Will this PC have internet after setup?', 'Pick one answer to continue.');
-  T := AddText(InternetPage, 'Setup needs the internet right now to download Domovoi (about 8-9 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.', 0, 0, False, False);
+  T := AddText(InternetPage, 'Setup needs the internet right now to download Domovoi (about 10-13 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.', 0, 0, False, False);
   Y := T.Top + T.Height + ScaleY(10);
   RadioAlways := AddRadio(InternetPage, 'Yes, always. It''s on our home internet.', Y);
   T := AddText(InternetPage, 'Turns on the extras that use the internet: web answers (weather, scores, news), song lyrics, other names for artists, podcast downloads. They pause by themselves if the internet drops.', RadioAlways.Top + RadioAlways.Height, ScaleX(18), True, False);
@@ -424,8 +525,15 @@ procedure OpenDomovoiClick(Sender: TObject);
 var
   Err: Integer;
 begin
-  { localhost, not the LAN address: a secure context for the browser (PLAN 4.12). }
-  ShellExecAsOriginalUser('open', DashboardUrl, '', '', SW_SHOWNORMAL, ewNoWait, Err);
+  { localhost, not the LAN address: a secure context for the browser (PLAN
+    4.12); with this build's mark, so no old service worker answers it
+    from its cache (OpenUrl). }
+  ShellExecAsOriginalUser('open', OpenUrl, '', '', SW_SHOWNORMAL, ewNoWait, Err);
+end;
+
+procedure CopyLogsClick(Sender: TObject);
+begin
+  CopyLogs(AppHelper, 'install', '');
 end;
 
 procedure CreateFinishControls;
@@ -453,6 +561,10 @@ begin
   OpenButton.Parent := P;
   OpenButton.Caption := 'Open Domovoi';
   OpenButton.OnClick := @OpenDomovoiClick;
+  CopyLogsButton := TNewButton.Create(WizardForm);
+  CopyLogsButton.Parent := P;
+  CopyLogsButton.Caption := 'Copy logs';
+  CopyLogsButton.OnClick := @CopyLogsClick;
   LanText := TNewStaticText.Create(WizardForm);
   LanText.Parent := P;
   LanText.WordWrap := True;
@@ -473,7 +585,9 @@ begin
   CodeHint.SetBounds(X, Y, W, ScaleY(30));
   CodeHint.AdjustHeight;
   Y := CodeHint.Top + CodeHint.Height + ScaleY(10);
+  { One of the two shows: Open Domovoi after an install, Copy logs after a failure. }
   OpenButton.SetBounds(X, Y, ScaleX(120), ScaleY(25));
+  CopyLogsButton.SetBounds(X, Y, ScaleX(120), ScaleY(25));
   Y := Y + ScaleY(36);
   LanText.SetBounds(X, Y, W, ScaleY(60));
   LanText.AdjustHeight;
@@ -489,6 +603,7 @@ begin
   CopyButton.Visible := HasCode;
   CodeHint.Visible := HasCode;
   OpenButton.Visible := InstallOk;
+  CopyLogsButton.Visible := not InstallOk and FileExists(AppHelper);
   LanText.Visible := True;
   if InstallOk then
   begin
@@ -507,7 +622,12 @@ begin
       WizardForm.FinishedLabel.Caption := FailureText + #13#10#13#10 + 'When you click Finish, Domovoi''s uninstaller removes everything Setup changed.'
     else
       WizardForm.FinishedLabel.Caption := FailureText + #13#10#13#10 + 'What Setup changed so far is still there. Run Setup again to carry on, or remove it with Settings > Apps > Installed apps > Domovoi > Uninstall.';
-    LanText.Caption := 'Logs: C:\ProgramData\Domovoi\logs (install.log, host.log, provision.log).';
+    if not FileExists(AppHelper) then
+      LanText.Caption := 'Setup stopped before it changed anything.'
+    else if UndoOnExit then
+      LanText.Caption := LogsHint + ' Copy them before you click Finish: removing Domovoi deletes that folder.'
+    else
+      LanText.Caption := LogsHint;
   end;
   WizardForm.AdjustLabelHeight(WizardForm.FinishedLabel);
   LayoutFinishControls;
@@ -554,8 +674,7 @@ begin
     if Err = '' then
       Err := 'the helper exited with code ' + IntToStr(Code);
     Log('Step failed: ' + Title + ': ' + Err);
-    if TaskDialogMsgBox(Title + ': it did not work', Err + #13#10#13#10 + 'Logs: C:\ProgramData\Domovoi\state\install.log and C:\ProgramData\Domovoi\logs',
-      mbError, MB_RETRYCANCEL, ['Retry', 'Stop Setup'], 0) <> IDRETRY then
+    if not RetryOrStop(Title + ': it did not work', Err) then
     begin
       FailureText := Title + ' did not work: ' + Err;
       Result := False;
@@ -583,7 +702,7 @@ end;
   gave up after the time limit. }
 function WaitForHost: Boolean;
 var
-  Lines, Ignored: TArrayOfString;
+  Lines, Ignored, PortLines: TArrayOfString;
   Code, Percent, WantAttempt: Integer;
   State, Service, Err: String;
   Started, LimitMs: Cardinal;
@@ -591,7 +710,7 @@ begin
   Result := False;
   WantAttempt := 0;
   Started := GetTickCount;
-  { Four hours: far more than a slow line needs for 8-9 GB. }
+  { Four hours: far more than a slow line needs for 10-13 GB. }
   LimitMs := 4 * 3600 * 1000;
   while True do
   begin
@@ -632,9 +751,44 @@ begin
     end;
     ProgressPage.SetText(KvValue(Lines, 'message'), SizeText(KvValue(Lines, 'bytes'), KvValue(Lines, 'bytes_total')));
     ProgressPage.SetProgress(Percent, 100);
+    { Right before Domovoi starts, DomovoiHost checks the ports again and
+      waits while one is taken (state "ports"): the same pop-up per program
+      as the first check; the host carries on by itself once they are free.
+      (Only with a pinned provision.sh that has --stop-before.) }
+    if State = 'ports' then
+    begin
+      if PortsTakenNow(PortLines) then
+        if not ResolvePorts(PortLines, AppHelper, InstallPortCheck, 'Stop Setup') then
+        begin
+          FailureText := 'A port Domovoi needs is taken by another program: ' + KvValue(Lines, 'message');
+          Exit;
+        end;
+      Wait(3000, Percent);
+      Continue;
+    end;
     Err := '';
     if State = 'failed' then
-      Err := KvValue(Lines, 'host_error')
+    begin
+      { A port taken since the first check makes the start fail (2026-10-12:
+        Docker's domovoi-postgres came back on 6432 during the downloads).
+        Then the pop-up per program, not the generic error, and once the
+        ports are free Setup asks the host to carry on by itself. }
+      if PortsTakenNow(PortLines) then
+      begin
+        Log('Host failed with a port taken: ' + KvValue(Lines, 'host_error'));
+        if not ResolvePorts(PortLines, AppHelper, InstallPortCheck, 'Stop Setup') then
+        begin
+          FailureText := 'Setting up Domovoi''s Linux system did not work: a port Domovoi needs is taken by another program.';
+          Exit;
+        end;
+        if not Step('Asking DomovoiHost to try again', 'host-retry', ProgressPage.ProgressBar.Position, Ignored) then
+          Exit;
+        WantAttempt := StrToIntDef(KvValue(Ignored, 'attempt'), 0);
+        Wait(1500, Percent);
+        Continue;
+      end;
+      Err := KvValue(Lines, 'host_error');
+    end
     else if (Service = 'stopped') or (Service = 'missing') then
       Err := 'the DomovoiHost service is not running'
     else if StrToIntDef(KvValue(Lines, 'age_sec'), 0) > 300 then
@@ -642,9 +796,7 @@ begin
     if Err <> '' then
     begin
       Log('Host problem: ' + Err);
-      if TaskDialogMsgBox('Setting up Domovoi''s Linux system did not work', Err + #13#10#13#10 +
-        'Retry carries on where it stopped. Logs: C:\ProgramData\Domovoi\logs (host.log, provision.log).',
-        mbError, MB_RETRYCANCEL, ['Retry', 'Stop Setup'], 0) <> IDRETRY then
+      if not RetryOrStop('Setting up Domovoi''s Linux system did not work', Err + #13#10#13#10 + 'Retry carries on where it stopped.') then
       begin
         FailureText := 'Setting up Domovoi''s Linux system did not work: ' + Err;
         Exit;
@@ -723,7 +875,7 @@ begin
   ResumeExe := ExpandConstant('{app}\resume\DomovoiSetup.exe');
   { A second restart: Setup already runs from that copy. }
   if not SameText(ExpandConstant('{srcexe}'), ResumeExe) then
-    if not ForceDirectories(ExtractFileDir(ResumeExe)) or not FileCopy(ExpandConstant('{srcexe}'), ResumeExe, False) then
+    if not ForceDirectories(ExtractFileDir(ResumeExe)) or not CopyFile(ExpandConstant('{srcexe}'), ResumeExe, False) then
       RaiseException('Setup could not copy itself to ' + ResumeExe + ' to carry on after the restart.');
   Data := AddQuotes(ResumeExe) + ' /resume=1 /internet=' + InternetAnswer +
     ' /mediaroot=' + AddQuotes(RemoveBackslashUnlessRoot(MediaPage.Values[0]));
@@ -933,7 +1085,7 @@ begin
     InstallOk := MachineSetup;
     if not InstallOk then
     begin
-      UndoOnExit := MsgBox(FailureText + #13#10#13#10 + 'Remove what Setup has changed so far? (Recommended unless you want to look at the logs first; you can also run Setup again later to carry on.)',
+      UndoOnExit := MsgBox(FailureText + #13#10#13#10 + 'Remove what Setup has changed so far? (Recommended unless you want to run Setup again later to carry on. Either way, the last page has a Copy logs button.)',
         mbConfirmation, MB_YESNO) = IDYES;
       { Kept for later: DomovoiHost stopped and set to Manual, so it doesn't
         start provisioning again at every boot. Setup sets it back. }
@@ -955,13 +1107,120 @@ end;
 
 { -- uninstall (PLAN 7) ------------------------------------------------- }
 
+{ The steps as they happen, under the progress bar (owner fixes
+  2026-10-12, item 7: the window sat on one message for minutes while the
+  helper's log showed each step). }
+procedure InitializeUninstallProgressForm;
+var
+  F: TUninstallProgressForm;
+  Top, H: Integer;
+begin
+  { An exception here would stop the uninstaller (Inno treats it as
+    fatal), so the list is optional: without it the status text and the
+    bar still move. }
+  try
+    F := UninstallProgressForm;
+    Top := F.ProgressBar.Top + F.ProgressBar.Height + ScaleY(12);
+    H := F.InstallingPage.ClientHeight - Top - ScaleY(4);
+    if H < ScaleY(48) then
+      H := ScaleY(48);
+    UninstallDetails := TNewMemo.Create(F);
+    UninstallDetails.Parent := F.InstallingPage;
+    UninstallDetails.ReadOnly := True;
+    UninstallDetails.ScrollBars := ssVertical;
+    UninstallDetails.WordWrap := True;
+    UninstallDetails.SetBounds(F.ProgressBar.Left, Top, F.ProgressBar.Width, H);
+    UninstallDetails.Visible := False;
+  except
+    Log('No list of steps: ' + GetExceptionMessage);
+    UninstallDetails := nil;
+  end;
+end;
+
+procedure AddDetail(const S: String);
+begin
+  if UninstallDetails = nil then
+    Exit;
+  UninstallDetails.Visible := True;
+  UninstallDetails.Lines.Add(S);
+  { Keep the newest line in view. }
+  SendMessage(UninstallDetails.Handle, WM_VSCROLL, SB_BOTTOM, 0);
+end;
+
+{ One line of the helper's uninstall output, shown: progress=N|TOTAL|what
+  drives the status text and the bar; info=, leftover=, kept= and
+  restart= lines go to the list. }
+procedure ShowUninstallLine(const S: String);
+var
+  P, Index, Total: Integer;
+  Rest: String;
+begin
+  if Copy(S, 1, 9) = 'progress=' then
+  begin
+    Rest := Copy(S, 10, Length(S));
+    P := Pos('|', Rest);
+    Index := StrToIntDef(Copy(Rest, 1, P - 1), 0);
+    Rest := Copy(Rest, P + 1, Length(Rest));
+    P := Pos('|', Rest);
+    Total := StrToIntDef(Copy(Rest, 1, P - 1), 0);
+    Rest := Copy(Rest, P + 1, Length(Rest));
+    UninstallProgressForm.StatusLabel.Caption := Rest + '...';
+    if (Total > 0) and (Index > 0) then
+    begin
+      UninstallProgressForm.ProgressBar.Min := 0;
+      UninstallProgressForm.ProgressBar.Max := Total;
+      UninstallProgressForm.ProgressBar.Position := Index - 1;
+    end;
+    AddDetail(IntToStr(Index) + '/' + IntToStr(Total) + '  ' + Rest);
+  end
+  else if Copy(S, 1, 5) = 'info=' then
+    AddDetail('        ' + Copy(S, 6, Length(S)))
+  else if Copy(S, 1, 9) = 'leftover=' then
+    AddDetail('Left over: ' + Copy(S, 10, Length(S)))
+  else if Copy(S, 1, 8) = 'restart=' then
+    AddDetail('At the next restart: ' + Copy(S, 9, Length(S)))
+  else if Copy(S, 1, 5) = 'kept=' then
+    AddDetail('Kept: ' + Copy(S, 6, Length(S)));
+end;
+
+{ The helper's output as it runs (ExecAndLogOutput reads it a line at a
+  time while the helper works, and keeps the window responsive). Every
+  line is kept for the messages at the end. }
+procedure UninstallOutput(const S: String; const Error, FirstLine: Boolean);
+var
+  N: Integer;
+begin
+  if Error then
+  begin
+    Log('Reading the helper''s output: ' + S);
+    Exit;
+  end;
+  N := GetArrayLength(UninstLines);
+  SetArrayLength(UninstLines, N + 1);
+  UninstLines[N] := S;
+  { Showing a line must never stop the reading: an exception here would
+    end the wait with the helper still at work. }
+  try
+    ShowUninstallLine(S);
+  except
+    Log('Showing a line of the helper''s output: ' + GetExceptionMessage);
+  end;
+end;
+
+{ A message with a Copy logs button, which copies the logs (Domovoi's
+  folder, while it is still there, and the uninstall's own record) and asks
+  again. (MB_YESNO: the labels in that order, Yes first.) }
+procedure UninstallNotice(const Instruction, Text: String; const Typ: TMsgBoxType; const HelperExe, LogFile: String);
+begin
+  while SuppressibleTaskDialogMsgBox(Instruction, Text, Typ, MB_YESNO, ['OK', 'Copy logs'], 0, IDYES) = IDNO do
+    CopyLogs(HelperExe, 'uninstall', LogFile);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  Output: TExecOutput;
   Code: Integer;
-  HelperExe: String;
-  Lines: TArrayOfString;
-  Left, Kept: TArrayOfString;
+  HelperExe, LogFile, Later: String;
+  Left, Kept, AtRestart: TArrayOfString;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
@@ -971,40 +1230,52 @@ begin
     SuppressibleMsgBox(HelperExe + ' is missing, so the uninstaller can''t undo what Setup changed. Run Domovoi Setup again (it repairs the program), then uninstall.', mbError, MB_OK, IDOK);
     Abort;
   end;
-  UninstallProgressForm.StatusLabel.Caption := 'Removing Domovoi''s Linux system, its hidden account, its service and its firewall rules. This can take a few minutes...';
+  UninstallProgressForm.StatusLabel.Caption := 'Looking at what Setup changed...';
+  SetArrayLength(UninstLines, 0);
   try
-    if not ExecAndCaptureOutput(HelperExe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code, Output) then
+    if not ExecAndLogOutput(HelperExe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code, @UninstallOutput) then
       Code := -1;
-    Lines := Output.StdOut;
   except
+    Log('Could not run the helper: ' + GetExceptionMessage);
     Code := -1;
   end;
-  Log('Uninstall helper exit code ' + IntToStr(Code) + '; record: ' + KvValue(Lines, 'log'));
-  Left := KvValues(Lines, 'leftover');
-  Kept := KvValues(Lines, 'kept');
+  LogFile := KvValue(UninstLines, 'log');
+  Log('Uninstall helper exit code ' + IntToStr(Code) + '; record: ' + LogFile);
+  UninstallProgressForm.StatusLabel.Caption := 'Removing the program...';
+  Left := KvValues(UninstLines, 'leftover');
+  Kept := KvValues(UninstLines, 'kept');
+  AtRestart := KvValues(UninstLines, 'restart');
+  Later := '';
+  if GetArrayLength(AtRestart) > 0 then
+    Later := #13#10 + 'At the next restart Windows removes the rest by itself; there is nothing for you to do:' + #13#10#13#10 + JoinLines(AtRestart, '- ');
   if GetArrayLength(Kept) > 0 then
-    SuppressibleMsgBox('Kept on purpose:' + #13#10#13#10 + JoinLines(Kept, '- '), mbInformation, MB_OK, IDOK);
+    UninstallNotice('Kept on purpose', JoinLines(Kept, '- '), mbInformation, HelperExe, LogFile);
+  { 0: all gone now, or at the next restart by itself (owner fixes
+    2026-10-12, items 8 and 9: the profile Windows still held is deleted by
+    a one-time startup task, not left to the household). }
+  if (Code = 0) and (Later <> '') then
+    UninstallNotice('Domovoi is removed', Trim(Later), mbInformation, HelperExe, LogFile);
   if Code = 0 then
     Exit;
   { 4: finished; what is left holds no data and grants nothing (or this was
     the third try): list it with how to remove it by hand, and let Uninstall
-    remove the program. }
+    remove the program, so nothing here asks for the uninstaller again. }
   if Code = 4 then
   begin
-    SuppressibleMsgBox('Domovoi is removed. A few things could not be, and are safe to leave or remove by hand:' + #13#10#13#10 +
-      JoinLines(Left, '- ') + #13#10 + 'The same list is in ' + KvValue(Lines, 'log'), mbInformation, MB_OK, IDOK);
+    UninstallNotice('Domovoi is removed', 'A few things could not be removed. They hold none of Domovoi''s data and are safe to leave, or remove them by hand:' + #13#10#13#10 +
+      JoinLines(Left, '- ') + Later + #13#10 + 'The same list is in ' + LogFile, mbInformation, HelperExe, LogFile);
     Exit;
   end;
   { Anything else short of "all gone": stop here, before Uninstall deletes
     C:\Program Files\Domovoi and the Apps entry, so the uninstaller (and the
     helper it runs) stay for the retry. }
   if Code = 3 then
-    SuppressibleMsgBox('Domovoi is not fully removed yet (try ' + KvValue(Lines, 'run') + '). Still there:' + #13#10#13#10 + JoinLines(Left, '- ') + #13#10 +
-      'Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped. On the third try it finishes and lists whatever is left.' + #13#10#13#10 +
-      'Details: ' + KvValue(Lines, 'log'), mbInformation, MB_OK, IDOK)
+    UninstallNotice('Domovoi is not fully removed yet', 'Still there (try ' + KvValue(UninstLines, 'run') + '):' + #13#10#13#10 + JoinLines(Left, '- ') + Later + #13#10 +
+      'Domovoi stays in Installed apps for this. Restart Windows, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped. On the third try it finishes and lists whatever is left.' + #13#10#13#10 +
+      'Details: ' + LogFile, mbInformation, HelperExe, LogFile)
   else
-    SuppressibleMsgBox('The uninstaller stopped before removing Domovoi''s account, service or data: ' + KvValue(Lines, 'error') + #13#10#13#10 +
-      'Nothing of Domovoi''s data was deleted. Fix what the message says, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped.' + #13#10#13#10 +
-      'Details: ' + KvValue(Lines, 'log'), mbError, MB_OK, IDOK);
+    UninstallNotice('The uninstaller stopped', 'It stopped before removing Domovoi''s account, service or data: ' + KvValue(UninstLines, 'error') + #13#10#13#10 +
+      'Nothing of Domovoi''s data was deleted, and Domovoi stays in Installed apps. Fix what the message says, then uninstall Domovoi again (Settings > Apps > Installed apps > Domovoi > Uninstall); it carries on where it stopped.' + #13#10#13#10 +
+      'Details: ' + LogFile, mbError, HelperExe, LogFile);
   Abort;
 end;

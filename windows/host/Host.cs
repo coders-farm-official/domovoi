@@ -8,11 +8,15 @@
 //   4. run provision.sh (the pinned copy) as root inside it, its progress
 //      lines into status.json for Setup's progress bar, and handle its
 //      exits: restart_required and exit 3 (terminate, start, run again),
-//      4 (busy, wait), a lost final line (run again once);
+//      4 (busy, wait), a lost final line (run again once); right before
+//      its "start" step, wait until the ports Domovoi needs are free on
+//      Windows (when the pinned provision.sh has --stop-before);
 //   5. wait until both health URLs answer from Windows;
 //   6. answer one-off requests (the setup code);
-//   7. with the start parameter "unregister": unregister the distro and stop
-//      (the uninstaller's way to delete it as its owner).
+//   7. with the start parameter "unregister": unregister the distro, end
+//      this account's own WSL session (wsl --shutdown as domovoi-svc, which
+//      leaves every other account's WSL alone), and stop (the uninstaller's
+//      way to delete it as its owner and free the account's profile).
 //
 // Nothing here runs a Windows program but wsl.exe, and nothing it reads
 // from the distro is executed on Windows.
@@ -46,6 +50,8 @@ namespace Domovoi.Windows.Host
         DateTime holderNext = DateTime.MinValue;
         int holderBackoffSec = 5;
         Process provision;
+        // The pinned provision.sh takes --stop-before (ProvisionScript).
+        bool canStopBeforeStart;
         DateTime lastStatusWrite = DateTime.MinValue;
         string lastJobError;
 
@@ -462,6 +468,7 @@ namespace Domovoi.Windows.Host
             string sha;
             using (var h = System.Security.Cryptography.SHA256.Create()) sha = Sha256.Hex(h.ComputeHash(script));
             if (sha != job.ProvisionSha256) { Fail("provision.sh does not match its pinned SHA-256", null); return false; }
+            canStopBeforeStart = ProvisionScript.SupportsStopBefore(Encoding.UTF8.GetString(script));
             string sh = "umask 077 && mkdir -p " + InDistroDir + " && cat > " + InDistroScript + ".new && mv -f "
                 + InDistroScript + ".new " + InDistroScript + " && sha256sum " + InDistroScript;
             WslResult r = Wsl.Run(new[] { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/sh", "-c", sh }, 120000, script, 16 * 1024);
@@ -479,10 +486,14 @@ namespace Domovoi.Windows.Host
             if (!CopyScriptIn(job)) return false;
             int restarts = 0, lost = 0, busy = 0;
             bool verifying = false;
+            // The port check right before the start step (owner fixes
+            // 2026-10-12, item 2): the first pass stops before "start".
+            bool portGate = canStopBeforeStart;
+            if (!portGate) log.Write("the pinned provision.sh has no --stop-before: the ports are checked again only if the start fails");
             while (!Stopping)
             {
                 ProvisionLine final;
-                int code = RunProvision(job, verifying, out final);
+                int code = RunProvision(job, verifying, portGate ? "start" : null, out final);
                 if (Stopping) return false;
                 if (final != null)
                 {
@@ -513,6 +524,11 @@ namespace Domovoi.Windows.Host
                     case ProvisionVerdict.Lost:
                         if (++lost > 1) { Fail(why, null); return false; }
                         continue;
+                    case ProvisionVerdict.Stopped:
+                        if (!portGate) { Fail("provisioning stopped though nobody asked it to: " + why, null); return false; }
+                        if (!WaitForFreePorts()) return false;
+                        portGate = false;
+                        continue;
                     default:
                         Fail(why, final != null ? final.FailedStep : null);
                         return false;
@@ -521,11 +537,13 @@ namespace Domovoi.Windows.Host
             return false;
         }
 
-        int RunProvision(HostJob job, bool verifying, out ProvisionLine final)
+        int RunProvision(HostJob job, bool verifying, string stopBefore, out ProvisionLine final)
         {
             var args = new List<string> { "-d", Paths.DistroName, "-u", "root", "--cd", "/", "--exec", "/bin/bash", InDistroScript };
-            args.AddRange(job.ProvisionArgs);
-            plog.Write("---- provision.sh " + string.Join(" ", job.ProvisionArgs.ToArray()) + (verifying ? " (after a restart)" : ""));
+            var scriptArgs = new List<string>(job.ProvisionArgs);
+            if (stopBefore != null) { scriptArgs.Add("--stop-before"); scriptArgs.Add(stopBefore); }
+            args.AddRange(scriptArgs);
+            plog.Write("---- provision.sh " + string.Join(" ", scriptArgs.ToArray()) + (verifying ? " (after a restart)" : ""));
             var psi = Wsl.Start(args);
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
@@ -583,6 +601,43 @@ namespace Domovoi.Windows.Host
                 final = last;
                 return p.ExitCode;
             }
+        }
+
+        // Right before provision.sh starts Domovoi: every port Domovoi needs
+        // must be free on Windows, or the database, the core or the dashboard
+        // can't bind (mirrored networking shares the port space). Setup's
+        // own check was before the downloads, which take most of the
+        // install; on 2026-10-12 Docker's domovoi-postgres took 6432 back in
+        // those minutes and the start failed. Waits while any is taken,
+        // looking again every 3 s; Setup shows the same pop-up per program
+        // as its first check meanwhile (state "ports"). Only Windows
+        // programs show in the table, never Domovoi's own Linux services
+        // (PortScan). False: the service is stopping.
+        bool WaitForFreePorts()
+        {
+            string last = null;
+            while (!Stopping)
+            {
+                List<PortOwner> owners;
+                try { owners = PortCheck.Owners(PortScan.Listeners(), null); }
+                catch (System.ComponentModel.Win32Exception e)
+                {
+                    log.Write("can't read Windows' port table (" + e.Message + "); starting Domovoi without the check");
+                    return true;
+                }
+                if (owners.Count == 0)
+                {
+                    log.Write(last == null ? "the ports Domovoi needs are free" : "the ports Domovoi needs are free again");
+                    return true;
+                }
+                string text = PortCheck.Summary(owners);
+                if (text != last) log.Write("ports Domovoi needs are taken: " + text + "; waiting before starting Domovoi");
+                last = text;
+                Status("ports", HostProgress.PhaseProvision, 0, "Waiting for port " + text + " to be free");
+                ProcessRequests(false);
+                if (Sleep(3000)) return false;
+            }
+            return false;
         }
 
         bool WaitHealthy(int seconds)
@@ -743,10 +798,33 @@ namespace Domovoi.Windows.Host
                 if (!(bool)result["ok"]) result["error"] = "wsl --unregister failed (exit " + Inv.S(u.ExitCode) + "): " + FirstLine(u.Stdout + u.Stderr);
                 else result["message"] = "unregistered";
             }
+            if (result["ok"] is bool && (bool)result["ok"]) result["released"] = ReleaseWsl();
             result["at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             try { Json.WriteFile(Paths.UnregisterResult, result); }
             catch (IOException e) { log.Write("can't write unregister.json: " + e.Message); }
             Status("unregistered", HostProgress.PhaseConfig, 0, "Removed");
+        }
+
+        // With the distro gone, this account's WSL VM still holds files in
+        // its profile (C:\Users\domovoi-svc: WSL's temporary folder for the
+        // VM) until it idles out, and the uninstaller deletes that profile
+        // next; on 2026-10-12 it was still held minutes later and stayed until
+        // a restart. wsl --shutdown ends the CALLER's WSL session only: WSL's
+        // service keeps one session per Windows user, found by the caller's
+        // SID (microsoft/WSL 3.0.1, the version on the PC this was built on:
+        // src/windows/service/exe/LxssUserSessionFactory.cpp,
+        // CreateInstanceForCurrentUser and FindSessionLockHeld), and the
+        // shutdown acts on that session alone (LxssUserSession.cpp:521-528,
+        // LxssUserSession::Shutdown, then LxssUserSessionImpl::Shutdown). So
+        // the household's own WSL distros and Docker Desktop's run on. It
+        // runs here, as domovoi-svc, and nowhere else: never from the helper,
+        // which runs as the household's administrator.
+        bool ReleaseWsl()
+        {
+            WslResult r = Wsl.Run(new[] { "--shutdown" }, 120000, null, 8192);
+            log.Write("wsl --shutdown as " + Paths.AccountName + " (this account's WSL session only) exit " + Inv.S(r.ExitCode)
+                + (r.TimedOut ? " (timed out)" : "") + Trailer(r));
+            return r.ExitCode == 0;
         }
     }
 }

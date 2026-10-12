@@ -37,9 +37,9 @@ namespace Domovoi.Windows.Helper
             "files.pythonhosted.org", "download.pytorch.org", "huggingface.co", "registry.ollama.ai",
         };
 
-        public static void Run(Output o, bool portsOnly, bool skipInternet)
+        public static void Run(Output o, bool portsOnly, bool skipInternet, bool installing)
         {
-            Ports(o);
+            Ports(o, installing);
             if (portsOnly) return;
             Os(o);
             SmartAppControl(o);
@@ -52,64 +52,6 @@ namespace Domovoi.Windows.Helper
         }
 
         // -- ports ------------------------------------------------------
-
-        public static List<Listener> Listeners()
-        {
-            var list = new List<Listener>();
-            ReadTable(Native.AF_INET, list);
-            ReadTable(Native.AF_INET6, list);
-            var names = new Dictionary<int, string>();
-            foreach (var l in list)
-            {
-                string n;
-                if (!names.TryGetValue(l.Pid, out n))
-                {
-                    try
-                    {
-                        using (var p = Process.GetProcessById(l.Pid)) n = p.ProcessName;
-                    }
-                    catch (ArgumentException) { n = null; }
-                    catch (InvalidOperationException) { n = null; }
-                    names[l.Pid] = n;
-                }
-                l.Process = n;
-            }
-            return list;
-        }
-
-        static void ReadTable(int af, List<Listener> list)
-        {
-            int size = 0;
-            Native.GetExtendedTcpTable(IntPtr.Zero, ref size, false, af, Native.TCP_TABLE_OWNER_PID_LISTENER, 0);
-            for (int tries = 0; tries < 5; tries++)
-            {
-                IntPtr buf = Marshal.AllocHGlobal(size);
-                try
-                {
-                    uint rc = Native.GetExtendedTcpTable(buf, ref size, false, af, Native.TCP_TABLE_OWNER_PID_LISTENER, 0);
-                    if (rc == 122) continue; // ERROR_INSUFFICIENT_BUFFER: the table grew
-                    if (rc != 0) throw new System.ComponentModel.Win32Exception((int)rc, "GetExtendedTcpTable");
-                    int n = Marshal.ReadInt32(buf);
-                    // MIB_TCPROW_OWNER_PID: 6 DWORDs (state, local addr, local
-                    // port, remote addr, remote port, pid). MIB_TCP6ROW_OWNER_PID:
-                    // 16-byte addr, scope, port, 16-byte addr, scope, port,
-                    // state, pid = 56 bytes. Ports in network byte order.
-                    int rowSize = af == Native.AF_INET ? 24 : 56;
-                    int portOff = af == Native.AF_INET ? 8 : 20;
-                    int pidOff = af == Native.AF_INET ? 20 : 52;
-                    for (int i = 0; i < n; i++)
-                    {
-                        IntPtr row = new IntPtr(buf.ToInt64() + 4 + i * rowSize);
-                        int rawPort = Marshal.ReadInt32(row, portOff);
-                        int port = ((rawPort & 0xFF) << 8) | ((rawPort >> 8) & 0xFF);
-                        int pid = Marshal.ReadInt32(row, pidOff);
-                        list.Add(new Listener(port, pid, null));
-                    }
-                    return;
-                }
-                finally { Marshal.FreeHGlobal(buf); }
-            }
-        }
 
         public static List<PortRange> ExcludedRanges()
         {
@@ -129,20 +71,29 @@ namespace Domovoi.Windows.Helper
             catch (System.ComponentModel.Win32Exception) { return new List<PortRange>(); }
         }
 
-        public static void Ports(Output o)
+        // installing: Setup's check again while DomovoiHost sets Domovoi up
+        // (right before it starts, or after a step failed). Then the host
+        // runs, but Domovoi's own Linux services never show in Windows'
+        // table (PortScan), so whatever holds a port is another program; and
+        // Windows' excluded ranges are left out, because the WSL VM starting
+        // may itself reserve ranges and they can't be told apart from here.
+        public static void Ports(Output o, bool installing)
         {
-            // Setup run again over a running install (a repair): the ports
-            // are Domovoi's own. Setup stops DomovoiHost before it installs.
-            using (var s = HostService.Find())
+            if (!installing)
             {
-                if (s != null && s.Status != System.ServiceProcess.ServiceControllerStatus.Stopped)
+                // Setup run again over a running install (a repair): the ports
+                // are Domovoi's own. Setup stops DomovoiHost before it installs.
+                using (var s = HostService.Find())
                 {
-                    o.Kv("ports_taken", "0");
-                    o.Kv("ports_note", "Domovoi is already running here; its own ports were not checked");
-                    return;
+                    if (s != null && s.Status != System.ServiceProcess.ServiceControllerStatus.Stopped)
+                    {
+                        o.Kv("ports_taken", "0");
+                        o.Kv("ports_note", "Domovoi is already running here; its own ports were not checked");
+                        return;
+                    }
                 }
             }
-            var owners = PortCheck.Owners(Listeners(), ExcludedRanges());
+            var owners = PortCheck.Owners(PortScan.Listeners(), installing ? null : ExcludedRanges());
             o.Kv("ports_taken", owners.Count > 0 ? "1" : "0");
             foreach (var w in owners) o.Kv("port_owner", w.Kind + "|" + w.Title + "|" + w.Advice);
         }
@@ -413,7 +364,7 @@ namespace Domovoi.Windows.Helper
             if (failed.Count > 0)
             {
                 o.Kv("internet_unreachable", string.Join(",", failed.ToArray()));
-                o.Kv("fatal", "Setup needs the internet to download Domovoi (about 8-9 GB). It could not reach " + string.Join(", ", failed.ToArray()) + ". Connect this PC and run Setup again.");
+                o.Kv("fatal", "Setup needs the internet to download Domovoi (about 10-13 GB). It could not reach " + string.Join(", ", failed.ToArray()) + ". Connect this PC and run Setup again.");
             }
             // The core's connectivity probe dials 1.1.1.1:443 by default
             // (domovoi/config.py); some networks block it.

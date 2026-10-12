@@ -33,8 +33,9 @@ DOC = REPO_ROOT / "docs" / "WINDOWS_HOST.md"
 SOURCES = sorted(
     p
     for p in WIN.rglob("*")
-    if p.is_file() and "build" not in p.relative_to(WIN).parts and p.suffix in {".cs", ".iss", ".ps1", ".xml"}
+    if p.is_file() and "build" not in p.relative_to(WIN).parts and p.suffix in {".cs", ".iss", ".ps1", ".xml", ".py", ".txt"}
 )
+ART = WIN / "installer" / "art"
 
 POWERSHELL = shutil.which("powershell.exe") if sys.platform == "win32" else None
 CSC = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Microsoft.NET" / "Framework64" / "v4.0.30319" / "csc.exe"
@@ -55,7 +56,8 @@ def _pins() -> dict[str, str]:
 
 def test_sources_exist():
     names = {p.name for p in SOURCES}
-    for n in ("DomovoiSetup.iss", "pins.iss", "build.ps1", "Tests.cs", "Host.cs", "Uninstall.cs", "UninstallPlan.cs", "WslList.cs", "Processes.cs"):
+    for n in ("DomovoiSetup.iss", "pins.iss", "build.ps1", "Tests.cs", "Host.cs", "Uninstall.cs", "UninstallPlan.cs", "WslList.cs", "Processes.cs",
+              "PortScan.cs", "ServiceWait.cs", "ProfileTask.cs", "Logs.cs", "make_art.py"):
         assert n in names, n
 
 
@@ -107,9 +109,74 @@ def test_the_script_uses_the_pins_and_the_ports():
     for key in ("ProvisionUrl", "ProvisionSha256", "UbuntuUrl", "UbuntuSha256", "WslMsiUrl", "WslMsiSha256", "DomovoiCommit"):
         assert "{#" + key + "}" in s, key
     assert '#include "pins.iss"' in s
-    # The dashboard the finish page opens: localhost, the AGENTS.md port.
+    # The dashboard the finish page opens: localhost, the AGENTS.md port,
+    # with this build's mark so an old cache-first service worker can't
+    # answer it from its cache (owner fixes 2026-10-12, item 5).
     assert "DashboardUrl = 'http://localhost:6369'" in s
+    assert "OpenUrl = 'http://localhost:6369/?installed={#Copy(DomovoiCommit, 1, 7)}-{#BuildStamp}'" in s
+    assert "ShellExecAsOriginalUser('open', OpenUrl," in s and "ShellExecAsOriginalUser('open', DashboardUrl," not in s
     assert "PrivilegesRequired=admin" in s and "ArchitecturesAllowed=x64os" in s and "MinVersion=10.0.22621" in s
+
+
+def test_the_current_service_worker_takes_over_at_once():
+    """Item 5: a browser with an older dashboard worker gets the current one
+    as soon as it opens a page the old cache can't answer."""
+    sw = (REPO_ROOT / "web" / "static" / "sw.js").read_text(encoding="utf-8")
+    assert "self.skipWaiting()" in sw and "self.clients.claim()" in sw
+    assert "shellNetworkFirst" in sw
+
+
+def _ico_sizes(data: bytes) -> list[int]:
+    import struct
+
+    reserved, kind, count = struct.unpack_from("<HHH", data, 0)
+    assert (reserved, kind) == (0, 1)
+    sizes = []
+    for i in range(count):
+        w, h = struct.unpack_from("<BB", data, 6 + 16 * i)
+        assert w == h
+        sizes.append(w or 256)
+    return sizes
+
+
+def _png_size(data: bytes) -> tuple[int, int]:
+    import struct
+
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    return struct.unpack(">II", data[16:24])
+
+
+def test_the_artwork_is_domovois_and_complete():
+    """Item 1: Setup, the uninstaller and Installed apps carry Domovoi's
+    icon (16-256 px), and the wizard its pictures at every size Inno Setup
+    6.6+ uses; all made by make_art.py, which the script and build use."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert "SetupIconFile=art\\domovoi.ico" in s
+    assert "UninstallDisplayIcon={app}\\domovoi.ico" in s
+    assert 'Source: "art\\domovoi.ico"; DestDir: "{app}"' in s
+    assert _ico_sizes((ART / "domovoi.ico").read_bytes()) == [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
+    wizard = [(202, 386), (269, 515), (336, 643), (403, 772), (430, 824), (498, 953), (534, 1022)]
+    small = [58, 77, 97, 116, 124, 143, 159]
+    assert "WizardImageFile=" + ",".join(f"art\\wizard-{w}x{h}.png" for w, h in wizard) in s
+    assert "WizardSmallImageFile=" + ",".join(f"art\\small-{n}.png" for n in small) in s
+    for w, h in wizard:
+        assert _png_size((ART / f"wizard-{w}x{h}.png").read_bytes()) == (w, h)
+    for n in small:
+        assert _png_size((ART / f"small-{n}.png").read_bytes()) == (n, n)
+    made = {p.name for p in ART.iterdir() if p.suffix in (".png", ".ico")}
+    assert made == {"domovoi.ico", *(f"wizard-{w}x{h}.png" for w, h in wizard), *(f"small-{n}.png" for n in small)}
+    assert "installer\\art\\domovoi.ico" in BUILD.read_text(encoding="ascii")
+
+
+def test_the_artwork_is_what_make_art_makes():
+    """No hand-edited binaries: the files are make_art.py's output from
+    docs/assets/domovoi-icon.png (compared pixel for pixel), with the Pillow
+    version requirements.txt pins."""
+    pil = pytest.importorskip("PIL")
+    if pil.__version__ != "12.3.0":
+        pytest.skip(f"make_art.py needs Pillow 12.3.0, this venv has {pil.__version__}")
+    proc = subprocess.run([sys.executable, str(ART / "make_art.py"), "--check"], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def test_the_doc_names_every_machine_change():
@@ -120,6 +187,8 @@ def test_the_doc_names_every_machine_change():
         "SpecialAccounts\\UserList", "trust boundary", "DHCP reservation", "HKLM\\SOFTWARE\\Domovoi",
         "Smart App Control", "VerifiedAndReputablePolicyState", "Windows protected your PC", "More info", "Run anyway",
         "every WSL VM on the PC", "Domovoi-kept-", "The **third** run",
+        "Copy logs", "Documents\\Domovoi logs", "DomovoiRemoveProfile", "wsl --shutdown", "as `domovoi-svc`",
+        "?installed=", "--stop-before",
     ):
         assert needle in doc, needle
 
@@ -149,6 +218,33 @@ def test_uninstall_aborts_unless_the_helper_finished():
     body = s[s.index("procedure CurUninstallStepChanged"):]
     assert "if Code = 0 then\n    Exit;" in body
     assert body.rstrip().endswith("Abort;\nend;")
+
+
+def test_uninstall_shows_its_steps_and_no_dead_advice():
+    """Items 7 and 9: the uninstaller follows the helper's progress lines as
+    they come (ExecAndLogOutput), and never tells the user to run an
+    uninstaller that has already removed itself."""
+    s = SCRIPT.read_text(encoding="ascii")
+    body = s[s.index("procedure CurUninstallStepChanged"):]
+    assert "ExecAndLogOutput(HelperExe, 'uninstall'" in body and "@UninstallOutput" in body
+    assert "ExecAndCaptureOutput(HelperExe, 'uninstall'" not in s
+    assert "'progress='" in s and "ProgressBar.Position" in s
+    four = body[body.index("if Code = 4 then"):body.index("if Code = 3 then")]
+    assert "again" not in four, four
+    for src in (WIN / "helper" / "Uninstall.cs", WIN / "common" / "UninstallPlan.cs"):
+        text = src.read_text(encoding="ascii")
+        assert "run the uninstaller again" not in text and "then run the uninstaller" not in text, src.name
+
+
+def test_every_error_offers_copy_logs():
+    """Item 4: the install's error dialogs, the finish page after a
+    failure, and the uninstaller's messages."""
+    s = SCRIPT.read_text(encoding="ascii")
+    assert s.count("['Retry', 'Copy logs', 'Stop Setup']") == 1 and s.count("RetryOrStop(") >= 3
+    assert "CopyLogsButton.Caption := 'Copy logs'" in s
+    assert "['OK', 'Copy logs']" in s
+    assert "TaskDialogMsgBox(Title + ': it did not work'" not in s
+    assert s.count("copy-logs --kind ") == 1
 
 
 @requires_windows_build

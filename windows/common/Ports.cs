@@ -237,6 +237,15 @@ namespace Domovoi.Windows
             }
         }
 
+        // One line for a log or a status message: "6432 (Docker Desktop);
+        // 11434 (Ollama)".
+        public static string Summary(List<PortOwner> owners)
+        {
+            var parts = new List<string>();
+            foreach (var o in owners) parts.Add(Format(o.Ports) + " (" + o.Name + ")");
+            return string.Join("; ", parts.ToArray());
+        }
+
         // "6432", "8050-8052", "6369, 8050-8052".
         public static string Format(List<int> ports)
         {

@@ -13,6 +13,7 @@ using System.Linq;
 using System.Management.Automation;
 using System.Management.Automation.Language;
 using System.Runtime.InteropServices;
+using System.ServiceProcess;
 using Domovoi.Windows;
 
 static class Tests
@@ -87,6 +88,11 @@ static class Tests
         MediaRoots();
         FirewallFilter();
         Links();
+        ServiceWaits();
+        PortGate();
+        ProfileCleanup();
+        LogCopies();
+        UninstallTexts();
         Console.WriteLine();
         Console.WriteLine(Inv.F("{0} passed, {1} failed", passed, failed));
         return failed == 0 ? 0 : 1;
@@ -1010,6 +1016,272 @@ static class Tests
                 True(Domovoi.Windows.Helper.Folders.RemoveIfEmpty(empty, delegate (string m) { }), "empty one removed");
             }
             finally { Domovoi.Windows.Helper.Folders.DeleteTree(root); }
+        });
+    }
+
+    // -- the fixes from the first real run (2026-10-12) -------------------
+
+    // A status reader and clock played back from a list: each read returns
+    // the next state (the last one repeats), each sleep moves the clock on.
+    sealed class FakeService
+    {
+        readonly ServiceControllerStatus[] states;
+        int i;
+        public DateTime Now = new DateTime(2026, 10, 12, 17, 38, 14, DateTimeKind.Utc);
+        public int Reads;
+
+        public FakeService(params ServiceControllerStatus[] states) { this.states = states; }
+
+        public ServiceControllerStatus Read()
+        {
+            Reads++;
+            ServiceControllerStatus s = states[Math.Min(i, states.Length - 1)];
+            i++;
+            return s;
+        }
+
+        public void Sleep(int ms) { Now = Now.AddMilliseconds(ms); }
+        public DateTime Clock() { return Now; }
+    }
+
+    static OneShotResult PlayOneShot(FakeService f, int startSec, int finishSec)
+    {
+        return ServiceWait.OneShot(f.Read, f.Sleep, f.Clock, TimeSpan.FromSeconds(startSec), TimeSpan.FromSeconds(finishSec));
+    }
+
+    static void ServiceWaits()
+    {
+        Run("service wait: the unregister run of 2026-10-12 (StartPending, then Stopped within a second) is finished, not a timeout (item 6)", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.StartPending, ServiceControllerStatus.StartPending, ServiceControllerStatus.Stopped);
+            Eq(OneShotResult.Finished, PlayOneShot(f, 120, 900), "finished");
+            True(f.Now - new DateTime(2026, 10, 12, 17, 38, 14, DateTimeKind.Utc) < TimeSpan.FromSeconds(2), "no long wait: " + f.Now);
+        });
+        Run("service wait: Running, then StopPending, then Stopped", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.StartPending, ServiceControllerStatus.Running, ServiceControllerStatus.Running,
+                ServiceControllerStatus.StopPending, ServiceControllerStatus.Stopped);
+            Eq(OneShotResult.Finished, PlayOneShot(f, 120, 900), "finished");
+        });
+        Run("service wait: seen only on its way out (StopPending) counts as started", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.StopPending, ServiceControllerStatus.Stopped);
+            Eq(OneShotResult.Finished, PlayOneShot(f, 120, 900), "finished");
+        });
+        Run("service wait: never past StartPending is NeverStarted, at the start limit", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.StartPending);
+            Eq(OneShotResult.NeverStarted, PlayOneShot(f, 120, 900), "never started");
+            True(f.Now - new DateTime(2026, 10, 12, 17, 38, 14, DateTimeKind.Utc) <= TimeSpan.FromSeconds(121), "gave up at the limit");
+        });
+        Run("service wait: running and never stopping is StillRunning", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.Running);
+            Eq(OneShotResult.StillRunning, PlayOneShot(f, 120, 900), "still running");
+        });
+        Run("service wait: a long-running start settles on Running, or Stopped when it died at once", delegate
+        {
+            var f = new FakeService(ServiceControllerStatus.StartPending, ServiceControllerStatus.Running);
+            Eq((ServiceControllerStatus?)ServiceControllerStatus.Running, ServiceWait.Started(f.Read, f.Sleep, f.Clock, TimeSpan.FromSeconds(120)), "running");
+            var g = new FakeService(ServiceControllerStatus.StartPending, ServiceControllerStatus.Stopped);
+            Eq((ServiceControllerStatus?)ServiceControllerStatus.Stopped, ServiceWait.Started(g.Read, g.Sleep, g.Clock, TimeSpan.FromSeconds(120)), "stopped");
+            var h = new FakeService(ServiceControllerStatus.StartPending);
+            True(ServiceWait.Started(h.Read, h.Sleep, h.Clock, TimeSpan.FromSeconds(5)) == null, "still starting at the limit");
+        });
+        Run("unregister result: only a fresh ok counts (item 6)", delegate
+        {
+            DateTime asked = new DateTime(2026, 10, 12, 17, 38, 12, DateTimeKind.Utc);
+            // host\out\unregister.json of 2026-10-12, with what the host now adds.
+            var real = Json.ParseObject("{\"ok\":true,\"message\":\"unregistered\",\"released\":true,\"at\":\"2026-10-12T17:38:14.2268277Z\"}");
+            True(UnregisterOutcome.Judge(real, asked) == null, "the real answer is a success");
+            True(UnregisterOutcome.Judge(real, asked.AddMinutes(5)).Contains("gave no result"), "an answer from before the request is stale");
+            True(UnregisterOutcome.Judge(null, asked).Contains("gave no result"), "no file");
+            var failed = Json.ParseObject("{\"ok\":false,\"error\":\"wsl --unregister failed (exit 1): busy\",\"at\":\"2026-10-12T17:38:14Z\"}");
+            True(UnregisterOutcome.Judge(failed, asked).Contains("busy"), "the host's error");
+        });
+    }
+
+    // The final line of a run given --stop-before start.
+    const string StoppedFinal = "@@DOMOVOI {\"v\":1,\"step\":\"finish\",\"index\":21,\"total\":21,\"state\":\"done\",\"percent\":90,\"message\":\"Stopped before: Starting Domovoi (--stop-before start)\",\"final\":true,\"result\":\"stopped\",\"restart_required\":true,\"exit_code\":0,\"failed_step\":null,\"head\":\"44f0fff6822991bbae7cf6d7dc46bf1c4d54e58e\",\"tier\":\"standard\",\"wsl\":true,\"gpu\":null,\"warnings\":0,\"dashboard\":\"http://localhost:6369\"}";
+
+    static string RepoFile(string relative)
+    {
+        // windows\build\obj\DomovoiWindowsTests.exe -> the repository.
+        string dir = AppDomain.CurrentDomain.BaseDirectory;
+        for (int i = 0; i < 6 && dir != null; i++)
+        {
+            string p = System.IO.Path.Combine(dir, relative);
+            if (System.IO.File.Exists(p)) return p;
+            dir = System.IO.Path.GetDirectoryName(dir.TrimEnd('\\'));
+        }
+        return null;
+    }
+
+    static void PortGate()
+    {
+        string why;
+        Run("port gate: a run stopped before start is Stopped, not done or failed (item 2)", delegate
+        {
+            var p = ProvisionLine.TryParse(StoppedFinal);
+            Eq(ProvisionVerdict.Stopped, ProvisionOutcome.Classify(0, p, out why), "stopped");
+            True(why.Contains("Starting Domovoi"), "reason: " + why);
+        });
+        Run("port gate: only a provision.sh that has --stop-before gets it", delegate
+        {
+            string path = RepoFile(@"scripts\linux\provision.sh");
+            True(path != null, "found provision.sh");
+            True(ProvisionScript.SupportsStopBefore(System.IO.File.ReadAllText(path)), "this branch's provision.sh has it");
+            // 44f0fff's usage text (the pin today) ends its options like this.
+            string old = "  --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision\n  --dry-run             say what each step would do; change nothing\n";
+            True(!ProvisionScript.SupportsStopBefore(old), "an older one does not");
+            True(!ProvisionScript.SupportsStopBefore("# mentions --stop-before STEP in a comment only"), "a mention is not the option");
+            True(!ProvisionScript.SupportsStopBefore(null), "null");
+        });
+        Run("port gate: the summary names each port and its program", delegate
+        {
+            var o = PortCheck.Owners(new[] { new Listener(6432, 35452, "com.docker.backend"), new Listener(11434, 7, "ollama") }, null);
+            Eq("6432 (Docker Desktop); 11434 (Ollama)", PortCheck.Summary(o), "summary");
+        });
+        Run("port gate: Windows' own TCP table can be read without an administrator", delegate
+        {
+            var l = PortScan.Listeners();
+            True(l.Count > 0, "some listeners on this PC");
+            True(l.All(x => x.Port > 0 && x.Port < 65536), "ports in range");
+        });
+    }
+
+    const string RealSid = "S-1-5-21-225214871-3057608554-2089764004-1003";
+
+    // Runs ProfileTask's cleanup script against stand-in cmdlets: the
+    // profile Get-CimInstance returns, and what got removed and unregistered.
+    static List<string> RunCleanup(string sid, string localPath, bool loaded)
+    {
+        string fakes =
+            "$script:log = New-Object System.Collections.ArrayList\n" +
+            "function Get-CimInstance { param($ClassName, $Filter) " +
+            (localPath == null ? "$null" : "[pscustomobject]@{ SID = '" + sid + "'; LocalPath = '" + localPath + "'; Loaded = $" + (loaded ? "true" : "false") + " }") + " }\n" +
+            "function Remove-CimInstance { param($InputObject) [void]$script:log.Add('removed ' + $InputObject.LocalPath) }\n" +
+            "function Unregister-ScheduledTask { param($TaskName, $TaskPath, $Confirm, $ErrorAction) [void]$script:log.Add('unregistered ' + $TaskPath + $TaskName) }\n";
+        using (var ps = PowerShell.Create())
+        {
+            ps.AddScript(fakes + ProfileTask.CleanupScript(sid) + "\n$script:log");
+            var outp = ps.Invoke();
+            if (ps.HadErrors) throw new InvalidOperationException("script errors: " + string.Join("; ", ps.Streams.Error.Select(e => e.ToString()).ToArray()));
+            return outp.Where(x => x != null).Select(x => x.ToString()).ToList();
+        }
+    }
+
+    static void ParsesAsPowerShell(string script, string what)
+    {
+        Token[] tokens; ParseError[] errors;
+        Parser.ParseInput(script, out tokens, out errors);
+        True(errors.Length == 0, what + " parses: " + string.Join("; ", errors.Select(e => e.Message).ToArray()));
+    }
+
+    static void ProfileCleanup()
+    {
+        Run("profile task: deletes domovoi-svc's profile once its account is gone, then itself (item 8)", delegate
+        {
+            SeqEq(new[] { @"removed C:\Users\domovoi-svc", @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc", false), "done");
+            SeqEq(new[] { @"removed C:\Users\domovoi-svc.MY-PC", @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc.MY-PC", false), "the renamed folder too");
+        });
+        Run("profile task: anything else is left, and the task still goes", delegate
+        {
+            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\Kamron", false), "another profile");
+            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svcx", false), "a look-alike");
+            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc", true), "a loaded profile");
+            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, null, false), "no profile");
+            // This PC's own account resolves: its profile is never touched.
+            string mine = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+            if (ProfileTask.IsLocalAccountSid(mine))
+                SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(mine, @"C:\Users\domovoi-svc", false), "an account that exists");
+        });
+        Run("profile task: only a local account's SID goes into the scripts", delegate
+        {
+            foreach (string bad in new[] { "S-1-5-18", "S-1-5-21-1-2-3-1003'; Remove-Item C:\\ -Recurse; '", "", null, "S-1-5-21-1-2-3" })
+                Throws<ArgumentException>(delegate { ProfileTask.CleanupScript(bad); }, "refused: " + bad);
+            True(ProfileTask.IsLocalAccountSid(RealSid), "the real one");
+        });
+        Run("profile task: registered at startup as SYSTEM, running the cleanup encoded", delegate
+        {
+            string reg = ProfileTask.RegisterScript(RealSid);
+            ParsesAsPowerShell(reg, "the register script");
+            ParsesAsPowerShell(ProfileTask.CleanupScript(RealSid), "the cleanup script");
+            True(reg.Contains("New-ScheduledTaskTrigger -AtStartup") && reg.Contains("-UserId 'S-1-5-18'") && reg.Contains("-TaskName 'DomovoiRemoveProfile'"), "startup, SYSTEM, its name");
+            int at = reg.IndexOf("-EncodedCommand ", StringComparison.Ordinal) + "-EncodedCommand ".Length;
+            string b64 = reg.Substring(at, reg.IndexOf('\'', at) - at);
+            Eq(ProfileTask.CleanupScript(RealSid), System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(b64)), "the encoded command is the cleanup script");
+        });
+    }
+
+    static void LogCopies()
+    {
+        Run("redact: no setup code, no password in a URL (item 4)", delegate
+        {
+            Eq("code [hidden] here", Redact.Line("code acorn-apple-arrow-autumn-badge-baker-basil-beach here"), "setup code");
+            Eq("postgresql://domovoi:[hidden]@127.0.0.1:6432/domovoi", Redact.Line("postgresql://domovoi:s3cret-Pass@127.0.0.1:6432/domovoi"), "URL password");
+            Eq("https://github.com/coders-farm-official/domovoi", Redact.Line("https://github.com/coders-farm-official/domovoi"), "a plain URL stays");
+            Eq("installed /etc/sudoers.d/domovoi-update: domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl", Redact.Line("installed /etc/sudoers.d/domovoi-update: domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl"), "an ordinary line stays");
+        });
+        Run("copy logs: a new folder the user can open, every line redacted, links refused", delegate
+        {
+            string root = Scratch(), victim = Scratch();
+            string tmpLog = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "domovoi-uninstall-20991231-235959.log");
+            try
+            {
+                System.IO.File.WriteAllText(tmpLog, "2099-12-31 23:59:59 helper uninstall\r\nleaked acorn-apple-arrow-autumn-badge-baker-basil-beach\r\nurl postgresql://u:pw@h/db\r\n");
+                var o = new Domovoi.Windows.Helper.Output(null);
+                string dest = System.IO.Path.Combine(root, "Domovoi logs");
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "uninstall", tmpLog);
+                var made = System.IO.Directory.GetDirectories(dest);
+                Eq(1, made.Length, "one new folder");
+                True(System.IO.Path.GetFileName(made[0]).StartsWith("uninstall-", StringComparison.Ordinal), "named for the uninstall: " + made[0]);
+                string copy = System.IO.File.ReadAllText(System.IO.Path.Combine(made[0], "domovoi-uninstall-20991231-235959.log"));
+                True(copy.Contains("helper uninstall") && !copy.Contains("acorn-apple") && !copy.Contains(":pw@") && copy.Contains("[hidden]"), "redacted: " + copy);
+                True(System.IO.File.Exists(System.IO.Path.Combine(made[0], "README.txt")), "a README");
+                Domovoi.Windows.Helper.Logs.Copy(o, dest, "uninstall", tmpLog);
+                Eq(2, System.IO.Directory.GetDirectories(dest).Length, "a second copy goes to a second folder");
+
+                string link = System.IO.Path.Combine(root, "linked logs");
+                Junction(link, victim);
+                Throws<InvalidOperationException>(delegate { Domovoi.Windows.Helper.Logs.Copy(o, link, "install", null); }, "a link as the folder");
+                Eq(0, System.IO.Directory.GetFileSystemEntries(victim).Length, "nothing written through it");
+            }
+            finally
+            {
+                System.IO.File.Delete(tmpLog);
+                Domovoi.Windows.Helper.Folders.DeleteTree(root);
+                if (System.IO.Directory.Exists(victim)) System.IO.Directory.Delete(victim, true);
+            }
+        });
+        Run("copy logs: only the uninstall's own log from the temp folder", delegate
+        {
+            Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Sources(@"C:\Windows\System32\config\SAM"); }, "another file");
+            Throws<ArgumentException>(delegate { Domovoi.Windows.Helper.Logs.Sources(@"C:\Users\Public\domovoi-uninstall-20261012-133801.log"); }, "another folder");
+            True(Domovoi.Windows.Helper.Logs.Sources(null).Any(s => s.Value == "provision.log"), "provision.log is among them");
+        });
+    }
+
+    static void UninstallTexts()
+    {
+        Run("uninstall progress: N|TOTAL|What it does (item 7)", delegate
+        {
+            var l = FullLedger();
+            var plan = UninstallPlan.Make(l, FullFacts(l));
+            string line = UninstallProgress.Line(2, plan.Count, plan[2]);
+            Eq("3|" + plan.Count + "|Unregister the 'domovoi' WSL distro as domovoi-svc (deletes its disk)", line, "line");
+            var firewall = new UninstallStep(UninstallKind.RemoveFirewallRules, "a|b");
+            True(UninstallProgress.Line(0, 1, firewall).Split('|').Length == 3, "a | in the text can't add a field");
+        });
+        Run("uninstall texts: nothing tells the user to run an uninstaller that is gone (item 9)", delegate
+        {
+            foreach (UninstallKind k in UninstallRunner.Inert)
+            {
+                var s = new UninstallStep(k, @"C:\x");
+                s.Sids.Add(Sid);
+                string how = new UninstallLeftover(s, "x").HowToRemove();
+                True(how.IndexOf("uninstaller again", StringComparison.OrdinalIgnoreCase) < 0 && how.IndexOf("run the uninstaller", StringComparison.OrdinalIgnoreCase) < 0, k + ": " + how);
+            }
         });
     }
 }

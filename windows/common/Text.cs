@@ -74,4 +74,19 @@ namespace Domovoi.Windows
             return InLine.Replace(line, "[hidden]");
         }
     }
+
+    // Every line that goes into a log, or into the copies "Copy logs"
+    // makes for the household: no setup code (SetupCode.Scrub) and no
+    // password in a URL (scheme://user:password@host, the same rule as
+    // provision.sh's scrub_log).
+    public static class Redact
+    {
+        static readonly Regex UrlPassword = new Regex(@"(://[^:/@\s]+:)[^@/\s]+@");
+
+        public static string Line(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return line;
+            return UrlPassword.Replace(SetupCode.Scrub(line), "$1[hidden]@");
+        }
+    }
 }

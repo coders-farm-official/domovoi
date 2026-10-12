@@ -229,6 +229,35 @@ namespace Domovoi.Windows
         }
     }
 
+    // The "progress=" line the helper prints before each step, which the
+    // uninstaller turns into its status text and progress bar while it
+    // runs: "N|TOTAL|What it does now" (N from 1).
+    public static class UninstallProgress
+    {
+        public static string Line(int index, int total, UninstallStep s)
+        {
+            string what = s.ToString().Replace("|", "/");
+            if (what.Length > 0) what = char.ToUpperInvariant(what[0]) + what.Substring(1);
+            return Inv.S(index + 1) + "|" + Inv.S(total) + "|" + what;
+        }
+    }
+
+    // What DomovoiHost's unregister run left in host\out\unregister.json,
+    // judged: null when the distro is gone, else what is left. Only an
+    // answer written after the request counts (asked: when it was made).
+    public static class UnregisterOutcome
+    {
+        public static string Judge(Dictionary<string, object> d, DateTime askedUtc)
+        {
+            DateTime at;
+            if (d == null || !DateTime.TryParse(Json.Str(d, "at"), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out at) || at.ToUniversalTime() < askedUtc)
+                return "the distro (" + Paths.ServiceName + " gave no result for this request; see " + Paths.HostLog + ")";
+            if (Json.Bool(d, "ok") != true) return "the distro (" + (Json.Str(d, "error") ?? "unregister failed") + ")";
+            return null;
+        }
+    }
+
     public sealed class UninstallLeftover
     {
         public UninstallStep Step;
@@ -242,8 +271,8 @@ namespace Domovoi.Windows
             switch (Step == null ? UninstallKind.Blocked : Step.Kind)
             {
                 case UninstallKind.DeleteService: return "it goes at the next restart; or, as an administrator: sc.exe delete " + Paths.ServiceName;
-                case UninstallKind.DeleteProgramData: return "files still in use go at the next restart; if any are left after it, delete " + Paths.ProgramData + " as an administrator";
-                case UninstallKind.DeleteProfile: return "after a restart: Settings > System > About > Advanced system settings > User Profiles > Settings, delete the domovoi-svc profile";
+                case UninstallKind.DeleteProgramData: return "restart Windows, then delete " + Paths.ProgramData + " as an administrator";
+                case UninstallKind.DeleteProfile: return "restart Windows, then: Settings > System > About > Advanced system settings > User Profiles > Settings, delete the domovoi-svc profile (it may show as \"Account Unknown\")";
                 case UninstallKind.RemoveMediaAccess: return "as an administrator: icacls \"" + Step.Target + "\" /remove *" + string.Join(" *", Step.Sids.ToArray());
                 case UninstallKind.UnhideAccount: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList\" /v " + Paths.AccountName + " /f";
                 case UninstallKind.RemoveRunOnce: return "as an administrator: reg delete \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce\" /v DomovoiSetupResume /f";

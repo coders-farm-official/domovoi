@@ -128,8 +128,10 @@ namespace Domovoi.Windows
     // status.json: what the host is doing, for the installer's progress page.
     public sealed class HostStatus
     {
-        // starting, waiting, config, importing, provisioning, restarting,
-        // verifying, health, ready, failed, unregistering, unregistered
+        // starting, waiting, config, importing, provisioning, ports (a port
+        // Domovoi needs is taken, right before the start: Setup shows the
+        // pop-ups, the host waits), restarting, verifying, health, ready,
+        // failed, unregistering, unregistered
         public string State = "starting";
         public string Phase = HostProgress.PhaseConfig;
         public int Percent;

@@ -8,6 +8,7 @@ using System.ComponentModel;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
+using System.Threading;
 
 namespace Domovoi.Windows.Helper
 {
@@ -186,20 +187,6 @@ namespace Domovoi.Windows.Helper
             return p.EndsWith("\\DomovoiHost.exe", StringComparison.OrdinalIgnoreCase);
         }
 
-        public static bool WaitFor(ServiceControllerStatus want, int seconds)
-        {
-            using (var s = Find())
-            {
-                if (s == null) return want == ServiceControllerStatus.Stopped;
-                try
-                {
-                    s.WaitForStatus(want, TimeSpan.FromSeconds(seconds));
-                    return true;
-                }
-                catch (System.ServiceProcess.TimeoutException) { return false; }
-            }
-        }
-
         public static void Stop(int seconds, Action<string> say)
         {
             using (var s = Find())
@@ -214,24 +201,48 @@ namespace Domovoi.Windows.Helper
             }
         }
 
-        public static void Start(string[] args, int seconds)
+        // Starts the long-running host (no start parameter) and waits until
+        // it runs. One that stops again at once (it logs why in host.log)
+        // is an error, not a 2-minute wait.
+        public static void Start(int seconds)
         {
             using (var s = Find())
             {
                 if (s == null) throw new InvalidOperationException(Paths.ServiceName + " is not registered");
                 s.Refresh();
-                if (args == null && s.Status == ServiceControllerStatus.Running) return;
+                if (s.Status == ServiceControllerStatus.Running) return;
+                if (s.Status == ServiceControllerStatus.StopPending) s.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(240));
+                s.Refresh();
+                if (s.Status == ServiceControllerStatus.Stopped) s.Start();
+                ServiceControllerStatus? st = ServiceWait.Started(delegate { s.Refresh(); return s.Status; }, Thread.Sleep,
+                    delegate { return DateTime.UtcNow; }, TimeSpan.FromSeconds(seconds));
+                if (st == null) throw new System.TimeoutException(Paths.ServiceName + " did not start within " + Inv.S(seconds) + " s");
+                if (st == ServiceControllerStatus.Stopped) throw new InvalidOperationException(Paths.ServiceName + " stopped right after it started; see " + Paths.HostLog);
+            }
+        }
+
+        // Starts the host for a run that stops by itself when its work is
+        // done (the uninstall's "unregister"), and waits for it: Running or
+        // already Stopped again (it can finish in a second), then Stopped
+        // (ServiceWait.OneShot).
+        public static OneShotResult RunOnce(string[] args, int startSeconds, int finishSeconds)
+        {
+            using (var s = Find())
+            {
+                if (s == null) throw new InvalidOperationException(Paths.ServiceName + " is not registered");
+                s.Refresh();
                 if (s.Status == ServiceControllerStatus.StopPending) s.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(240));
                 s.Refresh();
                 // A start parameter only reaches a service that starts now: a
                 // running one would ignore it, so stop it first.
-                if (args != null && s.Status != ServiceControllerStatus.Stopped)
+                if (s.Status != ServiceControllerStatus.Stopped)
                 {
                     s.Stop();
                     s.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(240));
                 }
-                if (args != null) s.Start(args); else s.Start();
-                s.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(seconds));
+                s.Start(args);
+                return ServiceWait.OneShot(delegate { s.Refresh(); return s.Status; }, Thread.Sleep, delegate { return DateTime.UtcNow; },
+                    TimeSpan.FromSeconds(startSeconds), TimeSpan.FromSeconds(finishSeconds));
             }
         }
     }

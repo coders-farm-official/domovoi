@@ -1,7 +1,7 @@
 // Append-only text logs under C:\ProgramData\Domovoi\logs. Every line goes
-// through SetupCode.Scrub first, and nothing here is ever handed a
-// password: the account's password exists only inside the helper's
-// account step and is never formatted into a message.
+// through Redact.Line first (no setup code, no password in a URL), and
+// nothing here is ever handed the account's password: it exists only
+// inside the helper's account step and is never formatted into a message.
 
 using System;
 using System.Globalization;
@@ -26,7 +26,7 @@ namespace Domovoi.Windows
 
         public void Write(string message)
         {
-            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + SetupCode.Scrub(message ?? "");
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + " " + Redact.Line(message ?? "");
             lock (gate)
             {
                 try

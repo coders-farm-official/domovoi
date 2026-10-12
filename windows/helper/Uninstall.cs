@@ -10,8 +10,12 @@
 // hold no data and grant nothing (or after the third run, whatever is
 // left), each in a "leftover=" line with how to remove it by hand; the
 // uninstaller goes. "kept=" lines name what was kept on purpose (a distro
-// disk WSL no longer listed). --dry-run prints the facts and the plan and
-// changes nothing.
+// disk WSL no longer listed); "restart=" lines what Windows removes at the
+// next restart by itself (files still in use, the account's profile when
+// Windows wouldn't let go of it), which needs nothing from anyone and
+// doesn't count as left over. Before each step a "progress=N|TOTAL|what"
+// line, and "info=" lines as it goes, which the uninstaller shows while it
+// runs. --dry-run prints the facts and the plan and changes nothing.
 //
 // Left in place on purpose: WSL and the VirtualMachinePlatform feature
 // (shared with the household's own WSL, PLAN 7), and every file in the
@@ -54,14 +58,20 @@ namespace Domovoi.Windows.Helper
             }
             o.Kv("run", Inv.S(run) + " of " + Inv.S(UninstallRunner.MaxRuns));
             var notes = new List<string>();
+            var atRestart = new List<string>();
             var left = new List<UninstallLeftover>();
-            int code = UninstallRunner.Run(plan, delegate (UninstallStep s) { return Do(s, ledger, notes, o); }, left, null, run);
+            int code = UninstallRunner.Run(plan, delegate (UninstallStep s)
+            {
+                o.Kv("progress", UninstallProgress.Line(plan.IndexOf(s), plan.Count, s));
+                return Do(s, ledger, notes, atRestart, o);
+            }, left, null, run);
             foreach (var l in left)
             {
                 o.Kv("leftover", l.What + " | to remove it by hand: " + l.HowToRemove());
                 o.LogOnly("leftover: " + l.What + " | " + l.HowToRemove());
             }
             foreach (string n in notes) { o.Kv("kept", n); o.LogOnly("kept: " + n); }
+            foreach (string n in atRestart) { o.Kv("restart", n); o.LogOnly("at the next restart: " + n); }
             o.Kv("result", code == UninstallRunner.ExitDone ? "removed" : code == UninstallRunner.ExitStopped ? "stopped"
                 : code == UninstallRunner.ExitLeftovers ? "leftovers, run again" : "removed, with leftovers");
             if (code == UninstallRunner.ExitStopped)
@@ -163,7 +173,7 @@ namespace Domovoi.Windows.Helper
         }
 
         // Does one step; returns a leftover description, or null when done.
-        static string Do(UninstallStep s, Ledger ledger, List<string> notes, Output o)
+        static string Do(UninstallStep s, Ledger ledger, List<string> notes, List<string> atRestart, Output o)
         {
             switch (s.Kind)
             {
@@ -217,7 +227,7 @@ namespace Domovoi.Windows.Helper
                     return null;
 
                 case UninstallKind.DeleteProfile:
-                    return DeleteProfile(s.Target, o);
+                    return DeleteProfile(s.Target, atRestart, o);
 
                 case UninstallKind.RemoveRights:
                     Account.RemoveAllRights(new SecurityIdentifier(s.Target));
@@ -234,7 +244,7 @@ namespace Domovoi.Windows.Helper
                     return null;
 
                 case UninstallKind.DeleteProgramData:
-                    return KeepOrDropDisk(notes, o) ?? DeleteProgramData(ledger != null ? ledger.AccountSid : null, o);
+                    return KeepOrDropDisk(notes, o) ?? DeleteProgramData(ledger != null ? ledger.AccountSid : null, atRestart, o);
 
                 case UninstallKind.RemoveRunOnce:
                     using (var hklm = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
@@ -250,37 +260,42 @@ namespace Domovoi.Windows.Helper
             return null;
         }
 
-        // The host, as domovoi-svc, unregisters the distro, then stops itself
-        // (Host.Unregister). The result counts only if the host wrote it
-        // after this request: the helper never deletes in host\out.
+        // The host, as domovoi-svc, unregisters the distro, ends its own WSL
+        // session and stops itself (Host.Unregister), often within a second:
+        // the wait is for Running or Stopped, then Stopped (ServiceWait).
+        // The result counts only if the host wrote it after this request:
+        // the helper never deletes in host\out.
         static string Unregister(List<string> notes, Output o)
         {
             if (!Directory.Exists(Paths.HostOut)) return "the distro (the host's folder is gone, so it could not report)";
             DateTime asked = DateTime.UtcNow.AddSeconds(-2);
             o.Say("asking " + Paths.ServiceName + " to unregister the distro as " + Paths.AccountName);
-            HostService.Start(new[] { Paths.UnregisterArg }, 120);
-            if (!HostService.WaitFor(ServiceControllerStatus.Stopped, 15 * 60))
-                return "the distro (" + Paths.ServiceName + " did not finish unregistering within 15 minutes)";
+            OneShotResult r = HostService.RunOnce(new[] { Paths.UnregisterArg }, 120, 15 * 60);
+            if (r == OneShotResult.NeverStarted) return "the distro (" + Paths.ServiceName + " did not start within 2 minutes; see " + Paths.HostLog + ")";
+            if (r == OneShotResult.StillRunning) return "the distro (" + Paths.ServiceName + " did not finish unregistering within 15 minutes)";
             var d = Steps.ReadHostFile(Paths.UnregisterResult);
-            DateTime at;
-            if (d == null || !DateTime.TryParse(Json.Str(d, "at"), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out at) || at.ToUniversalTime() < asked)
-                return "the distro (" + Paths.ServiceName + " gave no result for this request; see " + Paths.HostLog + ")";
-            if (Json.Bool(d, "ok") != true) return "the distro (" + (Json.Str(d, "error") ?? "unregister failed") + ")";
+            string why = UnregisterOutcome.Judge(d, asked);
+            if (why != null) return why;
             o.Say("the WSL distro '" + Paths.DistroName + "' is not registered any more (" + (Json.Str(d, "message") ?? "") + ")");
+            if (Json.Bool(d, "released") == true) o.Say("ended " + Paths.AccountName + "'s own WSL session (the household's WSL keeps running)");
             // WSL doesn't list it, yet its disk is there: kept aside or, if no
             // import ever finished, left to go with ProgramData.
             return KeepOrDropDisk(notes, o);
         }
 
-        // The profile stays loaded while the account's WSL VM runs; with
-        // the distro gone the VM stops on its own after its idle timeout
-        // (60 s, see WslConfig.cs), so this waits up to three minutes.
-        static string DeleteProfile(string sid, Output o)
+        // The host ended the account's WSL session after unregistering
+        // (Host.ReleaseWsl), so the profile is normally free at once; this
+        // still waits up to two minutes. If Windows keeps it open (error 32
+        // on 2026-10-12, held until a restart), its deletion is scheduled
+        // for the next restart (ProfileTask), which needs nothing from the
+        // household; only if that can't be set up is it left over.
+        static string DeleteProfile(string sid, List<string> atRestart, Output o)
         {
             string path = Account.ProfilePath(sid);
             int err = 0;
-            DateTime until = DateTime.UtcNow.AddMinutes(3);
+            DateTime start = DateTime.UtcNow, until = start.AddMinutes(2);
             bool waited = false;
+            int lastMinute = 0;
             while (true)
             {
                 if (!Account.ProfileExists(sid)) return null;
@@ -291,13 +306,31 @@ namespace Domovoi.Windows.Helper
                     return null;
                 }
                 if (DateTime.UtcNow > until) break;
-                if (!waited) { o.Say("waiting for WSL to let go of the profile (up to 3 minutes)"); waited = true; }
+                if (!waited) { o.Say("waiting for Windows to let go of the profile " + (path ?? sid) + " (up to 2 minutes)"); waited = true; }
+                int minute = (int)(DateTime.UtcNow - start).TotalMinutes;
+                if (minute > lastMinute) { lastMinute = minute; o.Say("still waiting for the profile (" + Inv.S(minute) + " min)"); }
                 Thread.Sleep(5000);
             }
-            return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + "; restart Windows, then run the uninstaller again)";
+            if (!ProfileTask.IsLocalAccountSid(sid))
+                return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + ")";
+            try
+            {
+                string outText = Steps.PowerShell(ProfileTask.RegisterScript(sid), o);
+                if (outText.IndexOf("scheduled", StringComparison.Ordinal) < 0) throw new InvalidOperationException("the task did not register");
+            }
+            catch (Exception e)
+            {
+                if (!(e is InvalidOperationException || e is System.TimeoutException || e is System.ComponentModel.Win32Exception)) throw;
+                return "the profile " + (path ?? sid) + " (error " + Inv.S(err) + "; its removal at the next restart could not be scheduled either: " + e.Message + ")";
+            }
+            string note = "the profile " + (path ?? sid) + ": Windows still had it open (error " + Inv.S(err)
+                + "), so a one-time startup task, " + ProfileTask.TaskName + ", deletes it at the next restart and then deletes itself";
+            o.Say(note);
+            atRestart.Add(note);
+            return null;
         }
 
-        static string DeleteProgramData(string sid, Output o)
+        static string DeleteProgramData(string sid, List<string> atRestart, Output o)
         {
             // Nothing runs as the account by now (its service is gone and
             // StopAccountProcesses ran); make the tree admin-only anyway
@@ -314,8 +347,15 @@ namespace Domovoi.Windows.Helper
                 if (!Directory.Exists(Paths.ProgramData)) break;
                 if (DateTime.UtcNow > until)
                 {
-                    int n = ScheduleDelete(Paths.ProgramData);
-                    return Paths.ProgramData + " (" + (last != null ? last.Message : "in use") + "; " + Inv.S(n) + " item(s) will be deleted at the next restart; run the uninstaller again after it)";
+                    int failed;
+                    int n = ScheduleDelete(Paths.ProgramData, out failed);
+                    string why = last != null ? last.Message : "in use";
+                    if (failed > 0)
+                        return Paths.ProgramData + " (" + why + "; " + Inv.S(failed) + " item(s) could not even be scheduled for deletion at the next restart)";
+                    string note = Paths.ProgramData + ": " + Inv.S(n) + " file(s) and folder(s) Windows still had open (" + why + "); Windows deletes them at the next restart";
+                    o.Say(note);
+                    atRestart.Add(note);
+                    return null;
                 }
                 if (!waited) { o.Say("waiting for WSL to let go of " + Paths.ProgramData + " (up to 3 minutes)"); waited = true; }
                 Thread.Sleep(5000);
@@ -325,10 +365,12 @@ namespace Domovoi.Windows.Helper
         }
 
         // Files first, then folders deepest first: Windows runs these in
-        // order at the next restart. Links are scheduled as links.
-        static int ScheduleDelete(string root)
+        // order at the next restart. Links are scheduled as links. failed:
+        // how many Windows refused to schedule.
+        static int ScheduleDelete(string root, out int failed)
         {
             int n = 0;
+            failed = 0;
             var dirs = new List<string>();
             var stack = new Stack<string>();
             stack.Push(root);
@@ -337,11 +379,11 @@ namespace Domovoi.Windows.Helper
                 string d = stack.Pop();
                 dirs.Add(d);
                 if ((File.GetAttributes(d) & FileAttributes.ReparsePoint) != 0) continue;
-                foreach (string f in Directory.GetFiles(d)) if (Native.MoveFileExW(f, null, Native.MOVEFILE_DELAY_UNTIL_REBOOT)) n++;
+                foreach (string f in Directory.GetFiles(d)) { if (Native.MoveFileExW(f, null, Native.MOVEFILE_DELAY_UNTIL_REBOOT)) n++; else failed++; }
                 foreach (string sub in Directory.GetDirectories(d)) stack.Push(sub);
             }
             dirs.Reverse();
-            foreach (string d in dirs) if (Native.MoveFileExW(d, null, Native.MOVEFILE_DELAY_UNTIL_REBOOT)) n++;
+            foreach (string d in dirs) { if (Native.MoveFileExW(d, null, Native.MOVEFILE_DELAY_UNTIL_REBOOT)) n++; else failed++; }
             return n;
         }
     }
