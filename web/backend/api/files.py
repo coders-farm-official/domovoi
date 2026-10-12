@@ -78,10 +78,13 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
+import anyio
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
@@ -123,6 +126,7 @@ from web.backend.api.files_security import (
     unstorable_reason,
 )
 from web.backend.api.csrf_guard import require_requested_with
+from web.backend.api import listing_cache, paging
 from web.backend.api.music import _safe_basename, _unique_path
 from web.backend.db import session_scope
 from web.backend.domovoi_client import auth_forward_headers, post_admin
@@ -179,11 +183,12 @@ async def _resolve_library(library_id: str) -> MediaLibrary:
 
 
 # ─── Entry-kind classification (mirrors documents._doc_category buckets) ──────
-def _entry_kind(entry: Path, is_dir: bool) -> str:
-    """kind ∈ folder | audio | video | doc-office | doc-text | image | pdf | other."""
+def _kind_for(name: str, is_dir: bool) -> str:
+    """kind ∈ folder | audio | video | doc-office | doc-text | image | pdf | other,
+    from the bare name (no Path built per entry — listings call it 10,000 times)."""
     if is_dir:
         return "folder"
-    ext = entry.suffix.lower()
+    ext = os.path.splitext(name)[1].lower()
     if ext in AUDIO_EXTENSIONS:
         return "audio"
     if ext in VIDEO_EXTENSIONS:
@@ -250,6 +255,15 @@ class BrowseResponse(BaseModel):
     # ``editable`` is the LIBRARY's property; ``writable`` is the device's.
     writable: bool = True
     blocked_reason: Optional[str] = None
+    # Paging (web/backend/api/paging.py). ``total`` counts the entries that
+    # match q / kind; ``folder_total`` counts the whole folder. An unpaged
+    # request (an old client) gets every entry with has_more=false.
+    total: int = 0
+    folder_total: int = 0
+    limit: Optional[int] = None
+    offset: Optional[int] = None
+    has_more: bool = False
+    next_cursor: Optional[str] = None
 
 
 class UploadResponse(BaseModel):
@@ -550,16 +564,110 @@ async def list_libraries() -> dict[str, Any]:
 
 
 # ─── GET /browse ─────────────────────────────────────────────────────────────
+# Folders first under every sort, then the sort's own field, then the name
+# (unique within a folder) so a cursor names exactly one place.
+FileSort = Literal["name", "newest", "oldest", "largest"]
+_FILE_SORT_KEYS: dict[str, Any] = {
+    "name": lambda e: (not e["is_dir"], e["name"].lower(), e["name"]),
+    "newest": lambda e: (not e["is_dir"], -float(e["mtime"] or 0.0), e["name"].lower(), e["name"]),
+    "oldest": lambda e: (not e["is_dir"], float(e["mtime"] or 0.0), e["name"].lower(), e["name"]),
+    "largest": lambda e: (not e["is_dir"], -int(e["size"] or 0), e["name"].lower(), e["name"]),
+}
+FileKind = Literal["folder", "audio", "video", "doc-office", "doc-text", "image", "pdf", "other"]
+
+
+def _is_link(entry: os.DirEntry) -> bool:
+    try:
+        if entry.is_symlink():
+            return True
+        is_junction = getattr(entry, "is_junction", None)   # 3.12+, Windows
+        return bool(is_junction and is_junction())
+    except OSError:
+        return True   # can't tell: resolve it like a link
+
+
+def _read_folder(root: Path, target: Path) -> listing_cache.Snapshot:
+    """Every entry of one folder, filtered for the Files surface. Sync (a
+    worker thread). Every entry passes the same three checks as before:
+    realpath inside the root, not secret-shaped, not private by location.
+
+    Cost (measured 2026-10-11, one 10,000-entry folder on the Windows dev
+    box): ~6 s before. ``target`` is already resolved inside ``root``
+    (safe_join), so an entry that is not a link resolves to ``target/name``
+    and only links (symlinks, Windows junctions) pay for a realpath; the
+    relative path is built as a string rather than by ``relative_to``
+    (~0.1 ms a call on Windows); and :func:`private_path_check` resolves its
+    fixed directories once per folder."""
+    private = private_path_check()
+    rows: list[dict[str, Any]] = []
+    folder_mtime = os.stat(target).st_mtime_ns
+    rel_dir = target.relative_to(root).as_posix()
+    prefix = "" if rel_dir in ("", ".") else rel_dir + "/"
+    with os.scandir(target) as it:
+        found = list(it)
+    for entry in found:
+        name = entry.name
+        if is_sensitive_name(name):
+            continue
+        if _is_link(entry):
+            # Symlink guard — drop anything whose realpath escapes the root.
+            real = (target / name).resolve(strict=False)
+            try:
+                real.relative_to(root)
+            except ValueError:
+                continue
+        else:
+            real = target / name
+        if private(real, resolved=True):
+            continue
+        try:
+            is_dir = entry.is_dir()
+            st = entry.stat()
+        except OSError:
+            continue
+        rows.append({
+            "name": name,
+            "rel": prefix + name,
+            "is_dir": is_dir,
+            "size": None if is_dir else st.st_size,
+            "mtime": st.st_mtime,
+            "kind": _kind_for(name, is_dir),
+            "locked_by": None,
+        })
+    return listing_cache.Snapshot(
+        rows=rows, hay=[r["name"].lower() for r in rows],
+        dirs={str(target): folder_mtime},
+    )
+
+
 @router.get("/browse", dependencies=[Depends(require_device_read)])
 async def browse(
     library_id: str = Query(...),
     path: str = Query(""),
     device_id: Optional[str] = Query(None, min_length=3, max_length=64),
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Case-insensitive substring of the entry name"),
+    kind: Optional[FileKind] = Query(
+        None, description="Only entries of this kind (folder = folders only)"),
+    sort: FileSort = Query(
+        "name", description="name (default) · newest · oldest · largest; folders first"),
+    limit: Optional[int] = paging.limit_query(),
+    cursor: Optional[str] = paging.cursor_query(),
+    offset: Optional[int] = paging.offset_query(),
+    refresh: bool = Query(
+        False, description="Re-read the folder instead of using the cached listing"),
 ) -> BrowseResponse:
-    """One directory level inside a library, sorted dirs-first then name. Every
-    entry's realpath is re-checked inside the root (drops symlinks that escape)
+    """One directory level inside a library, folders first. Every entry's
+    realpath is re-checked inside the root (drops symlinks that escape)
     and secret-shaped names are filtered. (The per-file editor-lock join is
     gone with the office engines — the homegrown editors don't lock.)
+
+    Paged when ``limit`` / ``cursor`` / ``offset`` is sent (paging.py):
+    ``entries`` is one page; the search (``q``), the ``kind`` filter and
+    the sort run here over the whole folder. Unpaged — an old client — it
+    is the whole folder, as before. The listing is cached between pages
+    (listing_cache) and re-read when the folder's mtime moves, a write
+    through this server lands in the library, or ``refresh=true``.
 
     ``device_id`` is optional and only affects ``writable`` / ``blocked_reason``
     — reading is never blocked, so a blocked device can still SEE the folder
@@ -578,39 +686,36 @@ async def browse(
     rel = "" if rel == "." else rel
     breadcrumb = [seg for seg in rel.split("/") if seg] if rel else []
 
-    entries: list[BrowseEntry] = []
+    def load() -> tuple[listing_cache.Snapshot, list, list, list]:
+        snap = listing_cache.get(
+            (lib.id, str(root), "folder", rel),
+            lambda: _read_folder(root, target),
+            force=refresh,
+        )
+        rows, keys, order = snap.view(sort, _FILE_SORT_KEYS[sort])
+        return snap, rows, keys, order
+
     try:
-        children = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        snap, rows, keys, order = await anyio.to_thread.run_sync(load)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"cannot list directory: {e}")
 
-    private = private_path_check()
-    for entry in children:
-        # Symlink guard — drop anything whose realpath escapes the root.
-        real = entry.resolve(strict=False)
-        try:
-            real.relative_to(root)
-        except ValueError:
-            continue
-        if is_sensitive_name(entry.name) or private(real):
-            continue
-        try:
-            is_dir = entry.is_dir()
-            st = entry.stat()
-        except OSError:
-            continue
-        erel = entry.relative_to(root).as_posix()
-        entries.append(
-            BrowseEntry(
-                name=entry.name,
-                rel=erel,
-                is_dir=is_dir,
-                size=None if is_dir else st.st_size,
-                mtime=st.st_mtime,
-                kind=_entry_kind(entry, is_dir),
-                locked_by=None,
-            )
+    needle = (q or "").strip().lower()
+    keep = None
+    if needle or kind:
+        hay = snap.hay
+        keep = lambda i: (not needle or needle in hay[order[i]]) and (  # noqa: E731
+            not kind or rows[i]["kind"] == kind)
+
+    if paging.wants_page(limit, cursor, offset):
+        page, fields = paging.page_view(
+            rows, keys, sort=sort, limit=limit or paging.DEFAULT_LIMIT,
+            cursor=cursor, offset=offset, keep=keep,
         )
+    else:
+        page = [r for i, r in enumerate(rows) if keep is None or keep(i)]
+        fields = paging.page_fields(total=len(page), limit=None, has_more=False,
+                                    next_cursor=None)
 
     blocked_reason = await _block_status(device_id)
     return BrowseResponse(
@@ -620,9 +725,11 @@ async def browse(
         importable=lib.importable,
         doc_editing=lib.doc_editing,
         breadcrumb=breadcrumb,
-        entries=entries,
+        entries=[BrowseEntry(**r) for r in page],
         writable=blocked_reason is None,
         blocked_reason=blocked_reason,
+        folder_total=len(rows),
+        **fields,
     )
 
 
@@ -775,6 +882,7 @@ async def upload(
             detail="no files saved" + (f"; {skipped}" if skipped else ""),
         )
 
+    listing_cache.invalidate(lib.id)
     reindex_triggered = False
     if lib.reindex_kind in INDEXED_KINDS:
         reindex_triggered = await _trigger_reindex(lib.reindex_kind, request)
@@ -828,6 +936,8 @@ async def delete(request: Request, req: DeleteRequest) -> DeleteResponse:
         except OSError as e:
             failed.append(f"{rel}: {e}")
 
+    if deleted:
+        listing_cache.invalidate(lib.id)
     reindex_triggered = False
     if deleted and lib.reindex_kind in INDEXED_KINDS:
         reindex_triggered = await _trigger_reindex(lib.reindex_kind, request)
@@ -911,6 +1021,7 @@ async def import_media(request: Request, req: ImportRequest) -> ImportResponse:
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"copy failed: {e}")
 
+    listing_cache.invalidate(target.id)
     reindex_triggered = False
     if target.reindex_kind in INDEXED_KINDS:
         reindex_triggered = await _trigger_reindex(target.reindex_kind, request)
@@ -1029,6 +1140,9 @@ async def move(request: Request, req: MoveRequest) -> MoveResponse:
         except OSError as e:
             failed.append(f"{rel}: {e}")
 
+    if moved:
+        listing_cache.invalidate(source.id)
+        listing_cache.invalidate(target.id)
     # Both sides can be indexed libraries, and a move changes both.
     reindex_triggered = False
     if moved:

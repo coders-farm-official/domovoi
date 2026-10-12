@@ -818,7 +818,7 @@
           "music"
         ],
         "summary": "List Library",
-        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active ``q`` / ``source`` filters.\n\nSort options are whitelisted (the ORDER BY can't be user-supplied)\nso a malformed ``sort`` returns 422 rather than a SQL error.",
+        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active ``q`` / ``source`` / ``favorited`` filters.\n\nAlways paged (default 50, max 200), as it always was. ``cursor`` (from\nthe previous page's ``next_cursor``) pages by keyset \u2014 rows added,\nremoved or re-sorted while somebody scrolls are neither repeated nor\nskipped \u2014 and is what both clients now send; ``offset`` still works\nfor the installed Android app (web/backend/api/paging.py).\n\nSort options are whitelisted (the ORDER BY can't be user-supplied)\nso a malformed ``sort`` returns 422 rather than a SQL error.",
         "operationId": "list_library_api_music_library_get",
         "parameters": [
           {
@@ -900,9 +900,11 @@
               "type": "integer",
               "maximum": 200,
               "minimum": 1,
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
               "default": 50,
               "title": "Limit"
-            }
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
           },
           {
             "name": "offset",
@@ -911,9 +913,30 @@
             "schema": {
               "type": "integer",
               "minimum": 0,
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
               "default": 0,
               "title": "Offset"
-            }
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
           }
         ],
         "responses": {
@@ -8804,7 +8827,7 @@
           "files"
         ],
         "summary": "Browse",
-        "description": "One directory level inside a library, sorted dirs-first then name. Every\nentry's realpath is re-checked inside the root (drops symlinks that escape)\nand secret-shaped names are filtered. (The per-file editor-lock join is\ngone with the office engines \u2014 the homegrown editors don't lock.)\n\n``device_id`` is optional and only affects ``writable`` / ``blocked_reason``\n\u2014 reading is never blocked, so a blocked device can still SEE the folder\nand is told why it can't change it.",
+        "description": "One directory level inside a library, folders first. Every entry's\nrealpath is re-checked inside the root (drops symlinks that escape)\nand secret-shaped names are filtered. (The per-file editor-lock join is\ngone with the office engines \u2014 the homegrown editors don't lock.)\n\nPaged when ``limit`` / ``cursor`` / ``offset`` is sent (paging.py):\n``entries`` is one page; the search (``q``), the ``kind`` filter and\nthe sort run here over the whole folder. Unpaged \u2014 an old client \u2014 it\nis the whole folder, as before. The listing is cached between pages\n(listing_cache) and re-read when the folder's mtime moves, a write\nthrough this server lands in the library, or ``refresh=true``.\n\n``device_id`` is optional and only affects ``writable`` / ``blocked_reason``\n\u2014 reading is never blocked, so a blocked device can still SEE the folder\nand is told why it can't change it.",
         "operationId": "browse_api_files_browse_get",
         "parameters": [
           {
@@ -8843,6 +8866,141 @@
               ],
               "title": "Device Id"
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of the entry name",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of the entry name"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "folder",
+                    "audio",
+                    "video",
+                    "doc-office",
+                    "doc-text",
+                    "image",
+                    "pdf",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only entries of this kind (folder = folders only)",
+              "title": "Kind"
+            },
+            "description": "Only entries of this kind (folder = folders only)"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "name",
+                "newest",
+                "oldest",
+                "largest"
+              ],
+              "type": "string",
+              "description": "name (default) \u00b7 newest \u00b7 oldest \u00b7 largest; folders first",
+              "default": "name",
+              "title": "Sort"
+            },
+            "description": "name (default) \u00b7 newest \u00b7 oldest \u00b7 largest; folders first"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Re-read the folder instead of using the cached listing",
+              "default": false,
+              "title": "Refresh"
+            },
+            "description": "Re-read the folder instead of using the cached listing"
           }
         ],
         "responses": {
@@ -9193,19 +9351,120 @@
           "podcasts"
         ],
         "summary": "List Subscriptions",
+        "description": "Subscribed shows with episode counts, sorted and searched here.\nPaged when ``limit`` / ``cursor`` / ``offset`` is sent (``{items, total,\nlimit, has_more, next_cursor}``, paging.py); the bare list, as before,\nfor a client that sends none of them.",
         "operationId": "list_subscriptions_api_podcasts_subscriptions_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of title, author or feed URL",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of title, author or feed URL"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "title",
+                "newest"
+              ],
+              "type": "string",
+              "description": "title (default) \u00b7 newest",
+              "default": "title",
+              "title": "Sort"
+            },
+            "description": "title (default) \u00b7 newest"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "type": "array",
                   "title": "Response List Subscriptions Api Podcasts Subscriptions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -9220,14 +9479,14 @@
         "description": "Subscribe by RSS URL, or by name via iTunes discovery (network).\n\nDevice tier: ``X-Device-Token`` or an admin Bearer. The feed URL \u2014\ntyped in or returned by discovery \u2014 must be an http(s) URL outside\nthe house's own address space.\n\nThe show's artwork \u2014 the directory's, for a name lookup or a feed a\ndiscovery search returned in this process \u2014 is stored as the source\nand fetched in the background; the response's ``artwork`` is the\nserver path once it is in (usually null here).",
         "operationId": "subscribe_api_podcasts_subscriptions_post",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SubscribeRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -9235,8 +9494,8 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Subscribe Api Podcasts Subscriptions Post"
                 }
               }
@@ -9348,6 +9607,7 @@
           "podcasts"
         ],
         "summary": "List Episodes",
+        "description": "One show's episodes, newest first by default. Paged when ``limit`` /\n``cursor`` / ``offset`` is sent (``{items, total, \u2026}``, paging.py \u2014 a\nlong back catalogue no longer arrives in one answer); the bare list, as\nbefore, for a client that sends none of them.",
         "operationId": "list_episodes_api_podcasts_subscriptions__sub_id__episodes_get",
         "parameters": [
           {
@@ -9358,6 +9618,117 @@
               "type": "integer",
               "title": "Sub Id"
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of the episode title",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of the episode title"
+          },
+          {
+            "name": "downloaded",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "true \u2192 only episodes with a file here; false \u2192 only those without",
+              "title": "Downloaded"
+            },
+            "description": "true \u2192 only episodes with a file here; false \u2192 only those without"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "newest",
+                "oldest"
+              ],
+              "type": "string",
+              "description": "newest (default) \u00b7 oldest",
+              "default": "newest",
+              "title": "Sort"
+            },
+            "description": "newest (default) \u00b7 oldest"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
           }
         ],
         "responses": {
@@ -9366,11 +9737,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": true
-                  },
                   "title": "Response List Episodes Api Podcasts Subscriptions  Sub Id  Episodes Get"
                 }
               }
@@ -9686,19 +10052,121 @@
           "audiobooks"
         ],
         "summary": "List Books",
+        "description": "The indexed books, sorted and searched here.\n\nPaged when ``limit`` / ``cursor`` / ``offset`` is sent:\n``{items, total, limit, has_more, next_cursor}`` (web/backend/api/\npaging.py). With none of them \u2014 an old client, the installed Android\napp \u2014 the bare list it was built for, every match, as before.",
         "operationId": "list_books_api_audiobooks__get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of title, author or narrator",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of title, author or narrator"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "title",
+                "author",
+                "newest"
+              ],
+              "type": "string",
+              "description": "title (default) \u00b7 author \u00b7 newest",
+              "default": "title",
+              "title": "Sort"
+            },
+            "description": "title (default) \u00b7 author \u00b7 newest"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "type": "array",
                   "title": "Response List Books Api Audiobooks  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -9712,19 +10180,121 @@
           "audiobooks"
         ],
         "summary": "List Books",
+        "description": "The indexed books, sorted and searched here.\n\nPaged when ``limit`` / ``cursor`` / ``offset`` is sent:\n``{items, total, limit, has_more, next_cursor}`` (web/backend/api/\npaging.py). With none of them \u2014 an old client, the installed Android\napp \u2014 the bare list it was built for, every match, as before.",
         "operationId": "list_books_api_audiobooks_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of title, author or narrator",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of title, author or narrator"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "title",
+                "author",
+                "newest"
+              ],
+              "type": "string",
+              "description": "title (default) \u00b7 author \u00b7 newest",
+              "default": "title",
+              "title": "Sort"
+            },
+            "description": "title (default) \u00b7 author \u00b7 newest"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "type": "array",
                   "title": "Response List Books Api Audiobooks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -10043,17 +10613,155 @@
           "videos"
         ],
         "summary": "List Videos",
-        "description": "Every video across every present library. Bounded per library; the\nwalk runs in worker threads (one per library, gathered).",
+        "description": "Videos across every present library, sorted and filtered here, one\npage at a time.\n\nPaged (``limit`` / ``cursor`` / ``offset`` sent): ``videos`` is one page\nand ``total`` / ``has_more`` / ``next_cursor`` say where it sits\n(``web/backend/api/paging.py``). ``libraries`` counts the matches per\nlibrary (the search applied, the library filter not), for the section\nheaders. Unpaged (an old client): every match, as before, with the same\nextra fields.\n\nThe walk is bounded per library (``_MAX_VIDEOS_PER_LIBRARY``, and\nmedia_walk's directory cap) and cached between requests\n(``listing_cache``); ``truncated`` says a cap was hit.",
         "operationId": "list_videos_api_videos_list_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Case-insensitive substring of the file name or its path",
+              "title": "Q"
+            },
+            "description": "Case-insensitive substring of the file name or its path"
+          },
+          {
+            "name": "library_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this library",
+              "title": "Library Id"
+            },
+            "description": "Only this library"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "library",
+                "name",
+                "newest",
+                "oldest",
+                "largest"
+              ],
+              "type": "string",
+              "description": "library (default) \u00b7 name \u00b7 newest \u00b7 oldest \u00b7 largest",
+              "default": "library",
+              "title": "Sort"
+            },
+            "description": "library (default) \u00b7 name \u00b7 newest \u00b7 oldest \u00b7 largest"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 200,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer.",
+              "title": "Limit"
+            },
+            "description": "Page size (default 50, max 200). Sending any of limit / cursor / offset asks for the paged answer."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped.",
+              "title": "Cursor"
+            },
+            "description": "Opaque position from the previous page's next_cursor. Keyset-based: rows added or removed between pages are neither repeated nor skipped."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Row offset (stable only while the list doesn't change; prefer cursor).",
+              "title": "Offset"
+            },
+            "description": "Row offset (stable only while the list doesn't change; prefer cursor)."
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Re-walk the libraries instead of using the cached walk",
+              "default": false,
+              "title": "Refresh"
+            },
+            "description": "Re-walk the libraries instead of using the cached walk"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response List Videos Api Videos List Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -12437,6 +13145,54 @@
               }
             ],
             "title": "Blocked Reason"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "folder_total": {
+            "type": "integer",
+            "title": "Folder Total",
+            "default": 0
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "type": "object",
@@ -14442,6 +15198,44 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offset"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "default": false
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "type": "object",
@@ -14450,7 +15244,7 @@
           "items"
         ],
         "title": "LibraryPage",
-        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active filters. ``total`` reflects ``q``/``source``;\nit's what pagination math and the \"X results\" caption read."
+        "description": "One page of ``library_tracks`` plus the unbounded count that\nmatches the active filters. ``total`` reflects ``q``/``source``;\nit's what the \"showing N of M\" caption reads. The paging fields are\nthe shared contract (web/backend/api/paging.py): ``next_cursor`` is\nnull on the last page; ``offset`` is echoed for an offset request."
       },
       "LibraryStats": {
         "properties": {

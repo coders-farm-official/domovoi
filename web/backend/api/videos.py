@@ -8,7 +8,9 @@ which is also the key for the ``video_positions`` resume store (V005).
 
 Endpoints:
 
-* ``GET /list`` — bounded recursive walk of every library for video files.
+* ``GET /list`` — bounded recursive walk of every library for video files,
+  cached between requests (``listing_cache``) and served a page at a time
+  with the sort / filter / search applied here (``paging``).
 * ``GET /stream`` — Range/206 playback via the shared ``audio_serve``
   machinery with video MIME types (``.mkv`` rides as x-matroska; Chromium
   demuxes Matroska, other browsers fall back to save-to-device).
@@ -40,7 +42,7 @@ import hashlib
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -62,6 +64,7 @@ from web.backend.api.files_security import (
     is_sensitive_name,
     safe_join,
 )
+from web.backend.api import listing_cache, paging
 from web.backend.api.media_walk import walk_library_files
 from web.backend.db import session_scope
 
@@ -110,28 +113,135 @@ def _resolve_video(lib: MediaLibrary, path: str) -> Path:
 
 
 # ─── GET /list ───────────────────────────────────────────────────────────────
+# Sorts, as ascending key tuples (a descending field is negated). Every key
+# ends in (library_id, rel) — unique — so a cursor names exactly one place.
+VideoSort = Literal["library", "name", "newest", "oldest", "largest"]
+_VIDEO_SORT_KEYS: dict[str, Any] = {
+    "library": lambda v: (v["library_id"], v["rel"].lower(), v["rel"]),
+    "name": lambda v: (v["name"].lower(), v["name"], v["library_id"], v["rel"]),
+    "newest": lambda v: (-float(v["mtime"]), v["library_id"], v["rel"]),
+    "oldest": lambda v: (float(v["mtime"]), v["library_id"], v["rel"]),
+    "largest": lambda v: (-int(v["size"]), v["library_id"], v["rel"]),
+}
+
+
+def _library_snapshot(lib: MediaLibrary, force: bool) -> listing_cache.Snapshot:
+    """This library's cached walk (listing_cache: re-walked only when a
+    folder it read changed, it aged out, or a write invalidated it)."""
+
+    def build() -> listing_cache.Snapshot:
+        meta: dict[str, Any] = {}
+        rows = walk_library_files(lib, VIDEO_EXTENSIONS, _MAX_VIDEOS_PER_LIBRARY, meta)
+        hay = [f"{r['name']}\n{r['rel']}".lower() for r in rows]
+        return listing_cache.Snapshot(
+            rows=rows, hay=hay, dirs=meta.get("dirs", {}),
+            truncated=bool(meta.get("truncated")),
+        )
+
+    key = (lib.id, str(lib.root_path), "videos", _MAX_VIDEOS_PER_LIBRARY)
+    return listing_cache.get(key, build, force=force)
+
+
+# The every-library list, joined from the per-library snapshots. Rebuilt
+# only when one of them was (identity, not equality: a snapshot is never
+# mutated, it is replaced).
+_combined: dict[str, Any] = {"parts": (), "snap": None}
+
+
+def _combined_snapshot(parts: list[listing_cache.Snapshot]) -> listing_cache.Snapshot:
+    prev_parts = _combined["parts"]
+    if (
+        _combined["snap"] is not None
+        and len(prev_parts) == len(parts)
+        and all(a is b for a, b in zip(prev_parts, parts))
+    ):
+        return _combined["snap"]
+    rows: list[dict[str, Any]] = []
+    hay: list[str] = []
+    for p in parts:
+        rows.extend(p.rows)
+        hay.extend(p.hay)
+    snap = listing_cache.Snapshot(
+        rows=rows, hay=hay, dirs={}, truncated=any(p.truncated for p in parts),
+    )
+    _combined["parts"] = tuple(parts)
+    _combined["snap"] = snap
+    return snap
+
+
 @router.get("/list")
-async def list_videos() -> dict[str, Any]:
-    """Every video across every present library. Bounded per library; the
-    walk runs in worker threads (one per library, gathered)."""
+async def list_videos(
+    q: Optional[str] = Query(None, max_length=200,
+                             description="Case-insensitive substring of the file name or its path"),
+    library_id: Optional[str] = Query(None, description="Only this library"),
+    sort: VideoSort = Query("library", description="library (default) · name · newest · oldest · largest"),
+    limit: Optional[int] = paging.limit_query(),
+    cursor: Optional[str] = paging.cursor_query(),
+    offset: Optional[int] = paging.offset_query(),
+    refresh: bool = Query(False, description="Re-walk the libraries instead of using the cached walk"),
+) -> dict[str, Any]:
+    """Videos across every present library, sorted and filtered here, one
+    page at a time.
+
+    Paged (``limit`` / ``cursor`` / ``offset`` sent): ``videos`` is one page
+    and ``total`` / ``has_more`` / ``next_cursor`` say where it sits
+    (``web/backend/api/paging.py``). ``libraries`` counts the matches per
+    library (the search applied, the library filter not), for the section
+    headers. Unpaged (an old client): every match, as before, with the same
+    extra fields.
+
+    The walk is bounded per library (``_MAX_VIDEOS_PER_LIBRARY``, and
+    media_walk's directory cap) and cached between requests
+    (``listing_cache``); ``truncated`` says a cap was hit."""
     libs = await build_libraries()
     results = await asyncio.gather(
-        *(
-            anyio.to_thread.run_sync(
-                walk_library_files, lib, VIDEO_EXTENSIONS, _MAX_VIDEOS_PER_LIBRARY
-            )
-            for lib in libs
-        ),
+        *(anyio.to_thread.run_sync(_library_snapshot, lib, refresh) for lib in libs),
         return_exceptions=True,
     )
-    videos: list[dict[str, Any]] = []
+    parts: list[listing_cache.Snapshot] = []
     for lib, res in zip(libs, results):
         if isinstance(res, BaseException):
             log.warning("videos: walk failed for %s: %s", lib.id, res)
             continue
-        videos.extend(res)
-    videos.sort(key=lambda v: (v["library_id"], v["rel"].lower()))
-    return {"videos": videos}
+        parts.append(res)
+    snap = _combined_snapshot(parts)
+    # Sorting 10,000 rows is tens of ms: off the event loop, once per sort
+    # per snapshot.
+    rows, keys, order = await anyio.to_thread.run_sync(snap.view, sort, _VIDEO_SORT_KEYS[sort])
+
+    needle = (q or "").strip().lower()
+    hay = snap.hay
+    counts: dict[str, int] = {}
+    if needle:
+        hit = [needle in hay[order[i]] for i in range(len(rows))]
+    else:
+        hit = None
+    for i, r in enumerate(rows):
+        if hit is None or hit[i]:
+            counts[r["library_id"]] = counts.get(r["library_id"], 0) + 1
+    keep = None
+    if hit is not None or library_id:
+        keep = lambda i: (hit is None or hit[i]) and (  # noqa: E731
+            not library_id or rows[i]["library_id"] == library_id)
+
+    libraries = [
+        {"library_id": lib.id, "library_label": lib.label, "total": counts.get(lib.id, 0)}
+        for lib in libs
+    ]
+    if not paging.wants_page(limit, cursor, offset):
+        # Old clients (the installed Android app) send no paging params and
+        # get every match, as /list always answered — still bounded by the
+        # walk caps above.
+        every = [r for i, r in enumerate(rows) if keep is None or keep(i)]
+        return {
+            "videos": every, "total": len(every), "limit": None, "has_more": False,
+            "next_cursor": None, "libraries": libraries, "truncated": snap.truncated,
+        }
+    page, fields = paging.page_view(
+        rows, keys, sort=sort, limit=limit or paging.DEFAULT_LIMIT,
+        cursor=cursor, offset=offset, keep=keep,
+    )
+    return {"videos": page, **fields, "libraries": libraries, "truncated": snap.truncated}
 
 
 # ─── GET /stream ─────────────────────────────────────────────────────────────

@@ -276,6 +276,44 @@ its Python packages are already present; otherwise the same code, with
 `details.missing`). Voice replies say "I'm set to stay off the internet,
 so …".
 
+### 1.7 Paging (the files-like lists)
+
+Every list behind the Music, Videos, Files, Audiobooks and Podcasts pages
+pages the same way (`web/backend/api/paging.py`), so no client ever has to
+take a whole list at once and every sort, filter and search covers the
+whole list on the server:
+
+| Request | Meaning |
+|---|---|
+| `limit` | Page size. Default **50**, max **200** (`422` above it or below 1). |
+| `cursor` | Opaque, from the previous answer's `next_cursor`. A keyset position (the last row's sort key), so a row added or removed between two pages neither repeats a row nor skips one. A cursor cut for a different `sort` is `400` ("start again from page one"); a garbled one is `400`. |
+| `offset` | Also accepted (rows to skip). Stable only while the list doesn't change; use `cursor`. |
+
+The answer adds `total` (rows matching the active filters, not the page),
+`limit`, `has_more`, `next_cursor` (`null` on the last page) and, for an
+offset request, `offset`. Clients start again from page one whenever a
+filter, search or sort changes.
+
+**Old clients.** A request that sends none of `limit` / `cursor` /
+`offset` is treated as a client built before paging (the Android app
+installed before 2026-10-11): `GET /api/videos/list` and
+`GET /api/files/browse` answer with every entry as before (still within
+their walk caps) plus `total` and `has_more: false`;
+`GET /api/audiobooks`, `GET /api/podcasts/subscriptions` and
+`GET /api/podcasts/subscriptions/{id}/episodes` answer with the bare JSON
+array they always did. `GET /api/music/library` was always paged (default
+50) and still takes `offset`.
+
+**Filesystem lists are cached.** Videos and Files have no index: the
+server keeps each library walk / folder listing between requests
+(`listing_cache.py`) and checks, on every request, the mtime of each
+folder it read (~0.5 ms for 100 folders). A file added, removed or renamed
+anywhere it read, a write through this server into the library (upload,
+delete, move, import, a document save), `refresh=true`, or five minutes'
+age re-reads it. Measured on a 10,000-entry synthetic tree (Windows dev
+box): a cold walk of 10,000 videos ~0.1 s (was ~2 s), a cold 10,000-entry
+folder ~0.13 s (was ~6 s), every later page ~25 ms end to end.
+
 ---
 
 ## 2. Core API (`:6370`)
@@ -538,7 +576,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. `q` matches title, artist, album and that same relative path, so nothing above the music library is searchable either. |
+| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&cursor=` (or `&offset=`) | Paged library listing (§1.7): `{total, items, limit, has_more, next_cursor, offset?}`; sorts `added_desc` (default), `added_asc`, `title`, `artist`, `duration` (NULL titles / artists / durations last). Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. `q` matches title, artist, album and that same relative path, so nothing above the music library is searchable either. |
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
 | `PATCH /api/music/library/{track_id}` | **Device** | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
@@ -1115,7 +1153,7 @@ directory zip and an import copy, even from a library rooted above it.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
-| `GET /api/files/browse` | `?library_id=&path=&device_id=` | One directory level (dirs-first, then name). Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason }`; each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
+| `GET /api/files/browse` | `?library_id=&path=&device_id=&q=&kind=&sort=&limit=&cursor=&refresh=` | One directory level, folders first under every `sort` (`name` default · `newest` · `oldest` · `largest`), paged (§1.7). `q` is a case-insensitive substring of the name and `kind` keeps one entry kind (`folder` = folders only), both over the whole folder. Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason, total, folder_total, limit, has_more, next_cursor }` (`total` counts the matches, `folder_total` the folder; no paging params → every entry, as before); the listing is cached between pages and re-read when the folder changes (§1.7); each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
 | `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
 | `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or a **removable** target without an admin session (Documents is device tier like any other core library) · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | **Admin (mutation)** · `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `401` no admin session · `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
@@ -1247,18 +1285,18 @@ workers; audio is served by this process.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/podcasts/subscriptions` | — | Subscribed feeds. Each row's `artwork` is a path on this server (`/api/podcasts/subscriptions/{id}/artwork?v=…`) or `null`, never the publisher's URL: the server downloads each show's artwork itself, so clients load nothing from outside the house. |
+| `GET /api/podcasts/subscriptions` | `?q=&sort=title\|newest&limit=&cursor=` | Subscribed feeds, paged (§1.7: `{items, total, …}`; the bare array when no paging param is sent). `q` matches title, author and feed URL. Each row's `artwork` is a path on this server (`/api/podcasts/subscriptions/{id}/artwork?v=…`) or `null`, never the publisher's URL: the server downloads each show's artwork itself, so clients load nothing from outside the house. |
 | `POST /api/podcasts/subscriptions` | `SubscribeRequest` (`feed_url` or `query`, `keep_n` 1–50, default 5) | **Device.** Subscribe to a feed URL, or by `query` (a directory search). `keep_n` is how many of the newest episodes stay downloaded; outside 1–50 is `422` (each episode is a download of up to 512 MB). `400` for a URL the server won't fetch. Under `never` subscribing by `query` is `409`; a feed URL is stored and fetched once the internet is allowed. |
 | `GET /api/podcasts/subscriptions/{sub_id}/artwork` | — | Open, like episode audio (an `<img>` can't send headers). The show's artwork as the server stored it (JPEG, PNG, WebP or GIF, at most 5 MB), `Cache-Control: max-age=86400`; `404` when it isn't downloaded. |
 | `GET /api/podcasts/discover/artwork/{key}` | — | Open. Artwork for a Discover result, by a key the server minted for that result; a key it didn't mint is `404` without any fetch, so a client can never make the server fetch a URL of its choosing. |
 | `DELETE /api/podcasts/subscriptions/{sub_id}` | — | Unsubscribe. |
-| `GET /api/podcasts/subscriptions/{sub_id}/episodes` | — | Episodes for one subscription. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
+| `GET /api/podcasts/subscriptions/{sub_id}/episodes` | `?q=&downloaded=&sort=newest\|oldest&limit=&cursor=` | Episodes for one subscription, paged (§1.7; the bare array when no paging param is sent), undated episodes last. `q` matches the title; `downloaded=true` keeps the ones with a file here. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
 | `GET /api/podcasts/discover` | `?q=` (required) | **Device.** Search a podcast directory (the server fetches Apple's search, so a caller without the household token or an admin Bearer is `401` before anything leaves the house). Hits whose feed URL would be refused are left out. A hit's `artwork` is a server path (`/api/podcasts/discover/artwork/{key}`) or `null`. `409` under `never`. |
 | `POST /api/podcasts/poll` | — | **Device.** Poll feeds now (instead of waiting for the worker). `409` under `never`. |
 | `GET /api/podcasts/episodes/{episode_id}/audio` | `?download=` | Stream a downloaded episode. `?download=1` serves it as an attachment named from the episode title plus its on-disk extension. |
 | `GET /api/podcasts/positions/{episode_id}` | `?device_id=&person_id=` | Resume position. |
 | `POST /api/podcasts/positions/{episode_id}` | `PositionSave` | Save position. |
-| `GET /api/audiobooks` | — | Indexed books (also `/api/audiobooks/`). Each row includes `is_folder` and `file_ext` (single-file books; `null` for folder books, which download as a zip) instead of the private server path. |
+| `GET /api/audiobooks` | `?q=&sort=title\|author\|newest&limit=&cursor=` | Indexed books (also `/api/audiobooks/`), paged (§1.7: `{items, total, …}`; the bare array when no paging param is sent). `q` matches title, author and narrator. Each row includes `is_folder` and `file_ext` (single-file books; `null` for folder books, which download as a zip) instead of the private server path. |
 | `GET /api/audiobooks/{book_id}` | — | One book (files/chapters), with `is_folder` / `file_ext` as above. |
 | `POST /api/audiobooks/reindex` | — | Re-walk the audiobooks dir. |
 | `GET /api/audiobooks/{book_id}/audio` | `?file=&download=` | Stream a book file (`?file=` selects a chapter for folder books). `?download=1` serves it as an attachment — a single chapter for folder books, the whole file for single-file books. |
@@ -1285,7 +1323,7 @@ fire the `video_positions.changed` WS event.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/videos/list` | — | Every video across every present library (bounded walk; hidden dirs skipped). |
+| `GET /api/videos/list` | `?q=&library_id=&sort=&limit=&cursor=&refresh=` | Videos across every present library (bounded walk — 2,000 per library, 2,000 folders; hidden dirs skipped), paged (§1.7) as `{videos, total, limit, has_more, next_cursor, libraries, truncated}`. `sort`: `library` (default: library, then path) · `name` · `newest` · `oldest` · `largest`. `q` is a case-insensitive substring of the name or path; `library_id` keeps one library. `libraries` is `[{library_id, library_label, total}]` — the matches per library with `q` applied — for section headers; `truncated` says a walk cap was hit. No paging params → every match, as before. The walk is cached between pages (§1.7). |
 | `GET /api/videos/stream` | `?library_id=&path=&download=` | Range/206 playback with the container's native MIME. `.mkv` serves as `x-matroska` — Chromium-family browsers and ExoPlayer play it; others fall back to `?download=1` (attachment). |
 | `GET /api/videos/poster` | `?library_id=&path=` | Cached ffmpeg-extracted poster frame (`video_posters_dir`); `204` when no frame could be extracted. |
 | `GET /api/videos/position` | `?library_id=&path=&device_id=&person_id=` | Resume position (`{position_sec, duration_sec}`). |
