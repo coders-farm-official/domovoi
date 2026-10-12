@@ -191,7 +191,8 @@ private fun SatCard(s: Satellite, extraSec: Double, onOpen: () -> Unit) {
     val songDur = np?.song?.duration_sec ?: 0.0
     val elapsed = if (playing) (np?.elapsed_sec ?: 0.0) + extraSec else 0.0
     val progress = if (playing && songDur > 0) (elapsed / songDur).coerceIn(0.0, 1.0) else 0.0
-    val wTone = wifiTone(s.wifi?.rx_mbits)
+    val wTone = wifiTone(s.wifi)
+    val (wMain, wSub) = wifiLinkText(s.wifi)
 
     DomovoiCard(
         modifier = Modifier
@@ -269,10 +270,17 @@ private fun SatCard(s: Satellite, extraSec: Double, onOpen: () -> Unit) {
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                s.wifi?.rx_mbits?.let { "%.0f Mbit/s".format(it) } ?: "—",
+                wMain,
                 style = MaterialTheme.typography.labelMedium,
-                color = Domovoi.colors.fg,
+                color = if (s.wifi?.mode == "ap") toneColor(wTone) else Domovoi.colors.fg,
             )
+            if (wSub != null) {
+                Text(
+                    " · $wSub",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.fgMuted,
+                )
+            }
             Spacer(Modifier.weight(1f))
             Text(
                 if (online) "active now" else relTime(s.last_connected_at),

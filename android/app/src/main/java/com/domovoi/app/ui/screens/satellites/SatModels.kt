@@ -33,6 +33,10 @@ data class SatWifi(
     val rx_mbits: Double? = null,
     val tx_mbits: Double? = null,
     val ssid: String? = null,
+    // Since 2026-10-12: the received signal at the satellite (dBm), and
+    // "ap" while its radio hosts the setup hotspot. Null from an older one.
+    val signal_dbm: Double? = null,
+    val mode: String? = null,
 )
 
 @Serializable
@@ -179,11 +183,52 @@ data class AddByUrlResult(
 // Shared helpers (web satellites.jsx wifiTone)
 // ---------------------------------------------------------------------------
 
+/** The rate is the LAST frame's, and an idle link's last frame is a
+ *  beacon at 1 Mbit/s: it colours only a satellite too old to report a
+ *  signal, as before. */
 internal fun wifiTone(rx: Double?): Tone = when {
     rx == null -> Tone.Idle
     rx < 5 -> Tone.Err
     rx < 15 -> Tone.Warn
     else -> Tone.Ok
+}
+
+/** Received signal bands (dBm), the web's wifiSignalTone and the core's
+ *  voice answer: at or above -60 good, -60 to -70 fair, below -70 weak. */
+internal const val WIFI_SIGNAL_GOOD_DBM = -60.0
+internal const val WIFI_SIGNAL_FAIR_DBM = -70.0
+
+internal fun wifiSignalTone(dbm: Double?): Tone = when {
+    dbm == null -> Tone.Idle
+    dbm >= WIFI_SIGNAL_GOOD_DBM -> Tone.Ok
+    dbm >= WIFI_SIGNAL_FAIR_DBM -> Tone.Warn
+    else -> Tone.Err
+}
+
+internal fun wifiSignalWord(dbm: Double?): String = when (wifiSignalTone(dbm)) {
+    Tone.Ok -> "good"
+    Tone.Warn -> "fair"
+    Tone.Err -> "weak"
+    else -> ""
+}
+
+/** A link's tone: by signal when the satellite reports one (red while it
+ *  hosts the setup hotspot), else by rate (web satellites.jsx wifiTone). */
+internal fun wifiTone(w: SatWifi?): Tone = when {
+    w == null -> Tone.Idle
+    w.mode == "ap" -> Tone.Err
+    w.signal_dbm != null -> wifiSignalTone(w.signal_dbm)
+    else -> wifiTone(w.rx_mbits)
+}
+
+/** What a link reads as on the card: "-52 dBm" with the rate second, the
+ *  rate alone from an older satellite. */
+internal fun wifiLinkText(w: SatWifi?): Pair<String, String?> = when {
+    w == null -> "—" to null
+    w.mode == "ap" -> "setup hotspot" to "not on the house Wi-Fi"
+    w.signal_dbm != null -> "%d dBm".format(Math.round(w.signal_dbm)) to
+        w.rx_mbits?.let { "%.0f Mbit/s".format(it) }
+    else -> (w.rx_mbits?.let { "%.0f Mbit/s".format(it) } ?: "—") to null
 }
 
 internal fun songTitle(np: SatNowPlaying?): String =

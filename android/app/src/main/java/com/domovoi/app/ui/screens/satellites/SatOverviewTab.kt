@@ -94,7 +94,34 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
             Column(Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 14.dp)) {
                 SectionLabel("wi-fi")
                 val rx = s.wifi?.rx_mbits
-                if (rx != null) {
+                val dbm = s.wifi?.signal_dbm
+                if (s.wifi?.mode == "ap") {
+                    Text(
+                        "setup hotspot",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(Tone.Err),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        "hosting its setup network, not on the house Wi-Fi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (dbm != null) {
+                    Text(
+                        "%d dBm %s".format(Math.round(dbm), wifiSignalWord(dbm)),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(wifiSignalTone(dbm)),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        (s.wifi?.ssid ?: "—") + (rx?.let { " · %.1f Mbit/s".format(it) } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (rx != null) {
                     val tx = s.wifi?.tx_mbits
                     Text(
                         "%.1f".format(rx) + (tx?.let { " / %.1f".format(it) } ?: "") + " Mbit/s",
