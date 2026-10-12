@@ -92,6 +92,9 @@ dependencies {
     implementation(libs.sherpa.onnx) {
         artifact { type = "aar"; extension = "aar" }
     }
+    // The model download runs as a WorkManager job, so it survives leaving
+    // the app, an app restart and a dropped Wi-Fi connection.
+    implementation(libs.androidx.work.runtime.ktx)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
