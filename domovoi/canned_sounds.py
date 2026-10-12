@@ -390,6 +390,24 @@ def _needs_regen(mp3: Path, sidecar: Path, marker: str, text: str) -> bool:
     return recorded[0].strip() != marker or recorded[1].strip() != _hash(text)
 
 
+def _spoken_key(text: str, engine: str | None) -> str:
+    """What a clip's sidecar hash covers: ``text``, plus for a Piper voice
+    the "say it like" entries that change how it is said (domovoi/
+    phonemizer), so editing an entry re-renders the clips that use it and
+    no others. The bare text when no entry applies (or under stubs, which
+    have no converter), so the hash of every other clip stays as it was."""
+    if (engine or "").strip().lower() != "piper" or settings.use_stubs:
+        return text
+    try:
+        from domovoi.phonemizer import get_phonemizer
+
+        tag = get_phonemizer().pronunciation_tag(text)
+    except Exception as e:  # noqa: BLE001 - a clip still renders without the tag
+        log.debug("pronunciation tag for a clip failed: %s", e)
+        return text
+    return f"{text}\x00say:{tag}" if tag else text
+
+
 def _hash(text: str) -> str:
     """Short, stable identifier for the text body."""
     import hashlib
@@ -471,7 +489,8 @@ async def _regen_entry(
     module docstring); ``edge_ok`` is :func:`edge_usable` for this pass."""
     mp3_path = directory / mp3_name
     sidecar_path = directory / sidecar_name
-    if not _needs_regen(mp3_path, sidecar_path, marker, text):
+    key = _spoken_key(text, voice["engine"])
+    if not _needs_regen(mp3_path, sidecar_path, marker, key):
         if not (edge_ok and _misattributed_edge_clip(mp3_path, sidecar_path, marker)):
             return
         log.info(
@@ -480,7 +499,7 @@ async def _regen_entry(
             mp3_name, voice["name"],
         )
     plan = _render_voice(
-        voice["engine"], voice["model_ref"], mp3_path, sidecar_path, text,
+        voice["engine"], voice["model_ref"], mp3_path, sidecar_path, key,
         edge_ok=edge_ok,
     )
     if plan is None:
@@ -509,7 +528,7 @@ async def _regen_entry(
         )
     try:
         mp3_path.write_bytes(mp3_bytes)
-        sidecar_path.write_text(f"{actual}\n{_hash(text)}\n", encoding="utf-8")
+        sidecar_path.write_text(f"{actual}\n{_hash(key)}\n", encoding="utf-8")
         log.info("clip %s regenerated (%d bytes)", mp3_path, len(mp3_bytes))
     except OSError as e:
         log.warning("failed to write clip %s: %s", mp3_path, e)
@@ -641,9 +660,10 @@ async def render_setup_clips() -> tuple[int, list[str]]:
     for wav_name, text in SETUP_LINES:
         wav_path = _SETUP_DIR / wav_name
         sidecar = _SETUP_DIR / f"{wav_name.rsplit('.', 1)[0]}.voice"
-        if not _needs_regen(wav_path, sidecar, marker, text):
+        key = _spoken_key(text, engine)
+        if not _needs_regen(wav_path, sidecar, marker, key):
             continue
-        plan = _render_voice(engine, model_ref, wav_path, sidecar, text, edge_ok=edge_ok)
+        plan = _render_voice(engine, model_ref, wav_path, sidecar, key, edge_ok=edge_ok)
         if plan is None:
             continue  # an Edge-voiced clip, kept until Edge is usable
         rendered = await _synth_clip_wav(text, *plan)
@@ -653,7 +673,7 @@ async def render_setup_clips() -> tuple[int, list[str]]:
         wav_bytes, actual = rendered
         try:
             wav_path.write_bytes(wav_bytes)
-            sidecar.write_text(f"{actual}\n{_hash(text)}\n", encoding="utf-8")
+            sidecar.write_text(f"{actual}\n{_hash(key)}\n", encoding="utf-8")
             written += 1
         except OSError as e:
             problems.append(f"{wav_name}: {e}")

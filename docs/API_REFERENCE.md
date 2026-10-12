@@ -474,6 +474,8 @@ dashboard reads the incidents itself and proxies these.
 | `POST /v1/admin/sounds/regenerate` | **Admin (Bearer)** | — | Kick a background re-render of all voices' greeting/canned clips, then notify satellites to re-sync. Returns `{"started": true}` immediately. |
 | `POST /v1/admin/sounds/setup-clips` | **Admin (Bearer)** | — | Render the satellite's setup phrase set in the household's default voice, synchronously (sixteen short lines, seconds), for media prep to copy onto a prepared card. The web process cannot import the TTS clients, so its prepare job calls this with the operator's credentials forwarded. Returns `{written, problems}`. |
 | `POST /v1/admin/voices/sample` | **Device (`X-Device-Token` or Bearer)** | `{"name": "<voice>"}` | Live-synthesize a sample line in a registered voice; returns `audio/wav` with the text in `X-Sample-Text`. `404` for an unknown voice. |
+| `POST /v1/admin/pronunciations/reload` | **Admin (Bearer)** | — | Load the "say it like" list from the database (V026, over the shipped defaults) into the text-to-phoneme converter, then re-render in the background the clips whose words it changes. `{"reloaded": true, "left_out": [<entries it could not use>]}`. The web backend calls it after an edit. |
+| `POST /v1/admin/voice/say-like` | **Device (`X-Device-Token` or Bearer)** | `{"word", "say_like", "voice"?}` | Say `word` as `say_like` asks, unsaved, in `voice` (one of the three) or the server's voice: `audio/wav`, the phonemes in `X-Phonemes` (URL-encoded, sentences joined by ` \| `). `400` with the reason for an entry the converter can't use or an unknown voice; `502` when the voice can't speak. |
 | `POST /v1/admin/wake/record/start` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Tell a connected satellite to record positive training clips (fresh take: clip dir + count reset). `404` room/word unknown, `409` mid drop-in or wrong status, `502` send failure. |
 | `POST /v1/admin/wake/record/stop` | **Admin (Bearer)** | `{room_id}` | Stop an in-progress recording; the Pi resumes its wake loop. |
 | `POST /v1/admin/wake/push` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Push a trained model: the Pi writes the slug to its wake sidecar, syncs from `/v1/wake-models`, and restarts. `409` when not trained yet. |
@@ -1053,6 +1055,29 @@ file on the server. Mutations trigger the core's background clip re-render
 | `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice. `201`. Both files are streamed to disk under a byte budget — the model at 200 MB, the config at 4 MB — and an upload over either one is answered `413` while it is still arriving, leaving nothing on disk. A request whose declared `Content-Length` is over 210 MB is refused before its body is read at all. |
 | `PATCH /api/voices/{voice_id}` | `VoicePatch` | Rename / set default. |
 | `DELETE /api/voices/{voice_id}` | — | Remove a voice. `204`. |
+
+### 3.11a Domovoi's voice and the "say it like" list
+
+Domovoi speaks with one of three public-domain Piper voices, fed by its own
+text-to-phoneme converter (`domovoi/phonemizer`), and an owner can tell the
+converter how to say a word. The phone runs the same converter and voices
+and reads the server's choice and list here (`web/backend/api/voice.py`;
+the data model in `domovoi/voice_settings.py`; the "say it like" format in
+`domovoi/phonemizer/README.md`). Reads are **Device** (`X-Device-Token` or
+an admin Bearer); changes are **Admin (Bearer)**. Every write answers with
+the `GET /api/voice` body, then asks the core to reload the list
+(`/v1/admin/pronunciations/reload`) or re-render the clips
+(`/v1/admin/sounds/regenerate`), best-effort.
+
+| Method & path | Auth | Request | Purpose |
+|---|---|---|---|
+| `GET /api/voice` | Device | — | `{"voices": [{"id", "name", "sex", "sample_rate", "size_bytes", "sha256"}], "server_voice": "<id>", "pronunciations": [{"word", "say_like"}], "updated_at": "<UTC, ISO 8601, Z>"}`. `voices`: the three (`en_US-norman-medium` Norman, `en_US-kristin-medium` Kristin, `en_US-ljspeech-medium` Linda), each `.onnx` with its size and SHA-256 at rhasspy/piper-voices revision `c10ece1a…`. `server_voice`: the voice registry's default when it is one of the three, else `TTS_PIPER_VOICE`. `pronunciations`: the effective list (the shipped entries with the owner's changes and removals applied), in order. `updated_at` moves whenever the list or the server's voice changes. |
+| `GET /api/voice/sample/{voice_id}` | Device | — | A sample sentence in one of the three voices, `audio/wav` (proxies `/v1/admin/voices/sample`). `404` for another id. |
+| `PUT /api/voice/server` | Admin | `{"voice": "<id>"}` | Make one of the three the server's voice: the registry's default (rooms without a voice of their own speak in it); clips re-render. `400` for another id. |
+| `POST /api/voice/pronunciations` | Admin | `{"word", "say_like"}` | Add a word, or change how a listed one is said (matched without regard to case or accents). `400` with the reason when the converter can't use it; `409` past 500 entries. |
+| `DELETE /api/voice/pronunciations/{word}` | Admin | — | Take a word off the list (a shipped one stays off until added again or the defaults are put back). `404` when it isn't listed. |
+| `POST /api/voice/pronunciations/defaults` | Admin | — | Put the shipped entries back as shipped; the owner's own words stay. |
+| `POST /api/voice/pronunciations/preview` | Device | `{"word", "say_like", "voice"?}` | Hear an entry before saving it: `audio/wav` from `/v1/admin/voice/say-like`, phonemes in `X-Phonemes`. `400` for an unusable entry or unknown voice. |
 
 ### 3.12 Wake words
 

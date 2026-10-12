@@ -371,7 +371,7 @@ encoder's load stalled every room while it ran:
 ```bash
 journalctl -u domovoi-core | grep "speech warm-up"
 # speech warm-up: voice encoder ready in 0.7 s
-# speech warm-up: Piper voice en_US-lessac-medium ready in 0.5 s
+# speech warm-up: Piper voice en_US-norman-medium ready in 0.5 s
 ```
 
 Ollama's model loads are the exception: they are boot cost only if the
@@ -559,10 +559,16 @@ For now it only runs in **shadow mode**: it writes down what it would
 have done and whether Whisper agreed, and every reply is exactly what it
 would have been without it. Those records decide whether it may ever act.
 
-Turn it on:
+Turn it on. Domovoi does not install the recognizer, sherpa-onnx, since
+2026-10: its wheels on PyPI (and `sherpa-onnx-core` under them) compile in
+espeak-ng, GPL-3.0, for their own text to speech, and Domovoi's own
+dependencies are permissive only. Build sherpa-onnx with
+`SHERPA_ONNX_ENABLE_TTS=OFF` (the Android app's copy is built that way:
+`android/native/sherpa-onnx/README.md`), or install the PyPI wheel
+knowing what it carries:
 
 ```bash
-pip install -e ".[fastlane]"              # sherpa-onnx; not part of any other extra
+pip install "sherpa-onnx>=1.13.8,<2"      # the PyPI wheel: includes espeak-ng (GPL-3.0)
 python -m domovoi.fast_lane fetch         # optional: the 103 MB model now
 ```
 
@@ -573,7 +579,7 @@ once. The model downloads on first enable into
 releases, checked against a pinned SHA-256 (and its files again on every
 load). It is NVIDIA NeMo's
 `stt_en_fastconformer_hybrid_large_streaming_80ms` (CC-BY-4.0) in
-sherpa-onnx's int8 export. Without the extra, shadow mode logs once that
+sherpa-onnx's int8 export. Without sherpa-onnx, shadow mode logs once that
 the lane is unavailable and nothing else changes.
 
 What it commits on, and after how much quiet:

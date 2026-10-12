@@ -1568,6 +1568,11 @@ class VoicesRepository:
         )
         return True
 
+    async def clear_default(self) -> None:
+        """Leave no default (the caller sets another one in the same
+        transaction): what lets :meth:`delete` take out a former default."""
+        await self.s.execute(text("UPDATE voices SET is_default = FALSE WHERE is_default"))
+
     async def update(
         self,
         voice_id: int,
@@ -1613,6 +1618,45 @@ class VoicesRepository:
         )
         r = row.first()
         return self._row(r) if r else None
+
+
+class PronunciationsRepository:
+    """The owner's changes to the "say it like" list (table
+    ``pronunciations``, V026): one row per word, keyed by the converter's
+    normalized form. ``say_like`` None marks a shipped default the owner
+    removed. Rows are upserted, never deleted, so the newest ``updated_at``
+    is when the list last changed. The effective list (defaults + these
+    rows) is built by :mod:`domovoi.voice_settings`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def all(self) -> list[dict]:
+        row = await self.s.execute(
+            text("SELECT key, word, say_like, updated_at FROM pronunciations ORDER BY lower(word), key")
+        )
+        return [
+            {"key": r[0], "word": r[1], "say_like": r[2], "updated_at": r[3]} for r in row.all()
+        ]
+
+    async def put(self, *, key: str, word: str, say_like: str | None) -> None:
+        """Insert or replace the row for ``key``; None removes the word
+        from the effective list (a default) or keeps it out."""
+        await self.s.execute(
+            text(
+                """
+                INSERT INTO pronunciations (key, word, say_like, updated_at)
+                VALUES (:key, :word, :say_like, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET word = EXCLUDED.word, say_like = EXCLUDED.say_like, updated_at = NOW()
+                """
+            ),
+            {"key": key, "word": word, "say_like": say_like},
+        )
+
+    async def count(self) -> int:
+        row = await self.s.execute(text("SELECT COUNT(*) FROM pronunciations"))
+        return int(row.scalar_one())
 
 
 class WakeWordsRepository:

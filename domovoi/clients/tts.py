@@ -10,11 +10,17 @@ so HTTP clients can stream it directly without re-encoding.
   or a voice registered on the edge engine) and the internet answer allows
   it. It is never a fallback rung, and under ``INTERNET_ACCESS=never`` it is
   never used at all (see :func:`engine_order`).
-- `piper`  — local neural (offline, auto-downloads voice, 22 kHz). The
-  one-time voice download goes through the egress gate, so it is refused
-  under ``never`` and the chain carries on to `system`.
+- `piper`  — local neural (offline, auto-downloads voice, 22 kHz): a Piper
+  VITS model run directly on ONNX Runtime, fed by Domovoi's own permissive
+  text-to-phoneme converter (``domovoi/phonemizer``; no espeak-ng, no
+  piper-tts). It speaks voices trained on espeak's British ``"en"`` phoneme
+  set, which the converter writes: the three public-domain voices Domovoi
+  offers (``SHIPPED_VOICES``). The one-time voice download goes through the
+  egress gate, so it is refused under ``never`` and the chain carries on to
+  `system`.
 - `system` — the OS's own synthesizer: pyttsx3/SAPI5 on Windows,
-  `espeak-ng` (or `espeak`) on Linux/BSD, `say` on macOS. Robotic, but it
+  `espeak-ng` (or `espeak`) on Linux/BSD when the owner installed one (Domovoi
+  no longer installs it), `say` on macOS. Robotic, but it
   is the floor of the chain — the thing that still talks when the network
   is down AND the Piper voice is missing or broken. Returns None when no
   system synthesizer is installed, which just ends the chain.
@@ -32,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -215,7 +222,7 @@ def _synth_edge_sync(text: str, voice: str, speed: float) -> bytes | None:
     return _pcm_to_wav_bytes(pcm_bytes, decoded.sample_rate)
 
 
-_piper_voice_cache: dict[str, object] = {}
+_piper_voice_cache: dict[str, "PiperVoice"] = {}
 _piper_load_lock = threading.Lock()
 
 
@@ -236,24 +243,58 @@ def _voices_dir() -> Path:
 
 PIPER_REPO_URL = "https://huggingface.co/rhasspy/piper-voices"
 PIPER_API_URL = "https://huggingface.co/api/models/rhasspy/piper-voices"
-# The rhasspy/piper-voices commit the pins were read from (2026-09-17).
+# The rhasspy/piper-voices commit the pins were read from (2026-10-12).
 PIPER_PINNED_REVISION = "c10ece1aade47bb51c153c893d14e5bf8e5b7117"
+
+
+@dataclass(frozen=True)
+class ShippedVoice:
+    """One of the voices Domovoi offers: public domain (LibriVox / LJ Speech
+    recordings, trained from scratch by Bryce Beattie, no lessac base), and
+    trained on espeak's British "en" phoneme set, which domovoi/phonemizer
+    writes. ``onnx_sha256`` is the LFS oid of the model at
+    PIPER_PINNED_REVISION; ``json_blob_sha1`` the git blob id of its config,
+    sha1(b"blob <len>\\0" + content)."""
+
+    model_ref: str
+    name: str        # the spoken name ("switch to Norman")
+    sex: str
+    sample_rate: int
+    onnx_sha256: str
+    onnx_bytes: int
+    json_blob_sha1: str
+    json_bytes: int
+
+
+SHIPPED_VOICES: tuple[ShippedVoice, ...] = (
+    ShippedVoice("en_US-norman-medium", "Norman", "male", 22050,
+                 "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71", 63531379,
+                 "64985a9c6620d5522c500dd42224be7998f83f39", 4968),
+    ShippedVoice("en_US-kristin-medium", "Kristin", "female", 22050,
+                 "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4", 63531379,
+                 "e94be84ab0dc3532b4b2b48cbb1f5d4a8746bedd", 4968),
+    ShippedVoice("en_US-ljspeech-medium", "Linda", "female", 22050,
+                 "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22", 63531379,
+                 "73ecdec4f6ab17a437936652dfe3a925bb19e098", 4972),
+)
+DEFAULT_PIPER_VOICE = "en_US-norman-medium"
 # model_ref -> (.onnx SHA-256, .onnx bytes, .onnx.json git blob SHA-1,
-# .onnx.json bytes), from the Hub's tree API at PIPER_PINNED_REVISION: the
-# LFS oid is the SHA-256 of the model; the small JSON config is a plain git
-# blob, whose id is sha1(b"blob <len>\0" + content). Every voice in
-# voice_catalog.PIPER_CATALOG is here.
+# .onnx.json bytes), read from the Hub's tree API at PIPER_PINNED_REVISION.
 PIPER_PINS: dict[str, tuple[str, int, str, int]] = {
-    "en_US-kusal-medium": ("438ae25bb305b2a7f6d632327d6102df25011f793e8222fa9db876e7321df8f3", 63201294, "68eff4cb75e728b75ada72c3d1b8e54ba5cf0b3f", 4884),
-    "en_US-lessac-medium": ("5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f", 63201294, "c67cea2c9a7a6501d89f7b2cdff411bc49e54a28", 4885),
-    "en_US-amy-medium": ("b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18", 63201294, "5a1e0a2d94d3719de29a4771aa0e6c116552445f", 4882),
-    "en_US-ryan-high": ("b3990d7606e183ec8dbfba70a4607074f162de1a0c412e0180d1ff60bb154eca", 120786792, "d50091e9aeb2e7b02517749d953ade2be28dcdb1", 4166),
-    "en_US-joe-medium": ("58afce0321b8d9c46d7cdf9c16500cc55a793b4220212dba6b70fb788b3baf06", 63201294, "b4ab600fbd71cee986a8e7714bd88996f33be945", 4794),
-    "en_US-kathleen-low": ("87adf17f5326bc0782282147a8b9788406236245f0f9b0e68dacb651bc1de8b6", 63104526, "95db36461a4f0479b68b06eb20a3f86e383a14db", 4169),
-    "en_GB-alan-medium": ("0a309668932205e762801f1efc2736cd4b0120329622adf62be09e56339d3330", 63201294, "31f864659bfb7678af373cf4e58a7a0866ff52af", 4888),
-    "en_GB-alba-medium": ("401369c4a81d09fdd86c32c5c864440811dbdcc66466cde2d64f7133a66ad03b", 63201294, "c0969252c640fd7c2765baa62936a1106ca856d7", 4888),
-    "en_GB-cori-high": ("470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903", 114219352, "ec08ff84191b2e7fe7dd91928b6068bca12ff81b", 4963),
+    v.model_ref: (v.onnx_sha256, v.onnx_bytes, v.json_blob_sha1, v.json_bytes) for v in SHIPPED_VOICES
 }
+# The voices Domovoi offered before 2026-10-12 whose licences don't allow
+# every use: lessac is research-only, amy and ryan have non-commercial data,
+# and kusal, joe, kathleen, alan and alba were fine-tuned from lessac or
+# ryan. An install configured for one of them moves to DEFAULT_PIPER_VOICE,
+# and their registry rows and files go (domovoi/voice_migration.py,
+# domovoi/voice_catalog.py). The old catalog's cori is public domain and
+# trained on the same "en" phonemes, so an install that chose it keeps it;
+# it is just no longer offered.
+RETIRED_PIPER_VOICES: frozenset[str] = frozenset({
+    "en_US-kusal-medium", "en_US-lessac-medium", "en_US-amy-medium", "en_US-ryan-high",
+    "en_US-joe-medium", "en_US-kathleen-low", "en_GB-alan-medium", "en_GB-alba-medium",
+})
 # LANG_REGION-SPEAKER-QUALITY, the catalogue's naming ("en_US-lessac-medium",
 # "en_GB-northern_english_male-medium", "zh_CN-huayan-x_low").
 PIPER_MODEL_REF_RE = re.compile(
@@ -450,8 +491,89 @@ def _piper_voice_path(model_ref: str) -> Path:
     return _piper_download(model_ref, voices_dir)
 
 
-def _piper_voice(voice: str) -> object:
-    """The loaded PiperVoice for ``voice`` (a model_ref), loading it once.
+class UnsupportedPiperVoice(ValueError):
+    """A Piper model this engine can't speak: its config asks for phonemes
+    other than espeak's British "en" set (the only set Domovoi's converter
+    writes), or it is not a Piper model at all."""
+
+
+# Silence between the sentences of one reply, as the Piper voices' original
+# command line put it (and as the owner heard them on 2026-10-12).
+SENTENCE_SILENCE_SEC = 0.2
+# Said, in the voice, when a text has words but none the converter can read
+# (no Latin letters: another script entirely), rather than silence.
+UNREADABLE_TEXT_FALLBACK = "Sorry, I can't read that out loud."
+
+
+class PiperVoice:
+    """A Piper VITS voice on ONNX Runtime, fed by domovoi.phonemizer.
+
+    Loads ``<model>.onnx`` and its ``.onnx.json``: the phoneme id map, the
+    sample rate and the inference scales come from the config. Thread-safe
+    to share (ONNX Runtime's ``run`` is)."""
+
+    def __init__(self, onnx_path: Path) -> None:
+        import numpy as np
+        import onnxruntime as ort
+
+        cfg_path = Path(f"{onnx_path}.json")
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise UnsupportedPiperVoice(f"{cfg_path.name}: not a readable Piper config ({e})") from None
+        phoneme_type = str(cfg.get("phoneme_type") or "espeak")
+        espeak_voice = str((cfg.get("espeak") or {}).get("voice") or "")
+        if phoneme_type != "espeak" or espeak_voice != "en" or not isinstance(cfg.get("phoneme_id_map"), dict):
+            raise UnsupportedPiperVoice(
+                f"{onnx_path.name} was trained on {phoneme_type} phonemes for {espeak_voice or '?'!r}; "
+                f"Domovoi's converter writes espeak \"en\" phonemes only"
+            )
+        inf = cfg.get("inference") or {}
+        self.np = np
+        self.id_map: dict[str, list[int]] = cfg["phoneme_id_map"]
+        self.sample_rate = int((cfg.get("audio") or {}).get("sample_rate") or 22050)
+        self.noise_scale = float(inf.get("noise_scale", 0.667))
+        self.length_scale = float(inf.get("length_scale", 1.0))
+        self.noise_w = float(inf.get("noise_w", 0.8))
+        self.multi_speaker = int(cfg.get("num_speakers") or 1) > 1
+        so = ort.SessionOptions()
+        so.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(str(onnx_path), so, providers=["CPUExecutionProvider"])
+
+    def sentence_audio(self, phonemes: str, speed: float) -> "object":
+        """One sentence's phoneme string -> float32 samples in [-1, 1]."""
+        from domovoi.phonemizer import phoneme_ids
+
+        np = self.np
+        ids = phoneme_ids(phonemes, self.id_map)
+        length = self.length_scale / speed if speed > 0 else self.length_scale
+        args = {
+            "input": np.array([ids], dtype=np.int64),
+            "input_lengths": np.array([len(ids)], dtype=np.int64),
+            "scales": np.array([self.noise_scale, length, self.noise_w], dtype=np.float32),
+        }
+        if self.multi_speaker:
+            args["sid"] = np.array([0], dtype=np.int64)
+        audio = self.session.run(None, args)[0].squeeze()
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        if peak < 1e-8:
+            return np.zeros_like(audio, dtype=np.float32)
+        return np.clip(audio / peak, -1.0, 1.0).astype(np.float32)
+
+    def synthesize_pcm(self, sentences: list[str], speed: float) -> bytes:
+        """int16 mono PCM for the sentences, a short silence between them."""
+        np = self.np
+        gap = np.zeros(int(SENTENCE_SILENCE_SEC * self.sample_rate), dtype=np.int16)
+        parts = []
+        for k, ph in enumerate(sentences):
+            if k:
+                parts.append(gap)
+            parts.append((self.sentence_audio(ph, speed) * 32767).astype(np.int16))
+        return b"".join(p.tobytes() for p in parts)
+
+
+def _piper_voice(voice: str) -> PiperVoice:
+    """The loaded voice for ``voice`` (a model_ref), loading it once.
     Blocking — worker threads only. The lock makes a boot or connect-time
     preload and a turn racing it load the model once between them."""
     v = _piper_voice_cache.get(voice)
@@ -459,9 +581,7 @@ def _piper_voice(voice: str) -> object:
         with _piper_load_lock:
             v = _piper_voice_cache.get(voice)
             if v is None:
-                from piper import PiperVoice
-
-                v = PiperVoice.load(str(_piper_voice_path(voice)))
+                v = PiperVoice(_piper_voice_path(voice))
                 _piper_voice_cache[voice] = v
     return v
 
@@ -471,39 +591,41 @@ def piper_voice_loaded(voice: str) -> bool:
 
 
 def preload_piper_voice_sync(voice: str) -> bool:
-    """Load a Piper voice and synthesize one short word with it, so the
-    first reply in that voice pays neither the model load nor the first
-    inference (~600 ms on a CPU host, against ~50 ms warm). Blocking —
-    run it in a worker thread (``domovoi/speech_warmup.py``). True when
-    the voice rendered audio."""
+    """Load a Piper voice (and the text-to-phoneme converter) and
+    synthesize one short word with it, so the first reply in that voice
+    pays neither the model load nor the first inference. Blocking — run it
+    in a worker thread (``domovoi/speech_warmup.py``). True when the voice
+    rendered audio."""
     return _synth_piper_sync("Okay.", voice, 1.0) is not None
+
+
+def _phonemize(text: str) -> list[str]:
+    from domovoi.phonemizer import get_phonemizer
+
+    return get_phonemizer().phonemize(text)
 
 
 def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
     try:
-        from piper import SynthesisConfig
+        import onnxruntime  # noqa: F401
     except ImportError:
         return None
 
     v = _piper_voice(voice)
-
-    syn_config = SynthesisConfig(length_scale=(1.0 / speed) if speed > 0 else 1.0)
-    pcm_parts: list[bytes] = []
-    sr: int | None = None
-    for chunk in v.synthesize(text, syn_config=syn_config):
-        if sr is None:
-            sr = chunk.sample_rate
-        pcm_parts.append(chunk.audio_int16_bytes)
-    pcm = b"".join(pcm_parts)
-    if not pcm or sr is None:
-        # Defensive: if a voice ever renders no audio (a bad/empty uploaded
-        # model, a degenerate phonemization) that's a failure, not a silent
-        # success — return None so the router falls through to the next engine
-        # instead of emitting a zero-frame WAV. (Verified 2026-06-13: piper-tts
-        # 1.4.2 renders every current voice fine; this is a safety net, not a
-        # known bug.)
+    sentences = _phonemize(text)
+    if not sentences and any(ch.isalnum() for ch in text):
+        # Words, but none in a script the converter reads (Cyrillic, CJK,
+        # ...): say so in the voice instead of going silent.
+        log.warning("TTS: no pronounceable words in a %d-character text; saying the fallback line", len(text))
+        sentences = _phonemize(UNREADABLE_TEXT_FALLBACK)
+    pcm = v.synthesize_pcm(sentences, speed) if sentences else b""
+    if not pcm:
+        # Nothing to say (punctuation only), or a voice that rendered no
+        # audio: a failure, not a silent success — return None so the
+        # router falls through to the next engine instead of emitting a
+        # zero-frame WAV.
         return None
-    return _pcm_to_wav_bytes(pcm, sr)
+    return _pcm_to_wav_bytes(pcm, v.sample_rate)
 
 
 def _synth_system_windows(text: str) -> bytes | None:

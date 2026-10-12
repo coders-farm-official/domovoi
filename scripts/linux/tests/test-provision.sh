@@ -657,10 +657,10 @@ if [ "${1-}" = -c ]; then
       done <<<"$PROVISION_ENV_KEYS"
       exit 0 ;;
     "#provision:piper-info")
-      echo en_US-lessac-medium
       echo "$HOME/.domovoi/piper_voices"
-      cat "$SHIM_STATE/piper-pin"
-      echo 16
+      for v in en_US-norman-medium en_US-kristin-medium en_US-ljspeech-medium; do
+        echo "$v $(cat "$SHIM_STATE/piper-pin") 16"
+      done
       exit 0 ;;
     "#provision:piper-download")
       d=$SHIM_ROOT$4; mkdir -p "$d"
@@ -1005,7 +1005,9 @@ case_full_run_wsl() {
   check "download progress lines" grep -q '"step":"models".*"state":"progress".*"bytes":' "$CASE/progress.jsonl"
   check "Ollama download bytes" grep -q '"step":"ollama".*"bytes":' "$CASE/progress.jsonl"
   check "Whisper at the pinned revision" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/d1d751a5f8271d482d14ca55d9e2deeebbae577f/model.bin"
-  check "Piper voice" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-lessac-medium.onnx"
+  check "Piper voice" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
+  check "and the other two" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
+  check "no espeak-ng installed" not_called "espeak-ng"
   # images, search helper
   check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
   check "MPD image built as the core does" called "docker build --progress=plain -t domovoi-mpd:latest -f $CHECKOUT/domovoi/Dockerfile.mpd $CHECKOUT/domovoi"
@@ -1303,7 +1305,7 @@ case_internet_never_keeps_searxng_off() {
   check "models skipped" eq "$(state_of models)" skip
   check "whisper skipped" eq "$(state_of whisper)" skip
   check "no pull" not_called "/api/pull"
-  check "the voice is still fetched ahead" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-lessac-medium.onnx"
+  check "the voice is still fetched ahead" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
   # No internet quiets Ubuntu's own jobs (owner decision 2026-10-11).
   local u
   for u in "${NEVER_UNITS[@]}"; do check "$u masked (never)" masked "$u"; done

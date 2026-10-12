@@ -74,7 +74,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis` is Domovoi's default) and supports custom models trained from your own recorded clips.
 
-**Piper** — the local neural TTS engine — second link in the TTS chain and the fully-offline voice. Voice models download once or can be uploaded on the dashboard's Voices page.
+**Piper** — the local neural TTS engine — second link in the TTS chain and the fully-offline voice. Domovoi offers three public-domain Piper voices (Norman, Kristin, Linda), run on ONNX Runtime and fed by its own text-to-phoneme converter (`domovoi/phonemizer`, no espeak-ng). Voice models download once or can be uploaded on the dashboard's Voices page.
 
 **Plugin schema** — the private Postgres schema (`plugin_<slug>`) where a plugin keeps its tables, with its own migration ledger. Plugins never run DDL against core tables; a linter enforces the boundary.
 

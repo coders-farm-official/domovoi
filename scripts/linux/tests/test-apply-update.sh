@@ -380,6 +380,10 @@ if [ "${1-}" = -m ] && [ "${2-}" = pip ]; then
     if [ "$a" = freeze ]; then
       printf 'requests==2.31.0\ntorch==2.14.0+cpu\nlocalthing @ file:///tmp/localthing.whl\n'
     fi
+    if [ "$a" = uninstall ] && [ -f "$SHIM_STATE/pip-uninstall-output" ]; then
+      cat "$SHIM_STATE/pip-uninstall-output"
+      if [ -f "$SHIM_STATE/pip-uninstall-fails" ]; then exit 1; fi
+    fi
     if [ "$a" = -r ]; then echo "pip-r-file: $(tr '\n' ' ' <"${!#}")" >>"$SHIM_STATE/calls.log"; fi
   done
   exit 0
@@ -736,6 +740,70 @@ case_mpd_changed() {
   check "rebuild while core is stopped" before "systemctl stop" "docker build"
   check "rebuild before core starts" before "docker build" "systemctl start domovoi-core.service"
   check "no pip" not_called "pip "
+  end_case
+}
+
+# A forward re-sync uninstalls what the release stopped using (piper-tts,
+# GPL); pip never would. A step only when something went, and never in a
+# rollback, whose older checkout still needs it.
+case_retired_packages_uninstalled() {
+  new_case retired_packages_uninstalled
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  printf 'Found existing installation: piper-tts 1.8.0\nUninstalling piper-tts-1.8.0:\n  Successfully uninstalled piper-tts-1.8.0\nWARNING: Skipping piper-phonemize as it is not installed.\n' \
+    >"$STATE/pip-uninstall-output"
+  write_root_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "uninstalls the retired packages" called "pip --disable-pip-version-check --no-input uninstall -y piper-tts piper-phonemize"
+  check "after the re-sync" before "install -e" "uninstall -y piper-tts"
+  check "before the services start" before "uninstall -y piper-tts" "systemctl start domovoi-core.service"
+  check "as the service user" called "runuser -u tester -- $CASE/venv/bin/python -m pip --disable-pip-version-check --no-input uninstall"
+  check "the step names what went" grep -qF '"name": "drop-retired-packages", "status": "ok"' "$RESULT"
+  check "and only that" grep -qF '"detail": "uninstalled piper-tts-1.8.0 (no longer used)"' "$RESULT"
+  end_case
+}
+
+case_retired_packages_absent_leave_no_step() {
+  new_case retired_packages_absent_leave_no_step
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  printf 'WARNING: Skipping piper-tts as it is not installed.\n' >"$STATE/pip-uninstall-output"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "asked pip" called "uninstall -y piper-tts piper-phonemize"
+  check "no step when nothing went" eq "$(grep -c 'drop-retired-packages' "$RESULT")" 0
+  end_case
+}
+
+case_retired_packages_failure_is_a_warning() {
+  new_case retired_packages_failure_is_a_warning
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  printf 'ERROR: permission denied\n' >"$STATE/pip-uninstall-output"
+  : >"$STATE/pip-uninstall-fails"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" grep -qF '"name": "drop-retired-packages", "status": "warn"' "$RESULT"
+  check "still starts" called "systemctl start domovoi-core.service"
+  end_case
+}
+
+case_retired_packages_kept_through_a_rollback() {
+  new_case retired_packages_kept_through_a_rollback
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "2"\n' >"$REPO/pyproject.toml"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: deps + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  printf '  Successfully uninstalled piper-tts-1.8.0\n' >"$STATE/pip-uninstall-output"
+  run_update
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "uninstalled once, on the way forward" eq "$(grep -c 'uninstall -y piper-tts' "$STATE/calls.log")" 1
+  check "the rollback re-syncs after it" again_after "uninstall -y piper-tts" "pip --disable-pip-version-check --no-input install -e"
   end_case
 }
 
@@ -2602,6 +2670,10 @@ CASES=(
   case_noop_restart_brings_postgres_back
   case_noop_restart_a_baseline_row_is_not_a_migration
   case_deps_changed_as_root
+  case_retired_packages_uninstalled
+  case_retired_packages_absent_leave_no_step
+  case_retired_packages_failure_is_a_warning
+  case_retired_packages_kept_through_a_rollback
   case_mpd_changed
   case_mpd_conf_only
   case_migration_health_failure_rolls_back
