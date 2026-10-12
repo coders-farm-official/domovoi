@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-11 — Android: "your device" on the Files, Music and Videos pages
+
+New Android build; nothing to do on the server.
+
+* **Files, Music and Videos have a switch at the top: the server, or
+  "your device".** "Your device" shows the phone's own folders and
+  photos, music and videos exactly as the app does with no server
+  connected; playing something there plays it on the phone. Switching back
+  shows the server's page where you left it, and each page remembers its
+  side until the app is closed.
+* **There, each row's Download is an Upload** that sends that file to the
+  server: a track to the Music library (indexed at once), a video to the
+  Videos library (Documents on a server without one), anything else
+  through the send-to-home sheet, where you pick the library and folder.
+  The row shows the progress; a toast says where it landed. The file
+  streams, so a long phone video uploads without running the app out of
+  memory.
+* **A device an admin blocked from changing files** (Settings → Devices)
+  sees why above the list and its Upload buttons refuse with the server's
+  reason; so does a read-only Music library. Uploads use the same doors
+  as the dashboard's (`/api/music/library/upload`, `/api/files/upload`), so
+  nothing changes in who may write where.
+
 ## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
 
 New Android build; nothing to do on the server beyond the usual update.
