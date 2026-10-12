@@ -4,6 +4,28 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Android: an on-device assistant benchmark, and a bigger app
+
+New Android build only; nothing changes on the server.
+
+* **The app is much bigger: about 82 MB built for phones only
+  (`./gradlew assembleDebug -Pdomovoi.abis=arm64-v8a`), about 147 MB as
+  built by default** (which also carries the emulator's x86_64
+  libraries), up from about 25 MB. It now carries the speech-recognition
+  and language-model engines the coming on-device assistant needs
+  (sherpa-onnx, built here without its text to speech; ONNX Runtime;
+  LiteRT-LM), stored uncompressed. The phone's own voice is Android's
+  text-to-speech engine.
+* **Settings → About has an "On-device assistant benchmark" card**, which
+  measures how fast this phone runs the assistant's models. With no server
+  paired, the gear on the phone's own Music / Videos / Files screen reaches
+  it. Nothing is downloaded until you ask: "download all" fetches the
+  models (2.58 GB as the card counts it, about 2.8 billion bytes) from
+  their public hosts (never with the household token), on Wi-Fi only
+  unless you allow mobile data, in the background with a notification you
+  can pause or cancel. The assistant itself is not
+  in this build yet.
+
 ## 2026-10-12 — Chat: talk to Domovoi from the app's chat screen
 
 New Android build and a server update (it adds migration **V025**; the
