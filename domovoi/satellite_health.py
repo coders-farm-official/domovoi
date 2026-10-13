@@ -145,6 +145,38 @@ def _battery(v: Any) -> dict[str, Any] | None:
     return out if any(x is not None for x in out.values()) else None
 
 
+#: The states a satellite's boot-time network step can report
+#: (satellite/net_settings.py STEP_STATES).
+NET_STEP_STATES = frozenset(
+    {"applied", "unchanged", "skipped", "failed", "not_run", "not_installed", "running"}
+)
+
+
+def _net_step(v: Any) -> dict[str, Any] | None:
+    """What root's boot-time network step did this boot: a known ``state``
+    and a short reason. Anything else (an unknown state) is not kept."""
+    if not isinstance(v, dict):
+        return None
+    state = v.get("state")
+    if state not in NET_STEP_STATES:
+        return None
+    return {
+        "state": state,
+        "detail": _str(v.get("detail"), 240) or "",
+        "when": _str(v.get("when"), 16),
+        "at": _num(v.get("at")),
+        "version": _int(v.get("version")),
+    }
+
+
+def _hostname(v: Any) -> str | None:
+    """A host name as a DNS label would have it; anything else is dropped
+    rather than drawn."""
+    if not isinstance(v, str) or len(v) > 64:
+        return None
+    return v if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", v) else None
+
+
 def _flags(v: Any) -> list[str]:
     if not isinstance(v, list):
         return []
@@ -175,6 +207,11 @@ SAMPLE_FIELDS: dict[str, Any] = {
     # network settings root applies at boot are not in place yet); absent
     # or null when it does not.
     "reboot_needed": lambda v: _str(v, 200),
+    # 2026-10-12 (follow-up): what that boot-time step did this boot
+    # (`{state, detail, when, at, version}`) and the unit's host name now.
+    # Only kept when sent: an older satellite's record reads as before.
+    "net_step": _net_step,
+    "hostname": _hostname,
 }
 
 

@@ -96,6 +96,43 @@ def test_a_health_sample_keeps_signal_mode_and_reboot_needed():
     assert old["wifi"] == {"rx_mbits": 1.0, "tx_mbits": None, "ssid": None}
 
 
+def test_a_health_sample_keeps_the_boot_step_and_the_host_name():
+    """What root's boot-time network step did this boot, and the unit's
+    host name (2026-10-12 follow-up: the rename had to be visible)."""
+    s = satellite_health.validate_sample({
+        "seq": 1, "ts": 1.0, "hostname": "domovoi-office",
+        "net_step": {"state": "skipped", "when": "boot", "at": 1760000000.5, "version": 2,
+                     "detail": "host name 'kamrons-pi' looks chosen by a person; not renaming it"},
+    })
+    assert s["hostname"] == "domovoi-office"
+    assert s["net_step"] == {"state": "skipped", "when": "boot", "at": 1760000000.5, "version": 2,
+                             "detail": "host name 'kamrons-pi' looks chosen by a person; not renaming it"}
+    for state in ("applied", "unchanged", "failed", "not_run", "not_installed", "running"):
+        assert satellite_health.validate_sample(
+            {"seq": 1, "net_step": {"state": state}})["net_step"]["state"] == state
+
+
+@pytest.mark.parametrize("net_step, hostname", [
+    ({"state": "pwned", "detail": "x"}, "bad name with spaces"),
+    ("applied", "-leading-dash"),
+    ({"detail": "no state"}, 42),
+    (["applied"], "a" * 80),
+])
+def test_a_bogus_boot_step_or_host_name_is_not_kept(net_step, hostname):
+    s = satellite_health.validate_sample({"seq": 1, "load1": 0.5, "net_step": net_step, "hostname": hostname})
+    assert s["net_step"] is None and s["hostname"] is None
+
+
+def test_the_boot_step_detail_is_bounded():
+    s = satellite_health.validate_sample({"seq": 1, "net_step": {"state": "applied", "detail": "x" * 1000}})
+    assert len(s["net_step"]["detail"]) == 240
+
+
+def test_an_older_satellite_sends_no_boot_step():
+    s = satellite_health.validate_sample({"seq": 1, "load1": 0.5, "reboot_needed": None})
+    assert "net_step" not in s and "hostname" not in s
+
+
 def test_the_journal_line_names_the_signal():
     line = satellite_health.format_health_line("kitchen", {"wifi": {"rx_mbits": 1.0, "signal_dbm": -67}})
     assert "signal=-67dBm" in line

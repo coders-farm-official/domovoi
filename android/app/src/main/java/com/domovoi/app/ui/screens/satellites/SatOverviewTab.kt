@@ -79,6 +79,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
         runCatching { it.api.get("/api/satellites/${s.room_id}/health").decode<SatHealthDoc>() }.getOrNull()
     }
     val rebootReason = rebootNeeded(healthState.data)
+    val netStep = netStepLine(healthState.data)
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
@@ -210,7 +211,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         DropInSection(s, sats)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        MaintenanceSection(s, coreSha, needsUpgrade, upToDate, rebootReason)
+        MaintenanceSection(s, coreSha, needsUpgrade, upToDate, rebootReason, netStep)
     }
 }
 
@@ -570,6 +571,7 @@ private fun MaintenanceSection(
     needsUpgrade: Boolean,
     upToDate: Boolean,
     rebootReason: String? = null,
+    netStep: NetStepLine? = null,
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -604,12 +606,40 @@ private fun MaintenanceSection(
         }
         if (rebootReason != null) {
             Text(
-                "Upgraded, but not rebooted yet: its network settings are applied at boot. " +
+                (if (netStep?.word == "failed") "Its network settings did not all apply at this boot; a reboot tries again. "
+                else "Upgraded, but not rebooted yet: its network settings are applied at boot. ") +
                     "Unplug it for a few seconds and plug it back in. ($rebootReason)",
                 style = MaterialTheme.typography.bodySmall,
                 color = Domovoi.colors.fgMuted,
                 modifier = Modifier.padding(top = 6.dp),
             )
+        }
+        // What root's boot-time network step did this boot, and the host
+        // name the router should show (absent from an older satellite).
+        if (netStep != null) {
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SectionLabel("boot network step")
+                if (netStep.word.isNotEmpty()) Pill(netStep.word, netStep.tone)
+            }
+            if (netStep.hostname != null) {
+                Text(
+                    "host name ${netStep.hostname}",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (netStep.detail != null) {
+                Text(
+                    netStep.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),

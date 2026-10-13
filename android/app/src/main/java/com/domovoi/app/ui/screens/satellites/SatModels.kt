@@ -39,11 +39,29 @@ data class SatWifi(
     val mode: String? = null,
 )
 
+/** What root's boot-time network step did on this boot (satellite/
+ *  net_settings.py `assess`): applied / unchanged / skipped / failed /
+ *  not_run / not_installed / running, with the reason. */
+@Serializable
+data class SatNetStep(
+    val state: String? = null,
+    val detail: String? = null,
+    val `when`: String? = null,
+    val at: Double? = null,
+    val version: Int? = null,
+)
+
 /** The slice of GET /api/satellites/{room}/health this screen reads: why
  *  the satellite wants a reboot (it was upgraded, and the network settings
- *  root applies at boot are not in place yet, or did not all apply). */
+ *  root applies at boot are not in place yet, or did not all apply), what
+ *  that boot step did, and the unit's host name. An older satellite sends
+ *  only the first. */
 @Serializable
-data class SatHealthSample(val reboot_needed: String? = null)
+data class SatHealthSample(
+    val reboot_needed: String? = null,
+    val net_step: SatNetStep? = null,
+    val hostname: String? = null,
+)
 
 @Serializable
 data class SatHealthLatest(val sample: SatHealthSample? = null)
@@ -53,6 +71,30 @@ data class SatHealthDoc(val latest: SatHealthLatest? = null)
 
 internal fun rebootNeeded(doc: SatHealthDoc?): String? =
     doc?.latest?.sample?.reboot_needed?.takeIf { it.isNotBlank() }
+
+/** One line for the overview: the boot network step's outcome in words,
+ *  its tone, and the reason (the web drawer shows the same). Null from a
+ *  satellite that does not report it, so the screen reads as before. */
+internal data class NetStepLine(val word: String, val tone: Tone, val detail: String?, val hostname: String?)
+
+internal fun netStepLine(doc: SatHealthDoc?): NetStepLine? {
+    val sample = doc?.latest?.sample ?: return null
+    val step = sample.net_step
+    val host = sample.hostname?.takeIf { it.isNotBlank() }
+    val state = step?.state
+    if (state == null && host == null) return null
+    val (word, tone) = when (state) {
+        "applied" -> "applied" to Tone.Ok
+        "unchanged" -> "nothing to change" to Tone.Ok
+        "skipped" -> "skipped" to Tone.Warn
+        "failed" -> "failed" to Tone.Err
+        "not_run" -> "not run" to Tone.Warn
+        "not_installed" -> "not installed" to Tone.Idle
+        "running" -> "running" to Tone.Idle
+        else -> (state ?: "") to Tone.Idle
+    }
+    return NetStepLine(word, tone, step?.detail?.takeIf { it.isNotBlank() }, host)
+}
 
 @Serializable
 data class SatMpdPorts(

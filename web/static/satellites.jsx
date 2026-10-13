@@ -334,6 +334,32 @@ const SatLastOutage = ({ outage }) => {
   );
 };
 
+// What root's boot-time network step did on this boot (satellite/net_settings.py
+// `assess`: the setup hotspot profile gone, Wi-Fi power saving off, the host
+// name domovoi-<room> set before the Wi-Fi joins), with the reason, and the
+// host name the router should be showing. A satellite older than this sends
+// neither and the card reads exactly as before.
+const SAT_NET_STEP = {
+  applied: { tone: 'ok', word: 'applied' },
+  unchanged: { tone: 'ok', word: 'nothing to change' },
+  skipped: { tone: 'warn', word: 'skipped' },
+  failed: { tone: 'err', word: 'failed' },
+  not_run: { tone: 'warn', word: 'not run' },
+  not_installed: { tone: 'idle', word: 'not installed' },
+  running: { tone: 'idle', word: 'running' },
+};
+const SatNetStep = ({ step, hostname }) => {
+  const m = (step && SAT_NET_STEP[step.state]) || null;
+  return (
+    <div className="sat-net-step" style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 10, fontSize: 12 }}>
+      <div className="label">boot network step</div>
+      {m && <Pill tone={m.tone}>{m.word}</Pill>}
+      {hostname && <span className="mono" style={{ fontSize: 11.5 }}>host name {hostname}</span>}
+      {m && step.detail && <span style={{ color: 'var(--fg-muted)', flexBasis: '100%', overflowWrap: 'anywhere' }}>{step.detail}</span>}
+    </div>
+  );
+};
+
 const SatHealthCard = ({ room, online }) => {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -376,7 +402,10 @@ const SatHealthCard = ({ room, online }) => {
       </div>
       {s && s.reboot_needed && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-          Upgraded, but not rebooted yet: its network settings (no setup hotspot, Wi-Fi power saving off, host name domovoi-{room}) are applied at boot. Unplug it for a few seconds and plug it back in.
+          {s.net_step && s.net_step.state === 'failed'
+            ? 'Its network settings did not all apply at this boot (below); a reboot tries again.'
+            : `Upgraded, but not rebooted yet: its network settings (no setup hotspot, Wi-Fi power saving off, host name domovoi-${room} set before the Wi-Fi joins) are applied at boot.`}
+          {' '}Unplug it for a few seconds and plug it back in.
         </div>
       )}
       {error && !s && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>couldn’t read health: {error}</div>}
@@ -419,6 +448,7 @@ const SatHealthCard = ({ room, online }) => {
           )}
         </div>
       )}
+      {s && (s.net_step || s.hostname) && <SatNetStep step={s.net_step} hostname={s.hostname}/>}
       {s && (
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 8 }}>
           sampled {satHealthWhen(latest.received_at)}
