@@ -159,6 +159,13 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-provisioning.service",
         system / "domovoi-provisioning.service",
     )
+    # The host name domovoi-<room>, set before NetworkManager starts, so
+    # the router learns it from the first DHCP request of every boot
+    # (satellite/net_settings.py, --before-network).
+    shutil.copy2(
+        sat_dir / "scripts" / "domovoi-hostname.service",
+        system / "domovoi-hostname.service",
+    )
     shutil.copy2(
         overlay.TEMPLATES_DIR / "domovoi-bootstrap.service",
         system / "domovoi-bootstrap.service",

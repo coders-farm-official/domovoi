@@ -87,7 +87,7 @@ def test_nothing_in_the_units_implies_no_new_privileges(name):
 def test_the_root_oneshots_are_not_sandboxed_and_say_why():
     """provisioning writes /etc, /boot and configfs; bootstrap installs
     packages. A sandbox there would break the thing it protects."""
-    for name in ("domovoi-provisioning.service",):
+    for name in ("domovoi-provisioning.service", "domovoi-hostname.service"):
         svc = _unit(name)
         assert svc.get("User") == ["root"]
         assert "ProtectSystem" not in svc
