@@ -162,6 +162,63 @@ def read_soc_temp(path: str | os.PathLike[str] = "/sys/class/thermal/thermal_zon
         return None
 
 
+# Statuses the kernel reports for a battery (power_supply class).
+_ON_CHARGER_STATUSES = ("Charging", "Full", "Not charging")
+
+
+def read_battery(root: str | os.PathLike[str] = "/sys/class/power_supply") -> dict[str, Any]:
+    """A spare laptop's battery for the health sample, or ``{}`` when the
+    machine has none (every Pi): ``battery_percent`` (0-100, the mean when
+    there are two packs) and ``battery_charging`` — true while it is on the
+    charger, charging or held full or at a charge limit ("Not charging"
+    with the charger plugged in is what a set threshold looks like).
+
+    System batteries only: a wireless mouse's or a phone's battery
+    (``scope`` = Device) is not the laptop's."""
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return {}
+    levels: list[int] = []
+    statuses: list[str] = []
+    mains: list[bool] = []
+    for name in entries:
+        base = os.path.join(root, name)
+        kind = (_read_text(os.path.join(base, "type")) or "").strip()
+        if kind in ("Mains", "USB", "USB_C", "USB_PD"):
+            online = (_read_text(os.path.join(base, "online")) or "").strip()
+            if online in ("0", "1"):
+                mains.append(online == "1")
+            continue
+        if kind != "Battery":
+            continue
+        if (_read_text(os.path.join(base, "scope")) or "").strip().lower() == "device":
+            continue
+        try:
+            level = int((_read_text(os.path.join(base, "capacity")) or "").strip())
+        except ValueError:
+            continue
+        if 0 <= level <= 100:
+            levels.append(level)
+            statuses.append((_read_text(os.path.join(base, "status")) or "").strip())
+    if not levels:
+        return {}
+    if "Charging" in statuses:
+        charging: bool | None = True
+    elif "Discharging" in statuses:
+        charging = False
+    elif mains:
+        charging = any(mains)
+    elif statuses and all(st in _ON_CHARGER_STATUSES for st in statuses):
+        charging = True
+    else:
+        charging = None
+    out: dict[str, Any] = {"battery_percent": round(sum(levels) / len(levels))}
+    if charging is not None:
+        out["battery_charging"] = charging
+    return out
+
+
 def count_fds(path: str | os.PathLike[str] = "/proc/self/fd") -> int | None:
     try:
         return len(os.listdir(path))
@@ -571,7 +628,10 @@ class Sampler:
         )
         routes = self.run(["ip", "route"], timeout=5.0)
         gateway = parse_default_gateway(routes)
+        # Only on a machine with a battery: a Pi's sample gains no keys.
+        battery = read_battery(os.path.join(self.sys_root, "class/power_supply"))
         return {
+            **battery,
             "rss_kb": status["rss_kb"],
             "hwm_kb": status["hwm_kb"],
             "threads": status["threads"],

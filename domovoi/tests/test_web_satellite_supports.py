@@ -82,7 +82,7 @@ def _row(room: str, *, board=None, supports=None, full_duplex=False, legacy=Fals
     return row
 
 
-def _scenario(device: str, row: dict) -> dict:
+def _scenario(device: str, row: dict, sample: dict | None = None) -> dict:
     room = row["room_id"]
     return {
         "files": FILES, "component": "SatellitesPanel", "setup": _SETUP,
@@ -96,7 +96,7 @@ def _scenario(device: str, row: dict) -> dict:
                 "room_id": room, "connected": True, "last_outage": None, "outages": [],
                 "history": None,
                 "latest": {"received_at": "2026-10-12T15:00:00Z",
-                           "sample": DEVICES[device]["health"]["stored"]},
+                           "sample": sample or DEVICES[device]["health"]["stored"]},
             },
         },
         "script": _SCRIPT,
@@ -121,6 +121,12 @@ def driven(tmp_path_factory) -> dict:
     assert node, "node is required to drive web/static JSX (see jsxcheck)"
     rows = _rows()
     scenarios = {name: _scenario(name.split("__")[0], row) for name, row in rows.items()}
+    # S1: the battery as laptops and phones send it, and S0's draft object.
+    pc = DEVICES["linux_pc"]["health"]["stored"]
+    for name, battery in _BATTERIES.items():
+        sample = {k: v for k, v in pc.items() if not k.startswith("battery")}
+        sample.update(battery)
+        scenarios[name] = _scenario("linux_pc", rows["linux_pc"], sample)
     spec = tmp_path_factory.mktemp("sat-supports") / "scenarios.json"
     spec.write_text(json.dumps(scenarios), encoding="utf-8")
     proc = subprocess.run(
@@ -133,6 +139,14 @@ def driven(tmp_path_factory) -> dict:
               if isinstance(v, dict) and "__harness_error" in v}
     assert not broken, broken
     return out
+
+
+_BATTERIES = {
+    "battery__full_on_charger": {"battery_percent": 100, "battery_charging": True},
+    "battery__low_on_battery": {"battery_percent": 15, "battery_charging": False},
+    "battery__s0_draft_object": {"battery": {"percent": 70, "charging": False, "on_power": False}},
+    "battery__none": {},
+}
 
 
 def _button(result: dict, label: str) -> dict:
@@ -154,8 +168,25 @@ def test_a_linux_pc_shows_its_board_and_keeps_what_it_declared(driven):
     assert r["badge"] == "Linux PC"
     assert not _button(r, "Restart satellite")["disabled"]
     assert not _button(r, "Upgrade satellite")["disabled"]
-    assert "battery" in r["overview"] and "charging" in r["overview"]
+    assert "battery" in r["overview"] and "81%" in r["overview"]
+    assert "on the charger" in r["overview"]
     assert "settings stay on the device" not in r["settings"]
+
+
+def test_a_battery_held_full_on_the_charger_asks_for_a_charge_limit(driven):
+    assert "100%" in driven["battery__full_on_charger"]["overview"]
+    assert "set a charge limit" in driven["battery__full_on_charger"]["overview"]
+    low = driven["battery__low_on_battery"]["overview"]
+    assert "15%" in low and "on battery" in low and "charge limit" not in low
+
+
+def test_s0_s_draft_battery_object_still_shows(driven):
+    r = driven["battery__s0_draft_object"]["overview"]
+    assert "70%" in r and "on battery" in r
+
+
+def test_a_spare_device_without_a_battery_shows_none(driven):
+    assert "battery" not in driven["battery__none"]["overview"]
 
 
 def test_an_android_room_greys_what_it_left_out_with_a_reason(driven):

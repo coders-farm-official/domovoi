@@ -275,6 +275,32 @@ const satHealthAgeTone = (sec) => sec == null ? 'idle' : sec < 150 ? 'ok' : sec 
 const satHealthTempTone = (c) => c == null ? 'idle' : c < 70 ? 'ok' : c < 80 ? 'warn' : 'err';
 const satHealthThrottle = (flags) => (flags || []).filter(f => !f.endsWith('_occurred'));
 const satHealthMb = (kb) => kb == null ? '—' : `${(kb / 1024).toFixed(0)} MB`;
+// A spare device's battery: `battery_percent` / `battery_charging` (S1,
+// what laptops and phones send), else S0's draft `battery` object. null on
+// a device without one (every Pi). onCharger: true / false / null.
+const satBattery = (s) => {
+  if (!s) return null;
+  if (s.battery_percent != null || s.battery_charging != null) {
+    return { percent: s.battery_percent == null ? null : s.battery_percent,
+             onCharger: s.battery_charging == null ? null : !!s.battery_charging,
+             charging: s.battery_charging === true };
+  }
+  const b = s.battery;
+  if (!b) return null;
+  const onCharger = b.charging ? true : b.on_power == null ? null : !!b.on_power;
+  return { percent: b.percent == null ? null : b.percent, onCharger, charging: !!b.charging };
+};
+const satBatteryView = (b) => {
+  const pct = b.percent;
+  const value = pct == null ? '—' : `${Math.round(pct)}%`;
+  const sub = b.onCharger === true
+    ? (pct != null && pct >= 98 ? 'on the charger · set a charge limit if it stays here for weeks' : 'on the charger')
+    : b.onCharger === false ? 'on battery' : 'power unknown';
+  const tone = pct == null ? 'idle'
+    : b.onCharger === false ? (pct < 20 ? 'err' : 'warn')
+    : (b.onCharger === true && pct >= 98) ? 'warn' : 'ok';
+  return { value, sub, tone };
+};
 const satHealthUptime = (sec) => {
   if (sec == null) return '—';
   const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
@@ -442,11 +468,10 @@ const SatHealthCard = ({ room, online }) => {
           <SatHealthStat label="handles" value={s.fds == null ? '—' : `${s.fds} fds`}
                          sub={`${s.threads == null ? '—' : s.threads} threads · ${s.mem_avail_kb == null ? '—' : satHealthMb(s.mem_avail_kb)} free`}
                          tone={s.fds == null ? 'idle' : s.fds > 400 ? 'warn' : 'ok'}/>
-          {s.battery && (
-            <SatHealthStat label="battery" value={s.battery.percent == null ? '—' : `${s.battery.percent.toFixed(0)}%`}
-                           sub={s.battery.charging ? 'charging' : s.battery.on_power ? 'on power' : s.battery.on_power === false ? 'on battery' : 'power unknown'}
-                           tone={s.battery.percent == null ? 'idle' : (s.battery.on_power === false && s.battery.percent < 20) ? 'err' : s.battery.on_power === false ? 'warn' : 'ok'}/>
-          )}
+          {satBattery(s) && (() => {
+            const v = satBatteryView(satBattery(s));
+            return <SatHealthStat label="battery" value={v.value} sub={v.sub} tone={v.tone}/>;
+          })()}
         </div>
       )}
       {s && (s.net_step || s.hostname) && <SatNetStep step={s.net_step} hostname={s.hostname}/>}

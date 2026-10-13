@@ -716,11 +716,8 @@
             "tx_mbits": 270.0,
             "ssid": "home"
           },
-          "battery": {
-            "percent": 81,
-            "charging": true,
-            "on_power": true
-          },
+          "battery_percent": 81,
+          "battery_charging": true,
           "mic_blocked": false,
           "fan_rpm": 2100
         },
@@ -755,11 +752,8 @@
             "tx_mbits": 270.0,
             "ssid": "home"
           },
-          "battery": {
-            "percent": 81,
-            "charging": true,
-            "on_power": true
-          },
+          "battery_percent": 81,
+          "battery_charging": true,
           "mic_blocked": false
         }
       }
@@ -883,11 +877,8 @@
             "rx_mbits": 144.0,
             "ssid": "home"
           },
-          "battery": {
-            "percent": 64,
-            "charging": false,
-            "on_power": true
-          },
+          "battery_percent": 64,
+          "battery_charging": true,
           "mic_blocked": true,
           "thermal_status": "moderate"
         },
@@ -910,11 +901,8 @@
             "tx_mbits": null,
             "ssid": "home"
           },
-          "battery": {
-            "percent": 64,
-            "charging": false,
-            "on_power": true
-          },
+          "battery_percent": 64,
+          "battery_charging": true,
           "mic_blocked": true
         }
       }
