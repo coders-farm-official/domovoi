@@ -16,8 +16,11 @@ did not. What changes:
 
 * **The name is set before the Wi-Fi joins.** A new unit,
   `domovoi-hostname.service`, sets the host name on every boot before
-  NetworkManager starts. A new card gets it from media prep. An older card
-  installs it at its next boot after the satellite upgrade. That same boot,
+  NetworkManager starts. It runs a small root-owned helper, not the
+  satellite's own code. A new card gets it from media prep. An older card
+  installs it at its next boot after the satellite upgrade, once:
+  `systemctl disable` or `mask` turns it off for good. A hand-built
+  satellite gets it only if you ask for it (PROVISIONING.md §8.4). That same boot,
   having renamed the unit, asks the router for its address once more under
   the new name, so **one reboot is enough**. A new card is named before
   setup even joins the house Wi-Fi.

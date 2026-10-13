@@ -1999,20 +1999,26 @@ root-runs-updatable-code path carries; the step touches nothing beyond
 those three settings and the record, and the record is the satellite
 user's to read, not an input to root. The account can still edit the code
 this service runs, exactly as before — the same remaining item. Later that
-day the same path gained a second entry point and two more actions, so the
-router learns the new name at the first boot instead of the second:
-`domovoi-hostname.service` (root, a oneshot ordered before NetworkManager)
-runs `python -m satellite.net_settings --before-network` from the same venv
-and code tree on every boot, and only sets the host name. The boot step
-installs that unit on an older card, rendered from the template in the code
-tree with the account's home (a path it refuses unless it is a plain
-absolute path) and written without following a link. So the code tree now
-also supplies the text of a root unit file. That gives the account no power
-it did not already have: it can already edit the code root runs at every
-boot. After a rename it made itself, the boot step also asks DHCP once more
-under the new name (`nmcli device modify wlan0 ipv4.dhcp-hostname …`). That
-changes only the active connection, and nothing is saved. Moving both units
-onto a root-owned copy of the code is the same remaining item. The console
+day the same path gained two more actions, so the router learns the new name
+at the first boot instead of the second. First, it installs
+`domovoi-hostname.service` (root, a oneshot ordered before NetworkManager),
+which does **not** run the account's code: it runs
+`/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname`, a self-contained,
+root-owned (`root:root 0755`) helper that imports nothing from the code
+tree, cannot see `/home` (`ProtectHome=yes`), and reads only two root-owned
+records: `/var/lib/domovoi/hostname-target` (the name the boot step last
+confirmed, validated as a host name) and `hostname-set`. It never reads
+`config.toml`. The boot step writes the helper and the unit from text it
+carries, atomically and without following a link: the same accepted
+path, nothing the account did not already control. Media prep writes the
+same text on a new card. The unit is enabled once; after that an operator's
+`systemctl disable` or `mask` is left alone. On a hand-built unit, the
+manual `sudo python -m satellite.net_settings` installs no boot unit unless
+it is given `--install-early-unit`, so such a unit still runs nothing at
+boot as root that it did not run before. Second, after a rename it made
+itself, the boot step asks DHCP once more under the new name
+(`nmcli device modify wlan0 ipv4.dhcp-hostname …`). That changes only the
+active connection, and nothing is saved. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only

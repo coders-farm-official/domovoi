@@ -451,14 +451,18 @@ if ! skip units; then
       "$PAYDIR/system/$U.service" >"/etc/systemd/system/$U.service"
   done
   # The host name domovoi-<room>, set before NetworkManager starts on
-  # every boot (satellite/net_settings.py --before-network), so the router
-  # learns it from the first DHCP request. Skips itself until setup has
-  # written config.toml. Guarded: a payload from before it lacks it (the
-  # boot step then installs it from the code tree).
+  # every boot, so the router learns it from the first DHCP request: a
+  # root-owned, self-contained helper that reads only root-owned records
+  # (the name setup confirms), and its unit, in the place locally added
+  # units go (so `systemctl mask` works on it). Guarded: a payload from
+  # before them lacks them (the boot step then writes both).
   EARLY_UNIT=""
-  if [ -f "$PAYDIR/system/domovoi-hostname.service" ]; then
-    sed -e "s|@USER@|$SAT_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
-      "$PAYDIR/system/domovoi-hostname.service" >/etc/systemd/system/domovoi-hostname.service
+  if [ -f "$PAYDIR/system/domovoi-set-hostname" ] && [ -f "$PAYDIR/system/domovoi-hostname.service" ]; then
+    mkdir -p /usr/local/lib/domovoi /usr/local/lib/systemd/system
+    install -m 0755 -o root -g root \
+      "$PAYDIR/system/domovoi-set-hostname" /usr/local/lib/domovoi/set-hostname
+    install -m 0644 -o root -g root \
+      "$PAYDIR/system/domovoi-hostname.service" /usr/local/lib/systemd/system/domovoi-hostname.service
     EARLY_UNIT=domovoi-hostname
   fi
   sed -e "s|@USER@|$SAT_USER|g" "$PAYDIR/system/sudoers" \
