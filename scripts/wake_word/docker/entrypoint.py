@@ -7,7 +7,7 @@ host wrapper set) and route generation/training to ``cuda`` or ``cpu``
 accordingly. Steps:
 
   1. Detect device (GPU vs CPU) and print it.
-  2. Ensure the one-time ~7 GB negative/feature dataset is in the NAMED cache
+  2. Ensure the one-time ~17.5 GB negative/feature dataset is in the NAMED cache
      volume at /data/cache — download once, gated by a sentinel file so reruns
      skip it. (Detects cached-vs-fresh; NOT baked into the image.)
   3. Render the training YAML from env (WAKE_PHRASE/WAKE_SLUG/...).
@@ -35,6 +35,7 @@ from pathlib import Path
 OWW_REPO = Path("/opt/openWakeWord")
 TRAIN_PY = OWW_REPO / "openwakeword" / "train.py"
 TEMPLATE = Path("/opt/train_config.template.yaml")
+TRAIN_RUNNER = Path("/opt/train_runner.py")
 
 CACHE = Path(os.environ.get("OWW_CACHE", "/data/cache"))
 CLIPS_IN = Path("/data/clips")          # read-only real positives (host bind)
@@ -94,20 +95,20 @@ def detect_device() -> str:
 
 def ensure_dataset() -> None:
     """Download the one-time negative/feature dataset into the NAMED cache
-    volume, gated by a sentinel so reruns skip the ~7 GB pull. Detects
+    volume, gated by a sentinel so reruns skip the ~17.5 GB pull. Detects
     cached-vs-fresh. The data is NOT baked into the image."""
     CACHE.mkdir(parents=True, exist_ok=True)
     if SENTINEL.is_file():
         log(f"cache HIT: dataset present at {CACHE} (sentinel exists) — "
-            f"skipping ~7 GB download.")
+            f"skipping ~17.5 GB download.")
         return
     log(f"cache MISS: downloading one-time openWakeWord feature dataset into "
-        f"{CACHE} (~7 GB; first run only) ...")
+        f"{CACHE} (~17.5 GB; first run only) ...")
     FEATURES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         from huggingface_hub import snapshot_download
         # Precomputed ACAV100M negative features + validation set used by
-        # openWakeWord training. ~7 GB on disk.
+        # openWakeWord training. ~17.5 GB on disk.
         snapshot_download(
             "davidscripka/openwakeword_features",
             repo_type="dataset",
@@ -116,7 +117,7 @@ def ensure_dataset() -> None:
     except Exception as e:
         die(f"feature dataset download failed: {e}. Re-running resumes "
             f"(huggingface_hub caches partial files); check container network "
-            f"+ that the named cache volume has room for ~7 GB.", 4)
+            f"+ that the named cache volume has room for ~17.5 GB.", 4)
     SENTINEL.write_text("ok\n")
     log("cache download complete; sentinel written.")
 
@@ -261,6 +262,66 @@ def render_config(slug: str, phrase: str, device: str, work: Path) -> Path:
     return cfg
 
 
+# train.py's --augment_clips does nothing when positive_features_train.npy
+# already exists (it never sees --overwrite), and the run dir under the cache
+# volume is kept per slug. So a retrain after recording more (or different)
+# clips reused the first run's features: the new clips never reached the
+# model. These four are written together by that stage.
+FEATURE_FILES = (
+    "positive_features_train.npy", "negative_features_train.npy",
+    "positive_features_test.npy", "negative_features_test.npy",
+)
+REAL_FINGERPRINT = ".real_clips.sha256"
+
+
+def real_clip_fingerprint(wavs: list[Path]) -> str:
+    """A digest of the real clips' names and contents (order-independent)."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for w in sorted(wavs, key=lambda p: p.name):
+        h.update(w.name.encode("utf-8") + b"\0")
+        h.update(hashlib.sha256(w.read_bytes()).digest())
+    return h.hexdigest()
+
+
+def real_wavs() -> list[Path]:
+    return sorted(CLIPS_IN.glob("*.wav")) if CLIPS_IN.is_dir() else []
+
+
+def reset_for_real_clips(model_dir: Path, wavs: list[Path]) -> bool:
+    """Before injecting this run's real clips into <model_dir>/positive_train:
+    always drop the previous run's injected copies (real_*.wav), and unless
+    the stored features are recorded as computed from exactly this real clip
+    set (mark_features_current, after a successful --augment_clips), delete
+    them so --augment_clips computes them again. Synthetic clips are kept
+    either way. Returns True when features were dropped."""
+    pos_dir = model_dir / "positive_train"
+    if pos_dir.is_dir():
+        for old in pos_dir.glob("real_*.wav"):
+            old.unlink()
+    stamp = model_dir / REAL_FINGERPRINT
+    before = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
+    if before == real_clip_fingerprint(wavs):
+        return False
+    dropped = False
+    for name in FEATURE_FILES:
+        f = model_dir / name
+        if f.is_file():
+            f.unlink()
+            dropped = True
+    if stamp.is_file():
+        stamp.unlink()
+    return dropped
+
+
+def mark_features_current(model_dir: Path, wavs: list[Path]) -> None:
+    """Record which real clip set the features on disk were computed from."""
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / REAL_FINGERPRINT).write_text(
+        real_clip_fingerprint(wavs) + "\n", encoding="utf-8")
+
+
 def inject_real_clips(work: Path, slug: str) -> int:
     """Copy real positive WAVs from /data/clips into the generated-positives dir,
     resampled to 16 kHz mono, OVERSAMPLING each so the real clips reach a target
@@ -279,10 +340,13 @@ def inject_real_clips(work: Path, slug: str) -> int:
     so we write into work/<slug>/positive_train."""
     pos_dir = work / slug / "positive_train"
     pos_dir.mkdir(parents=True, exist_ok=True)
+    wavs = real_wavs()
+    if reset_for_real_clips(work / slug, wavs):
+        log("real clip set changed since the last run; dropped the old copies "
+            "and computed features so augmentation runs again.")
     if not CLIPS_IN.is_dir():
         log("no /data/clips mount; training on synthetic positives only.")
         return 0
-    wavs = sorted(CLIPS_IN.glob("*.wav"))
     if not wavs:
         log("clips dir present but empty; synthetic positives only.")
         return 0
@@ -334,7 +398,11 @@ def run_stage(cfg: Path, flag: str, device: str) -> None:
     # CUDA context isn't created.
     if device == "cpu":
         env["CUDA_VISIBLE_DEVICES"] = "-1"
-    argv = [sys.executable, str(TRAIN_PY), "--training_config", str(cfg), flag]
+    # Through train_runner.py: phrase words the CMU dictionary lacks get an
+    # espeak-ng pronunciation first (train.py's own fallback downloads a
+    # DeepPhonemizer model that is no longer served).
+    argv = [sys.executable, str(TRAIN_RUNNER), str(TRAIN_PY),
+            "--training_config", str(cfg), flag]
     log(f"$ {' '.join(argv)}")
     r = subprocess.run(argv, cwd=str(OWW_REPO), env=env)
     if r.returncode != 0:
@@ -375,7 +443,7 @@ def main() -> int:
 
     log(f"training wake word: slug={slug!r} phrase={phrase!r}")
     device = detect_device()
-    ensure_dataset()       # ~7 GB precomputed feature .npy's (negatives + FP val)
+    ensure_dataset()       # ~17.5 GB precomputed feature .npy's (negatives + FP val)
     ensure_rirs()          # MIT impulse-response WAVs for augmentation
     ensure_background()    # background-noise WAVs for augmentation
 
@@ -390,6 +458,7 @@ def main() -> int:
     inject_real_clips(work, slug)
     # 3) augment (varies acoustics, resamples to 16 kHz training set).
     run_stage(cfg, "--augment_clips", device)
+    mark_features_current(work / slug, real_wavs())
     # 4) train + ONNX export.
     run_stage(cfg, "--train_model", device)
     # 5) place <slug>.onnx where the host worker will find it.

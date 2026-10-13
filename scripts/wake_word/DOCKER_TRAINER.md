@@ -26,7 +26,7 @@ domovoi worker  --shells out-->  train_wake_word.py  --docker run-->  container
 | File | Role |
 |---|---|
 | `scripts/wake_word/train_wake_word.py` | **Host wrapper** — IS the `wake_word_train_command`. Stdlib-only (host may not have torch). Senses Docker + GPU, builds the right `docker run`, streams output, returns the container exit code unchanged. |
-| `scripts/wake_word/docker/Dockerfile` | **One image**, GPU or CPU. Bakes piper model; the ~7 GB feature data is **not** baked — it lives in a named cache volume. |
+| `scripts/wake_word/docker/Dockerfile` | **One image**, GPU or CPU. Bakes piper model; the ~17.5 GB feature data is **not** baked — it lives in a named cache volume. |
 | `scripts/wake_word/docker/entrypoint.py` | **Container entrypoint** — auto-detects GPU/CPU, downloads cache once, generates synthetic positives, injects real clips, trains, writes `/data/models/<slug>.onnx`, exits non-zero on any failure. |
 | `scripts/wake_word/docker/train_config.template.yaml` | openWakeWord training config, rendered per run from env. |
 | `scripts/wake_word/docker/requirements.txt` | Extra Python deps installed into the image (reference; the Dockerfile installs them). |
@@ -42,9 +42,16 @@ domovoi worker  --shells out-->  train_wake_word.py  --docker run-->  container
    (toolkit bundled) and native Linux. If it exits non-zero, we **omit
    `--gpus`** entirely so a GPU-less host never errors on the flag.
 3. If GPUs exist and there are several, pick the **least-used** via
-   `nvidia-smi --query-gpu=index,memory.used` and pass `--gpus "device=<N>"`.
-   Single GPU -> `--gpus all`. The chosen backend is logged
-   (`backend = GPU device 1 (of 3, least-used)` or `backend = CPU`).
+   `nvidia-smi --query-gpu=index,uuid,memory.used` and pass `--gpus "device=<N>"`
+   **plus `-e CUDA_VISIBLE_DEVICES=<that card's UUID>`**. Under WSL2 (Docker
+   Desktop, or Docker Engine in a distro) `--gpus device=N` alone does not
+   isolate a card: every GPU is reached through `/dev/dxg`, the container sees
+   them all and torch takes `cuda:0`, so a run "on GPU 1" landed on GPU 0
+   (measured 2026-10-13, both engines); the environment variable is what
+   holds. nvidia-smi is looked up on PATH and then at `/usr/lib/wsl/lib/`,
+   which a systemd unit's PATH lacks. Single GPU -> `--gpus all`. The chosen
+   backend is logged (`backend = GPU device 1 GPU-… (of 3, least-used)` or
+   `backend = CPU`).
 
 **Container (`entrypoint.py`):** asks `torch.cuda.is_available()` (which honors
 the `CUDA_VISIBLE_DEVICES` the runtime sets) and routes generation + training to
@@ -79,7 +86,7 @@ docker push ghcr.io/kamronk/domovoi-wake-trainer:1
 # on each sharer's host:
 docker pull ghcr.io/kamronk/domovoi-wake-trainer:1
 # point the wrapper at it (so it won't try to build):
-export WAKE_TRAINER_IMAGE=ghcr.io/kamronk/domovoi-wake-trainer:1   # or set in .env
+export WAKE_TRAINER_IMAGE=ghcr.io/kamronk/domovoi-wake-trainer:1   # in the core's process env (see Env knobs)
 ```
 
 ---
@@ -104,7 +111,7 @@ Dockerfile layer so the slow base layers stay cached):
 | `datasets` | **3.6.0** | entrypoint RIR download |
 | `scipy` | **<1.15** (1.14.x) | pin reason below |
 
-Two non-obvious pins and three patches make it work — keep these if you bump
+Two non-obvious pins and five patches make it work — keep these if you bump
 anything:
 
 1. **`scipy<1.15`** — `acoustics 0.2.6` (newest on PyPI) imports
@@ -137,6 +144,22 @@ anything:
    `openwakeword/resources/models/`. The build runs
    `openwakeword.utils.download_models([])` to fetch them (v0.5.1 release assets)
    so no network is needed mid-train.
+6. **Words the CMU dictionary lacks** ("domovoi", "domo", most names).
+   `--generate_clips` builds adversarial negatives from each phrase word's CMU
+   pronunciation; for a missing word upstream downloads a DeepPhonemizer
+   checkpoint from an S3 bucket that answers **403 for every model** (checked
+   2026-10-13) and imports a `dp` package the image lacks, so "hey domovoi"
+   failed every run with `No module named 'dp'`. The entrypoint runs `train.py`
+   through `docker/train_runner.py`, which first gives such words a pronunciation
+   from espeak-ng (already in the image) mapped to ARPAbet
+   (`domovoi` -> `D AA1 M UW0 V OY2`) and logs it.
+7. **Retraining picks up new clips.** `--augment_clips` does nothing when
+   `positive_features_train.npy` exists, and the run dir is kept per slug, so a
+   retrain after recording more clips used to reuse the first run's features.
+   The entrypoint stores a digest of the real clip set the features were
+   computed from (`.real_clips.sha256`, written after a successful augment) and
+   drops the four feature files when the set changes; old `real_*.wav` copies
+   are always replaced. Synthetic clips stay cached.
 
 **`--shm-size`.** The training DataLoader's worker processes pass batches through
 `/dev/shm`; Docker's 64 MB default overflows mid-train
@@ -154,6 +177,13 @@ run the container by hand, add `--shm-size=2g` yourself.
 | `WAKE_TRAINER_SHM_SIZE` | — (docker `--shm-size`) | `2g` | shared-memory for DataLoader workers |
 | `WAKE_TRAINER_IMAGE` | — | `domovoi-wake-trainer:latest` | image to run (set to a published tag to skip building) |
 | `WAKE_TRAINER_CACHE_VOLUME` | — | `domovoi_oww_cache` | named volume for the one-time datasets |
+
+These are read from the wrapper's **process environment**, which is the core's
+(the worker passes its own environment on). A line in `domovoi/.env` does
+**not** reach them: the core reads `.env` into its settings, not into
+`os.environ`. On a systemd host set them in a drop-in for `domovoi-core`
+(`[Service]` `Environment=WAKE_TRAINER_STEPS=…`), or prefix the train command
+with `env WAKE_TRAINER_STEPS=… …` inside `WAKE_WORD_TRAIN_COMMAND`.
 
 ### Fast iteration vs. full quality
 
@@ -174,10 +204,16 @@ worker timeout. Recording **more real positive clips** than the 30 in
 
 ## Wire it into the Domovoi server
 
-In `domovoi/.env` (or the gear-modal config):
+In `domovoi/.env` (neither key is in the dashboard's Configuration tab), then
+restart the core. On a Linux host or the Windows install's distro (checkout
+`/opt/domovoi`):
 ```
 WAKE_WORD_TRAINER_ENABLED=true
-WAKE_WORD_TRAIN_COMMAND=python "C:\Users\Kamron\claude-exp\domovoi-voice-search\scripts\wake_word\train_wake_word.py" --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"
+WAKE_WORD_TRAIN_COMMAND=/opt/domovoi/.venv/bin/python /opt/domovoi/scripts/wake_word/train_wake_word.py --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"
+```
+On a Windows development host with Docker Desktop:
+```
+WAKE_WORD_TRAIN_COMMAND=python "C:\path\to\domovoi\scripts\wake_word\train_wake_word.py" --clips "{clips_dir}" --phrase "{phrase}" --slug "{slug}" --out "{out}"
 ```
 Notes:
 - **Every placeholder is double-quoted.** The worker tokenizes with
@@ -221,35 +257,37 @@ Windows bind mounts are dramatically slower for the I/O-heavy feature reads.
 
 | Cached under `/data/cache/` | Source | Size | Sentinel | Used by |
 |---|---|---|---|---|
-| `openwakeword_features/` | HF `davidscripka/openwakeword_features` (ACAV100M negative features `.npy` + `validation_set_features.npy`) | ~7 GB | `.oww_data_complete` | `feature_data_files` + FP-validation in `--train_model` |
-| `mit_rirs/` | HF `davidscripka/MIT_environmental_impulse_responses` (streamed → 270 16 kHz 16-bit WAVs) | ~25 MB | `.oww_rirs_complete` | `rir_paths` in `--augment_clips` |
-| `background_clips/` | openWakeWord-resources `fma_sample.zip` + `fsd50k_sample.zip` (extracted WAVs) | ~1.2 k clips, ~1 GB | `.oww_background_complete` | `background_paths` in `--augment_clips` |
+| `openwakeword_features/` | HF `davidscripka/openwakeword_features` (`openwakeword_features_ACAV100M_2000_hrs_16bit.npy` 17.3 GB + `validation_set_features.npy` 0.18 GB) | **17.5 GB** (measured 2026-10-13) | `.oww_data_complete` | `feature_data_files` + FP-validation in `--train_model` |
+| `mit_rirs/` | HF `davidscripka/MIT_environmental_impulse_responses` (streamed → 270 16 kHz 16-bit WAVs) | 6 MB | `.oww_rirs_complete` | `rir_paths` in `--augment_clips` |
+| `background_clips/` | openWakeWord-resources `fma_sample.zip` + `fsd50k_sample.zip` (extracted WAVs) | 1,200 clips, 0.45 GB | `.oww_background_complete` | `background_paths` in `--augment_clips` |
 
 The RIR + background WAVs are **separate** from the feature `.npy`'s: the augment
 stage `os.scandir()`s `rir_paths`/`background_paths` for *real WAV files*, so they
 cannot point at the features dir. Per-run synthetic clips + computed features
-live under `/data/cache/runs/<slug>/` and are resumable (re-running tops up to
-`n_samples` and skips augmentation if features already exist).
+live under `/data/cache/runs/<slug>/` (about 0.5 GB per wake word at the
+defaults) and are resumable: re-running tops up to `n_samples`, and
+augmentation is skipped only while the real clip set is the one the features
+were computed from (patch 7 above).
 
-Warm it up once before the first real training run (optional but nice):
+Warm it up once before the first real training run (optional but nice; the
+first Train otherwise spends ~6 min downloading on a fast line):
 ```bash
 docker volume create domovoi_oww_cache
-docker run --rm -v domovoi_oww_cache:/data/cache \
-  -e WAKE_SLUG=warmup -e WAKE_PHRASE="warm up" \
-  domovoi-wake-trainer:latest python -c \
-  "import importlib.util; s=importlib.util.spec_from_file_location('e','/opt/entrypoint.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.ensure_dataset()"
+docker run --rm -v domovoi_oww_cache:/data/cache --entrypoint python \
+  domovoi-wake-trainer:latest -c \
+  "import importlib.util; s=importlib.util.spec_from_file_location('e','/opt/entrypoint.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.ensure_dataset(); m.ensure_rirs(); m.ensure_background()"
 ```
 Inspect / reset:
 ```bash
 docker volume inspect domovoi_oww_cache
-docker volume rm domovoi_oww_cache    # forces a fresh ~7 GB download next run
+docker volume rm domovoi_oww_cache    # forces a fresh ~17.5 GB download next run
 ```
 
 ---
 
 ## Per-OS prerequisites
 
-### GPU box (Windows 11 + NVIDIA — e.g. Domovoi)
+### GPU box (Windows 11 + NVIDIA, Docker Desktop — a development PC)
 - Recent NVIDIA **Windows** driver (R495+; any current Game-Ready/Studio is fine
   for RTX 40-series).
 - `wsl --update`; Docker Desktop with the **WSL2 engine** enabled.
@@ -257,7 +295,29 @@ docker volume rm domovoi_oww_cache    # forces a fresh ~7 GB download next run
   mapped in as `libcuda.so`; a Linux driver breaks it.
 - The NVIDIA Container Toolkit is **bundled** in Docker Desktop — nothing extra
   to install for `--gpus all`.
-- Verify: `docker run --rm --gpus all domovoi-wake-trainer:latest python -c "import torch;print(torch.cuda.is_available())"` -> `True`.
+- Verify: `docker run --rm --gpus all --entrypoint python domovoi-wake-trainer:latest -c "import torch;print(torch.cuda.is_available())"` -> `True`.
+
+### GPU box (the Windows install: Docker Engine inside its WSL2 distro)
+`provision.sh` installs Docker Engine (docker-ce) in the distro and WSL passes
+the cards through (`/dev/dxg`, `/usr/lib/wsl/lib`), but Docker Engine has no
+NVIDIA runtime of its own: `--gpus` fails with *"failed to discover GPU vendor
+from CDI: no known GPU vendor found"*, the wrapper's probe fails, and training
+quietly runs on the CPU. Add the NVIDIA Container Toolkit (Apache-2.0) in the
+distro, as root:
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+# primary key fingerprint C95B321B61E88C1809C4F759DDCAE044F796ECB0
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get update && apt-get install -y nvidia-container-toolkit
+nvidia-ctk runtime configure --runtime=docker && systemctl restart docker
+```
+(Measured 2026-10-13 on Ubuntu 26.04.1 in WSL 2, docker-ce 29.8.1, toolkit
+1.20.1: about 15 s, then `--gpus all` sees both cards.) Again no Linux NVIDIA
+driver. The service user's `docker build` of the image takes about 8 min the
+first time (3.2 GB base image download).
 
 ### GPU box (native Linux + NVIDIA)
 - NVIDIA driver + `nvidia-container-toolkit` installed and the daemon

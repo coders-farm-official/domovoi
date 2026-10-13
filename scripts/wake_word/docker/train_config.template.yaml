@@ -34,7 +34,7 @@ background_paths_duplication_rate:
 rir_paths:
   - __RIR_DIR__
 
-# --- precomputed negative / FP-validation features (from the ~7 GB cache vol) ---
+# --- precomputed negative / FP-validation features (from the ~17.5 GB cache vol) ---
 false_positive_validation_data_path: __FP_VAL_NPY__
 feature_data_files:
   ACAV100M_sample: __NEG_FEATURES_NPY__

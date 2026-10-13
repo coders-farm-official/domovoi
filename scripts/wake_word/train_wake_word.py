@@ -40,7 +40,7 @@ Mounts (host path syntax handled for BOTH Windows and POSIX):
                                   ``/data/models/<slug>.onnx``; the bind mount
                                   makes it appear at the host ``{out}`` the
                                   worker then stat()s for success)
-  * named volume ``WAKE_TRAINER_CACHE_VOLUME`` -> ``/data/cache`` (the ~7 GB
+  * named volume ``WAKE_TRAINER_CACHE_VOLUME`` -> ``/data/cache`` (the ~17.5 GB
                                   negative/feature dataset + piper model,
                                   downloaded once, reused forever)
 
@@ -68,7 +68,7 @@ from pathlib import Path, PureWindowsPath
 # (e.g. ghcr.io/kamronk/domovoi-wake-trainer:1) so sharers `docker pull` instead
 # of building locally — see scripts/wake_word/DOCKER_TRAINER.md.
 IMAGE = os.environ.get("WAKE_TRAINER_IMAGE", "domovoi-wake-trainer:latest")
-# Named Docker volume holding the one-time ~7 GB negative/feature dataset +
+# Named Docker volume holding the one-time ~17.5 GB negative/feature dataset +
 # piper voice model. A NAMED volume (not a bind mount) because Windows C:\ bind
 # mounts are dramatically slower for the I/O-heavy feature reads.
 CACHE_VOLUME = os.environ.get("WAKE_TRAINER_CACHE_VOLUME", "domovoi_oww_cache")
@@ -155,48 +155,64 @@ def gpu_runtime_available() -> bool:
         return False
 
 
-def select_gpu() -> tuple[str, int]:
-    """Return ('all', count) on success, choosing the LEAST-USED GPU index.
+# WSL puts nvidia-smi here, outside the PATH a systemd unit gets (the core's
+# own GPU probe has the same fallback, domovoi/homelab.py).
+WSL_NVIDIA_SMI = "/usr/lib/wsl/lib/nvidia-smi"
+
+
+def nvidia_smi() -> str | None:
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    if os.path.isfile(WSL_NVIDIA_SMI) and os.access(WSL_NVIDIA_SMI, os.X_OK):
+        return WSL_NVIDIA_SMI
+    return None
+
+
+def select_gpu() -> tuple[str, int, str]:
+    """Choose the LEAST-USED GPU: returns (device, count, uuid).
 
     We shell out to the HOST's nvidia-smi (not inside a container) to rank cards
     by used memory, so a multi-tenant box doesn't pile this run onto a card
-    another job is hammering. Returns:
-      * ('all', 1)           -> single GPU, use --gpus all
-      * (str(index), n)      -> multi-GPU, use --gpus "device=<index>"
-      * ('', 0)              -> nvidia-smi unavailable; caller may still try
-                                --gpus all if the container GPU probe passed.
+    another job (Ollama) is hammering. Returns:
+      * ('all', 1, uuid)       -> single GPU, use --gpus all
+      * (str(index), n, uuid)  -> multi-GPU, use --gpus "device=<index>" AND
+                                  CUDA_VISIBLE_DEVICES=<uuid> (see build_run_argv)
+      * ('', 0, '')            -> nvidia-smi unavailable; caller may still try
+                                  --gpus all if the container GPU probe passed.
     """
-    if shutil.which("nvidia-smi") is None:
-        return ("", 0)
+    smi = nvidia_smi()
+    if smi is None:
+        return ("", 0, "")
     try:
         r = subprocess.run(
-            ["nvidia-smi",
-             "--query-gpu=index,memory.used",
+            [smi,
+             "--query-gpu=index,uuid,memory.used",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=30,
         )
     except (OSError, subprocess.SubprocessError):
-        return ("", 0)
+        return ("", 0, "")
     if r.returncode != 0:
-        return ("", 0)
+        return ("", 0, "")
 
-    cards: list[tuple[int, int]] = []  # (mem_used_mib, index)
+    cards: list[tuple[int, int, str]] = []  # (mem_used_mib, index, uuid)
     for line in r.stdout.strip().splitlines():
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) != 2:
+        if len(parts) != 3:
             continue
         try:
-            idx, used = int(parts[0]), int(parts[1])
+            idx, used = int(parts[0]), int(parts[2])
         except ValueError:
             continue
-        cards.append((used, idx))
+        cards.append((used, idx, parts[1]))
 
     if not cards:
-        return ("", 0)
+        return ("", 0, "")
     if len(cards) == 1:
-        return ("all", 1)
+        return ("all", 1, cards[0][2])
     cards.sort()  # least-used memory first
-    return (str(cards[0][1]), len(cards))
+    return (str(cards[0][1]), len(cards), cards[0][2])
 
 
 def to_docker_mount_source(host_path: str) -> str:
@@ -229,9 +245,19 @@ def build_run_argv(
     phrase: str,
     slug: str,
     gpu_flag: list[str],
+    cuda_visible: str = "",
 ) -> list[str]:
     """Assemble the full ``docker run`` argv. ``gpu_flag`` is e.g.
-    ['--gpus', 'all'] or ['--gpus', 'device=1'] or [] (CPU)."""
+    ['--gpus', 'all'] or ['--gpus', 'device=1'] or [] (CPU).
+
+    ``cuda_visible`` (the chosen card's UUID) becomes CUDA_VISIBLE_DEVICES in
+    the container. Under WSL2 (Docker Desktop, or Docker Engine in a distro
+    with the NVIDIA Container Toolkit) ``--gpus device=N`` does not isolate a
+    card: every GPU is reached through /dev/dxg, the container sees them all
+    and torch takes cuda:0, whichever card was picked (measured 2026-10-13).
+    CUDA honours CUDA_VISIBLE_DEVICES there, and a UUID can't be confused by
+    CUDA's and nvidia-smi's different index orders. Harmless on native Linux,
+    where the one card the container sees has that UUID."""
     argv: list[str] = [
         *docker_argv(), "run", "--rm",
         # The training DataLoader uses multiprocessing workers that pass tensor
@@ -247,6 +273,8 @@ def build_run_argv(
         "-e", f"WAKE_PHRASE={phrase}",
         "-e", f"WAKE_SLUG={slug}",
     ]
+    if cuda_visible:
+        argv += ["-e", f"CUDA_VISIBLE_DEVICES={cuda_visible}"]
     if N_SAMPLES:
         argv += ["-e", f"WAKE_N_SAMPLES={N_SAMPLES}"]
     if N_SAMPLES_VAL:
@@ -322,12 +350,14 @@ def main() -> int:
     #     (a) the container can actually use --gpus (gpu_runtime_available), and
     #     (b) we can pick a card (or it's a single-GPU host).
     gpu_flag: list[str] = []
+    cuda_visible = ""
     backend = "CPU"
     if gpu_runtime_available():
-        device, count = select_gpu()
+        device, count, uuid = select_gpu()
         if count > 1 and device not in ("", "all"):
             gpu_flag = ["--gpus", f"device={device}"]
-            backend = f"GPU device {device} (of {count}, least-used)"
+            cuda_visible = uuid
+            backend = f"GPU device {device} {uuid} (of {count}, least-used)"
         else:
             # Single GPU, or nvidia-smi unavailable but the container probe
             # passed -> let Docker expose all GPUs.
@@ -341,7 +371,8 @@ def main() -> int:
     # (4) Build + run.
     clips_src = to_docker_mount_source(args.clips)
     models_src = to_docker_mount_source(str(models_dir))
-    run_argv = build_run_argv(clips_src, models_src, args.phrase, slug, gpu_flag)
+    run_argv = build_run_argv(clips_src, models_src, args.phrase, slug, gpu_flag,
+                              cuda_visible)
 
     # (5) Log the chosen backend + the exact command (stderr).
     log(f"backend = {backend}")

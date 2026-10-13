@@ -76,7 +76,7 @@ WORKDIR /opt
 RUN git clone https://github.com/dscripka/piper-sample-generator.git /opt/piper-sample-generator && \
     cd /opt/piper-sample-generator && git checkout "$PSG_REF"
 
-# Bake the ~63 MB v1.0.0 VITS generator checkpoint at BUILD time (offline-capable,
+# Bake the ~255 MB v1.0.0 VITS generator checkpoint at BUILD time (offline-capable,
 # no GitHub-Releases rate-limit hit per run). This is the en-us-libritts-high.pt
 # that the dscripka fork's generate_samples() defaults to (models/ dir, relative
 # to the script) — the matching state_dict for THIS fork's generator.
@@ -158,6 +158,7 @@ RUN cd /opt/openWakeWord && \
 
 # Our entrypoint + YAML template (rendered per-run from env by the entrypoint).
 COPY entrypoint.py /opt/entrypoint.py
+COPY train_runner.py /opt/train_runner.py
 COPY train_config.template.yaml /opt/train_config.template.yaml
 
 # The cache (negative/feature dataset + downloaded extras) lives on a NAMED

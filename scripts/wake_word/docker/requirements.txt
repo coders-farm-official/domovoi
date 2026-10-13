@@ -16,7 +16,7 @@ soundfile                # WAV read/write + real-clip resampling
 scipy                    # resample_poly for 16 kHz conversion
 
 # openWakeWord training + export:
-huggingface_hub>=0.23    # snapshot_download of the ~7 GB feature dataset
+huggingface_hub>=0.23    # snapshot_download of the ~17.5 GB feature dataset
 onnx
 onnxruntime
 pyyaml                   # render/parse the training config
