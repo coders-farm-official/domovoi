@@ -81,6 +81,9 @@ ROOT_STATE_DIR = Path("/var/lib/domovoi")
 # Root's units (satellite/net_settings.py installs domovoi-hostname.service
 # there and reads the boot step's enable link).
 ROOT_UNIT_DIR = Path("/etc/systemd/system")
+# Where it installs the early unit and its root-owned helper.
+ROOT_LOCAL_UNIT_DIR = Path("/usr/local/lib/systemd/system")
+ROOT_HELPER_DIR = Path("/usr/local/lib/domovoi")
 
 
 @pytest.fixture(scope="session")
@@ -123,7 +126,9 @@ def _relocate(value: Path, home: Path) -> Path | None:
     for root, stand_in in ((REAL_CONFIG_DIR, home / ".domovoi"),
                            (ROOT_CONFIG_DIR, home / "etc-domovoi"),
                            (ROOT_STATE_DIR, home / "var-lib-domovoi"),
-                           (ROOT_UNIT_DIR, home / "etc-systemd-system")):
+                           (ROOT_UNIT_DIR, home / "etc-systemd-system"),
+                           (ROOT_LOCAL_UNIT_DIR, home / "usr-local-lib-systemd-system"),
+                           (ROOT_HELPER_DIR, home / "usr-local-lib-domovoi")):
         try:
             rel = value.relative_to(root)
         except ValueError:

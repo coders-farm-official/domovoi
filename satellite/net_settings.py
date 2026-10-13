@@ -36,18 +36,22 @@ Who runs it, as root:
   satellite upgrade replaces this file, and the next boot applies them.
   docs/SECURITY_PRIVACY.md records that this is the root-runs-updatable-
   code path, and that the owner accepted it for these three settings;
-* the host name alone, at every boot BEFORE NetworkManager starts
-  (``python -m satellite.net_settings --before-network``, from
-  ``domovoi-hostname.service``: stage 1 installs it on a new card, the
-  boot step above on an older one). The router learns a satellite's name
-  from its DHCP request, which NetworkManager sends as soon as the Wi-Fi
-  joins, with whatever name the unit had at that moment. Renamed later in
-  the boot, a unit kept its old name on the router until it next
-  reconnected: every satellite needed a second reboot (2026-10-12). Where
-  the boot step itself still does the rename (the first boot after the
-  upgrade, before that unit exists), it asks NetworkManager for one fresh
-  DHCP exchange under the new name (:func:`refresh_dhcp_name`), once,
-  right after the change.
+* the host name alone, at every boot BEFORE NetworkManager starts, by
+  ``domovoi-hostname.service``: a root-owned, self-contained helper
+  (:data:`EARLY_HELPER_TEXT`, installed as /usr/local/lib/domovoi/
+  set-hostname) that sets the name this step last confirmed
+  (/var/lib/domovoi/hostname-target) and reads nothing of the satellite
+  account's. Stage 1 installs it on a new card; this step on a prepared
+  one, once (an operator's disable or mask is left alone); a manual run on
+  a hand-built card only with ``--install-early-unit``. The router learns
+  a satellite's name from its DHCP request, which NetworkManager sends as
+  soon as the Wi-Fi joins, with whatever name the unit had at that moment.
+  Renamed later in the boot, a unit kept its old name on the router until
+  it next reconnected: every satellite needed a second reboot
+  (2026-10-12). Where this step itself does the rename (the first boot
+  after the upgrade, or after a room rename, which the helper cannot know
+  of), it asks NetworkManager for one fresh DHCP exchange under the new
+  name (:func:`refresh_dhcp_name`), once, right after the change.
 
 Every run says exactly what it changed: in the journal, and in
 ``/var/lib/domovoi/net-settings.json`` — root's own directory, 0644, which
@@ -69,6 +73,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -96,12 +101,21 @@ REPORT_PATH = STATE_DIR / "net-settings.json"
 EARLY_REPORT_PATH = STATE_DIR / "net-settings-early.json"
 #: The host name this step set, so it renames only a name it set itself.
 HOSTNAME_RECORD = STATE_DIR / "hostname-set"
-#: Where root's units live, and the one that sets the host name before the
-#: network starts. Its template rides the code tree (satellite/scripts/),
-#: so an upgrade brings it and the boot step installs or refreshes it.
+#: The name the early helper may set (the room's, as this step last
+#: confirmed it): root-owned, the helper's only input besides hostname-set.
+HOSTNAME_TARGET = STATE_DIR / "hostname-target"
+#: Present once this step has enabled the early unit: after that an
+#: operator's disable is theirs, and the unit is not enabled again.
+EARLY_UNIT_MARKER = STATE_DIR / "early-unit-enabled"
+#: Where enable links and an operator's masks live.
 SYSTEMD_DIR = Path("/etc/systemd/system")
+#: The unit that sets the host name before the network starts, installed
+#: where locally added units go (so `systemctl mask` works on it), and its
+#: root-owned helper. Both written from text this module carries.
 EARLY_UNIT_NAME = "domovoi-hostname.service"
-EARLY_UNIT_TEMPLATE = Path(__file__).resolve().parent / "scripts" / EARLY_UNIT_NAME
+UNIT_FILE_DIR = Path("/usr/local/lib/systemd/system")
+HELPER_DIR = Path("/usr/local/lib/domovoi")
+EARLY_HELPER_NAME = "set-hostname"
 #: The enable link of the boot step's own unit: without it nothing runs
 #: this module at boot, whatever the unit file says.
 PROVISIONING_UNIT_NAME = "domovoi-provisioning.service"
@@ -128,18 +142,14 @@ POWERSAVE_DISABLE = 2
 _NM_WAIT_SEC = 45.0
 _NM_POLL_SEC = 1.5
 _TIMEOUT_SEC = 30.0
-#: Before the network the unit has 30 s in all (TimeoutStartSec), and
-#: NetworkManager waits for it: hostnamectl gets this long, then the
-#: name is written by hand.
-_EARLY_HOSTNAMECTL_SEC = 8.0
+#: The `hostname` fallback when hostnamectl cannot be reached.
+_HOSTNAME_CMD_SEC = 5.0
 #: How long the boot step waits for the Wi-Fi to come up before asking
 #: DHCP again under a new name (the next connect carries it anyway).
 _LINK_WAIT_SEC = 45.0
 _LABEL_MAX = 63
 #: NetworkManager's device state "connected".
 _NM_CONNECTED = 100
-#: A home directory this module will write into a root unit file.
-_SAFE_HOME = re.compile(r"^/[A-Za-z0-9._/-]+$")
 
 
 # ─── the host name ─────────────────────────────────────────────────────────
@@ -242,6 +252,9 @@ class Report:
         self.errors: list[str] = []
         #: ``[old, new]`` when this run renamed the unit, else None.
         self.renamed: list[str] | None = None
+        #: The room's name, and whether the unit has it with its record.
+        self.wanted: str | None = None
+        self.confirmed = False
 
     def change(self, what: str) -> None:
         log.info("changed: %s", what)
@@ -448,18 +461,36 @@ def set_hostname(room_id: str | None, run: Callable[..., Any], report: Report, *
             except OSError as e:
                 report.error(f"set the host name to {wanted!r}: {detail}; {e}")
                 return current
-            _call(run, ["hostname", wanted])
-        report.change(f"host name {current!r} -> {wanted!r}")
+            rc, detail = _call(run, ["hostname", wanted], timeout=_HOSTNAME_CMD_SEC)
+            if rc != 0:
+                # /etc/hostname has it; the running name does not until
+                # the next boot. A DHCP re-ask names it explicitly anyway.
+                report.change(f"{hostname_path} names {wanted!r} (was {current!r})")
+                report.error(f"set the running host name to {wanted!r}: {detail or 'hostname failed'}; "
+                             "it takes effect at the next boot")
+            else:
+                report.change(f"host name {current!r} -> {wanted!r}")
+        else:
+            report.change(f"host name {current!r} -> {wanted!r}")
         report.renamed = [current, wanted]
         renamed = True
-    if renamed:
+    else:
+        report.same(f"host name already {wanted!r}")
+    report.wanted = wanted
+    # The record that lets a later room rename change this name again: kept
+    # whenever the name is confirmed, not only when this run renamed it (an
+    # earlier run may have renamed it and lost the record).
+    record_ok = True
+    if (set_before or "").strip().lower() != wanted:
         try:
             record_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
             safe_write(record_path.parent, record_path.name, (wanted + "\n").encode("utf-8"))
+            if not renamed:
+                report.change(f"recorded {wanted!r} as the host name this step set "
+                              f"({record_path.name} was {set_before or 'missing'!r})")
         except OSError as e:
             report.error(f"record the host name this step set: {e}")
-    else:
-        report.same(f"host name already {wanted!r}")
+            record_ok = False
     try:
         hosts = hosts_path.read_text(encoding="utf-8")
     except OSError as e:
@@ -481,6 +512,7 @@ def set_hostname(room_id: str | None, run: Callable[..., Any], report: Report, *
                 report.change(f"{hosts_path}: 127.0.1.1 names {wanted!r}")
             except OSError as e:
                 report.error(f"update {hosts_path}: {e}")
+    report.confirmed = record_ok
     if renamed and restart_avahi:
         restart_avahi_for(wanted, run, report)
     return wanted
@@ -690,55 +722,382 @@ def refresh_dhcp_name(nmcli: str, name: str, profiles: list[wifi_profiles.Profil
                      "at the next reboot")
 
 
-def ensure_early_unit(run: Callable[..., Any], report: Report, *,
-                      template: Path | None = None, unit_dir: Path | None = None,
-                      home: Path | str | None = None) -> None:
-    """Install (or refresh) and enable ``domovoi-hostname.service``, the
-    unit that sets the host name before NetworkManager starts. Rendered
-    from the template in this code tree with the satellite account's home,
-    written without following a link (:func:`safe_write`), enabled with
-    ``systemctl --no-reload enable`` (the link only: nothing is reloaded or
-    started mid-boot; it runs from the next boot). Idempotent: an
-    identical, enabled unit is left alone."""
-    template = template or EARLY_UNIT_TEMPLATE
-    unit_dir = unit_dir or SYSTEMD_DIR
-    home = home if home is not None else satellite_home()
-    if home is None or not _SAFE_HOME.match(str(home)) or ".." in str(home).split("/"):
-        report.skip(f"{EARLY_UNIT_NAME}: cannot tell the satellite account's home directory, "
-                    "so the host name is still set later in the boot")
+# ─── the early unit: the host name before the network ─────────────────────
+#
+# Root writes these two files from the text below: the boot step (this
+# module, the root path the owner accepted) on a prepared card, media prep
+# (domovoi/satellite_media/payload.py reads these constants without
+# importing the package) on a new one. Never from a file in the code tree.
+# The helper is self-contained: the standard library only, run as
+# `python3 -I` with /home hidden (ProtectHome=yes), reading only
+# root-owned records. It must not grow an import from `satellite`.
+
+EARLY_HELPER_TEXT = r'''#!/usr/bin/python3 -I
+"""Domovoi satellite: the host name, set BEFORE the network starts.
+
+Installed root:root 0755 as /usr/local/lib/domovoi/set-hostname by the
+satellite's boot step (satellite/net_settings.py carries this text) or by
+media prep, and run by domovoi-hostname.service before NetworkManager, so
+the router learns the name from the first DHCP request of the boot.
+
+Self-contained on purpose: the standard library only, nothing from the
+satellite account's home (the unit runs it with python3 -I and
+ProtectHome=yes), and only root-owned records as input:
+
+* /var/lib/domovoi/hostname-target: the name root's boot step last
+  confirmed for this room (the boot step reads the room; this does not);
+* /var/lib/domovoi/hostname-set: the name root set before. Only that name
+  or a stock one (raspberrypi, blank) is ever changed: a name a person
+  chose is left alone.
+
+What it did goes to /var/lib/domovoi/net-settings-early.json, which the
+boot step folds into its own record. Always exits 0: NetworkManager starts
+after it either way.
+"""
+
+import json
+import os
+import re
+import socket
+import stat
+import subprocess
+import sys
+import time
+
+STOCK = frozenset({"", "raspberrypi", "localhost", "localhost.localdomain"})
+LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+HOSTNAMECTL_SEC = 8.0
+HOSTNAME_SEC = 5.0
+
+
+def euid():
+    return os.geteuid() if hasattr(os, "geteuid") else 0
+
+
+def read_root_record(path):
+    """A small regular file owned by root (by whoever runs this), not
+    writable by group or others, opened without following a link; None
+    when it is anything else."""
+    try:
+        fd = os.open(path, os.O_RDONLY | NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid not in (0, euid()):
+            return None
+        if os.name == "posix" and st.st_mode & 0o022:
+            return None
+        return os.read(fd, 512).decode("utf-8", "replace").strip()
+    finally:
+        os.close(fd)
+
+
+def write_atomic(directory, name, data, mode=0o644):
+    """directory/name replaced atomically, never through a link, and as
+    root only inside a directory root owns."""
+    tmp = ".%s.tmp%d" % (name, os.getpid())
+    if os.open in os.supports_dir_fd and NOFOLLOW and DIRECTORY:
+        dfd = os.open(directory, os.O_RDONLY | DIRECTORY | NOFOLLOW)
+        try:
+            if euid() == 0 and os.fstat(dfd).st_uid != 0:
+                raise PermissionError("%s is not root's" % directory)
+            try:
+                os.unlink(tmp, dir_fd=dfd)
+            except FileNotFoundError:
+                pass
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | NOFOLLOW, mode, dir_fd=dfd)
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(fd, view):]
+                os.fchmod(fd, mode)
+                try:
+                    os.fsync(fd)
+                except OSError:
+                    pass
+            finally:
+                os.close(fd)
+            os.rename(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        finally:
+            os.close(dfd)
+        return
+    path = os.path.join(directory, name)
+    with open(path + ".tmp", "wb") as f:
+        f.write(data)
+    os.replace(path + ".tmp", path)
+
+
+def rewrite_hosts(text, old, new):
+    """/etc/hosts with the 127.0.1.1 line naming new (in place of old), or
+    None when it already does. Every other line and name is kept."""
+    out = []
+    found = changed = False
+    for line in text.splitlines(True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body):]
+        fields = body.split("#", 1)[0].split()
+        if fields and fields[0] == "127.0.1.1":
+            found = True
+            names = fields[1:]
+            renamed = [new if old and n.lower() == old.lower() else n for n in names]
+            if new not in renamed:
+                renamed = [new] + renamed
+            if renamed != names:
+                comment = body.split("#", 1)[1] if "#" in body else None
+                body = "127.0.1.1\t" + " ".join(renamed) + ("\t#" + comment if comment else "")
+                changed = True
+            out.append(body + ending)
+        else:
+            out.append(line)
+    if not found:
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        out.append("127.0.1.1\t%s\n" % new)
+        changed = True
+    return "".join(out) if changed else None
+
+
+def call(run, argv, timeout):
+    try:
+        r = run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return 1, str(e)
+    lines = ((getattr(r, "stderr", "") or "") + (getattr(r, "stdout", "") or "")).strip().splitlines()
+    return int(getattr(r, "returncode", 1)), (lines[-1].strip() if lines else "")
+
+
+def boot_id():
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip()[:64] or None
+    except OSError:
+        return None
+
+
+def rename(doc, root, run):
+    state = os.path.join(root, "var", "lib", "domovoi")
+    etc = os.path.join(root, "etc")
+    target = read_root_record(os.path.join(state, "hostname-target"))
+    if not target:
+        doc["skipped"].append("host name: no name confirmed by the boot step yet")
+        return
+    target = target.lower()
+    if len(target) > 63 or not LABEL.fullmatch(target):
+        doc["errors"].append("host name: %r in hostname-target is not a host name; left alone"
+                             % target[:70])
         return
     try:
-        rendered = template.read_text(encoding="utf-8").replace("@HOME@", str(home)).encode("utf-8")
-    except OSError as e:
-        report.error(f"read {template.name}: {e}")
+        with open(os.path.join(etc, "hostname"), encoding="utf-8") as f:
+            current = f.read().strip().lower()
+    except OSError:
+        current = ""
+    current = current or socket.gethostname().strip().lower()
+    doc["hostname"] = current
+    if current == target:
+        doc["unchanged"].append("host name already %r" % target)
         return
-    path = unit_dir / EARLY_UNIT_NAME
-    existed = os.path.lexists(path)
-    current: bytes | None = None
-    if existed and not os.path.islink(path):
+    set_before = (read_root_record(os.path.join(state, "hostname-set")) or "").lower()
+    if current not in STOCK and current != set_before:
+        doc["skipped"].append("host name %r looks chosen by a person; not renaming it to %r"
+                              % (current, target))
+        return
+    rc, detail = call(run, ["hostnamectl", "set-hostname", target], HOSTNAMECTL_SEC)
+    if rc != 0:
+        # No D-Bus or no systemd-hostnamed: what hostnamectl does, by hand.
         try:
-            current = path.read_bytes()
-        except OSError:
-            current = None
-    if current != rendered:
-        try:
-            safe_write(unit_dir, EARLY_UNIT_NAME, rendered)
+            write_atomic(etc, "hostname", (target + "\n").encode("utf-8"))
         except OSError as e:
-            report.error(f"install {path}: {e}")
+            doc["errors"].append("set the host name to %r: %s; %s" % (target, detail, e))
             return
-        report.change(f"{'updated' if existed else 'installed'} {path}: the host name is set "
-                      "before the network starts")
-    else:
-        report.same(f"{EARLY_UNIT_NAME} is current")
+        rc, detail = call(run, ["hostname", target], HOSTNAME_SEC)
+        if rc != 0:
+            doc["errors"].append("set the running host name to %r: %s"
+                                 % (target, detail or "hostname failed"))
+    doc["changed"].append("host name %r -> %r" % (current, target))
+    doc["renamed"] = [current, target]
+    doc["hostname"] = target
+    try:
+        with open(os.path.join(etc, "hosts"), encoding="utf-8", newline="") as f:
+            updated = rewrite_hosts(f.read(), current, target)
+        if updated is not None:
+            write_atomic(etc, "hosts", updated.encode("utf-8"))
+            doc["changed"].append("/etc/hosts: 127.0.1.1 names %r" % target)
+    except OSError as e:
+        doc["errors"].append("update /etc/hosts: %s" % e)
+    try:
+        write_atomic(state, "hostname-set", (target + "\n").encode("utf-8"))
+    except OSError as e:
+        doc["errors"].append("record the host name this step set: %s" % e)
+
+
+def main(argv=None, run=subprocess.run):
+    args = sys.argv[1:] if argv is None else list(argv)
+    root = args[args.index("--root") + 1] if "--root" in args else "/"
+    doc = {"version": 1, "ts": time.time(), "boot_id": boot_id(), "when": "before-network",
+           "hostname": None, "renamed": None, "changed": [], "unchanged": [], "skipped": [],
+           "errors": []}
+    try:
+        rename(doc, root, run)
+    except Exception as e:  # never hold the network up
+        doc["errors"].append("unexpected failure: %r" % (e,))
+    for key in ("changed", "skipped", "errors"):
+        for line in doc[key]:
+            print("%s: %s" % (key, line))
+    try:
+        write_atomic(os.path.join(root, "var", "lib", "domovoi"), "net-settings-early.json",
+                     json.dumps(doc, indent=1).encode("utf-8"))
+    except OSError as e:
+        print("could not write the record: %s" % e, file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
+EARLY_UNIT_TEXT = '''# Domovoi satellite: the host name domovoi-<room>, set BEFORE the network
+# starts, so the router learns it from the first DHCP request of the boot.
+# Runs a root-owned, self-contained helper that reads only root-owned
+# records (/var/lib/domovoi/hostname-target, hostname-set): nothing from
+# the satellite account's home, which it cannot even see (ProtectHome).
+# Written by the satellite's boot step (satellite/net_settings.py carries
+# this text) or by media prep, and enabled once: an operator's
+# `systemctl disable` or `systemctl mask domovoi-hostname` is left alone.
+
+[Unit]
+Description=Domovoi satellite host name, set before the network starts
+After=local-fs.target
+Before=network-pre.target NetworkManager.service dhcpcd.service domovoi-provisioning.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname
+ProtectHome=yes
+# NetworkManager waits for this; it must never hold the network up long.
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target
+'''
+
+
+def _masked(path: Path) -> bool:
+    try:
+        return os.path.islink(path) and os.readlink(path) in ("/dev/null", os.devnull)
+    except OSError:
+        return False
+
+
+def early_unit_state(unit_dir: Path | None = None, marker: Path | None = None) -> str:
+    """``masked`` (an operator's ``systemctl mask``), ``enabled``,
+    ``disabled`` (this step enabled it once and the link is gone: an
+    operator's ``systemctl disable``) or ``absent`` (never installed)."""
+    unit_dir = unit_dir or SYSTEMD_DIR
+    marker = marker or EARLY_UNIT_MARKER
+    if _masked(unit_dir / EARLY_UNIT_NAME):
+        return "masked"
     if os.path.lexists(unit_dir / WANTS_DIRNAME / EARLY_UNIT_NAME):
-        report.same(f"{EARLY_UNIT_NAME} is enabled")
-        return
-    rc, detail = _call(run, ["systemctl", "--no-reload", "enable", EARLY_UNIT_NAME])
-    if rc == 0:
+        return "enabled"
+    if os.path.lexists(marker):
+        return "disabled"
+    return "absent"
+
+
+def _install_root_file(directory: Path, name: str, data: bytes, mode: int,
+                       report: Report) -> bool:
+    """``directory/name`` holds exactly ``data`` with ``mode``, written by
+    :func:`safe_write` (root's directory, no link followed) when it does not.
+    True when it does afterwards."""
+    path = directory / name
+    try:
+        directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+        existed = os.path.lexists(path)
+        current: bytes | None = None
+        if existed and not os.path.islink(path):
+            st = os.lstat(path)
+            if stat.S_ISREG(st.st_mode) and (os.name != "posix" or stat.S_IMODE(st.st_mode) == mode):
+                current = path.read_bytes()
+        if current == data:
+            report.same(f"{path} is current")
+            return True
+        safe_write(directory, name, data, mode=mode)
+    except OSError as e:
+        report.error(f"install {path}: {e}")
+        return False
+    report.change(f"{'updated' if existed else 'installed'} {path}")
+    return True
+
+
+def ensure_early_unit(run: Callable[..., Any], report: Report, *, allowed: bool,
+                      unit_dir: Path | None = None, unit_file_dir: Path | None = None,
+                      helper_dir: Path | None = None,
+                      marker: Path | None = None) -> dict[str, str]:
+    """Install and enable ``domovoi-hostname.service`` ONCE, with its
+    root-owned helper, and say how it stands (``{state, detail}``).
+
+    Both files are written from the text this module carries
+    (:data:`EARLY_HELPER_TEXT`, :data:`EARLY_UNIT_TEXT`), never read from a
+    file in the code tree, and kept current on later boots. The helper is
+    self-contained and reads only root-owned records, so the unit never runs
+    the satellite account's code. Enabled with ``systemctl --no-reload
+    enable`` the first time only (:data:`EARLY_UNIT_MARKER` says it was):
+    an operator who disabled or masked it afterwards is left alone.
+    ``allowed`` False (a manual run on a hand-built card without
+    ``--install-early-unit``) installs nothing."""
+    unit_dir = unit_dir or SYSTEMD_DIR
+    marker = marker or EARLY_UNIT_MARKER
+    if not allowed:
+        return {"state": "not_installed",
+                "detail": "early rename unit not installed: hand-built card (no "
+                          "domovoi-provisioning.service; a manual run adds it with "
+                          "--install-early-unit)"}
+    state = early_unit_state(unit_dir, marker)
+    if state == "masked":
+        # Said in the status (early_unit), not as a skipped setting.
+        report.same(f"{EARLY_UNIT_NAME} is masked; left alone")
+        return {"state": "masked", "detail": "early rename unit masked by the operator; left alone"}
+    for directory, name, text, mode in (
+        (helper_dir or HELPER_DIR, EARLY_HELPER_NAME, EARLY_HELPER_TEXT, 0o755),
+        (unit_file_dir or UNIT_FILE_DIR, EARLY_UNIT_NAME, EARLY_UNIT_TEXT, 0o644),
+    ):
+        if not _install_root_file(directory, name, text.encode("utf-8"), mode, report):
+            return {"state": "error", "detail": f"could not install the early rename unit's {name}"}
+    if state == "disabled":
+        report.same(f"{EARLY_UNIT_NAME} was disabled by the operator; not re-enabled")
+        return {"state": "disabled",
+                "detail": "early rename unit disabled by the operator; left alone "
+                          "(systemctl enable domovoi-hostname turns it back on)"}
+    if state == "absent":
+        rc, detail = _call(run, ["systemctl", "--no-reload", "enable", EARLY_UNIT_NAME])
+        if rc != 0:
+            report.error(f"enable {EARLY_UNIT_NAME}: {detail}")
+            return {"state": "error", "detail": f"could not enable the early rename unit: {detail}"[:200]}
         report.change(f"enabled {EARLY_UNIT_NAME}: from the next boot the router learns this "
                       "unit's name from its first DHCP request")
-    else:
-        report.error(f"enable {EARLY_UNIT_NAME}: {detail}")
+    if not os.path.lexists(marker):
+        try:
+            marker.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            safe_write(marker.parent, marker.name, b"enabled once by satellite/net_settings.py\n")
+        except OSError as e:
+            report.error(f"record that {EARLY_UNIT_NAME} was enabled: {e}")
+    if state == "absent":
+        return {"state": "installed", "detail": "early rename unit installed; it runs from the next boot"}
+    return {"state": "enabled", "detail": ""}
+
+
+def _early_unit_result(run: Callable[..., Any]) -> str:
+    """How the early unit ended this boot, as systemd says it."""
+    out = _stdout(run, ["systemctl", "show", "-p", "Result", "-p", "ExecMainStatus",
+                        EARLY_UNIT_NAME]) or ""
+    facts = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    if not facts:
+        return "systemd did not say how it ended"
+    return f"Result={facts.get('Result', '?')}, status {facts.get('ExecMainStatus', '?')}"
 
 
 def _early_this_boot(path: Path, boot_id: str | None) -> dict[str, Any] | None:
@@ -746,6 +1105,26 @@ def _early_this_boot(path: Path, boot_id: str | None) -> dict[str, Any] | None:
     if doc is None or boot_id is None or doc.get("boot_id") != boot_id:
         return None
     return doc
+
+
+def _keep_target(report: Report, path: Path) -> None:
+    """The name the early helper may set at the next boot: the room's name
+    once this run confirmed it (with its record); otherwise none, so the
+    helper does nothing."""
+    try:
+        if report.confirmed and report.wanted:
+            data = (report.wanted + "\n").encode("utf-8")
+            try:
+                same = path.read_bytes() == data and not path.is_symlink()
+            except OSError:
+                same = False
+            if not same:
+                path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+                safe_write(path.parent, path.name, data)
+        elif os.path.lexists(path):
+            path.unlink()
+    except OSError as e:
+        report.error(f"record the name for the early rename unit: {e}")
 
 
 _BOOT_ID_NOW = object()
@@ -767,9 +1146,12 @@ def apply(
     link_wait: float = _LINK_WAIT_SEC,
     server_pin: Callable[[Report], None] | None = None,
     early_report_path: Path | None = None,
+    target_path: Path | None = None,
     unit_dir: Path | None = None,
-    unit_template: Path | None = None,
-    home: Path | str | None = None,
+    unit_file_dir: Path | None = None,
+    helper_dir: Path | None = None,
+    early_marker: Path | None = None,
+    install_early: bool | None = None,
     boot_id: Any = _BOOT_ID_NOW,
 ) -> dict[str, Any]:
     """Apply the settings; return (and record) what changed. Never raises:
@@ -777,38 +1159,53 @@ def apply(
 
     The host name goes FIRST, before anything waits for NetworkManager: at
     boot NetworkManager is starting beside this step and asks DHCP as soon
-    as the Wi-Fi joins. When the before-the-network unit already renamed
-    the unit this boot, its record is folded in here. When this run is the
-    one that renames it (the first boot after the upgrade, before that unit
-    existed), DHCP is asked once more under the new name."""
+    as the Wi-Fi joins. When the early unit already renamed the unit this
+    boot, its record is folded in here. When this run is the one that
+    renames it (the first boot after the upgrade, or after a room rename),
+    DHCP is asked once more under the new name.
+
+    ``install_early``: whether this run may install the early unit; None is
+    yes for the boot step and setup (``domovoi-provisioning.service``) and
+    no for a manual run (``--install-early-unit`` says yes)."""
     report = Report()
     hostname: str | None = None
     boot = _boot_id() if boot_id is _BOOT_ID_NOW else boot_id
+    unit_dir = unit_dir or SYSTEMD_DIR
+    early_marker = early_marker or EARLY_UNIT_MARKER
     renamed_before: list[str] | None = None
+    early_errors: list[str] = []
+    early_failure: str | None = None
+    early_was = early_unit_state(unit_dir, early_marker)
     if when == "boot":
         early = _early_this_boot(early_report_path or EARLY_REPORT_PATH, boot)
         if early is not None:
             for what in early.get("changed") or []:
-                report.change(f"before the network started: {what}")
+                if isinstance(what, str):
+                    report.change(f"before the network started: {what}")
             renamed_before = early.get("renamed") if isinstance(early.get("renamed"), list) else None
             early_errors = [e for e in early.get("errors") or [] if isinstance(e, str)]
-        else:
-            early_errors = []
-    else:
-        early_errors = []
+        elif early_was == "enabled":
+            # Enabled, ordered before this step, and no record for this boot:
+            # it failed to start (203: the helper is missing or not
+            # executable) or timed out. Said, not quietly made up for.
+            early_failure = (f"the early rename unit left no record this boot "
+                             f"({_early_unit_result(run)}); the name was checked after the "
+                             "network started instead")
     try:
         errors_before = len(report.errors)
         hostname = set_hostname(room_id, run, report,
                                 hostname_path=hostname_path, hosts_path=hosts_path,
                                 record_path=record_path, suffix=suffix, restart_avahi=False)
+        repaired = report.confirmed and len(report.errors) == errors_before
         for what in early_errors:
-            # Moot when this run managed what the early one could not.
-            if len(report.errors) > errors_before:
-                report.error(f"before the network started: {what}")
+            if repaired:
+                report.same(f"before the network started, could not: {what}; this step then "
+                            f"confirmed {report.wanted!r} and its record")
             else:
-                report.same(f"before the network started, could not: {what} (done here instead)")
+                report.error(f"before the network started: {what}")
     except Exception as e:  # noqa: BLE001 — never take the boot down
         report.error(f"host name: unexpected failure: {e!r}")
+    _keep_target(report, target_path or HOSTNAME_TARGET)
     renamed_now = report.renamed
     try:
         nm = nmcli if nmcli is not None else shutil.which("nmcli")
@@ -839,10 +1236,31 @@ def apply(
             restart_avahi_for((renamed_now or renamed_before)[1], run, report)
         except Exception as e:  # noqa: BLE001
             report.error(f"avahi: unexpected failure: {e!r}")
+    allowed = when in ("boot", "setup") if install_early is None else bool(install_early)
     try:
-        ensure_early_unit(run, report, template=unit_template, unit_dir=unit_dir, home=home)
+        if not allowed and when == "manual" and boot_step_unit_state() == "enabled":
+            # A prepared card run by hand: the boot step looks after it.
+            early_unit = {
+                "enabled": {"state": "enabled", "detail": ""},
+                "masked": {"state": "masked",
+                           "detail": "early rename unit masked by the operator; left alone"},
+                "disabled": {"state": "disabled",
+                             "detail": "early rename unit disabled by the operator; left alone"},
+            }.get(early_was, {"state": "not_installed",
+                              "detail": "early rename unit not installed yet: the boot step "
+                                        "installs it at the next boot"})
+        else:
+            early_unit = ensure_early_unit(run, report, allowed=allowed, unit_dir=unit_dir,
+                                           unit_file_dir=unit_file_dir, helper_dir=helper_dir,
+                                           marker=early_marker)
     except Exception as e:  # noqa: BLE001
         report.error(f"{EARLY_UNIT_NAME}: unexpected failure: {e!r}")
+        early_unit = {"state": "error", "detail": f"early rename unit: unexpected failure: {e!r}"[:200]}
+    if early_failure and early_unit.get("state") == "enabled":
+        early_unit = {"state": "failed", "detail": early_failure[:200]}
+    elif early_errors and not report.confirmed and early_unit.get("state") == "enabled":
+        early_unit = {"state": "failed",
+                      "detail": f"the early rename unit could not: {early_errors[0]}"[:200]}
     if server_pin is not None:
         try:
             server_pin(report)
@@ -852,37 +1270,10 @@ def apply(
         report.renamed = renamed_before
     doc = report.document(room_id=room_id, hostname=hostname, when=when)
     doc["boot_id"] = boot
+    doc["early_unit"] = early_unit
     write_report(doc, report_path or REPORT_PATH)
     if not report.changed and not report.errors:
         log.info("network settings v%d already in place; nothing changed", NET_SETTINGS_VERSION)
-    return doc
-
-
-def apply_before_network(
-    room_id: str | None,
-    *,
-    run: Callable[..., Any] = subprocess.run,
-    report_path: Path | None = None,
-    hostname_path: Path | None = None,
-    hosts_path: Path | None = None,
-    record_path: Path | None = None,
-    suffix: str | None = None,
-    hostnamectl_timeout: float = _EARLY_HOSTNAMECTL_SEC,
-) -> dict[str, Any]:
-    """The host name alone, before NetworkManager starts
-    (``domovoi-hostname.service``): nothing here waits for or asks the
-    network, restarts a unit, or raises. Recorded in
-    :data:`EARLY_REPORT_PATH` for the boot step to fold into its own."""
-    report = Report()
-    hostname: str | None = None
-    try:
-        hostname = set_hostname(room_id, run, report, hostname_path=hostname_path,
-                                hosts_path=hosts_path, record_path=record_path, suffix=suffix,
-                                hostnamectl_timeout=hostnamectl_timeout, restart_avahi=False)
-    except Exception as e:  # noqa: BLE001
-        report.error(f"unexpected failure: {e!r}")
-    doc = report.document(room_id=room_id, hostname=hostname, when="before-network")
-    write_report(doc, report_path or EARLY_REPORT_PATH)
     return doc
 
 
@@ -1093,6 +1484,10 @@ def assess(report: dict[str, Any] | None, *, unit_state: str, boot_id: str | Non
     state, detail = _outcome(report)
     status["state"] = state
     status["detail"] = _cut(detail)
+    early = report.get("early_unit") if isinstance(report.get("early_unit"), dict) else {}
+    if early.get("state") in ("installed", "not_installed", "disabled", "masked", "failed", "error"):
+        note = early.get("detail") if isinstance(early.get("detail"), str) else ""
+        status["early"] = _cut(note or f"early rename unit: {early['state']}")
     if state == "failed":
         errors = _strings(report, "errors")
         return status, (
@@ -1115,27 +1510,19 @@ def main(argv: list[str] | None = None) -> int:
     """``sudo ~/satellite-venv/bin/python -m satellite.net_settings`` — the
     same step by hand, for a unit without ``domovoi-provisioning.service``.
 
-    ``--before-network`` is the host name alone, as
-    ``domovoi-hostname.service`` runs it before NetworkManager starts. It
-    always exits 0: NetworkManager starts after it either way, and what it
-    could not do is in its record, which the boot step reports."""
+    It installs no boot unit unless asked: ``--install-early-unit`` adds
+    ``domovoi-hostname.service`` (the host name before the network, from a
+    root-owned helper) on a hand-built card."""
     args = list(sys.argv[1:] if argv is None else argv)
-    early = "--before-network" in args
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     if sys.platform != "linux":
         log.error("this only runs on the satellite itself")
-        return 0 if early else 2
+        return 2
     if hasattr(os, "geteuid") and os.geteuid() != 0:
         log.error("run it as root (sudo): it changes the host name and NetworkManager profiles")
-        return 0 if early else 2
+        return 2
     room = read_room_id(config_path())
-    if early:
-        try:
-            apply_before_network(room)
-        except Exception as e:  # noqa: BLE001 — never hold the network up
-            log.warning("host name before the network: %r", e)
-        return 0
-    doc = apply(room, when="manual")
+    doc = apply(room, when="manual", install_early=True if "--install-early-unit" in args else None)
     print(json.dumps(doc, indent=1))
     return 1 if doc.get("errors") else 0
 

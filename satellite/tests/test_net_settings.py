@@ -51,6 +51,9 @@ class FakeHost:
         self.dhcp_names: list[str] = []
         self.unit_dir = unit_dir
         self.enable_ok = True
+        self.hostname_ok = True
+        self.kws: list[dict] = []
+        self.unit_result = "Result=success\nExecMainStatus=0\n"
 
     def ok(self, argv, out=""):
         return subprocess.CompletedProcess(argv, 0, out, "")
@@ -61,6 +64,7 @@ class FakeHost:
     def __call__(self, argv, **kw):
         argv = list(argv)
         self.calls.append(argv)
+        self.kws.append(kw)
         j = " ".join(argv)
         if argv[0].endswith("nmcli"):
             if "GENERAL.STATE,GENERAL.CONNECTION" in j:
@@ -103,12 +107,14 @@ class FakeHost:
             self.hostname_path.write_text(argv[-1] + "\n", encoding="utf-8")
             return self.ok(argv)
         if argv[0] == "hostname":
-            return self.ok(argv)
+            return self.ok(argv) if self.hostname_ok else self.fail(argv, 1, "hostname: you must be root")
         if argv[0] == "systemctl":
             if "is-active" in argv:
                 return self.ok(argv) if self.avahi_active else self.fail(argv, 3)
             if "try-restart" in argv:
                 return self.ok(argv)
+            if argv[1] == "show":
+                return self.ok(argv, self.unit_result)
             if "enable" in argv:
                 if not self.enable_ok:
                     return self.fail(argv, 1, "Failed to enable unit")
@@ -145,18 +151,17 @@ def host(tmp_path):
         "hostname_path": hostname, "hosts_path": hosts,
         "report_path": tmp_path / "home" / ".domovoi" / "net-settings.json",
         "early_report_path": tmp_path / "state" / "net-settings-early.json",
+        "target_path": tmp_path / "state" / "hostname-target",
         "unit_dir": units,
+        "unit_file_dir": tmp_path / "unit-files",
+        "helper_dir": tmp_path / "usr-local-lib-domovoi",
+        "early_marker": tmp_path / "state" / "early-unit-enabled",
     }
     return fake
 
 
-#: Where the satellite account lives in these tests (rendered into the unit).
-SAT_HOME = "/home/kamron"
-
-
 def _apply(fake, room="kitchen", **kw):
     kw.setdefault("suffix", "")
-    kw.setdefault("home", SAT_HOME)
     kw.setdefault("boot_id", "boot-1")
     kw.setdefault("link_wait", 0.0)
     return ns.apply(room, run=fake, nmcli="/usr/bin/nmcli", sleep=lambda s: None,
@@ -560,8 +565,141 @@ def test_the_boot_step_includes_the_record_and_setup_does_not(monkeypatch):
 # On the four real satellites the rename landed after NetworkManager had
 # already asked DHCP as `raspberrypi`; the router showed the new name only
 # after a second reboot. Now: the host name first, a before-the-network
-# unit for every later boot, and one DHCP re-ask when the boot step itself
-# is the one that renamed.
+# unit running a root-owned helper for every later boot, and one DHCP
+# re-ask when the boot step itself is the one that renamed.
+
+
+def _helper():
+    """The early helper, as root installs it: the text this module carries,
+    run as its own program (it imports nothing from `satellite`)."""
+    g = {"__name__": "domovoi_set_hostname"}
+    exec(compile(ns.EARLY_HELPER_TEXT, "set-hostname", "exec"), g)
+    return g
+
+
+def _root(tmp_path, *, hostname="raspberrypi", target="domovoi-kitchen", record=None):
+    """A root file system for the helper: /etc/hostname, /etc/hosts and
+    root's state directory."""
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    (root / "var" / "lib" / "domovoi").mkdir(parents=True)
+    (root / "etc" / "hostname").write_text(hostname + "\n", encoding="utf-8")
+    (root / "etc" / "hosts").write_text(STOCK_HOSTS, encoding="utf-8")
+    if target is not None:
+        (root / "var" / "lib" / "domovoi" / "hostname-target").write_text(target + "\n", encoding="utf-8")
+    if record is not None:
+        (root / "var" / "lib" / "domovoi" / "hostname-set").write_text(record + "\n", encoding="utf-8")
+    return root
+
+
+def _early_doc(root):
+    return json.loads((root / "var" / "lib" / "domovoi" / "net-settings-early.json").read_text())
+
+
+class Calls:
+    def __init__(self, hostnamectl_ok=False):
+        self.calls = []
+        self.kw = []
+        self.hostnamectl_ok = hostnamectl_ok
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        self.kw.append(kw)
+        ok = argv[0] != "hostnamectl" or self.hostnamectl_ok
+        return subprocess.CompletedProcess(argv, 0 if ok else 1, "", "" if ok else "Failed to connect to bus")
+
+
+def test_the_helper_sets_the_confirmed_name_before_the_network(tmp_path):
+    root = _root(tmp_path)
+    run = Calls()
+    assert _helper()["main"](["--root", str(root)], run=run) == 0
+    assert (root / "etc" / "hostname").read_text().strip() == "domovoi-kitchen"
+    assert "127.0.1.1\tdomovoi-kitchen" in (root / "etc" / "hosts").read_text()
+    assert (root / "var" / "lib" / "domovoi" / "hostname-set").read_text().strip() == "domovoi-kitchen"
+    doc = _early_doc(root)
+    assert doc["renamed"] == ["raspberrypi", "domovoi-kitchen"] and doc["errors"] == []
+    # hostnamectl on a short leash, then the file and `hostname` by hand.
+    assert [c[0] for c in run.calls] == ["hostnamectl", "hostname"]
+    assert all(kw["timeout"] <= 10 for kw in run.kw)
+    run.calls.clear()
+    _helper()["main"](["--root", str(root)], run=run)
+    assert run.calls == [] and _early_doc(root)["unchanged"] == ["host name already 'domovoi-kitchen'"]
+
+
+def test_the_helper_reads_nothing_of_the_satellite_account():
+    text = ns.EARLY_HELPER_TEXT
+    assert "config.toml" not in text and "/home" not in text and ".domovoi" not in text
+    for line in text.splitlines():
+        assert not line.startswith(("from satellite", "import satellite")), line
+    imports = {ln.split()[1] for ln in text.splitlines() if ln.startswith("import ")}
+    assert imports <= {"json", "os", "re", "socket", "stat", "subprocess", "sys", "time"}
+
+
+@pytest.mark.parametrize("target", ["", "Domovoi Kitchen", "-x", "a" * 64, "kitchen;rm -rf /", "domovoi_k"])
+def test_the_helper_refuses_a_target_that_is_not_a_host_name(tmp_path, target):
+    root = _root(tmp_path, target=target)
+    run = Calls()
+    _helper()["main"](["--root", str(root)], run=run)
+    assert run.calls == []
+    assert (root / "etc" / "hostname").read_text().strip() == "raspberrypi"
+
+
+def test_the_helper_never_renames_a_name_a_person_chose(tmp_path):
+    root = _root(tmp_path, hostname="kamrons-pi", record="domovoi-den")
+    run = Calls()
+    _helper()["main"](["--root", str(root)], run=run)
+    assert run.calls == [] and "looks chosen by a person" in _early_doc(root)["skipped"][0]
+    # ...but the name root set before follows the room.
+    root2 = _root(tmp_path / "b", hostname="domovoi-den", record="domovoi-den")
+    _helper()["main"](["--root", str(root2)], run=Calls())
+    assert (root2 / "etc" / "hostname").read_text().strip() == "domovoi-kitchen"
+
+
+def test_the_helper_without_a_target_does_nothing(tmp_path):
+    root = _root(tmp_path, target=None)
+    run = Calls()
+    assert _helper()["main"](["--root", str(root)], run=run) == 0
+    assert run.calls == [] and _early_doc(root)["skipped"]
+
+
+@needs_symlinks
+def test_the_helper_takes_its_target_only_from_a_root_owned_file_not_a_link(tmp_path):
+    root = _root(tmp_path, target=None)
+    elsewhere = tmp_path / "planted"
+    elsewhere.write_text("domovoi-evil\n", encoding="utf-8")
+    (root / "var" / "lib" / "domovoi" / "hostname-target").symlink_to(elsewhere)
+    run = Calls()
+    _helper()["main"](["--root", str(root)], run=run)
+    assert run.calls == [] and (root / "etc" / "hostname").read_text().strip() == "raspberrypi"
+    # Writable by others: refused too.
+    target = root / "var" / "lib" / "domovoi" / "hostname-target"
+    target.unlink()
+    target.write_text("domovoi-kitchen\n", encoding="utf-8")
+    ns.os.chmod(target, 0o666)
+    _helper()["main"](["--root", str(root)], run=run)
+    assert run.calls == []
+
+
+def test_the_helper_never_fails_the_unit(tmp_path):
+    root = _root(tmp_path)
+    h = _helper()
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    h["rename"] = boom
+    assert h["main"](["--root", str(root)], run=Calls()) == 0
+    assert "unexpected failure" in _early_doc(root)["errors"][0]
+
+
+@pytest.mark.parametrize("text, old, new", [
+    (STOCK_HOSTS, "raspberrypi", "domovoi-kitchen"),
+    ("127.0.0.1 localhost\n", "raspberrypi", "domovoi-kitchen"),
+    ("127.0.1.1 raspberrypi alias # mine\r\n", "raspberrypi", "domovoi-den"),
+    ("127.0.1.1\tdomovoi-den\n", "domovoi-den", "domovoi-den"),
+])
+def test_the_helper_edits_hosts_exactly_like_the_boot_step(text, old, new):
+    assert _helper()["rewrite_hosts"](text, old, new) == ns.rewrite_hosts(text, old, new)
 
 
 def test_the_host_name_goes_before_anything_waits_for_networkmanager(host):
@@ -571,20 +709,27 @@ def test_the_host_name_goes_before_anything_waits_for_networkmanager(host):
     assert rename < first_nmcli
 
 
+def test_the_boot_step_leaves_the_helper_its_target(host):
+    _apply(host)
+    assert host.paths["target_path"].read_text().strip() == "domovoi-kitchen"
+    # A name left alone (a person's): no target, so the helper does nothing.
+    host.paths["hostname_path"].write_text("kamrons-pi\n", encoding="utf-8")
+    _apply(host, room="den")
+    assert not host.paths["target_path"].exists()
+
+
+def _early_record(host, doc):
+    host.paths["early_report_path"].parent.mkdir(parents=True, exist_ok=True)
+    host.paths["early_report_path"].write_text(json.dumps(doc), encoding="utf-8")
+
+
 def test_a_rename_before_the_network_is_not_asked_again(host):
     """The early unit renamed the unit before NetworkManager started, so
     this boot's DHCP request already carried the name."""
-    early = ns.apply_before_network("kitchen", run=host, suffix="",
-                                    hostname_path=host.paths["hostname_path"],
-                                    hosts_path=host.paths["hosts_path"],
-                                    report_path=host.paths["early_report_path"])
-    assert early["renamed"] == ["raspberrypi", "domovoi-kitchen"]
-    # The early run touches nothing but the name: no NetworkManager, no units.
-    assert not [c for c in host.calls if c[0].endswith("nmcli") or c[0] == "systemctl"]
-    early_doc = json.loads(host.paths["early_report_path"].read_text())
-    early_doc["boot_id"] = "boot-1"
-    host.paths["early_report_path"].write_text(json.dumps(early_doc), encoding="utf-8")
-    host.calls.clear()
+    _enabled(host)
+    host.paths["hostname_path"].write_text("domovoi-kitchen\n", encoding="utf-8")
+    _early_record(host, {"boot_id": "boot-1", "renamed": ["raspberrypi", "domovoi-kitchen"],
+                         "changed": ["host name 'raspberrypi' -> 'domovoi-kitchen'"], "errors": []})
     doc = _apply(host)
     assert not host.ran("device", "modify")
     assert not host.ran("hostnamectl")
@@ -592,17 +737,67 @@ def test_a_rename_before_the_network_is_not_asked_again(host):
     assert "before the network started: host name 'raspberrypi' -> 'domovoi-kitchen'" in changed
     assert "avahi-daemon restarted" in changed, "mDNS still follows a rename made this boot"
     assert doc["renamed"] == ["raspberrypi", "domovoi-kitchen"]
+    assert doc["early_unit"]["state"] == "enabled"
 
 
 def test_an_early_record_from_another_boot_is_not_folded_in(host):
-    host.paths["early_report_path"].parent.mkdir(parents=True, exist_ok=True)
-    host.paths["early_report_path"].write_text(json.dumps({
-        "boot_id": "boot-0", "changed": ["host name 'x' -> 'y'"], "renamed": ["x", "y"], "errors": [],
-    }), encoding="utf-8")
+    _early_record(host, {"boot_id": "boot-0", "changed": ["host name 'x' -> 'y'"],
+                         "renamed": ["x", "y"], "errors": []})
     host.paths["hostname_path"].write_text("domovoi-kitchen\n", encoding="utf-8")
     doc = _apply(host)
     assert not any(c.startswith("before the network started") for c in doc["changed"])
     assert not host.ran("try-restart")
+
+
+def test_an_early_error_the_boot_step_repaired_is_said_as_such(host):
+    """M25: the early run could not record the name; the boot step then
+    confirmed the name AND wrote its record, so nothing is left broken."""
+    _enabled(host)
+    host.paths["hostname_path"].write_text("domovoi-kitchen\n", encoding="utf-8")
+    _early_record(host, {"boot_id": "boot-1", "renamed": ["raspberrypi", "domovoi-kitchen"],
+                         "changed": ["host name 'raspberrypi' -> 'domovoi-kitchen'"],
+                         "errors": ["record the host name this step set: read-only"]})
+    doc = _apply(host)
+    assert doc["errors"] == []
+    assert any("could not: record the host name" in u and "confirmed 'domovoi-kitchen' and its record" in u
+               for u in doc["unchanged"])
+    assert ns.HOSTNAME_RECORD.read_text().strip() == "domovoi-kitchen", "the lost record is rewritten"
+    assert any("recorded 'domovoi-kitchen'" in c for c in doc["changed"])
+
+
+def test_an_early_error_the_boot_step_could_not_repair_stays_an_error(host, tmp_path):
+    """M25 and the reviewer's case: the record cannot be written at all.
+    Not "done here instead": failed, and a later room rename would be
+    refused as a person's name."""
+    _enabled(host)
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    host.paths["hostname_path"].write_text("domovoi-kitchen\n", encoding="utf-8")
+    _early_record(host, {"boot_id": "boot-1", "renamed": ["raspberrypi", "domovoi-kitchen"],
+                         "changed": ["host name 'raspberrypi' -> 'domovoi-kitchen'"],
+                         "errors": ["record the host name this step set: Not a directory"]})
+    doc = _apply(host, record_path=blocker / "hostname-set")
+    assert "before the network started: record the host name this step set: Not a directory" in doc["errors"]
+    assert not any("done here instead" in u or "confirmed" in u for u in doc["unchanged"])
+    status, why = ns.assess(doc, unit_state="enabled", boot_id="boot-1", uptime=900.0)
+    assert status["state"] == "failed" and why
+    assert doc["early_unit"]["state"] == "failed"
+    assert not host.paths["target_path"].exists(), "no target without the record"
+
+
+def test_an_early_unit_that_failed_is_said(host):
+    """Enabled, ordered before the boot step, and no record this boot: it
+    failed to start (203) or timed out. Said in the status, not quietly
+    made up for by the late rename."""
+    _enabled(host)
+    host.unit_result = "Result=exit-code\nExecMainStatus=203\n"
+    doc = _apply(host)
+    assert doc["early_unit"]["state"] == "failed"
+    assert "Result=exit-code, status 203" in doc["early_unit"]["detail"]
+    status, _ = ns.assess(doc, unit_state="enabled", boot_id="boot-1", uptime=900.0)
+    assert "left no record this boot" in status["early"]
+    # The name is still put right, after the network.
+    assert host.dhcp_names == ["domovoi-kitchen"]
 
 
 def test_dhcp_is_asked_again_only_on_the_house_network(host):
@@ -630,7 +825,7 @@ def test_a_link_still_coming_up_is_waited_for(host):
         return real(argv, **kw)
 
     doc = ns.apply("kitchen", run=run, nmcli="/usr/bin/nmcli", sleep=lambda s: None, nm_wait=0.0,
-                   suffix="", home=SAT_HOME, boot_id="boot-1", link_wait=60.0, **host.paths)
+                   suffix="", boot_id="boot-1", link_wait=60.0, **host.paths)
     assert host.dhcp_names == ["domovoi-kitchen"]
     assert doc["errors"] == []
 
@@ -655,11 +850,21 @@ def test_no_rename_no_second_dhcp_request(host):
     assert host.dhcp_names == []
 
 
+def test_a_failed_hostname_fallback_is_not_called_a_rename(host):
+    """hostnamectl unreachable AND `hostname` failing: /etc/hostname has the
+    name, the running name does not until the next boot."""
+    host.hostnamectl_ok = False
+    host.hostname_ok = False
+    doc = _apply(host)
+    assert not any(c.startswith("host name 'raspberrypi' ->") for c in doc["changed"])
+    assert any("names 'domovoi-kitchen' (was 'raspberrypi')" in c for c in doc["changed"])
+    assert any("set the running host name to 'domovoi-kitchen'" in e for e in doc["errors"])
+    assert [kw.get("timeout") for c, kw in zip(host.calls, host.kws) if c[0] == "hostname"] == [5.0]
+    # The router still learns it: the re-ask names it explicitly.
+    assert host.dhcp_names == ["domovoi-kitchen"]
+
+
 # ─── the before-the-network unit ──────────────────────────────────────────
-
-
-def _unit_text() -> str:
-    return ns.EARLY_UNIT_TEMPLATE.read_text(encoding="utf-8")
 
 
 def _directives(text: str) -> dict[str, list[str]]:
@@ -673,113 +878,165 @@ def _directives(text: str) -> dict[str, list[str]]:
     return out
 
 
-def test_the_unit_runs_the_name_alone_before_networkmanager():
-    d = _directives(_unit_text())
+def test_the_unit_runs_the_root_owned_helper_never_the_venv():
+    d = _directives(ns.EARLY_UNIT_TEXT)
+    assert d["ExecStart"] == ["/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname"]
+    # The path the boot step installs the helper at (the module's own
+    # constant is moved into tmp by the tests' conftest).
+    assert d["ExecStart"][0].endswith("/usr/local/lib/domovoi/" + ns.EARLY_HELPER_NAME)
+    source = ns.Path(ns.__file__).read_text(encoding="utf-8")
+    assert 'HELPER_DIR = Path("/usr/local/lib/domovoi")' in source
+    assert 'UNIT_FILE_DIR = Path("/usr/local/lib/systemd/system")' in source
+    text = ns.EARLY_UNIT_TEXT
+    assert "satellite-venv" not in text and "@HOME@" not in text and "/home" not in text
+    assert "WorkingDirectory" not in d and "Environment" not in d
+    assert d["ProtectHome"] == ["yes"], "the account's home is not even visible to it"
     before = " ".join(d["Before"]).split()
     assert {"NetworkManager.service", "network-pre.target", "domovoi-provisioning.service"} <= set(before)
     assert d["Wants"] == ["network-pre.target"]
     assert d["Type"] == ["oneshot"], "NetworkManager waits for a oneshot to FINISH"
     assert d["User"] == ["root"]
-    assert d["ExecStart"] == ["@HOME@/satellite-venv/bin/python -m satellite.net_settings --before-network"]
-    assert d["WorkingDirectory"] == ["@HOME@/domovoi"]
-    assert d["Environment"] == ["HOME=@HOME@"]
-    assert d["ConditionPathExists"] == ["@HOME@/.domovoi/config.toml"]
     assert 0 < int(d["TimeoutStartSec"][0]) <= 30
     assert d["WantedBy"] == ["multi-user.target"]
-    # Nothing that could fail the network: no Requires/BindsTo on it.
     assert "Requires" not in d and "BindsTo" not in d and "RequiredBy" not in d
+    assert not (ns.Path(ns.__file__).parent / "scripts" / ns.EARLY_UNIT_NAME).exists(), \
+        "no copy in the code tree for anyone to install from"
 
 
-def test_the_unit_is_installed_rendered_and_enabled_once(host):
+def _enable(host, **kw):
     report = ns.Report()
-    ns.ensure_early_unit(host, report, unit_dir=host.unit_dir, home=SAT_HOME)
-    unit = host.unit_dir / ns.EARLY_UNIT_NAME
-    assert unit.read_text(encoding="utf-8") == _unit_text().replace("@HOME@", SAT_HOME)
-    assert "@HOME@" not in unit.read_text(encoding="utf-8")
+    state = ns.ensure_early_unit(host, report, allowed=kw.pop("allowed", True), **_unit_paths(host), **kw)
+    return state, report
+
+
+def _unit_paths(host):
+    return {"unit_dir": host.paths["unit_dir"], "unit_file_dir": host.paths["unit_file_dir"],
+            "helper_dir": host.paths["helper_dir"], "marker": host.paths["early_marker"]}
+
+
+def _enabled(host):
+    """The early unit as a prepared card has it after its first boot step."""
+    _enable(host)
+    host.calls.clear()
+
+
+def test_the_unit_and_its_helper_are_installed_and_enabled_once(host):
+    state, report = _enable(host)
+    unit = host.paths["unit_file_dir"] / ns.EARLY_UNIT_NAME
+    helper = host.paths["helper_dir"] / ns.EARLY_HELPER_NAME
+    assert unit.read_text(encoding="utf-8") == ns.EARLY_UNIT_TEXT
+    assert helper.read_text(encoding="utf-8") == ns.EARLY_HELPER_TEXT
+    if ns.os.name == "posix":
+        assert ns.stat.S_IMODE(helper.stat().st_mode) == 0o755
+        assert ns.stat.S_IMODE(unit.stat().st_mode) == 0o644
     assert [c for c in host.calls if c[0] == "systemctl"] == [
         ["systemctl", "--no-reload", "enable", ns.EARLY_UNIT_NAME]]
-    assert len(report.changed) == 2 and report.errors == []
+    assert state["state"] == "installed" and report.errors == []
+    assert host.paths["early_marker"].exists()
     host.calls.clear()
-    again = ns.Report()
-    ns.ensure_early_unit(host, again, unit_dir=host.unit_dir, home=SAT_HOME)
-    assert again.changed == [] and host.calls == []
+    state, again = _enable(host)
+    assert again.changed == [] and host.calls == [] and state["state"] == "enabled"
 
 
-def test_a_changed_template_updates_the_unit(host, tmp_path):
-    ns.ensure_early_unit(host, ns.Report(), unit_dir=host.unit_dir, home=SAT_HOME)
-    newer = tmp_path / "domovoi-hostname.service"
-    newer.write_text(_unit_text() + "# a later version\n", encoding="utf-8")
-    report = ns.Report()
-    ns.ensure_early_unit(host, report, unit_dir=host.unit_dir, home=SAT_HOME, template=newer)
-    assert any(c.startswith("updated") for c in report.changed)
-    assert (host.unit_dir / ns.EARLY_UNIT_NAME).read_text(encoding="utf-8").endswith("# a later version\n")
+def test_an_operator_disable_is_respected(host):
+    """`systemctl disable domovoi-hostname` removes the enable link: not
+    re-enabled at the next boot, and the status says so."""
+    _enable(host)
+    (host.paths["unit_dir"] / "multi-user.target.wants" / ns.EARLY_UNIT_NAME).unlink()
+    host.calls.clear()
+    state, report = _enable(host)
+    assert not [c for c in host.calls if c[0] == "systemctl"]
+    assert state["state"] == "disabled" and "disabled by the operator" in state["detail"]
+    doc = _apply(host)
+    status, _ = ns.assess(doc, unit_state="enabled", boot_id="boot-1", uptime=900.0)
+    assert "early rename unit disabled by the operator" in status["early"]
+    assert status["state"] != "skipped", "the operator's choice is not a skipped setting"
 
 
-@pytest.mark.parametrize("home", [None, "relative/home", "/home/a b", "/home/x\nExecStartPre=/bin/sh",
-                                  "/home/../etc"])
-def test_no_unit_without_a_home_it_can_trust(host, monkeypatch, home):
-    monkeypatch.setattr(ns, "satellite_home", lambda: None)
-    report = ns.Report()
-    ns.ensure_early_unit(host, report, unit_dir=host.unit_dir, home=home)
-    assert not (host.unit_dir / ns.EARLY_UNIT_NAME).exists()
-    assert report.skipped and report.errors == []
+@needs_symlinks
+def test_an_operator_mask_is_respected(host):
+    """`systemctl mask domovoi-hostname`: a link to /dev/null in
+    /etc/systemd/system. Left exactly as it is."""
+    _enable(host)
+    mask = host.paths["unit_dir"] / ns.EARLY_UNIT_NAME
+    mask.symlink_to("/dev/null")
+    (host.paths["unit_dir"] / "multi-user.target.wants" / ns.EARLY_UNIT_NAME).unlink()
+    helper = host.paths["helper_dir"] / ns.EARLY_HELPER_NAME
+    helper.write_text("# an older helper\n", encoding="utf-8")
+    host.calls.clear()
+    state, report = _enable(host)
+    assert ns.os.readlink(mask) == "/dev/null"
+    assert helper.read_text(encoding="utf-8") == "# an older helper\n", "nothing touched"
+    assert not [c for c in host.calls if c[0] == "systemctl"]
+    assert state["state"] == "masked" and "masked by the operator" in state["detail"]
+
+
+def test_a_newer_text_updates_the_files_but_never_the_operators_choice(host, monkeypatch):
+    _enable(host)
+    monkeypatch.setattr(ns, "EARLY_HELPER_TEXT", ns.EARLY_HELPER_TEXT + "# later\n")
+    host.calls.clear()
+    state, report = _enable(host)
+    assert any(c.startswith("updated") and ns.EARLY_HELPER_NAME in c for c in report.changed)
+    assert (host.paths["helper_dir"] / ns.EARLY_HELPER_NAME).read_text().endswith("# later\n")
+    assert host.calls == [] and state["state"] == "enabled"
 
 
 def test_an_enable_that_fails_is_an_error(host):
     host.enable_ok = False
-    report = ns.Report()
-    ns.ensure_early_unit(host, report, unit_dir=host.unit_dir, home=SAT_HOME)
+    state, report = _enable(host)
     assert any("enable domovoi-hostname.service" in e for e in report.errors)
+    assert state["state"] == "error"
+    assert not host.paths["early_marker"].exists(), "tried again at the next boot"
 
 
 @needs_symlinks
-def test_a_link_planted_as_the_unit_is_replaced_not_followed(host, tmp_path):
+def test_a_link_planted_as_the_unit_or_helper_is_replaced_not_followed(host, tmp_path):
     target = tmp_path / "root-file"
     target.write_text("original\n", encoding="utf-8")
-    (host.unit_dir / ns.EARLY_UNIT_NAME).symlink_to(target)
-    report = ns.Report()
-    ns.ensure_early_unit(host, report, unit_dir=host.unit_dir, home=SAT_HOME)
+    for d, name in ((host.paths["unit_file_dir"], ns.EARLY_UNIT_NAME),
+                    (host.paths["helper_dir"], ns.EARLY_HELPER_NAME)):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).symlink_to(target)
+    _enable(host)
     assert target.read_text(encoding="utf-8") == "original\n"
-    assert not (host.unit_dir / ns.EARLY_UNIT_NAME).is_symlink()
+    assert not (host.paths["unit_file_dir"] / ns.EARLY_UNIT_NAME).is_symlink()
+    assert not (host.paths["helper_dir"] / ns.EARLY_HELPER_NAME).is_symlink()
 
 
-def test_the_early_run_never_holds_the_network_up(monkeypatch):
-    """Off a satellite, or not root: exit 0, so the unit never 'fails'."""
-    monkeypatch.setattr(ns, "apply_before_network", lambda *a, **k: pytest.fail("ran"))
-    monkeypatch.setattr(ns.sys, "platform", "win32")
-    assert ns.main(["--before-network"]) == 0
-    monkeypatch.setattr(ns.sys, "platform", "linux")
-    monkeypatch.setattr(ns.os, "geteuid", lambda: 1000, raising=False)
-    assert ns.main(["--before-network"]) == 0
+def test_a_hand_built_unit_gets_no_new_root_boot_unit(host):
+    """The reviewer's case: no domovoi-provisioning.service, and the
+    documented manual `sudo python -m satellite.net_settings`. Before this
+    branch root ran nothing at boot on such a unit; it still does not,
+    unless asked. The status says why there is no early unit."""
+    doc = _apply(host, when="manual")
+    assert not (host.paths["unit_file_dir"] / ns.EARLY_UNIT_NAME).exists()
+    assert not (host.paths["helper_dir"] / ns.EARLY_HELPER_NAME).exists()
+    assert not host.ran("enable")
+    assert doc["early_unit"]["state"] == "not_installed"
+    status, why = ns.assess(doc, unit_state="missing", boot_id="boot-1", uptime=900.0)
+    assert status["early"].startswith("early rename unit not installed: hand-built card")
+    assert why is None
+    # Asked explicitly, it is installed.
+    doc = _apply(host, when="manual", install_early=True)
+    assert (host.paths["unit_file_dir"] / ns.EARLY_UNIT_NAME).exists()
+    assert doc["early_unit"]["state"] == "installed"
 
 
-def test_the_early_run_survives_its_own_failure(monkeypatch):
+def test_main_installs_the_early_unit_only_when_asked(monkeypatch):
+    seen = []
     monkeypatch.setattr(ns.sys, "platform", "linux")
     monkeypatch.setattr(ns.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(ns, "read_room_id", lambda *a: "kitchen")
-    monkeypatch.setattr(ns, "apply_before_network", lambda *a, **k: 1 / 0)
-    assert ns.main(["--before-network"]) == 0
-
-
-def test_the_early_run_gives_hostnamectl_a_short_leash(host):
-    seen = []
-    real = host.__call__
-
-    def run(argv, **kw):
-        if argv[0] == "hostnamectl":
-            seen.append(kw.get("timeout"))
-        return real(argv, **kw)
-
-    ns.apply_before_network("kitchen", run=run, suffix="",
-                            hostname_path=host.paths["hostname_path"],
-                            hosts_path=host.paths["hosts_path"],
-                            report_path=host.paths["early_report_path"])
-    assert seen and seen[0] <= 10
+    monkeypatch.setattr(ns, "apply", lambda room, **k: seen.append(k) or {"errors": []})
+    ns.main([])
+    ns.main(["--install-early-unit"])
+    assert [k["install_early"] for k in seen] == [None, True]
+    assert all(k["when"] == "manual" for k in seen)
 
 
 def test_a_manual_sudo_run_finds_the_satellite_home(tmp_path, monkeypatch):
-    """Under sudo $HOME is root's: the config and the unit's home come from
-    the account the code tree lives in."""
+    """Under sudo $HOME is root's: the config comes from the account the
+    code tree lives in."""
     sat = tmp_path / "sat"
     (sat / "satellite-venv").mkdir(parents=True)
     (sat / "domovoi" / "satellite").mkdir(parents=True)
@@ -834,6 +1091,33 @@ def test_right_after_boot_it_is_still_running_not_missing():
     assert status["state"] == "running" and why is None
     status, why = ns.assess(_doc(boot_id="b1"), unit_state="enabled", boot_id="b2", uptime=40.0)
     assert status["state"] == "running" and why is None
+
+
+def test_a_this_boot_record_from_an_older_version_is_not_run_not_running():
+    """M11: the step already ran THIS boot, at the older version (the code
+    arrived after it ran): even inside the grace window that is "not run"
+    with a reboot asked for, not "still running"."""
+    status, why = ns.assess(_doc(version=1, boot_id="b2"), unit_state="enabled",
+                            boot_id="b2", uptime=40.0)
+    assert status["state"] == "not_run" and why and "reboot" in why
+
+
+@pytest.mark.parametrize("early, note", [
+    ({"state": "enabled", "detail": ""}, None),
+    ({"state": "installed", "detail": "early rename unit installed; it runs from the next boot"},
+     "early rename unit installed"),
+    ({"state": "disabled", "detail": "early rename unit disabled by the operator; left alone"},
+     "disabled by the operator"),
+    ({"state": "failed", "detail": "the early rename unit left no record this boot (x)"}, "left no record"),
+    (None, None),
+])
+def test_the_early_unit_s_state_is_part_of_the_status(early, note):
+    doc = _doc(changed=["x"])
+    if early is not None:
+        doc["early_unit"] = early
+    status, why = ns.assess(doc, unit_state="enabled", boot_id="b1", uptime=900.0)
+    assert status.get("early") is None if note is None else note in status["early"]
+    assert why is None, "the early unit's state alone never asks for a reboot"
 
 
 def test_a_boot_where_it_did_not_run_says_so_without_a_reboot():
