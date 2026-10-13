@@ -21,17 +21,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.ui.theme.Domovoi
 
 /** One open-source part of the app and its licence. [notices]: asset
- *  paths of the licence texts the app carries for it (shown on tap). */
+ *  paths of the licence texts the app carries for it (shown on tap).
+ *  [assistantOnly]: downloaded by the on-device assistant, so not listed
+ *  where the assistant is not in this install. */
 internal data class OpenSourcePart(
     val name: String,
     val licence: String,
     val source: String,
     val note: String? = null,
     val notices: List<String> = emptyList(),
+    val assistantOnly: Boolean = false,
 )
 
 private const val SHERPA = "licences/sherpa-onnx"
@@ -71,10 +75,28 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
             "$SHERPA/simple-sentencepiece/LICENSE", "$SHERPA/kissfft/COPYING",
         ),
     ),
-    OpenSourcePart("LiteRT-LM 0.18.0", "Apache-2.0", "github.com/google-ai-edge/LiteRT-LM", "Runs the on-device language model."),
+    OpenSourcePart(LITERT_LM, "Apache-2.0", "github.com/google-ai-edge/LiteRT-LM", "Runs the on-device language model."),
 ) + ModelCatalog.assistant.map { m ->
-    OpenSourcePart(m.name, m.license, m.licenseUrl.removePrefix("https://"), "Downloaded by the on-device assistant's benchmark.")
+    OpenSourcePart(m.name, m.license, m.licenseUrl.removePrefix("https://"), "Downloaded by the on-device assistant's benchmark.",
+        assistantOnly = true)
 }
+
+private const val LITERT_LM = "LiteRT-LM 0.18.0"
+
+/** The card's list for this install. Without the on-device assistant (a
+ *  32-bit phone or APK, [AssistantSupport]) its downloads are left out, as
+ *  nothing downloads them; LiteRT-LM stays, as its Java part is in every
+ *  APK, and says it is not used here. */
+internal fun openSourceParts(assistant: Boolean): List<OpenSourcePart> =
+    if (assistant) {
+        OPEN_SOURCE_PARTS
+    } else {
+        OPEN_SOURCE_PARTS.filterNot { it.assistantOnly }.map { part ->
+            if (part.name != LITERT_LM) part else part.copy(
+                note = "Runs the on-device language model, on 64-bit phones only: not used on this one.",
+            )
+        }
+    }
 
 /** Settings → About: the open-source licences, a notice text on tap. */
 @Composable
@@ -83,7 +105,7 @@ internal fun LicencesCard() {
     var open by remember { mutableStateOf<String?>(null) }
     PanelCard("Open-source licences", "What this app is built from and what it downloads, with each licence.") {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OPEN_SOURCE_PARTS.forEach { part ->
+            openSourceParts(AssistantSupport.available).forEach { part ->
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(part.name, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
                     Text("${part.licence} · ${part.source}", style = MaterialTheme.typography.labelSmall,

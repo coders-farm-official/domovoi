@@ -7,6 +7,39 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+/*
+ * The processors (ABIs) the app carries native code for. Every native
+ * library has all four except LiteRT-LM, the on-device assistant's engine,
+ * which ships only 64-bit ones; so a 32-bit APK is the whole app without the
+ * on-device assistant, which hides itself there (assistant/AssistantSupport.kt).
+ *
+ *   arm64-v8a    64-bit phones: everything
+ *   armeabi-v7a  32-bit phones (old, budget, Android Go): no on-device assistant
+ *   x86_64       the emulator, x86 Chromebooks: everything
+ *   x86          the 32-bit emulator image: as armeabi-v7a
+ *
+ * - Default: one APK for arm64-v8a + x86_64, a phone and the emulator.
+ * - `-Pdomovoi.abis=<list>|all`: one APK for exactly those ABIs
+ *   (`-Pdomovoi.abis=arm64-v8a` is a phone-only APK about half the size; the
+ *   libraries are stored uncompressed).
+ * - `-Pdomovoi.apkPerAbi`: one APK per ABI, all four unless domovoi.abis
+ *   narrows them, as app-<abi>-<buildType>.apk; each carries only its own
+ *   ABI's libraries. What a GitHub release attaches.
+ * - An App Bundle (any `bundle*` task on the command line) carries all four
+ *   unless domovoi.abis says otherwise; Play splits it per ABI, so each phone
+ *   downloads only its own ABI's libraries (android/README.md, "ABIs and APKs").
+ * See docs/ANDROID_COMPATIBILITY.md.
+ */
+val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+val apkPerAbi = (findProperty("domovoi.apkPerAbi") as String?)?.let { it.trim() != "false" } ?: false
+val bundling = gradle.startParameter.taskNames.any { it.substringAfterLast(':').startsWith("bundle") }
+val appAbis: List<String> = (findProperty("domovoi.abis") as String?)?.trim()?.let { p ->
+    if (p == "all") allAbis else p.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+} ?: if (apkPerAbi || bundling) allAbis else listOf("arm64-v8a", "x86_64")
+appAbis.forEach { abi ->
+    if (abi !in allAbis) throw GradleException("domovoi.abis: unknown ABI '$abi' (one of ${allAbis.joinToString()})")
+}
+
 android {
     namespace = "com.domovoi.app"
     compileSdk = 35
@@ -17,15 +50,26 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
-        // The on-device assistant's native libraries: LiteRT-LM ships only
-        // arm64-v8a and x86_64, so a 32-bit build could not load it.
-        // arm64-v8a is every phone it targets; x86_64 is the emulator.
-        // `-Pdomovoi.abis=arm64-v8a` builds a phone-only APK about half
-        // the size (the libraries are stored uncompressed).
-        ndk {
-            abiFilters += (findProperty("domovoi.abis") as String?)?.split(',')?.map { it.trim() }
-                ?: listOf("arm64-v8a", "x86_64")
+        // The ABIs above. One APK per ABI filters by splits (below)
+        // instead of here.
+        if (!apkPerAbi) {
+            ndk { abiFilters += appAbis }
         }
+    }
+
+    splits {
+        abi {
+            isEnable = apkPerAbi
+            reset()
+            include(*appAbis.toTypedArray())
+            isUniversalApk = false
+        }
+    }
+    bundle {
+        // Play makes one APK per ABI from the bundle (the default, stated):
+        // a 32-bit phone gets armeabi-v7a's libraries, which hold no
+        // LiteRT-LM, and a 64-bit phone arm64-v8a's.
+        abi { enableSplit = true }
     }
 
     buildTypes {

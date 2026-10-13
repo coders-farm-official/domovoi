@@ -3,6 +3,7 @@ package com.domovoi.app.ui.screens.settings
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -67,11 +68,7 @@ internal fun ProblemReportsCard() {
 
     fun report(): String = renderReport(problems, header).take(MAX_SHARE_CHARS)
 
-    PanelCard(
-        "Problem reports",
-        "Crashes, freezes and \"not responding\" closes on this phone. They stay on the " +
-            "phone: nothing is sent anywhere unless you copy or share it.",
-    ) {
+    PanelCard("Problem reports", problemReportsIntro(Build.VERSION.SDK_INT)) {
         if (problems.isEmpty()) {
             Text(
                 "Nothing recorded. If the app freezes or closes unexpectedly, it shows up here.",
@@ -182,3 +179,12 @@ private fun share(context: Context, text: String): Boolean {
 
 /** Kept well under the Binder limit an Intent extra travels through. */
 private const val MAX_SHARE_CHARS = 100_000
+
+/** What the card records on this Android version: "not responding" closes
+ *  come from Android's exit history, which exists from Android 11 (API 30;
+ *  diagnostics/Diagnostics.kt), so older phones record crashes and freezes
+ *  only, and the card does not promise more. */
+internal fun problemReportsIntro(sdk: Int): String =
+    (if (sdk >= Build.VERSION_CODES.R) "Crashes, freezes and \"not responding\" closes on this phone. "
+    else "Crashes and freezes on this phone (Android 11 and later also record \"not responding\" closes). ") +
+        "They stay on the phone: nothing is sent anywhere unless you copy or share it."

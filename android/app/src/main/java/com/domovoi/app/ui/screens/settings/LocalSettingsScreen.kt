@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCard
 import com.domovoi.app.ui.theme.Domovoi
 
@@ -35,8 +36,9 @@ import com.domovoi.app.ui.theme.Domovoi
  * shell has no Settings route, so a gear in its top bar
  * ([LocalSettingsButton]) opens this instead. It holds only what needs no
  * server — the voice, the problem reports, the on-device assistant's
- * benchmark and the licences — the same cards Settings → Voice and About
- * show when a Domovoi is connected.
+ * benchmark (64-bit installs only, [AssistantSupport]) and the licences —
+ * the same cards Settings → Voice and About show when a Domovoi is
+ * connected.
  */
 @Composable
 internal fun LocalSettingsScreen(
@@ -70,8 +72,9 @@ internal fun LocalSettingsScreen(
             Column(Modifier.padding(start = 4.dp)) {
                 Text("Settings", style = MaterialTheme.typography.titleLarge, color = Domovoi.colors.fg)
                 Text(
-                    "This phone's voice, its problem reports and the on-device assistant. Server " +
-                        "settings appear once a Domovoi is connected.",
+                    (if (AssistantSupport.available) "This phone's voice, its problem reports and the on-device assistant. "
+                    else "This phone's voice and its problem reports. ") +
+                        "Server settings appear once a Domovoi is connected.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgMuted,
                 )

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -51,6 +52,19 @@ class MainActivity : ComponentActivity() {
                 DomovoiTheme(mode = themeMode) {
                     AppShell()
                 }
+            }
+        }
+        // Android 8 (API 26-27) gives the first focusable view of a window
+        // the focus whenever nothing holds it (at start, back from a
+        // permission dialog, after a field lets go), and Compose hands that
+        // on to its first text field: the keyboard opened over Music's
+        // filter on every start. The content frame takes that focus instead;
+        // tapping a field still focuses it. Android 9 stopped doing this for
+        // touch screens.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            findViewById<ViewGroup>(android.R.id.content).apply {
+                isFocusableInTouchMode = true
+                descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
             }
         }
     }

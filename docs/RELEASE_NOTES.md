@@ -4,6 +4,27 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
+
+New Android build only; nothing changes on the server.
+
+* **The app installs on 32-bit phones again** (old and budget phones,
+  Android Go), from Android 8.0 up. Since the on-device assistant arrived
+  it installed on 64-bit phones only (`INSTALL_FAILED_NO_MATCHING_ABIS`).
+  A release now attaches one APK per processor type: **arm64-v8a** for
+  almost every phone, **armeabi-v7a** for 32-bit ones, x86_64 and x86 for
+  emulators. The 32-bit APKs have **no on-device assistant** (its engine
+  is 64-bit only): its card is simply not there, and everything else works
+  the same. Which APK, and what each Android version gets:
+  [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md).
+* **Android 8: the keyboard no longer opens by itself** over Music's
+  filter or Home's announce box at every start.
+* **Problem reports on Android 8 to 10 say what they record** (crashes and
+  freezes); "not responding" closes are recorded from Android 11.
+* Building: `./gradlew assembleDebug` still makes one APK for a phone and
+  the emulator; `-Pdomovoi.apkPerAbi` makes one per ABI, and an App Bundle
+  carries all four (android/README.md, "ABIs and APKs").
+
 ## 2026-10-12 — Kristin is the house voice; the Microsoft Edge voices are gone
 
 Server, dashboard and Android update; no migration. What changes:
