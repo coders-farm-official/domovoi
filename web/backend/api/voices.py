@@ -45,6 +45,7 @@ from web.backend.api.voice import clip_response
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
+    core_audio_refusal,
     domovoi_url,
     post_admin,
     post_admin_bytes,
@@ -185,7 +186,9 @@ async def list_voices() -> list[Voice]:
 async def sample_voice(voice_id: int, request: Request) -> Response:
     """Stream a freshly-synthesized sample (intro + random fun fact) for a
     voice, for the play button. Proxies the Domovoi server's TTS — the web
-    process has none of its own. 502 if the Domovoi server is unreachable.
+    process has none of its own. 502 if the Domovoi server is unreachable;
+    a refusal from it (409: the voice can't speak right now, and why)
+    passes through with its own sentence.
     A shipped voice not downloaded yet plays its built-in clip instead; a
     Piper voice that can't speak here is 409 with the reason (its button
     is hidden: the system voice would answer, not this one)."""
@@ -214,11 +217,14 @@ async def sample_voice(voice_id: int, request: Request) -> Response:
         "/v1/admin/voices/sample",
         {"name": voice["name"]},
         headers=auth_forward_headers(request),
+        # A catalogue voice not on the box yet downloads on its first
+        # sample (Cori is 114 MB): the shipped voices' route waits as long.
+        timeout=120.0,
     )
-    if status == 0:
-        raise HTTPException(status_code=502, detail="domovoi unreachable")
     if status != 200 or not audio:
-        raise HTTPException(status_code=502, detail="voice sample synthesis failed")
+        # The core's own sentence ("Eric can't speak right now: Microsoft's
+        # voice service answered HTTP 403"), not a bare "502 Bad Gateway".
+        raise core_audio_refusal(status, audio, f"{voice['name']}'s sample could not be made")
     # Forward the spoken text so the UI can show what it's saying.
     out_headers = {}
     if headers.get("x-sample-text"):

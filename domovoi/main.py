@@ -3458,12 +3458,12 @@ async def admin_voice_sample(body: _VoiceSampleBody) -> FastAPIResponse:
         text, engine=voice["engine"], voice=voice["model_ref"]
     )
     if result.engine != voice["engine"]:
-        # Another rung answered (a voice that can't speak here, or Edge
-        # turned off): that is not a sample of this voice.
-        raise HTTPException(
-            status_code=409,
-            detail=f"{voice['name']} can't speak here right now; another voice would answer instead",
-        )
+        # Another rung answered (a voice that can't speak here, Edge turned
+        # off, or Microsoft's service refusing): that is not a sample of
+        # this voice. Say why, in the owner's words, for the page's toast.
+        mine = [f.split(": ", 1)[1] for f in result.failures if f.startswith(voice["engine"] + ": ")]
+        why = mine[0] if mine else "another voice would answer instead"
+        raise HTTPException(status_code=409, detail=f"{voice['name']} can't speak right now: {why}")
     wav = result.wav
     return FastAPIResponse(
         content=wav,

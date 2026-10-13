@@ -60,7 +60,7 @@ def fake_registry(monkeypatch):
     monkeypatch.setattr(voices_api, "_trigger_rerender", no_rerender)
     calls: list[dict] = []
 
-    async def fake_core(path, body, headers=None):
+    async def fake_core(path, body, headers=None, timeout=30.0):
         calls.append({"path": path, "body": body})
         return 200, b"RIFFfake", {"content-type": "audio/wav", "x-sample-text": "hello"}
 

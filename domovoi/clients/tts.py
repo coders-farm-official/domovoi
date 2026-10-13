@@ -52,7 +52,7 @@ import tempfile
 import threading
 import wave
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -78,6 +78,23 @@ class SynthResult:
     wav: bytes
     engine: str
     voice: str | None
+    # Why each rung tried before the one that answered gave nothing, in
+    # words for the owner ("edge: Microsoft's voice service answered HTTP
+    # 403"): what a sample that can't play its own voice says. Not part of
+    # equality.
+    failures: tuple[str, ...] = field(default=(), compare=False)
+
+
+def engine_failure_words(engine: str, exc: BaseException) -> str:
+    """One rung's failure, short and in words (no URLs: edge-tts puts its
+    whole request URL in the message)."""
+    if isinstance(exc, egress.InternetTurnedOff):
+        return f"{engine}: {egress.TURNED_OFF_REASON}"
+    status = getattr(exc, "status", None)
+    if engine == "edge" and isinstance(status, int):
+        return f"edge: Microsoft's voice service answered HTTP {status}"
+    text = str(exc).split(", url=")[0].strip() or type(exc).__name__
+    return f"{engine}: {text[:160]}"
 
 
 _edge_skip_logged = False
@@ -860,6 +877,7 @@ class RealTTSClient:
         # override only applies to the preferred engine (the registry pairs a
         # voice with its engine); fallback engines use their own default voice.
         preferred = (engine or self.preferred_engine or "").strip().lower()
+        failures: list[str] = []
         for eng in self._engine_order(preferred):
             v = voice if (voice and eng == preferred) else None
             used: str | None = None
@@ -878,12 +896,14 @@ class RealTTSClient:
                 # audio) so we fall through to the next engine rather than
                 # returning silence — the local-first safety net working.
                 if out and not _wav_is_silent(out):
-                    return SynthResult(wav=out, engine=eng, voice=used)
+                    return SynthResult(wav=out, engine=eng, voice=used, failures=tuple(failures))
+                failures.append(f"{eng}: no audio")
             except Exception as e:
                 log.warning("TTS engine %s failed: %s", eng, e)
+                failures.append(engine_failure_words(eng, e))
         # If every engine fails, return an empty WAV so callers don't crash.
         log.error("all TTS engines failed for text len=%d", len(text))
-        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None)
+        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None, failures=tuple(failures))
 
 
 _client: TTSClient | None = None

@@ -6910,7 +6910,7 @@
           "voices"
         ],
         "summary": "Sample Voice",
-        "description": "Stream a freshly-synthesized sample (intro + random fun fact) for a\nvoice, for the play button. Proxies the Domovoi server's TTS \u2014 the web\nprocess has none of its own. 502 if the Domovoi server is unreachable.\nA shipped voice not downloaded yet plays its built-in clip instead; a\nPiper voice that can't speak here is 409 with the reason (its button\nis hidden: the system voice would answer, not this one).",
+        "description": "Stream a freshly-synthesized sample (intro + random fun fact) for a\nvoice, for the play button. Proxies the Domovoi server's TTS \u2014 the web\nprocess has none of its own. 502 if the Domovoi server is unreachable;\na refusal from it (409: the voice can't speak right now, and why)\npasses through with its own sentence.\nA shipped voice not downloaded yet plays its built-in clip instead; a\nPiper voice that can't speak here is 409 with the reason (its button\nis hidden: the system voice would answer, not this one).",
         "operationId": "sample_voice_api_voices__voice_id__sample_get",
         "parameters": [
           {

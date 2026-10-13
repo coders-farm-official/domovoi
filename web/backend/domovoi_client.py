@@ -15,6 +15,7 @@ Domovoi server side is wired up — surfaced honestly in the schema.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -261,6 +262,28 @@ async def post_admin_bytes(
         log.warning("admin POST(bytes) %s failed: %s", path, e)
         return 0, b"", {}
     return r.status_code, r.content, dict(r.headers)
+
+
+def core_audio_refusal(status: int, body: bytes, what: str):
+    """The HTTPException for a core audio call (``post_admin_bytes``) that
+    gave no audio, carrying the core's own sentence so the page can show
+    it (a voice sample's 409 says why the voice can't speak; a credential
+    refusal names the header it wanted). The core's 4xx passes through
+    with its status; anything else is a 502 naming ``what``."""
+    from fastapi import HTTPException
+
+    if status == 0:
+        return HTTPException(status_code=502, detail=f"{what}: the Domovoi server is unreachable")
+    detail = None
+    try:
+        parsed = json.loads(body.decode("utf-8")) if body else None
+        if isinstance(parsed, dict) and isinstance(parsed.get("detail"), str):
+            detail = parsed["detail"]
+    except (UnicodeDecodeError, ValueError):
+        pass
+    if 400 <= status < 500:
+        return HTTPException(status_code=status, detail=detail or f"{what} (HTTP {status})")
+    return HTTPException(status_code=502, detail=f"{what}: {detail}" if detail else f"{what} (HTTP {status})")
 
 
 def bridge_response(status_code: int, payload: Any):
