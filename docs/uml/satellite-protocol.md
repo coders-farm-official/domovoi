@@ -185,6 +185,48 @@ can't drift apart. The `linux_pc` and `android_room` entries are drafts
 for S1 and S3; change them with the code that sends them. Tokens and codes
 in it are placeholders.
 
+## Enrolling a spare device (`domovoi-room:1`)
+
+Spare-device satellites (S1, 2026-10-13). A Linux laptop or a phone in
+room mode is told which core it belongs to by an **enrolment payload**, a
+URI the dashboard shows under Settings → Satellites → **Add a spare
+device** (admin only): inside a one-line Linux install command, and as a QR
+code for a phone.
+
+```
+domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
+```
+
+* `core`: the core's base URL as the device dials it, `http` or `https`
+  only (e.g. `http://192.168.0.117:6370`); the satellite socket is the same
+  host and port with `ws`/`wss`.
+* `fp`: the core's Ed25519 fingerprint as `satellite/server_identity.py`
+  writes it (`SHA256:` and 43 characters of unpadded base64).
+* `room`: the room name as typed (at most 64 code points). The device
+  connects as the room id derived from it (`satellite/enrolment.py`
+  `room_id_for`: NFKD, combining marks and apostrophes dropped, ASCII
+  lower-case, every other run of characters one `-`, at most 32), so
+  "Kid's Room & Den" is `kids-room-den`.
+
+Every value is percent-encoded UTF-8, and a `+` is a plus sign, never a
+space (this is a URI, not a form). Unknown keys are ignored; a key given
+twice is refused. **The payload carries no secret**: it adds the pin, not
+an approval. The device holds the core to `fp` from its first connect
+(the address-bound `/v1/health` challenge, before anything is written),
+and is still parked until someone types its approval code in the
+dashboard, exactly like a Pi.
+
+The grammar, the reason codes a refusal carries (`not_enrolment`,
+`unsupported_version`, `malformed`, `missing_core`, `missing_fp`,
+`missing_room`, `bad_core`, `bad_fp`, `bad_room`) and 65 worked cases
+(valid and invalid, with the room ids) are in
+[`spare-device-enrol-fixture.json`](spare-device-enrol-fixture.json). The
+Python parser (`satellite/tests/test_enrolment.py`) and the Android room
+mode's Kotlin parser are both tested against it. What the install command
+does with it, and why it is safe enough on a LAN without TLS:
+[../SPARE_DEVICE_SATELLITES.md](../SPARE_DEVICE_SATELLITES.md) and
+[../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md).
+
 ## Adding to the protocol
 
 Both sides must keep working against the other's older version:
