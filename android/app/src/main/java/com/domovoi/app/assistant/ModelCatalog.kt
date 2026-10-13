@@ -128,6 +128,14 @@ object ModelCatalog {
     /** What the assistant's benchmark downloads and runs. */
     val assistant: List<CatalogModel> = listOf(gemma4E2b, moonshineTinyEn, moonshineBaseEn, sileroVad)
 
+    /** What the assistant itself downloads before its first answer: the
+     *  language model, for text chat (M1). Voice (M2) adds its speech model
+     *  and voice detector here. */
+    val chat: List<CatalogModel> = listOf(gemma4E2b)
+
+    /** The language model the assistant answers with. */
+    val chatModel: CatalogModel get() = gemma4E2b
+
     private const val PIPER_REV = "c10ece1aade47bb51c153c893d14e5bf8e5b7117"
     private const val PIPER = "https://huggingface.co/rhasspy/piper-voices/resolve/$PIPER_REV/en/en_US"
 

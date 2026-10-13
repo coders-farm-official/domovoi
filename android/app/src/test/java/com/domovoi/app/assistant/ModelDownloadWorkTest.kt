@@ -80,6 +80,8 @@ class ModelDownloadWorkTest {
         assertEquals(NetworkType.UNMETERED, wifi.workSpec.constraints.requiredNetworkType)
         assertFalse(ModelDownloads.TAG_MOBILE_DATA in wifi.tags)
         assertEquals(listOf("a", "b"), wifi.workSpec.input.getStringArray(ModelDownloads.KEY_MODELS)!!.toList())
+        // Each model is a tag too, so whoever watches the job knows what it fetches.
+        assertTrue("model:a" in wifi.tags && "model:b" in wifi.tags)
 
         val mobile = ModelDownloads.request(listOf(a), allowMobileData = true)
         assertEquals(NetworkType.CONNECTED, mobile.workSpec.constraints.requiredNetworkType)
@@ -99,6 +101,32 @@ class ModelDownloadWorkTest {
         assertEquals(DownloadStatus(false, null), describeDownload(WorkInfo.State.SUCCEEDED, 0, false, null))
         assertEquals(DownloadStatus(false, null), describeDownload(WorkInfo.State.CANCELLED, 0, false, null))
         assertEquals(DownloadStatus(false, null), describeDownload(null, 0, false, null))
+    }
+
+    /** The job as the assistant's screens see it (assistant/DownloadJobs.kt). */
+    @Test fun theJobAsTheAssistantSeesIt() {
+        val info = WorkInfo(
+            id = java.util.UUID.randomUUID(),
+            state = WorkInfo.State.RUNNING,
+            tags = setOf(ModelDownloadWorker::class.java.name, "model:gemma-4-e2b-it", "model:silero-vad-v4", ModelDownloads.TAG_MOBILE_DATA),
+            progress = DownloadProgress("gemma-4-e2b-it", 1, 2, 3, 4).toData(),
+            runAttemptCount = 2,
+        )
+        val job = WorkDownloadJobs.of(info)
+        assertEquals(setOf("gemma-4-e2b-it", "silero-vad-v4"), job.models)
+        assertTrue(job.mobileData)
+        assertEquals(2, job.attempts)
+        assertEquals(DownloadProgress("gemma-4-e2b-it", 1, 2, 3, 4), job.progress)
+        assertTrue(job.active)
+
+        val failed = WorkDownloadJobs.of(WorkInfo(
+            id = java.util.UUID.randomUUID(), state = WorkInfo.State.FAILED, tags = setOf("model:gemma-4-e2b-it"),
+            outputData = androidx.work.workDataOf(ModelDownloads.KEY_ERROR to "not enough free space for Gemma"),
+        ))
+        assertTrue(failed.finished)
+        assertFalse(failed.mobileData)
+        assertNull(failed.progress)
+        assertEquals("not enough free space for Gemma", failed.error)
     }
 
     // ── The manifest the foreground job needs ───────────────────────────

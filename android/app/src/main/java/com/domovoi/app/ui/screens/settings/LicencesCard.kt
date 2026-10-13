@@ -77,8 +77,12 @@ internal val OPEN_SOURCE_PARTS: List<OpenSourcePart> = listOf(
     ),
     OpenSourcePart(LITERT_LM, "Apache-2.0", "github.com/google-ai-edge/LiteRT-LM", "Runs the on-device language model."),
 ) + ModelCatalog.assistant.map { m ->
-    OpenSourcePart(m.name, m.license, m.licenseUrl.removePrefix("https://"), "Downloaded by the on-device assistant's benchmark.",
-        assistantOnly = true)
+    OpenSourcePart(
+        m.name, m.license, m.licenseUrl.removePrefix("https://"),
+        if (m in ModelCatalog.chat) "Downloaded by the on-device assistant (the assistant tab)."
+        else "Downloaded by the on-device assistant's benchmark.",
+        assistantOnly = true,
+    )
 }
 
 private const val LITERT_LM = "LiteRT-LM 0.18.0"

@@ -74,12 +74,17 @@ Notes:
   library links against Android 8.0's system libraries (checked symbol by
   symbol against the NDK's API 26 stubs, and loaded on the Android 8.0
   image), and the card loads on every 64-bit emulator image above. Whether a given old phone is fast enough is
-  a separate question; the assistant's model needs about 8 GB of RAM.
+  a separate question; the assistant needs a phone sold with 8 GB of
+  memory or more (`assistant/DeviceTier.kt`) and says so, with no download
+  button, on a smaller one.
 - **32-bit phones:** the app checks once per start whether the assistant's
   engine library is in this install and this process can load it
-  (`assistant/AssistantSupport.kt`). Where it isn't, the benchmark card is
-  not shown, the local Settings screen doesn't mention the assistant, and
-  the licences list leaves out the models only the assistant downloads.
+  (`assistant/AssistantSupport.kt`). Where it isn't, the Assistant tab and
+  screen are on no launcher (local mode keeps Music, Videos and Files; Home's
+  grid, the drawer, the rail and the phone-bar choices leave it out), the
+  benchmark card is not shown, the local Settings screen doesn't mention the
+  assistant, and the licences list leaves out the models only the assistant
+  downloads.
 
 ## What was tested
 

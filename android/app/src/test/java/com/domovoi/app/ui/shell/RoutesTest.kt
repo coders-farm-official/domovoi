@@ -8,10 +8,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
+import com.domovoi.app.ui.screens.home.everythingTiles
 
 /** Route visibility is data-driven by the capability manifest (design section 8). */
 class RoutesTest {
+
+    @After fun restore() {
+        onDeviceAssistant = { com.domovoi.app.assistant.AssistantSupport.available }
+    }
 
     private fun caps(vararg c: String) =
         Capabilities(plugins = listOf(CapabilityPlugin(slug = "p", androidCapabilities = c.toList())))
@@ -57,7 +63,8 @@ class RoutesTest {
         assertFalse(WorkspaceRoutes.contains(Route.Settings))
         assertFalse(WorkspaceRoutes.contains(Route.Manual))
         assertEquals(Route.Chat, WorkspaceRoutes.first())
-        assertEquals(Route.Files, WorkspaceRoutes.last())
+        // The web's workspace ends at Files; the app's own assistant follows.
+        assertEquals(listOf(Route.Files, Route.Assistant), WorkspaceRoutes.takeLast(2))
     }
 
     @Test fun theContainersScreenIsOnNoLauncher() {
@@ -85,7 +92,10 @@ class RoutesTest {
 
     @Test fun sharedScreenLeavesPersonalScreensOffEveryLauncher() {
         // web/static/components.jsx SHARED_SCREEN_HIDDEN: people, chat, files, news.
-        assertEquals(setOf(Route.People, Route.Chat, Route.Files, Route.News), SharedScreenHidden)
+        // ...plus the app's on-device assistant, whose conversations are the
+        // device's, as Chat's are the server's.
+        assertEquals(setOf(Route.People, Route.Chat, Route.Files, Route.News, Route.Assistant), SharedScreenHidden)
+        onDeviceAssistant = { true }
         SharedScreenHidden.forEach {
             assertTrue(it.visibleOn(Capabilities.EMPTY, shared = false))
             assertFalse(it.visibleOn(Capabilities.EMPTY, shared = true))
@@ -98,5 +108,37 @@ class RoutesTest {
         // Capability gating still applies on top.
         assertFalse(Route.Stations.visibleOn(Capabilities.EMPTY, shared = false))
         assertTrue(Route.Stations.visibleOn(caps(CAP_STATIONS), shared = true))
+    }
+
+    /** The on-device assistant is on every launcher of an install that has
+     *  its engine (a 64-bit phone and APK) and on none of one that doesn't:
+     *  no dead tab on a 32-bit phone. */
+    @Test fun theAssistantIsOfferedOnlyWhereTheInstallHasIt() {
+        val saved = listOf(Route.Home, Route.Assistant, Route.Music)
+        onDeviceAssistant = { true }
+        assertTrue(Route.Assistant.visibleOn(Capabilities.EMPTY, shared = false))
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs())
+        assertTrue(Route.Assistant in everythingTiles(Capabilities.EMPTY, shared = false))
+        assertEquals(saved, PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
+        assertTrue(Route.Assistant in PhoneBar.Choices)
+        // Never in Chat's place: the default bar is unchanged.
+        assertFalse(Route.Assistant in DefaultPhoneBar)
+        assertNull(Route.Assistant.requiredCapability())
+        // A shared screen (the kitchen tablet) keeps it off its launchers.
+        assertFalse(Route.Assistant.visibleOn(Capabilities.EMPTY, shared = true))
+
+        onDeviceAssistant = { false }
+        assertFalse(Route.Assistant.visibleWith(Capabilities.EMPTY))
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs())
+        assertFalse(Route.Assistant in everythingTiles(Capabilities.EMPTY, shared = false))
+        assertEquals(listOf(Route.Home, Route.Music), PhoneBar.routes(saved, Capabilities.EMPTY, shared = false))
+    }
+
+    @Test fun theLocalShellIsTheAssistantsFirstHome() {
+        // No server needed: a tab of the local shell, after the phone's media.
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs(assistant = true))
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files), localTabs(assistant = false))
+        // On the JVM there is no engine: the default asks AssistantSupport.
+        assertFalse(Route.Assistant in localTabs())
     }
 }

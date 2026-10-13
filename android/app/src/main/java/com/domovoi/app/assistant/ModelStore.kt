@@ -39,6 +39,15 @@ class ModelStore(val root: File) {
     fun bytesOnDisk(model: CatalogModel): Long =
         dir(model).walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
+    /** How much of [model] a download has: its verified files whole, plus
+     *  what the `.part` files of the others hold. */
+    fun bytesDone(model: CatalogModel): Long =
+        model.files.sumOf { f ->
+            if (isComplete(model, f)) f.size else File(fileFor(model, f).path + ".part").let { if (it.isFile) it.length() else 0L }
+        }
+
+    /** Frees everything [model] holds on the phone: verified files, `.part`
+     *  files and the install marker. */
     fun delete(model: CatalogModel): Boolean = dir(model).let { !it.exists() || it.deleteRecursively() }
 
     /** Free space where the models go. */

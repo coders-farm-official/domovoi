@@ -4,6 +4,32 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — Android: Domovoi on the phone (text chat, no server needed)
+
+New Android build only; nothing changes on the server.
+
+* **An Assistant tab answers on the phone itself**, with no server and no
+  internet once its model is on the phone (airplane mode included). It is
+  a tab of local mode, beside Music, Videos and Files; with a server
+  connected it is on Home's grid, the drawer and the rail, and can be put
+  on the bottom bar from Settings → Phone bar. It always says "on this
+  phone": it is separate from Chat, which talks to the server, and the two
+  never share a conversation. Text only in this build; voice comes next.
+* **First use downloads the model once: 2.41 GB** (Gemma 4 E2B,
+  Apache-2.0), shown with the free space it needs before it starts. Wi-Fi
+  only unless "allow mobile data" is on; it carries on in the background,
+  resumes after a dropped connection or a restart, can be paused or
+  cancelled, and is checked against its SHA-256 before use. **Delete
+  model** in the assistant's model settings frees the space.
+* **Which phones:** the 64-bit app on a phone sold with 8 GB of memory or
+  more. Others see why it isn't available, and no download button; the
+  32-bit app has no assistant at all, as before. The model runs on the CPU;
+  the GPU is an opt-in in the model settings.
+* **Conversations are kept only on the phone** (outside backups, never sent
+  to a server), with delete and "clear all conversations". A shared screen
+  (the kitchen tablet) doesn't offer the assistant, as it doesn't offer
+  Chat.
+
 ## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
 
 New Android build only; nothing changes on the server.

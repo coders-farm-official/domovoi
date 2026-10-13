@@ -1,6 +1,8 @@
 package com.domovoi.app.assistant
 
 import com.domovoi.app.assistant.ModelDownloader.Companion.toHex
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -206,6 +208,54 @@ class ModelDownloaderTest {
         ModelDownloader(http).install(m, store)
         assertEquals("bytes=$kept-", server.takeRequest().getHeader("Range"))
         assertArrayEquals(bytesA, store.fileFor(m, m.files[0]).readBytes())
+        assertTrue(store.isInstalled(m))
+    }
+
+    /** Pausing (or WorkManager stopping the job when Wi-Fi goes) cancels the
+     *  coroutine mid-file: the `.part` stays, nothing is installed, and the
+     *  next run asks for the rest with a Range request. */
+    @Test fun aPauseMidFileKeepsThePartAndTheNextRunResumes() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(Buffer().write(bytesA))
+                .throttleBody(16 * 1024, 20, java.util.concurrent.TimeUnit.MILLISECONDS),
+        )
+        val m = model(file("a.bin", bytesA))
+        val store = ModelStore(dir)
+        val target = store.fileFor(m, m.files[0])
+        val halfway = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val job = launch(kotlinx.coroutines.Dispatchers.IO) {
+            ModelDownloader(http).install(m, store) { done, _ -> if (done > 50_000) halfway.complete(Unit) }
+        }
+        halfway.await()
+        job.cancelAndJoin()
+        assertTrue(job.isCancelled)
+        val kept = ModelDownloader.partOf(target).length()
+        assertTrue("kept $kept bytes", kept in 50_001 until bytesA.size)
+        assertFalse(target.exists())
+        assertFalse(store.isInstalled(m))
+        server.takeRequest()
+
+        serve(mapOf("a.bin" to bytesA))
+        ModelDownloader(http).install(m, store)
+        assertEquals("bytes=$kept-", server.takeRequest().getHeader("Range"))
+        assertArrayEquals(bytesA, target.readBytes())
+        assertTrue(store.isInstalled(m))
+    }
+
+    /** A cancel deletes what a paused download left; the next download
+     *  starts from byte 0. */
+    @Test fun aCancelledDownloadStartsAgainFromTheBeginning() = runBlocking {
+        serve(mapOf("a.bin" to bytesA))
+        val m = model(file("a.bin", bytesA))
+        val store = ModelStore(dir)
+        val target = store.fileFor(m, m.files[0])
+        target.parentFile!!.mkdirs()
+        ModelDownloader.partOf(target).writeBytes(bytesA.copyOfRange(0, 100_000))
+        assertEquals(100_000L, store.bytesDone(m))
+        store.deletePartials(m)
+        assertEquals(0L, store.bytesDone(m))
+        ModelDownloader(http).install(m, store)
+        assertNull(server.takeRequest().getHeader("Range"))
         assertTrue(store.isInstalled(m))
     }
 
