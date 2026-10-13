@@ -293,12 +293,9 @@ daemon, provisioned lazily in Docker when the room's satellite first
 connects. TTS is local by default — three public-domain neural **Piper**
 voices rendered on the server through Domovoi's own permissively licensed
 text-to-phoneme converter, so Domovoi's replies are spoken on your own
-hardware. Microsoft's
-online Edge voices are available as a deliberate opt-in for anyone who
-prefers them, and the engine chain falls back gracefully (`piper → system`
-by default, `edge → piper → system` if you choose Edge) so the house keeps
-talking whatever happens. Edge is never a stand-in for the local voice:
-text reaches Microsoft only if you choose an Edge voice. See
+hardware, and the engine chain falls back gracefully (`piper → system`)
+so the house keeps talking whatever happens. No online voice is offered:
+the Microsoft Edge voices were dropped in October 2026. See
 [What goes out](docs/INTERNET.md#what-goes-out).
 
 Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
@@ -404,6 +401,7 @@ Want to write one? Start at the
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
 | [Running the server on Linux](docs/LINUX_HOST.md) | Linux install, what differs from the Windows-first docs, systemd units |
+| [The Windows installer (test build)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
 
 ---

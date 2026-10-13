@@ -128,7 +128,14 @@ def test_lock_pins_satisfy_pyproject() -> None:
 
 @pytest.mark.parametrize("package", sorted(ADVISORY_FLOORS))
 def test_lock_stays_above_the_advisory_lines(package: str) -> None:
-    version = _blocks()[package][0]
+    blocks = _blocks()
+    if package not in blocks:
+        # Not in the lock at all, so nothing to hold above the line: aiohttp
+        # and multidict came only with edge-tts, which left on 2026-10-12.
+        # Should something pull them back in, the floor applies again.
+        assert "urllib3" in blocks, "the lock did not parse"
+        return
+    version = blocks[package][0]
     assert version >= ADVISORY_FLOORS[package], f"{package}=={version} is below {ADVISORY_FLOORS[package]}"
 
 

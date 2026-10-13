@@ -169,3 +169,74 @@ async def test_status_degrades_gracefully_when_nvidia_smi_missing() -> None:
 
     assert "no gpus detected" in response.text.lower()
     assert "no models loaded" in response.text.lower()
+
+
+# ─── nvidia-smi lookup (WSL) ────────────────────────────────────────────────
+# In the Windows installer's WSL distro, nvidia-smi lives in /usr/lib/wsl/lib,
+# which WSL puts on PATH for wsl.exe sessions only, never for systemd services
+# like domovoi-core.service: the probe has to look there itself.
+
+
+def test_nvidia_smi_path_prefers_path(monkeypatch) -> None:
+    from domovoi.handlers import homelab
+
+    monkeypatch.setattr(homelab.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
+    assert homelab._nvidia_smi_path() == "/usr/bin/nvidia-smi"
+
+
+def test_nvidia_smi_path_falls_back_to_wsl_copy(monkeypatch) -> None:
+    from domovoi.handlers import homelab
+
+    monkeypatch.setattr(homelab.shutil, "which", lambda name: None)
+    monkeypatch.setattr(homelab.os.path, "isfile", lambda p: p == homelab._WSL_NVIDIA_SMI)
+    monkeypatch.setattr(homelab.os, "access", lambda p, mode: p == homelab._WSL_NVIDIA_SMI)
+    assert homelab._nvidia_smi_path() == "/usr/lib/wsl/lib/nvidia-smi"
+
+
+def test_nvidia_smi_path_none_without_either(monkeypatch) -> None:
+    from domovoi.handlers import homelab
+
+    monkeypatch.setattr(homelab.shutil, "which", lambda name: None)
+    monkeypatch.setattr(homelab.os.path, "isfile", lambda p: False)
+    assert homelab._nvidia_smi_path() is None
+
+
+@pytest.mark.asyncio
+async def test_query_gpus_runs_the_wsl_copy_when_not_on_path(monkeypatch) -> None:
+    """The systemd-PATH case: nothing on PATH, WSL's copy present → it is
+    the one run, and its CSV becomes the snapshots."""
+    from domovoi.handlers import homelab
+
+    monkeypatch.setattr(homelab, "_nvidia_smi_path", lambda: homelab._WSL_NVIDIA_SMI)
+    seen: list[str] = []
+
+    class _Proc:
+        async def communicate(self):
+            return (
+                b"NVIDIA GeForce RTX 4070 Ti SUPER, 0, 471, 16376, 55\n"
+                b"NVIDIA GeForce RTX 4070 Ti SUPER, 2, 905, 16376, 53\n",
+                b"",
+            )
+
+    async def _exec(exe, *args, **kwargs):
+        seen.append(exe)
+        return _Proc()
+
+    monkeypatch.setattr(homelab.asyncio, "create_subprocess_exec", _exec)
+    gpus = await homelab._query_gpus()
+    assert seen == ["/usr/lib/wsl/lib/nvidia-smi"]
+    assert [g.name for g in gpus] == ["NVIDIA GeForce RTX 4070 Ti SUPER"] * 2
+    assert gpus[1].mem_used_mb == 905 and gpus[1].mem_total_mb == 16376
+
+
+@pytest.mark.asyncio
+async def test_query_gpus_empty_without_nvidia_smi(monkeypatch) -> None:
+    from domovoi.handlers import homelab
+
+    monkeypatch.setattr(homelab, "_nvidia_smi_path", lambda: None)
+
+    async def _exec(*args, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError("nvidia-smi must not be started")
+
+    monkeypatch.setattr(homelab.asyncio, "create_subprocess_exec", _exec)
+    assert await homelab._query_gpus() == []

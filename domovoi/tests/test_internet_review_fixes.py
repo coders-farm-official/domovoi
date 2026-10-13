@@ -12,7 +12,6 @@
   "do this automatically?" offer is not made on an unsearched reply.
 * A failed podcast-directory lookup is not "I couldn't find a podcast".
 * Whisper loads a cache pinned by commit (no ``refs/main``).
-* An Edge-marked clip that Edge did not render is rendered again once.
 * The Models catalog says which Whisper sizes are on disk; a model pull
   that is running when the answer becomes never is cancelled.
 * A satellite plugin's apt work is marked offline under never.
@@ -22,12 +21,8 @@
 from __future__ import annotations
 
 import asyncio
-import io
-import math
-import struct
 import subprocess
 import threading
-import wave
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -506,62 +501,6 @@ def test_whisper_loads_a_pinned_cache_with_no_request(monkeypatch, tmp_path, ans
     assert loads[0] == ("tiny.en", True)
     assert len(loads) == 2 and loads[1][0].endswith("snapshots/d1d751a5") and loads[1][1] is False
     assert client.short_window is None
-
-
-# ─── clips: an Edge-marked clip that Edge did not render ─────────────────
-
-
-def _mp3(rate: int) -> bytes:
-    from domovoi import canned_sounds as cs
-
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(rate)
-        wf.writeframes(b"".join(struct.pack("<h", int(6000 * math.sin(i / 9))) for i in range(rate // 4)))
-    out = cs._wav_to_mp3(buf.getvalue())
-    if out is None:
-        pytest.skip("lameenc is not installed")
-    return out
-
-
-@pytest.mark.asyncio
-async def test_an_edge_clip_rendered_by_a_stand_in_is_redone_once(monkeypatch, tmp_path) -> None:
-    from domovoi import canned_sounds as cs
-
-    marker = "edge|en-US-GuyNeural"
-    text = "I'm having trouble reaching the network."
-    (tmp_path / "net.mp3").write_bytes(_mp3(22050))            # Piper's rate, Edge's tag
-    (tmp_path / "net.voice").write_text(f"{marker}\n{cs._hash(text)}\n", encoding="utf-8")
-    assert cs._mp3_sample_rate(tmp_path / "net.mp3") == 22050
-    renders: list[str] = []
-
-    async def synth(t, engine, model_ref):
-        renders.append(engine)
-        return _mp3(24000), marker
-
-    monkeypatch.setattr(cs, "_synth_clip_mp3", synth)
-    voice = {"name": "Guy", "engine": "edge", "model_ref": "en-US-GuyNeural"}
-    # Edge can't be reached: kept as it is, nothing tried.
-    await cs._regen_entry(tmp_path, "net.mp3", "net.voice", text, marker, voice, edge_ok=False)
-    assert renders == []
-    # Edge works: rendered again, once.
-    await cs._regen_entry(tmp_path, "net.mp3", "net.voice", text, marker, voice, edge_ok=True)
-    await cs._regen_entry(tmp_path, "net.mp3", "net.voice", text, marker, voice, edge_ok=True)
-    assert renders == ["edge"]
-    assert cs._mp3_sample_rate(tmp_path / "net.mp3") == 24000
-
-
-def test_a_real_edge_clip_and_a_piper_voice_are_left_alone(tmp_path) -> None:
-    from domovoi import canned_sounds as cs
-
-    (tmp_path / "a.mp3").write_bytes(_mp3(24000))
-    (tmp_path / "a.voice").write_text("edge|en-US-GuyNeural\nh\n", encoding="utf-8")
-    assert not cs._misattributed_edge_clip(tmp_path / "a.mp3", tmp_path / "a.voice", "edge|en-US-GuyNeural")
-    (tmp_path / "b.mp3").write_bytes(_mp3(22050))
-    (tmp_path / "b.voice").write_text("piper|en_US-lessac-medium\nh\n", encoding="utf-8")
-    assert not cs._misattributed_edge_clip(tmp_path / "b.mp3", tmp_path / "b.voice", "piper|en_US-lessac-medium")
 
 
 # ─── Models: which Whisper sizes are on disk; a pull cut off ─────────────

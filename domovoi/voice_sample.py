@@ -40,14 +40,28 @@ def shipped_clip(model_ref: str) -> Path | None:
 
 def piper_sample_source(model_ref: str) -> str | None:
     """What a Piper voice's "play a sample" button can play: "voice" (it
-    speaks live: on disk, and on a phoneme set the converter writes),
-    "clip" (a shipped voice not downloaded yet: its built-in clip), or
-    None (nothing that is really that voice: no button)."""
-    from domovoi.clients.tts import piper_voice_on_disk, piper_voice_problem
+    speaks live: on disk, and on a phoneme set the converter writes; or an
+    English catalogue voice registered but not downloaded yet, like an
+    install's kept Cori, which its first sample downloads as its first
+    reply would, unless the internet is turned off), "clip" (a shipped
+    voice not downloaded yet: its built-in clip), or None (nothing that is
+    really that voice: no button)."""
+    from domovoi import egress
+    from domovoi.clients.tts import (
+        PIPER_MODEL_REF_RE,
+        RETIRED_PIPER_VOICES,
+        piper_voice_on_disk,
+        piper_voice_problem,
+    )
 
     if piper_voice_on_disk(model_ref):
         return "voice" if piper_voice_problem(model_ref) is None else None
-    return "clip" if shipped_clip(model_ref) is not None else None
+    if shipped_clip(model_ref) is not None:
+        return "clip"
+    m = PIPER_MODEL_REF_RE.fullmatch(model_ref)
+    if m and m.group("lang") == "en" and model_ref not in RETIRED_PIPER_VOICES and egress.internet_allowed():
+        return "voice"
+    return None
 
 # Clean, TTS-friendly one-liners (no symbols/abbreviations that read badly).
 FUN_FACTS: list[str] = [

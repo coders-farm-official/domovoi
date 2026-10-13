@@ -144,6 +144,44 @@ class PiperSpeechOut(
         return ids.takeIf { PhonemeIds.speaksAnything(it, idMap) }
     }
 
+    /** (runs away, the lead-in's phonemes, its length alone), measured once,
+     *  on the first short sentence: see [LeadIn]. */
+    private val leadIn: Triple<Boolean, String, Double> by lazy {
+        val longest = LeadIn.PROBES.maxOf { word ->
+            idsFor(phonemizer.phonemize(word, dialect).joinToString(" "))
+                ?.let { voice.synthesize(it).size.toDouble() / voice.sampleRate } ?: 0.0
+        }
+        val runsAway = longest > LeadIn.RUNAWAY_SECONDS
+        val lead = phonemizer.phonemize(LeadIn.TEXT, dialect).joinToString(" ")
+        val seconds = if (runsAway) {
+            idsFor(lead)?.let { voice.synthesize(it).size.toDouble() / voice.sampleRate } ?: 0.0
+        } else 0.0
+        if (runsAway) log(String.format(java.util.Locale.US,
+            "%s says a short sentence alone in %.1f s; its short sentences are said after a lead-in", voiceKey, longest))
+        Triple(runsAway, lead, seconds)
+    }
+
+    /** One sentence's audio, null when nothing in it is a sound the voice
+     *  knows; a short sentence in a voice that runs away is said after the
+     *  lead-in and cut off from it ([LeadIn]). Throws [VoiceModel.Stopped]. */
+    internal fun sentenceAudio(phonemes: String): FloatArray? {
+        val ids = idsFor(phonemes) ?: return null
+        if (LeadIn.phonemeCount(phonemes) < LeadIn.MAX_PHONEMES) {
+            val (runsAway, lead, leadSeconds) = leadIn
+            if (runsAway && leadSeconds > 0) {
+                val both = idsFor("$lead $phonemes")
+                if (both != null) {
+                    repeat(LeadIn.TRIES) {
+                        LeadIn.cut(voice.synthesize(both), voice.sampleRate, leadSeconds)
+                            ?.let { return PiperVoice.peakNormalize(it) }
+                    }
+                }
+                log("no pause after the lead-in; the sentence is said alone")
+            }
+        }
+        return voice.synthesize(ids)
+    }
+
     /** The last sentence's phoneme strings, as spoken (for the device check). */
     @Volatile var lastPhonemes: List<String> = emptyList()
         private set
@@ -170,9 +208,8 @@ class PiperSpeechOut(
                         for ((i, p) in phonemes.withIndex()) {
                             if (generation.get() != gen) break
                             val t0 = clock()
-                            val ids = idsFor(p) ?: continue
                             val audio = try {
-                                voice.synthesize(ids)
+                                sentenceAudio(p) ?: continue
                             } catch (e: VoiceModel.Stopped) {
                                 break
                             }
@@ -221,7 +258,7 @@ class PiperSpeechOut(
     /** The voice's audio for [text], every sentence with the gap between
      *  them, not played (the benchmark's self-test). */
     override suspend fun synthesize(text: String): SynthesizedSpeech = withContext(Dispatchers.Default) {
-        val parts = phonemizer.phonemize(text, dialect).mapNotNull { p -> idsFor(p)?.let { voice.synthesize(it) } }
+        val parts = phonemizer.phonemize(text, dialect).mapNotNull { p -> sentenceAudio(p) }
         val gap = (voice.sampleRate * SENTENCE_GAP_S).toInt()
         val out = FloatArray(parts.sumOf { it.size } + gap * (parts.size - 1).coerceAtLeast(0))
         var at = 0

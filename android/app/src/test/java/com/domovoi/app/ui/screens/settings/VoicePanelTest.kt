@@ -24,7 +24,7 @@ class VoicePanelTest {
     @Test fun itSaysWhereTheVoiceComesFrom() {
         assertEquals("The voice your Domovoi speaks with, on the phone and in the chat mic's replies.",
             voiceSourceNote(PhoneVoiceUi(serverVoice = "en_US-norman-medium")))
-        assertTrue(voiceSourceNote(PhoneVoiceUi(serverVoice = null)).contains("speaks with Norman"))
+        assertTrue(voiceSourceNote(PhoneVoiceUi(serverVoice = null)).contains("speaks with Kristin"))   // the default
         assertTrue(voiceSourceNote(PhoneVoiceUi(serverVoice = "en_US-lessac-medium")).contains("en_US-lessac-medium, which this app does not have"))
         assertTrue(voiceSourceNote(PhoneVoiceUi(choice = "en_US-kristin-medium")).startsWith("This phone's own pick"))
         // The pick says it covers the chat mic's replies (Kamron's test, 2026-10-12).

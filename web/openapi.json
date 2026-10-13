@@ -6910,7 +6910,7 @@
           "voices"
         ],
         "summary": "Sample Voice",
-        "description": "Stream a freshly-synthesized sample (intro + random fun fact) for a\nvoice, for the play button. Proxies the Domovoi server's TTS \u2014 the web\nprocess has none of its own. 502 if the Domovoi server is unreachable.\nA shipped voice not downloaded yet plays its built-in clip instead; a\nPiper voice that can't speak here is 409 with the reason (its button\nis hidden: the system voice would answer, not this one).",
+        "description": "Stream a freshly-synthesized sample (intro + random fun fact) for a\nvoice, for the play button. Proxies the Domovoi server's TTS \u2014 the web\nprocess has none of its own. 502 if the Domovoi server is unreachable;\na refusal from it (409: the voice can't speak right now, and why)\npasses through with its own sentence.\nA shipped voice not downloaded yet plays its built-in clip instead; a\nPiper voice that can't speak here is 409 with the reason (its button\nis hidden: the system voice would answer, not this one).",
         "operationId": "sample_voice_api_voices__voice_id__sample_get",
         "parameters": [
           {
@@ -6929,48 +6929,6 @@
             "content": {
               "application/json": {
                 "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/voices/edge": {
-      "post": {
-        "tags": [
-          "voices"
-        ],
-        "summary": "Register Edge Voice",
-        "description": "Register a Microsoft Edge cloud voice by its voice id (e.g.\n``en-US-AriaNeural``). No file \u2014 the engine downloads on demand.\n409 under ``INTERNET_ACCESS=never``: the voice could never speak.",
-        "operationId": "register_edge_voice_api_voices_edge_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EdgeVoiceCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Voice"
-                }
               }
             }
           },
@@ -14637,33 +14595,6 @@
         ],
         "title": "DropInStartRequest",
         "description": "Open a drop-in FROM the path's ``{room_id}`` (initiator) TO\n``target_room``."
-      },
-      "EdgeVoiceCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "voice_id": {
-            "type": "string",
-            "maxLength": 120,
-            "minLength": 1,
-            "title": "Voice Id"
-          },
-          "set_default": {
-            "type": "boolean",
-            "title": "Set Default",
-            "default": false
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "voice_id"
-        ],
-        "title": "EdgeVoiceCreate"
       },
       "Favorite": {
         "properties": {

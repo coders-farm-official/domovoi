@@ -260,7 +260,9 @@
       // Home is where a bare URL, the installed app (manifest start_url)
       // and an unknown route all land. Deep links (#music, …) still work,
       // and a page that became a Settings tab (#satellites) opens that tab
-      // (settingsTabRoute, components.jsx).
+      // (settingsTabRoute, components.jsx). `route` is the whole address
+      // (#settings/configuration): its first segment picks the page, the
+      // rest is the page's own (a tab, useRouteTab in components.jsx).
       const initialRoute = (window.location.hash || '#home').slice(1);
       const [theme, setThemeState] = React.useState(initialTheme);
       const [route, setRouteState] = React.useState(() => settingsTabRoute(initialRoute));
@@ -299,13 +301,19 @@
         return () => clearTimeout(t);
       });
 
+      // The page the address opens: its first segment (#settings/models →
+      // settings). Everything below picks pages, nav and crumbs by it.
+      const page = routePage(route);
+
       // A new page starts at its top. .main is the one scroller every page
       // shares, so a tab tapped from a page scrolled halfway down used to
-      // open halfway down too (Music scrolled 600px -> Home at 865px).
+      // open halfway down too (Music scrolled 600px -> Home at 865px). A
+      // tab of the same page (#music/queue) keeps the scroll: Music's tabs
+      // sit below every room card.
       const mainRef = React.useRef(null);
       React.useLayoutEffect(() => {
         if (mainRef.current) mainRef.current.scrollTop = 0;
-      }, [route]);
+      }, [page]);
 
       const counts = useSidebarCounts();
       const manifest = window.DomovoiPluginManifest || { plugins: [] };
@@ -316,12 +324,12 @@
       // Route map: core routes + manifest-declared plugin pages.
       let Page = null;
       let pageSlug = null;   // set only when the resolved page belongs to a plugin
-      const coreGetter = window.DomovoiCore.pages[route];
+      const coreGetter = window.DomovoiCore.pages[page];
       if (coreGetter) Page = coreGetter();
       if (!Page) {
         for (const p of manifest.plugins || []) {
           for (const pg of p.pages || []) {
-            if (pg.route === route) {
+            if (pg.route === page) {
               const P = pluginPage(p.slug, pg.page);
               if (P) { Page = P; pageSlug = p.slug; }
             }
@@ -332,7 +340,7 @@
       // (a script error in home.jsx must not leave the shell with no page).
       // The crumb and the nav then name the page that is showing, not the
       // unknown route ("domovoi / " with nothing after it).
-      let shownRoute = route;
+      let shownRoute = page;
       if (!Page) {
         Page = window.DomovoiCore.pages.home() || window.DomovoiCore.pages.music();
         shownRoute = window.DomovoiCore.pages.home() ? 'home' : 'music';

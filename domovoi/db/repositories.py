@@ -1547,9 +1547,10 @@ class ClientGreetingsRepository:
 class VoicesRepository:
     """The voice registry (table ``voices``). Each row is a
     user-selectable TTS voice: a spoken ``name``, the ``engine`` that
-    renders it (``piper``|``edge``), and a ``model_ref`` locating the
-    model (an uploaded ``.onnx`` path or a bare HF name for Piper, the
-    Edge voice id for Edge). Exactly one row is ``is_default`` — the voice
+    renders it (``piper``; the Microsoft Edge rows of older releases are
+    removed at boot, domovoi/voice_catalog.py), and a ``model_ref``
+    locating the model (an uploaded ``.onnx`` path or a bare HF name).
+    Exactly one row is ``is_default`` — the voice
     a satellite uses until it reports its own selection.
 
     Backs the streaming voice resolver, the per-voice clip renderer, the

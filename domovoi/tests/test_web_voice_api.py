@@ -92,8 +92,8 @@ async def fresh_lists():
         await conn.execute(text("DELETE FROM voices"))
         await conn.execute(text(
             "INSERT INTO voices (name, engine, model_ref, is_default) VALUES "
-            "('Norman', 'piper', 'en_US-norman-medium', TRUE), "
-            "('Kristin', 'piper', 'en_US-kristin-medium', FALSE)"))
+            "('Kristin', 'piper', 'en_US-kristin-medium', TRUE), "
+            "('Norman', 'piper', 'en_US-norman-medium', FALSE)"))
     yield
 
 
@@ -115,7 +115,7 @@ async def test_the_contract_the_phone_reads(_db, fresh_lists, core_hops):  # noq
             "size_bytes": 63531379,
             "sha256": "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71",
         }
-        assert body["server_voice"] == "en_US-norman-medium"
+        assert body["server_voice"] == "en_US-kristin-medium"   # the house voice since 2026-10-12
         assert body["pronunciations"] == [
             {"word": "Domovoi", "say_like": "DOH-moe-voy"},
             {"word": "Domo", "say_like": "DOH-moe"},

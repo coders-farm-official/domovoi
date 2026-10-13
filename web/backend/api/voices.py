@@ -2,9 +2,10 @@
 
 Each satellite speaks in one registered voice; the Domovoi server
 synthesizes that room's responses and renders its greeting/canned clips in
-it. This page manages the registry: list voices, register a cloud (Edge)
-voice by id, upload a local Piper model (``.onnx`` + ``.onnx.json``), set
-the default, rename, and delete.
+it. This page manages the registry: list voices, upload a local Piper
+model (``.onnx`` + ``.onnx.json``), set the default, rename, and delete.
+(The Microsoft Edge cloud voices and their registration were dropped on
+2026-10-12; the core removes old Edge rows at boot.)
 
 On any mutation we ping the Domovoi server's ``/v1/admin/sounds/regenerate``
 so the new/changed voice's clips render and reach satellites — best-effort,
@@ -35,7 +36,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
-from domovoi import egress
 from domovoi.admin_auth import require_admin_mutation
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
@@ -45,6 +45,7 @@ from web.backend.api.voice import clip_response
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
+    core_audio_refusal,
     domovoi_url,
     post_admin,
     post_admin_bytes,
@@ -121,12 +122,6 @@ class Voice(BaseModel):
     problem: str | None = None
 
 
-class EdgeVoiceCreate(BaseModel):
-    name: str = Field(..., min_length=1, max_length=80)
-    voice_id: str = Field(..., min_length=1, max_length=120)
-    set_default: bool = False
-
-
 class VoicePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     set_default: bool | None = None
@@ -157,7 +152,10 @@ async def _trigger_rerender(request: Request) -> None:
 
 def _speakability(engine: str, model_ref: str) -> tuple[str | None, str | None]:
     """(sample, problem) for a registry row; reads a Piper voice's config
-    from disk, never its model."""
+    from disk, never its model. A Microsoft Edge row left from an older
+    release (the core removes them at its next start) plays nothing."""
+    if engine == "edge":
+        return None, "a Microsoft Edge voice: Domovoi no longer speaks those"
     if engine != "piper":
         return "voice", None
     from domovoi.clients.tts import piper_voice_problem
@@ -185,7 +183,9 @@ async def list_voices() -> list[Voice]:
 async def sample_voice(voice_id: int, request: Request) -> Response:
     """Stream a freshly-synthesized sample (intro + random fun fact) for a
     voice, for the play button. Proxies the Domovoi server's TTS — the web
-    process has none of its own. 502 if the Domovoi server is unreachable.
+    process has none of its own. 502 if the Domovoi server is unreachable;
+    a refusal from it (409: the voice can't speak right now, and why)
+    passes through with its own sentence.
     A shipped voice not downloaded yet plays its built-in clip instead; a
     Piper voice that can't speak here is 409 with the reason (its button
     is hidden: the system voice would answer, not this one)."""
@@ -204,21 +204,22 @@ async def sample_voice(voice_id: int, request: Request) -> Response:
                 detail=f"{voice['name']} can't speak here: {problem}" if problem
                 else f"{voice['name']} is not on this server",
             )
-    # A Microsoft Edge voice is synthesized by Microsoft: under
-    # INTERNET_ACCESS=never the sample is refused here, before the core is
-    # asked (it would otherwise answer in a Piper stand-in voice).
-    if voice["engine"] == "edge" and egress.internet_turned_off():
-        raise egress.http_exception("Microsoft Edge voices")
+    elif voice["engine"] == "edge":
+        raise HTTPException(status_code=409, detail=f"{voice['name']} is a Microsoft Edge voice: "
+                            "Domovoi no longer speaks those")
 
     status, audio, headers = await post_admin_bytes(
         "/v1/admin/voices/sample",
         {"name": voice["name"]},
         headers=auth_forward_headers(request),
+        # A catalogue voice not on the box yet downloads on its first
+        # sample (Cori is 114 MB): the shipped voices' route waits as long.
+        timeout=120.0,
     )
-    if status == 0:
-        raise HTTPException(status_code=502, detail="domovoi unreachable")
     if status != 200 or not audio:
-        raise HTTPException(status_code=502, detail="voice sample synthesis failed")
+        # The core's own sentence ("Cori can't speak right now: ..."), not
+        # a bare "502 Bad Gateway".
+        raise core_audio_refusal(status, audio, f"{voice['name']}'s sample could not be made")
     # Forward the spoken text so the UI can show what it's saying.
     out_headers = {}
     if headers.get("x-sample-text"):
@@ -228,33 +229,6 @@ async def sample_voice(voice_id: int, request: Request) -> Response:
         media_type=headers.get("content-type", "audio/wav"),
         headers=out_headers,
     )
-
-
-@router.post(
-    "/edge", response_model=Voice, status_code=201,
-    dependencies=[Depends(require_admin_mutation)],
-)
-async def register_edge_voice(payload: EdgeVoiceCreate, request: Request) -> Voice:
-    """Register a Microsoft Edge cloud voice by its voice id (e.g.
-    ``en-US-AriaNeural``). No file — the engine downloads on demand.
-    409 under ``INTERNET_ACCESS=never``: the voice could never speak."""
-    if egress.internet_turned_off():
-        raise egress.http_exception("Microsoft Edge voices")
-    name = payload.name.strip()
-    voice_id = payload.voice_id.strip()
-    try:
-        async with session_scope() as s:
-            repo = VoicesRepository(s)
-            new_id = await repo.create(
-                name=name, engine="edge", model_ref=voice_id,
-                is_default=payload.set_default,
-            )
-            row = await repo.get_by_name(name)
-    except IntegrityError as e:
-        raise HTTPException(status_code=409, detail="a voice with that name already exists") from e
-    await _trigger_rerender(request)
-    return _to_model(row or {"id": new_id, "name": name, "engine": "edge",
-                             "model_ref": voice_id, "is_default": payload.set_default})
 
 
 @router.post(

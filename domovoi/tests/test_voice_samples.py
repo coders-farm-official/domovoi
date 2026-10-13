@@ -86,6 +86,21 @@ def test_an_uploaded_voice_plays_only_when_it_can_speak(voices):
     assert piper_sample_source("gone") is None              # not on disk, no clip
 
 
+def test_a_kept_catalogue_voice_downloads_on_its_first_sample(voices):
+    """Kamron's Cori (en_GB-cori-high, kept from the old catalogue): not on
+    a fresh box until something speaks in it, and its first sample fetches
+    it as its first reply would. Not under "never" (nothing can fetch it),
+    nor a catalogue voice in another language (it could not speak here)."""
+    from domovoi import egress
+
+    with egress.override_policy("always"):
+        assert piper_sample_source("en_GB-cori-high") == "voice"
+        assert piper_sample_source("de_DE-thorsten-medium") is None
+        assert piper_sample_source("en_US-lessac-medium") is None   # retired
+    with egress.override_policy("never"):
+        assert piper_sample_source("en_GB-cori-high") is None
+
+
 # ── the web routes ────────────────────────────────────────────────────────
 
 
@@ -134,7 +149,9 @@ def test_the_registry_rows_say_what_plays_and_why_not(voices):
     assert got[0] == ("clip", None)
     assert got[1] == ("voice", None)                         # an en-us upload speaks now
     assert got[2][0] is None and "espeak's 'de' phonemes" in got[2][1]
-    assert got[3] == ("voice", None)
+    # a Microsoft Edge row left from an older release (the core removes them
+    # at its next start) plays nothing, and says why
+    assert got[3][0] is None and "Microsoft Edge voice" in got[3][1]
 
 
 def test_the_settings_page_hides_a_button_with_nothing_to_play():

@@ -18,8 +18,8 @@ Internet, the Windows installer, ``env_bootstrap --internet``):
   literals, ``localhost``, single-label names and the LAN suffixes below
   stay reachable — satellites, the router, Ollama, Postgres, MPD, a LAN
   feed mirror. "never" means no internet, not no network.
-* :func:`require_internet` — egress that has no URL (``edge_tts``,
-  AcoustID, Shazam, ``git fetch``, ``pip``, ``docker pull``) and LOCAL
+* :func:`require_internet` — egress that has no URL (AcoustID,
+  Shazam, ``git fetch``, ``pip``, ``docker pull``) and LOCAL
   services that proxy to the internet (SearXNG, an Ollama registry pull).
 * :func:`async_client` / :func:`sync_client` and the request hooks — an
   ``httpx`` client that refuses non-local URLs, redirect hops included.
@@ -322,7 +322,7 @@ def require_destination(url: str) -> None:
 def require_internet(what: str) -> None:
     """Raise :class:`InternetTurnedOff` under ``never``. For egress with
     no URL and for local services that proxy to the internet. ``what`` is
-    a short human label: "web search", "Microsoft Edge voice"."""
+    a short human label: "web search", "song identification"."""
     if internet_turned_off():
         _log_refusal(what)
         raise InternetTurnedOff(what)

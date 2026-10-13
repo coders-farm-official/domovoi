@@ -597,7 +597,7 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
       </span>
     )}
     <Button variant="secondary" icon="external-link"
-            onClick={() => { window.location.hash = '#settings'; }}>Manage</Button>
+            onClick={() => { openSettingsTab(tab); }}>Manage</Button>
   </div>
 );
 

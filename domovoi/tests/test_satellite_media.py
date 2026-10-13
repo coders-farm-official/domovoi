@@ -62,6 +62,11 @@ def fake_repo(tmp_path, monkeypatch):
     (sat / "requirements.txt").write_text("requests==2.32.0\n", encoding="utf-8")
     (sat / "domovoi-satellite.service").write_text("[Unit]\n", encoding="utf-8")
     (sat / "scripts" / "domovoi-provisioning.service").write_text("[Unit]\n", encoding="utf-8")
+    # The early unit's two files are string constants in net_settings.py.
+    (sat / "net_settings.py").write_text(
+        'EARLY_HELPER_TEXT = "#!/usr/bin/python3 -I\\nprint(1)\\n"\n'
+        'EARLY_UNIT_TEXT = "[Service]\\nExecStart=/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname\\n"\n',
+        encoding="utf-8")
     (sat / "scripts" / "domovoi-apply-payload").write_text("#!/bin/sh\n", encoding="utf-8")
     # Every root helper and the verifier `assemble` ships under system/:
     # the fixture used to stop at apply-payload, so both tests below failed
@@ -78,6 +83,29 @@ def fake_repo(tmp_path, monkeypatch):
 
 
 @requires_db
+def test_a_new_card_installs_and_enables_the_host_name_unit() -> None:
+    """Stage 1 renders domovoi-hostname.service with the other units and
+    enables it, so a new card sets domovoi-<room> before NetworkManager on
+    every boot after setup (setup itself names it before the Wi-Fi join)."""
+    firstrun = overlay.render_firstrun("domovoi", "xvf3800_usb", "voice")
+    units = firstrun[firstrun.index("# 7. Units"):firstrun.index("# 7b.")]
+    assert ('install -m 0755 -o root -g root \\\n      "$PAYDIR/system/domovoi-set-hostname" '
+            "/usr/local/lib/domovoi/set-hostname") in units
+    assert ('install -m 0644 -o root -g root \\\n      "$PAYDIR/system/domovoi-hostname.service" '
+            "/usr/local/lib/systemd/system/domovoi-hostname.service") in units
+    assert "EARLY_UNIT=domovoi-hostname" in units
+    assert "systemctl enable domovoi-provisioning domovoi-bootstrap $EARLY_UNIT" in units
+    # Both files come from the real net_settings.py, read without importing
+    # it: the unit runs the root-owned helper, never the account's venv.
+    repo = Path(__file__).resolve().parents[2]
+    unit = payload.embedded_text(repo / "satellite" / "net_settings.py", "EARLY_UNIT_TEXT")
+    helper = payload.embedded_text(repo / "satellite" / "net_settings.py", "EARLY_HELPER_TEXT")
+    assert "ExecStart=/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname" in unit
+    assert "satellite-venv" not in unit and "@HOME@" not in unit
+    assert helper.startswith("#!/usr/bin/python3 -I") and "from satellite" not in helper
+    assert not (repo / "satellite" / "scripts" / "domovoi-hostname.service").exists()
+
+
 def test_assemble_and_finalize(fake_repo, tmp_path, monkeypatch):
     async def _no_plugins():
         return []
@@ -94,6 +122,11 @@ def test_assemble_and_finalize(fake_repo, tmp_path, monkeypatch):
     assert not (pay / "satellite" / "secret.env").exists()     # denylisted
     assert (pay / "wheels" / "pip-24.0-py3-none-any.whl").is_file()
     assert (pay / "system" / "domovoi-apply-payload").is_file()
+    # The host name before the network (2026-10-12): the unit and its
+    # root-owned helper, from the constants net_settings.py carries.
+    assert (pay / "system" / "domovoi-hostname.service").read_text(encoding="utf-8").startswith("[Service]")
+    assert (pay / "system" / "domovoi-set-hostname").read_text(encoding="utf-8") == \
+        "#!/usr/bin/python3 -I\nprint(1)\n"
     assert any("debs" in w for w in asm["warnings"])           # empty bucket flagged
 
     manifest = json.loads((pay / "manifest.json").read_text(encoding="utf-8"))

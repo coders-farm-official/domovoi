@@ -140,6 +140,57 @@ internal fun dockExpanded(expanded: Boolean, pulledSoFar: Float, thresholdPx: Fl
     else -> expanded
 }
 
+/**
+ * How much of a drag the dock's list left over the dock keeps for itself:
+ * all of it in the direction that moves the dock (pushing on past the end of
+ * a closed dock, pulling past the top of an open thread), none the other way.
+ *
+ * Keeping it is what makes the gesture work at all on Android 12 and later.
+ * There the list's stretch overscroll takes whatever a drag leaves over, and
+ * once it has stretched, the next frame's delta goes to the stretch FIRST,
+ * before the list or any nested-scroll parent is asked
+ * (AndroidEdgeEffectOverscrollEffect.applyToScroll, Compose foundation
+ * 1.7.6). A connection that took nothing saw one frame past the end, a few
+ * pixels, never the 56dp threshold, so the dock neither opened nor closed
+ * whenever its list was long enough to scroll (measured 2026-10-12 on the
+ * emulator, API 35: three swipes and a slow 1.5 s drag past the end of a
+ * long reply left it docked). Taking the leftover means no stretch builds,
+ * so every frame of the pull reaches the dock; the other direction is left
+ * to the stretch, which is the right answer there.
+ */
+internal fun dockTakes(expanded: Boolean, leftoverY: Float): Float = when {
+    !expanded && leftoverY < 0f -> leftoverY
+    expanded && leftoverY > 0f -> leftoverY
+    else -> 0f
+}
+
+/** One drag's pull on the dock, frame by frame: what the dock's
+ *  nested-scroll connection does with each leftover ([dockTakes] then
+ *  [dockExpanded]). [lift] is the finger leaving the glass. */
+internal class DockPull(private val thresholdPx: Float) {
+    private var pulled = 0f
+    var expanded = false
+        private set
+
+    /** The list's leftover this frame; returns how much of it the dock kept. */
+    fun leftover(expandedNow: Boolean, leftoverY: Float): Float {
+        expanded = expandedNow
+        val taken = dockTakes(expandedNow, leftoverY)
+        if (taken == 0f) return 0f
+        pulled += taken
+        val next = dockExpanded(expandedNow, pulled, thresholdPx)
+        if (next != expandedNow) {
+            pulled = 0f
+            expanded = next
+        }
+        return taken
+    }
+
+    fun lift() {
+        pulled = 0f
+    }
+}
+
 /** What to say under the button. */
 internal fun talkHint(phase: TalkPhase, followup: Boolean, note: String?): String = when (phase) {
     TalkPhase.Recording -> "listening — release to send, slide away to cancel"
@@ -452,23 +503,20 @@ internal fun VoiceView(
     val threshold = with(LocalDensity.current) { 56.dp.toPx() }
     // Scrolling the lists past their ends moves the dock: pushing on past
     // the latest exchange opens the whole thread; pulling past the top of
-    // the whole thread closes it again.
+    // the whole thread closes it again. The pull is kept from the list's
+    // stretch, or the stretch swallows it (see dockTakes).
     val dockScroll = remember(expanded) {
+        val pull = DockPull(threshold)
         object : NestedScrollConnection {
-            var pulled = 0f
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                 if (source != NestedScrollSource.UserInput) return Offset.Zero
-                pulled += available.y
-                val next = dockExpanded(expanded, pulled, threshold)
-                if (next != expanded) {
-                    pulled = 0f
-                    expanded = next
-                }
-                return Offset.Zero
+                val taken = pull.leftover(expanded, available.y)
+                if (pull.expanded != expanded) expanded = pull.expanded
+                return Offset(0f, taken)
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                pulled = 0f
+                pull.lift()
                 return Velocity.Zero
             }
         }

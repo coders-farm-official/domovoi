@@ -110,6 +110,73 @@ def parse_say_it_like(word, say):
                          stressed=stressed, has_capitals=has_capitals)
 
 
+# A respelling syllable no dictionary knows ("shuh", "zhahn", "voy") is read
+# with this key before the out-of-dictionary model, which reads it as a word
+# ("shuh" came out SH UW1, so "SEER-shuh" said "SEER-shoo"): the conventions
+# of dictionaries' and Wikipedia's pronunciation respellings ("uh" as in
+# but, "ay" as in say, "ow" as in now, "zh" as in measure, "dh" as in this).
+# A syllable is consonants, one vowel spelling, consonants; anything else
+# (two vowels, an apostrophe) is left to the model. Longest spelling first.
+RESPELL_VOWELS = {
+    "eye": "AY", "igh": "AY", "air": "EH R", "ear": "IH R", "eer": "IH R", "oor": "UH R", "our": "AW R",
+    "ahr": "AA R", "ah": "AA", "ai": "EY", "ar": "AA R", "au": "AO", "aw": "AO", "ay": "EY",
+    "ea": "IY", "ee": "IY", "eh": "EH", "er": "ER", "ew": "Y UW", "ih": "IH", "ir": "ER",
+    "oa": "OW", "oe": "OW", "oh": "OW", "oi": "OY", "oo": "UW", "or": "AO R", "ou": "AW", "ow": "AW",
+    "oy": "OY", "uh": "AH", "ur": "ER", "uu": "UH",
+    "a": "AE", "e": "EH", "i": "IH", "o": "AA", "u": "AH",
+}
+# A lone vowel letter ending the syllable: "pa", "mo", "ki", "zu".
+RESPELL_OPEN_VOWELS = {"a": "AA", "e": "EH", "i": "IY", "o": "OW", "u": "UW"}
+RESPELL_CONSONANTS = {
+    "dzh": "JH", "tch": "CH", "ch": "CH", "ck": "K", "dh": "DH", "dz": "D Z", "gh": "G", "kh": "K",
+    "ng": "NG", "nk": "NG K", "ph": "F", "qu": "K W", "sh": "SH", "th": "TH", "ts": "T S", "wh": "W",
+    "zh": "ZH",
+    "b": "B", "c": "K", "d": "D", "f": "F", "g": "G", "h": "HH", "j": "JH", "k": "K", "l": "L",
+    "m": "M", "n": "N", "p": "P", "q": "K", "r": "R", "s": "S", "t": "T", "v": "V", "w": "W",
+    "x": "K S", "y": "Y", "z": "Z",
+}
+_RESPELL_LETTER_VOWELS = "aeiou"
+
+
+def _longest(s, i, table):
+    for n in (3, 2, 1):
+        if s[i:i + n] in table and len(s[i:i + n]) == n:
+            return s[i:i + n]
+    return None
+
+
+def respell_arpa(syllable):
+    """One respelling syllable -> ARPAbet by the key above (its vowel with
+    stress 1, a doubled sound said once), or None when it is not
+    consonants, one vowel spelling, consonants."""
+    s = syllable.lower()
+    if not s or not all("a" <= c <= "z" for c in s):
+        return None
+    onset, coda, i = [], [], 0
+    while i < len(s) and s[i] not in _RESPELL_LETTER_VOWELS:
+        m = _longest(s, i, RESPELL_CONSONANTS)
+        onset += RESPELL_CONSONANTS[m].split()
+        i += len(m)
+    if i == len(s):
+        return None
+    v = _longest(s, i, RESPELL_VOWELS)
+    i += len(v)
+    while i < len(s):
+        if s[i] in _RESPELL_LETTER_VOWELS:
+            return None
+        m = _longest(s, i, RESPELL_CONSONANTS)
+        coda += RESPELL_CONSONANTS[m].split()
+        i += len(m)
+    vowel = (RESPELL_OPEN_VOWELS[v] if len(v) == 1 and not coda else RESPELL_VOWELS[v]).split()
+    vowel = [p + "1" if p in ("AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY",
+                              "UH", "UW") else p for p in vowel]
+    out = []
+    for p in onset + vowel + coda:
+        if not out or out[-1].rstrip("012") != p.rstrip("012"):
+            out.append(p)
+    return out
+
+
 def parse_pronunciation_text(text):
     """``Word = say it like`` lines -> [(word, say_it_like)], in order.
     Blank lines and ``#`` comment lines are skipped. Only the shape is

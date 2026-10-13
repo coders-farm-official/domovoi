@@ -64,6 +64,12 @@ SAY_IT_LIKE_CASES = [
     ([("Saoirse", "SEER-shuh")], "Saoirse sings."),
     ([("Hozier", "HOE-zee-er")], "Hozier and Lorde."),
     ([("Kamron", "CAM ron")], "Kamron asked."),
+    ([("Kamron", "KAM-ren")], "Kamron asked."),
+    ([("Kamron", "Kam-ren")], "Kamron asked."),
+    ([("Kamron", "kamren")], "Kamron asked."),
+    ([("Kamron", "KAM-run")], "Kamron asked."),
+    ([("Cameron", "CAM-er-on"), ("Jennifer", "jen-NIF-er")], "Cameron and Jennifer."),
+    ([("Jean", "zhahn"), ("Aoife", "EE-fuh")], "Jean and Aoife."),
     ([("Ollama", "oh-LAH-muh")], "Ollama is running."),
     ([("SZA", "SIZ-uh")], "Play SZA."),
     ([("Beyoncé", "bee-YON-say")], "Beyonce, BEYONCÉ and Beyoncé's."),
@@ -113,8 +119,10 @@ def respelling_model_words(ph, text):
     out = []
     for key in [e.split("=", 1)[0] for e in ph.pronunciation_tag(text).split(";") if e]:
         entry = pron[key]
+        if ph.whole_respelling_arpa(entry.pieces, entry.stressed) is not None:
+            continue            # read from the dictionary as one word
         for piece in entry.pieces:
-            arpa, src = ph.word_arpa(piece.lower())
+            arpa, src = ph.respelling_arpa(piece.lower())
             if src == "model" and [piece.lower(), " ".join(arpa)] not in out:
                 out.append([piece.lower(), " ".join(arpa)])
     return out

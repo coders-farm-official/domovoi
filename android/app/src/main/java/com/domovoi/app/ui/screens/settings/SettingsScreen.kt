@@ -240,7 +240,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                             append(
                                 ": speech, understanding, local voices, the music library, timers and " +
                                     "intercom all work with no internet. Only a few features (web search, " +
-                                    "cloud voices, some plugins) need the network, and they degrade " +
+                                    "some plugins) need the network, and they degrade " +
                                     "gracefully instead of breaking.",
                             )
                         },

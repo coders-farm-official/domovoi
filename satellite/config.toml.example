@@ -127,8 +127,7 @@ threshold = 0.5
 # The greeting or chime plays to the END first, then the satellite listens —
 # anything said while it plays is not heard, by design, so wait for it. That
 # puts the clip's length in front of every command: about 1 s with a Piper
-# voice (1.5 s for the longer lines), about 1.8 s with an Edge voice (whose
-# clips end in ~0.85 s of silence), plus 0.2 s for the room to go quiet. The
+# voice (1.5 s for the longer lines), plus 0.2 s for the room to go quiet. The
 # chime costs about half a second; "none" costs nothing.
 # When music was playing, the spoken greeting is skipped (the music stopping
 # and the LED say "listening"); the chime still plays.
@@ -178,8 +177,8 @@ sync_enabled = true
 
 [voice]
 # Which registered voice this satellite speaks in. The Domovoi server keeps a
-# voice registry (Piper local models + optional Edge cloud voices, managed
-# from the web dashboard's Voices page) and synthesizes THIS room's responses
+# voice registry (Piper local voices, managed from the web dashboard's
+# Voices page) and synthesizes THIS room's responses
 # and greetings in the named voice. Say "what voices are there", "let me hear
 # <name>", or "switch to <name>" to sample and change it by voice — a switch
 # writes ~/.domovoi/voice, which overrides this value and survives restarts.

@@ -2,14 +2,15 @@
 
 A short fallback chain that starts at the preferred engine. Output is always
 a complete WAV file's bytes (int16 mono, native sample rate of the engine),
-so HTTP clients can stream it directly without re-encoding.
+so HTTP clients can stream it directly without re-encoding. Every rung is
+local: nothing Domovoi says leaves the house.
 
-- `edge`   — Microsoft Edge neural voices (online, very natural, ~24 kHz).
-  The reply text goes to Microsoft, so Edge is an informed opt-in: it is
-  used ONLY when it is the preferred engine for the call (``TTS_ENGINE=edge``
-  or a voice registered on the edge engine) and the internet answer allows
-  it. It is never a fallback rung, and under ``INTERNET_ACCESS=never`` it is
-  never used at all (see :func:`engine_order`).
+(The Microsoft Edge online voices, edge-tts, were dropped on 2026-10-12, by
+the owner's decision: Microsoft's service had started refusing edge-tts,
+every reply text went to Microsoft, and edge-tts is LGPL. An ``engine`` of
+"edge" still named by an old setting or registry row is spoken by Piper;
+the boot removes the rows, domovoi/voice_catalog.py.)
+
 - `piper`  — local neural (offline, auto-downloads voice, 22 kHz): a Piper
   VITS model run directly on ONNX Runtime, fed by Domovoi's own permissive
   text-to-phoneme converter (``domovoi/phonemizer``; no espeak-ng, no
@@ -52,7 +53,7 @@ import tempfile
 import threading
 import wave
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -62,56 +63,50 @@ from domovoi.speech_sanitize import sanitize_for_speech
 
 log = logging.getLogger(__name__)
 
-ENGINES: tuple[str, ...] = ("edge", "piper", "system")
+ENGINES: tuple[str, ...] = ("piper", "system")
 
 
 @dataclass(frozen=True)
 class SynthResult:
     """What a synthesis produced, and which rung of the chain produced it.
 
-    ``engine`` is ``"edge"``, ``"piper"`` or ``"system"``, or ``""`` when
-    every rung failed and ``wav`` is the empty WAV callers get so they don't
-    crash. ``voice`` is the model_ref / Edge voice id the rung used, and
+    ``engine`` is ``"piper"`` or ``"system"``, or ``""`` when every rung
+    failed and ``wav`` is the empty WAV callers get so they don't crash.
+    ``voice`` is the Piper model_ref the rung used, and
     None for ``system`` (the OS voice has no id here) and for the empty
     result."""
 
     wav: bytes
     engine: str
     voice: str | None
+    # Why each rung tried before the one that answered gave nothing, in
+    # words for the owner ("piper: en_GB-x.onnx can't speak here: ..."):
+    # what a sample that can't play its own voice says. Not part of
+    # equality.
+    failures: tuple[str, ...] = field(default=(), compare=False)
 
 
-_edge_skip_logged = False
+def engine_failure_words(engine: str, exc: BaseException) -> str:
+    """One rung's failure, short and in words (no URLs)."""
+    if isinstance(exc, egress.InternetTurnedOff):
+        return f"{engine}: {egress.TURNED_OFF_REASON}"
+    text = str(exc).split(", url=")[0].strip() or type(exc).__name__
+    return f"{engine}: {text[:160]}"
 
 
 def engine_order(preferred: str | None) -> list[str]:
-    """The rungs to try, in order, for a call that prefers ``preferred``.
-
-    Edge appears ONLY when it is the preferred engine and the internet
-    answer allows it: never as a fallback, so a broken Piper on an online
-    box can't quietly send reply text to Microsoft, and never under
-    ``INTERNET_ACCESS=never``. An unknown engine name is treated as Piper.
+    """The rungs to try, in order, for a call that prefers ``preferred``:
+    ``system`` first only when asked for, else Piper; anything else
+    (``piper``, the dropped ``edge``, an unknown name) is Piper.
 
     =====================  ===========================
     preferred              order
     =====================  ===========================
-    edge (allowed)         edge, piper, system
-    edge (under never)     piper, system
-    piper / unknown        piper, system
+    piper / edge / other   piper, system
     system                 system, piper
     =====================  ===========================
     """
-    global _edge_skip_logged
     pref = (preferred or "").strip().lower()
-    if pref == "edge":
-        if egress.internet_allowed():
-            return ["edge", "piper", "system"]
-        if not _edge_skip_logged:
-            _edge_skip_logged = True
-            log.info(
-                "TTS: the Microsoft Edge voice is skipped (%s); speaking with "
-                "Piper instead", egress.TURNED_OFF_REASON,
-            )
-        return ["piper", "system"]
     if pref == "system":
         return ["system", "piper"]
     return ["piper", "system"]
@@ -149,8 +144,7 @@ class TTSStubClient:
             wf.setsampwidth(2)
             wf.setframerate(16_000)
             wf.writeframes(b"")
-        # The stub "renders" on the first rung the real router would try, so
-        # what it reports follows the same Edge rules.
+        # The stub "renders" on the first rung the real router would try.
         requested = (engine or "piper").strip().lower()
         rung = engine_order(requested)[0]
         return SynthResult(
@@ -183,46 +177,6 @@ def _wav_is_silent(wav_bytes: bytes) -> bool:
             return wf.getnframes() == 0
     except (wave.Error, EOFError, OSError):
         return False
-
-
-def _synth_edge_sync(text: str, voice: str, speed: float) -> bytes | None:
-    """Run edge-tts (async under the hood) from a sync context.
-
-    Refuses under ``INTERNET_ACCESS=never`` before anything is imported or
-    sent (``egress.InternetTurnedOff``). :func:`engine_order` already keeps
-    Edge out of the chain there; this is the defence in depth for any other
-    caller."""
-    egress.require_internet("Microsoft Edge voice")
-    try:
-        import edge_tts
-        import miniaudio
-    except ImportError:
-        return None
-
-    rate = f"{int(round((speed - 1.0) * 100)):+d}%"
-
-    async def _go() -> bytes:
-        chunks: list[bytes] = []
-        async for c in edge_tts.Communicate(text, voice, rate=rate).stream():
-            if c["type"] == "audio":
-                chunks.append(c["data"])
-        return b"".join(chunks)
-
-    mp3 = asyncio.run(_go())
-    if not mp3:
-        return None
-    # miniaudio.decode defaults to nchannels=2, sample_rate=44100 — silently
-    # upmixes/resamples. Edge MP3 is mono 24 kHz; pin both so the WAV we
-    # write matches the bytes (otherwise _pcm_to_wav_bytes writes a mono
-    # header over stereo-interleaved data → playback at half speed).
-    decoded = miniaudio.decode(
-        mp3,
-        output_format=miniaudio.SampleFormat.SIGNED16,
-        nchannels=1,
-        sample_rate=24_000,
-    )
-    pcm_bytes = decoded.samples.tobytes()
-    return _pcm_to_wav_bytes(pcm_bytes, decoded.sample_rate)
 
 
 _piper_voice_cache: dict[str, "PiperVoice"] = {}
@@ -280,7 +234,10 @@ SHIPPED_VOICES: tuple[ShippedVoice, ...] = (
                  "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22", 63531379,
                  "73ecdec4f6ab17a437936652dfe3a925bb19e098", 4972),
 )
-DEFAULT_PIPER_VOICE = "en_US-norman-medium"
+# The house voice: Kristin since 2026-10-12 (the owner's pick), Norman
+# before; an install still on Norman moves once (domovoi/voice_migration.py).
+DEFAULT_PIPER_VOICE = "en_US-kristin-medium"
+PREVIOUS_DEFAULT_PIPER_VOICE = "en_US-norman-medium"
 # model_ref -> (.onnx SHA-256, .onnx bytes, .onnx.json git blob SHA-1,
 # .onnx.json bytes), read from the Hub's tree API at PIPER_PINNED_REVISION.
 PIPER_PINS: dict[str, tuple[str, int, str, int]] = {
@@ -566,6 +523,83 @@ UNREADABLE_TEXT_FALLBACK = "Sorry, I can't read that out loud."
 MAX_SPOKEN_CHARS = 5000
 
 
+# Some voices run away on a short sentence said on its own: Norman (the
+# shipped default until 2026-10-12) says "Cameron." as four to six seconds
+# of babble in no language (and "Okay.", "Done.", "Hi, I'm Norman." much
+# the same), while
+# the very same ids come out right after a sentence of context, and Kristin
+# and Linda say them right either way (measured 2026-10-12, Whisper and
+# by length). A voice is checked once, the first time it says a short
+# sentence (:meth:`PiperVoice.runs_away`; the boot warm-up's "Okay." is
+# one): if one of the probe words alone comes out longer than
+# RUNAWAY_SECONDS, its short sentences are said after the lead-in sentence
+# in the same call and cut off again at the pause between the two
+# (:func:`cut_after_lead_in`). The Kotlin engine on the phone does the same
+# with the same numbers (PiperSpeechOut.kt, LeadIn.kt).
+LEAD_IN_TEXT = "The weather today is sunny with a high of seventy two degrees."
+# A sentence with fewer phonemes than this (letters of the phoneme string,
+# not stress or length marks) counts as short. Norman failed on sentences
+# of up to 12 and was right from about 14, in a 32-sentence sample.
+LEAD_IN_MAX_PHONEMES = 20
+RUNAWAY_PROBES = ("Cameron.", "Norman.")
+# Norman says each probe in 3.5 to 6 s; Kristin and Linda in about 0.5 s.
+RUNAWAY_SECONDS = 1.5
+# The cut: a pause is 10 ms frames quieter than this (dB under the loudest
+# frame) for at least LEAD_IN_MIN_PAUSE_SEC (the lead-in's end is 0.3 to
+# 0.9 s; the stops inside it at most 0.14 s), the first one that starts
+# after LEAD_IN_SEARCH_FROM of the lead-in's own length (said before a
+# sentence it lasts 0.8 to 0.9 of that); the sentence's audio starts
+# LEAD_IN_KEEP_SEC before that pause ends, so a soft first sound (a vowel,
+# an n) is not clipped. No such pause: the call is made once more, then
+# the sentence is said alone.
+LEAD_IN_PAUSE_DB = -40.0
+LEAD_IN_MIN_PAUSE_SEC = 0.16
+LEAD_IN_SEARCH_FROM = 0.6
+LEAD_IN_KEEP_SEC = 0.1
+LEAD_IN_FADE_SEC = 0.005
+LEAD_IN_TRIES = 2
+
+
+def phoneme_count(phonemes: str) -> int:
+    """How many phonemes a phoneme string holds: its letters, without the
+    stress and length marks (ˈ ˌ ː), spaces or punctuation."""
+    return sum(1 for c in phonemes if c.isalpha() and c not in "ˈˌː")
+
+
+def cut_after_lead_in(audio, sample_rate: int, lead_in_seconds: float):
+    """The part of ``audio`` (the lead-in sentence, then a short sentence,
+    from one model call) after the pause that ends the lead-in, faded in;
+    None when no such pause is found. ``lead_in_seconds``: how long the
+    lead-in alone lasts at this call's speed."""
+    import numpy as np
+
+    hop = max(1, int(sample_rate * 0.01))
+    n = len(audio) // hop
+    if n < 3:
+        return None
+    frames = np.asarray(audio[: n * hop], dtype=np.float32).reshape(n, hop)
+    rms = np.sqrt(np.mean(frames * frames, axis=1)) + 1e-12
+    quiet = 20 * np.log10(rms / float(np.max(rms))) < LEAD_IN_PAUSE_DB
+    start = int(LEAD_IN_SEARCH_FROM * lead_in_seconds / 0.01)
+    min_frames = int(round(LEAD_IN_MIN_PAUSE_SEC / 0.01))
+    k = max(1, start)
+    while k < n:
+        if not quiet[k]:
+            k += 1
+            continue
+        j = k
+        while j < n and quiet[j]:
+            j += 1
+        if j - k >= min_frames and j < n:
+            cut = max(k, j - int(round(LEAD_IN_KEEP_SEC / 0.01))) * hop
+            out = np.array(audio[cut:], dtype=np.float32)
+            fade = min(len(out), max(1, int(sample_rate * LEAD_IN_FADE_SEC)))
+            out[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            return out
+        k = j
+    return None
+
+
 def _cap_text(text: str) -> str:
     if len(text) <= MAX_SPOKEN_CHARS:
         return text
@@ -620,6 +654,53 @@ class PiperVoice:
         if threads:
             so.intra_op_num_threads = threads
         self.session = ort.InferenceSession(str(onnx_path), so, providers=["CPUExecutionProvider"])
+        # Whether short sentences are said after the lead-in (runs_away),
+        # and the lead-in's phonemes and length alone: checked on first need.
+        self._lead_in: tuple[bool, str, float] | None = None
+        self._lead_in_lock = threading.Lock()
+
+    def _raw_audio(self, ids: list[int], speed: float):
+        """The model's float output for ``ids``, not normalized."""
+        np = self.np
+        length = self.length_scale / speed if speed > 0 else self.length_scale
+        args = {
+            "input": np.array([ids], dtype=np.int64),
+            "input_lengths": np.array([len(ids)], dtype=np.int64),
+            "scales": np.array([self.noise_scale, length, self.noise_w], dtype=np.float32),
+        }
+        if self.multi_speaker:
+            args["sid"] = np.array([0], dtype=np.int64)
+        return self.session.run(None, args)[0].squeeze()
+
+    def _lead_in_state(self) -> tuple[bool, str, float]:
+        """(runs away, lead-in phonemes, lead-in seconds at speed 1),
+        measured once: each probe word said alone, then the lead-in."""
+        if self._lead_in is None:
+            with self._lead_in_lock:
+                if self._lead_in is None:
+                    from domovoi.phonemizer import get_phonemizer
+
+                    ph = get_phonemizer()
+                    longest = 0.0
+                    for word in RUNAWAY_PROBES:
+                        ids = self.sentence_ids(" ".join(ph.phonemize(word, dialect=self.dialect)))
+                        if ids:
+                            longest = max(longest, self._raw_audio(ids, 1.0).size / self.sample_rate)
+                    runs_away = longest > RUNAWAY_SECONDS
+                    lead = " ".join(ph.phonemize(LEAD_IN_TEXT, dialect=self.dialect))
+                    seconds = 0.0
+                    if runs_away:
+                        ids = self.sentence_ids(lead)
+                        seconds = self._raw_audio(ids, 1.0).size / self.sample_rate if ids else 0.0
+                        log.info("TTS: %s says a short sentence alone in %.1f s; its short sentences "
+                                 "are said after a lead-in", self.name, longest)
+                    self._lead_in = (runs_away, lead, seconds)
+        return self._lead_in
+
+    def runs_away(self) -> bool:
+        """Whether this voice garbles a short sentence said on its own (a
+        probe word alone comes out longer than RUNAWAY_SECONDS)."""
+        return self._lead_in_state()[0]
 
     def sentence_ids(self, phonemes: str) -> list[int] | None:
         """One sentence's phoneme string -> this voice's ids, a symbol its
@@ -639,20 +720,27 @@ class PiperVoice:
 
     def sentence_audio(self, phonemes: str, speed: float) -> "object":
         """One sentence's phoneme string -> float32 samples in [-1, 1]
-        (none when nothing in it is a sound the voice knows)."""
+        (none when nothing in it is a sound the voice knows). A short
+        sentence in a voice that runs away is said after the lead-in and
+        cut off from it."""
         np = self.np
         ids = self.sentence_ids(phonemes)
         if ids is None:
             return np.zeros(0, dtype=np.float32)
-        length = self.length_scale / speed if speed > 0 else self.length_scale
-        args = {
-            "input": np.array([ids], dtype=np.int64),
-            "input_lengths": np.array([len(ids)], dtype=np.int64),
-            "scales": np.array([self.noise_scale, length, self.noise_w], dtype=np.float32),
-        }
-        if self.multi_speaker:
-            args["sid"] = np.array([0], dtype=np.int64)
-        audio = self.session.run(None, args)[0].squeeze()
+        audio = None
+        if phoneme_count(phonemes) < LEAD_IN_MAX_PHONEMES:
+            runs_away, lead, lead_seconds = self._lead_in_state()
+            if runs_away and lead_seconds > 0:
+                both = self.sentence_ids(f"{lead} {phonemes}")
+                for _ in range(LEAD_IN_TRIES if both is not None else 0):
+                    audio = cut_after_lead_in(self._raw_audio(both, speed), self.sample_rate,
+                                              lead_seconds / (speed if speed > 0 else 1.0))
+                    if audio is not None:
+                        break
+                if audio is None:
+                    log.warning("TTS: no pause after the lead-in; %s says the sentence alone", self.name)
+        if audio is None:
+            audio = self._raw_audio(ids, speed)
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
         if peak < 1e-8:
             return np.zeros_like(audio, dtype=np.float32)
@@ -820,12 +908,10 @@ class RealTTSClient:
         self,
         *,
         preferred_engine: str,
-        edge_voice: str,
         piper_voice: str,
         speed: float,
     ) -> None:
         self.preferred_engine = preferred_engine
-        self.edge_voice = edge_voice
         self.piper_voice = piper_voice
         self.speed = speed
 
@@ -860,14 +946,12 @@ class RealTTSClient:
         # override only applies to the preferred engine (the registry pairs a
         # voice with its engine); fallback engines use their own default voice.
         preferred = (engine or self.preferred_engine or "").strip().lower()
+        failures: list[str] = []
         for eng in self._engine_order(preferred):
             v = voice if (voice and eng == preferred) else None
             used: str | None = None
             try:
-                if eng == "edge":
-                    used = v or self.edge_voice
-                    out = _synth_edge_sync(text, used, self.speed)
-                elif eng == "piper":
+                if eng == "piper":
                     used = v or self.piper_voice
                     out = _synth_piper_sync(text, used, self.speed)
                 elif eng == "system":
@@ -878,12 +962,14 @@ class RealTTSClient:
                 # audio) so we fall through to the next engine rather than
                 # returning silence — the local-first safety net working.
                 if out and not _wav_is_silent(out):
-                    return SynthResult(wav=out, engine=eng, voice=used)
+                    return SynthResult(wav=out, engine=eng, voice=used, failures=tuple(failures))
+                failures.append(f"{eng}: no audio")
             except Exception as e:
                 log.warning("TTS engine %s failed: %s", eng, e)
+                failures.append(engine_failure_words(eng, e))
         # If every engine fails, return an empty WAV so callers don't crash.
         log.error("all TTS engines failed for text len=%d", len(text))
-        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None)
+        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None, failures=tuple(failures))
 
 
 _client: TTSClient | None = None
@@ -898,7 +984,6 @@ def get_tts_client() -> TTSClient:
     else:
         _client = RealTTSClient(
             preferred_engine=settings.tts_engine,
-            edge_voice=settings.tts_edge_voice,
             piper_voice=settings.tts_piper_voice,
             speed=settings.tts_speed,
         )

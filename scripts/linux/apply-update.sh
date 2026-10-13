@@ -50,8 +50,9 @@
 #      venv's Python, otherwise through the resolver as a `warn` step
 #      ("lock not applied: <why>", shown on the Version card). After a
 #      re-sync, packages a release stopped using are uninstalled
-#      (drop_retired_packages: piper-tts and piper-phonemize, GPL), since
-#      pip never removes what nothing requires any more.
+#      (drop_retired_packages: piper-tts and piper-phonemize, GPL;
+#      edge-tts, LGPL), since pip never removes what nothing requires any
+#      more.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
@@ -1419,10 +1420,11 @@ sync_deps_resolved() {
 # them, and its re-sync installs them again): piper-tts, GPL-3.0 since 1.3
 # with espeak-ng (GPL-3.0) inside, which Domovoi's own text-to-phoneme
 # converter and ONNX Runtime replaced in 2026-10 (domovoi/phonemizer), and
-# piper-phonemize, its older espeak-ng wrapper. A step is recorded only when
-# something was removed; a failure is a `warn` and the update stands
-# (nothing imports them any more).
-RETIRED_PACKAGES=(piper-tts piper-phonemize)
+# piper-phonemize, its older espeak-ng wrapper; edge-tts (LGPL-3.0), the
+# Microsoft Edge online voices, dropped on 2026-10-12. A step is recorded
+# only when something was removed; a failure is a `warn` and the update
+# stands (nothing imports them any more).
+RETIRED_PACKAGES=(piper-tts piper-phonemize edge-tts)
 drop_retired_packages() {
   local t0 out rc=0 gone
   t0=$(now_ms)

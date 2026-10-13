@@ -121,11 +121,15 @@ def test_say_it_like_cases(case):
 
 
 def test_near_ties_are_marked_in_respellings_too():
-    """A syllable of a "say it like" entry that the model reads is checked
-    for near ties like any word of the text (say_it_like-004: "shiv")."""
-    case = next(c for c in LIST_CASES if c["pronunciations"] == [["Siobhan", "shiv-AWN"]])
-    assert case["respelling_model"][0][0] == "shiv" and case["near_tie"] == ["shiv"]
-    assert "shiv" in GOLDEN["near_tie_words"]
+    """A syllable of a "say it like" entry that the model reads is listed
+    and checked for near ties like any word of the text ("kamren",
+    say_it_like-010). Since the respelling key (2026-10-12) "shiv" is no
+    longer one: the key reads it, the same on every runtime."""
+    case = next(c for c in LIST_CASES if c["pronunciations"] == [["Kamron", "kamren"]])
+    assert case["respelling_model"] == [["kamren", "K AE1 M ER0 AH0 N"]]
+    siobhan = next(c for c in LIST_CASES if c["pronunciations"] == [["Siobhan", "shiv-AWN"]])
+    assert "respelling_model" not in siobhan and "near_tie" not in siobhan
+    assert "shiv" not in GOLDEN["near_tie_words"]
     # The shipped defaults have none: one voice says Domovoi the same everywhere.
     default_ties = {w for c in DEFAULT_CASES for w in c.get("near_tie", [])}
     assert not default_ties & {"voy", "doh", "moe", "win"}

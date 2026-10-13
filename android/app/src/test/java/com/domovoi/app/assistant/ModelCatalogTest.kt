@@ -59,7 +59,7 @@ class ModelCatalogTest {
         val voices = ModelCatalog.all.filter { it.kind == ModelKind.TTS }
         assertEquals(listOf("en_US-norman-medium", "en_US-kristin-medium", "en_US-ljspeech-medium"), voices.map { it.id })
         assertEquals(ModelCatalog.voices, voices)
-        assertEquals(ModelCatalog.norman, ModelCatalog.defaultVoice)
+        assertEquals(ModelCatalog.kristin, ModelCatalog.defaultVoice)   // the house voice since 2026-10-12
         assertTrue(ModelCatalog.assistant.none { it.kind == ModelKind.TTS })
         voices.forEach { v ->
             assertEquals("public domain", v.license)

@@ -17,7 +17,9 @@ Owner decisions (design-notes NAV-SATELLITES-BRIEF.md):
 * Satellites left the sidebar, the strip and the grid and is a Settings
   tab; the old ``#satellites`` (bookmarks, the docs, Home's room cards and
   problem rows) opens that tab, and the route stays reserved so no plugin
-  can take it.
+  can take it. Since 2026-10-12 every Settings tab has its own address
+  (``#settings/satellites``; test_web_settings_routes.py), so the old route
+  is rewritten to that address, in place.
 
 Driven through domovoi/tests/jsx_interact_harness.js (the dashboard's own
 Babel, a small stateful React), like test_web_home_shell.py.
@@ -82,7 +84,9 @@ window.dispatchEvent = (e) => {
 };
 CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
 window.__replaced = [];
-window.history = { replaceState: (s, t, url) => { window.__replaced.push(url); } };
+// replaceState moves the address in place, as in a browser (no hashchange).
+window.history = { replaceState: (s, t, url) => { window.__replaced.push(url); window.location.hash = url; } };
+if (__HASH) window.location.hash = __HASH;
 window.DomovoiPluginManifest = __MANIFEST;
 window.__cls = (e) => String((e && e.props && e.props.className) || '').split(' ');
 window.__deep = (n) => {
@@ -110,14 +114,15 @@ def _device(shared: bool) -> str:
 
 
 def _setup(*, saved=None, raw: str | None = None, broken: str = "", shared: bool = False,
-           ss: dict | None = None, manifest: dict | None = None) -> str:
+           ss: dict | None = None, manifest: dict | None = None, hash: str = "") -> str:
     ls = {}
     if raw is not None:
         ls[KEY] = raw
     elif saved is not None:
         ls[KEY] = json.dumps(saved)
     return (f"const __LS = {json.dumps(ls)}; const __BROKEN = {json.dumps(broken)};"
-            f" const __SS = {json.dumps(ss or {})}; const __MANIFEST = {json.dumps(manifest or _RADIO)};\n"
+            f" const __SS = {json.dumps(ss or {})}; const __MANIFEST = {json.dumps(manifest or _RADIO)};"
+            f" const __HASH = {json.dumps(hash)};\n"
             + _SANDBOX + _device(shared))
 
 
@@ -140,9 +145,8 @@ def _grid(**kw) -> dict:
             "const w = h.global('window'); h.render(); await w.__settle(h);"
             "const tiles = h.findAll((e) => e.props.className === 'home-tile').map((e) => e.props.href);"
             "const edit = h.find((e) => w.__cls(e).includes('home-bar-edit'));"
-            "await h.click((e) => w.__cls(e).includes('home-bar-edit'));"
-            "return { tiles, edit: edit && { href: edit.props.href, text: edit.text },"
-            " hash: w.location.hash, tab: w.__ss.get('domovoi.settings.tab') || null };"
+            "return { tiles, edit: edit && { href: edit.props.href, text: edit.text,"
+            " onClick: typeof edit.props.onClick } };"
         ),
     }
 
@@ -253,16 +257,16 @@ SCENARIOS: dict[str, dict] = {
         "script": r"""
           const w = h.global('window');
           const music = w.settingsTabRoute('music');
-          const quiet = { ss: w.__ss.get('domovoi.settings.tab') || null, replaced: w.__replaced.slice(),
-                          events: w.__events.length };
+          const quiet = { replaced: w.__replaced.slice(), events: w.__events.length };
           const sats = w.settingsTabRoute('satellites');
-          return { music, quiet, sats, ss: w.__ss.get('domovoi.settings.tab') || null,
+          const deeper = w.settingsTabRoute('#satellites/');
+          return { music, quiet, sats, deeper, ss: w.__ss.get('domovoi.settings.tab') || null,
                    replaced: w.__replaced, events: w.__events, aliases: w.SETTINGS_TAB_ROUTES };
         """,
     },
     "settings_on_satellites": {
         "files": SAT_FILES, "component": "(window.__tabs = SETTINGS_TABS, SettingsPage)",
-        "setup": _setup(ss={"domovoi.settings.tab": "satellites"}),
+        "setup": _setup(hash="#settings/satellites"),
         "api": {
             "GET /api/satellites": [{"room_id": "kitchen", "status": "online", "wifi": None,
                                      "now_playing": None, "sat_type": "voice"}],
@@ -278,21 +282,24 @@ SCENARIOS: dict[str, dict] = {
           const drawerBefore = h.findAll({ type: 'aside' }).length;
           await h.click((e) => w.__cls(e).includes('sat-card'));
           return { tabs: w.__tabs.map((t) => t.id), headers, summary, cards, drawerBefore,
-                   drawerAfter: h.findAll({ type: 'aside' }).length,
-                   stored: w.__ss.get('domovoi.settings.tab') || null };
+                   drawerAfter: h.findAll({ type: 'aside' }).length, hash: w.location.hash };
         """,
     },
     "settings_switches_on_alias": {
         "files": SAT_FILES, "component": "SettingsPage",
-        "setup": _setup(ss={"domovoi.settings.tab": "about"}),
+        "setup": _setup(hash="#settings/about"),
         "api": {"GET /api/satellites": [], "GET /api/satellites/approvals": [],
                 "GET /api/satellites/pending": []},
         "script": r"""
           const w = h.global('window'); h.render(); await w.__settle(h);
           const before = !!h.find((e) => w.__cls(e).includes('sat-panel'));
-          w.settingsTabRoute('satellites'); await w.__settle(h);
+          // A #satellites link pressed while Settings is on screen: the
+          // address changes, the shell rewrites it, the page follows.
+          w.location.hash = '#satellites';
+          w.settingsTabRoute(w.location.hash);
+          w.dispatchEvent({ type: 'hashchange' }); await w.__settle(h);
           const after = !!h.find((e) => w.__cls(e).includes('sat-panel'));
-          return { before, after, stored: w.__ss.get('domovoi.settings.tab') || null };
+          return { before, after, hash: w.location.hash };
         """,
     },
 }
@@ -392,8 +399,8 @@ def test_the_grid_holds_what_the_bar_does_not(driven) -> None:
 
 def test_the_grid_links_to_the_bar_editor(driven) -> None:
     out = driven["grid_default"]
-    assert out["edit"] == {"href": "#settings", "text": "edit the bar"}
-    assert out["tab"] == "phonebar" and out["hash"] == "settings"
+    # The tab's own address: a plain link, no click handler in between.
+    assert out["edit"] == {"href": "#settings/phone-bar", "text": "edit the bar", "onClick": "undefined"}
 
 
 # ─── the editor ──────────────────────────────────────────────────────────
@@ -475,11 +482,12 @@ def test_the_editor_is_a_settings_tab_of_its_own(driven) -> None:
 def test_the_old_route_opens_the_settings_tab(driven) -> None:
     o = driven["alias"]
     assert o["music"] == "music"
-    assert o["quiet"] == {"ss": None, "replaced": [], "events": 0}
-    assert o["sats"] == "settings"
-    assert o["ss"] == "satellites"
-    assert o["replaced"] == ["#settings"]
-    assert o["events"] == [{"type": "domovoi:settings-tab", "detail": {"tab": "satellites"}}]
+    assert o["quiet"] == {"replaced": [], "events": 0}
+    # The tab's own address, in place of the old one (replaced, not pushed).
+    assert o["sats"] == "settings/satellites" and o["deeper"] == "settings/satellites"
+    assert o["replaced"] == ["#settings/satellites", "#settings/satellites"]
+    # The address is the whole story: no session storage, no window event.
+    assert o["ss"] is None and o["events"] == []
     assert o["aliases"] == {"satellites": "satellites"}
 
 
@@ -498,7 +506,7 @@ def test_settings_opens_on_satellites_with_the_whole_view(driven) -> None:
     o = driven["settings_on_satellites"]
     tabs = o["tabs"]
     assert tabs.index("satellites") == tabs.index("phonebar") + 1
-    assert o["stored"] is None                       # the deep link was read once
+    assert o["hash"] == "#settings/satellites"       # the address stays the tab's
     assert o["summary"] == "1 online · 0 offline · 1 known"
     assert o["cards"] == 1
     # One page header (Settings), not a second "Satellites" one.
@@ -509,7 +517,7 @@ def test_settings_opens_on_satellites_with_the_whole_view(driven) -> None:
 
 def test_a_settings_page_already_on_screen_switches_to_the_tab(driven) -> None:
     o = driven["settings_switches_on_alias"]
-    assert o == {"before": False, "after": True, "stored": None}
+    assert o == {"before": False, "after": True, "hash": "#settings/satellites"}
 
 
 def test_homes_satellite_links_all_use_the_alias() -> None:

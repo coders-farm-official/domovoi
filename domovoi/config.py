@@ -96,8 +96,6 @@ def normalize_think_setting(value: object) -> str:
 #
 # Deliberately NOT here:
 #   * NEWS_AUTO_FETCH — topic news stays a personal opt-in on every answer;
-#   * TTS_ENGINE — Microsoft Edge voices are an informed opt-in, never a
-#     default (your voice never leaves the box);
 #   * SearXNG — a container, not a setting: started or stopped when the
 #     answer is saved.
 
@@ -587,24 +585,32 @@ class Settings(BaseSettings):
         _log.warning("FASTLANE_MODE=%r is not off or shadow; the fast lane stays off", value)
         return "off"
 
-    # ─── TTS engine router (edge → piper → system) ─────────────────────
-    # Preferred engine; the router falls through edge → piper → system on
-    # per-engine failure regardless of where it starts.
-    #
-    # Defaults to `piper` (fully local) because local-first is the product
-    # promise, and `edge` sends the text of every spoken response to
-    # Microsoft — the one place the default config would otherwise leak what
-    # the household is being told. Edge remains a first-class choice for
-    # anyone who wants the nicer voices and is happy with that trade; it is
-    # opt-in rather than opt-out. Piper's voice model auto-downloads from
-    # Hugging Face once, on first render.
+    # ─── TTS engine router (piper → system) ────────────────────────────
+    # Preferred engine; the router falls through piper → system on
+    # per-engine failure (or system → piper when `system` is preferred).
+    # Every engine is local. The Microsoft Edge online voices were dropped
+    # on 2026-10-12: a TTS_ENGINE=edge left in an old .env reads as piper.
+    # Piper's voice model auto-downloads from Hugging Face once.
     tts_engine: str = "piper"                        # preferred engine
-    tts_edge_voice: str = "en-US-AriaNeural"
     # One of the three public-domain voices Domovoi offers (SHIPPED_VOICES in
-    # domovoi/clients/tts.py): en_US-norman-medium, en_US-kristin-medium,
-    # en_US-ljspeech-medium. An install still set to a voice Domovoi no
-    # longer offers moves to this default at boot (domovoi/voice_migration.py).
-    tts_piper_voice: str = "en_US-norman-medium"
+    # domovoi/clients/tts.py): en_US-kristin-medium (the default since
+    # 2026-10-12), en_US-norman-medium, en_US-ljspeech-medium. An install
+    # still set to a voice Domovoi no longer offers, or still on Norman, the
+    # old default, moves at boot (domovoi/voice_migration.py).
+    tts_piper_voice: str = "en_US-kristin-medium"
+
+    @field_validator("tts_engine", mode="before")
+    @classmethod
+    def _tts_engine_known(cls, value: object) -> str:
+        """piper or system; the dropped edge (and anything unknown) is
+        piper, with a log line."""
+        text = str(value or "").strip().lower()
+        if text in ("piper", "system"):
+            return text
+        if text:
+            _log.warning("TTS_ENGINE=%r: Domovoi speaks with piper or system; using piper", value)
+        return "piper"
+
     tts_speed: float = 1.0
     # Wall-clock cap on the `system` engine's subprocess (espeak-ng / say on
     # non-Windows; the Windows SAPI path is in-process and unaffected). This
@@ -691,13 +697,13 @@ class Settings(BaseSettings):
     # address is the wrong one).
     satellite_adoption_enabled: bool = True
     satellite_adoption_advertise_url: str = "auto"
-    # On startup, pre-populate the voices registry with the curated catalog
-    # (domovoi/voice_catalog.py) of Edge cloud + Piper local voices, so
-    # they're available to list/sample/switch without manual registration.
+    # On startup, pre-populate the voices registry with the three
+    # public-domain Piper voices (domovoi/voice_catalog.py), so they're
+    # available to list/sample/switch without manual registration.
     # Idempotent by name. NOTE: the next boot after enabling this renders
-    # each registered voice's greeting clips — a slow, one-time, bandwidth-
-    # heavy boot (Piper models download, Edge clips synth). Turn off once
-    # you've curated the list so deleted voices don't reappear on reboot.
+    # each registered voice's greeting clips — a slow, one-time boot (the
+    # Piper models download). Turn off once you've curated the list so
+    # deleted voices don't reappear on reboot.
     # Follows INTERNET_ACCESS when not set by hand: off on every answer
     # (the default below is what an unanswered box keeps).
     seed_voice_catalog: bool = True

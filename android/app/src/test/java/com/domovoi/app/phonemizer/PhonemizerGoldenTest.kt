@@ -93,7 +93,7 @@ class PhonemizerGoldenTest {
      * that did not match exactly: the only differences are in the model's
      * output for the case's near-tie words, each at most one phone from the
      * fixture's. A near tie in a "say it like" respelling (`respelling_model`,
-     * say_it_like-004's "shiv") is held to the rule the Python test uses:
+     * say_it_like-010's "kamren") is held to the rule the Python test uses:
      * the same entries, each at most one phone per tie from the fixture's,
      * and the sentences within two characters per tie.
      */
@@ -239,14 +239,49 @@ class PhonemizerGoldenTest {
         assertEquals(voices, setOf(ids.getValue("voice").jsonPrimitive.content) + ids.getValue("same_for").strings())
     }
 
-    /** A syllable of a "say it like" entry the model reads is marked like any
-     *  word of the text (say_it_like-004: "shiv"), so the allowance above
-     *  needs no list of its own. */
+    /** A syllable of a "say it like" entry the model reads is listed and
+     *  marked like any word of the text (say_it_like-010: "kamren"), so the
+     *  allowance above needs no list of its own. Since the respelling key
+     *  (2026-10-12) "shiv" (say_it_like-004) is read by the key, the same
+     *  on every runtime: no near tie. */
     @Test fun nearTiesInRespellingsAreMarkedInTheFixture() {
-        val case = cases.first { it.getValue("id").jsonPrimitive.content == "say_it_like-004" }
-        assertEquals(listOf("shiv"), case.getValue("near_tie").strings())
-        assertEquals("shiv", case.getValue("respelling_model").jsonArray[0].jsonArray[0].jsonPrimitive.content)
-        assertTrue("shiv" in golden.getValue("near_tie_words").strings())
+        val case = cases.first { it.getValue("id").jsonPrimitive.content == "say_it_like-010" }
+        assertEquals("kamren", case.getValue("respelling_model").jsonArray[0].jsonArray[0].jsonPrimitive.content)
+        val siobhan = cases.first { it.getValue("id").jsonPrimitive.content == "say_it_like-004" }
+        assertTrue("near_tie" !in siobhan && "respelling_model" !in siobhan)
+        assertTrue("shiv" !in golden.getValue("near_tie_words").strings())
+    }
+
+    /** The respelling key on the same syllables as test_phonemizer.py's
+     *  test_the_respelling_key, and Kamron's name (test_kamron). */
+    @Test fun theRespellingKey() {
+        val key = mapOf(
+            "shuh" to "SH AH1", "zhahn" to "ZH AA1 N", "dhuh" to "DH AH1", "tsuh" to "T S AH1",
+            "shiv" to "SH IH1 V", "voy" to "V OY1", "awn" to "AO1 N", "eer" to "IH1 R", "zu" to "Z UW1",
+            "kowt" to "K AW1 T", "bair" to "B EH1 R", "chess" to "CH EH1 S", "yoo" to "Y UW1", "nyew" to "N Y UW1",
+        )
+        for ((syllable, arpa) in key) assertEquals(syllable, arpa, Pronunciations.respellArpa(syllable)?.joinToString(" "))
+        for (syllable in listOf("", "my", "shh", "boat'", "two-", "naive", "aeiou", "é")) {
+            assertEquals(syllable, null, Pronunciations.respellArpa(syllable))
+        }
+        assertEquals(listOf("R", "EH1", "N") to "lex", ph.respellingArpa("ren"))
+        assertEquals("lex", ph.respellingArpa("ts").second)
+        val kamron = mapOf(
+            "KAM-ren" to ("K AE1 M R AH0 N" to "kˈamɹən."), "Kam-ren" to ("K AE1 M R AH0 N" to "kˈamɹən."),
+            "KAM-run" to ("K AE1 M R AH0 N" to "kˈamɹən."), "kamren" to ("K AE1 M ER0 AH0 N" to "kˈaməɹən."),
+            "kam-REN" to ("K AE2 M R EH1 N" to "kamɹˈɛn."),
+        )
+        for ((say, want) in kamron) {
+            val p = Phonemizer(data, model, listOf("Kamron" to say))
+            assertEquals(say, want.first, p.pronunciations().getValue("kamron").resolved)
+            assertEquals(say, listOf(want.second), p.phonemize("Kamron."))
+        }
+        fun resolved(word: String, say: String) =
+            Phonemizer(data, model, listOf(word to say)).pronunciations().values.single().resolved
+        assertEquals("K AE1 M ER0 AH0 N", resolved("Cameron", "CAM-er-on"))
+        assertEquals("SH AE1 R AH0 N", resolved("Sharon", "SHA-ron"))
+        assertEquals("K AE2 M ER1 AA2 N", resolved("Cameron", "cam-ER-on"))
+        assertEquals("JH EH2 N IH1 F ER0", resolved("Jennifer", "jen-NIF-er"))
     }
 
     /** normalize.py's long-number pass (review 2026-10-12): more than 30

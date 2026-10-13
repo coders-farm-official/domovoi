@@ -38,8 +38,7 @@ them.
 
 ### 1. The system-voice fallback is optional on Linux
 
-TTS falls back through `piper → system` (`edge → piper → system` if you
-chose Edge; Edge is never a fallback for Piper). The `system` rung is the
+TTS falls back through `piper → system`. The `system` rung is the
 OS's own synthesizer — pyttsx3/SAPI on Windows, `say` on macOS, and on
 Linux **`espeak-ng` if you install it**. It's robotic, and it is only the
 floor beneath the Piper voice for when that voice is missing or broken.
@@ -189,7 +188,7 @@ If your target Python's tag is in all three lists, you're clear.
 Every compiled dependency had cp314 manylinux x86_64 wheels: `torch`
 2.13.0, `ctranslate2` 4.8.2, `numba` 0.67.0, `numpy` 2.5.2, `scipy`
 1.18.1, `asyncpg` 0.31.0, plus `pillow`, `psutil`, `sqlalchemy`,
-`miniaudio`, `lameenc`, `soxr`, `llvmlite`. `piper-tts` (the voice engine
+`miniaudio` (until 2026-10), `lameenc`, `soxr`, `llvmlite`. `piper-tts` (the voice engine
 until 2026-10) shipped `cp39-abi3`; its replacement, `onnxruntime`, has
 cp314 wheels. The NVIDIA
 CUDA wheels are `py3-none-manylinux` — no Python tag at all.

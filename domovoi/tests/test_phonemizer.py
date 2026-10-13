@@ -24,6 +24,7 @@ from domovoi.phonemizer import (
     parse_say_it_like,
     phoneme_ids,
     pronunciation_key,
+    respell_arpa,
     unknown_symbols,
 )
 
@@ -77,6 +78,55 @@ def test_spaces_and_hyphens_both_split_syllables(ph):
 
 def test_an_unstressed_uh_is_a_schwa(ph):
     assert ph.resolve_pronunciation("Domovoi", "DOM-uh-voy").phones == ("D", "AA1", "M", "AH0", "V", "OY2")
+
+
+# Kamron, 2026-10-12: "Kamron = kamren" (and "Kam-ren") for his name said
+# like Cameron. The same results are golden cases (say_it_like-008..013),
+# which the Kotlin port is held to.
+@pytest.mark.parametrize("say,phones,en", [
+    ("KAM-ren", "K AE1 M R AH0 N", "kˈamɹən"),     # a light last "ren" is a schwa
+    ("Kam-ren", "K AE1 M R AH0 N", "kˈamɹən"),
+    ("KAM-run", "K AE1 M R AH0 N", "kˈamɹən"),
+    ("kamren", "K AE1 M ER0 AH0 N", "kˈaməɹən"),   # one piece, as the model reads it: Cameron
+    ("kam-REN", "K AE2 M R EH1 N", "kamɹˈɛn"),     # stressed: a full e
+])
+def test_kamron(ph, say, phones, en):
+    e = ph.resolve_pronunciation("Kamron", say)
+    assert " ".join(e.phones) == phones
+    assert ph.phonemize("Kamron.", extra=[e]) == [en + "."]
+
+
+@pytest.mark.parametrize("syllable,arpa", [
+    ("shuh", "SH AH1"), ("zhahn", "ZH AA1 N"), ("dhuh", "DH AH1"), ("tsuh", "T S AH1"),
+    ("shiv", "SH IH1 V"), ("voy", "V OY1"), ("awn", "AO1 N"), ("eer", "IH1 R"), ("zu", "Z UW1"),
+    ("kowt", "K AW1 T"), ("bair", "B EH1 R"), ("chess", "CH EH1 S"), ("yoo", "Y UW1"), ("nyew", "N Y UW1"),
+])
+def test_the_respelling_key(ph, syllable, arpa):
+    """A respelling syllable no dictionary knows goes by the key, not the
+    model ("shuh" was SH UW1, so "SEER-shuh" said "SEER-shoo")."""
+    assert " ".join(respell_arpa(syllable)) == arpa
+    phones, src = ph.respelling_arpa(syllable)
+    if src == "key":
+        assert " ".join(phones) == arpa
+
+
+@pytest.mark.parametrize("syllable", ["", "my", "shh", "boat'", "two-", "naive", "aeiou", "é"])
+def test_the_key_reads_one_syllable_only(syllable):
+    assert respell_arpa(syllable) is None
+
+
+def test_dictionary_syllables_and_words_still_win(ph):
+    assert ph.respelling_arpa("ren") == (["R", "EH1", "N"], "lex")
+    assert ph.respelling_arpa("ts")[1] == "lex"           # no vowel: the key has nothing better
+    # run together, a dictionary word with the respelling's stress: read whole
+    assert " ".join(ph.resolve_pronunciation("Cameron", "CAM-er-on").phones) == "K AE1 M ER0 AH0 N"
+    assert " ".join(ph.resolve_pronunciation("Sharon", "SHA-ron").phones) == "SH AE1 R AH0 N"
+    # ...but not against the stress the owner wrote
+    assert " ".join(ph.resolve_pronunciation("Cameron", "cam-ER-on").phones) == "K AE2 M ER1 AA2 N"
+
+
+def test_a_consonant_written_on_both_sides_of_a_hyphen_is_said_once(ph):
+    assert " ".join(ph.resolve_pronunciation("Jennifer", "jen-NIF-er").phones) == "JH EH2 N IH1 F ER0"
 
 
 def test_the_list_beats_rules_and_weak_forms():

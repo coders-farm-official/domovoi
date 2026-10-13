@@ -25,6 +25,130 @@ New Android build only; nothing changes on the server.
   the emulator; `-Pdomovoi.apkPerAbi` makes one per ABI, and an App Bundle
   carries all four (android/README.md, "ABIs and APKs").
 
+## 2026-10-12 — Kristin is the house voice; the Microsoft Edge voices are gone
+
+Server, dashboard and Android update; no migration. What changes:
+
+* **The default voice is now Kristin** (it was Norman). A server still on
+  Norman moves to Kristin once, on its first start after the update, and
+  only once Kristin is on disk: it downloads her first (a box answered
+  **No** to the internet question keeps Norman until her files are there;
+  the provisioning already fetched all three voices). Nothing recorded
+  whether Norman was picked on purpose, so every server on Norman moves:
+  **pick Norman again in Settings → Voices if you prefer him**, and he
+  stays. A room that chose its own voice keeps it. The phone app speaks
+  Kristin when it knows no server voice.
+* **The Microsoft Edge online voices are dropped.** Microsoft's service had
+  started refusing them, every reply they spoke went to Microsoft, and
+  their library (edge-tts) is LGPL. The "Add a cloud voice" card is gone,
+  every registered cloud voice is removed on the update, and a room or a
+  default that was set to one speaks in the house voice, Kristin. The
+  speech chain is local only: Piper, then the system voice. An old
+  `TTS_ENGINE=edge` in `domovoi/.env` reads as `piper`, and a
+  `TTS_EDGE_VOICE` line is ignored.
+* **The update uninstalls edge-tts** (LGPL-3.0) from the server's Python
+  environment, after a successful re-sync and never during a rollback, the
+  way it removed piper-tts; its MP3 decoder `miniaudio` and their
+  dependencies (aiohttp and friends) leave the Linux lock too. This removes
+  an LGPL package from Domovoi's dependencies.
+
+## 2026-10-12 — Norman says short sentences right; Settings → Voices play buttons say why they can't play
+
+Server, dashboard and Android update; no migration, nothing to do but
+update (and update the app).
+
+* **Norman no longer babbles short sentences.** Norman (the default until
+  this batch) ran away on a short sentence said on its own: a "say it like" preview
+  ("Kamron.", "Domovoi."), a one-word reply ("Okay.", "Done."), the
+  "Hi, I'm Norman." of its own sample, came out as two to six seconds of
+  sound in no language. The phonemes were right; Kristin and Linda say the
+  same ones correctly. A voice is now checked once when it first says a
+  short sentence, and one that runs away (Norman) says its short sentences
+  after a lead-in sentence that is cut off again, so only the sentence is
+  heard. Longer sentences are said exactly as before. The phone does the
+  same, and Norman's built-in sample clip is re-made.
+* **"Say it like" reads respellings better.** A syllable no dictionary
+  knows goes by the usual respelling key (uh as in but, ay as in say, zh as
+  in measure: `SEER-shuh` was "SEER-shoo"), a light last "ren", "sel" or
+  "dem" is said like the end of "Cameron" (`Kamron = KAM-ren`), and a
+  respelling that runs together into a dictionary word with the same
+  stress (`CAM-er-on`) is read as that word. The preview toast says what
+  was previewed in words ("Kamron → KAM-ren"); the voice's phonemes are on
+  the play button's hover. An entry saved before may sound slightly
+  different: `NOO-yen` now ends like "Cameron" too; write `noo-YEN` for a
+  full "yen".
+* **Settings → Voices play buttons say why they can't play**, instead of
+  "sample failed: 502 Bad Gateway". A registered voice's sample is made by
+  the server on the household device tier, and the page now passes the
+  server's own sentence through ("Cori can't speak right now: ..."). (That
+  day Microsoft's service was refusing the Edge voices with HTTP 403; they
+  are gone now, see the entry above.) A
+  catalogue voice an install kept (Cori) downloads on its first sample,
+  as on its first reply. The upload form's file pickers and fields are
+  the dashboard's own controls now.
+
+## 2026-10-12 (later) — The router learns a satellite's new name after one reboot
+
+Server, dashboard, satellite and Android update; no migration. After the
+Wi-Fi fixes below, each satellite renamed itself `domovoi-<room>` at the
+first reboot. But it did so after it had already asked the router for its
+address as `raspberrypi`, so the router showed the new name only after a
+**second** reboot. On 2026-10-12, dining-room had been rebooted twice and
+showed its name; office, garage and basement had been rebooted once and
+did not. What changes:
+
+* **The name is set before the Wi-Fi joins.** A new unit,
+  `domovoi-hostname.service`, sets the host name on every boot before
+  NetworkManager starts. It runs a small root-owned helper, not the
+  satellite's own code. A new card gets it from media prep. An older card
+  installs it at its next boot after the satellite upgrade, once:
+  `systemctl disable` or `mask` turns it off for good. A hand-built
+  satellite gets it only if you ask for it (PROVISIONING.md §8.4). That same boot,
+  having renamed the unit, asks the router for its address once more under
+  the new name, so **one reboot is enough**. A new card is named before
+  setup even joins the house Wi-Fi.
+* **The Health card says what the boot step did.** It has a new **boot
+  network step** line: *applied* (what changed), *nothing to change*,
+  *skipped* (and why, e.g. a host name you chose yourself), *failed* (the
+  error), *not run* (and since when), *running*, or *not installed*. It
+  also shows the satellite's current **host name**, the one the router
+  should show. The Android app's satellite overview shows the same. A
+  satellite not yet upgraded shows neither.
+* **"Reboot needed" comes back once.** The boot step's version moved
+  from 1 to 2, so every upgraded satellite asks for one more reboot.
+  That reboot installs the unit that sets the name before the network
+  starts.
+
+**What to do:** update the server, upgrade each satellite (Settings →
+Satellites → the room → **Upgrade satellite**), then unplug each one for a
+few seconds once it says **reboot needed**. A satellite already renamed by
+an earlier reboot needs only that one. Check the router's client list
+afterwards, or the room's **boot network step** and **host name**.
+
+## 2026-10-12 — Every tab has its own address
+
+A dashboard-only change (reload open tabs once).
+
+* **The address bar follows the tabs.** Settings' tabs are
+  `#settings/about`, `greetings`, `voices`, `wake-words`, `recordings`,
+  `devices`, `phone-bar`, `satellites`, `models`, `internet` and
+  `configuration`; Music's are `#music/library`, `player`, `queue`,
+  `playlists`, `stats` and `jobs`; Calendar's views are `#calendar/month`,
+  `week` and `day`. Clicking a tab changes the address, Back goes to the
+  tab before, and a bookmark or link opens its tab. Old addresses keep
+  working: `#settings` is Settings on Greetings, `#satellites` is
+  `#settings/satellites`, and a tab a page doesn't have opens its first
+  one.
+* **`#settings/configuration/setup`** is where the Windows installer's
+  "Open Domovoi" goes. On a box nobody has claimed, Settings →
+  Configuration now opens the **first-run admin setup** by itself (at
+  this address and at `#settings/configuration`), with the setup code
+  field ready for a paste; on a claimed box it only says the admin
+  account is already set up.
+* **Where the setup code is** is now said for the kind of server: on a
+  Windows install, the installer's last page (run the installer again for
+  a fresh code); on a Linux server, `~/.domovoi/setup-code.txt`.
+
 ## 2026-10-12 — Satellites stay on the Wi-Fi (upgrade each satellite, then reboot it once)
 
 Server, dashboard, satellite and Android update; no migration. The router
