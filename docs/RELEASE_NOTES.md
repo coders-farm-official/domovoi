@@ -4,6 +4,43 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Norman says short sentences right; Settings → Voices play buttons say why they can't play
+
+Server, dashboard and Android update; no migration, nothing to do but
+update (and update the app).
+
+* **Norman no longer babbles short sentences.** The default voice ran
+  away on a short sentence said on its own: a "say it like" preview
+  ("Kamron.", "Domovoi."), a one-word reply ("Okay.", "Done."), the
+  "Hi, I'm Norman." of its own sample, came out as two to six seconds of
+  sound in no language. The phonemes were right; Kristin and Linda say the
+  same ones correctly. A voice is now checked once when it first says a
+  short sentence, and one that runs away (Norman) says its short sentences
+  after a lead-in sentence that is cut off again, so only the sentence is
+  heard. Longer sentences are said exactly as before. The phone does the
+  same, and Norman's built-in sample clip is re-made.
+* **"Say it like" reads respellings better.** A syllable no dictionary
+  knows goes by the usual respelling key (uh as in but, ay as in say, zh as
+  in measure: `SEER-shuh` was "SEER-shoo"), a light last "ren", "sel" or
+  "dem" is said like the end of "Cameron" (`Kamron = KAM-ren`), and a
+  respelling that runs together into a dictionary word with the same
+  stress (`CAM-er-on`) is read as that word. The preview toast says what
+  was previewed in words ("Kamron → KAM-ren"); the voice's phonemes are on
+  the play button's hover. An entry saved before may sound slightly
+  different: `NOO-yen` now ends like "Cameron" too; write `noo-YEN` for a
+  full "yen".
+* **Settings → Voices play buttons say why they can't play**, instead of
+  "sample failed: 502 Bad Gateway". A registered voice's sample is made by
+  the server on the household device tier, and the page now passes the
+  server's own sentence through. On 2026-10-12 Microsoft's voice service
+  refused Domovoi's Microsoft Edge voices (HTTP 403, edge-tts 7.2.8, the
+  newest release): their buttons now say "Eric can't speak right now:
+  Microsoft's voice service answered HTTP 403", and rooms set to such a
+  voice speak in the local voice until Microsoft accepts it again. A
+  catalogue voice an install kept (Cori) downloads on its first sample,
+  as on its first reply. The upload form's file pickers and fields are
+  the dashboard's own controls now.
+
 ## 2026-10-12 — Satellites stay on the Wi-Fi (upgrade each satellite, then reboot it once)
 
 Server, dashboard, satellite and Android update; no migration. The router
