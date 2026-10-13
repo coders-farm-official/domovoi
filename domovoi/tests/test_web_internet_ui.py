@@ -5,8 +5,9 @@
   the change announced to the rest of the page), a locked answer, the
   feature chips and "follow the answer again", the restart badge, the
   SearXNG hint and the Microsoft-voices note.
-* ``SettingsPage`` opens on the tab ``openSettingsTab`` asked for
-  (sessionStorage), and switches when asked while on screen.
+* ``SettingsPage`` opens on the tab its address names
+  (``#settings/internet``, what ``openSettingsTab`` writes), and switches
+  when the address changes while it is on screen.
 * Greyed, never hidden, under ``never``: Configuration's fields that need
   the internet and the Edge choice, the Internet group shown as one line,
   Version's check / pull, the Voices page's Edge controls, Wake Words'
@@ -63,6 +64,9 @@ window.dispatchEvent = (e) => {
   return true;
 };
 CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
+// replaceState moves the address in place, as in a browser (no hashchange).
+window.history = { replaceState: (s, t, url) => { window.location.hash = url; } };
+if (__HASH) window.location.hash = __HASH;
 Auth = {
   status: { setup_complete: true, authenticated: true },
   subscribe: () => () => {},
@@ -90,8 +94,9 @@ window.__settle = async (h, n = 4) => { for (let i = 0; i < n; i++) { await h.se
 """
 
 
-def _setup(access: str = "", ss: dict | None = None) -> str:
-    return (f"const __ACCESS = {json.dumps(access)}; const __SS = {json.dumps(ss or {})};\n"
+def _setup(access: str = "", ss: dict | None = None, hash: str = "") -> str:
+    return (f"const __ACCESS = {json.dumps(access)}; const __SS = {json.dumps(ss or {})};"
+            f" const __HASH = {json.dumps(hash)};\n"
             + SETUP)
 
 
@@ -218,14 +223,15 @@ SCENARIOS["panel_signed_out"] = {
 SCENARIOS["settings_deep_link"] = {
     "files": [COMPONENTS, SETTINGS],
     "component": "(window.__tabs = SETTINGS_TABS, window.__open = openSettingsTab, SettingsPage)",
-    "setup": _setup("", {"domovoi.settings.tab": "internet"}),
+    "setup": _setup("", hash="#settings/internet"),
     "api": {"GET /api/config/internet": doc(""), "GET /api/greetings": []},
     "script": r"""
       const w = h.global('window');
       h.render(); await w.__settle(h);
       const first = { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
-                      stored: w.__ss.get('domovoi.settings.tab') || null };
+                      hash: w.location.hash };
       w.__open('greetings');
+      w.dispatchEvent({ type: 'hashchange' });
       await w.__settle(h);
       const second = { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
                        hash: w.location.hash, stored: w.__ss.get('domovoi.settings.tab') || null };
@@ -235,13 +241,13 @@ SCENARIOS["settings_deep_link"] = {
 
 SCENARIOS["settings_default_tab"] = {
     "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
-    "setup": _setup("", {"domovoi.settings.tab": "nonsense"}),
+    "setup": _setup("", hash="#settings/nonsense"),
     "api": {"GET /api/greetings": []},
     "script": r"""
       const w = h.global('window');
       h.render(); await w.__settle(h);
       return { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
-               stored: w.__ss.get('domovoi.settings.tab') || null };
+               hash: w.location.hash };
     """,
 }
 
@@ -615,12 +621,14 @@ def test_a_signed_out_read_offers_the_sign_in(driven) -> None:
 
 def test_settings_opens_on_the_tab_it_was_sent_to(driven) -> None:
     o = driven["settings_deep_link"]
-    assert o["first"] == {"onInternet": True, "stored": None}       # read once, then cleared
+    assert o["first"] == {"onInternet": True, "hash": "#settings/internet"}
     assert o["second"]["onInternet"] is False                       # switched while on screen
-    assert o["second"]["hash"] == "settings"
+    assert o["second"]["hash"] == "settings/greetings"              # the tab's address
+    assert o["second"]["stored"] is None                            # nothing rides storage
     tabs = o["tabs"]
     assert "internet" in tabs and tabs.index("internet") == tabs.index("config") - 1
-    assert driven["settings_default_tab"] == {"onInternet": False, "stored": None}
+    # A tab Settings doesn't have: the default tab, and the address says so.
+    assert driven["settings_default_tab"] == {"onInternet": False, "hash": "#settings"}
 
 
 # ─── Greyed, not hidden ───────────────────────────────────────────────────
@@ -707,7 +715,9 @@ def test_decide_later_closes_without_saving(driven) -> None:
 def test_the_step_is_not_offered_when_already_answered_or_on_a_plain_login(driven) -> None:
     o = driven["first_run_already_answered"]
     assert o["step"]["titles"] == []
-    assert [c["p"] for c in o["calls"]] == ["/api/config"]          # it looked, and kept quiet
+    # It looked, and kept quiet. (/api/capabilities is the setup form's own
+    # read: which kind of server, for where the setup code is.)
+    assert [c["p"] for c in o["calls"]] == ["/api/capabilities", "/api/config"]
     login = driven["login_never_asks"]
     assert login["auth"]["login"] == "correct horse battery"
     assert login["step"]["titles"] == []
@@ -728,8 +738,7 @@ sessionStorage = {
 HOME_SCRIPT = (
     "const before = w.__snap(h);"
     "const row = h.find((e) => e.props && e.props['data-key'] === 'internet');"
-    "if (row) await h.click((e) => e.props && e.props['data-key'] === 'internet');"
-    "return { before, hash: w.location.hash, tab: w.__ss.get('domovoi.settings.tab') || null };"
+    "return { before, onClick: row ? typeof row.props.onClick : null };"
 )
 
 
@@ -779,9 +788,9 @@ def test_home_asks_an_admin_while_the_answer_is_unset(home_driven) -> None:
     rows = _internet_rows(o)
     assert len(rows) == 1
     assert rows[0]["text"] == "tell Domovoi whether this box has internet"   # lower case, like its siblings
-    assert rows[0]["href"] == "#settings"
-    # clicking it opens Settings on the Internet tab
-    assert o["hash"] == "settings" and o["tab"] == "internet"
+    # The Internet tab's own address: a plain link opens it.
+    assert rows[0]["href"] == "#settings/internet"
+    assert o["onClick"] == "undefined"
 
 
 def test_home_does_not_ask_when_answered_or_on_an_older_server(home_driven) -> None:

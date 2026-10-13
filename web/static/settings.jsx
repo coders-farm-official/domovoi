@@ -676,18 +676,48 @@ const VoicesPanel = () => {
  * Advanced section, and any change asks for the password again. The card
  * used to say "signed in" for both and offer only "sign out", which is
  * how the owner signed out, signed in, reloaded, and never saw Advanced.
+ *
+ * On an unclaimed box, arriving here (the tab, or its address
+ * #settings/configuration) opens the first-run admin setup by itself, once
+ * per arrival, as soon as a fresh status read says the box is unclaimed:
+ * the setup code field has the focus, so a new owner pastes and goes.
+ * `setupAsked` is the installer's address, #settings/configuration/setup
+ * (SETUP_ROUTE): on a box already claimed before it arrived it says so in
+ * one line, and nothing opens. After a claim made here the marker leaves
+ * the address (replaced in place), so a reload doesn't call the box
+ * claimed "already".
  */
-const AdminSection = () => {
+const AdminSection = ({ setupAsked = false }) => {
   const [, force] = React.useReducer((x) => x + 1, 0);
+  // The first fresh answer this arrival got: 'unclaimed' | 'claimed' | null.
+  const [arrived, setArrived] = React.useState(null);
   React.useEffect(() => {
+    let alive = true;
     const un = Auth.subscribe(force);
-    Auth.refreshStatus();
-    return un;
+    Promise.resolve(Auth.refreshStatus ? Auth.refreshStatus() : Auth.status).then((s) => {
+      if (!alive || !s) return;
+      const unclaimed = s.setup_complete === false;
+      setArrived(unclaimed ? 'unclaimed' : 'claimed');
+      if (unclaimed && !Auth.modalOpen) Auth.openModal();
+    }, () => { /* unreachable: the card says "checking…" and offers the button */ });
+    return () => { alive = false; un(); };
   }, []);
   const st = Auth.status;
   const needsSetup = st && st.setup_complete === false;
+  const hostKind = useHostKind(!!needsSetup);
   const live = Auth.isLoggedIn();
   const viewOnly = !live && !!(st && st.authenticated);
+  // Claimed here, on the installer's address: drop its marker in place.
+  const claimedHere = arrived === 'unclaimed' && !!st && st.setup_complete !== false;
+  React.useEffect(() => {
+    if (!claimedHere || !setupAsked) return;
+    try {
+      if (routeParts(currentRoute()).join('/') === SETUP_ROUTE) {
+        window.history.replaceState(null, '', '#settings/configuration');
+      }
+    } catch { /* the marker stays; it only adds a note on the next visit */ }
+  }, [claimedHere, setupAsked]);
+  const alreadySetUp = setupAsked && arrived === 'claimed' && !needsSetup;
   // Not returned: a view-only tab's sign-out waits on the password prompt.
   const signOut = () => { Auth.logout(); };
   return (
@@ -705,10 +735,15 @@ const AdminSection = () => {
                 ? <Pill tone="warn">signed in (view only after reload)</Pill>
                 : <Pill tone="idle">signed out</Pill>}
         {needsSetup && (
-          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
-            the Domovoi server (the core also prints it when it runs in a
-            terminal) and choose an admin password.
+          <span className="setup-code-where" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            <SetupCodeWhere kind={hostKind}/>
+          </span>
+        )}
+        {alreadySetUp && (
+          <span className="admin-already-set-up" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {live
+              ? 'This Domovoi’s admin account is already set up, and you’re signed in.'
+              : 'This Domovoi’s admin account is already set up: sign in with its password.'}
           </span>
         )}
         {viewOnly && (
@@ -1084,7 +1119,7 @@ const configLoadMessage = (error) => {
   return `couldn't load configuration (${error.status || 'no response'}): ${apiErrorText(error)}`;
 };
 
-const ConfigPanel = () => {
+const ConfigPanel = ({ setupAsked = false }) => {
   // What comes back depends on WHO asks (CORE-6): the advanced section
   // and the unmasked secrets only for a live admin Bearer, the common
   // section with secrets masked for the cookie a reload keeps. So this
@@ -1168,7 +1203,7 @@ const ConfigPanel = () => {
       <span>{(internetField.value && (internetField.choice_labels || {})[internetField.value])
              || internetField.value || 'not answered'}</span>
       <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
-      <a href="#settings" className="home-link" onClick={(e) => { e.preventDefault(); openSettingsTab('internet'); }}>
+      <a href="#settings/internet" className="home-link">
         Settings → Internet
       </a>
     </div>
@@ -1178,7 +1213,7 @@ const ConfigPanel = () => {
 
   return (
     <React.Fragment>
-    <AdminSection/>
+    <AdminSection setupAsked={setupAsked}/>
     <VersionSection/>
     <Card title="Domovoi configuration"
           sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart.">
@@ -3284,19 +3319,24 @@ const CapturesPanel = () => {
 /* Settings shell                                               */
 /* ============================================================ */
 
+// Each tab's address is #settings/<slug> (the id where there is no slug;
+// the id opens the tab too). useRouteTab, components.jsx. The slugs are
+// public: bookmarks, the docs and the Windows installer's "Open Domovoi"
+// (#settings/configuration/setup) use them, so a slug is never renamed.
 const SETTINGS_TABS = [
   { id: 'about', label: 'About' },            // informational intro / manual link
   { id: 'greetings', label: 'Greetings' },
   { id: 'voices', label: 'Voices' },
-  { id: 'wakewords', label: 'Wake Words' },
+  { id: 'wakewords', slug: 'wake-words', label: 'Wake Words' },
   { id: 'recordings', label: 'Recordings' },  // opt-in command recordings (admins)
   { id: 'devices', label: 'Devices' },        // device names + queue / files access
-  { id: 'phonebar', label: 'Phone bar' },     // this browser's phone tabs (no sign-in: kept in the browser)
+  { id: 'phonebar', slug: 'phone-bar', label: 'Phone bar' },  // this browser's phone tabs (no sign-in: kept in the browser)
   { id: 'satellites', label: 'Satellites' },  // the rooms' Pis (was a nav route, #satellites still opens it)
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
-  { id: 'config', label: 'Configuration' },   // last tab, by request
+  { id: 'config', slug: 'configuration', label: 'Configuration' },   // last tab, by request
 ];
+const SETTINGS_DEFAULT_TAB = 'greetings';
 
 const SETTINGS_SUB = {
   about: 'What Domovoi is — and a link to the user manual.',
@@ -3312,34 +3352,12 @@ const SETTINGS_SUB = {
   config: 'Editable domovoi configuration.',
 };
 
-// openSettingsTab (components.jsx) leaves the tab to open here: the shell
-// maps one hash to one page, so a deep link rides sessionStorage, read
-// once (and cleared) when the page mounts.
-const settingsStartTab = () => {
-  try {
-    const want = sessionStorage.getItem('domovoi.settings.tab');
-    if (want) {
-      sessionStorage.removeItem('domovoi.settings.tab');
-      if (SETTINGS_TABS.some((t) => t.id === want)) return want;
-    }
-  } catch { /* storage blocked */ }
-  return 'greetings';
-};
-
 const SettingsPage = () => {
-  const [tab, setTab] = React.useState(settingsStartTab);
-  // A link pressed while this page is already on screen (the
-  // Configuration tab's "Settings → Internet", a "needs internet" note).
-  React.useEffect(() => {
-    const onTab = (e) => {
-      const want = e && e.detail && e.detail.tab;
-      if (!want || !SETTINGS_TABS.some((t) => t.id === want)) return;
-      try { sessionStorage.removeItem('domovoi.settings.tab'); } catch { /* storage blocked */ }
-      setTab(want);
-    };
-    window.addEventListener(SETTINGS_TAB_EVENT, onTab);
-    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onTab);
-  }, []);
+  // The tab is the address's (#settings/<tab>): clicking one writes it, a
+  // link to one (the Configuration tab's "Settings → Internet", a "needs
+  // internet" note, Home's rows) opens it, also while this page is on
+  // screen, and Back goes to the tab before.
+  const [tab, setTab, marks] = useRouteTab('settings', SETTINGS_TABS, SETTINGS_DEFAULT_TAB);
 
   return (
     <div className="page">
@@ -3355,7 +3373,7 @@ const SettingsPage = () => {
       {tab === 'satellites' && <SatellitesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'internet' && <InternetPanel/>}
-      {tab === 'config' && <ConfigPanel/>}
+      {tab === 'config' && <ConfigPanel setupAsked={marks[0] === 'setup'}/>}
     </div>
   );
 };

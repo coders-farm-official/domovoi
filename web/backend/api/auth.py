@@ -35,6 +35,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from domovoi import admin_auth
+from domovoi.host_kind import host_kind
 from web.backend.db import session_scope
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,27 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE_MAX_AGE_SEC = admin_auth.SESSION_TTL_DAYS * 86400
+
+
+def setup_code_refusal() -> str:
+    """Why a setup was refused for its code, and where the right one is,
+    in the words of this kind of host. The Windows installer's Linux
+    system (``wsl``) shows its code on the installer's last page, and
+    nobody there can open ``~/.domovoi`` (docs/WINDOWS_HOST.md: run the
+    installer again for a fresh code); everywhere else the code is the
+    file the core wrote."""
+    if host_kind() == "wsl":
+        return (
+            "setup code required — use the one on the last page of "
+            "Domovoi's Windows installer; a code older than a day, or a "
+            "lost one, is replaced by running the installer again"
+        )
+    return (
+        "setup code required — read it from "
+        "~/.domovoi/setup-code.txt on the Domovoi server (the "
+        "core also prints it when it runs in a terminal); a code "
+        "older than a day is replaced by restarting the core"
+    )
 
 
 def _set_session_cookie(response: JSONResponse, token: str) -> None:
@@ -100,15 +122,7 @@ async def auth_setup(body: SetupRequest, request: Request) -> JSONResponse:
             # failure is already on the books; just confirm it. The code
             # is guessable-in-theory (64-bit) but never for free.
             admin_auth.LOGIN_BACKOFF.record_failure(source)
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "setup code required — read it from "
-                    "~/.domovoi/setup-code.txt on the Domovoi server (the "
-                    "core also prints it when it runs in a terminal); a code "
-                    "older than a day is replaced by restarting the core"
-                ),
-            )
+            raise HTTPException(status_code=403, detail=setup_code_refusal())
         await admin_auth.set_password(s, body.password)
         token = await admin_auth.create_session(s, label="setup")
         # The household device token was readable by anyone on the LAN

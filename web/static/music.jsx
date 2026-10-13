@@ -1686,8 +1686,17 @@ const BucketStat = ({ label, buckets }) => {
 };
 
 /* ---- Page ------------------------------------------------- */
+// The lower section's tabs, by address: #music/<id> (useRouteTab,
+// components.jsx). The labels and counts are the page's `tabs` below.
+const MUSIC_PAGE_TABS = [
+  { id: 'library' }, { id: 'player' }, { id: 'queue' },
+  { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' },
+];
+
 const MusicPage = () => {
-  const [tab, setTab] = React.useState('library');
+  // #music/queue opens Room queue, a tab click writes its address, Back
+  // goes to the tab before.
+  const [tab, setTab] = useRouteTab('music', MUSIC_PAGE_TABS, 'library');
   const [selected, setSelected] = React.useState(null);
   // Playlists tab state: which playlist row's drawer is open, and
   // which library track triggered the "+ add to playlist" drawer.

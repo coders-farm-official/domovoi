@@ -364,10 +364,10 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
   if (!dbDown && !coreDown) {
     const stt = health && health.stt;
     if (stt === 'unavailable') {
-      add({ key: 'stt', tone: 'err', scope: 'open', href: '#settings',
+      add({ key: 'stt', tone: 'err', scope: 'open', href: '#settings/models',
             text: "speech recognition is off · the rooms can't understand anyone" });
     } else if (stt === 'fallback') {
-      add({ key: 'stt', tone: 'warn', scope: 'open', href: '#settings',
+      add({ key: 'stt', tone: 'warn', scope: 'open', href: '#settings/models',
             text: 'speech recognition is on its slower fallback model' });
     }
 
@@ -455,15 +455,15 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       const last = version.last_update;
       const st = last && last.status;
       if (st === 'failed' || st === 'rollback_failed') {
-        add({ key: 'update', tone: 'err', scope: 'admin', href: '#settings', at: last.finished_at,
+        add({ key: 'update', tone: 'err', scope: 'admin', href: '#settings/configuration', at: last.finished_at,
               text: 'the last update failed' });
       } else if (st === 'rolled_back' || (version.bad_sha && st !== 'ok')) {
-        add({ key: 'update', tone: 'warn', scope: 'admin', href: '#settings', at: last && last.finished_at,
+        add({ key: 'update', tone: 'warn', scope: 'admin', href: '#settings/configuration', at: last && last.finished_at,
               text: 'the last update was rolled back' });
       }
       const restartWaiting = pendingRestart(version);
       if (restartWaiting.code) {
-        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#settings',
+        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#settings/configuration',
               text: "a restart is pending · the pulled code isn't running yet" });
       } else if (restartWaiting.plugins.length) {
         add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#plugins',
@@ -476,14 +476,14 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     // until an admin answers, it behaves as it always has. '' is the
     // unanswered answer; a server from before the question sends nothing.
     if (config && config.internet_access === '') {
-      add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings', tab: 'internet',
+      add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings/internet',
             text: 'tell Domovoi whether this box has internet' });
     }
     const disk = hardware && hardware.disk;
     if (disk && typeof disk.percent === 'number' && disk.percent >= HOME_DISK_WARN) {
       // The core measures $HOME, so it is the home disk, not "the" disk.
       add({ key: 'disk', tone: disk.percent >= HOME_DISK_ERR ? 'err' : 'warn', scope: 'admin',
-            href: '#settings', text: `home disk is ${Math.round(disk.percent)}% full` });
+            href: '#settings/models', text: `home disk is ${Math.round(disk.percent)}% full` });
     }
   }
 
@@ -664,11 +664,10 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
               </div>
             );
           }
-          // A row may name a Settings tab (`tab`): the shell maps one hash to
-          // one page, so the tab rides openSettingsTab (sessionStorage).
+          // A row's href may be a Settings tab's own address
+          // (#settings/configuration): a plain link opens it.
           return (
-            <a key={r.key} className={cls} data-key={r.key} href={r.href}
-               onClick={r.tab ? (e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab(r.tab); } : undefined}>
+            <a key={r.key} className={cls} data-key={r.key} href={r.href}>
               {body}
             </a>
           );
@@ -1162,8 +1161,7 @@ const HomeEverything = ({ counts, badges: given, shared }) => {
   const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
   const tiles = items.filter((it) => !onBar.has(it.route)).concat(HOME_EXTRA_TILES);
   const edit = (
-    <a href="#settings" className="home-link home-bar-edit"
-       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab('phonebar'); }}>
+    <a href="#settings/phone-bar" className="home-link home-bar-edit">
       edit the bar
     </a>
   );

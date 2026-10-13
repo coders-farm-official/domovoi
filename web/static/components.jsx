@@ -215,7 +215,6 @@ const useAdminSignedIn = () => {
 const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
 const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
 const INTERNET_CHANGED_EVENT = 'domovoi:internet-changed';   // window CustomEvent, detail {access}
-const SETTINGS_TAB_EVENT = 'domovoi:settings-tab';           // window CustomEvent, detail {tab}
 const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
 const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
 
@@ -291,16 +290,41 @@ const announceInternetChange = (access) => {
   catch { /* no CustomEvent (old browser, test sandbox) — the set() above is enough */ }
 };
 
-/* Open Settings on a tab. The shell maps one hash to one page (#settings),
- * so the tab rides sessionStorage; a Settings page already on screen
- * hears SETTINGS_TAB_EVENT instead. */
-const askSettingsTab = (tab) => {
-  try { sessionStorage.setItem('domovoi.settings.tab', tab); } catch { /* storage blocked */ }
-  try { window.dispatchEvent(new CustomEvent(SETTINGS_TAB_EVENT, { detail: { tab } })); } catch { /* no CustomEvent */ }
+/* ── Addresses: a hash route per page, and per tab ───────────────────
+ *
+ * #<page> opens a page on its default tab, as it always has. Since
+ * 2026-10-12 a tab has an address too, #<page>/<tab>: #settings/configuration,
+ * #music/queue, #calendar/week. Clicking a tab writes its address as a new
+ * history entry (Back goes to the tab before), opening an address selects
+ * its tab, and a tab the page doesn't have opens the page's default tab
+ * (the address is corrected to #<page>). A tab is named by its `slug` (the
+ * words in the address) or its `id` (the name in the code); the id is
+ * rewritten to the slug in place.
+ *
+ * A segment after the tab is a marker for that tab. The one there is:
+ * #settings/configuration/setup (SETUP_ROUTE), which the Windows installer's
+ * "Open Domovoi" opens. Configuration always shows the first-run admin
+ * setup on an unclaimed box; the marker only adds a short "already set up"
+ * note on a claimed one. Addresses are hash segments only: no query
+ * strings, no key=value pairs.
+ *
+ * The shell (index.html) shows the page named by the first segment; the
+ * page's tabs follow the rest through useRouteTab. */
+const SETUP_ROUTE = 'settings/configuration/setup';
+
+// '#Settings/configuration/' → ['settings', 'configuration']
+const routeParts = (route) => {
+  let s = String(route == null ? '' : route).trim();
+  if (s.charAt(0) === '#') s = s.slice(1);
+  return s.split('/').map((p) => p.trim().toLowerCase()).filter(Boolean);
 };
-const openSettingsTab = (tab) => {
-  askSettingsTab(tab);
-  try { window.location.hash = 'settings'; } catch { /* no location */ }
+
+// The page a route opens: its first segment ('' for none).
+const routePage = (route) => routeParts(route)[0] || '';
+
+// The address bar's route, without the '#'.
+const currentRoute = () => {
+  try { return String((window.location && window.location.hash) || '').replace(/^#/, ''); } catch { return ''; }
 };
 
 /* Pages that became a Settings tab, by their old route → the tab. Since
@@ -309,16 +333,83 @@ const openSettingsTab = (tab) => {
  * keep it because it also works in a new tab) still lands there. */
 const SETTINGS_TAB_ROUTES = { satellites: 'satellites' };
 
-/* The route the shell shows for `route`: an old route of a Settings tab
- * opens Settings on that tab, and the address bar says #settings (replaced,
- * not pushed, so Back doesn't bounce off the old address). Anything else
- * is itself. */
+/* The route an address means, tidied: no '#', no empty segments, lower
+ * case; an old route of a Settings tab (#satellites, and anything after
+ * it) is that tab's address, #settings/<tab>. Pure: nothing is written. */
+const resolveRoute = (route) => {
+  const parts = routeParts(route);
+  const tab = parts.length ? SETTINGS_TAB_ROUTES[parts[0]] : null;
+  return (tab ? ['settings', tab, ...parts.slice(1)] : parts).join('/');
+};
+
+/* The route the shell shows for `route` (resolveRoute). When that is not
+ * what the address bar says (an old #satellites), the address is replaced,
+ * not pushed, so Back doesn't bounce off the old one. */
 const settingsTabRoute = (route) => {
-  const tab = SETTINGS_TAB_ROUTES[route];
-  if (!tab) return route;
-  askSettingsTab(tab);
-  try { window.history.replaceState(null, '', '#settings'); } catch { /* the old hash stays; the page is still right */ }
-  return 'settings';
+  const to = resolveRoute(route);
+  if (to !== routeParts(route).join('/')) {
+    try { window.history.replaceState(null, '', `#${to}`); } catch { /* the old hash stays; the page is still right */ }
+  }
+  return to;
+};
+
+// A tab's words in the address: its slug, else its id.
+const tabSlug = (tabs, id) => {
+  const t = (tabs || []).find((x) => x.id === id);
+  return (t && (t.slug || t.id)) || id;
+};
+
+/* What `route` says about `page`'s tabs ([{id, slug?}]): the tab (the
+ * fallback when it names none or one the page doesn't have), the markers
+ * after it, and the address to show instead when it isn't the canonical
+ * one (an id for a slug, an unknown tab), else null. */
+const readRouteTab = (route, page, tabs, fallback) => {
+  const parts = routeParts(resolveRoute(route));
+  if (parts[0] !== page || parts.length < 2) return { tab: fallback, rest: [], fix: null };
+  const hit = (tabs || []).find((t) => (t.slug || t.id) === parts[1] || t.id === parts[1]);
+  if (!hit) return { tab: fallback, rest: [], fix: page };
+  const slug = hit.slug || hit.id;
+  const fix = slug === parts[1] ? null : [page, slug, ...parts.slice(2)].join('/');
+  return { tab: hit.id, rest: parts.slice(2), fix };
+};
+
+/* A page's tabs, kept in the address (#<page>/<tab>). Returns
+ * [tab, setTab, rest]: setTab writes the tab's address as a new history
+ * entry; Back, Forward and a link to another tab of this page move the tab
+ * here; `rest` holds the markers after the tab (['setup']). An address for
+ * another page leaves the tab alone (the page is on its way out). */
+const useRouteTab = (page, tabs, fallback) => {
+  const tabsRef = React.useRef(tabs);
+  tabsRef.current = tabs;
+  const [at, setAt] = useState(() => readRouteTab(currentRoute(), page, tabs, fallback));
+  useEffect(() => {
+    const follow = () => {
+      const route = currentRoute();
+      if (routePage(resolveRoute(route)) !== page) return;
+      setAt(readRouteTab(route, page, tabsRef.current, fallback));
+    };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, [page, fallback]);
+  // An id where the slug goes, or a tab this page doesn't have: say what is
+  // showing, in place (no new history entry).
+  useEffect(() => {
+    if (at.fix == null || routePage(currentRoute()) !== page) return;
+    try { window.history.replaceState(null, '', `#${at.fix}`); } catch { /* the address stays as typed */ }
+  }, [at.fix, page]);
+  const setTab = React.useCallback((id) => {
+    setAt({ tab: id, rest: [], fix: null });
+    const to = `${page}/${tabSlug(tabsRef.current, id)}`;
+    try { if (currentRoute() !== to) window.location.hash = to; } catch { /* no location */ }
+  }, [page]);
+  return [at.tab, setTab, at.rest];
+};
+
+/* Open Settings on a tab (by its id or slug): its address. A Settings page
+ * already on screen follows the address (useRouteTab). */
+const settingsTabHref = (tab) => `#settings/${tab}`;
+const openSettingsTab = (tab) => {
+  try { window.location.hash = `settings/${tab}`; } catch { /* no location */ }
 };
 
 /* "needs internet · Settings → Internet", the link opening that tab. */
@@ -328,8 +419,7 @@ const NeedsInternetNote = ({ compact = false }) => (
                  fontSize: compact ? 11 : 12, color: 'var(--fg-muted)' }}>
     <Icon name="wifi-off" size={compact ? 12 : 13}/>
     <span>needs internet · </span>
-    <a href="#settings" className="needs-internet-link"
-       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab('internet'); }}>
+    <a href="#settings/internet" className="needs-internet-link">
       Settings → Internet
     </a>
   </span>
@@ -1885,6 +1975,76 @@ const loginErrorText = (e) => {
   return String((e && e.message) || e);
 };
 
+/* What kind of machine the Domovoi server is (GET /api/capabilities
+ * host_kind: linux | wsl | windows | darwin, domovoi/host_kind.py), or null
+ * until known and from a server too old to say. Asked once per page load
+ * and shared; a failed ask is tried again by the next component that wants
+ * it. "wsl" is the Linux system the Windows installer sets up. */
+const HostKindStore = (() => {
+  let kind = null;
+  let asking = null;
+  const subs = new Set();
+  const tell = () => subs.forEach((fn) => { try { fn(kind); } catch { /* one bad subscriber */ } });
+  return {
+    get: () => kind,
+    ask() {
+      if (kind || asking) return asking || Promise.resolve(kind);
+      asking = Promise.resolve()
+        .then(() => apiGet('/api/capabilities', { quiet: true }))
+        .then((caps) => { kind = (caps && typeof caps.host_kind === 'string' && caps.host_kind) || null; })
+        .catch(() => { /* unknown: the words cover both kinds of server */ })
+        .then(() => { asking = null; tell(); return kind; });
+      return asking;
+    },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+
+const useHostKind = (wanted = true) => {
+  const [kind, setKind] = useState(HostKindStore.get());
+  useEffect(() => {
+    if (!wanted) return undefined;
+    const un = HostKindStore.subscribe(setKind);
+    HostKindStore.ask();
+    return un;
+  }, [wanted]);
+  return kind;
+};
+
+/* Where the setup code is, for the first-run admin setup (the Admin card
+ * and the dialog). A Windows install (the installer's WSL system) never
+ * shows anyone ~/.domovoi: its installer shows the code on its last page,
+ * and running the installer again writes a fresh one (docs/WINDOWS_HOST.md).
+ * Unknown: both, so neither kind of owner is sent somewhere that isn't. */
+const SetupCodeWhere = ({ kind }) => {
+  if (kind === 'wsl') {
+    return (
+      <span className="setup-code-text">
+        Paste the setup code from the last page of Domovoi’s Windows
+        installer and choose an admin password. Lost the code, or is it more
+        than a day old? Run the installer again: it shows a fresh one.
+      </span>
+    );
+  }
+  if (kind) {
+    return (
+      <span className="setup-code-text">
+        Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
+        the Domovoi server (the core also prints it when it runs in a
+        terminal) and choose an admin password.
+      </span>
+    );
+  }
+  return (
+    <span className="setup-code-text">
+      Enter the setup code and choose an admin password. On Windows the
+      Domovoi installer showed the code on its last page; on a Linux server
+      it is in <code>~/.domovoi/setup-code.txt</code> (the core also prints
+      it when it runs in a terminal).
+    </span>
+  );
+};
+
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
   const [code, setCode] = useState('');
@@ -1914,6 +2074,7 @@ const LoginModal = ({ onClose }) => {
   }, []);
 
   const needsSetup = status && status.setup_complete === false;
+  const hostKind = useHostKind(!!needsSetup);
   // Auth.logout() on a tab that holds only the cookie (the page was
   // reloaded): the server ends a session only for a Bearer, so the
   // password is asked for once, and this modal says why.
@@ -1960,10 +2121,8 @@ const LoginModal = ({ onClose }) => {
         <div className="cal-modal-body">
           {needsSetup ? (
             <>
-              <div className="hint">
-                Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
-                the Domovoi server (the core also prints it when it runs in a
-                terminal) and choose an admin password.
+              <div className="hint setup-code-where">
+                <SetupCodeWhere kind={hostKind}/>
               </div>
               <div className="field">
                 <label>setup code</label>
@@ -2826,7 +2985,9 @@ Object.assign(window, {
   CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, usePluginBadges,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
   PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
-  SETTINGS_TAB_ROUTES, settingsTabRoute,
+  SETTINGS_TAB_ROUTES, settingsTabRoute, resolveRoute, routeParts, routePage, currentRoute,
+  readRouteTab, useRouteTab, tabSlug, settingsTabHref, openSettingsTab, SETUP_ROUTE,
+  SetupCodeWhere, useHostKind,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,

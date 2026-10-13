@@ -1777,7 +1777,7 @@ const useGuestViewer = () => {
  * The queue buttons on a room's card (Music's now-playing cards, Home's
  * rooms) open Music's Room queue tab on THAT room and scroll it into view.
  * The router has no query string (index.html routes on the bare hash), so
- * the room rides here: openRoomQueue() leaves it and goes to #music, and
+ * the room rides here: openRoomQueue() leaves it and goes to #music/queue, and
  * the Music page takes it when it mounts — or, already showing, hears it. */
 const RoomQueueIntent = (() => {
   let pending = null;
@@ -1796,7 +1796,12 @@ const RoomQueueIntent = (() => {
 const openRoomQueue = (room) => {
   RoomQueueIntent.open(room);
   try {
-    if ((window.location.hash || '').slice(1) !== 'music') window.location.hash = 'music';
+    // Straight to the Room queue tab's address; a Music page already on
+    // screen hears the room above and opens the tab itself.
+    // (data.js loads before components.jsx's routePage: the page is the
+    // address's first segment.)
+    const page = String(window.location.hash || '').replace(/^#/, '').split('/')[0].toLowerCase();
+    if (page !== 'music') window.location.hash = 'music/queue';
   } catch { /* no location — a test harness */ }
 };
 
