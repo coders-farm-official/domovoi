@@ -1503,6 +1503,29 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .chat-input { font-size: 16px; }
 }
 
+/* A toast that stays (components.jsx useToast, fire(msg, { stay: true })):
+   an error to read, closed by its own button. */
+.toast-stay {
+  width: min(90vw, 560px); background: var(--overlay); border: 1px solid var(--border);
+  border-left: 3px solid var(--err); border-radius: var(--r-md);
+  box-shadow: var(--shadow-md), var(--inner-highlight);
+  padding: 8px 6px 8px 12px; font-size: 13px; color: var(--fg);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast-stay-row { display: flex; align-items: flex-start; gap: 8px; }
+.toast-stay-dot { flex: none; padding-top: 7px; }
+.toast-stay-body { flex: 1; min-width: 0; padding-top: 4px; line-height: 1.45; }
+.toast-stay-text { overflow-wrap: anywhere; user-select: text; }
+.toast-stay-detail { margin-top: 4px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; white-space: pre-line; user-select: text; }
+.toast-stay-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 6px 2px 18px; }
+.toast-stay-actions .btn { max-width: 100%; }
+@media (max-width: 760px) {
+  .toast-stay .btn-icon { width: 44px; height: 44px; }
+  .toast-stay-dot { padding-top: 14px; }
+  .toast-stay-body { padding-top: 11px; }
+  .toast-stay-actions .btn { height: 44px; }
+}
+
 /* Chat replies rendered as Markdown (chat_markdown.js) */
 .chat-md > :first-child { margin-top: 0; }
 .chat-md > :last-child { margin-bottom: 0; }
