@@ -48,6 +48,7 @@ import androidx.core.content.ContextCompat
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.assistant.AssistantBench
+import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.CatalogModel
 import com.domovoi.app.assistant.LlmBackend
 import com.domovoi.app.assistant.ModelCatalog
@@ -67,10 +68,18 @@ import com.domovoi.app.ui.theme.Domovoi
  * assistant): download the models, run the measured tests, copy the
  * results. No route or tab of its own; everything runs in
  * [AssistantBench], so a run carries on when this card leaves the screen.
+ *
+ * Nothing at all where the assistant's engine is not in this install (a
+ * 32-bit phone or APK, [AssistantSupport]): no card, no dead buttons. On a
+ * 64-bit phone running the 32-bit app, one line says which app has it.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AssistantBenchmarkCard() {
+    if (!AssistantSupport.available) {
+        if (AssistantSupport.thirtyTwoBitAppOn64BitPhone) AssistantIn64BitAppOnly()
+        return
+    }
     val bench = LocalApp.current.assistantBench
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -305,6 +314,22 @@ fun AssistantBenchmarkCard() {
             destructive = true,
             onConfirm = { bench.delete(m) },
             onDismiss = { confirmDelete = null },
+        )
+    }
+}
+
+/** In the card's place on a 64-bit phone running the 32-bit app: a note,
+ *  no controls. */
+@Composable
+private fun AssistantIn64BitAppOnly() {
+    DomovoiCard(Modifier.fillMaxWidth()) {
+        Text("On-device assistant", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text(
+            "This phone is running the 32-bit Domovoi app, which has no on-device assistant. The 64-bit " +
+                "app (the arm64-v8a download) has it; everything else works the same in both.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Domovoi.colors.fgMuted,
+            modifier = Modifier.padding(top = 2.dp),
         )
     }
 }
