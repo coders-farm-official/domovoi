@@ -516,15 +516,19 @@ private fun TopChrome(content: @Composable () -> Unit) {
 
 // ---------------------------------------------------------------------------
 // Offline/local mode: no domovoi configured, or the saved one is out of
-// reach ([unreachableServer] names it). Music + Videos are the only tabs,
-// backed by on-device media (MediaStore); "connect" opens the
+// reach ([unreachableServer] names it). Music, Videos and Files, backed by
+// the phone's own media (MediaStore) and folders, and the on-device
+// assistant where this install has it ([localTabs]); "connect" opens the
 // discovery/startup screen. Connecting flips prefs.serverUrl (or, for an
 // unreachable server, the live connection coming back), which recomposes
 // AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
 private fun OfflineShell(choice: ServerChoice) {
-    var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos, 2 = files
+    // Music, videos, files, and the on-device assistant where this install
+    // has it (localTabs); the index of the one showing.
+    val tabs = remember { localTabs() }
+    var tab by rememberSaveable { mutableStateOf(0) }
     // This phone's own settings (problem reports, the on-device assistant
     // benchmark): the top bar's gear opens them, with no server needed.
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
@@ -639,7 +643,7 @@ private fun OfflineShell(choice: ServerChoice) {
             BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
-                    listOf(Route.Music, Route.Videos, Route.Files).forEachIndexed { i, r ->
+                    tabs.forEachIndexed { i, r ->
                         NavigationBarItem(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -659,10 +663,11 @@ private fun OfflineShell(choice: ServerChoice) {
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (tab) {
-                0 -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
-                1 -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
-                else -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
+            when (tabs.getOrElse(tab) { Route.Music }) {
+                Route.Videos -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
+                Route.Files -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
+                Route.Assistant -> com.domovoi.app.ui.screens.assistant.AssistantScreen()
+                else -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
             }
         }
     }

@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.net.LocalCapabilities
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
+import com.domovoi.app.ui.screens.assistant.AssistantScreen
 import com.domovoi.app.ui.screens.audiobooks.AudiobooksScreen
 import com.domovoi.app.ui.screens.calendar.CalendarScreen
 import com.domovoi.app.ui.screens.chat.ChatScreen
@@ -67,5 +68,6 @@ fun ScreenRouter(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts 
         Route.Settings -> SettingsScreen(navigate)
         Route.Manual -> ManualScreen()
         Route.Containers -> ContainersScreen()
+        Route.Assistant -> AssistantScreen()
     }
 }
