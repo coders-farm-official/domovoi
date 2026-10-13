@@ -2406,10 +2406,12 @@ const AuthModalHost = () => {
   // A dialog that is OPENING renders at once (flushSync), inside the call
   // that opened it: "sign in" calls Auth.openModal() from its click, so the
   // modal, and the focus its first field takes (useFirstFieldFocus), land
-  // inside that tap. Left to React's own schedule they landed just after
-  // the tap returned, which a phone does not count as the tap: the
-  // keyboard and the caret could part ways (2026-10-13). Every other
-  // change re-renders as before.
+  // inside that click handler, the surest place for a phone to treat the
+  // focus as the tap's and raise its keyboard on the field. Left to React's
+  // own schedule they landed after the handler had returned (2026-10-13:
+  // on a phone the keyboard came up without the caret in the field; not
+  // reproduced in an emulated phone, where both ways focus the field).
+  // Every other change re-renders as before.
   useEffect(() => {
     let shown = { login: !!Auth.modalOpen, pair: !!Auth.pairModalOpen };
     const onChange = () => {
