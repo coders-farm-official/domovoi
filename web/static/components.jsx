@@ -2045,6 +2045,33 @@ const SetupCodeWhere = ({ kind }) => {
   );
 };
 
+/* Put the caret in a dialog's first field: focus it and place the caret at
+ * the end of whatever it holds. Only ever an input — never the dialog box
+ * or the backdrop, which take the focus (and on a phone, the keyboard)
+ * somewhere no keystroke lands. */
+const focusFirstField = (el) => {
+  if (!el || typeof el.focus !== 'function') return;
+  try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch { return; } }
+  try {
+    const end = String(el.value == null ? '' : el.value).length;
+    if (typeof el.setSelectionRange === 'function') el.setSelectionRange(end, end);
+  } catch { /* a field type without a caret position */ }
+};
+
+/* The auth dialogs' first field, focused the moment it is on screen: in
+ * the layout pass that puts it there, so a dialog a tap opens (AuthModalHost
+ * renders it inside that tap, below) focuses inside the tap too — what a
+ * phone needs to raise its keyboard on the field. `which` names the field
+ * that should have it ('setup', 'login', ...): when it changes, the new
+ * first field takes the focus. A dialog that opens on its own (a refused
+ * request, the installer's setup address) focuses the field all the same;
+ * a phone may then want one tap on it for the keyboard. */
+const useFirstFieldFocus = (which) => {
+  const ref = React.useRef(null);
+  React.useLayoutEffect(() => { focusFirstField(ref.current); }, [which]);
+  return ref;
+};
+
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
   const [code, setCode] = useState('');
@@ -2080,6 +2107,10 @@ const LoginModal = ({ onClose }) => {
   // password is asked for once, and this modal says why.
   let signingOut = false;
   try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
+  // The first field of the form on screen: the setup code on an unclaimed
+  // box, the password otherwise. Once the status read says which, the
+  // caret is there.
+  const firstField = useFirstFieldFocus(needsSetup ? 'setup' : 'login');
 
   const submit = async () => {
     if (busyRef.current) return;
@@ -2126,7 +2157,7 @@ const LoginModal = ({ onClose }) => {
               </div>
               <div className="field">
                 <label>setup code</label>
-                <input className="cal-inp" value={code} autoFocus
+                <input className="cal-inp" value={code} ref={firstField}
                        placeholder="eight-words-separated-by-dashes"
                        onChange={(e) => setCode(e.target.value)}/>
               </div>
@@ -2145,7 +2176,7 @@ const LoginModal = ({ onClose }) => {
           ) : (
             <div className="field">
               <label>admin password</label>
-              <input className="cal-inp" type="password" value={password} autoFocus
+              <input className="cal-inp" type="password" value={password} ref={firstField}
                      onChange={(e) => setPassword(e.target.value)}
                      onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
             </div>
@@ -2197,6 +2228,7 @@ const LoginModal = ({ onClose }) => {
 const PairModal = ({ onClose }) => {
   const [value, setValue] = useState('');
   const [err, setErr] = useState(null);
+  const tokenField = useFirstFieldFocus('pair');
 
   const submit = () => {
     setErr(null);
@@ -2236,7 +2268,7 @@ const PairModal = ({ onClose }) => {
           </div>
           <div className="field">
             <label>household token</label>
-            <input className="cal-inp mono" value={value} autoFocus
+            <input className="cal-inp mono" value={value} ref={tokenField}
                    placeholder="household token"
                    onChange={(e) => setValue(e.target.value)}
                    onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
@@ -2370,7 +2402,29 @@ const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   // subscribeModal: every change, plus the login modal coming down the
   // moment a sign-in succeeds (auth.js signedIn).
-  useEffect(() => (Auth.subscribeModal ? Auth.subscribeModal(force) : Auth.subscribe(force)), []);
+  //
+  // A dialog that is OPENING renders at once (flushSync), inside the call
+  // that opened it: "sign in" calls Auth.openModal() from its click, so the
+  // modal, and the focus its first field takes (useFirstFieldFocus), land
+  // inside that click handler, the surest place for a phone to treat the
+  // focus as the tap's and raise its keyboard on the field. Left to React's
+  // own schedule they landed after the handler had returned (2026-10-13:
+  // on a phone the keyboard came up without the caret in the field; not
+  // reproduced in an emulated phone, where both ways focus the field).
+  // Every other change re-renders as before.
+  useEffect(() => {
+    let shown = { login: !!Auth.modalOpen, pair: !!Auth.pairModalOpen };
+    const onChange = () => {
+      const now = { login: !!Auth.modalOpen, pair: !!Auth.pairModalOpen };
+      const opening = (now.login && !shown.login) || (now.pair && !shown.pair);
+      shown = now;
+      if (opening && typeof ReactDOM !== 'undefined' && typeof ReactDOM.flushSync === 'function') {
+        try { ReactDOM.flushSync(force); return; } catch { /* rendering already: the normal path */ }
+      }
+      force();
+    };
+    return Auth.subscribeModal ? Auth.subscribeModal(onChange) : Auth.subscribe(onChange);
+  }, []);
   useEffect(() => InternetAsk.subscribe(force), []);
   // Keyed on the opening: a prompt that comes back is a fresh form, never
   // the last one's typed password and error.

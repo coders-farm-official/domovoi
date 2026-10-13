@@ -83,6 +83,7 @@ from web.backend.schemas import (
     SatelliteApproveRequest,
     SatelliteDisplay,
     SatellitePairing,
+    SatelliteUpgrade,
     Session,
     Timer,
     TimerAnnouncements,
@@ -1343,6 +1344,15 @@ async def _satellite_for(
     supports = (snapshot.get("satellite_supports") or {}).get(room_id) if online else None
     if supports is not None and not isinstance(supports, list):
         supports = None
+    # An upgrade the Domovoi server asked this room for (running, or how it
+    # just ended): what locks the Upgrade button, a page reload included.
+    upgrade_dict = (snapshot.get("satellite_upgrades") or {}).get(room_id)
+    upgrade: SatelliteUpgrade | None = None
+    if isinstance(upgrade_dict, dict) and isinstance(upgrade_dict.get("state"), str):
+        try:
+            upgrade = SatelliteUpgrade(**upgrade_dict)
+        except (TypeError, ValueError):
+            upgrade = None
     display_dict = (snapshot.get("satellite_display") or {}).get(room_id)
     display = (
         SatelliteDisplay(
@@ -1387,6 +1397,7 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
+        upgrade=upgrade,
     )
 
 

@@ -18293,6 +18293,16 @@
               }
             ],
             "title": "Supports"
+          },
+          "upgrade": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SatelliteUpgrade"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -18405,6 +18415,89 @@
         "type": "object",
         "title": "SatellitePairing",
         "description": "WS pairing status for a room (V002). ``paired`` is whether a\n``satellite_pairings`` row exists (the room has claimed its token,\ntrust-on-first-use); ``paired_at`` / ``last_seen_at`` are that row's\ntimestamps. An unpaired room reports ``paired=False`` with null times \u2014\nit still accepts a tokenless satellite unless strict pairing is on."
+      },
+      "SatelliteUpgrade": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "expected_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Sha"
+          },
+          "from_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Sha"
+          },
+          "back_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Back Sha"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "deadline_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "SatelliteUpgrade",
+        "description": "A code upgrade the Domovoi server asked this satellite for, from the\nrequest until a while after it ended (domovoi/satellite_upgrades.py).\n``state``: ``running`` (asked, not back yet: the Upgrade button stays\nlocked), ``done`` (back on ``expected_sha``), ``rolled_back`` (back on\nanother version, ``back_sha``: the new code did not stay up) or\n``no_news`` (never came back with an answer by ``deadline_at``; a sync\nthat fails before the restart leaves the satellite on its old code\nwithout a word, and its log says why). Kept a plain str so a new state\nnever breaks deserialization."
       },
       "SendBody": {
         "properties": {

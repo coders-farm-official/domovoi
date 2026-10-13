@@ -132,6 +132,9 @@ data class Satellite(
     // timers and reminders set on it. Absent (an older server, or no V018
     // yet) = OFF, the default for every room.
     val timers_own_only: Boolean = false,
+    // A code upgrade under way or just finished (SatUpgrade.kt); null when
+    // there is none, and from an older server.
+    val upgrade: SatUpgrade? = null,
 ) {
     val online: Boolean get() = status == "online"
 }

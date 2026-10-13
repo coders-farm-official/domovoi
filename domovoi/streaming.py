@@ -491,7 +491,7 @@ from domovoi.router import (
     is_request_for_a_story,
     route,
 )
-from domovoi import satellite_abilities, satellite_health
+from domovoi import satellite_abilities, satellite_health, satellite_upgrades
 from domovoi.satellite_abilities import Abilities, NotDeclared
 from domovoi.satellite_media.overlay import APPROVAL_CODE_DIGITS
 from domovoi.timer_delivery import AnnounceInterrupted, AnnounceNotStarted
@@ -2966,6 +2966,14 @@ class StreamSession:
             self.ws.app.state.satellite_synced_sha[self.room_id] = ctrl.get(
                 "synced_sha"
             )
+            # An upgrade the core asked this room for is over: the code
+            # version it came back on says how it went
+            # (domovoi/satellite_upgrades.py).
+            upgrades = getattr(self.ws.app.state, "satellite_upgrades", None)
+            if upgrades:
+                satellite_upgrades.on_hello(
+                    upgrades, self.room_id, ctrl.get("synced_sha"), time.time()
+                )
             # Cache the satellite type and whether voice input is running.
             # Both are OPTIONAL hello fields (absent on older clients) and
             # default to the historical behavior: a voice satellite with a

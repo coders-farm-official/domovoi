@@ -301,6 +301,7 @@ for kind, caps in (("wsl", {"host_kind": "wsl"}), ("linux", {"host_kind": "linux
         "files": [COMPONENTS, SETTINGS], "component": "LoginModal", "fnProps": ["onClose"],
         "setup": _setup(status=UNCLAIMED) + "Auth.status = __STATUS;",
         "api": {"GET /api/capabilities": caps} if caps is not None else {},
+        "refs": True,
         "script": r"""
           const w = h.global('window');
           h.render(); await w.__settle(h);
@@ -310,7 +311,7 @@ for kind, caps in (("wsl", {"host_kind": "wsl"}), ("linux", {"host_kind": "linux
           const title = w.__deep(h.find((e) => w.__cls(e).includes('ttl')));
           const code = h.find((e) => e.type === 'input' && e.props.placeholder === 'eight-words-separated-by-dashes');
           return { hint: hint ? h.tree().filter((e) => e === hint || h.ancestors(e).includes(hint)).map((e) => e.text).join(' ') : null, labels, buttons, title,
-                   codeAutoFocus: !!(code && code.props.autoFocus) };
+                   codeFocused: h.focused().map((f) => f.props.placeholder || f.props.type || f.type) };
         """,
     }
     SCENARIOS[f"card_{kind}"] = {
@@ -539,7 +540,7 @@ def test_the_labels_the_installer_names(driven) -> None:
     assert o["title"] == "first-run admin setup"
     assert o["labels"] == ["setup code", "admin password (min 10 chars)", "confirm password"]
     assert "set password" in o["buttons"]
-    assert o["codeAutoFocus"] is True                      # paste and go
+    assert o["codeFocused"] == ["eight-words-separated-by-dashes"]   # paste and go
     assert "set up admin" in driven["card_wsl"]["buttons"]
     assert "Settings → Configuration" not in o["hint"]     # it is on that page
 
