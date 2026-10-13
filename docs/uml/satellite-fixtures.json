@@ -765,7 +765,7 @@
       }
     },
     "android_room": {
-      "about": "An Android phone in room mode (S3 draft): only `supports`, no boolean keys. Echo cancellation for drop-ins but no chat mode; it updates through its app store, so no restart, code sync, settings, live log or clip recording.",
+      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex out): only `supports`, no boolean keys. Echo cancellation for drop-ins but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording.",
       "hello": {
         "type": "hello",
         "room_id": "nursery",
@@ -780,7 +780,8 @@
           "speech_pause",
           "capture_control",
           "announce_after_session_end",
-          "wake_models"
+          "wake_models",
+          "sounds"
         ]
       },
       "ready": {
@@ -802,6 +803,7 @@
           "announce_after_session_end",
           "capture_control",
           "full_duplex",
+          "sounds",
           "speech_pause",
           "wake_models"
         ],
@@ -811,6 +813,7 @@
           "announce_after_session_end",
           "capture_control",
           "full_duplex",
+          "sounds",
           "speech_pause",
           "wake_models"
         ],
@@ -824,7 +827,6 @@
           "mic_gain",
           "plugin_payloads",
           "restart",
-          "sounds",
           "time_sync",
           "voice",
           "wake_clips",
@@ -833,6 +835,7 @@
         "frames_sent": [
           "set_wake_word",
           "wake_models_changed",
+          "sounds_changed",
           "dropin_start",
           "end_capture",
           "announcement"
@@ -844,7 +847,6 @@
           "get_logs",
           "start_wake_recording",
           "stop_wake_recording",
-          "sounds_changed",
           "set_display",
           "chat_start"
         ],
