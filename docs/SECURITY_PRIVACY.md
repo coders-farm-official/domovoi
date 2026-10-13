@@ -1411,7 +1411,6 @@ outbound traffic, each with its own off switch:
 | Traffic | When | Off switch |
 |---|---|---|
 | **Connectivity probe** — a TCP connection with no payload to `CONNECTIVITY_PROBE_TARGET` (`1.1.1.1:443`) | Every 30 s | Under `never` it doesn't dial. Otherwise keep it on an internet address: it is how the core knows the line is down. |
-| **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box replies are spoken on your hardware. Edge is never a fallback for Piper (`piper → system`), and an Edge voice is registered only when you choose Edge or the extra voices (`seed_voice_catalog`). A registered Edge voice's fixed clips (the network notice, the voice sample, the wake greetings) are rendered by Microsoft once each, and only while the internet is up; offline, Piper renders stand-ins. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. Under `never` Edge is not used at all. |
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face. The voices Domovoi offers come from a pinned revision and are checked against pinned SHA-256 digests; any other standard voice name is checked against the digests Hugging Face publishes for it. Nothing that fails the check is kept, the body is capped, and every redirect is re-checked | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **Fast-lane model download** — one-time fetch of the streaming recognizer's model (103 MB) from the sherpa-onnx project's GitHub releases, checked against a pinned SHA-256 | Only if you set `fastlane_mode` to `shadow` (off by default) and the model isn't in `~/.domovoi/models/fastlane/` yet | Leave `fastlane_mode` off, or run `python -m domovoi.fast_lane fetch` once on a connected machine and copy `~/.domovoi/models/fastlane/` across. |
 | **Whisper model download** — the configured model (and its CPU fallback) from Hugging Face | Only when the model isn't on disk yet: every load tries the local cache first | Download the models while online; under `never` the core also sets `HF_HUB_OFFLINE=1` for itself. |
@@ -1433,7 +1432,7 @@ outbound traffic, each with its own off switch:
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
 
-Turn off Edge TTS, news, and the enricher, leave the MusicBrainz alias
+Turn off news and the enricher, leave the MusicBrainz alias
 lookup off, skip provider plugins, and
 Domovoi's steady-state outbound traffic is **zero**, apart from the
 connectivity probe (a TCP connection with no payload to
@@ -1463,7 +1462,7 @@ network:
   podcast feeds and episodes, podcast artwork, radio streams, ICY polls,
   add-by-URL, a model registry;
 - the paths that never went through that check: SearXNG searches (the
-  container is local, the engines it asks are not), Microsoft Edge speech,
+  container is local, the engines it asks are not),
   Piper and Whisper downloads (`HF_HUB_OFFLINE=1` is set for the core),
   the fast-lane model, the wake-word trainer's data, the library enricher
   (AcoustID, Shazam, MusicBrainz), the MusicBrainz name lookup, the

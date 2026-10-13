@@ -323,26 +323,19 @@ split.
 
 ### TTS: the one place local-first costs you something
 
-`tts_engine` defaults to `piper`, which renders every spoken response
-locally — on this box, that means on the same CPU already doing Whisper
-and the language models. Edge, by contrast, arrives over the network
-already rendered and costs zero local compute.
+`tts_engine` is `piper`, which renders every spoken response locally —
+on this box, that means on the same CPU already doing Whisper and the
+language models. (There is no online voice to offload it to: the
+Microsoft Edge voices were dropped in October 2026.)
 
-So this is the one setting where the local-first default and the
-CPU-host advice genuinely pull in opposite directions, and it's worth
-being clear-eyed rather than pretending otherwise.
-
-**Start on Piper anyway.** It's fast — a `medium` voice renders a
+**It is rarely the bottleneck.** Piper is fast — a `medium` voice renders a
 typical one- or two-sentence reply in well under a second on eight modern
 cores — and it runs after the answer is already decided, so it lands at
 the tail of the turn rather than in the middle of it. For most households
 it simply isn't the bottleneck.
 
-Reach for `edge` if you measure otherwise, or if you want the nicer
-voices badly enough. Just do it knowingly: it sends **the text of every
-spoken response** to Microsoft, which is the single thing the default
-config is built to avoid. See
-[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+If you measure otherwise, the `system` engine is cheaper still, at the
+cost of a robotic voice.
 
 Piper's voice model downloads from Hugging Face once, on first render.
 After that it is fully offline — which also makes it the rung that keeps
@@ -371,7 +364,7 @@ encoder's load stalled every room while it ran:
 ```bash
 journalctl -u domovoi-core | grep "speech warm-up"
 # speech warm-up: voice encoder ready in 0.7 s
-# speech warm-up: Piper voice en_US-norman-medium ready in 0.5 s
+# speech warm-up: Piper voice en_US-kristin-medium ready in 0.5 s
 ```
 
 Ollama's model loads are the exception: they are boot cost only if the

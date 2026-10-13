@@ -333,7 +333,7 @@ also on the dashboard as **Wake acknowledgement** in its Wake word settings:
 
 | Mode | What you hear | Added before listening starts |
 |---|---|---|
-| `greeting` (default) | A short spoken line from the greeting bank ("Yes?", "What's up?") in the room's voice | The clip's length plus 0.2 s: about **1.2 s** with a Piper voice (1.7 s for the longer lines), about **2 s** with an Edge voice |
+| `greeting` (default) | A short spoken line from the greeting bank ("Yes?", "What's up?") in the room's voice | The clip's length plus 0.2 s: about **1.2 s** with a Piper voice (1.7 s for the longer lines) |
 | `chime` | A 0.24 s two-note chime, made on the satellite | About **0.5 s** |
 | `none` | Nothing — the LED alone | Nothing |
 
@@ -346,10 +346,9 @@ on a HAT as well as on the XVF3800. A player still going after 4 s (1.5 s
 for the chime) is stopped and listening starts anyway.
 
 Measured on the shipped greeting bank as rendered (2,184 clips, 28 voices):
-Piper clips run a median 1.0 s (90th percentile 1.5 s); Edge clips a median
-1.8 s (90th percentile 2.3 s), of which about 0.85 s is silence at the end of
-the clip. The longest, a funny line in an Edge voice, is 4.1 s; the cap
-stops it inside that trailing silence. If the wait matters in a room,
+Piper clips run a median 1.0 s (90th percentile 1.5 s). (The Microsoft
+Edge voices of that measurement, a median 1.8 s with 0.85 s of trailing
+silence, were dropped in October 2026.) If the wait matters in a room,
 `chime` keeps an audible acknowledgement at under half the cost.
 
 When music was playing, the spoken greeting is skipped — the music stopping

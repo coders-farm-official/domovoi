@@ -119,12 +119,30 @@ Siobhan = shiv-AWN
   respelled instead of spelled.
 - **Say it like** (right): syllables separated by hyphens or spaces, each
   written in plain letters. Each syllable is pronounced the way the
-  converter says that spelling as a word on its own (dictionary, then
-  model), never through the list again.
+  converter says that spelling as a word on its own (context rules,
+  dictionary), never through the list again; a syllable no dictionary
+  knows (or that CMUdict only spells out, like `ts`) is read with the
+  **respelling key** before the model: consonants, one vowel spelling,
+  consonants, in the conventions of dictionaries' and Wikipedia's
+  respellings (`uh` but, `ah` father, `aw` law, `ay` say, `ee` see, `eh`
+  bed, `ih` sit, `oh`/`oe` go, `oo` too, `ow`/`ou` now, `oy` boy, `eye`
+  eye, `er`/`ur` her, `ar` car, `or` for, `air` hair, `eer` here, `oor`
+  tour; `zh` measure, `dh` this, `th` thin, `ch`, `sh`, `ng`, `kh`, `ts`,
+  `j`; a lone a/e/i/o/u closing a syllable is the vowel of pa, meh, ski,
+  go, zoo; `pronunciations.respell_arpa`). The model read `shuh` as SH UW1
+  (so `SEER-shuh` was "SEER-shoo"); the key reads SH AH1. Anything else
+  (two vowel spellings, an apostrophe) goes to the model as before.
+- **A dictionary word, respelled**: two or more syllables that run
+  together into a CMUdict word with one vowel per syllable, and its main
+  stress on the syllable the respelling stresses, are read as that word
+  (`CAM-er-on` is cameron's K AE1 M ER0 AH0 N). A consonant written on
+  both sides of a hyphen is said once (`jen-NIF-er`).
 - **Stress**: the syllable in CAPITALS takes the main stress. With no
   capitals (or all capitals), the first syllable does. Other syllables are
-  said lighter: their stress drops to secondary, and an unstressed "uh" or
-  "er" sound becomes a schwa (`DOM-uh-voy` is D AA1 M AH0 V OY2).
+  said lighter: their stress drops to secondary, an unstressed "uh" or
+  "er" sound becomes a schwa (`DOM-uh-voy` is D AA1 M AH0 V OY2), and so
+  does the e of a light last syllable ending in n, l or m (`KAM-ren` is
+  K AE1 M R AH0 N, the end of "Cameron"; write `kam-REN` for a full "ren").
 - **Advanced**: between slashes, the text is the voice's own phoneme string,
   used unchanged: `Domovoi = /dˈəʊməʊvɔɪ/`. Every symbol must be one in the
   voices' map.
@@ -188,12 +206,13 @@ lord (`oːɹ` here), `ɑː` in office, `ʊɹɹ` in during.
 
 ## The golden fixture (`golden.json`)
 
-What the converter must produce for 696 texts, each in both phoneme sets
-(1,392 cases): the 13 comparison sentences, 39 Domovoi phrases,
+What the converter must produce for 702 texts, each in both phoneme sets
+(1,404 cases): the 13 comparison sentences, 39 Domovoi phrases,
 function-word sentences, heteronyms, 32 number forms plus 93 more
 normalization cases (money, times, dates, units, ordinals, phone numbers,
 abbreviations, odd punctuation), 74 names, 62 artists, the 337 common
-words, and 13 cases with their own "say it like" lists. UTF-8 JSON, LF
+words, and 19 cases with their own "say it like" lists (Kamron's own name
+four ways among them). UTF-8 JSON, LF
 line endings, one case per line.
 
 Top level:
@@ -233,14 +252,17 @@ A case:
 - `model` (informational): the words of the text the out-of-dictionary
   model pronounced, with its ARPAbet, to tell a model difference from a
   rules difference. `respelling_model`: the same for the syllables of a
-  "say it like" entry the case uses (`voy` in `DOH-moe-voy`).
+  "say it like" entry the case uses that the model read (`kamren`; the
+  respelling key's syllables, like `voy` in `DOH-moe-voy`, are not model
+  output and not listed).
 - `near_tie`: model words (of the text or of a respelling) whose output
   is within `near_tie_margin` (0.1) logits of a different phoneme. The
   case may then differ by **one phoneme per near-tie word** (at most two
   code points each in the joined sentences, `iː` against `ɪ`), and nothing
   else: a runtime other than `made_with` may pick the other phoneme
-  (ONNX Runtime 1.24 reads `shiv` as SH IY1 V, 1.28 and 1.30 as SH IH1 V;
-  `oluwaseun` flips between the int8 and float models). The ids then
+  (ONNX Runtime 1.24 read `shiv` as SH IY1 V, 1.28 and 1.30 as SH IH1 V,
+  before the respelling key read it; `oluwaseun` flips between the int8
+  and float models). The ids then
   follow the phonemes actually produced. The Python test, `make_golden.py
   --check` and the Kotlin port apply this same rule. The shipped "say it
   like" entries have no near tie, so Domovoi's own name sounds the same

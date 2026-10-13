@@ -32,9 +32,9 @@ Honest answers to the questions people actually ask. For a term you don't recogn
 - The language models are **local Ollama models** on the same machine.
 - Voice-profile identification ("who's speaking") computes voice embeddings locally and stores them in your own Postgres.
 
-Two honest nuances, so you can decide for yourself:
+Two honest notes, so you can decide for yourself:
 
-1. **Edge TTS sends response *text* out — but only if you choose it.** Text-to-speech defaults to `piper`, fully local neural TTS, so out of the box Domovoi's replies are spoken on your own hardware. Edge is never used as a stand-in: if Piper can't speak a reply, the robotic system voice does, and an Edge voice is only registered when you choose Edge or the extra voices. Microsoft's Edge neural voices are available on Settings → Voices if you prefer them, and they sound better — but switching means the *text Domovoi speaks back to you* (not your voice, not your audio) goes to a Microsoft service. Worth choosing on purpose rather than inheriting. On a server answered **No** to the internet question, Edge isn't used at all.
+1. **Every voice is local.** Text-to-speech is `piper`, Domovoi's local neural voices, with the OS's robotic system voice beneath it; Domovoi's replies are spoken on your own hardware. (The Microsoft Edge online voices, which sent the text of each reply to Microsoft, were dropped in October 2026.)
 2. **Song identification sends short audio clips out — but not from your microphone.** The bundled radio plugin can sample short clips of *radio streams* you've favorited, and the library enricher can fingerprint *your music files*, sending those to online identification services (Shazam via `shazamio`, optionally AcoustID/MusicBrainz). Radio-stream audio and library files, never mic audio. Both are switchable off (see the table below).
 
 ## What touches the internet, and how do I turn each thing off?
@@ -43,8 +43,6 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 
 | Feature | What goes out | Where | How to disable |
 |---|---|---|---|
-| Edge TTS — **opt-in, not the default** | Response text | Microsoft Edge TTS service | Nothing to disable: the default engine is `piper` (fully local), and Edge is never a fallback for it. This row applies only if you switch to `edge` yourself (Settings → Voices, or `TTS_ENGINE=edge`) |
-| Clips for a registered Edge voice | Fixed text, once per clip: the "trouble reaching the network" notice, the voice sample and the wake greetings (including ones you wrote in Settings → Greetings) | Microsoft Edge TTS, at startup when a clip is missing or its text changed, and only while the internet is up | Only when an Edge voice is registered: you chose `TTS_ENGINE=edge`, or the extra voices (`SEED_VOICE_CATALOG=true`, 19 Edge voices). While the internet is down, Piper renders a stand-in that is replaced later |
 | Connectivity probe | A TCP connection, no payload | `1.1.1.1:443` every 30 s | Answer **No** in Settings → Internet: the probe stops dialing and the dashboard says "Turned off for this box". Otherwise **leave `CONNECTIVITY_PROBE_TARGET` on an internet address**: the failing dial is how Domovoi knows the line is down. Pointed at a LAN host (your router), it reports online when the internet isn't there, and online features fail slowly instead of saying they can't. If your network blocks `1.1.1.1`, use another public `host:443` (e.g. `9.9.9.9:443`) |
 | Model downloads | Model files, once | Hugging Face (Whisper models, Piper voices), Ollama model pulls, the fast lane's model (GitHub, only once `fastlane_mode` is `shadow`) | One-time each. Whisper loads its model from the server's own cache first and asks Hugging Face only for a model that isn't downloaded yet; under **No** it never asks (and `HF_HUB_OFFLINE=1` is set for the core), so download every model you'll use before you disconnect ([how](INTERNET.md#before-you-disconnect)) |
 | News briefings | RSS feed fetches; topic feed discovery via your local SearXNG | The feeds you configure | `NEWS_ENABLED=false` kills all background fetching (it follows the internet answer: off for **No**); `NEWS_AUTO_FETCH` (topic feeds) is already off by default |
@@ -56,7 +54,7 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | MusicBrainz alias lookup — **off unless your internet answer is Yes or Sometimes** | Artist names from your library — tagged artists, and the "Artist" of an untagged file whose name reads "Artist - Title" (so a home recording named "Grandma Edith - Happy Birthday" would send "Grandma Edith"): one search per artist, once, then only for artists added later (about an hour and a half the first time for ~2,000 artists); the spoken stage names that come back are kept, legal names and a person's names sharing a word with one are filtered out and never stored. A band's other names (members, "The Farriss Brothers" for INXS) can be kept | musicbrainz.org, one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Look up other names on MusicBrainz" (`music_alias_fetch_enabled` / `MUSIC_ALIAS_FETCH_ENABLED`) overrides the answer; switching it off stops it before its next request |
 | Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
-| Extra voices | Downloads of the other two Piper voices (about 130 MB), and the Edge clips above for 19 Edge voices | Hugging Face; Microsoft | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
+| Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
 | Things an admin starts | Downloads, only when an admin clicks: **Pull the latest** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media | GitHub; PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
@@ -91,7 +89,7 @@ Yes — local-first is a tested contract, not a slogan. Every voice handler decl
 What that looks like in practice with the internet down:
 
 - **Fully works:** wake word, STT, intent routing, timers, reminders, clocks, calculator, music from your local library, intercom announcements, room-to-room drop-in calls, voice profiles, memory. All local.
-- **Degrades:** the default Piper voice is local, so Domovoi keeps talking in the same voice. If you chose the online Edge voices, it falls back to Piper (and to the robotic system voice if Piper is missing), so it keeps talking, just in a different voice. Radio needs the stream, but its handler degrades per-command, and FM over an RTL-SDR keeps working.
+- **Degrades:** every voice is local, so Domovoi keeps talking in the same voice (or the robotic system voice if the Piper voice is missing). Radio needs the stream, but its handler degrades per-command, and FM over an RTL-SDR keeps working.
 - **Says so honestly:** web-backed answers ("double-check that", news fetches) reply that they can't check right now instead of guessing. On a server answered **No** they say "I'm set to stay off the internet" instead.
 - **Satellite-side:** if a satellite loses the *server* for 30+ seconds, the next wake word plays a locally cached "having trouble reaching the network" clip instead of silence.
 
@@ -135,14 +133,16 @@ Those are two separate things:
 ## Which voice does Domovoi speak with, and can I fix how it says a word?
 
 One of three local voices, all public domain (recorded from LibriVox and the
-LJ Speech set, trained from scratch by Bryce Beattie): **Norman** (male, the
-default), **Kristin** and **Linda** (female). Pick one under Settings →
+LJ Speech set, trained from scratch by Bryce Beattie): **Kristin** (female,
+the default since October 2026), **Norman** (male) and **Linda** (female).
+A server still on Norman, the old default, moves to Kristin once on the
+update (pick Norman again here to keep him). Pick one under Settings →
 Voices → *Domovoi's voice*, where each has a play button; the phone app
 offers the same three. Since October 2026 the words are turned into sounds
 by Domovoi's own converter (a pronouncing dictionary, rules and a small
 model, all permissively licensed), not by espeak-ng, which is GPL; an
 update moves a server off the voices Domovoi used to offer (lessac and the
-voices built on it) to Norman, and fetches it.
+voices built on it) to the default, and fetches it.
 
 When a word comes out wrong, add it under Settings → Voices → *Say it
 like*: the word, and how it sounds in plain letters, with the stressed

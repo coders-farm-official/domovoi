@@ -151,7 +151,7 @@ SCENARIOS["panel_unanswered_save"] = {
       const before = { status: w.__byClass(h, 'pill').map((e) => w.__deep(e)),
                        radios: w.__radios(h), save: w.__button(h, 'Save'),
                        privacy: w.__byClass(h, 'internet-privacy').map((e) => w.__deep(e)),
-                       edge: w.__byClass(h, 'internet-edge-note').map((e) => w.__deep(e)),
+                       edge: w.__byClass(h, 'internet-edge-note').length,
                        hint: w.__byClass(h, 'internet-searxng-hint').length };
       await h.change((e) => e.type === 'input' && e.props.type === 'radio' && e.props.value === 'sometimes', true);
       const picked = { radios: w.__radios(h), save: w.__button(h, 'Save'),
@@ -269,8 +269,10 @@ def _config_fields(answer: str) -> dict:
                choice_labels={"always": "Yes, always", "sometimes": "Sometimes",
                               "never": "No, keep everything in the house"}),
         _field("bot_name", "Bot name", "Identity", "str", "Domovoi"),
+        # A choice that needs the internet (no real field has one since the
+        # Microsoft Edge voices were dropped; the page still greys one).
         _field("tts_engine", "TTS engine", "Voice & speech", "choice", "piper",
-               choices=["piper", "edge", "system"], needs_internet_choices=["edge"]),
+               choices=["piper", "cloud", "system"], needs_internet_choices=["cloud"]),
         _field("music_alias_fetch_enabled", "Look up other names on MusicBrainz", "Library", "bool",
                answer == "always", needs_internet=True, internet_profile=True,
                follows_internet=bool(answer)),
@@ -307,7 +309,6 @@ for answer in ("never", "always", ""):
         "script": CONFIG_SCRIPT,
     }
 
-EDGE = {"id": 1, "name": "Aria", "engine": "edge", "model_ref": "en-US-AriaNeural", "is_default": False}
 PIPER = {"id": 2, "name": "Amy", "engine": "piper", "model_ref": "amy.onnx", "is_default": True}
 PIPER2 = {"id": 3, "name": "Ryan", "engine": "piper", "model_ref": "ryan.onnx", "is_default": False}
 
@@ -328,7 +329,7 @@ for answer in ("never", "always"):
     SCENARIOS[f"voices_{answer}"] = {
         "files": [COMPONENTS, SETTINGS], "component": "VoicesPanel",
         "setup": _setup(answer),
-        "api": {"GET /api/voices": [EDGE, PIPER, PIPER2],
+        "api": {"GET /api/voices": [PIPER, PIPER2],
                 "GET /api/config": {"bot_name": "x", "internet_access": answer}},
         "script": f"const __NEEDS = {json.dumps(NEEDS)};" + VOICES_SCRIPT,
     }
@@ -537,7 +538,7 @@ def test_an_unanswered_box_says_so_and_offers_the_three_answers(driven) -> None:
     assert not any(r["checked"] for r in b["radios"])
     assert b["save"]["disabled"] is True                       # nothing picked yet
     assert b["privacy"] == [PRIVACY]
-    assert b["edge"] == ["Microsoft voices stay your choice on every answer (Settings → Voices)."]
+    assert b["edge"] == 0          # no Microsoft voices to mention any more
     assert b["hint"] == 0
 
 
@@ -644,8 +645,8 @@ def test_configuration_greys_what_needs_the_internet_under_never(driven) -> None
     assert boxes and all(i["disabled"] and i["title"] == NEEDS for i in boxes)   # alias fetch + topic news
     text_inputs = [i for i in o["inputs"] if i["type"] == "input" and i["kind"] == "text"]
     assert text_inputs and not any(i["disabled"] for i in text_inputs)           # bot name stays
-    edge = next(x for x in o["options"] if x["value"] == "edge")
-    assert edge["disabled"] is True and edge["text"] == "edge · needs internet"
+    cloud = next(x for x in o["options"] if x["value"] == "cloud")
+    assert cloud["disabled"] is True and cloud["text"] == "cloud · needs internet"
     assert next(x for x in o["options"] if x["value"] == "piper")["disabled"] is False
     assert o["notes"] >= 2
     assert o["line"] == ["Internet: No, keep everything in the house · change it in Settings → Internet"]
@@ -667,19 +668,19 @@ def test_configuration_greys_nothing_when_the_internet_is_allowed(driven) -> Non
     assert unset["follows"] == 0
 
 
-def test_voices_grey_the_microsoft_controls_under_never(driven) -> None:
-    o = driven["voices_never"]
-    assert o["register"] == {"disabled": True, "title": NEEDS}
-    assert o["upload"]["disabled"] is False                                      # local voices stay
-    assert all(o["textInputs"][:2])                                              # the Edge name + id
-    assert {"disabled": True, "title": NEEDS} in o["plays"]                      # Aria's sample
-    assert {"disabled": False, "title": "Play a sample"} in o["plays"]           # Amy / Ryan
-    assert o["makeDefault"] == [{"disabled": True, "title": NEEDS},              # Aria
-                                {"disabled": False, "title": None}]              # Ryan
-    a = driven["voices_always"]
-    assert a["register"] == {"disabled": False, "title": None}
-    assert not any(p["disabled"] for p in a["plays"])
-    assert a["notes"] == 0
+@pytest.mark.parametrize("answer", ["never", "always"])
+def test_the_voices_page_is_the_same_on_every_answer(driven, answer) -> None:
+    """Every voice is local since the Microsoft Edge voices were dropped
+    (2026-10-12): no "Add a cloud voice", nothing greyed for the internet."""
+    o = driven[f"voices_{answer}"]
+    assert o["register"] is None                                                 # no cloud voice to add
+    # the upload is greyed only until a name and both files are chosen, and
+    # says that, never the internet
+    assert o["upload"] == {"disabled": True, "title": "Choose a name, the model, the config first"}
+    assert not any(o["textInputs"])
+    assert o["plays"] == [{"disabled": False, "title": "Play a sample"}] * 2     # Amy, Ryan
+    assert o["makeDefault"] == [{"disabled": False, "title": None}]              # Ryan
+    assert o["notes"] == 0
 
 
 def test_wake_word_training_is_greyed_under_never(driven) -> None:

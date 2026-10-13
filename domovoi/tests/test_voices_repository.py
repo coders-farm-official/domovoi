@@ -42,7 +42,7 @@ async def test_create_and_lookup(repo):
 @requires_db
 @pytest.mark.asyncio
 async def test_single_default_invariant(repo):
-    a = await repo.create(name="Aria", engine="edge", model_ref="en-US-AriaNeural", is_default=True)
+    a = await repo.create(name="Aria", engine="piper", model_ref="aria.onnx", is_default=True)
     b = await repo.create(name="Lessac", engine="piper", model_ref="en_US-lessac-medium")
 
     # Creating B (non-default) leaves A the default.
@@ -77,7 +77,7 @@ async def test_update_fields(repo):
 @pytest.mark.asyncio
 async def test_delete_guards_default(repo):
     default_id = await repo.create(
-        name="Aria", engine="edge", model_ref="en-US-AriaNeural", is_default=True
+        name="Aria", engine="piper", model_ref="aria.onnx", is_default=True
     )
     other_id = await repo.create(name="Lessac", engine="piper", model_ref="en_US-lessac-medium")
 

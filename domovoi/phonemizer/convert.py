@@ -21,7 +21,7 @@ import os
 import re
 
 from .normalize import normalize
-from .pronunciations import PronunciationError, load_default_pronunciations, parse_say_it_like
+from .pronunciations import PronunciationError, load_default_pronunciations, parse_say_it_like, respell_arpa
 
 log = logging.getLogger(__name__)
 
@@ -222,9 +222,10 @@ class Phonemizer:
         if entry.ipa is not None:
             return entry
         phones = []
+        whole = self.whole_respelling_arpa(entry.pieces, entry.stressed)
+        last = len(entry.pieces) - 1
         for k, piece in enumerate(entry.pieces):
-            ph, _ = self.word_arpa(piece.lower())
-            ph = list(ph)
+            ph = list(whole[k]) if whole else self.respelling_arpa(piece.lower())[0]
             if k == entry.stressed:
                 if not any(p.endswith("1") for p in ph):
                     for j, p in enumerate(ph):
@@ -238,12 +239,53 @@ class Phonemizer:
                         continue
                     if not capital and base(p) in ("AH", "ER"):
                         ph[j] = base(p) + "0"  # an unstressed "uh" / "er" is a schwa
+                    elif not capital and k == last and base(p) == "EH" and len(ph) == j + 2 and ph[-1] in ("N", "L", "M"):
+                        ph[j] = "AH0"          # ...and so is the e of a light last "ren", "sel", "dem"
                     elif p.endswith("1"):
                         ph[j] = base(p) + "2"
+            if phones and ph and not is_vowel(ph[0]) and ph[0] == phones[-1]:
+                ph = ph[1:]                    # "jen-NIF": one n, not two
             phones += ph
         if not any(is_vowel(p) for p in phones):
             raise PronunciationError(f"{word}: {say!r} has no vowel sound")
         return entry.with_phones(tuple(phones))
+
+    def _spelled_out(self, w, phones):
+        """Whether a dictionary entry only spells ``w`` out letter by letter
+        (CMUdict's abbreviations: "ts" is T IY1 EH1 S)."""
+        return list(phones) == [p for c in w for p in LETTERS.get(c, "?").split()]
+
+    def respelling_arpa(self, s):
+        """One syllable of a respelling -> (ARPAbet, source): the way the
+        converter says it as a word on its own (context rules, dictionary),
+        but a syllable no dictionary knows (or only spells out) goes by the
+        respelling key (``pronunciations.respell_arpa``, source "key")
+        before the model or spelling."""
+        ph, src = self.word_arpa(s)
+        if src in ("model", "spell") or (src == "lex" and self._spelled_out(s, ph)):
+            key = respell_arpa(s)
+            if key is not None:
+                return key, "key"
+        return list(ph), src
+
+    def whole_respelling_arpa(self, pieces, stressed):
+        """A respelling of two or more syllables that, run together, is a
+        dictionary word with one vowel per syllable and its main stress on
+        the syllable the respelling stresses ("CAM-er-on" is cameron): its
+        ARPAbet split into the syllables, each syllable's consonants before
+        its vowel with it, the last one's after it too; else None."""
+        if len(pieces) < 2:
+            return None
+        w = "".join(pieces).lower()
+        variants = self.lex.get(w)
+        if not variants or self._spelled_out(w, variants[0]):
+            return None
+        phones = list(variants[0])
+        vowels = [j for j, p in enumerate(phones) if is_vowel(p)]
+        if len(vowels) != len(pieces) or not phones[vowels[stressed]].endswith("1"):
+            return None
+        bounds = [0] + [v + 1 for v in vowels[:-1]] + [len(phones)]
+        return [phones[bounds[k]:bounds[k + 1]] for k in range(len(pieces))]
 
     # ---------------- word -> ARPAbet ----------------
     def model_arpa(self, word):

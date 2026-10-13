@@ -126,13 +126,15 @@ object PhoneVoiceChoice {
 
     /** The voice the phone speaks with: the server's voice for
      *  [SAME_AS_SERVER] when it is one the app knows, else the chosen one;
-     *  Norman when neither is known (offline before any server answered). */
+     *  Kristin, the default, when neither is known (offline before any
+     *  server answered). */
     fun effective(choice: String?, serverVoice: String?): CatalogModel {
         val wanted = if (choice == null || choice == SAME_AS_SERVER) serverVoice else choice
         return ModelCatalog.voice(wanted) ?: ModelCatalog.defaultVoice
     }
 
-    /** A server voice the app does not know (so it speaks Norman instead). */
+    /** A server voice the app does not know (so it speaks the default,
+     *  Kristin, instead). */
     fun unknownServerVoice(serverVoice: String?): String? =
         serverVoice?.takeIf { it.isNotBlank() && ModelCatalog.voice(it) == null }
 

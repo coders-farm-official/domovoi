@@ -146,13 +146,11 @@ logging.getLogger("uvicorn.access").addFilter(_SuppressNoisyAccessPaths())
 
 
 async def seed_voices() -> None:
-    """Ensure the voice registry is populated. Seeds the configured
-    Edge + Piper voices plus — when ``SEED_VOICE_CATALOG`` is on — the
-    curated catalog from ``domovoi.voice_catalog``, so an existing
-    install keeps whatever Domovoi speaks today as the default while a fresh
-    set of cloud + local voices is available to list/sample/switch with no
-    manual step. Idempotent (by name + model_ref); preserves any existing
-    default."""
+    """Ensure the voice registry is populated: the configured Piper voice
+    plus — when ``SEED_VOICE_CATALOG`` is on — the three public-domain
+    voices from ``domovoi.voice_catalog``, and the retired and Microsoft
+    Edge voices removed. Idempotent (by name + model_ref); preserves any
+    existing default that is still spoken."""
     from domovoi.db.repositories import VoicesRepository
     from domovoi.voice_catalog import seed_voices as seed_voice_registry
 
@@ -160,9 +158,7 @@ async def seed_voices() -> None:
         created = await seed_voice_registry(
             VoicesRepository(s),
             include_catalog=settings.seed_voice_catalog,
-            edge_voice=settings.tts_edge_voice,
             piper_voice=settings.tts_piper_voice,
-            default_is_piper=settings.tts_engine == "piper",
         )
     if created:
         log.info(
@@ -373,6 +369,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await seed_voices()
     except Exception as e:
         log.warning("voice registry seed raised: %s", e)
+    # Norman to Kristin, the house voice since 2026-10-12, once and only
+    # with her on disk (domovoi/voice_migration.py): in the background,
+    # since it may fetch her first. Real speech only, like the list below.
+    app.state.default_voice_move_task = None
+    if not settings.use_stubs:
+        app.state.default_voice_move_task = asyncio.create_task(
+            voice_migration.run_default_voice_move(), name="voice-default-move")
 
     # The owner's "say it like" list into the text-to-phoneme converter
     # (domovoi/voice_settings.py). Real speech only: the stub TTS has no
@@ -3458,12 +3461,12 @@ async def admin_voice_sample(body: _VoiceSampleBody) -> FastAPIResponse:
         text, engine=voice["engine"], voice=voice["model_ref"]
     )
     if result.engine != voice["engine"]:
-        # Another rung answered (a voice that can't speak here, or Edge
-        # turned off): that is not a sample of this voice.
-        raise HTTPException(
-            status_code=409,
-            detail=f"{voice['name']} can't speak here right now; another voice would answer instead",
-        )
+        # Another rung answered (a voice that can't speak here, or one that
+        # could not be fetched): that is not a sample of this voice. Say
+        # why, in the owner's words, for the page's toast.
+        mine = [f.split(": ", 1)[1] for f in result.failures if f.startswith(voice["engine"] + ": ")]
+        why = mine[0] if mine else "another voice would answer instead"
+        raise HTTPException(status_code=409, detail=f"{voice['name']} can't speak right now: {why}")
     wav = result.wav
     return FastAPIResponse(
         content=wav,

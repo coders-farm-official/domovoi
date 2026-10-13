@@ -126,6 +126,74 @@ object Pronunciations {
     /** (word, say it like) pairs -> the text form, one entry per line. */
     fun formatText(pairs: List<Pair<String, String>>): String =
         pairs.joinToString("") { (w, s) -> "$w = $s\n" }
+
+    /*
+     * A respelling syllable no dictionary knows ("shuh", "zhahn", "voy") is
+     * read with this key before the out-of-dictionary model, which reads it
+     * as a word ("shuh" came out SH UW1): the conventions of dictionaries'
+     * and Wikipedia's pronunciation respellings. Consonants, one vowel
+     * spelling, consonants; anything else is left to the model. The same
+     * tables as pronunciations.py's RESPELL_*.
+     */
+    private val RESPELL_VOWELS = mapOf(
+        "eye" to "AY", "igh" to "AY", "air" to "EH R", "ear" to "IH R", "eer" to "IH R", "oor" to "UH R", "our" to "AW R",
+        "ahr" to "AA R", "ah" to "AA", "ai" to "EY", "ar" to "AA R", "au" to "AO", "aw" to "AO", "ay" to "EY",
+        "ea" to "IY", "ee" to "IY", "eh" to "EH", "er" to "ER", "ew" to "Y UW", "ih" to "IH", "ir" to "ER",
+        "oa" to "OW", "oe" to "OW", "oh" to "OW", "oi" to "OY", "oo" to "UW", "or" to "AO R", "ou" to "AW", "ow" to "AW",
+        "oy" to "OY", "uh" to "AH", "ur" to "ER", "uu" to "UH",
+        "a" to "AE", "e" to "EH", "i" to "IH", "o" to "AA", "u" to "AH",
+    )
+    /** A lone vowel letter ending the syllable: "pa", "mo", "ki", "zu". */
+    private val RESPELL_OPEN_VOWELS = mapOf("a" to "AA", "e" to "EH", "i" to "IY", "o" to "OW", "u" to "UW")
+    private val RESPELL_CONSONANTS = mapOf(
+        "dzh" to "JH", "tch" to "CH", "ch" to "CH", "ck" to "K", "dh" to "DH", "dz" to "D Z", "gh" to "G", "kh" to "K",
+        "ng" to "NG", "nk" to "NG K", "ph" to "F", "qu" to "K W", "sh" to "SH", "th" to "TH", "ts" to "T S", "wh" to "W",
+        "zh" to "ZH",
+        "b" to "B", "c" to "K", "d" to "D", "f" to "F", "g" to "G", "h" to "HH", "j" to "JH", "k" to "K", "l" to "L",
+        "m" to "M", "n" to "N", "p" to "P", "q" to "K", "r" to "R", "s" to "S", "t" to "T", "v" to "V", "w" to "W",
+        "x" to "K S", "y" to "Y", "z" to "Z",
+    )
+    private const val RESPELL_LETTER_VOWELS = "aeiou"
+    private val RESPELL_VOWEL_PHONES = setOf("AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW")
+
+    private fun longest(s: String, i: Int, table: Map<String, String>): String? {
+        for (n in 3 downTo 1) {
+            if (i + n <= s.length && s.substring(i, i + n) in table) return s.substring(i, i + n)
+        }
+        return null
+    }
+
+    /** One respelling syllable -> ARPAbet by the key above (its vowel with
+     *  stress 1, a doubled sound said once), or null when it is not
+     *  consonants, one vowel spelling, consonants. */
+    fun respellArpa(syllable: String): List<String>? {
+        val s = syllable.lowercase()
+        if (s.isEmpty() || !s.all { it in 'a'..'z' }) return null
+        val onset = mutableListOf<String>()
+        val coda = mutableListOf<String>()
+        var i = 0
+        while (i < s.length && s[i] !in RESPELL_LETTER_VOWELS) {
+            val m = longest(s, i, RESPELL_CONSONANTS)!!
+            onset += RESPELL_CONSONANTS.getValue(m).split(' ')
+            i += m.length
+        }
+        if (i == s.length) return null
+        val v = longest(s, i, RESPELL_VOWELS)!!
+        i += v.length
+        while (i < s.length) {
+            if (s[i] in RESPELL_LETTER_VOWELS) return null
+            val m = longest(s, i, RESPELL_CONSONANTS)!!
+            coda += RESPELL_CONSONANTS.getValue(m).split(' ')
+            i += m.length
+        }
+        val vowel = (if (v.length == 1 && coda.isEmpty()) RESPELL_OPEN_VOWELS.getValue(v) else RESPELL_VOWELS.getValue(v))
+            .split(' ').map { if (it in RESPELL_VOWEL_PHONES) it + "1" else it }
+        val out = mutableListOf<String>()
+        for (p in onset + vowel + coda) {
+            if (out.isEmpty() || out.last().trimEnd('0', '1', '2') != p.trimEnd('0', '1', '2')) out += p
+        }
+        return out
+    }
 }
 
 /**

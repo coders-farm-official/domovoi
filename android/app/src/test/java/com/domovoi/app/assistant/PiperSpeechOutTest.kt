@@ -92,7 +92,10 @@ class PiperSpeechOutTest {
         val phonemes = phonemizer.phonemize(text)
         assertEquals(2, phonemes.size)
         assertEquals(phonemes, out.lastPhonemes)
-        assertEquals(phonemes.map { PhonemeIds.ids(it, phonemizer.idMap).toList() }, voice.calls.map { it.toList() })
+        // after the voice's one-time check (each probe word alone: this voice
+        // says them quickly, so its short sentences are said alone; LeadInTest)
+        assertEquals(phonemes.map { PhonemeIds.ids(it, phonemizer.idMap).toList() },
+            voice.calls.drop(LeadIn.PROBES.size).map { it.toList() })
         // sentence, 0.2 s of silence, sentence, then the tail that pushes it out
         assertEquals(listOf(500, 200, 500, 7), sink.writes.map { it.size })
         assertTrue(sink.writes[1].all { it == 0.toShort() })
@@ -217,7 +220,8 @@ class PiperSpeechOutTest {
         val out = PiperSpeechOut(phonemizer, voice, "kronk", FakeSink(), clock = clock.read, log = {}, dialect = "en-us")
         out.speak("Better water.")
         assertEquals(listOf("bˈɛɾɚ wˈɔːɾɚ."), out.lastPhonemes)
-        assertEquals(listOf(PhonemeIds.ids("bˈɛɾɚ wˈɔːɾɚ.", phonemizer.idMap).toList()), voice.calls.map { it.toList() })
+        assertEquals(listOf(PhonemeIds.ids("bˈɛɾɚ wˈɔːɾɚ.", phonemizer.idMap).toList()),
+            voice.calls.drop(LeadIn.PROBES.size).map { it.toList() })
     }
 
     @Test fun aSymbolTheVoiceLacksIsSaidAsTheNearestOne() = runBlocking {
@@ -227,7 +231,8 @@ class PiperSpeechOutTest {
         val out = PiperSpeechOut(phonemizer, voice, "small", FakeSink(), idMap = small, clock = clock.read,
             log = { logged += it }, dialect = "en-us")
         out.speak("Better, remind me.")
-        assertEquals(listOf(PhonemeIds.ids("bˈɛtɚ, ɹɪmˈaɪnd mˌiː.", small).toList()), voice.calls.map { it.toList() })
+        assertEquals(listOf(PhonemeIds.ids("bˈɛtɚ, ɹɪmˈaɪnd mˌiː.", small).toList()),
+            voice.calls.drop(LeadIn.PROBES.size).map { it.toList() })
         assertEquals(1, logged.count { "has no" in it })
         out.speak("Better.")
         assertEquals(1, logged.count { "has no" in it })     // once per voice

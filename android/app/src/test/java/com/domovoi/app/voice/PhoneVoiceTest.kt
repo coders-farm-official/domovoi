@@ -47,15 +47,15 @@ class PhoneVoiceTest {
         assertEquals(ModelCatalog.kristin, PhoneVoiceChoice.effective(same, "en_US-kristin-medium"))
         assertEquals(ModelCatalog.kristin, PhoneVoiceChoice.effective(null, "en_US-kristin-medium"))
         // Offline with no server choice known: Norman.
-        assertEquals(ModelCatalog.norman, PhoneVoiceChoice.effective(same, null))
+        assertEquals(ModelCatalog.kristin, PhoneVoiceChoice.effective(same, null))     // the default
         // A server voice the app does not have (an old lessac install): Norman, and say so.
-        assertEquals(ModelCatalog.norman, PhoneVoiceChoice.effective(same, "en_US-lessac-medium"))
+        assertEquals(ModelCatalog.kristin, PhoneVoiceChoice.effective(same, "en_US-lessac-medium"))
         assertEquals("en_US-lessac-medium", PhoneVoiceChoice.unknownServerVoice("en_US-lessac-medium"))
         assertNull(PhoneVoiceChoice.unknownServerVoice("en_US-norman-medium"))
         assertNull(PhoneVoiceChoice.unknownServerVoice(null))
         // The phone's own pick wins over the server's.
         assertEquals(ModelCatalog.ljspeech, PhoneVoiceChoice.effective("en_US-ljspeech-medium", "en_US-kristin-medium"))
-        assertEquals(ModelCatalog.norman, PhoneVoiceChoice.effective("nonsense", "en_US-kristin-medium"))
+        assertEquals(ModelCatalog.kristin, PhoneVoiceChoice.effective("nonsense", "en_US-kristin-medium"))
     }
 
     @Test fun theContractDecodesAndRoundTrips() {

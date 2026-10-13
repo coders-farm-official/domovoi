@@ -26,7 +26,7 @@ class Pcm16(val sampleRate: Int, val channels: Int, val data: ByteArray) {
 
 /**
  * The PCM16 inside a RIFF/WAVE file — what the core's text-to-speech sends
- * (Piper, the stub, an edge rung converted). Walks the chunks rather than
+ * (Piper, or the stub). Walks the chunks rather than
  * assuming a 44-byte header, since some writers add a LIST chunk; a data
  * chunk whose size says more than the file holds (a streamed writer's
  * placeholder) is read to the end. Null for anything else.

@@ -51,7 +51,7 @@ internal val MANUAL_TECH = listOf(
     TechRow("core", "FastAPI · Python 3.11+ · native on Windows for CUDA · intent router → handlers → TTS · background workers · in-process plugin runtime"),
     TechRow("whisper", "faster-whisper large-v3 on CUDA (float16), via CTranslate2"),
     TechRow("ollama", "llama3.2:3b answers questions · qwen2.5:14b routes tool calls (stronger schema adherence)"),
-    TechRow("tts", "Domovoi's own text-to-phoneme converter → a Piper voice on ONNX Runtime (Norman, Kristin or Linda, public domain) → the system voice as the floor · Edge neural voices only when picked, never a fallback · voices configurable per satellite · this phone can speak with the same voice"),
+    TechRow("tts", "Domovoi's own text-to-phoneme converter → a Piper voice on ONNX Runtime (Kristin, Norman or Linda, public domain) → the system voice as the floor · every voice local · voices configurable per satellite · this phone can speak with the same voice"),
     TechRow("postgres", "PostgreSQL 16 (the only Dockerized piece) · migration-only schema · LISTEN/NOTIFY live state bus"),
     TechRow("mpd", "Music Player Daemon — one lazily-spawned container per room"),
     TechRow("workers", "timer watcher, library index/enrich, memory extractor, and more — plugins register their own alongside"),
@@ -80,7 +80,7 @@ internal val MANUAL_FAQ = listOf(
     ),
     FaqRow(
         "Does it work without internet?",
-        "Yes — it's local-first. Speech-to-text, understanding, local voices, the music library, timers, intercom and more all run offline. Only web search, cloud voices and some plugin features need the network, and they degrade gracefully instead of breaking.",
+        "Yes — it's local-first. Speech-to-text, understanding, local voices, the music library, timers, intercom and more all run offline. Only web search and some plugin features need the network, and they degrade gracefully instead of breaking.",
     ),
     FaqRow(
         "Is my data private?",
@@ -92,7 +92,7 @@ internal val MANUAL_FAQ = listOf(
     ),
     FaqRow(
         "Can I add my own voice?",
-        "Pick one of the three public-domain voices, upload a Piper .onnx trained on English phonemes (American \"en-us\", what most voices people train use, or British \"en\"), or register a Microsoft Edge neural voice — on the web dashboard, Settings → Voices.",
+        "Pick one of the three public-domain voices, upload a Piper .onnx trained on English phonemes (American \"en-us\", what most voices people train use, or British \"en\") — on the web dashboard, Settings → Voices.",
     ),
     FaqRow(
         "It says a name wrong. Can I fix it?",
@@ -183,9 +183,9 @@ internal val MANUAL_HOWTO = listOf(
     HowtoRow(
         "text-to-speech",
         listOf(
-            "Pick Domovoi's voice (Norman, Kristin or Linda) on the web dashboard under Settings → Voices.",
+            "Pick Domovoi's voice (Kristin, the default, Norman or Linda) on the web dashboard under Settings → Voices.",
             "A word said wrong? Add it under \"Say it like\" there: Siobhan = shiv-AWN.",
-            "Register an Edge cloud voice by id, or upload a local Piper .onnx trained on English phonemes (American \"en-us\" or British \"en\").",
+            "Or upload a local Piper .onnx trained on English phonemes (American \"en-us\" or British \"en\").",
             "This phone's voice: Settings → Voice here.",
         ),
         listOf(

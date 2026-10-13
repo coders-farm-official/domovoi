@@ -4,6 +4,68 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 — Kristin is the house voice; the Microsoft Edge voices are gone
+
+Server, dashboard and Android update; no migration. What changes:
+
+* **The default voice is now Kristin** (it was Norman). A server still on
+  Norman moves to Kristin once, on its first start after the update, and
+  only once Kristin is on disk: it downloads her first (a box answered
+  **No** to the internet question keeps Norman until her files are there;
+  the provisioning already fetched all three voices). Nothing recorded
+  whether Norman was picked on purpose, so every server on Norman moves:
+  **pick Norman again in Settings → Voices if you prefer him**, and he
+  stays. A room that chose its own voice keeps it. The phone app speaks
+  Kristin when it knows no server voice.
+* **The Microsoft Edge online voices are dropped.** Microsoft's service had
+  started refusing them, every reply they spoke went to Microsoft, and
+  their library (edge-tts) is LGPL. The "Add a cloud voice" card is gone,
+  every registered cloud voice is removed on the update, and a room or a
+  default that was set to one speaks in the house voice, Kristin. The
+  speech chain is local only: Piper, then the system voice. An old
+  `TTS_ENGINE=edge` in `domovoi/.env` reads as `piper`, and a
+  `TTS_EDGE_VOICE` line is ignored.
+* **The update uninstalls edge-tts** (LGPL-3.0) from the server's Python
+  environment, after a successful re-sync and never during a rollback, the
+  way it removed piper-tts; its MP3 decoder `miniaudio` and their
+  dependencies (aiohttp and friends) leave the Linux lock too. This removes
+  an LGPL package from Domovoi's dependencies.
+
+## 2026-10-12 — Norman says short sentences right; Settings → Voices play buttons say why they can't play
+
+Server, dashboard and Android update; no migration, nothing to do but
+update (and update the app).
+
+* **Norman no longer babbles short sentences.** Norman (the default until
+  this batch) ran away on a short sentence said on its own: a "say it like" preview
+  ("Kamron.", "Domovoi."), a one-word reply ("Okay.", "Done."), the
+  "Hi, I'm Norman." of its own sample, came out as two to six seconds of
+  sound in no language. The phonemes were right; Kristin and Linda say the
+  same ones correctly. A voice is now checked once when it first says a
+  short sentence, and one that runs away (Norman) says its short sentences
+  after a lead-in sentence that is cut off again, so only the sentence is
+  heard. Longer sentences are said exactly as before. The phone does the
+  same, and Norman's built-in sample clip is re-made.
+* **"Say it like" reads respellings better.** A syllable no dictionary
+  knows goes by the usual respelling key (uh as in but, ay as in say, zh as
+  in measure: `SEER-shuh` was "SEER-shoo"), a light last "ren", "sel" or
+  "dem" is said like the end of "Cameron" (`Kamron = KAM-ren`), and a
+  respelling that runs together into a dictionary word with the same
+  stress (`CAM-er-on`) is read as that word. The preview toast says what
+  was previewed in words ("Kamron → KAM-ren"); the voice's phonemes are on
+  the play button's hover. An entry saved before may sound slightly
+  different: `NOO-yen` now ends like "Cameron" too; write `noo-YEN` for a
+  full "yen".
+* **Settings → Voices play buttons say why they can't play**, instead of
+  "sample failed: 502 Bad Gateway". A registered voice's sample is made by
+  the server on the household device tier, and the page now passes the
+  server's own sentence through ("Cori can't speak right now: ..."). (That
+  day Microsoft's service was refusing the Edge voices with HTTP 403; they
+  are gone now, see the entry above.) A
+  catalogue voice an install kept (Cori) downloads on its first sample,
+  as on its first reply. The upload form's file pickers and fields are
+  the dashboard's own controls now.
+
 ## 2026-10-12 (later) — The router learns a satellite's new name after one reboot
 
 Server, dashboard, satellite and Android update; no migration. After the

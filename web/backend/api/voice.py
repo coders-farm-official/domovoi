@@ -53,6 +53,7 @@ from domovoi.voice_settings import (
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
+    core_audio_refusal,
     domovoi_url,
     post_admin,
     post_admin_bytes,
@@ -184,10 +185,8 @@ async def sample_voice(voice_id: str, request: Request) -> Response:
         "/v1/admin/voices/sample", {"name": row["name"]}, headers=auth_forward_headers(request),
         timeout=120.0,
     )
-    if status == 0:
-        raise HTTPException(status_code=502, detail="domovoi unreachable")
     if status != 200 or not audio:
-        raise HTTPException(status_code=502, detail="voice sample synthesis failed")
+        raise core_audio_refusal(status, audio, f"{row['name']}'s sample could not be made")
     out = {"X-Sample-Text": headers["x-sample-text"]} if headers.get("x-sample-text") else {}
     out["X-Sample-Source"] = "voice"
     return Response(content=audio, media_type="audio/wav", headers=out)
@@ -293,9 +292,7 @@ async def preview_pronunciation(body: PreviewBody, request: Request) -> Response
         {"word": body.word, "say_like": body.say_like, "voice": body.voice},
         headers=auth_forward_headers(request), timeout=120.0,
     )
-    if status == 0:
-        raise HTTPException(status_code=502, detail="domovoi unreachable")
     if status != 200 or not audio:
-        raise HTTPException(status_code=502 if status == 200 else status, detail="the preview could not be said")
+        raise core_audio_refusal(status, audio, "the preview could not be said")
     out = {"X-Phonemes": headers["x-phonemes"]} if headers.get("x-phonemes") else {}
     return Response(content=audio, media_type="audio/wav", headers=out)

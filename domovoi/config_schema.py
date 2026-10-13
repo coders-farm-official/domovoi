@@ -37,7 +37,7 @@ Sections:
                    paths, STT device) that can break the Domovoi server or
                    need manual reconciliation if set wrong.
 
-Deliberately EXCLUDED: ``tts_edge_voice`` / ``tts_piper_voice``. The
+Deliberately EXCLUDED: ``tts_piper_voice``. The
 voice a satellite actually speaks is resolved from the Voices registry
 table (managed on the Voices page; "Domovoi's voice" there picks among the
 three Piper voices), not from these settings — editing them here would be
@@ -320,16 +320,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Voice & speech ────────────────────────────────────────────────
     FieldSpec(
         "tts_engine", "TTS engine", "Voice & speech",
-        "Preferred text-to-speech engine. 'piper' (the default) = fully "
-        "local neural voices, nothing leaves your network. 'edge' = "
-        "Microsoft's cloud voices — nicer sounding and free of CPU cost, "
-        "but the TEXT OF EVERY SPOKEN RESPONSE is sent to Microsoft, so "
-        "choose it deliberately. 'system' = the OS's own synthesizer "
-        "(SAPI on Windows, say on macOS, espeak-ng on Linux when you "
-        "installed it), robotic. "
-        "Falls through the chain if the preferred one fails.",
-        "choice", tier="reapply", choices=["piper", "edge", "system"],
-        needs_internet_choices=("edge",),
+        "Preferred text-to-speech engine. 'piper' (the default) = "
+        "Domovoi's local neural voices, nothing leaves your network. "
+        "'system' = the OS's own synthesizer (SAPI on Windows, say on "
+        "macOS, espeak-ng on Linux when you installed it), robotic. "
+        "Falls through to the other if the preferred one fails. (The "
+        "Microsoft Edge online voices were dropped in October 2026.)",
+        "choice", tier="reapply", choices=["piper", "system"],
     ),
     FieldSpec(
         "tts_speed", "Speaking rate", "Voice & speech",

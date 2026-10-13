@@ -167,21 +167,44 @@ const GreetingsPanel = () => {
 /*
  * Each satellite speaks in one registered voice; the server renders
  * that room's responses + greeting clips in it. Manage the registry here:
- * register a cloud (Edge) voice by id, upload a local Piper model
- * (.onnx + .onnx.json), set the default, rename, delete. Every mutation
- * pings the server to re-render clips and push them to satellites.
+ * upload a local Piper model (.onnx + .onnx.json), set the default,
+ * rename, delete. Every mutation pings the server to re-render clips and
+ * push them to satellites. (The Microsoft Edge cloud voices were dropped
+ * on 2026-10-12.)
  *
  * Data:
  *   GET    /api/voices            · the registry (each row's `sample` and `problem`)
- *   POST   /api/voices/edge       · register an Edge voice {name, voice_id, set_default}
  *   POST   /api/voices/piper      · upload a Piper model (multipart)
  *   PATCH  /api/voices/{id}       · rename / set default
  *   DELETE /api/voices/{id}       · remove (refuses the default)
  */
 
-const _voiceFieldStyle = {
-  font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
-  border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
+// The Voices page's fields are the dashboard's own (`cal-inp`: the card
+// colour, the theme's border, the brand focus ring, light and dark); these
+// styles only lay them out.
+const _voiceFieldLayout = { minWidth: 0, boxSizing: 'border-box', maxWidth: '100%' };
+
+// A file picker in the dashboard's style, not the browser's raw "Choose
+// File" button: a themed button opens the hidden input, and the chosen
+// file's name (or "no file chosen") sits beside it.
+const VoiceFilePick = ({ label, accept, file, onPick, disabled = false }) => {
+  const ref = React.useRef(null);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+      <input ref={ref} type="file" accept={accept} hidden aria-label={label}
+             onChange={(e) => {
+               onPick((e.target.files && e.target.files[0]) || null);
+               e.target.value = '';   // picking the same file again still counts
+             }}/>
+      <Button type="button" icon="file" disabled={disabled}
+              onClick={() => ref.current && ref.current.click()}>{label}</Button>
+      <span title={file ? file.name : undefined}
+            style={{ fontSize: 12, color: file ? 'var(--fg)' : 'var(--fg-muted)', minWidth: 0, maxWidth: '100%',
+                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' }}>
+        {file ? file.name : 'no file chosen'}
+      </span>
+    </div>
+  );
 };
 
 // A play button plays the voice it names, or is not shown (owner,
@@ -193,11 +216,8 @@ const VOICE_CLIP_PLAYABLE = (() => {
 })();
 const voiceSamplePlayable = (source) => source === 'voice' || (source === 'clip' && VOICE_CLIP_PLAYABLE);
 
-const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, internetOff = false }) => {
+const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => {
   const [editing, setEditing] = React.useState(false);
-  // A Microsoft (Edge) voice speaks through the internet: under "No" its
-  // sample and "make default" are greyed, never hidden (Settings → Internet).
-  const cloudOff = internetOff && v.engine === 'edge';
   const [name, setName] = React.useState(v.name);
 
   const save = () => {
@@ -208,42 +228,41 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, inter
   };
 
   // A voice that can't speak here keeps no play button (the system voice
-  // would answer), and says why instead.
+  // would answer), and says why instead. A Microsoft Edge row left from an
+  // older release goes when the server restarts: no "make default" for it.
   const playable = v.sample === undefined || voiceSamplePlayable(v.sample);
+  const dropped = v.engine === 'edge';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
       {playable
         ? <IconButton name={sampling ? 'loader' : 'play'}
-                      title={cloudOff ? NEEDS_INTERNET_TEXT : (sampling ? 'Synthesizing…' : 'Play a sample')}
-                      disabled={sampling || cloudOff} onClick={() => onPlay(v)}/>
+                      title={sampling ? 'Synthesizing…' : 'Play a sample'}
+                      disabled={sampling} onClick={() => onPlay(v)}/>
         : <span style={{ width: 28, flex: 'none' }} aria-hidden="true"/>}
       {editing ? (
-        <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
-               onKeyDown={(e) => e.key === 'Enter' && save()}
-               style={{ ..._voiceFieldStyle, flex: 1 }}/>
+        <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} autoFocus
+               aria-label="Voice name" onKeyDown={(e) => e.key === 'Enter' && save()}
+               style={{ ..._voiceFieldLayout, flex: 1, minWidth: 120 }}/>
       ) : (
         <div style={{ flex: 1, minWidth: 120 }}>
           <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
           {v.problem && (
             <div style={{ fontSize: 12, color: 'var(--warn)' }}>
-              Can’t speak here: {v.problem}. Rooms set to it speak with the system voice.
+              Can’t speak here: {v.problem}. {dropped
+                ? 'It goes when the server restarts; rooms set to it speak in the default voice.'
+                : 'Rooms set to it speak with the system voice.'}
             </div>
           )}
         </div>
       )}
-      <Pill tone={v.engine === 'piper' ? 'idle' : 'live'}>
-        {v.engine === 'piper' ? 'local' : 'cloud'}
-      </Pill>
       <span style={{ fontSize: 12, color: 'var(--fg-muted)', maxWidth: 200,
                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {v.model_ref}
       </span>
-      {cloudOff && <NeedsInternetNote compact/>}
       {v.is_default
         ? <Pill tone="live">default</Pill>
-        : <Button variant="ghost" onClick={() => onSetDefault(v)} disabled={cloudOff}
-                  title={cloudOff ? NEEDS_INTERNET_TEXT : undefined}>make default</Button>}
+        : !dropped && <Button variant="ghost" onClick={() => onSetDefault(v)}>make default</Button>}
       {editing
         ? <Button variant="primary" onClick={save}>Save</Button>
         : <IconButton name="pencil" title="rename" onClick={() => setEditing(true)}/>}
@@ -252,50 +271,25 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, inter
   );
 };
 
-const RegisterEdge = ({ onAdd, internetOff = false }) => {
-  const [name, setName] = React.useState('');
-  const [voiceId, setVoiceId] = React.useState('');
-  const submit = (e) => {
-    e?.preventDefault?.();
-    if (internetOff) return;
-    const n = name.trim(); const id = voiceId.trim();
-    if (!n || !id) return;
-    onAdd(n, id);
-    setName(''); setVoiceId('');
-  };
-  return (
-    <form onSubmit={submit}
-          style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Aria)"
-             disabled={internetOff} style={{ ..._voiceFieldStyle, width: 160 }}/>
-      <input value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
-             placeholder="Edge voice id (e.g. en-US-AriaNeural)" disabled={internetOff}
-             style={{ ..._voiceFieldStyle, flex: 1, minWidth: 220 }}/>
-      <Button variant="primary" icon="cloud" type="submit" disabled={internetOff}
-              title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Register</Button>
-      {internetOff && <NeedsInternetNote compact/>}
-    </form>
-  );
-};
-
 const UploadPiper = ({ onUpload }) => {
   const [name, setName] = React.useState('');
-  const onnxRef = React.useRef(null);
-  const jsonRef = React.useRef(null);
+  const [onnx, setOnnx] = React.useState(null);
+  const [json, setJson] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  // "Upload voice" can only work with a name and both files: until then it
+  // is greyed and says what is missing.
+  const missing = [!name.trim() && 'a name', !onnx && 'the model', !json && 'the config'].filter(Boolean);
 
   const submit = async (e) => {
     e?.preventDefault?.();
     const n = name.trim();
-    const onnx = onnxRef.current?.files?.[0];
-    const json = jsonRef.current?.files?.[0];
     if (!n || !onnx || !json) return;
     setBusy(true);
     try {
       await onUpload(n, onnx, json);
       setName('');
-      if (onnxRef.current) onnxRef.current.value = '';
-      if (jsonRef.current) jsonRef.current.value = '';
+      setOnnx(null);
+      setJson(null);
     } finally {
       setBusy(false);
     }
@@ -303,19 +297,14 @@ const UploadPiper = ({ onUpload }) => {
 
   return (
     <form onSubmit={submit}
-          style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
-             style={{ ..._voiceFieldStyle, width: 200 }}/>
-      <label style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        Model (.onnx)
-        <input ref={onnxRef} type="file" accept=".onnx" style={{ display: 'block', marginTop: 4 }}/>
-      </label>
-      <label style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        Config (.onnx.json)
-        <input ref={jsonRef} type="file" accept=".json" style={{ display: 'block', marginTop: 4 }}/>
-      </label>
+          style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px' }}>
+      <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
+             aria-label="Name" style={{ ..._voiceFieldLayout, width: 240 }}/>
+      <VoiceFilePick label="Model (.onnx)" accept=".onnx" file={onnx} onPick={setOnnx} disabled={busy}/>
+      <VoiceFilePick label="Config (.onnx.json)" accept=".json" file={json} onPick={setJson} disabled={busy}/>
       <div>
-        <Button variant="primary" icon="upload" type="submit" disabled={busy}>
+        <Button variant="primary" icon="upload" type="submit" disabled={busy || missing.length > 0}
+                title={missing.length ? `Choose ${missing.join(', ')} first` : undefined}>
           {busy ? 'Uploading…' : 'Upload voice'}
         </Button>
       </div>
@@ -339,9 +328,11 @@ const UploadPiper = ({ onUpload }) => {
  *   POST   /api/voice/pronunciations/preview   · {word, say_like, voice?} → WAV (device tier)
  */
 
-const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters. Split the syllables with hyphens '
-  + 'and write the stressed one in CAPITALS: Domovoi = DOH-moe-voy, Nguyen = win. '
-  + 'Advanced: the voice’s own phonemes between slashes, /wɪn/.';
+const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters, the syllables split by hyphens and the '
+  + 'stressed one in CAPITALS: Domovoi = DOH-moe-voy, Kamron = KAM-ren, Siobhan = shiv-AWN, Nguyen = win. '
+  + 'The other syllables are said lightly. Sounds as dictionaries spell them: uh (but), ay (say), ee (see), '
+  + 'oh (go), oo (too), ow (now), zh (measure). Advanced: the voice’s own phonemes between slashes, /wɪn/ '
+  + '(hover a play button you have heard to see them).';
 
 const VoiceSettingsCards = ({ fire }) => {
   const { data, loading, error, refresh } = useApiObject('/api/voice');
@@ -352,6 +343,9 @@ const VoiceSettingsCards = ({ fire }) => {
   const [busy, setBusy] = React.useState(null);      // what is playing / saving
   const [word, setWord] = React.useState('');
   const [sayLike, setSayLike] = React.useState('');
+  // The voice's phonemes of each word heard here (lower-cased word -> the
+  // string): advanced detail, on the play buttons' hover, not in the toast.
+  const [heard, setHeard] = React.useState({});
   const audioRef = React.useRef(null);
   const view = current || data;
 
@@ -363,13 +357,18 @@ const VoiceSettingsCards = ({ fire }) => {
   React.useEffect(() => stopAudio, []);
 
   // Play a WAV the server synthesizes; `key` marks which button is busy.
-  const playFrom = async (key, path, opts) => {
+  // `say`: a "say it like" preview, toasted in plain words ("Kamron →
+  // KAM-ren"), its phonemes kept for the button's hover.
+  const playFrom = async (key, path, opts, say) => {
     stopAudio();
     setBusy(key);
     try {
       const r = await apiFetchRaw(path, opts || {});
       const phon = r.headers.get('X-Phonemes');
-      if (phon) fire(`🔊 ${decodeURIComponent(phon)}`);
+      if (say) {
+        fire(`🔊 ${say.word} → ${say.sayLike}`);
+        if (phon) setHeard((h) => ({ ...h, [say.word.toLowerCase()]: decodeURIComponent(phon) }));
+      }
       const said = r.headers.get('X-Sample-Text');
       if (said) fire(`🔊 ${decodeURIComponent(said)}`);
       const url = URL.createObjectURL(await r.blob());
@@ -406,7 +405,12 @@ const VoiceSettingsCards = ({ fire }) => {
   const preview = (w, s) => playFrom(`say:${w}`, '/api/voice/pronunciations/preview', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ word: w, say_like: s }),
-  });
+  }, { word: w, sayLike: s });
+  // "Hear it", with the voice's phonemes on hover once it has been heard.
+  const hearTitle = (w, base) => {
+    const ph = heard[(w || '').toLowerCase()];
+    return ph ? `${base} (the voice’s phonemes: /${ph.replace(/[.!?]$/, '')}/)` : base;
+  };
   const addEntry = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
     const w = word.trim(); const s = sayLike.trim();
@@ -433,7 +437,6 @@ const VoiceSettingsCards = ({ fire }) => {
     );
   }
   const lock = admin ? undefined : 'Sign in as an admin to change this';
-  const fieldStyle = { ..._voiceFieldStyle };
 
   return (
     <React.Fragment>
@@ -476,7 +479,7 @@ const VoiceSettingsCards = ({ fire }) => {
         {view.pronunciations.map((p) => (
           <div key={p.word} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
                                      borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
-            <IconButton name={busy === `say:${p.word}` ? 'loader' : 'play'} title="Hear it"
+            <IconButton name={busy === `say:${p.word}` ? 'loader' : 'play'} title={hearTitle(p.word, 'Hear it')}
                         disabled={!!busy} onClick={() => preview(p.word, p.say_like)}/>
             <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontWeight: 500 }}>{p.word}</div>
             <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontFamily: 'var(--font-mono, monospace)' }}>{p.say_like}</div>
@@ -486,11 +489,15 @@ const VoiceSettingsCards = ({ fire }) => {
         ))}
         <form onSubmit={addEntry}
               style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <input value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Siobhan)"
-                 aria-label="Word" maxLength={48} style={{ ...fieldStyle, width: 170 }}/>
-          <input value={sayLike} onChange={(e) => setSayLike(e.target.value)} placeholder="Say it like (e.g. shiv-AWN)"
-                 aria-label="Say it like" maxLength={100} style={{ ...fieldStyle, flex: 1, minWidth: 180 }}/>
-          <IconButton name={busy === `say:${word.trim()}` ? 'loader' : 'play'} title="Hear it before saving"
+          <input className="cal-inp" value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Kamron)"
+                 aria-label="Word" maxLength={48} style={{ ..._voiceFieldLayout, flex: '1 1 140px' }}/>
+          <input className="cal-inp" value={sayLike} onChange={(e) => setSayLike(e.target.value)}
+                 placeholder="Say it like (e.g. KAM-ren)" aria-label="Say it like" maxLength={100}
+                 style={{ ..._voiceFieldLayout, flex: '3 1 180px' }}/>
+          {/* type="button": a plain button in this form would also submit
+              it, saving the entry the owner only meant to hear. */}
+          <IconButton type="button" name={busy === `say:${word.trim()}` ? 'loader' : 'play'}
+                      title={hearTitle(word.trim(), 'Hear it before saving')}
                       disabled={!!busy || !word.trim() || !sayLike.trim()}
                       onClick={() => preview(word.trim(), sayLike.trim())}/>
           <Button variant="primary" type="submit" disabled={!admin || !!busy || !word.trim() || !sayLike.trim()}
@@ -504,9 +511,6 @@ const VoiceSettingsCards = ({ fire }) => {
 
 const VoicesPanel = () => {
   const { items, loading, refresh } = useApiList('/api/voices');
-  // Microsoft voices need the internet: greyed under "No" (Settings → Internet).
-  const { data: cfg } = useApiObject('/api/config');
-  const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
   const [samplingId, setSamplingId] = React.useState(null);
   const audioRef = React.useRef(null);
@@ -531,8 +535,8 @@ const VoicesPanel = () => {
       audio.onerror = () => { fire('sample playback failed'); done(); };
       await audio.play();
     } catch (e) {
-      // The server's own sentence (a Microsoft voice under "No" says the
-      // internet is turned off); quiet when the pair / sign-in prompt owns it.
+      // The server's own sentence (why the voice can't speak right now);
+      // quiet when the pair / sign-in prompt owns it.
       reportMutationFailure(fire, 'Play', e);
       setSamplingId(null);
     }
@@ -547,9 +551,6 @@ const VoicesPanel = () => {
       fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
     }
   };
-
-  const addEdge = (name, voiceId) =>
-    guard(() => apiPost('/api/voices/edge', { name, voice_id: voiceId }), 'voice registered');
 
   const uploadPiper = (name, onnx, json) => {
     const fd = new FormData();
@@ -575,19 +576,12 @@ const VoicesPanel = () => {
     guard(() => apiDelete(`/api/voices/${v.id}`), 'voice removed'));
   const remove = (v) => del.request(v, {
     title: `Delete the voice “${v.name}”?`,
-    body: v.engine === 'piper'
-      ? <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Satellites using it fall back to the default voice.</div>
-      : <div>Satellites using it fall back to the default voice. Register the id again to bring it back.</div>,
+    body: <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Satellites using it fall back to the default voice.</div>,
   });
 
   return (
     <React.Fragment>
       <VoiceSettingsCards fire={fire}/>
-
-      <Card title="Add a cloud voice"
-            sub="Register a Microsoft Edge neural voice by its id. Needs network to speak.">
-        <RegisterEdge onAdd={addEdge} internetOff={internetOff}/>
-      </Card>
 
       <Card title="Upload a local voice"
             sub="A Piper model (.onnx) and its config (.onnx.json), trained on espeak’s English phonemes: American (“en-us”, what most Piper voices people train use) or British (“en”). Its config says which; Domovoi’s converter writes both. Fully offline once uploaded.">
@@ -595,14 +589,13 @@ const VoicesPanel = () => {
       </Card>
 
       {loading ? null : items.length === 0 ? (
-        <Empty title="No voices yet" sub="Add a cloud voice or upload a Piper model above."/>
+        <Empty title="No voices yet" sub="Upload a Piper model above."/>
       ) : (
         <Card title={`Registered (${items.length})`}
               sub="The default is used by any satellite that hasn't picked its own.">
           {items.map((v) => (
             <VoiceRow key={v.id} v={v} sampling={samplingId === v.id} onPlay={playSample}
-                      onRename={rename} onSetDefault={setDefault} onDelete={remove}
-                      internetOff={internetOff}/>
+                      onRename={rename} onSetDefault={setDefault} onDelete={remove}/>
           ))}
         </Card>
       )}
@@ -1586,9 +1579,6 @@ const InternetPanel = () => {
               in the house.
             </div>
           )}
-          <div className="internet-edge-note" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-            Microsoft voices stay your choice on every answer (Settings → Voices).
-          </div>
           {result && result.error && (
             <div style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>{result.error}</div>
           )}
@@ -2187,7 +2177,7 @@ const AboutPanel = () => (
       <div>
         It's <strong style={{ color: 'var(--fg)' }}>local-first</strong>: speech, understanding, local
         voices, the music library, timers and intercom all work with no internet. Only a few features
-        (web search, media-provider plugins, cloud voices) need the network, and they degrade gracefully instead of
+        (web search, media-provider plugins) need the network, and they degrade gracefully instead of
         breaking.
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>

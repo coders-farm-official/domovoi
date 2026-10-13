@@ -60,7 +60,7 @@ class VoiceApiContractTest {
             assertEquals(22_050, v.sample_rate)
             assertTrue((v.size_bytes ?: 0) > 0)
         }
-        assertEquals("en_US-norman-medium", info.server_voice)
+        assertEquals("en_US-kristin-medium", info.server_voice)   // the house voice since 2026-10-12
         assertNotNull(info.updated_at)
         assertEquals(listOf("Domovoi" to "DOH-moe-voy", "Domo" to "DOH-moe", "Nguyen" to "win"), info.pairs())
     }
