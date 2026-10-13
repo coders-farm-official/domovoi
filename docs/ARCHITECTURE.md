@@ -175,9 +175,8 @@ prose:
    read for this check.
 5. **Routing** (`domovoi/router.py`) — the stages below.
 6. **TTS.** The response text is split into sentences and synthesized through
-   the engine chain **piper → system** (**edge → piper → system** only when
-   Edge is the chosen engine and the internet answer isn't `never`; Edge is
-   never a fallback rung) — per-sentence fallback. The Piper rung runs the
+   the engine chain **piper → system** (both local; the Microsoft Edge
+   online voices were dropped in October 2026) — per-sentence fallback. The Piper rung runs the
    voice's ONNX model directly, fed by Domovoi's own text-to-phoneme
    converter (`domovoi/phonemizer`: CMUdict, rules, a small model for
    unknown words and the owner's "say it like" list; no espeak-ng). A
@@ -760,8 +759,8 @@ preserving comments, writes a `.bak`, and self-restarts.
     hook, so plugins are covered without an edit;
   * the paths that never went through `net_safety` call it directly:
     `egress.require_destination(url)` for a URL,
-    `egress.require_internet("what")` for egress without one (Edge speech,
-    a SearXNG search, `git fetch`, a docker build, pip). The connectivity
+    `egress.require_internet("what")` for egress without one (a SearXNG
+    search, `git fetch`, a docker build, pip). The connectivity
     probe stops dialing (`reason: turned_off`), which closes every
     `ctx.online` path too.
 
