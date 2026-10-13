@@ -87,6 +87,26 @@ SCENARIOS = {
     "reboot_needed": _with({"rx_mbits": 30.0, "tx_mbits": 72.2, "ssid": "home",
                             "signal_dbm": -58, "mode": "managed"},
                            reboot_needed="network settings are applied at boot: reboot this satellite once"),
+    # What root's boot-time network step did (2026-10-12 follow-up).
+    "step_applied": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
+                          hostname="domovoi-kitchen",
+                          net_step={"state": "applied", "when": "boot", "at": 1760000000.0, "version": 2,
+                                    "detail": "host name 'raspberrypi' -> 'domovoi-kitchen'",
+                                    "early": "early rename unit disabled by the operator; left alone"}),
+    "step_skipped": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
+                          hostname="kamrons-pi",
+                          net_step={"state": "skipped", "when": "boot", "version": 2,
+                                    "detail": "host name 'kamrons-pi' looks chosen by a person"}),
+    "step_failed": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
+                         hostname="raspberrypi",
+                         reboot_needed="the boot-time network settings did not all apply (x); reboot this satellite to retry",
+                         net_step={"state": "failed", "when": "boot", "version": 2,
+                                   "detail": "set the host name to 'domovoi-kitchen': read-only file system"}),
+    "step_not_run": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
+                          hostname="raspberrypi",
+                          reboot_needed="network settings ... are applied at boot: reboot this satellite once",
+                          net_step={"state": "not_run", "version": 1,
+                                    "detail": "has not run since this code arrived (version 2)"}),
 }
 
 
@@ -152,3 +172,38 @@ def test_an_upgraded_satellite_that_needs_a_reboot_says_so(driven):
     assert "reboot needed" in r["overview"]
     assert "Unplug it for a few seconds" in r["overview"]
     assert "reboot needed" not in driven["idle_good"]["overview"]
+
+
+# ─── the boot network step (2026-10-12 follow-up) ─────────────────────────
+
+
+def test_the_boot_step_and_host_name_are_shown(driven):
+    o = driven["step_applied"]["overview"]
+    assert "boot network step" in o and "applied" in o
+    assert "host name domovoi-kitchen" in o
+    assert "'raspberrypi' -> 'domovoi-kitchen'" in o
+    assert "early rename unit disabled by the operator" in o
+    assert "early rename unit" not in driven["step_skipped"]["overview"]
+
+
+def test_a_skipped_rename_says_why(driven):
+    o = driven["step_skipped"]["overview"]
+    assert "skipped" in o and "looks chosen by a person" in o and "host name kamrons-pi" in o
+
+
+def test_a_failed_step_asks_for_a_reboot_to_retry(driven):
+    o = driven["step_failed"]["overview"]
+    assert "reboot needed" in o and "failed" in o
+    assert "did not all apply at this boot" in o and "Unplug it for a few seconds" in o
+    assert "read-only file system" in o
+
+
+def test_not_run_since_the_upgrade_asks_for_the_reboot(driven):
+    o = driven["step_not_run"]["overview"]
+    assert "reboot needed" in o and "not run" in o
+    assert "Upgraded, but not rebooted yet" in o
+
+
+def test_an_older_satellite_shows_no_boot_step(driven):
+    assert "boot network step" not in driven["idle_good"]["overview"]
+    assert "boot network step" not in driven["reboot_needed"]["overview"]

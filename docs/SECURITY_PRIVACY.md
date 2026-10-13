@@ -1998,7 +1998,27 @@ The owner accepted that on 2026-10-12, knowing it widens what the
 root-runs-updatable-code path carries; the step touches nothing beyond
 those three settings and the record, and the record is the satellite
 user's to read, not an input to root. The account can still edit the code
-this service runs, exactly as before — the same remaining item. The console
+this service runs, exactly as before — the same remaining item. Later that
+day the same path gained two more actions, so the router learns the new name
+at the first boot instead of the second. First, it installs
+`domovoi-hostname.service` (root, a oneshot ordered before NetworkManager),
+which does **not** run the account's code: it runs
+`/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname`, a self-contained,
+root-owned (`root:root 0755`) helper that imports nothing from the code
+tree, cannot see `/home` (`ProtectHome=yes`), and reads only two root-owned
+records: `/var/lib/domovoi/hostname-target` (the name the boot step last
+confirmed, validated as a host name) and `hostname-set`. It never reads
+`config.toml`. The boot step writes the helper and the unit from text it
+carries, atomically and without following a link: the same accepted
+path, nothing the account did not already control. Media prep writes the
+same text on a new card. The unit is enabled once; after that an operator's
+`systemctl disable` or `mask` is left alone. On a hand-built unit, the
+manual `sudo python -m satellite.net_settings` installs no boot unit unless
+it is given `--install-early-unit`, so such a unit still runs nothing at
+boot as root that it did not run before. Second, after a rename it made
+itself, the boot step asks DHCP once more under the new name
+(`nmcli device modify wlan0 ipv4.dhcp-hostname …`). That changes only the
+active connection, and nothing is saved. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only

@@ -21,6 +21,7 @@ Layout (see the plan's §1.2):
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import logging
@@ -44,6 +45,21 @@ log = logging.getLogger(__name__)
 _CODE_EXT_ALLOW = frozenset(
     {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json", ".example"}
 )
+
+
+def embedded_text(source: Path, name: str) -> str:
+    """A string constant assigned at the top level of ``source``, read with
+    ``ast`` rather than by importing it: the core never imports the
+    satellite package. Raises RuntimeError when it is not there."""
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            value = ast.literal_eval(node.value)
+            if isinstance(value, str):
+                return value
+    raise RuntimeError(f"{name} is not a string constant in {source}")
 
 
 def _allowed_code_file(p: Path) -> bool:
@@ -159,6 +175,17 @@ async def assemble(
         sat_dir / "scripts" / "domovoi-provisioning.service",
         system / "domovoi-provisioning.service",
     )
+    # The host name domovoi-<room>, set before NetworkManager starts, so
+    # the router learns it from the first DHCP request of every boot: the
+    # unit and the root-owned, self-contained helper it runs, both from
+    # the text satellite/net_settings.py carries (the boot step writes the
+    # same text on a card prepared before this). Stage 1 installs them
+    # root's; neither ever runs the satellite account's code.
+    for name, const in (("domovoi-hostname.service", "EARLY_UNIT_TEXT"),
+                        ("domovoi-set-hostname", "EARLY_HELPER_TEXT")):
+        (system / name).write_text(
+            embedded_text(sat_dir / "net_settings.py", const), encoding="utf-8", newline="\n"
+        )
     shutil.copy2(
         overlay.TEMPLATES_DIR / "domovoi-bootstrap.service",
         system / "domovoi-bootstrap.service",

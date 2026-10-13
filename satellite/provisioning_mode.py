@@ -1013,10 +1013,13 @@ def apply_provision(
     wifi_attempts: int,
     wifi_join_timeout: float,
     run=subprocess.run,
+    before_join=None,
 ) -> tuple[bool, str | None]:
     """Write config + pairing token, join Wi-Fi, clean up. (ok, error).
     The credentials are cleared from the transport BEFORE any possible
-    re-expose, so they never ride a setup volume twice."""
+    re-expose, so they never ride a setup volume twice. ``before_join``
+    (room_id) runs just before the Wi-Fi join: :func:`run` passes
+    :func:`name_before_join`."""
     # 1. Config from the example, comment-preserving.
     example = EXAMPLE_CONFIG.read_text(encoding="utf-8")
     changes: dict[str, Any] = {
@@ -1094,6 +1097,12 @@ def apply_provision(
 
     # 4. Credentials unreadable BEFORE any re-expose.
     transport.clear_provision()
+
+    # 4b. The room's host name, before the join: the router names a device
+    #     after the host name in its first DHCP request, and keeps that
+    #     name until the device next connects.
+    if before_join is not None:
+        before_join(payload["room_id"])
 
     # 5. Wi-Fi — the step that can fail on a typo'd PSK.
     wifi = payload["wifi"]
@@ -1442,6 +1451,7 @@ def run(
             transport=transport,
             wifi_attempts=wifi_attempts,
             wifi_join_timeout=wifi_join_timeout,
+            before_join=name_before_join,
         )
         if ok:
             _write_state({"phase": "done"})
@@ -1512,6 +1522,23 @@ def _poll_for_provision(
         loops += 1
         if max_loops is not None and loops >= max_loops:
             return None
+
+
+def name_before_join(room_id: str | None) -> None:
+    """The room's host name (satellite/net_settings.py), set before setup
+    joins the house Wi-Fi, so the router's very first DHCP request from
+    this unit already carries it. Root on a satellite only, like
+    :func:`apply_network_settings`; never raises."""
+    geteuid = getattr(os, "geteuid", None)
+    if sys.platform != "linux" or geteuid is None or geteuid() != 0:
+        return
+    try:
+        from satellite import net_settings
+
+        net_settings.set_hostname(room_id, subprocess.run, net_settings.Report(),
+                                  restart_avahi=False)
+    except Exception as e:  # noqa: BLE001 — setup goes on with the old name
+        log.warning("host name before joining the Wi-Fi: %s", e)
 
 
 def apply_network_settings(room_id: str | None, when: str) -> dict[str, Any] | None:
