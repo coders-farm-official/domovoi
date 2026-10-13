@@ -356,6 +356,7 @@ const SatNetStep = ({ step, hostname }) => {
       {m && <Pill tone={m.tone}>{m.word}</Pill>}
       {hostname && <span className="mono" style={{ fontSize: 11.5 }}>host name {hostname}</span>}
       {m && step.detail && <span style={{ color: 'var(--fg-muted)', flexBasis: '100%', overflowWrap: 'anywhere' }}>{step.detail}</span>}
+      {step && step.early && <span className="sat-net-step-early" style={{ color: 'var(--fg-muted)', flexBasis: '100%', overflowWrap: 'anywhere' }}>{step.early}</span>}
     </div>
   );
 };

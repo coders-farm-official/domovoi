@@ -48,7 +48,13 @@ data class SatNetStep(
     val detail: String? = null,
     val `when`: String? = null,
     val at: Double? = null,
-    val version: Int? = null,
+    // Long, not Int: one out-of-range number must never fail the decoding
+    // of the whole health document (the core also clamps it).
+    val version: Long? = null,
+    // How the unit that sets the name before the network stands, when
+    // there is something to say (disabled by the operator, not installed
+    // on a hand-built card, failed this boot).
+    val early: String? = null,
 )
 
 /** The slice of GET /api/satellites/{room}/health this screen reads: why
@@ -75,7 +81,13 @@ internal fun rebootNeeded(doc: SatHealthDoc?): String? =
 /** One line for the overview: the boot network step's outcome in words,
  *  its tone, and the reason (the web drawer shows the same). Null from a
  *  satellite that does not report it, so the screen reads as before. */
-internal data class NetStepLine(val word: String, val tone: Tone, val detail: String?, val hostname: String?)
+internal data class NetStepLine(
+    val word: String,
+    val tone: Tone,
+    val detail: String?,
+    val hostname: String?,
+    val early: String? = null,
+)
 
 internal fun netStepLine(doc: SatHealthDoc?): NetStepLine? {
     val sample = doc?.latest?.sample ?: return null
@@ -93,7 +105,8 @@ internal fun netStepLine(doc: SatHealthDoc?): NetStepLine? {
         "running" -> "running" to Tone.Idle
         else -> (state ?: "") to Tone.Idle
     }
-    return NetStepLine(word, tone, step?.detail?.takeIf { it.isNotBlank() }, host)
+    return NetStepLine(word, tone, step?.detail?.takeIf { it.isNotBlank() }, host,
+        step?.early?.takeIf { it.isNotBlank() })
 }
 
 @Serializable

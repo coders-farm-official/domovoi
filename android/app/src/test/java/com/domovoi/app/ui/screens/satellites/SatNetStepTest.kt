@@ -50,6 +50,25 @@ class SatNetStepTest {
         assertNull(netStepLine(null))
     }
 
+    @Test fun anOutOfRangeVersionDoesNotBreakTheDocument() {
+        // The core clamps it now; an older core did not, and one bad number
+        // used to fail the decoding of the whole health document.
+        val line = netStepLine(doc(
+            """{"hostname":"domovoi-den","reboot_needed":"reboot once",
+               "net_step":{"state":"applied","version":1000000000000000}}"""
+        ))!!
+        assertEquals("applied", line.word)
+        assertEquals("domovoi-den", line.hostname)
+    }
+
+    @Test fun theEarlyUnitNoteIsCarried() {
+        val line = netStepLine(doc(
+            """{"net_step":{"state":"unchanged","early":"early rename unit disabled by the operator; left alone"}}"""
+        ))!!
+        assertEquals("early rename unit disabled by the operator; left alone", line.early)
+        assertNull(netStepLine(doc("""{"net_step":{"state":"unchanged"}}"""))!!.early)
+    }
+
     @Test fun aHostNameAloneIsStillShown() {
         val line = netStepLine(doc("""{"hostname":"domovoi-den"}"""))!!
         assertEquals("", line.word)

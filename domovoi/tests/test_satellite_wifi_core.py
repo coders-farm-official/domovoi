@@ -123,6 +123,19 @@ def test_a_bogus_boot_step_or_host_name_is_not_kept(net_step, hostname):
     assert s["net_step"] is None and s["hostname"] is None
 
 
+def test_the_early_unit_note_is_kept_and_the_version_is_a_small_number():
+    s = satellite_health.validate_sample({"seq": 1, "net_step": {
+        "state": "applied", "version": 2,
+        "early": "early rename unit disabled by the operator; left alone"}})
+    assert s["net_step"]["early"] == "early rename unit disabled by the operator; left alone"
+    assert s["net_step"]["version"] == 2
+    for bogus in (1e15, 10_001, -1, True, "2"):
+        s = satellite_health.validate_sample({"seq": 1, "net_step": {"state": "applied", "version": bogus}})
+        assert s["net_step"]["version"] is None, bogus
+    s = satellite_health.validate_sample({"seq": 1, "net_step": {"state": "applied"}})
+    assert "early" not in s["net_step"]
+
+
 def test_the_boot_step_detail_is_bounded():
     s = satellite_health.validate_sample({"seq": 1, "net_step": {"state": "applied", "detail": "x" * 1000}})
     assert len(s["net_step"]["detail"]) == 240

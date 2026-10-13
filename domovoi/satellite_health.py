@@ -160,13 +160,22 @@ def _net_step(v: Any) -> dict[str, Any] | None:
     state = v.get("state")
     if state not in NET_STEP_STATES:
         return None
-    return {
+    version = _int(v.get("version"))
+    out = {
         "state": state,
         "detail": _str(v.get("detail"), 240) or "",
         "when": _str(v.get("when"), 16),
         "at": _num(v.get("at")),
-        "version": _int(v.get("version")),
+        # A small step counter: anything else is not a version, and a
+        # client decoding it as a 32-bit number must never be handed one.
+        "version": version if version is not None and 0 <= version <= 10_000 else None,
     }
+    # How the unit that sets the name before the network stands (disabled
+    # or masked by the operator, not installed on a hand-built card, failed
+    # this boot); absent when there is nothing to say.
+    if "early" in v:
+        out["early"] = _str(v.get("early"), 200)
+    return out
 
 
 def _hostname(v: Any) -> str | None:

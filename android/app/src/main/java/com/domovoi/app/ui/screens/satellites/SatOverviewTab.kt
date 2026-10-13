@@ -640,6 +640,14 @@ private fun MaintenanceSection(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
+            if (netStep.early != null) {
+                Text(
+                    netStep.early,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),

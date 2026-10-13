@@ -91,7 +91,8 @@ SCENARIOS = {
     "step_applied": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
                           hostname="domovoi-kitchen",
                           net_step={"state": "applied", "when": "boot", "at": 1760000000.0, "version": 2,
-                                    "detail": "host name 'raspberrypi' -> 'domovoi-kitchen'"}),
+                                    "detail": "host name 'raspberrypi' -> 'domovoi-kitchen'",
+                                    "early": "early rename unit disabled by the operator; left alone"}),
     "step_skipped": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
                           hostname="kamrons-pi",
                           net_step={"state": "skipped", "when": "boot", "version": 2,
@@ -181,6 +182,8 @@ def test_the_boot_step_and_host_name_are_shown(driven):
     assert "boot network step" in o and "applied" in o
     assert "host name domovoi-kitchen" in o
     assert "'raspberrypi' -> 'domovoi-kitchen'" in o
+    assert "early rename unit disabled by the operator" in o
+    assert "early rename unit" not in driven["step_skipped"]["overview"]
 
 
 def test_a_skipped_rename_says_why(driven):
