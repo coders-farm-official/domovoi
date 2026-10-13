@@ -32,14 +32,16 @@
 ;   this build's tree has it is packed inside DomovoiSetup.exe (nothing to
 ;   download). For a test build whose provision.sh is ahead of the pinned
 ;   commit: here fb62fa4's script plus wf/wininst-exe's --stop-before and
-;   start diagnostics (130,385 bytes), which nothing else in fb62fa4's
-;   checkout depends on. Take it out once the commit pinned has them.
+;   start diagnostics, minus main's edge_tts and miniaudio import checks
+;   (130,360 bytes; fb62fa4's checkout still installs both, so the import
+;   check only asks for less), which nothing else in fb62fa4's checkout
+;   depends on. Take it out once the commit pinned has them.
 ; * not defined: downloaded from the pinned commit (ProvisionUrl).
 ; Either way ProvisionSha256 is checked by the helper and by DomovoiHost.
 #define ProvisionBundled
 #define ProvisionSource "..\..\scripts\linux\provision.sh"
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
-#define ProvisionSha256 "d07eed17ca486aac5da4b321ce89cfd3732614b5e48f2eb3d9309853e4e3a156"
+#define ProvisionSha256 "68088a139a044615d1f91cd4898474f56e10f6cc96a7577aa5bdfbdc54a7cd1d"
 
 ; Ubuntu 26.04.1's official WSL image, 418,495,746 bytes ([verified]
 ; SHA256SUMS 2026-09-24, PLAN 4.13; matched again 2026-10-11).
