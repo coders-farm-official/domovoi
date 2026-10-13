@@ -227,7 +227,8 @@ RAW_TOASTS_LEFT = {
     "plugins.jsx": [],   # staging refusals: apiErrorText reads the coded {error: {message}}
     # Verb-less guard() / act() wrappers (each call site needs a verb).
     "settings.jsx": ["failed", "failed", "failed", "failed"],
-    "models.jsx": ["failed"],
+    # Its guard() names each action since 2026-10-13 (mutationErrorText).
+    "models.jsx": [],
 }
 
 

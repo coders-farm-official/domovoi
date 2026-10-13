@@ -578,6 +578,96 @@ const _modelsLanRegistryRef = (ref) => {
   return !head.includes('.');
 };
 
+/* ---- "did you mean" for a pull of a name that doesn't exist ------ */
+/* Ollama answers a pull of a name its registry doesn't have with an error
+ * line, "pull model manifest: file does not exist" (a newer one or a
+ * private registry: "not found", "manifest unknown", a 404), and an
+ * unusable name with "invalid model name". Only those get suggestions: a
+ * network error or a full disk says nothing about the name. */
+const _PULL_NAME_MISSING = /file does not exist|not found|manifest unknown|invalid model name|\b404\b/i;
+
+/* A model reference the way Ollama reads it: case aside, the default
+ * registry's prefix dropped, a bare name meaning ":latest". */
+const _pullParts = (name) => {
+  let n = String(name || '').trim().toLowerCase();
+  for (const p of ['registry.ollama.ai/library/', 'registry.ollama.ai/', 'library/']) {
+    if (n.startsWith(p)) { n = n.slice(p.length); break; }
+  }
+  const colon = n.indexOf(':', n.lastIndexOf('/') + 1);
+  return colon < 0 ? { repo: n, tag: 'latest' } : { repo: n.slice(0, colon), tag: n.slice(colon + 1) };
+};
+
+/* Characters a person mistypes for one another: 1, l and i; 0 and o.
+ * (qwen3-v1:2b for qwen3-vl:2b, 2026-10-13.) */
+const _pullLookAlike = (s) => s.replace(/[1i]/g, 'l').replace(/0/g, 'o');
+
+/* Edits (insert, delete, replace, swap two neighbours) between a and b,
+ * or limit + 1 as soon as it's sure to be more than `limit`. */
+const _pullEdits = (a, b, limit) => {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let prev2 = null;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2] + 1);
+      }
+      cur.push(v);
+      if (v < best) best = v;
+    }
+    if (best > limit) return limit + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length];
+};
+
+/* Up to three names close to `typed`, from `known` ({ name, installed }:
+ * the catalog's and what Ollama already has — names the page already
+ * read, no lookup of its own), best first. Close is: the same name once
+ * look-alikes are folded; a small edit distance (1 for a short name, 2
+ * otherwise); or the same model (by that distance) with a tag that starts
+ * with the one typed ("2b" → "2b-instruct-q4_K_M"), or any of its tags
+ * when none was typed. Never the typed name itself, and never one in
+ * `missing` (names already refused the same way here). */
+const pullSuggestions = (typed, known, missing) => {
+  const t = _pullParts(typed);
+  const tKey = `${t.repo}:${t.tag}`;
+  const tFull = _pullLookAlike(tKey);
+  const tRepo = _pullLookAlike(t.repo);
+  const fullLimit = tFull.length <= 8 ? 1 : 2;
+  const repoLimit = tRepo.length <= 6 ? 1 : 2;
+  const best = new Map();   // key → { name, installed, score }
+  for (const k of known || []) {
+    const c = _pullParts(k.name);
+    const cKey = `${c.repo}:${c.tag}`;
+    if (!c.repo || cKey === tKey || (missing && missing.has(cKey))) continue;
+    let score = null;
+    const full = _pullEdits(tFull, _pullLookAlike(cKey), fullLimit);
+    if (full <= fullLimit) score = full;
+    else {
+      const repo = _pullEdits(tRepo, _pullLookAlike(c.repo), repoLimit);
+      if (repo <= repoLimit) {
+        if (t.tag !== 'latest' && c.tag.startsWith(`${t.tag}-`)) score = repo + 1;
+        else if (t.tag === 'latest') score = repo + 2;
+      }
+    }
+    if (score == null) continue;
+    const prev = best.get(cKey);
+    if (!prev || score < prev.score || (score === prev.score && k.installed && !prev.installed)) {
+      best.set(cKey, { name: k.name, installed: !!(k.installed || (prev && prev.installed)), score });
+    } else if (k.installed) prev.installed = true;
+  }
+  return Array.from(best.values())
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name))
+    .slice(0, 3)
+    .map(({ name, installed }) => ({ name, installed }));
+};
+
 /* (Image-generation model management lives on the Image Generation
  * plugin's own Images page — install the plugin from the Plugins page.) */
 
@@ -609,7 +699,11 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
  * returns a bare fragment — the Settings shell supplies the .page wrapper and
  * the page header. */
 const ModelsPanel = () => {
-  const [fire, node] = useToast();
+  // Errors here stay until they are dismissed or the action is tried
+  // again (useToast's `stay`, keyed per action and model); what went
+  // right still fades on its own (2026-10-13: a failed pull's error was
+  // gone before it could be read on a phone).
+  const [fire, node, dismissToast] = useToast();
   // Installing a model pulls it from the Ollama registry: greyed while the
   // box is set to stay off the internet (Settings → Internet).
   // The internet answer, read once for the page (the GET /api/config the
@@ -629,8 +723,8 @@ const ModelsPanel = () => {
   // admin sign-in (CORE-6). Re-read on every sign-in and sign-out.
   const { data: activeData, error: activeError, refresh: refreshActive } =
     useApiObject('/api/models/active', { refetchOnAuth: true });
-  const { items: jobs } = useApiList('/api/models/jobs', { eventTypes: ['model_jobs.changed'],
-    pickItems: (d) => (d && d.jobs) || [] });
+  const { items: jobs, refresh: refreshJobs } = useApiList('/api/models/jobs',
+    { eventTypes: ['model_jobs.changed'], pickItems: (d) => (d && d.jobs) || [] });
   // Open, numbers only. Fetched once per visit — a turn's timings don't
   // move while you look at the page.
   const { data: speechTimings, error: speechTimingsError, loading: speechTimingsLoading } =
@@ -678,15 +772,110 @@ const ModelsPanel = () => {
   const doneJobs = jobs.filter((j) => j.status === 'done').map((j) => j.id).join(',');
   React.useEffect(() => { if (doneJobs) refreshActive(); }, [doneJobs, refreshActive]);
 
-  const guard = async (fn, okMsg) => {
+  // One page action: `verb` names it in an error ("Delete llama3.2:3b
+  // failed: …"), `key` ties its error to it, so trying it again clears
+  // the last one. okMsg (or what it returns) is the answer that fades; an
+  // { error } object from it is a refusal the server answered with, and
+  // stays. Behind a sign-in or pairing prompt the prompt is the message
+  // (mutationErrorText, data.js).
+  const guard = async (fn, okMsg, { verb, key }) => {
+    if (key) dismissToast(key);
     try {
       const r = await fn();
-      if (okMsg) fire(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+      const msg = typeof okMsg === 'function' ? okMsg(r) : okMsg;
+      if (msg && typeof msg === 'object') fire(msg.error, { stay: true, key });
+      else if (msg) fire(msg);
       return r;
     } catch (e) {
-      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
+      const text = isInternetOffError(e) ? INTERNET_OFF_MESSAGE : mutationErrorText(e, verb, { kept: false });
+      if (text) fire(text, { stay: true, key });
     }
   };
+
+  // The names this page knows to be real (the catalog's, and what Ollama
+  // already has): what a "did you mean" may offer.
+  const knownModels = [
+    ...installed.map((m) => ({ name: m.name, installed: true })),
+    ...catOllama.map((m) => ({ name: m.name, installed: installedNames.has(m.name) })),
+  ];
+  // Names a pull here was refused as not existing: never suggested again.
+  const missingNames = React.useRef(new Set());
+
+  // A pull that ended badly, said until dismissed or tried again. A name
+  // the registry doesn't have gets the close matches the page knows: one
+  // press installs one; one already installed is only named (pulling it
+  // again could be refused the same way, e.g. a model made on this box).
+  const reportPullFailure = (j) => {
+    const key = `pull:${_ollamaKey(j.model)}`;
+    const err = String(j.error || 'no reason given');
+    if (j.status === 'cancelled') {
+      fire(`Install ${j.model} stopped: ${err}`, { stay: true, key });
+      return;
+    }
+    if (!_PULL_NAME_MISSING.test(err)) {
+      fire(`Install ${j.model} failed: ${err}`, { stay: true, key });
+      return;
+    }
+    const p = _pullParts(j.model);
+    missingNames.current.add(`${p.repo}:${p.tag}`);
+    const sugg = pullSuggestions(j.model, knownModels, missingNames.current);
+    const pullable = sugg.filter((s) => !s.installed && !(internetOff && !_modelsLanRegistryRef(s.name)));
+    let hint = '';
+    if (sugg.length === 1) {
+      hint = `Did you mean ${sugg[0].name}?${sugg[0].installed ? " It's already installed." : ''}`;
+    } else if (sugg.length > 1) {
+      hint = `Did you mean ${sugg.map((s) => (s.installed ? `${s.name} (installed)` : s.name)).join(', ')}?`;
+    }
+    fire(`Install ${j.model} failed: there is no model by that name`, {
+      stay: true, key,
+      detail: [hint, `Ollama: ${err}`].filter(Boolean).join('\n'),
+      actions: pullable.map((s) => ({
+        label: `install ${s.name}`,
+        title: `download ${s.name} into Ollama`,
+        onClick: () => install(s.name),
+      })),
+    });
+  };
+
+  // The pulls started here, by job id, until each one ends: how a failure
+  // that comes seconds later (Ollama answers a pull of an unknown name
+  // with an error line, not an HTTP error) still reaches the person who
+  // pressed Install, after the job list's 30 s window has dropped it.
+  const [watching, setWatching] = React.useState({});
+  const watchingAny = Object.keys(watching).length > 0;
+  React.useEffect(() => {
+    const ids = Object.keys(watching);
+    if (!ids.length) return;
+    const next = { ...watching };
+    let changed = false;
+    for (const id of ids) {
+      const w = watching[id];
+      const j = jobs.find((x) => String(x.id) === id);
+      if (!j) {
+        // Off the list: it ended unseen over 30 s ago, or the list was
+        // read before the job existed (give that a minute).
+        if (w.seen || Date.now() - w.since > 60000) { delete next[id]; changed = true; }
+        continue;
+      }
+      if (j.status === 'pending' || j.status === 'running') {
+        if (!w.seen) { next[id] = { ...w, seen: true }; changed = true; }
+        continue;
+      }
+      delete next[id];
+      changed = true;
+      if (j.status === 'failed' || (j.status === 'cancelled' && j.error)) reportPullFailure(j);
+      else if (j.status === 'done') fire(`installed ${j.model}`);
+    }
+    if (changed) setWatching(next);
+  }, [jobs, watching]);
+  // The job list follows model_jobs events; while a pull started here is
+  // open it is also re-read every few seconds, so a dropped event socket
+  // (a phone waking up) can't hide how it ended.
+  React.useEffect(() => {
+    if (!watchingAny) return undefined;
+    const t = setInterval(() => { refreshJobs(); }, 3000);
+    return () => clearInterval(t);
+  }, [watchingAny, refreshJobs]);
 
   // `compute` (STT catalog rows only) goes with the model, so a row that
   // says int8 really runs int8. The core refuses a pair the device can't
@@ -705,16 +894,24 @@ const ModelsPanel = () => {
         // The model can be saved while its compute type is refused (e.g. a
         // core too old to know whisper_compute_type) — say which half landed.
         const why = rejected.map(([k, v]) => `${k} (${v})`).join('; ');
-        return restart ? `saved ${model}, but not: ${why}` : `not saved: ${why}`;
+        return { error: restart ? `saved ${model}, but not: ${why}` : `not saved: ${why}` };
       }
       return restart ? `saved — restart the Domovoi server to apply ${model}` : `switched to ${model}`;
-    });
+    }, { verb: `Switch to ${model}`, key: `switch:${r.role}` });
 
+  // The job the server answers with is watched until it ends (above).
   const install = (name) =>
-    guard(async () => { await apiPost('/api/models/pull', { model: name }); }, `pulling ${name}…`);
+    guard(async () => {
+      const res = await apiPost('/api/models/pull', { model: name });
+      const job = res && res.job;
+      if (job && job.id != null) {
+        setWatching((w) => ({ ...w, [job.id]: { model: job.model || name, since: Date.now(), seen: false } }));
+      }
+    }, `pulling ${name}…`, { verb: `Install ${name}`, key: `pull:${_ollamaKey(name)}` });
 
   const cancel = (j) =>
-    guard(async () => { await apiPost(`/api/models/pull/${j.id}/cancel`, {}); }, 'pull cancelled');
+    guard(async () => { await apiPost(`/api/models/pull/${j.id}/cancel`, {}); }, 'pull cancelled',
+          { verb: `Cancel ${j.model}`, key: `cancel:${j.id}` });
 
   // The shared delete confirm (F-009) instead of window.confirm, so every
   // Settings delete asks the same way.
@@ -723,7 +920,7 @@ const ModelsPanel = () => {
       await apiDelete(`/api/models/${encodeURIComponent(m.name)}`);
       await refreshInstalled();
       refreshActive();   // a role's model may be the one that went
-    }, `deleted ${m.name}`));
+    }, `deleted ${m.name}`, { verb: `Delete ${m.name}`, key: `delete:${m.name}` }));
   const del = (m) => delConfirm.request(m, {
     title: `Delete ${m.name} from disk?`,
     body: <div>The model files are removed from this machine. It can be pulled again from the catalog later.</div>,

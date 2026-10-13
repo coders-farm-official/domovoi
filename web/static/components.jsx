@@ -695,15 +695,33 @@ const satBoardLabel = (s) => {
  * each other — toast A's cleanup timer would clear replacement toast B
  * after a few hundred ms, so long error details vanished unread.
  * Longer messages linger longer (up to 12 s); click a toast to dismiss.
+ *
+ * An error that must be read can STAY: fire(msg, { stay: true }) gives a
+ * toast with no timer, an error dot and its own close button, and only
+ * that button (or the page) removes it: a tap on its text doesn't, so it
+ * can be read, or selected, on a phone. `detail` is a second, muted line;
+ * `actions` ([{ label, onClick, title }]) are buttons under it, each of
+ * which closes the toast; `key` names it, so a later toast with the same
+ * key replaces it and the third return value, dismissKey(key), removes it
+ * (a page clears an action's error when that action is tried again). The
+ * Models page's pulls, deletes and switches use it (2026-10-13: an error
+ * there vanished on its own before it could be read).
  */
 const useToast = () => {
   const [items, setItems] = React.useState([]);
   const nextId = React.useRef(0);
   const dismiss = (id) => setItems((cur) => cur.filter((t) => t.id !== id));
-  const fire = (msg) => {
+  const dismissKey = React.useCallback(
+    (key) => setItems((cur) => cur.filter((t) => t.key !== key)), []);
+  const fire = (msg, opts) => {
+    const o = opts && typeof opts === 'object' ? opts : {};
     const id = ++nextId.current;
     const text = String(msg);
-    setItems((cur) => [...cur, { id, text }]);
+    const item = { id, text, key: o.key || null, stay: !!o.stay,
+                   detail: o.detail ? String(o.detail) : null,
+                   actions: Array.isArray(o.actions) ? o.actions : null };
+    setItems((cur) => [...cur.filter((t) => !item.key || t.key !== item.key), item]);
+    if (item.stay) return;
     const ttl = Math.min(12000, 2400 + text.length * 35);
     setTimeout(() => dismiss(id), ttl);
   };
@@ -722,10 +740,30 @@ const useToast = () => {
    * on a phone and stay until dismissed: the answer to a press must never
    * sit under them. */
   const node = items.length > 0 && (
-    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
+    <div className="toast-stack"
+         style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
                   gap: 8, zIndex: 111, maxWidth: 'min(90vw, 560px)' }}>
-      {items.map((t) => (
+      {items.map((t) => (t.stay ? (
+        <div key={t.id} className="toast toast-stay" role="alert">
+          <div className="toast-stay-row">
+            <span className="toast-stay-dot"><StatusDot tone="err"/></span>
+            <div className="toast-stay-body">
+              <div className="toast-stay-text">{t.text}</div>
+              {t.detail && <div className="toast-stay-detail">{t.detail}</div>}
+            </div>
+            <IconButton name="x" title="dismiss" aria-label="dismiss" onClick={() => dismiss(t.id)}/>
+          </div>
+          {t.actions && t.actions.length > 0 && (
+            <div className="toast-stay-actions">
+              {t.actions.map((a, i) => (
+                <Button key={i} variant={i === 0 ? 'primary' : 'secondary'} title={a.title}
+                        onClick={() => { dismiss(t.id); a.onClick(); }}>{a.label}</Button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
         <div key={t.id} onClick={() => dismiss(t.id)} title="dismiss"
              style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                       boxShadow: 'var(--shadow-md), var(--inner-highlight)', padding: '10px 14px',
@@ -734,10 +772,10 @@ const useToast = () => {
           <StatusDot tone="brand" live/>
           <span style={{ overflowWrap: 'anywhere' }}>{t.text}</span>
         </div>
-      ))}
+      )))}
     </div>
   );
-  return [fire, node];
+  return [fire, node, dismissKey];
 };
 
 /* ---- The dashboard's one restart ------------------------------ */
