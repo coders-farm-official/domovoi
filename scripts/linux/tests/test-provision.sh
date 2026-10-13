@@ -358,10 +358,19 @@ case $cmd in
   enable) for u in "${units[@]}"; do touch "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || touch "$SHIM_STATE/active/$u"; done ;;
   disable) for u in "${units[@]}"; do rm -f "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || rm -f "$SHIM_STATE/active/$u"; done ;;
   start|restart)
+    # start-fail: every start fails; with unit names in it, only theirs.
     for u in "${units[@]}"; do
-      if [ -f "$SHIM_STATE/start-fail" ]; then echo "Job for $u failed" >&2; exit 1; fi
+      if [ -f "$SHIM_STATE/start-fail" ] && { [ ! -s "$SHIM_STATE/start-fail" ] || grep -qx -- "$u" "$SHIM_STATE/start-fail"; }; then
+        echo "Job for $u failed because the control process exited with error code." >&2; touch "$SHIM_STATE/failed/$u"; exit 1
+      fi
       touch "$SHIM_STATE/active/$u"; rm -f "$SHIM_STATE/failed/$u"
     done ;;
+  status)
+    for u in "${units[@]}"; do
+      st=inactive; [ ! -f "$SHIM_STATE/active/$u" ] || st=active; [ ! -f "$SHIM_STATE/failed/$u" ] || st=failed
+      printf '%s\n' "x $u - fixture unit" "     Active: $st (fixture)"
+    done
+    exit 3 ;;
   stop) for u in "${units[@]}"; do rm -f "$SHIM_STATE/active/$u"; done ;;
   daemon-reload)
     # A running timer or path unit whose unit file is now a mask has
@@ -564,6 +573,7 @@ SH
   # A unit's journal: the case's text, if it set one.
   cat >"$bin/journalctl" <<'SH'
 #!/usr/bin/env bash
+echo "journalctl $*" >>"$SHIM_STATE/calls.log"
 [ ! -f "$SHIM_STATE/journal" ] || cat "$SHIM_STATE/journal"
 exit 0
 SH
@@ -1901,6 +1911,91 @@ case_setup_code_kept_out_of_the_journal_it_prints() {
   end_case
 }
 
+# Windows installer fixes 2026-10-12, item 3: a failed start leaves the
+# real cause in the log (provision.log on Windows): systemd's status of the
+# three units and their last 200 journal lines, without the setup code or
+# a password in a URL.
+case_failed_start_logs_status_and_journal() {
+  new_case failed_start_logs_status_and_journal
+  echo domovoi-db.service >"$STATE/start-fail"
+  printf '%s\n' "Oct 12 docker[90]: Error starting userland proxy: listen tcp4 127.0.0.1:6432: bind: address already in use" \
+    "Oct 12 domovoi-core[71]:  Setup code: acorn-apple-arrow-autumn-badge-baker-basil-beach" \
+    "Oct 12 domovoi-core[71]: connecting to postgresql://domovoi:s3cret-Pass@127.0.0.1:6432/domovoi" \
+    "Oct 12 domovoi-web[72]: an ordinary line" >"$STATE/journal"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "start failed" eq "$(state_of start)" fail
+  check "final names the step" eq "$(final_field failed_step)" '"start"'
+  check "systemd's status of all three" called "systemctl status --no-pager --full --lines=0 domovoi-db.service domovoi-core.service domovoi-web.service"
+  check "the status is printed" said "x domovoi-db.service - fixture unit"
+  check "it says the unit failed" said "Active: failed (fixture)"
+  check "200 journal lines of all three" called "journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200"
+  check "the cause is in the output" said "bind: address already in use"
+  check "the ordinary line too" said "an ordinary line"
+  check "no setup code" not_said "acorn-apple-arrow"
+  check "no Setup code line" not_said "Setup code:"
+  check "no password" not_said "s3cret-Pass"
+  check "the URL without it" said "postgresql://domovoi:[hidden]@127.0.0.1:6432/domovoi"
+  check "the message points at it" said "the units' last 200 journal lines are in the output above"
+  check "one final line" progress_ok
+  check "no marker" no_marker start
+  end_case
+}
+
+# A health wait that runs out logs the same, for all three units.
+case_unhealthy_start_logs_all_three_units() {
+  new_case unhealthy_start_logs_all_three_units
+  touch "$STATE/core-unhealthy"
+  printf '%s\n' "Oct 12 domovoi-core[71]: alembic: migration failed" >"$STATE/journal"
+  run_prov "${wsl_args[@]}" --skip-models --health-timeout 10
+  check "exit 1" eq "$RC" 1
+  check "status of all three" called "systemctl status --no-pager --full --lines=0 domovoi-db.service domovoi-core.service domovoi-web.service"
+  check "journal of all three" called "journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200"
+  check "the cause is in the output" said "migration failed"
+  end_case
+}
+
+# Item 2: --stop-before start runs everything before the start step and
+# stops (exit 0, result "stopped"), so the Windows installer can check the
+# PC's ports; the next run without it starts Domovoi.
+case_stop_before_start() {
+  new_case stop_before_start
+  run_prov "${wsl_args[@]}" --skip-models --stop-before start
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result stopped" eq "$(final_field result)" '"stopped"'
+  check "exit_code 0" eq "$(final_field exit_code)" 0
+  check "says where it stopped" said "Stopped before: Starting Domovoi (--stop-before start)"
+  check "the step before ran" marker timezone
+  check "start did not run" no_marker start
+  check "start never reported" eq "$(state_of start)" ""
+  check "no unit started" not_called "systemctl start domovoi-db.service"
+  check "result.json says stopped" grep -q '"result":"stopped"' "$ROOT/var/lib/domovoi-provision/result.json"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run exit 0" eq "$RC" 0
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "the steps before are skipped" eq "$(state_of timezone)" skip
+  check "start ran" eq "$(state_of start)" done
+  check "units started" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service"
+  end_case
+}
+
+case_stop_before_takes_a_step_inside_the_run() {
+  new_case stop_before_takes_a_step_inside_the_run
+  local bad
+  for bad in preflight finish bogus; do
+    run_prov "${wsl_args[@]}" --stop-before "$bad"
+    check "--stop-before $bad: 2" eq "$RC" 2
+    check "says which ($bad)" said "--stop-before takes a step id from apt to update-unit, not: $bad"
+  done
+  run_prov "${wsl_args[@]}" --stop-before ""
+  check "--stop-before with nothing: 2" eq "$RC" 2
+  check "nothing ran" not_called "apt-get"
+  run_prov --help
+  check "--help names it" said "--stop-before STEP"
+  end_case
+}
+
 # Finding 9: every way out ends with exactly one final line.
 case_every_exit_has_one_final_line() {
   new_case every_exit_has_one_final_line
@@ -2078,6 +2173,10 @@ CASES=(
   case_media_missing_on_a_rerun_warns
   case_docker_is_not_held
   case_setup_code_kept_out_of_the_journal_it_prints
+  case_failed_start_logs_status_and_journal
+  case_unhealthy_start_logs_all_three_units
+  case_stop_before_start
+  case_stop_before_takes_a_step_inside_the_run
   case_every_exit_has_one_final_line
   case_children_do_not_hold_the_lock
   case_wsl_conf_restart_note_comes_first

@@ -99,7 +99,8 @@
 # percent never goes down; progress lines of a download add "bytes" and
 # "bytes_total" (null when the size is unknown). Every run ends with exactly
 # one line that has "step":"finish", "final":true and "result" (ok, failed,
-# rerun_after_restart, dry_run, usage_error, busy or help),
+# rerun_after_restart, dry_run, usage_error, busy, help, or stopped: a run
+# given --stop-before STEP that got there, exit 0, STEP not run),
 # "restart_required" (WSL: /etc/wsl.conf changed and takes effect only after
 # `wsl --terminate <distro>`; this script never restarts the distro itself),
 # "exit_code", "failed_step", "message" (why, for anything but ok) and
@@ -111,7 +112,8 @@
 # object in /var/lib/domovoi-provision/result.json (a refused one leaves
 # that file to the run that holds the lock).
 #
-# Exit codes: 0 done (or dry run, or --help), 1 a step failed (or not
+# Exit codes: 0 done (or dry run, --help, or stopped before the step
+# --stop-before named), 1 a step failed (or not
 # root), 2 bad usage, 3 WSL without systemd as PID 1: /etc/wsl.conf was
 # written, terminate the distro and run this again, 4 another run of this
 # script holds the run lock (busy): wait for it, then run this again.
@@ -429,6 +431,7 @@ DRY_RUN=0
 HEALTH_TIMEOUT=900
 ALLOWED_SIGNERS=""
 KEEP_DOWNLOADS=0
+STOP_BEFORE=""
 
 usage() {
   cat <<'EOF'
@@ -482,6 +485,11 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         HEAD and every later update must verify against it
   --health-timeout SEC  how long the first start may take (default: 900)
   --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision
+  --stop-before STEP    run the steps before STEP (one of the step ids at the
+                        top of this file, apt to update-unit) and stop there,
+                        exit 0, result "stopped". The Windows installer stops
+                        before "start" to check the PC's ports, then runs
+                        this again without it
   --dry-run             say what each step would do; change nothing
   -h, --help            this text
 
@@ -506,7 +514,7 @@ while [ $# -gt 0 ]; do
     --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
   esac
   case $opt in
-    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers)
+    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers|--stop-before)
       if [ "$has_val" = 0 ]; then
         [ $# -ge 2 ] || usage_error "$opt needs a value"
         val=$2
@@ -528,6 +536,7 @@ while [ $# -gt 0 ]; do
         --media) MEDIA_ARGS+=("$val") ;;
         --health-timeout) HEALTH_TIMEOUT=$val ;;
         --allowed-signers) ALLOWED_SIGNERS=$val ;;
+        --stop-before) STOP_BEFORE=$val ;;
       esac
       ;;
     --wsl|--no-wsl|--skip-models|--no-vision-model|--dry-run|--keep-downloads|-h|--help)
@@ -546,6 +555,14 @@ while [ $# -gt 0 ]; do
     *) usage_error "unknown option: $1" ;;
   esac
 done
+if [ -n "$STOP_BEFORE" ]; then
+  # A step that has a "before" inside the run: not preflight (nothing runs
+  # before it) and not finish (that is the end anyway).
+  case " ${STEP_IDS[*]:1:${#STEP_IDS[@]}-2} " in
+    *" $STOP_BEFORE "*) ;;
+    *) usage_error "--stop-before takes a step id from apt to update-unit, not: $STOP_BEFORE" ;;
+  esac
+fi
 
 # ─── Small helpers ───────────────────────────────────────────────────────
 
@@ -579,7 +596,12 @@ sed_repl() { printf '%s' "$1" | sed 's/[#&\\]/\\&/g'; }
 # terminal, which under systemd it never is; an older checkout still put
 # it in the journal. So any line naming it still goes, and anything shaped
 # like a code is hidden wherever it appears.
-scrub_log() { LC_ALL=C sed -E -e '/setup[ _-]?code/Id' -e 's/[A-Za-z]+(-[A-Za-z]+){7,}/[hidden]/g'; }
+# Journal lines for people: no line about the setup code, nothing shaped
+# like one, and no password in a URL (scheme://user:password@host).
+scrub_log() {
+  LC_ALL=C sed -E -e '/setup[ _-]?code/Id' -e 's/[A-Za-z]+(-[A-Za-z]+){7,}/[hidden]/g' \
+    -e 's#(://[^:/@[:space:]]+:)[^@/[:space:]]+@#\1[hidden]@#g'
+}
 
 # Run a command as the service user with a clean environment. runuser
 # calls initgroups, so a group added moments ago (docker) is live.
@@ -2496,6 +2518,20 @@ all_active() {
 }
 healthy() { curl -fsS -o /dev/null --max-time 5 "$CORE_HEALTH_URL" && curl -fsS -o /dev/null --max-time 5 "$WEB_HEALTH_URL"; }
 
+# start_diagnostics: when the start fails, what systemd says about the
+# three units and their last 200 journal lines, into this script's own
+# output (the Windows installer keeps it in provision.log), so the log
+# names the real cause (a port already taken, a migration that failed)
+# rather than just "systemctl start failed". Without the setup code the
+# core's first boot prints, and without a password in a URL (scrub_log).
+start_diagnostics() {
+  log "systemctl status ${SHIPPED_UNITS[*]}:"
+  systemctl status --no-pager --full --lines=0 "${SHIPPED_UNITS[@]}" 2>&1 | scrub_log | sed 's/^/    /' || true
+  log "the last 200 lines of journalctl -u domovoi-db -u domovoi-core -u domovoi-web:"
+  journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200 -o short-iso 2>&1 \
+    | scrub_log | sed 's/^/    /' || true
+}
+
 # wait_http URL TIMEOUT LABEL UNIT FROM TO: wait for URL, with progress
 # lines from FROM to TO permille of the step as the time runs out (the
 # core's wait, then the dashboard's, each in its own part of the step).
@@ -2509,9 +2545,7 @@ wait_http() {
     fi
     now=$(date +%s)
     if [ $((now - t0)) -ge "$timeout" ]; then
-      # The unit's last lines, without the setup code the core's first boot
-      # prints (scrub_log).
-      journalctl -u "$unit" --no-pager -n 40 -o short-iso 2>/dev/null | scrub_log | sed 's/^/    /' || true
+      start_diagnostics
       die "$label did not answer within ${timeout}s ($url; journalctl -u $unit)"
     fi
     if [ $((now - last)) -ge 30 ]; then
@@ -2556,7 +2590,10 @@ do_start() {
     systemctl restart "${restart[@]}"
   fi
   # The documented start, which is a no-op for what already runs.
-  systemctl start "${SHIPPED_UNITS[@]}" || die "systemctl start ${SHIPPED_UNITS[*]} failed (journalctl -u domovoi-db -u domovoi-core)"
+  if ! systemctl start "${SHIPPED_UNITS[@]}"; then
+    start_diagnostics
+    die "systemctl start ${SHIPPED_UNITS[*]} failed (its status and the units' last 200 journal lines are in the output above; journalctl -u domovoi-db -u domovoi-core -u domovoi-web)"
+  fi
   rm -f "$UNITS_CHANGED_FILE"
   wait_http "$CORE_HEALTH_URL" "$HEALTH_TIMEOUT" "the core (/v1/health)" domovoi-core.service 0 800
   wait_http "$WEB_HEALTH_URL" 300 "the dashboard (/api/health)" domovoi-web.service 800 990
@@ -2738,6 +2775,15 @@ fi
 
 for step in "${STEP_IDS[@]:1}"; do
   [ "$step" != finish ] || break
+  if [ "$step" = "$STOP_BEFORE" ]; then
+    # --stop-before: everything up to here is done; the caller runs this
+    # again without it (the Windows installer checks the PC's ports in
+    # between). result.json says "stopped", so no one reads it as ok.
+    log "stopping before the $step step (--stop-before $step)"
+    compute_restart_required
+    final_line stopped 0 "Stopped before: ${STEP_TITLE[$step]} (--stop-before $step)"
+    exit 0
+  fi
   run_step "$step"
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;
