@@ -765,6 +765,24 @@ case_retired_packages_uninstalled() {
   end_case
 }
 
+# edge-tts (LGPL) joined the list on 2026-10-12 when the Microsoft Edge
+# online voices were dropped: uninstalled with the others, the same way.
+case_retired_packages_include_edge_tts() {
+  new_case retired_packages_include_edge_tts
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps without edge-tts" >/dev/null
+  printf 'WARNING: Skipping piper-tts as it is not installed.\nWARNING: Skipping piper-phonemize as it is not installed.\nFound existing installation: edge-tts 7.2.8\nUninstalling edge-tts-7.2.8:\n  Successfully uninstalled edge-tts-7.2.8\n' \
+    >"$STATE/pip-uninstall-output"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "asks pip for all three" called "pip --disable-pip-version-check --no-input uninstall -y piper-tts piper-phonemize edge-tts"
+  check "after the re-sync" before "install -e" "uninstall -y piper-tts piper-phonemize edge-tts"
+  check "before the services start" before "uninstall -y piper-tts piper-phonemize edge-tts" "systemctl start domovoi-core.service"
+  check "the step names edge-tts" grep -qF '"detail": "uninstalled edge-tts-7.2.8 (no longer used)"' "$RESULT"
+  end_case
+}
+
 case_retired_packages_absent_leave_no_step() {
   new_case retired_packages_absent_leave_no_step
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -2695,6 +2713,7 @@ CASES=(
   case_noop_restart_a_baseline_row_is_not_a_migration
   case_deps_changed_as_root
   case_retired_packages_uninstalled
+  case_retired_packages_include_edge_tts
   case_retired_packages_absent_leave_no_step
   case_retired_packages_failure_is_a_warning
   case_retired_packages_kept_through_a_rollback

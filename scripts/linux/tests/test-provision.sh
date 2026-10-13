@@ -857,6 +857,19 @@ case_help_and_usage_errors() {
   end_case
 }
 
+# The install's import check names only what the release installs: the
+# Microsoft Edge voices' edge-tts and its MP3 decoder miniaudio were
+# dropped on 2026-10-12, so a fresh venv without them must pass it.
+case_import_check_names_no_dropped_package() {
+  new_case import_check_names_no_dropped_package
+  local mods
+  mods=$(sed -n "/^PY_IMPORT_CHECK='#provision:import-check/,/^bad = \[\]/p" "$SCRIPT")
+  check "found the import check" grep -qF '"onnxruntime"' <<<"$mods"
+  check "no edge_tts" eq "$(grep -c 'edge_tts' <<<"$mods")" 0
+  check "no miniaudio" eq "$(grep -c 'miniaudio' <<<"$mods")" 0
+  end_case
+}
+
 case_harness_vars_need_each_other() {
   new_case harness_vars_need_each_other
   RC=0
@@ -2026,6 +2039,7 @@ case_vision_model_respects_the_household() {
 
 CASES=(
   case_help_and_usage_errors
+  case_import_check_names_no_dropped_package
   case_harness_vars_need_each_other
   case_not_root_refuses
   case_dry_run_changes_nothing
