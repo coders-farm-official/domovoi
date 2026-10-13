@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import random
+from pathlib import Path
 
 import pytest
 
@@ -1470,3 +1471,58 @@ def test_the_payload_carries_the_helper_outside_the_code_snapshot():
     helper = Path(__file__).resolve().parents[2] / "satellite" / "scripts" / "domovoi-sync-time"
     assert helper.is_file()
     assert helper.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n")
+
+
+# ─── requirement markers (spare-device satellites S1, 2026-10-13) ─────────
+#
+# satellite/requirements.txt keeps spidev and the onnxruntime==1.20.0 pin
+# to the Pi's ARM boards with environment markers, so an x86-64 laptop can
+# install it. `pip download --platform` evaluates markers against the HOST,
+# so the media prep evaluates them for the board itself: a card prepared
+# on an x86-64 server must still get the A53-safe pin.
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def test_the_target_environment_is_the_board_s_not_the_server_s():
+    env = fetchers._target_environment(("manylinux_2_17_aarch64", "manylinux_2_28_aarch64"), "3.13")
+    assert env["platform_machine"] == "aarch64" and env["python_version"] == "3.13"
+    assert fetchers._target_environment(("linux_armv7l",), "3.11")["platform_machine"] == "armv7l"
+
+
+def test_a_pi_card_gets_the_pinned_onnxruntime_and_spidev():
+    reqs = fetchers.satellite_requirements(
+        _REPO, fetchers._target_environment(("manylinux_2_28_aarch64",), "3.13"))
+    assert "onnxruntime==1.20.0" in reqs
+    assert not any(r.startswith("onnxruntime>=") for r in reqs)
+    assert "spidev>=3.6" in reqs
+    assert not any(";" in r for r in reqs), "markers are evaluated and stripped"
+
+
+def test_an_x86_64_target_gets_a_current_onnxruntime_and_no_spidev():
+    reqs = fetchers.satellite_requirements(
+        _REPO, fetchers._target_environment(("manylinux_2_28_x86_64",), "3.12"))
+    assert any(r.startswith("onnxruntime>=1.20.0") for r in reqs)
+    assert "onnxruntime==1.20.0" not in reqs
+    assert not any(r.startswith("spidev") for r in reqs)
+
+
+def test_the_wheel_fetch_asks_for_the_board_s_branch_whatever_the_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(fetchers.cache, "bucket", lambda *a: tmp_path)
+    monkeypatch.setattr(fetchers.cache, "stamp", lambda *a: None)
+    monkeypatch.setattr(fetchers, "_turned_off", lambda what: None)
+    seen: list[list[str]] = []
+
+    class Done:
+        returncode, stdout, stderr = 0, "", ""
+
+    def run(argv, **kw):
+        seen.append(list(argv))
+        return Done()
+
+    ok, _ = fetchers.fetch_wheels(_REPO, "3.13", ("manylinux_2_28_aarch64",), run=run)
+    assert ok
+    first = seen[0]
+    assert "onnxruntime==1.20.0" in first
+    assert not any(a.startswith("onnxruntime>=") for a in first)
+    assert not any("platform_machine" in a for a in first)

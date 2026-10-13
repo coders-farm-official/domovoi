@@ -28,6 +28,17 @@ branches through `client.py`, each board is described once here as a
                           ``[mic] enabled`` defaults false) and LED init
                           is skipped; audio goes out HDMI or a USB DAC.
 
+    generic_pc          — A spare Linux laptop or mini PC (spare-device
+                          satellites, S1). The system's default mic and
+                          speaker, through the desktop's sound server on a
+                          desktop install (the ALSA ``default`` device);
+                          no LEDs, no mic-gain tune, no Wi-Fi self-heal (it
+                          is the person's computer, not ours to reassociate),
+                          no full duplex unless ``[device] full_duplex``
+                          says a speakerphone cancels its own echo. Its
+                          hello says ``board: "linux_pc"`` with a narrower
+                          ``supports`` list (satellite/pc_engine.py).
+
 A profile carries two kinds of data:
 
   * **Hardware switches** the code branches on (``capture_dtype``,
@@ -153,6 +164,12 @@ class DeviceProfile:
     # [music] default stands. Provisioning writes this, so a prepared card
     # does not depend on anyone remembering PROVISIONING §F.
     provisioned_music_alsa_device: str = ""
+    # False where the Wi-Fi is not this program's to manage: the self-heal
+    # watcher (iw, and a sudo'd wpa_cli reassociate) stays off unless
+    # `[wifi] enabled` asks for it. Every Pi board keeps it on.
+    wifi_enabled_default: bool = True
+    # The hello's `board` for a spare device ("" = a Pi, which sends none).
+    board: str = ""
 
 
 # The HAT profile reproduces the client's historical hard-coded defaults
@@ -269,10 +286,47 @@ _RADXA_ZERO3W_VIDEO = DeviceProfile(
 )
 
 
+# A spare Linux laptop or mini PC. Every hardware switch is the plain
+# case: one int16 channel from the system default input (PortAudio asks the
+# sound server for mono), the server's TTS rate as declared, no LEDs.
+_GENERIC_PC = DeviceProfile(
+    name="generic_pc",
+    description="Spare Linux laptop or mini PC (system default mic and speaker)",
+    capture_dtype="int16",
+    capture_channels=1,
+    capture_select_channel=None,
+    led_backend="apa102",         # inert — leds_enabled_default=False below
+    playback_sample_rate=None,
+    led_xvf_host_path="xvf_host",
+    supports_full_duplex=False,   # built-in mic and speakers: no AEC
+    mic_gain_enabled=False,       # the sound server owns input levels
+    mic_gain_card=0,
+    # Laptop fans and a room's hum differ wildly: the gate calibrates.
+    noise_gate_auto_calibrate=True,
+    noise_gate_dbfs=-45.0,
+    barge_require_wake_word=True,
+    vad_during_tts=3,
+    # The ALSA default device: on a desktop install that is PipeWire or
+    # PulseAudio in the user's session, where the speakers are.
+    music_alsa_device="default",
+    leds_num=0,
+    leds_brightness=0,
+    # The volume is the sound server's default sink (wpctl/pactl, found by
+    # engine_platform.AutoVolume); amixer's Master on card 0 is only the
+    # last resort, on a headless box where plain ALSA drives the output.
+    output_mixer_card="0",
+    output_mixer_control="Master",
+    leds_enabled_default=False,
+    wifi_enabled_default=False,
+    board="linux_pc",
+)
+
+
 PROFILES: dict[str, DeviceProfile] = {
     _RESPEAKER_2MIC_HAT.name: _RESPEAKER_2MIC_HAT,
     _XVF3800_USB.name: _XVF3800_USB,
     _RADXA_ZERO3W_VIDEO.name: _RADXA_ZERO3W_VIDEO,
+    _GENERIC_PC.name: _GENERIC_PC,
 }
 
 DEFAULT_PROFILE = _RESPEAKER_2MIC_HAT.name

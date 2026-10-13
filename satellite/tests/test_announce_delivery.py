@@ -221,9 +221,9 @@ def test_the_hello_says_it_has_the_announcement_fix() -> None:
     for the rooms that still need the upgrade."""
     import inspect
 
-    src = inspect.getsource(client.Satellite._run_session)
+    src = inspect.getsource(client.Satellite._hello_frame)
     start = src.index('"type": "hello"')
-    hello = src[start:src.index("json.dumps(hello)", start)]
+    hello = src[start:src.index("return hello", start)]
     assert '"announce_after_session_end": True' in hello
 
 

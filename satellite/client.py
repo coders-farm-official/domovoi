@@ -58,6 +58,7 @@ from satellite import (
     log_buffer,
     log_spool,
     net_settings,
+    pc_engine,
     sound_sync,
     wake_model_sync,
     wifi_profiles,
@@ -588,6 +589,22 @@ class Config:
     health_log_push_interval_sec: float = 30.0
     health_mic_silence_sec: float = 30.0
     health_heartbeat_stale_sec: float = 60.0
+    # Spare computers (generic_pc, S1 2026-10-13); inert on a Pi.
+    # [satellite] room_name: the name it was enrolled with (the tray shows
+    # it; room_id is what it connects as).
+    room_name: str = ""
+    # [pc] permissions: "automatic" (updates and restarts from the core run
+    # on arrival, like a Pi) or "ask" (they wait for the person's OK).
+    permissions: str = "automatic"
+    # [audio] volume_backend: "" = the profile's (amixer on a Pi, "auto"
+    # on a PC: wpctl, then pactl, then amixer).
+    volume_backend: str = ""
+    # [control] enabled: the local control socket; None = the profile's
+    # (on for generic_pc, off on a Pi).
+    control_enabled: bool | None = None
+    # [device] full_duplex on generic_pc: a USB speakerphone that cancels
+    # its own echo. None = the profile's (no).
+    full_duplex_override: bool | None = None
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -662,6 +679,20 @@ class Config:
                 f"Valid values: {', '.join(ACK_MODES)}."
             )
         speech_pause_ms = _speech_pause_ms(listen.get("speech_pause_ms"))
+        pc = d.get("pc", {})
+        permissions = str(pc.get("permissions", "automatic"))
+        if permissions not in ("automatic", "ask"):
+            raise ValueError(
+                f"unknown [pc] permissions {permissions!r}. Valid values: automatic, ask."
+            )
+        volume_backend = str(audio.get("volume_backend", "") or "")
+        if volume_backend and volume_backend not in engine_platform.VOLUME_BACKENDS:
+            raise ValueError(
+                f"unknown [audio] volume_backend {volume_backend!r}. Valid values: "
+                f"{', '.join(engine_platform.VOLUME_BACKENDS)}."
+            )
+        control_enabled = d.get("control", {}).get("enabled")
+        fd_override = d.get("device", {}).get("full_duplex")
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -794,7 +825,7 @@ class Config:
             # WiFi self-heal — see [wifi] in the example config for the
             # incident this defends against. Defaults are tuned for the
             # 2.4 GHz Pi Zero 2 W radio on a typical home network.
-            wifi_enabled=bool(wifi.get("enabled", True)),
+            wifi_enabled=bool(wifi.get("enabled", getattr(profile, "wifi_enabled_default", True))),
             wifi_poll_interval_sec=float(wifi.get("poll_interval_sec", 60.0)),
             wifi_min_healthy_mbits=float(wifi.get("min_healthy_mbits", 5.0)),
             wifi_cooldown_sec=float(wifi.get("cooldown_sec", 300.0)),
@@ -820,6 +851,11 @@ class Config:
             health_log_push_interval_sec=max(5.0, float(healthc.get("log_push_interval_sec", 30.0))),
             health_mic_silence_sec=float(healthc.get("mic_silence_sec", 30.0)),
             health_heartbeat_stale_sec=float(healthc.get("heartbeat_stale_sec", 60.0)),
+            room_name=str(sat.get("room_name", "") or ""),
+            permissions=permissions,
+            volume_backend=volume_backend,
+            control_enabled=control_enabled if isinstance(control_enabled, bool) else None,
+            full_duplex_override=fd_override if isinstance(fd_override, bool) else None,
         )
 
 
@@ -1066,7 +1102,7 @@ def _signal_player(proc: Any, *, kill: bool = False) -> None:
 
 # ─── Satellite ────────────────────────────────────────────────────────────
 
-class Satellite:
+class Satellite(pc_engine.SpareDeviceEngine):
     """Owns the audio I/O threads + the WebSocket connection.
 
     Threads:
@@ -1415,6 +1451,11 @@ class Satellite:
         self._kiosk_alive: bool | None = None
         self._kiosk_thread: threading.Thread | None = None
 
+        # A spare computer's half (satellite/pc_engine.py): mute, the
+        # connection state the tray shows, "ask me" approvals, the control
+        # channel. Inert on a Pi.
+        self._pc_init()
+
     # ── Mic ingestion ─────────────────────────────────────────────────
 
     def _start_voice_input(self, *, fatal: bool) -> bool:
@@ -1448,7 +1489,11 @@ class Satellite:
             if self._voice_input_started or self._voice_gate_closed:
                 return False
             try:
-                self._start_mic()
+                # Muted from this device (a spare computer, kept across
+                # restarts): the mic thread starts, the stream does not;
+                # unmute opens it.
+                if not getattr(self, "_muted", False):
+                    self._start_mic()
                 # Under the SAME guard as the stream, and the flag is set
                 # only once both are up. A half-start is the shape that
                 # hurts: `Thread.start()` raises "can't start new thread"
@@ -1558,7 +1603,8 @@ class Satellite:
             if not self._voice_gate_closed:
                 return
             self._voice_gate_closed = False
-            if self._voice_input_started and self._input_stream is None:
+            if (self._voice_input_started and self._input_stream is None
+                    and not getattr(self, "_muted", False)):
                 try:
                     self._start_mic()
                 except Exception as e:
@@ -3422,7 +3468,12 @@ class Satellite:
         barge-in, chat or a drop-in call, all of which read the same live
         stream. A stream that is None here (a reopen that failed) is one
         that should be live and is not."""
-        return bool(self._voice_input_started and not getattr(self, "_voice_gate_closed", False))
+        return bool(
+            self._voice_input_started
+            and not getattr(self, "_voice_gate_closed", False)
+            # Muted from the device: the stream is closed on purpose.
+            and not getattr(self, "_muted", False)
+        )
 
     def _hcfg(self, name: str, default: Any) -> Any:
         """A [health] setting, with its default for a Config built without
@@ -3994,7 +4045,9 @@ class Satellite:
     # cache (and relative "turn it up" bumps) track the real value.
 
     def _emit_volume_status(self, level: int) -> None:
+        self._last_volume = int(level)
         self._emit_text({"type": "volume_status", "level": int(level)})
+        self._control_notify()
 
     def _emit_voice_status(self) -> None:
         """Tell the server which registered voice we speak in, so it
@@ -4115,6 +4168,16 @@ class Satellite:
         this satellite doesn't have) is refused here, with nothing written,
         rather than written and then crash-looping the service. Anything
         wrong past that, the .bak is the SSH-side manual escape."""
+        if pc_engine.is_pc(getattr(self, "cfg", None)):
+            changes, refused = pc_engine.filter_config_changes(changes)
+            if refused:
+                log.warning(
+                    "set_config: refusing %s — a spare computer's pinned server, "
+                    "its permission and its profile are its owner's to change",
+                    ", ".join(sorted(refused)),
+                )
+            if not changes:
+                return
         try:
             original = CONFIG_PATH.read_text(encoding="utf-8")
         except OSError as e:
@@ -4615,7 +4678,15 @@ class Satellite:
         # files and stage any root work (apt/post-install) via the sudoers
         # helper. STRICTLY best-effort: a payload failure never blocks the
         # code upgrade (plugins degrade; the satellite runs).
+        # A device whose hello did not list `plugin_payloads` (a spare
+        # computer: no root helper) is sent `"plugin_payloads": false`, and
+        # applies none: the payloads run as root on a Pi.
+        skip_payloads = payload.get("plugin_payloads") is False or pc_engine.is_pc(self.cfg)
+        if skip_payloads:
+            log.info("upgrade: plugin payloads not applied on this device (none declared)")
         try:
+            if skip_payloads:
+                raise _SkipPayloads()
             from satellite import plugin_sync
 
             psync = plugin_sync.sync_plugin_payloads(
@@ -4624,6 +4695,8 @@ class Satellite:
             )
             if psync["root_work"]:
                 plugin_sync.request_root_apply(psync["meta"], psync["root_work"])
+        except _SkipPayloads:
+            pass
         except Exception as e:  # noqa: BLE001 — degrade, never block the upgrade
             log.warning("upgrade: plugin payload sync failed (continuing): %s", e)
 
@@ -5549,7 +5622,7 @@ class Satellite:
         full_duplex = bool(payload.get("full_duplex", False))
         # Defence in depth: the server already gates on AEC, but never
         # open the mic-while-playing on a board that would howl.
-        if not full_duplex or not self.cfg.device.supports_full_duplex:
+        if not full_duplex or not pc_engine.full_duplex(self.cfg):
             log.warning("dropin_start refused: room lacks full-duplex AEC")
             self._emit_text({"type": "dropin_end"})
             return
@@ -5623,7 +5696,7 @@ class Satellite:
             log.warning("chat_start refused: another open-mic mode is already active")
             self._emit_text({"type": "chat_end", "reason": "busy"})
             return
-        if not self.cfg.device.supports_full_duplex:
+        if not pc_engine.full_duplex(self.cfg):
             log.warning(
                 "chat_start refused: this board lacks full-duplex AEC; "
                 "an open-mic conversation would capture its own TTS"
@@ -6346,6 +6419,8 @@ class Satellite:
         this is called from the receiver loop. Throttled per process so a
         flapping link re-syncs at most every few hours.
         """
+        if pc_engine.is_pc(self.cfg):
+            return      # its own clock and zone; no root helper, none declared
         now = time.monotonic()
         last = self._time_synced_at
         if last is not None and now - last < self._TIME_SYNC_MIN_INTERVAL_SEC:
@@ -6563,6 +6638,11 @@ class Satellite:
             # cut off, so we never gave the user the heads-up and
             # shouldn't silently kick the WS.
             pi_action = payload.get("pi_action")
+            if pi_action == "restart" and not interrupted and self._held(
+                "restart", "a restart asked for by voice",
+                lambda: self._deferred_pi_action("restart", None),
+            ):
+                pi_action = None
             if pi_action and not interrupted:
                 pi_action_arg = payload.get("pi_action_arg")
                 threading.Thread(
@@ -6643,6 +6723,9 @@ class Satellite:
             # first (via _deferred_pi_action), so we don't cut a response
             # off mid-sentence before bouncing.
             log.info("restart requested by server")
+            if self._held("restart", "the core asked for a restart",
+                          lambda: self._deferred_pi_action("restart", None)):
+                return
             threading.Thread(
                 target=self._deferred_pi_action,
                 args=("restart", None),
@@ -6654,6 +6737,11 @@ class Satellite:
             # (preserving comments), validate, back up, and restart to apply.
             # Run on a worker thread — it ends in a service restart.
             changes = payload.get("changes")
+            if isinstance(changes, dict) and changes and self._held(
+                "config", "settings from the dashboard: " + ", ".join(sorted(map(str, changes))),
+                lambda c=dict(changes): self._apply_config_changes(c),
+            ):
+                return
             if isinstance(changes, dict) and changes:
                 log.info("set_config: %d change(s) from server", len(changes))
                 threading.Thread(
@@ -6736,11 +6824,19 @@ class Satellite:
                 code = _remember_approval_code(payload.get("code"))
                 if code:
                     _setup_status("say-code", code)
+                if pc_engine.is_pc(self.cfg):
+                    # No root helper to say it: the terminal (only a real
+                    # one, never the journal), the tray and the CLI show it.
+                    self._approval_code = code
+                    self._set_conn("awaiting_approval")
+                    pc_engine.show_code_on_tty(code, self.cfg.room_name or self.cfg.room_id)
                 log.info(
                     "waiting for approval on the dashboard (code %s)",
                     "".join("*" for _ in code) if code else "unknown",
                 )
                 return
+            if payload.get("reason") in pc_engine.REFUSALS:
+                self._set_conn("refused", str(payload.get("message") or payload.get("reason")))
             self._leds.set_state("error")
             log.error("server error: %s", payload.get("message"))
             # Treat error like a terminal response so the mic thread
@@ -6765,6 +6861,13 @@ class Satellite:
             # Run on a worker thread — it does blocking HTTP + a tarball
             # backup + a service restart and must not stall the event loop.
             log.info("upgrade requested by server")
+            if self._held(
+                "update",
+                f"new satellite code ({_read_synced_sha() or 'unknown'} → "
+                f"{payload.get('expected_sha') or 'latest'})",
+                lambda p=dict(payload): self._apply_upgrade(p),
+            ):
+                return
             threading.Thread(
                 target=self._apply_upgrade,
                 args=(payload,),
@@ -6819,6 +6922,11 @@ class Satellite:
             # it does blocking HTTP + a service restart and must not stall the
             # asyncio receiver loop.
             slug = payload.get("slug")
+            if self._held(
+                "wake_word", f"the wake word {slug!r} pushed to this room",
+                lambda s_=slug, t_=payload.get("threshold"): self._apply_wake_switch(s_, t_),
+            ):
+                return
             threading.Thread(
                 target=self._apply_wake_switch,
                 args=(slug, payload.get("threshold")),
@@ -6876,6 +6984,69 @@ class Satellite:
         else:
             log.debug("unknown text frame type=%r", t)
 
+    def _hello_frame(self) -> dict[str, Any]:
+        """The `hello` this device opens every session with."""
+        hello: dict[str, Any] = {
+            "type": "hello",
+            "room_id": self.cfg.room_id,
+            # The EFFECTIVE wake word — the sidecar slug a dashboard
+            # push installed, else the [wake] config — so the
+            # server's per-room view matches what we listen for.
+            "wake_word": _effective_wake_word(self.cfg),
+            # Version LABEL of the last applied self-upgrade (Feature
+            # 10), so the dashboard can show which code this room runs.
+            # None until the first upgrade lands. Supersedes the old
+            # hard-coded client_version.
+            "synced_sha": _read_synced_sha(),
+            # Whether this board has on-chip AEC (full duplex), so the
+            # server can gate drop-in / open-mic modes per room.
+            "supports_full_duplex": self.cfg.device.supports_full_duplex,
+            # Per-device pairing token (V002 WS auth). Generated on
+            # first boot; the server binds this room to its sha256 on
+            # first sight (trust-on-first-use) and refuses a later
+            # mismatch. None only if the sidecar couldn't be read/written
+            # (degrades to a tokenless older-style hello).
+            "pairing_token": _effective_pairing_token(),
+            "approval_code": _effective_approval_code(),
+            # Satellite kind ("voice" | "video") — drives which
+            # per-type controls the dashboard offers, and is
+            # persisted server-side for offline display.
+            "sat_type": self.cfg.sat_type,
+            # Whether the voice-input stack is running (false on
+            # mic-less builds) — the server refuses wake-recording /
+            # drop-in / chat for mic-disabled rooms.
+            "mic_enabled": self.cfg.mic_enabled,
+            # This client reports its own pauses (`speech_pause` /
+            # `speech_resume`) and each capture's last voiced frame
+            # whenever the core's `ready` lists the feature, so the
+            # core can transcribe at the first pause and know
+            # exactly whether that transcript covers everything
+            # said. An older core ignores the field.
+            "speech_pause": True,
+            # This client stops a capture on `end_capture` — the
+            # core's early commit. Only a client that says so is
+            # ever ended early; [listen] early_commit=false opts
+            # this room out.
+            "capture_control": self.cfg.early_commit,
+            # A response_start ends whatever stop_playback was
+            # stopping (see _handle_text_frame), so an announcement
+            # after a reconnect or a failed turn plays. The core
+            # warns in its journal for a satellite that does not
+            # say so: it records such announcements as spoken.
+            "announce_after_session_end": True,
+        }
+        # The previous life's last-health record, carried until a
+        # core acknowledges it with `ready` (an older core ignores
+        # the field: it is a new key on an existing message).
+        if self._prev_health is not None:
+            hello["prev_health"] = self._prev_health
+        # A spare computer says what it is and what it can do (its board and
+        # its `supports` list), so the core never sends it a Pi-only frame.
+        # A Pi sends neither key: that is what keeps it exactly as before.
+        if pc_engine.is_pc(self.cfg):
+            hello.update(pc_engine.hello_fields(self.cfg))
+        return hello
+
     async def _run_session(self) -> None:
         assert self._async_shutdown is not None
         url = self.cfg.domovoi_url.rstrip("/") + f"/v1/stream/{self.cfg.room_id}"
@@ -6883,7 +7054,12 @@ class Satellite:
         # it belongs to, and "the address we wrote down once" is not proof
         # of that. A refusal here falls through to the caller's reconnect
         # backoff — the same path a server that is merely down takes.
+        self._set_conn("connecting")
         if not await asyncio.to_thread(_verify_server_identity, self.cfg):
+            failure = _LAST_IDENTITY_FAILURE or "the server could not prove who it is"
+            self._set_conn(
+                "offline" if failure.startswith("could not reach") else "unpinned", failure
+            )
             raise ConnectionError(
                 f"{url} did not prove it is this device's Domovoi server"
             )
@@ -6912,60 +7088,7 @@ class Satellite:
                 # that started during this one.
                 self._offline_drops = 0
                 self._offline_drop_last_log = 0.0
-                hello: dict[str, Any] = {
-                    "type": "hello",
-                    "room_id": self.cfg.room_id,
-                    # The EFFECTIVE wake word — the sidecar slug a dashboard
-                    # push installed, else the [wake] config — so the
-                    # server's per-room view matches what we listen for.
-                    "wake_word": _effective_wake_word(self.cfg),
-                    # Version LABEL of the last applied self-upgrade (Feature
-                    # 10), so the dashboard can show which code this room runs.
-                    # None until the first upgrade lands. Supersedes the old
-                    # hard-coded client_version.
-                    "synced_sha": _read_synced_sha(),
-                    # Whether this board has on-chip AEC (full duplex), so the
-                    # server can gate drop-in / open-mic modes per room.
-                    "supports_full_duplex": self.cfg.device.supports_full_duplex,
-                    # Per-device pairing token (V002 WS auth). Generated on
-                    # first boot; the server binds this room to its sha256 on
-                    # first sight (trust-on-first-use) and refuses a later
-                    # mismatch. None only if the sidecar couldn't be read/written
-                    # (degrades to a tokenless older-style hello).
-                    "pairing_token": _effective_pairing_token(),
-                    "approval_code": _effective_approval_code(),
-                    # Satellite kind ("voice" | "video") — drives which
-                    # per-type controls the dashboard offers, and is
-                    # persisted server-side for offline display.
-                    "sat_type": self.cfg.sat_type,
-                    # Whether the voice-input stack is running (false on
-                    # mic-less builds) — the server refuses wake-recording /
-                    # drop-in / chat for mic-disabled rooms.
-                    "mic_enabled": self.cfg.mic_enabled,
-                    # This client reports its own pauses (`speech_pause` /
-                    # `speech_resume`) and each capture's last voiced frame
-                    # whenever the core's `ready` lists the feature, so the
-                    # core can transcribe at the first pause and know
-                    # exactly whether that transcript covers everything
-                    # said. An older core ignores the field.
-                    "speech_pause": True,
-                    # This client stops a capture on `end_capture` — the
-                    # core's early commit. Only a client that says so is
-                    # ever ended early; [listen] early_commit=false opts
-                    # this room out.
-                    "capture_control": self.cfg.early_commit,
-                    # A response_start ends whatever stop_playback was
-                    # stopping (see _handle_text_frame), so an announcement
-                    # after a reconnect or a failed turn plays. The core
-                    # warns in its journal for a satellite that does not
-                    # say so: it records such announcements as spoken.
-                    "announce_after_session_end": True,
-                }
-                # The previous life's last-health record, carried until a
-                # core acknowledges it with `ready` (an older core ignores
-                # the field: it is a new key on an existing message).
-                if self._prev_health is not None:
-                    hello["prev_health"] = self._prev_health
+                hello = self._hello_frame()
                 await ws.send(json.dumps(hello))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if
@@ -7050,6 +7173,8 @@ class Satellite:
         listening since boot — resyncs right here, exactly as before.
         """
         _remember_approved()
+        self._approval_code = None
+        self._set_conn("connected")
         # Before the opener, because this is the frame that says the core
         # accepts this device: if an earlier `awaiting_approval` tore
         # capture down because the refusal could not be recorded, this is
@@ -7103,6 +7228,8 @@ class Satellite:
         in `__init__`) rather than piling into a queue nothing drains.
         """
         log.info("session ended; signaling mic thread to drop back to wake-word listen")
+        if getattr(self, "_conn_state", None) == "connected":
+            self._set_conn("offline", "the session with the core ended")
         # First, so a frame the mic thread emits while the rest of this
         # runs is dropped rather than queued. Idempotent: on a failed
         # reconnect this runs with the queue already gone.
@@ -7202,6 +7329,8 @@ class Satellite:
             )
 
         self._leds.start()
+        # The local control channel (a spare computer's tray and CLI).
+        await self._start_control()
         # Voice-off seam: a mic-less build ([mic] enabled=false, the video
         # kiosk default) skips capture AND the mic thread — the wake model
         # only ever loads inside _mic_thread_run, so this also skips the
@@ -7326,6 +7455,8 @@ class Satellite:
                         await asyncio.to_thread(self._note_session_ended_before_ready)
                 except (OSError, websockets.WebSocketException) as e:
                     log.warning("connection lost: %s", e)
+                    if getattr(self, "_conn_state", None) not in ("unpinned",):
+                        self._set_conn("offline", str(e))
                     unreachable += 1
                     # One offline_diag entry per failed connect, on a
                     # worker: the sidecar write must not stall the loop.
@@ -7393,6 +7524,7 @@ class Satellite:
                 )
                 self._health_write()
             self._leds.stop()
+            await self._stop_control()
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────
@@ -8127,6 +8259,13 @@ def _forget_approved() -> bool:
 # Set once per process when an unpinned device meets a core that has no
 # identity at all — see _verify_server_identity.
 _SERVER_HAS_NO_IDENTITY = False
+# Why the last identity check refused (for a spare computer's status), or
+# None after one that passed.
+_LAST_IDENTITY_FAILURE: str | None = None
+
+
+class _SkipPayloads(Exception):
+    """Internal: the upgrade applies no plugin payloads on this device."""
 
 
 def _pinned_fingerprint(cfg: "Config") -> tuple[str | None, str]:
@@ -8150,8 +8289,10 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
     identity it meets and returns True, so a device prepared before
     identities keeps connecting exactly as it did. From then on the
     recorded fingerprint is the pin, and a different one is refused."""
-    global _SERVER_HAS_NO_IDENTITY
+    global _SERVER_HAS_NO_IDENTITY, _LAST_IDENTITY_FAILURE
     from satellite import server_identity, sound_sync
+
+    _LAST_IDENTITY_FAILURE = None
 
     expected, source = _pinned_fingerprint(cfg)
     if not expected and _SERVER_HAS_NO_IDENTITY:
@@ -8170,6 +8311,7 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
                 "refusing to connect to %s: %s (pinned from %s)",
                 http_base, e, source,
             )
+            _LAST_IDENTITY_FAILURE = str(e)
             return False
         # An older core. Refusing here would strand every device in the
         # field the moment this code lands.
@@ -8182,6 +8324,7 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
                 "refusing to connect to %s: %s (pinned from %s)",
                 http_base, e, source,
             )
+            _LAST_IDENTITY_FAILURE = str(e)
             return False
         # Unreachable, or an answer we could not make sense of. Nothing to
         # compare against either way, so this is the server's problem to
@@ -8352,7 +8495,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-devices", action="store_true", help="Print sounddevice IDs and exit.")
     parser.add_argument("--input-device", type=int, default=None, help="Override input_device from config.")
     parser.add_argument("--output-device", type=int, default=None, help="Override output_device from config.")
+    pc_engine.add_cli_arguments(parser)
     args = parser.parse_args(argv)
+
+    # Talking to the satellite that is already running (a spare computer's
+    # tray-less CLI): answered through its control channel, nothing started.
+    if pc_engine.wants_cli(args):
+        return pc_engine.cli(args)
 
     if args.list_devices:
         _list_devices()
@@ -8386,6 +8535,17 @@ def main(argv: list[str] | None = None) -> int:
         cfg.output_device = args.output_device
 
     logging.basicConfig(level=cfg.log_level, format=LOG_FORMAT)
+    # An enrolled spare computer never trusts the first server that
+    # answers: no pinned identity, no satellite. Its unit does not restart
+    # it for this exit code (RestartPreventExitStatus).
+    if pc_engine.is_pc(cfg):
+        pinned, detail = pc_engine.require_pin(cfg)
+        if not pinned:
+            log.error("not starting: %s", detail)
+            print(f"domovoi-satellite: {detail}", file=sys.stderr)
+            return engine_platform.EXIT_UNPINNED
+        log.info("spare computer (%s): pinned to %s; updates %s",
+                 cfg.device.name, detail, cfg.permissions)
     # Mirror everything into the in-memory ring the dashboard reads. On the
     # ROOT logger, so third-party output lands there too — websockets'
     # connection errors and sounddevice's PortAudio complaints are exactly

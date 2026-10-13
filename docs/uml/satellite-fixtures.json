@@ -558,7 +558,7 @@
       }
     },
     "linux_pc": {
-      "about": "A Linux laptop running the Python client (S1 draft, 'automatic' mode): the same boolean keys as a Pi plus a `supports` list without Wi-Fi, LEDs, mic gain, plugin payloads, time sync or chat mode. `tray` is a name this core doesn't know: ignored.",
+      "about": "A Linux laptop running the Python client (S1, `generic_pc`): the same boolean keys as a Pi plus board linux_pc and a `supports` list without Wi-Fi, LEDs, mic gain, plugin payloads, time sync or chat mode (no root helpers on a laptop). The hello is the one satellite/pc_engine.py hello_fields() adds, in both permissions: with \"ask me\" an update or a restart is held for the person's OK, not refused.",
       "hello": {
         "type": "hello",
         "room_id": "study",
@@ -581,8 +581,7 @@
           "wake_clips",
           "wake_models",
           "sounds",
-          "voice",
-          "tray"
+          "voice"
         ]
       },
       "ready": {
@@ -614,9 +613,7 @@
           "wake_models"
         ],
         "board": "linux_pc",
-        "unknown_abilities": [
-          "tray"
-        ],
+        "unknown_abilities": [],
         "allowed": [
           "announce_after_session_end",
           "capture_control",

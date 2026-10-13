@@ -23,7 +23,11 @@ websockets>=12.0
 # extension; ships aarch64 wheels for cp313. If you're running on
 # non-ReSpeaker hardware, leave the package installed but set
 # `[leds] enabled = false` in ~/.domovoi/config.toml.
-spidev>=3.6
+#
+# A Pi board only (the marker): a spare x86-64 laptop or mini PC has no SPI
+# LEDs and no wheel to install, and would need a compiler for nothing.
+# satellite/scripts/install-pc.sh drops it on an ARM laptop too.
+spidev>=3.6 ; platform_machine == "aarch64" or platform_machine == "armv7l"
 
 # openwakeword runtime deps (installed explicitly; openwakeword itself goes
 # in with --no-deps to skip its tflite-runtime pin).
@@ -32,7 +36,14 @@ spidev>=3.6
 # on Pi Zero 2 W's Cortex-A53 with a vector::operator[] assertion from the
 # manylinux gcc-toolset-14 build. 1.20.0 is the only known-good cp313+aarch64
 # combo for this hardware.
-onnxruntime==1.20.0
+#
+# The pin is a Pi workaround, so it holds on ARM only (the markers). A spare
+# x86-64 laptop takes a current release: 1.20.0 has no wheel for newer
+# Pythons (Ubuntu 26.04's 3.14), and nothing there trips the A53 bug. The
+# satellite-media wheel fetch evaluates these markers for the board it
+# prepares (domovoi/satellite_media/fetchers.py), not for the server.
+onnxruntime==1.20.0 ; platform_machine == "aarch64" or platform_machine == "armv7l"
+onnxruntime>=1.20.0,<2 ; platform_machine != "aarch64" and platform_machine != "armv7l"
 tqdm>=4.0,<5.0
 scipy>=1.3,<2
 scikit-learn>=1,<2

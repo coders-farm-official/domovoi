@@ -36,7 +36,21 @@
 #                         audio goes out HDMI or a USB DAC (pin [music]
 #                         alsa_device / [audio] output_* for a DAC). See
 #                         VIDEO_SATELLITE.md.
+#
+#   generic_pc          — A spare Linux laptop or mini PC: the system's
+#                         default mic and speaker (through the desktop's
+#                         sound server), no LEDs, no mic-gain tune, no
+#                         Wi-Fi self-heal, no root helpers. Installed and
+#                         enrolled by satellite/scripts/install-pc.sh (see
+#                         docs/SPARE_DEVICE_SATELLITES.md), which writes the
+#                         [pc] section below. Refuses to start without a
+#                         server_fingerprint.
 profile = "respeaker_2mic_hat"
+
+# generic_pc only: a USB speakerphone that cancels its own echo can say so
+# here, and drop-in calls and chat mode open for this room. Leave it off
+# for built-in mics and speakers: a wrong `true` lets a call hear itself.
+# full_duplex = false
 
 [satellite]
 # Logical room name. Becomes the {room_id} in the WebSocket path and is
@@ -68,6 +82,30 @@ domovoi_url = "ws://domovoi.local:6370"
 # VIDEO_SATELLITE.md). Drives which controls the dashboard offers for
 # this satellite. A typo here fails loudly at startup.
 sat_type = "voice"
+
+# The room's name as it was typed when the device was enrolled (spare
+# computers): what the tray shows. room_id is still what it connects as.
+# room_name = "Kid's Room"
+
+[pc]
+# Spare computers (profile = "generic_pc") only; ignored on a Pi.
+#
+# What the Domovoi server may do on its own:
+#   "automatic" — install signed satellite code updates, apply settings
+#                 from the dashboard and restart the satellite as soon as
+#                 the server asks, like a Pi.
+#   "ask"       — hold each of those until you OK it in the tray (or with
+#                 `python -m satellite.client --pending / --approve all`).
+# Either way nothing runs as root: there are no root helpers on a laptop,
+# and plugins that need one on a satellite stay Pi-only. The server can
+# never change this setting.
+permissions = "automatic"
+
+[control]
+# The local control socket (~/.domovoi/control.sock, yours only) the tray
+# and the --status/--mute CLI talk to. On by default for generic_pc, off
+# on a Pi.
+# enabled = true
 
 [mic]
 # Whether the voice-input stack (wake word / VAD / capture) runs at all.
@@ -217,6 +255,13 @@ sync_enabled = true
 # reboot-proof). Find controls with `amixer -c <card> scontrols`.
 # output_mixer_card = "Array"
 # output_mixer_control = "PCM"
+
+# Which volume control the server's volume commands drive: "amixer" (the
+# mixer above; every Pi profile's default), "wpctl" (PipeWire), "pactl"
+# (PulseAudio), "auto" (wpctl, then pactl, then amixer: generic_pc's
+# default — on a desktop the speakers are the sound server's default sink,
+# and amixer's card 0 is often HDMI) or "none".
+# volume_backend = "auto"
 
 [listen]
 # WebRTC VAD aggressiveness while capturing user speech (0–3, higher = stricter).
