@@ -11,7 +11,8 @@ administration is the deliberate exception — see *Settings* below.
 | Layer | Choice |
 |---|---|
 | Language / UI | Kotlin + Jetpack Compose (Material 3) |
-| Min / target SDK | 26 / 35 |
+| Min / target SDK | 26 / 35 (Android 8.0 to 15; what each version gets: [docs/ANDROID_COMPATIBILITY.md](../docs/ANDROID_COMPATIBILITY.md)) |
+| ABIs | arm64-v8a, armeabi-v7a, x86_64, x86 (the on-device assistant on the 64-bit ones only; see *ABIs and APKs*) |
 | Networking | OkHttp + kotlinx.serialization (thin JSON client mirroring `web/static/data.js`) |
 | Realtime | One OkHttp WebSocket to `/ws/state`, subscribe-all, exponential-backoff reconnect (1s → 15s) — `net/StateBus.kt` |
 | Playback | Media3 ExoPlayer behind a `MediaSessionService` (background audio + media notification); one queue for library / radio / podcasts / audiobooks; casting to satellite rooms via the admin music endpoints |
@@ -31,6 +32,47 @@ cd android
 ./gradlew :app:assembleDebug
 # APK lands in app/build/outputs/apk/debug/
 ```
+
+### ABIs and APKs
+
+Every native library the app ships has builds for all four Android ABIs
+except LiteRT-LM, the on-device assistant's engine, which is 64-bit only.
+So a 32-bit APK is the whole app without the on-device assistant, and the
+app hides the assistant there itself (`assistant/AssistantSupport.kt`:
+a 64-bit process whose class loader finds `liblitertlm_jni.so`).
+
+| Library | arm64-v8a | armeabi-v7a | x86_64 | x86 | From |
+|---|---|---|---|---|---|
+| `liblitertlm_jni.so` (on-device assistant) | yes | — | yes | — | LiteRT-LM 0.18.0 AAR |
+| `libonnxruntime.so`, `libonnxruntime4j_jni.so` (phone voice, speech) | yes | yes | yes | yes | onnxruntime-android 1.28.0 AAR |
+| `libsherpa-onnx-jni.so` (speech recognition, voice detection) | yes | yes | yes | yes | built here, `native/sherpa-onnx/` |
+| `libandroidx.graphics.path.so`, `libdatastore_shared_counter.so` | yes | yes | yes | yes | AndroidX |
+
+What a build carries (`app/build.gradle.kts`):
+
+```bash
+./gradlew :app:assembleDebug                              # default: ONE APK, arm64-v8a + x86_64 (a phone and the emulator)
+./gradlew :app:assembleDebug -Pdomovoi.abis=arm64-v8a     # one APK, only those ABIs (comma list, or "all")
+./gradlew :app:assembleDebug -Pdomovoi.apkPerAbi          # one APK PER ABI, all four: app-<abi>-debug.apk
+./gradlew :app:bundleRelease                              # an App Bundle with all four ABIs
+```
+
+- The **default stays one APK for a phone and the emulator**, so the dev
+  loop and the emulator harness install the same file as before. All four
+  ABIs in one APK would add about 60 MB of 32-bit libraries (stored
+  uncompressed) that a 64-bit phone never loads.
+- **One APK per ABI** is what a GitHub release attaches; each carries only
+  its own ABI's libraries, and the armeabi-v7a and x86 ones carry no
+  LiteRT-LM. They share one `versionCode`, so a phone can move from one to
+  another with an ordinary update (same signing key).
+- An **App Bundle** (any `bundle*` task) carries all four ABIs unless
+  `domovoi.abis` says otherwise, and keeps Play's default split by ABI
+  (`bundle { abi { enableSplit = true } }`): Play builds one APK per ABI
+  from it and gives each phone only its own. A 32-bit phone gets the
+  armeabi-v7a split, with no LiteRT-LM; a 64-bit phone the arm64-v8a one.
+  To see what a given phone would get:
+  `bundletool build-apks --bundle=app-release.aab --output=x.apks --device-spec=phone.json`
+  with e.g. `{"supportedAbis": ["armeabi-v7a"], "sdkVersion": 26, "screenDensity": 320, "supportedLocales": ["en-US"]}`.
 
 ## Release-signed builds
 
