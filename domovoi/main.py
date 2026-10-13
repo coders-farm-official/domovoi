@@ -66,6 +66,7 @@ from domovoi.db.repositories import (  # noqa: E402
 )
 from domovoi.db.repositories import VoicesRepository  # noqa: E402
 from domovoi import satellite_abilities, satellite_health  # noqa: E402
+from domovoi import satellite_upgrades  # noqa: E402
 from domovoi.guest_queue import (  # noqa: E402
     GUEST_ADD_MAX_TRACKS,
     GUEST_QUEUE_MAX_ENTRIES,
@@ -604,6 +605,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # are behind the core's current SHA. None means the Pi has never
     # synced. Cleared on disconnect.
     app.state.satellite_synced_sha = {}
+    # The satellite upgrades this core asked for and how each ended
+    # (domovoi/satellite_upgrades.py): room → record, from the request until
+    # the satellite says hello again, then kept a while. NOT cleared on
+    # disconnect: the restart in the middle of an upgrade is one.
+    app.state.satellite_upgrades = {}
     # Live drop-in pairings: room_id → peer room_id (both directions).
     app.state.active_dropins = {}
     app.state.dropin_lock = asyncio.Lock()
@@ -1504,6 +1510,8 @@ async def admin_snapshot() -> dict[str, Any]:
     Pi's WiFiWatcher; `resumable_music` is the per-room "stream the
     Pi was playing before the last non-music turn interrupted it."
     """
+    import time
+
     from domovoi.workers.lyrics_index import lyrics_index_status
     # active_dropins is keyed by room_id in both directions; emit one row
     # per call (the initiator side) so the web UI can list live drop-ins
@@ -1584,6 +1592,13 @@ async def admin_snapshot() -> dict[str, Any]:
         # frame) so the dashboard can flag satellites behind the core.
         # None for a room means it has never synced its code.
         "satellite_synced_sha": dict(app.state.satellite_synced_sha),
+        # Per-room satellite upgrades under way or just finished
+        # (domovoi/satellite_upgrades.py: running | done | rolled_back |
+        # no_news), so every dashboard and the app lock a room's Upgrade
+        # button while it runs, a page reload included.
+        "satellite_upgrades": satellite_upgrades.view(
+            getattr(app.state, "satellite_upgrades", {}), time.time()
+        ),
         # The core's own version label (short HEAD SHA, +"-dirty" when
         # the working tree is dirty). "unknown" if git isn't available.
         # Cached: the dashboard polls this endpoint every 1.5 s and the
@@ -2160,7 +2175,13 @@ async def admin_satellite_upgrade(
     doesn't reconnect within the deadline. 503 when nothing is connected,
     404 when this room isn't. 423 while the container guard has an open
     tamper incident (docs/CONTAINER_GUARD.md): the upgrade also pushes the
-    plugin payloads that run as root on the Pi."""
+    plugin payloads that run as root on the Pi.
+
+    One at a time per room (domovoi/satellite_upgrades.py): from the request
+    until the satellite says hello again the room is upgrading — the
+    snapshot says so, and every Upgrade button locks on it — and a second
+    request meanwhile is 409, since a second ``upgrade`` frame mid-sync
+    would start a second sync and backup over the first."""
     import time
 
     from domovoi.db.repositories import IntentLogRepository
@@ -2177,13 +2198,40 @@ async def admin_satellite_upgrade(
     _require_declared(target, "code_sync", "a code sync")
 
     expected_sha = await git_version.current_sha()
+    # No await between the check and the record: two presses can't both pass.
+    upgrades: dict[str, Any] | None = getattr(app.state, "satellite_upgrades", None)
+    if upgrades is None:
+        upgrades = app.state.satellite_upgrades = {}
+    now = time.time()
+    under_way = satellite_upgrades.running(upgrades, body.room_id, now)
+    if under_way is not None:
+        asked = int(now - under_way["started_at"])
+        left = max(0, int(under_way["deadline"] - now))
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{body.room_id} is already upgrading (asked {asked} s ago); "
+                f"it is done when the satellite is back on the new code, "
+                f"or in {left} s if it never says"
+            ),
+        )
+    reconnect = settings.satellite_upgrade_reconnect_timeout_sec
+    record = satellite_upgrades.start(
+        upgrades, body.room_id,
+        expected_sha=expected_sha,
+        from_sha=(getattr(app.state, "satellite_synced_sha", None) or {}).get(body.room_id),
+        now=now,
+        window=satellite_upgrades.window_sec(reconnect),
+    )
     started = time.monotonic()
     try:
         await target.request_upgrade(
             expected_sha=expected_sha,
-            reconnect_timeout=settings.satellite_upgrade_reconnect_timeout_sec,
+            reconnect_timeout=reconnect,
         )
     except Exception as e:
+        # Nothing went out: nothing is under way.
+        satellite_upgrades.forget(upgrades, body.room_id, record)
         log.warning("admin upgrade to room=%s failed: %s", body.room_id, e)
         raise HTTPException(
             status_code=502, detail=f"couldn't reach satellite: {e}"
@@ -2198,7 +2246,14 @@ async def admin_satellite_upgrade(
             online=True,
             latency_ms=int((time.monotonic() - started) * 1000),
         )
-    return {"requested": True, "room_id": body.room_id, "expected_sha": expected_sha}
+    return {
+        "requested": True,
+        "room_id": body.room_id,
+        "expected_sha": expected_sha,
+        # The record the snapshot carries from now on (its started_at is
+        # what a page that pressed compares later answers with).
+        "upgrade": satellite_upgrades.view(upgrades, time.time()).get(body.room_id),
+    }
 
 
 # ─── Custom wake-word admin endpoints (Feature 5) ────────────────────────

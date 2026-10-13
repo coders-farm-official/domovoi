@@ -730,6 +730,75 @@ const SatTimerScopeControl = ({ s, fire, refresh }) => {
   );
 };
 
+/* ---- A satellite upgrade under way -------------------------------
+ * The Domovoi server keeps a record per room from an upgrade request until
+ * the satellite says hello again (domovoi/satellite_upgrades.py, the list
+ * row's `upgrade`): `running`, then `done` (back on the new code),
+ * `rolled_back` (back on its old code: the new code didn't stay up) or
+ * `no_news` (never came back with an answer; a sync that fails before the
+ * restart leaves it online on its old code without a word). The Upgrade
+ * button locks on `running` the way Settings → Version locks on
+ * restart_in_progress: across a reload and in every tab, and the server
+ * refuses a second request meanwhile (409).
+ *
+ * satUpgradePresses holds THIS page's presses, room → { at, expected,
+ * serverStartedMs }, kept while the drawer is closed and opened again: the
+ * button locks the moment the server says yes, before any list carries the
+ * record. A record started at or after the press's own is the press's. A
+ * server that keeps no records (an older core) ends the press when the
+ * satellite reports the expected version, or after SAT_UPGRADE_WAIT_MS. */
+const satUpgradePresses = new Map();
+const SAT_UPGRADE_WAIT_MS = 6 * 60 * 1000;
+const SAT_UPGRADE_FINISHED = ['done', 'rolled_back', 'no_news'];
+
+const satUpgradeView = (s, press, now = Date.now()) => {
+  const rec = s && s.upgrade && typeof s.upgrade === 'object' && typeof s.upgrade.state === 'string'
+    ? s.upgrade : null;
+  const recMs = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
+  const of = (state, r, expected, startedMs) => ({ state, running: state === 'running', rec: r, expected, startedMs });
+  if (press) {
+    const ours = !!rec && Number.isFinite(recMs) && press.serverStartedMs != null
+      && recMs >= press.serverStartedMs - 1000;
+    if (ours) return of(rec.state, rec, rec.expected_sha || press.expected, recMs);
+    if (press.outcome) {
+      return rec && rec.state === 'running'
+        ? of('running', rec, rec.expected_sha, Number.isFinite(recMs) ? recMs : null)
+        : of(press.outcome, null, press.expected, press.at);
+    }
+    // No record to wait for (a server that keeps none): the satellite's own
+    // version says it.
+    if (press.serverStartedMs == null && press.expected
+        && s.status === 'online' && s.version === press.expected) {
+      return of('done', null, press.expected, press.at);
+    }
+    // Never a word, and no record (or one long gone): stop waiting.
+    if (now - press.at > SAT_UPGRADE_WAIT_MS) return of('no_news', null, press.expected, press.at);
+    return of('running', null, press.expected, press.at);
+  }
+  if (rec) return of(rec.state, rec, rec.expected_sha, Number.isFinite(recMs) ? recMs : null);
+  return of(null, null, null, null);
+};
+
+// "1:05"
+const satUpgradeClock = (ms) => {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+};
+
+// How an upgrade ended, in a sentence (the toast) or a line (the drawer).
+const satUpgradeOutcome = (room, v, { line = false } = {}) => {
+  const to = v.expected || 'the new code';
+  if (v.state === 'done') return line ? `upgraded to ${to}` : `${room} upgraded — now on ${to}`;
+  const back = v.rec && v.rec.back_sha;
+  if (v.state === 'rolled_back') {
+    return `${line ? 'came back' : `${room} came back`} on its old code${back ? ` (${back})` : ''}: the new code didn’t stay up, so it rolled back — its Logs tab says why`;
+  }
+  if (v.state === 'no_news') {
+    return `${line ? 'didn’t' : `${room} didn’t`} come back on ${to} in time — if it still shows its old version, the sync failed before the restart; its Logs tab says why`;
+  }
+  return '';
+};
+
 const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
@@ -759,6 +828,49 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const canAnnounce = satCan(s, 'announce_after_session_end');
   const notOffered = satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device';
 
+  // The upgrade under way, if any (satUpgradeView above): this page's
+  // press, or the server's record — what a reload or another tab sees.
+  const [press, setPress] = React.useState(() => satUpgradePresses.get(s.room_id) || null);
+  React.useEffect(() => { setPress(satUpgradePresses.get(s.room_id) || null); }, [s.room_id]);
+  // The press in flight: the confirm said yes, the server hasn't answered
+  // (a sign-in prompt may stand in between).
+  const [asking, setAsking] = React.useState(false);
+  const [upgradeErr, setUpgradeErr] = React.useState(null);
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  const upView = satUpgradeView(s, press, nowMs);
+  const upgrading = upView.running;
+  // While it runs: the clock, and a fresh list every few seconds — the
+  // satellite drops off and comes back, and that answer ends the wait.
+  const refreshRef = React.useRef(refresh);
+  refreshRef.current = refresh;
+  React.useEffect(() => {
+    if (!upgrading) return undefined;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    const poll = setInterval(() => {
+      try { if (refreshRef.current) refreshRef.current(); } catch { /* the next tick */ }
+    }, 3000);
+    return () => { clearInterval(tick); clearInterval(poll); };
+  }, [upgrading]);
+  // The wait is over: say how it went, once, and forget the press (the
+  // server's record, when there is one, keeps saying it for a while).
+  const lastUpState = React.useRef(upView.state);
+  React.useEffect(() => {
+    const was = lastUpState.current;
+    lastUpState.current = upView.state;
+    if (was !== 'running' || !SAT_UPGRADE_FINISHED.includes(upView.state)) return;
+    fire(satUpgradeOutcome(s.room_id, upView));
+    if (!press) return;
+    if (upView.rec) {
+      satUpgradePresses.delete(s.room_id);
+      setPress(null);
+    } else {
+      // No record says it (an older server): the press keeps the outcome.
+      const settled = { ...press, outcome: upView.state };
+      satUpgradePresses.set(s.room_id, settled);
+      setPress(settled);
+    }
+  }, [upView.state]);
+
   const sendAnnounce = async () => {
     if (!msg.trim()) {
       fire('type a message first');
@@ -786,6 +898,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   };
 
   const restartSat = async () => {
+    if (upgrading) { fire(`${s.room_id} is upgrading — it restarts itself when the new code is in`); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     if (!window.confirm(`Restart the ${s.room_id} satellite? It'll drop offline for a few seconds while the service bounces.`)) return;
     try {
@@ -797,6 +910,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   };
 
   const upgradeSat = async () => {
+    if (upgrading || asking) return;
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     if (!window.confirm(
       `Upgrade the ${s.room_id} satellite to ${coreSha || 'the latest domovoi code'}?\n\n` +
@@ -806,11 +920,28 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       `Some updates finish at the next boot: if its health card then says ` +
       `"reboot needed", unplug it for a few seconds and plug it back in.`
     )) return;
+    setUpgradeErr(null);
+    setAsking(true);
     try {
-      await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
+      const res = await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
+      // Locked from here until the satellite is back (satUpgradeView).
+      const rec = res && res.upgrade;
+      const startedMs = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
+      const p = { at: Date.now(), expected: (res && res.expected_sha) || coreSha || null,
+                  serverStartedMs: Number.isFinite(startedMs) ? startedMs : null };
+      satUpgradePresses.set(s.room_id, p);
+      setPress(p);
+      setNowMs(Date.now());
       fire(`upgrading ${s.room_id}…`);
+      try { refresh && refresh(); } catch { /* the poll catches up */ }
     } catch (e) {
-      reportMutationFailure(fire, 'upgrade', e);
+      // Refused, failed or cancelled: the button stays offered, and says why.
+      const msg = reportMutationFailure(fire, 'upgrade', e);
+      if (msg) setUpgradeErr(msg);
+      // 409: one is already under way (another tab, the app): the list says so.
+      if (e && e.status === 409) { try { refresh && refresh(); } catch { /* next poll */ } }
+    } finally {
+      setAsking(false);
     }
   };
 
@@ -1081,12 +1212,17 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
           {needsUpgrade && canUpgrade && <Pill tone="warn">needs upgrade</Pill>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button icon="refresh-cw" disabled={s.status !== 'online' || !canRestart} onClick={restartSat}>
+          {/* Nothing else restarts it mid-upgrade: a restart during the sync
+              would leave a half-copied tree with no rollback armed. */}
+          <Button icon="refresh-cw" disabled={upgrading || s.status !== 'online' || !canRestart} onClick={restartSat}
+                  title={upgrading ? 'it restarts itself when the new code is in' : undefined}>
             Restart satellite
           </Button>
           <Button variant={needsUpgrade && canUpgrade ? 'primary' : 'secondary'} icon="download-cloud"
-                  disabled={s.status !== 'online' || upToDate || !canUpgrade} onClick={upgradeSat}>
-            Upgrade satellite
+                  disabled={upgrading || asking || s.status !== 'online' || upToDate || !canUpgrade}
+                  title={upgrading ? 'an upgrade is under way — this unlocks when the satellite is back' : undefined}
+                  onClick={upgradeSat}>
+            {upgrading || asking ? 'Upgrading…' : 'Upgrade satellite'}
           </Button>
           <Button icon="shield-off" disabled={!(s.pairing && s.pairing.paired)} onClick={resetPairing}>
             Reset pairing
@@ -1135,6 +1271,34 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             </Button>
           )}
         </div>
+        {upgrading && (
+          <div className="sat-upgrade-progress" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 8 }}>
+            {s.status === 'online'
+              ? `Syncing its code${upView.expected ? ` to ${upView.expected}` : ''} from the Domovoi server…`
+              : 'Restarting into the new code…'}
+            {upView.startedMs != null && (
+              <span className="mono" style={{ marginLeft: 6, color: 'var(--fg-faint)' }}>
+                {satUpgradeClock(nowMs - upView.startedMs)}
+              </span>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 2 }}>
+              It drops offline while it restarts. This unlocks when it is back on the new
+              code, usually within a couple of minutes.
+            </div>
+          </div>
+        )}
+        {!upgrading && SAT_UPGRADE_FINISHED.includes(upView.state) && (
+          <div className="sat-upgrade-result" data-state={upView.state}
+               style={{ fontSize: 12, marginTop: 8,
+                        color: upView.state === 'done' ? 'var(--ok)' : 'var(--warn)' }}>
+            {satUpgradeOutcome(s.room_id, upView, { line: true })}
+          </div>
+        )}
+        {upgradeErr && !upgrading && (
+          <div className="sat-upgrade-error" style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>
+            {upgradeErr}
+          </div>
+        )}
         {canRestart && canUpgrade ? (
           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
             restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room

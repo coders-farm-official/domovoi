@@ -448,6 +448,26 @@ class SatelliteDisplay(BaseModel):
     idle_mode: str | None = None
 
 
+class SatelliteUpgrade(BaseModel):
+    """A code upgrade the Domovoi server asked this satellite for, from the
+    request until a while after it ended (domovoi/satellite_upgrades.py).
+    ``state``: ``running`` (asked, not back yet: the Upgrade button stays
+    locked), ``done`` (back on ``expected_sha``), ``rolled_back`` (back on
+    another version, ``back_sha``: the new code did not stay up) or
+    ``no_news`` (never came back with an answer by ``deadline_at``; a sync
+    that fails before the restart leaves the satellite on its old code
+    without a word, and its log says why). Kept a plain str so a new state
+    never breaks deserialization."""
+
+    state: str
+    expected_sha: str | None = None
+    from_sha: str | None = None
+    back_sha: str | None = None
+    started_at: datetime | None = None
+    deadline_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class SatellitePairing(BaseModel):
     """WS pairing status for a room (V002). ``paired`` is whether a
     ``satellite_pairings`` row exists (the room has claimed its token,
@@ -535,6 +555,11 @@ class Satellite(BaseModel):
     # before) and for an offline room.
     board: str | None = None
     supports: list[str] | None = None
+    # A code upgrade under way or just finished (SatelliteUpgrade), from the
+    # Domovoi server snapshot; null when there is none. While ``state`` is
+    # ``running`` the dashboard and the app keep the room's Upgrade button
+    # locked, across a reload, and the server refuses a second one (409).
+    upgrade: SatelliteUpgrade | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────
