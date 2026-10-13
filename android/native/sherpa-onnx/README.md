@@ -12,7 +12,7 @@ phone speaks with Android's own `TextToSpeech` instead
 |---|---|
 | `build.sh` | Rebuilds everything here in a pinned Docker container. |
 | `build-in-container.sh` | The build itself, with every pin. |
-| `jniLibs/<abi>/libsherpa-onnx-jni.so` | arm64-v8a (phones), x86_64 (emulator); stripped, 16 KB pages. |
+| `jniLibs/<abi>/libsherpa-onnx-jni.so` | arm64-v8a (phones), x86_64 (emulator), armeabi-v7a (32-bit phones), x86 (the 32-bit emulator); stripped; the 64-bit ones with 16 KB pages. |
 | `kotlin/` | The Kotlin API those libraries bind to, from the same commit. |
 | `LICENSE`, `licenses/` | sherpa-onnx's licence and every compiled-in dependency's. |
 | `BUILD-INFO.txt`, `SHA256SUMS` | What built it, and the hash of every file here. |
@@ -43,10 +43,17 @@ bash android/native/sherpa-onnx/build.sh --install   # ...and replace the files 
 Docker is required; the container is pinned to CPUs 16-31 by default
 (`SHERPA_BUILD_CPUS`) and removed afterwards. `SHERPA_BUILD_CACHE=<dir>`
 keeps the NDK and ONNX Runtime downloads between runs. Two runs on
-2026-10-12 produced byte-identical libraries. The build fails if any
+2026-10-12 produced byte-identical libraries, and three more the same evening
+after armeabi-v7a and x86 were added (every file in `SHA256SUMS` identical;
+the 64-bit libraries unchanged by the addition). The build fails if any
 espeak-ng, piper-phonemize or TTS string is in the output, and
 `NativeSpeechLibraryTest` (app unit tests) checks the committed files against
-`SHA256SUMS`, the same strings, and 16 KB alignment.
+`SHA256SUMS`, the same strings, each library's ELF class and machine for its
+ABI, and 16 KB alignment for the 64-bit ones.
+
+The 32-bit libraries are for the app's 32-bit APKs (old and budget phones),
+which have no on-device assistant (LiteRT-LM is 64-bit only) but keep
+speech recognition and voice detection for what else needs them.
 
 A version bump changes the pins in `build-in-container.sh` (and the ONNX
 Runtime version in `gradle/libs.versions.toml` and its hashes in

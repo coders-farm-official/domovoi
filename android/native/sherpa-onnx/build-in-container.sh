@@ -42,7 +42,12 @@ APT_PACKAGES=(
   unzip=6.0-28ubuntu4.1
 )
 
-ABIS=(arm64-v8a x86_64)
+# 64-bit: phones (arm64-v8a) and the emulator (x86_64). 32-bit: old and
+# budget phones and Android Go (armeabi-v7a), and the 32-bit emulator image
+# that tests them (x86). The 32-bit APKs have no on-device assistant (its
+# LiteRT-LM is 64-bit only) but keep speech recognition and voice detection.
+# Added in that order so the 64-bit libraries build exactly as before.
+ABIS=(arm64-v8a x86_64 armeabi-v7a x86)
 ANDROID_API=26   # the app's minSdk
 
 # The Kotlin API files the app uses (speech to text, voice detection) and
