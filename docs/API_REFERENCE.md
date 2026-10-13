@@ -368,6 +368,8 @@ body's sha256 against the manifest.
 | `GET /v1/wake-models/manifest` | Open | — | `{relative_path: sha256}` for trained wake-word models (`.onnx` / `.onnx.json`) under the server's wake-models dir. |
 | `GET /v1/wake-models/manifest.sig` | Open | — | The same model list inside the signed envelope, with `channel: "satellite-wake-models"`. A pinned satellite takes only a list its own server signed: the model is what the room listens for, and its body is parsed in the client. |
 | `GET /v1/wake-models/{path}` | Open | — | Serves one wake-model file. Extension-allowlisted and traversal-guarded. |
+| `GET /v1/wake-base/manifest.sig` | Open | — | For a phone in room mode: `{name: sha256}` of the openWakeWord base models (melspectrogram, embedding, the stock wake words, Silero VAD) inside the signed envelope, `channel: "satellite-wake-base"`. Lists only pinned `.onnx` files (`OWW_MODEL_FILES`) the satellite media cache holds with their pinned size and digest; empty until Settings → Satellites → prepare satellite media → Refresh caches has run. Signed only (domovoi/wake_base_models.py). |
+| `GET /v1/wake-base/{name}` | Open | — | One model the list names; `404` for anything else. |
 
 ### 2.3 Capabilities, plugins, and observability
 

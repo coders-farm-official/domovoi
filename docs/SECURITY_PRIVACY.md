@@ -1568,7 +1568,7 @@ its own by editing one line.
 | before each connect | the same challenge, again — an address written down months ago can be answered by something else today |
 | code upgrade | `/v1/satellite-code/manifest.sig`, verified before a single body is fetched; a bad signature writes nothing, and so does a list whose serial is behind the last one this device accepted |
 | plugin payloads | `/v1/satellite-plugins/manifest.sig`, same rule — these are the files whose `post_install` runs as root. The verified envelope is saved beside the mirror, and the root helper verifies it again itself (see below) before it stages or runs anything |
-| sounds and wake models | `/v1/sounds/manifest.sig` and `/v1/wake-models/manifest.sig`, same envelope; every clip and model body is checked against the signed list before it is written. Nothing here is executed, but these are what the room says and what it listens for |
+| sounds and wake models | `/v1/sounds/manifest.sig` and `/v1/wake-models/manifest.sig`, same envelope; every clip and model body is checked against the signed list before it is written. Nothing here is executed, but these are what the room says and what it listens for. A phone in room mode also takes the openWakeWord base models from `/v1/wake-base/manifest.sig` the same way, each body checked against the list AND the pins the core holds |
 | clock and zone | the root helper takes its time source from the root-owned pin, not from an argument the satellite user chose, and makes the server sign for the pinned address before copying its clock |
 
 **The proof names the address.** A signature over a nonce alone proved
@@ -2072,6 +2072,70 @@ socket only — the HTTP reads of the same presence, calendar and satellite
 state still answered the LAN, so polling them was the feed this gate
 denied. They take the household tier now (see *Device tier*, "So is who is
 home"), so the socket and the reads beside it answer the same callers.
+
+## A room phone (Android room mode)
+
+A spare phone or tablet can be a room (docs/SPARE_DEVICE_SATELLITES-android.md;
+`android/.../roommode/`). It speaks the satellite protocol on
+`/v1/stream/{room}` like a Pi and is approved like one (strict pairing, the
+approval card, the code shown on its screen). What it holds, and what it
+does not (owner decision 2026-10-12, "room key only"):
+
+| Holds | Where | Notes |
+|---|---|---|
+| The room's pairing key | `shared_prefs/domovoi-room-vault.xml`, AES-256-GCM under its OWN non-exportable Android Keystore key (`domovoi-room-key`), the household vault's format | 32 random bytes minted on the phone; only its sha256 is ever stored by the core. A new room or server mints a new one |
+| The pinned server fingerprint, the core's address, the room | `shared_prefs/domovoi-room.xml` | From the room code (`domovoi-room:1?core=…&fp=…&room=…`), which carries no secret. Nothing is trusted on first use: the fingerprint is the decision. The core must be a home-network address or name (the app's cleartext list), https or not: a room code from a web page naming a public host is refused, so no room streams its mic out of the house |
+| The approval code, the pushed wake word, the last signed-list serials | `shared_prefs/domovoi-room.xml` | |
+| The listening models and the sound clips | `files/room/` | Each checked against a list our server signed; the openWakeWord base models also against the pins the core holds (`OWW_MODEL_FILES`) |
+| **Not** the household device token | | A phone that is also a household device keeps its token in the app's vault, **unused**: while room mode is on no request carries it (the app's one client asks `RoomStore.isActive` before attaching it, `AppContainer.kt`), the live state socket is closed, and the normal app is locked (`MainActivity` sends anyone to the room screen) until the person exits with the phone's device credential (`KeyguardManager`). Room mode's own requests go out on a client with no token interceptor at all |
+
+Every backup and device-to-device transfer excludes these files, like the
+rest of the app's data.
+
+**Before every connect** the phone proves the core is the pinned one, the
+Pi's way (`satellite/server_identity.py` `verify_server`, ported in
+`RoomIdentity.kt`): `GET <core>/v1/health?challenge=<fresh nonce>&addr=<host:port
+dialed>` must come back signed by the pinned key over the nonce AND that
+address; an unbound answer, another address, another key or a relayed
+answer (`addr_refused`) is refused and nothing is sent. Not the app's
+`IdentityGate`, which proves the web backend on 6369, unbound, per network.
+
+**File lists** — `/v1/wake-base` (the openWakeWord base models, a channel
+added for phones), `/v1/wake-models` and `/v1/sounds` — are taken only
+inside an envelope the pinned key signed (`signature_v2`, freshness by
+serial), and every body only when its digest is the one listed. A model is
+parsed by ONNX Runtime in the app, so a host on the path does not get to
+choose it.
+
+**Network:** the room's traffic is bound to the Wi-Fi (or Ethernet)
+network: with no Wi-Fi the room is offline rather than carrying its
+microphone over mobile data. Plain `ws://` / `http://` on the LAN, as for
+Pi satellites, and only to home-network addresses (the app's cleartext
+rule).
+
+**The microphone:** a foreground service of type microphone, started only
+from the room screen (Android's rule), with Android's notification and
+green dot for as long as it runs. Mute closes the recorder. A drop-in (the
+microphone streamed to another room) is accepted only on a phone with an
+echo canceller and only when the core says the call is full duplex. The
+room screen shows over the lock screen so anyone in the room can see its
+state and mute it; leaving room mode takes the device credential (on a
+phone with no screen lock, a confirmation that says so). The
+notification's Stop asks for the unlock on Android 12+.
+
+**One microphone owner:** room mode, the phone drop-in call, the chat mic
+and the on-device assistant ask `audio/MicArbiter` first; while room mode
+is on the others are refused with words, not silenced by Android.
+
+**Debug builds only:** a test feed (`src/debug`, `DebugFeedReceiver`) can
+replace the room's microphone with recorded audio for the emulator run.
+Its receiver requires `android.permission.DUMP` (adb's shell holds it, an
+installed app cannot) and is not in a release APK; the main code's hook
+(`RoomTestHooks.feed`) is never set there.
+
+**Residual:** a debuggable build can be driven to open the room key by
+anything running as the app (`run-as`, a debugger), as for the household
+token; a release build closes that.
 
 ## Response headers and cross-origin rules
 
