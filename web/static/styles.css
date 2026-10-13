@@ -12,9 +12,17 @@
    shell sat under it, and the phone's tab strip (home · music · …) was
    not on screen at all in Chrome on Android (2026-10-10, a guest could
    not find Music). 100dvh follows the bar. Full-height drawers and the
-   chat page use the same variable. */
-:root { --app-h: 100vh; }
-@supports (height: 100dvh) { :root { --app-h: 100dvh; } }
+   chat page use the same variable.
+   The on-screen keyboard: index.html's viewport asks for
+   interactive-widget=resizes-content, so in Chrome on Android (and the
+   other browsers that honour it) the keyboard shrinks the layout viewport
+   and 100dvh with it, and everything bottom-anchored (the chat composer,
+   the tab strip) sits above the keyboard. A browser that lays the
+   keyboard over the page instead (Safari on iOS) leaves 100dvh alone;
+   there index.html's visualViewport watcher sets --kb-h to the covered
+   height while a text field has the focus (2026-10-13). */
+:root { --app-h: calc(100vh - var(--kb-h, 0px)); }
+@supports (height: 100dvh) { :root { --app-h: calc(100dvh - var(--kb-h, 0px)); } }
 
 .app {
   display: grid;
@@ -1435,6 +1443,64 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .timer-fire-foot .btn { min-height: 44px; }
   .sat-timer-scope { min-height: 44px; }
   .sat-timer-scope input[type="checkbox"] { width: 20px; height: 20px; }
+}
+
+/* The chat page (chat.jsx). It is exactly as tall as the part of .main
+   the screen shows, so the composer sits at the bottom of what the
+   browser shows: above the phone's tab strip (that is .main's own grid
+   row), above the docked player (--player-h, html.mp-docked), above the
+   on-screen keyboard (--app-h), and below the container guard's banner
+   when one shows. .main's bottom padding comes down to its top padding on
+   this page, so nothing is left for .main to scroll: a short thread no
+   longer moves the whole page under a drag (it used to give 64 px, the
+   88 px player allowance less 24), and on a phone the send button is not
+   under the tab strip (it was: 100dvh - 52 - 48 and .main's 16 px top
+   padding came to 72 px past .main's bottom, 2026-10-13).
+   `.narrow` (chat.jsx, by the page's own width: under 666 px, so a 250 px
+   rail would leave the conversation under 400) shows the conversation OR
+   the chat list, never both side by side, and puts the composer on one
+   row: the old two-pane layout left a 77 px strip at 375 px. */
+.chat-page {
+  display: flex; gap: 16px; min-height: 200px;
+  height: calc(var(--app-h) - var(--topbar-h) - 48px - var(--player-h, 0px) - var(--guard-banner-h, 0px));
+}
+.main:has(> .chat-page) { padding-bottom: calc(24px + var(--player-h, 0px)); }
+.chat-rail { width: 250px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.chat-rail-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.chat-rail-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 2px; }
+.chat-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.chat-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-head-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-head-model { font-size: 11px; color: var(--fg-faint); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The thread: overscroll stays in it (no pull-to-refresh mid-reply). */
+.chat-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 14px; padding: 4px 2px; }
+.chat-composer {
+  flex: none; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--card); box-shadow: var(--inner-highlight);
+  padding: 10px; display: flex; flex-direction: column; gap: 8px;
+}
+.chat-composer-row { display: flex; align-items: center; gap: 8px; }
+.chat-input {
+  font: inherit; font-size: 13px; line-height: 1.5; resize: none; border: none; outline: none;
+  background: transparent; color: var(--fg); min-width: 0;
+}
+.chat-page.narrow { gap: 0; }
+.chat-page.narrow .chat-rail { width: auto; flex: 1; min-width: 0; }
+.chat-page.narrow .btn-icon { width: 44px; height: 44px; }
+.chat-page.narrow .chat-composer { padding: 4px; }
+.chat-page.narrow .chat-composer-row { align-items: flex-end; gap: 4px; }
+/* One row: paperclip · the text (it grows to five lines, chat.jsx) · send. */
+.chat-page.narrow .chat-input { flex: 1; padding: 10px 0; max-height: 140px; overflow-y: auto; }
+.chat-page.narrow .chat-send { width: 44px; height: 44px; padding: 0; justify-content: center; flex: none; }
+.chat-page.narrow .chat-send-label { display: none; }
+.chat-page.narrow .chat-new { height: 44px; justify-content: center; }
+@media (max-width: 760px) {
+  .chat-page {
+    height: calc(var(--app-h) - var(--topbar-h) - var(--phone-nav-h) - 32px - var(--player-h, 0px) - var(--guard-banner-h, 0px));
+  }
+  .main:has(> .chat-page) { padding-bottom: calc(16px + var(--player-h, 0px)); }
+  /* 16px: Safari on iOS zooms the page into any smaller text field. */
+  .chat-input { font-size: 16px; }
 }
 
 /* Chat replies rendered as Markdown (chat_markdown.js) */

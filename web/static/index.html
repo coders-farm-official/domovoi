@@ -2,8 +2,49 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- interactive-widget=resizes-content: the on-screen keyboard shrinks
+       the page (and 100dvh, styles.css --app-h) instead of covering its
+       bottom, so the chat composer and the phone's tab strip stay above
+       it (Chrome on Android; browsers that don't know it ignore it). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title>Domovoi Web</title>
+  <script>
+  /* The keyboard in a browser that lays it OVER the page (Safari on iOS,
+   * and any without interactive-widget): the visual viewport is shorter
+   * than the window by the height it covers. While a text field has the
+   * focus and the page isn't pinch-zoomed, that height is --kb-h, which
+   * styles.css takes off --app-h, so the shell (and the chat composer at
+   * its bottom) ends where the keyboard begins. Where the keyboard
+   * resizes the page instead, the two heights stay equal and this sets
+   * nothing. Plain script, in <head>: before the first paint. */
+  (function () {
+    var vv = window.visualViewport;
+    if (!vv) return;
+    var root = document.documentElement;
+    var last = 0;
+    function typing() {
+      var el = document.activeElement;
+      if (!el) return false;
+      if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
+      return el.tagName === 'INPUT' &&
+        !/^(button|checkbox|color|file|hidden|image|radio|range|reset|submit)$/i.test(el.type || '');
+    }
+    function sync() {
+      var kb = Math.round(window.innerHeight - vv.height);
+      if (!(kb > 80 && typing() && Math.abs(vv.scale - 1) < 0.01)) kb = 0;
+      if (kb === last) return;
+      last = kb;
+      if (kb) root.style.setProperty('--kb-h', kb + 'px');
+      else root.style.removeProperty('--kb-h');
+      // The browser may have scrolled the window to reach the field; the
+      // shell now fits above the keyboard, so put it back at the top.
+      if (kb && window.scrollY) window.scrollTo(0, 0);
+    }
+    vv.addEventListener('resize', sync);
+    window.addEventListener('focusin', sync);
+    window.addEventListener('focusout', function () { setTimeout(sync, 0); });
+  })();
+  </script>
   <link rel="stylesheet" href="colors_and_type.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="/vendor/xspreadsheet/xspreadsheet.css">
