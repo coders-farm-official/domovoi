@@ -62,8 +62,10 @@ class Phonemizer(
         val entry = Pronunciations.parseSayItLike(word, say, data.idMap)
         if (entry.ipa != null) return entry
         val phones = mutableListOf<String>()
+        val whole = wholeRespellingArpa(entry.pieces, entry.stressed)
+        val last = entry.pieces.size - 1
         entry.pieces.forEachIndexed { k, piece ->
-            val ph = wordArpa(piece.lowercase()).first.toMutableList()
+            var ph = (whole?.get(k) ?: respellingArpa(piece.lowercase()).first).toMutableList()
             if (k == entry.stressed) {
                 if (ph.none { it.endsWith("1") }) {
                     val j = ph.indexOfFirst { isVowel(it) }
@@ -76,10 +78,15 @@ class Phonemizer(
                     if (!isVowel(p)) continue
                     if (!capital && base(p) in setOf("AH", "ER")) {
                         ph[j] = base(p) + "0"   // an unstressed "uh" / "er" is a schwa
+                    } else if (!capital && k == last && base(p) == "EH" && ph.size == j + 2 && ph.last() in setOf("N", "L", "M")) {
+                        ph[j] = "AH0"           // ...and so is the e of a light last "ren", "sel", "dem"
                     } else if (p.endsWith("1")) {
                         ph[j] = base(p) + "2"
                     }
                 }
+            }
+            if (phones.isNotEmpty() && ph.isNotEmpty() && !isVowel(ph[0]) && ph[0] == phones.last()) {
+                ph = ph.subList(1, ph.size)     // "jen-NIF": one n, not two
             }
             phones += ph
         }
@@ -87,6 +94,40 @@ class Phonemizer(
             throw PronunciationException("$word: '$say' has no vowel sound")
         }
         return entry.copy(phones = phones.toList())
+    }
+
+    /** Whether a dictionary entry only spells [w] out letter by letter
+     *  (CMUdict's abbreviations: "ts" is T IY1 EH1 S). */
+    private fun spelledOut(w: String, phones: List<String>): Boolean =
+        phones == w.flatMap { c -> (LETTERS[c] ?: "?").split(' ') }
+
+    /** One syllable of a respelling -> (ARPAbet, source): the way the
+     *  converter says it as a word on its own, but a syllable no dictionary
+     *  knows (or only spells out) goes by the respelling key
+     *  ([Pronunciations.respellArpa], source "key") before the model or
+     *  spelling. */
+    fun respellingArpa(s: String): Pair<List<String>, String> {
+        val (ph, src) = wordArpa(s)
+        if (src == "model" || src == "spell" || (src == "lex" && spelledOut(s, ph))) {
+            Pronunciations.respellArpa(s)?.let { return it to "key" }
+        }
+        return ph to src
+    }
+
+    /** A respelling of two or more syllables that, run together, is a
+     *  dictionary word with one vowel per syllable and its main stress on
+     *  the syllable the respelling stresses ("CAM-er-on" is cameron): its
+     *  ARPAbet split into the syllables, each syllable's consonants before
+     *  its vowel with it, the last one's after it too; else null. */
+    private fun wholeRespellingArpa(pieces: List<String>, stressed: Int): List<List<String>>? {
+        if (pieces.size < 2) return null
+        val w = pieces.joinToString("").lowercase()
+        val phones = lexPhones(w) ?: return null
+        if (spelledOut(w, phones)) return null
+        val vowels = phones.indices.filter { isVowel(phones[it]) }
+        if (vowels.size != pieces.size || !phones[vowels[stressed]].endsWith("1")) return null
+        val bounds = listOf(0) + vowels.dropLast(1).map { it + 1 } + listOf(phones.size)
+        return pieces.indices.map { k -> phones.subList(bounds[k], bounds[k + 1]) }
     }
 
     // ---------------- word -> ARPAbet ----------------

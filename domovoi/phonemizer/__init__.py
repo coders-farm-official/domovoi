@@ -32,6 +32,7 @@ from .pronunciations import (
     parse_pronunciation_text,
     parse_say_it_like,
     pronunciation_key,
+    respell_arpa,
 )
 
 __all__ = [
@@ -39,7 +40,7 @@ __all__ = [
     "PronunciationError", "default_id_map", "dialect_for_espeak_voice", "fit_to_map",
     "format_pronunciation_text", "get_phonemizer", "load_default_pronunciations",
     "parse_pronunciation_text", "parse_say_it_like", "phoneme_ids", "pronunciation_key",
-    "speaks_anything", "unknown_symbols",
+    "respell_arpa", "speaks_anything", "unknown_symbols",
 ]
 
 _shared = None
