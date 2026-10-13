@@ -18,6 +18,7 @@ administration is the deliberate exception — see *Settings* below.
 | Playback | Media3 ExoPlayer behind a `MediaSessionService` (background audio + media notification); one queue for library / radio / podcasts / audiobooks; casting to satellite rooms via the admin music endpoints |
 | Images | Coil |
 | Alerts | A notification when a timer or reminder goes off anywhere in the house: live over `/ws/state`, plus a local `AlarmManager` mirror for when the socket is down — `alerts/` |
+| On-device assistant | LiteRT-LM running Gemma 4 E2B on the phone, no server needed (64-bit installs with 8 GB of memory or more; see *On-device assistant*) |
 | Settings | Preferences DataStore (server URL, theme, device id, "listening as" person, trusted servers and their pinned identities) — device-local only; server administration hands off to the dashboard. The household token is NOT in it: `data/TokenVault.kt` seals it under an Android Keystore key (see *Security*) |
 
 ## Building
@@ -116,10 +117,12 @@ goes on.
 
 ## First run / offline-local mode
 
-Without a configured server the app runs in **local mode**: just a Music
-and a Videos tab, backed by the device's own media via MediaStore
-(granular `READ_MEDIA_AUDIO` / `READ_MEDIA_VIDEO` permissions on API
-33+). A `connect` chip opens the discovery screen — the web backend on
+Without a configured server (or with one out of reach) the app runs in
+**local mode**: Music, Videos and Files tabs, backed by the device's own
+media via MediaStore (granular `READ_MEDIA_AUDIO` / `READ_MEDIA_VIDEO` /
+`READ_MEDIA_IMAGES` permissions on API 33+) and the folders added to Files,
+plus an **Assistant** tab on a 64-bit install (the on-device assistant,
+below). A `connect` chip opens the discovery screen — the web backend on
 your LAN, e.g. `http://192.168.1.20:6369`, health-checked via
 `/api/health` before accepting. Change it later under Settings →
 Connection. Traffic is plain HTTP on your LAN (same trust model as the
@@ -243,6 +246,94 @@ one credential the app has. The rules, all unit-tested under
   and fails `onAddMediaItems` / `onSetMediaItems` for everyone. The UI
   drives the ExoPlayer directly, so nothing legitimate needed either.
 
+## On-device assistant
+
+Domovoi can answer **on the phone itself**, with no server and, once its
+model is downloaded, no internet: a language model (Gemma 4 E2B, run by
+LiteRT-LM) on the phone's CPU. Text chat in this build; push-to-talk voice
+comes next. The model sees the system prompt and the conversation and
+nothing else: no files, media, contacts, location or any other app data,
+and no tools.
+
+**Where it is.** The **Assistant** tab of local mode (beside Music, Videos
+and Files), so it works with no server at all and in airplane mode. With a
+server connected it is on Home's "everything" grid, in the drawer and the
+rail, and one of the screens Settings → Phone bar can put on the bottom
+bar; it never takes Chat's place (the default bar stays home · music ·
+videos · chat). Its title always says **on this phone**, so it is not
+mistaken for Chat, which talks to the server: the two never share a
+conversation. A shared screen (the kitchen tablet) leaves it off its
+launchers, as it does Chat.
+
+**Who gets it.** A 64-bit install (`assistant/AssistantSupport.kt`; the
+32-bit APKs carry no engine, and nothing offers the assistant there) on a
+phone sold with **8 GB of memory or more** (`assistant/DeviceTier.kt`).
+Android reports a little less than the chips hold (an 8 GB phone 7.2-7.8
+GiB), so the floor is read as the size the phone is sold in; a phone below
+it, or one Android calls low-RAM, gets a plain "this phone can't run the
+assistant" and no controls.
+
+**The model download** (`assistant/ModelCatalog.kt`, `ModelDownloadWork.kt`,
+`ModelDownloader.kt`), the assistant's only network use:
+
+- One file, `gemma-4-E2B-it.litertlm`, 2,588,147,712 bytes (2.41 GiB),
+  Apache-2.0, from the upstream Hugging Face repo pinned to one commit
+  (`resolve/<commit>/`, never `main`), with its SHA-256 compiled in. The
+  setup screen shows the size, the free space it needs (the file plus
+  200 MB) and the licence before anything downloads; with too little room
+  it says how much to free and offers no download button.
+- A WorkManager foreground job (`assistant-models`, a progress
+  notification) that carries on when the app leaves the screen and after
+  a restart. **Wi-Fi only by default**; an "allow mobile data" switch lets
+  it use any network (a running job restarts under the new rule).
+- Resumable: the file is written to `<file>.part` and a dropped connection
+  or a pause resumes with an HTTP `Range` request (a host that answers 200
+  restarts the file). It is hashed while it is written and renamed into
+  place only when the SHA-256 matches; a mismatch is deleted and fetched
+  once more, then reported. Pause keeps the partial file; cancel deletes
+  it.
+- Over the app's own HTTP client without the household token (the same
+  redirect and cleartext rules; an https→http redirect is refused).
+- Stored in `filesDir/models/<id>/` (app-private, outside backups, removed
+  on uninstall). **Delete model** (the assistant's model settings) frees
+  the space; the download can be run again.
+
+**Memory.** The model loads when the assistant shows (about 2.4 s on the
+CPU on the owner's phone) and is freed five minutes after it leaves the
+screen, or at once when Android asks the app for memory, so playback and
+the rest of the app are not starved. **CPU by default**; the GPU is an
+opt-in in the model settings (faster replies on many phones, slower to
+load, about 1.5 GB more memory, and not every phone's driver works; a
+failed GPU load offers the CPU). A long conversation is given to the model
+from its newest turns, as much as fits the model's context.
+
+**Conversations** stay on the phone: one JSON file per conversation in
+`filesDir/assistant/` (app-private, outside backups and device-to-device
+transfer), never sent to a server. The history lists them; each can be
+deleted, and **clear all conversations** deletes every one. A reply's
+long-press shows how it went (time to first words, tokens a second, CPU or
+GPU).
+
+**The benchmark** (Settings → About) stays as a measuring tool: load
+time, time to first words, decode speed, voice turns, memory, network use
+and the 10-minute heat loop, with results to copy. It shares the model
+files with the assistant, and each frees the other's copy of the model
+before loading its own.
+
+**Open-source parts** of the assistant (the licences card in Settings →
+About lists them with their notices; nothing GPL):
+
+| Part | Licence | How it gets here |
+|---|---|---|
+| LiteRT-LM 0.18.0 (the engine) | Apache-2.0 | in the 64-bit APKs |
+| Gemma 4 E2B, instruction-tuned (`.litertlm`) | Apache-2.0 | downloaded by the assistant |
+| AndroidX WorkManager 2.11.2 (the download job) | Apache-2.0 | in every APK |
+| sherpa-onnx 1.13.8, built without text to speech (speech recognition, voice detection); compiled in: Eigen (MPL-2.0, unmodified), nlohmann/json (MIT), kaldi-decoder, kaldi-native-fbank, kaldifst, OpenFst, simple-sentencepiece (Apache-2.0), KISS FFT (BSD-3-Clause) | Apache-2.0 | in every APK; used by the benchmark (and voice, next) |
+| ONNX Runtime 1.28.0 | MIT | in every APK |
+| Moonshine tiny / base, English (speech to text) | MIT | downloaded by the benchmark |
+| Silero VAD v4 (voice detection) | MIT | downloaded by the benchmark |
+| Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice |
+
 ## Settings: device-local only
 
 The app's Settings screen keeps just the tabs that belong to the phone —
@@ -264,7 +355,8 @@ up in local mode automatically.
 
 ```
 app/src/main/java/com/domovoi/app/
-├── AppContainer.kt        # singleton graph: prefs, api, bus, player, alerts
+├── AppContainer.kt        # singleton graph: prefs, api, bus, player, alerts, assistant
+├── assistant/             # on-device assistant: model catalog, store, download job, engine, conversations
 ├── net/                   # ApiClient (data.js analog), StateBus (/ws/state), rememberApi hooks
 ├── alerts/                # timer/reminder notifications + the local alarm mirror (process-wide)
 ├── data/Prefs.kt          # DataStore-backed settings
@@ -275,7 +367,7 @@ app/src/main/java/com/domovoi/app/
     ├── shell/             # adaptive nav: bottom bar (phone) / rail (medium) / sidebar (tablet)
     └── screens/           # home, chat, music, podcasts, audiobooks, videos, images,
                            # news, people, satellites (a Settings tab), calendar, stations, documents,
-                           # local (offline MediaStore music+videos), settings, manual
+                           # local (offline MediaStore music+videos), assistant (on-device), settings, manual
 ```
 
 The app opens on **Home**, as the dashboard opens on `#home`: the house
