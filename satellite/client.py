@@ -52,6 +52,7 @@ from satellite import (
     devices,
     discovery,
     display_power,
+    engine_platform,
     kiosk,
     health,
     log_buffer,
@@ -2170,14 +2171,7 @@ class Satellite:
             #                       and adds imperceptible pause/stop
             #                       latency for music.
             proc = subprocess.Popen(
-                [
-                    "mpg123", "-q",
-                    "-b", "1024",
-                    "--devbuffer", "1.0",
-                    "-o", "alsa",
-                    "-a", self.cfg.music_alsa_device,
-                    url,
-                ],
+                self._platform.audio_out.stream_argv(self.cfg.music_alsa_device, url),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -2471,11 +2465,9 @@ class Satellite:
             if clip is None:
                 log.info("wake ack: no greeting clips here yet; listening at once")
                 return
-            argv = [
-                "mpg123", "-q",
-                *_volume.mpg123_scale_args(self.cfg.tts_playback_gain),
-                "-o", "alsa", "-a", device, str(clip),
-            ]
+            argv = self._platform.audio_out.mp3_argv(
+                device, str(clip), self.cfg.tts_playback_gain
+            )
             cap, what = _ACK_GREETING_CAP_SEC, clip.name
         else:
             try:
@@ -2485,7 +2477,7 @@ class Satellite:
             except OSError as e:
                 log.warning("wake ack: could not write the chime (%s); listening at once", e)
                 return
-            argv = ["aplay", "-q", "-D", device, str(path)]
+            argv = self._platform.audio_out.wav_argv(device, str(path))
             cap, what = _ACK_CHIME_CAP_SEC, "chime"
         played = self._play_ack(argv, cap)
         if played is None:
@@ -3293,47 +3285,45 @@ class Satellite:
         )
         return False
 
+    @property
+    def _platform(self) -> "engine_platform.Platform":
+        """This engine's platform seams (satellite/engine_platform.py): the
+        player argv, the volume control, how it restarts itself. Made on
+        first use, so a Satellite a test builds without __init__ has them
+        too; a Pi gets exactly what it always had."""
+        plat = self.__dict__.get("_platform_seams")
+        if plat is None:
+            plat = engine_platform.for_profile(self.cfg, request_exit=self._request_exit)
+            self.__dict__["_platform_seams"] = plat
+        return plat
+
+    def _request_exit(self, code: int) -> None:
+        """End the process with ``code`` once shutdown has run. A laptop
+        restarts itself this way (engine_platform.EXIT_RESTART): its unit
+        starts the engine again, and no privilege is needed."""
+        self.exit_code = code
+        self.shutdown_event.set()
+        loop = getattr(self, "loop", None)
+        event = getattr(self, "_async_shutdown", None)
+        if loop is not None and event is not None:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                pass
+
     def _restart_service(self) -> bool:
-        """Restart this satellite's own systemd service to apply a config
-        change that needs a fresh process (e.g. an audio-device or LED
-        change pushed from the web UI).
+        """Restart this satellite's own service to apply a config change
+        that needs a fresh process (e.g. an audio-device or LED change
+        pushed from the web UI), or new code.
 
-        Runs `sudo -n /usr/bin/systemctl --no-block restart
-        domovoi-satellite.service`. `--no-block` is load-bearing: a plain
-        synchronous `systemctl restart` issued from INSIDE the unit being
-        restarted shares that unit's cgroup, so systemd can SIGTERM this
-        very process mid-job and leave the service stopped. `--no-block`
-        hands the job to systemd (PID 1), which finishes the restart even
-        after we're killed.
-
-        Returns True when systemctl accepts the job. False on any failure —
-        a missing/incorrect sudoers entry (password prompt), missing
-        binary, timeout, non-zero exit. The matching sudoers line is in
-        `satellite/PROVISIONING.md` (self-restart section).
+        A Pi runs `sudo -n /usr/bin/systemctl --no-block restart
+        domovoi-satellite.service` (the self-restart sudoers line in
+        `satellite/PROVISIONING.md`); a laptop exits with
+        engine_platform.EXIT_RESTART and its unit starts it again. Returns
+        True when the restart is on its way, False when it could not be
+        asked for (a missing sudoers line, a missing binary, a timeout).
         """
-        try:
-            result = subprocess.run(
-                ["sudo", "-n", "/usr/bin/systemctl", "--no-block",
-                 "restart", "domovoi-satellite.service"],
-                capture_output=True, text=True, timeout=10.0,
-            )
-        except FileNotFoundError as e:
-            log.warning("self-restart: missing binary (%s)", e)
-            return False
-        except subprocess.TimeoutExpired:
-            log.warning("self-restart: systemctl timed out after 10s")
-            return False
-        if result.returncode == 0:
-            log.info("self-restart: restart queued — the service will bounce now")
-            return True
-        log.warning(
-            "self-restart failed: rc=%d stdout=%r stderr=%r. Check the "
-            "self-restart sudoers entry in PROVISIONING.md — `sudo -n "
-            "/usr/bin/systemctl --no-block restart domovoi-satellite.service` "
-            "must succeed without prompting for a password.",
-            result.returncode, result.stdout.strip(), result.stderr.strip(),
-        )
-        return False
+        return self._platform.service.restart()
 
     def _emit_wifi_status(self, link: dict[str, Any]) -> None:
         """Push the latest link sample to the server. No-op when
@@ -4153,35 +4143,20 @@ class Satellite:
         self._restart_service()
 
     def _read_output_volume(self) -> int | None:
-        """Current hardware output volume %, or None if no control is
-        configured for this board or amixer can't read it."""
-        ctrl = self.cfg.output_mixer_control
-        if not ctrl:
-            return None
-        try:
-            r = subprocess.run(
-                _volume.get_command(self.cfg.output_mixer_card, ctrl),
-                capture_output=True, text=True, timeout=5.0,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning("amixer get for volume failed: %s", e)
-            return None
-        if r.returncode != 0:
-            log.warning(
-                "amixer get %r on card %s failed: %s",
-                ctrl, self.cfg.output_mixer_card, r.stderr.strip()[:120],
-            )
-            return None
-        return _volume.parse_volume_percent(r.stdout)
+        """Current output volume %, or None if this device has no volume
+        control the engine drives (a Pi board with no mixer control
+        configured) or it can't be read. A Pi's is an amixer control; a
+        laptop's the sound server's default sink."""
+        return self._platform.volume.get()
 
     def _apply_output_volume(self, level: int) -> None:
-        """Set the hardware output volume, then re-read and report it so the
-        server's cache reflects the real level. Best-effort — a board
-        with no configured control, or an amixer failure, is logged and
-        skipped, never raised (a failed volume change must not take down the
-        receiver path)."""
-        ctrl = self.cfg.output_mixer_control
-        if not ctrl:
+        """Set the output volume, then re-read and report it so the server's
+        cache reflects the real level. Best-effort — a board with no
+        configured control, or a failed call, is logged and skipped, never
+        raised (a failed volume change must not take down the receiver
+        path)."""
+        backend = self._platform.volume
+        if not backend.available():
             log.info(
                 "set_volume ignored: no [audio] output_mixer_control configured "
                 "for device profile %r. Set it to this board's ALSA playback "
@@ -4190,26 +4165,19 @@ class Satellite:
             )
             return
         level = _volume.clamp(level)
-        try:
-            r = subprocess.run(
-                _volume.set_command(self.cfg.output_mixer_card, ctrl, level),
-                capture_output=True, text=True, timeout=5.0,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning("amixer set for volume failed: %s", e)
+        if not backend.set(level):
             return
-        if r.returncode != 0:
-            log.warning(
-                "amixer set %r=%d%% on card %s failed: %s",
-                ctrl, level, self.cfg.output_mixer_card, r.stderr.strip()[:120],
-            )
-            return
-        log.info(
-            "output volume set to %d%% (%s on card %s)",
-            level, ctrl, self.cfg.output_mixer_card,
-        )
+        log.info("output volume set to %d%% (%s)", level, self._volume_label())
         actual = self._read_output_volume()
         self._emit_volume_status(actual if actual is not None else level)
+
+    def _volume_label(self) -> str:
+        backend = self._platform.volume
+        chosen = getattr(backend, "chosen", None)
+        backend = (chosen() if callable(chosen) else None) or backend
+        if isinstance(backend, engine_platform.AmixerVolume):
+            return f"{backend.control} on card {backend.card}"
+        return f"the default sink, through {backend.name}"
 
     def _core_probe(self, timeout: float = 3.0) -> str | None:
         """How the core answers a TCP connect right now: ``"accepted"``,
@@ -4496,13 +4464,9 @@ class Satellite:
         self._leds.set_state("error")
         try:
             result = subprocess.run(
-                [
-                    "mpg123", "-q",
-                    *_volume.mpg123_scale_args(self.cfg.tts_playback_gain),
-                    "-o", "alsa",
-                    "-a", self.cfg.music_alsa_device,
-                    str(mp3_path),
-                ],
+                self._platform.audio_out.mp3_argv(
+                    self.cfg.music_alsa_device, str(mp3_path), self.cfg.tts_playback_gain
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -8468,7 +8432,13 @@ def main(argv: list[str] | None = None) -> int:
     # A shutdown someone ASKED for exits 0; one forced by a startup failure
     # exits non-zero so systemd retries it. The unit is Restart=on-failure,
     # so this return value is the difference between a satellite that keeps
-    # trying and one that is simply gone.
+    # trying and one that is simply gone. A laptop that restarts itself
+    # leaves with the code it asked for (engine_platform.EXIT_RESTART),
+    # which its unit answers by starting it again.
+    exit_code = getattr(sat, "exit_code", None)
+    if exit_code is not None:
+        log.info("exiting with %d (%s)", exit_code, sat._platform.service.describe())
+        return int(exit_code)
     if getattr(sat, "fatal_error", None):
         log.error("exiting non-zero so systemd retries: %s", sat.fatal_error)
         return 1

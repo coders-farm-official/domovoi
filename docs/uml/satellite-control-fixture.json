@@ -1,0 +1,229 @@
+{
+  "about": [
+    "The satellite engine's local control channel (spare-device satellites S1, 2026-10-13):",
+    "what the tray, the CLI (python -m satellite.client --status ...) and the installer",
+    "say to the engine running on the same machine. Implemented in satellite/control.py,",
+    "read by satellite/tests/test_control_protocol.py. A Windows satellite reuses the verbs",
+    "and the framing over its own transport (a named pipe), so it can test against this file.",
+    "Documented in docs/uml/satellite-protocol.md, 'The local control channel'."
+  ],
+  "fixture_version": 1,
+  "protocol": 1,
+  "transport": {
+    "linux": "AF_UNIX stream socket ~/.domovoi/control.sock, mode 0600 in a 0700 directory; a peer whose uid (SO_PEERCRED) is neither the engine's nor root is closed at once",
+    "windows": "not built yet: a named pipe, same framing, same verbs"
+  },
+  "framing": {
+    "encoding": "UTF-8 JSON, one object per line, terminated by \\n",
+    "max_line_bytes": 16384,
+    "request": "{\"verb\": <verb>, \"req\": <optional, echoed back>, ...arguments}",
+    "response": "exactly one line per request, in order: {\"ok\": true, \"verb\", \"req\"?, ...result} or {\"ok\": false, \"verb\", \"req\"?, \"error\": <code>, \"message\": <text for a person>}",
+    "watch": "after its response, the connection stays open and gets {\"event\": \"status\", ...status} whenever the status changes; requests may still be sent on it",
+    "idle": "a connection that is not watching is closed after 30 s without a request",
+    "clients": "at most 8 connections at once"
+  },
+  "verbs": {
+    "status": "the engine's status (see Status below)",
+    "watch": "the status now, then an {\"event\": \"status\"} line on every change",
+    "mute": "stop listening: the microphone is closed until unmute (kept across restarts)",
+    "unmute": "listen again",
+    "volume": "no argument: read; `level` 0-100 or `delta` -100..100: set; answers {volume}",
+    "code": "the approval code while waiting for approval: {waiting, code}",
+    "logs-path": "where the engine's log goes: {kind, path, hint}",
+    "identify": "play the room chime now (\"which room is this\"); answers {room}",
+    "approve": "run a pending action (the \"ask me\" permission): `action` = its id, or \"all\"",
+    "decline": "drop a pending action: `action` = its id, or \"all\""
+  },
+  "errors": {
+    "bad_request": "not a JSON object, no verb, or a line too long",
+    "unknown_verb": "a verb this engine doesn't have",
+    "bad_argument": "an argument missing, of the wrong type or out of range",
+    "no_pending": "approve/decline named no pending action",
+    "not_available": "this engine can't do that here (no volume control, no chime)",
+    "failed": "the engine tried and it did not work (the message says why)"
+  },
+  "status": {
+    "protocol": "1",
+    "board": "the hello's board, e.g. linux_pc",
+    "room": "{id, name}: the room id it connects as and the name it was enrolled with",
+    "server": "{url, host, fingerprint, pinned}: the core's socket URL, its host, the pinned fingerprint and whether one is pinned",
+    "dashboard": "the dashboard to open (http://<core host>:6369), or null",
+    "connection": "one of `connections`",
+    "reason": "a short reason for offline / refused / unpinned, else null",
+    "mic": "one of `mic_states`: the mic-live indicator",
+    "output": "one of `output_states`",
+    "volume": "the last known output volume 0-100, or null",
+    "permissions": "automatic | ask",
+    "pending": "[{id, kind, summary, received_at}] held for the person's OK (\"ask me\")",
+    "battery": "{percent, charging} on a device with a battery, else null",
+    "version": "the satellite code's version label (the hello's synced_sha), or null"
+  },
+  "connections": {
+    "connecting": "looking for the core or dialing it",
+    "connected": "a session is up: the core sent `ready`",
+    "awaiting_approval": "the core parked this device: type its code in the dashboard",
+    "offline": "the core can't be reached right now (reason says what failed)",
+    "refused": "the core refused this device (pairing rejected, another device has the room)",
+    "unpinned": "the core at the address could not prove the pinned identity"
+  },
+  "mic_states": ["listening", "capturing", "muted", "off"],
+  "output_states": ["idle", "speaking", "music"],
+  "pending_kinds": {
+    "update": "new satellite code from the core (`upgrade`)",
+    "restart": "a restart the core asked for (`restart`, or a spoken \"restart\")",
+    "config": "settings pushed from the dashboard (`set_config`, ends in a restart)",
+    "wake_word": "a wake-word model pushed to this room (`set_wake_word`, ends in a restart)"
+  },
+  "permissions": ["automatic", "ask"],
+  "engine": {
+    "status": {
+      "protocol": 1,
+      "board": "linux_pc",
+      "room": {"id": "kids-room", "name": "Kid's Room"},
+      "server": {
+        "url": "ws://192.168.0.117:6370",
+        "host": "192.168.0.117",
+        "fingerprint": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "pinned": true
+      },
+      "dashboard": "http://192.168.0.117:6369",
+      "connection": "awaiting_approval",
+      "reason": null,
+      "mic": "off",
+      "output": "idle",
+      "volume": 40,
+      "permissions": "ask",
+      "pending": [],
+      "battery": {"percent": 81, "charging": true},
+      "version": "44f0fff"
+    },
+    "approval_code": "482913",
+    "logs": {"kind": "journal", "path": null, "hint": "journalctl --user -u domovoi-satellite -e"}
+  },
+  "exchanges": [
+    {
+      "name": "status",
+      "request": {"verb": "status", "req": 1},
+      "response": {"ok": true, "verb": "status", "req": 1, "$status": true}
+    },
+    {
+      "name": "code_while_waiting",
+      "request": {"verb": "code"},
+      "response": {"ok": true, "verb": "code", "waiting": true, "code": "482913"}
+    },
+    {
+      "name": "code_once_approved",
+      "engine": {"connection": "connected", "mic": "listening"},
+      "request": {"verb": "code"},
+      "response": {"ok": true, "verb": "code", "waiting": false, "code": null}
+    },
+    {
+      "name": "mute",
+      "engine": {"connection": "connected", "mic": "listening"},
+      "request": {"verb": "mute"},
+      "response": {"ok": true, "verb": "mute", "mic": "muted"}
+    },
+    {
+      "name": "unmute",
+      "engine": {"connection": "connected", "mic": "muted"},
+      "request": {"verb": "unmute"},
+      "response": {"ok": true, "verb": "unmute", "mic": "listening"}
+    },
+    {
+      "name": "volume_read",
+      "request": {"verb": "volume"},
+      "response": {"ok": true, "verb": "volume", "volume": 40}
+    },
+    {
+      "name": "volume_set",
+      "request": {"verb": "volume", "level": 65},
+      "response": {"ok": true, "verb": "volume", "volume": 65}
+    },
+    {
+      "name": "volume_delta_clamps",
+      "request": {"verb": "volume", "delta": 80},
+      "response": {"ok": true, "verb": "volume", "volume": 100}
+    },
+    {
+      "name": "volume_out_of_range",
+      "request": {"verb": "volume", "level": 101},
+      "response": {"ok": false, "verb": "volume", "error": "bad_argument"}
+    },
+    {
+      "name": "volume_both",
+      "request": {"verb": "volume", "level": 10, "delta": 5},
+      "response": {"ok": false, "verb": "volume", "error": "bad_argument"}
+    },
+    {
+      "name": "volume_not_a_number",
+      "request": {"verb": "volume", "level": "65"},
+      "response": {"ok": false, "verb": "volume", "error": "bad_argument"}
+    },
+    {
+      "name": "volume_unavailable",
+      "engine": {"volume_available": false, "volume": null},
+      "request": {"verb": "volume", "level": 50},
+      "response": {"ok": false, "verb": "volume", "error": "not_available"}
+    },
+    {
+      "name": "logs_path",
+      "request": {"verb": "logs-path"},
+      "response": {"ok": true, "verb": "logs-path", "kind": "journal", "path": null,
+                   "hint": "journalctl --user -u domovoi-satellite -e"}
+    },
+    {
+      "name": "identify",
+      "request": {"verb": "identify"},
+      "response": {"ok": true, "verb": "identify", "room": {"id": "kids-room", "name": "Kid's Room"}}
+    },
+    {
+      "name": "approve_pending_update",
+      "engine": {"pending": [{"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code (44f0fff → 9c1d2aa)", "received_at": 1760280060.0}]},
+      "request": {"verb": "approve", "action": "a1b2c3d4e5f6"},
+      "response": {"ok": true, "verb": "approve",
+                   "done": [{"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code (44f0fff → 9c1d2aa)", "received_at": 1760280060.0}],
+                   "pending": []},
+      "ran": ["update"]
+    },
+    {
+      "name": "decline_all",
+      "engine": {"pending": [
+        {"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code", "received_at": 1760280060.0},
+        {"id": "0f9e8d7c6b5a", "kind": "restart", "summary": "the core asked for a restart", "received_at": 1760280070.0}
+      ]},
+      "request": {"verb": "decline", "action": "all"},
+      "response": {"ok": true, "verb": "decline",
+                   "done": [
+                     {"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code", "received_at": 1760280060.0},
+                     {"id": "0f9e8d7c6b5a", "kind": "restart", "summary": "the core asked for a restart", "received_at": 1760280070.0}
+                   ],
+                   "pending": []},
+      "ran": []
+    },
+    {
+      "name": "approve_nothing_pending",
+      "request": {"verb": "approve", "action": "a1b2c3d4e5f6"},
+      "response": {"ok": false, "verb": "approve", "error": "no_pending"}
+    },
+    {
+      "name": "approve_without_action",
+      "request": {"verb": "approve"},
+      "response": {"ok": false, "verb": "approve", "error": "bad_argument"}
+    },
+    {
+      "name": "unknown_verb",
+      "request": {"verb": "reboot", "req": "x"},
+      "response": {"ok": false, "verb": "reboot", "req": "x", "error": "unknown_verb"}
+    },
+    {
+      "name": "not_an_object",
+      "request": ["status"],
+      "response": {"ok": false, "verb": null, "error": "bad_request"}
+    },
+    {
+      "name": "no_verb",
+      "request": {"req": 3},
+      "response": {"ok": false, "verb": null, "req": 3, "error": "bad_request"}
+    }
+  ]
+}

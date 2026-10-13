@@ -227,6 +227,41 @@ does with it, and why it is safe enough on a LAN without TLS:
 [../SPARE_DEVICE_SATELLITES.md](../SPARE_DEVICE_SATELLITES.md) and
 [../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md).
 
+## The local control channel (engine ↔ tray)
+
+Spare-device satellites (S1, 2026-10-13). Not part of the wire protocol
+with the core: this is how programs on the satellite's own machine talk to
+the running engine. On a laptop the engine runs headless (a `systemd
+--user` service, or a system service on a headless box) and an optional
+tray shows it; the CLI (`python -m satellite.client --status`,
+`--approval-code`, `--mute`, `--unmute`, `--pending`, `--approve`,
+`--decline`) and the installer use the same channel.
+
+* **Transport.** Linux: the Unix socket `~/.domovoi/control.sock`, made
+  0600 inside the 0700 config dir; a peer whose uid (`SO_PEERCRED`) is
+  neither the engine's nor root is closed at once. Off on the Pi profiles
+  (a Pi is exactly as before); on for `generic_pc`. A Windows satellite
+  brings a named pipe with the same framing.
+* **Framing.** UTF-8 JSON, one object per line, at most 16 KiB. A request
+  is `{"verb": …, "req": <optional id, echoed>, …arguments}` and gets
+  exactly one response line, in order: `{"ok": true, …}` or `{"ok": false,
+  "error": <code>, "message": …}`. `watch` then keeps the connection and
+  adds `{"event": "status", …}` lines on every change — the tray's
+  mic-live indicator rides on it.
+* **Verbs.** `status`, `watch`, `mute`, `unmute`, `volume` (read, or
+  `level` / `delta`), `code` (the approval code while waiting), `logs-path`,
+  `identify` (play the chime), and for the "ask me" permission `approve` /
+  `decline` a pending `update`, `restart`, `config` or `wake_word`.
+* **Engine seams** (`satellite/engine_platform.py`): the player argv
+  (`AudioOut`), the volume (`VolumeBackend`: amixer on a Pi, `wpctl` /
+  `pactl` on a desktop), the self-restart (`ServiceControl`: sudo'd
+  `systemctl` on a Pi, exit 75 on a laptop, which its unit restarts) and
+  the control transport. A Pi's are byte for byte what they were.
+
+The verbs, errors, status fields and worked exchanges are in
+[`satellite-control-fixture.json`](satellite-control-fixture.json), which
+`satellite/tests/test_control_protocol.py` holds `satellite/control.py` to.
+
 ## Adding to the protocol
 
 Both sides must keep working against the other's older version:
