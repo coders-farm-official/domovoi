@@ -291,3 +291,53 @@ def test_suggestions(driven) -> None:
 
 def test_a_name_refused_here_is_not_suggested_again(driven) -> None:
     assert _names(driven["suggest"]["missing"]) == ["qwen3-vl:2b"]
+
+
+# ── the delete's reason, in Ollama's words ───────────────────────────
+# The page shows the server's detail; for an Ollama refusal that used to
+# be httpx's "Server error '500 Internal Server Error' for url '…' For more
+# information check: https://developer.mozilla.org/…".
+
+def _refusing(status: int, body):
+    import httpx
+
+    async def delete_model(name: str, base_url=None, timeout: float = 30.0) -> None:
+        req = httpx.Request("DELETE", "http://ollama/api/delete")
+        resp = httpx.Response(status, request=req,
+                              **({"json": body} if not isinstance(body, str) else {"text": body}))
+        resp.raise_for_status()
+
+    return delete_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,body,said", [
+    (404, {"error": "model 'qwen3-v1:2b' not found"}, "Ollama said: model 'qwen3-v1:2b' not found"),
+    (500, {"error": {"message": "model is in use"}}, "Ollama said: model is in use"),
+    (500, "<html>oops</html>", "Ollama said: HTTP 500"),
+])
+async def test_a_refused_delete_says_ollamas_reason(monkeypatch, status, body, said) -> None:
+    from fastapi import HTTPException
+
+    from web.backend.api import models as api
+
+    monkeypatch.setattr(api.ollama_client, "delete_model", _refusing(status, body))
+    with pytest.raises(HTTPException) as exc:
+        await api.delete_installed("qwen3-v1:2b")
+    assert exc.value.status_code == 502
+    assert exc.value.detail == said
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_ollama_still_says_delete_failed(monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    from web.backend.api import models as api
+
+    async def boom(name: str, base_url=None, timeout: float = 30.0) -> None:
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(api.ollama_client, "delete_model", boom)
+    with pytest.raises(HTTPException) as exc:
+        await api.delete_installed("x")
+    assert exc.value.detail == "delete failed: connection refused"

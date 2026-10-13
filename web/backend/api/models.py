@@ -349,12 +349,32 @@ async def get_hardware(request: Request):
 @router.delete("/{name:path}", dependencies=[Depends(require_admin_mutation)])
 async def delete_installed(name: str):
     """Delete an installed Ollama model from disk (``/api/delete``).
-    Admin tier: it removes a model the household is using."""
+    Admin tier: it removes a model the household is using.
+
+    When Ollama refuses, the detail is Ollama's own reason ("model 'x' not
+    found"), not httpx's message: that was a status line, the URL and a
+    link to MDN, which is what the Models page put in front of the person
+    (2026-10-13)."""
+    import httpx
+
     try:
         await ollama_client.delete_model(name)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Ollama said: {_ollama_reason(e.response)}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"delete failed: {e}")
     return {"deleted": name}
+
+
+def _ollama_reason(resp: Any) -> str:
+    """The ``error`` of an Ollama error body, else its HTTP status."""
+    try:
+        err = resp.json().get("error")
+    except Exception:  # noqa: BLE001 — not JSON, or not an object
+        err = None
+    if isinstance(err, dict):
+        err = err.get("message")
+    return str(err)[:300] if err else f"HTTP {resp.status_code}"
 
 
 # ─── Pull jobs ───────────────────────────────────────────────────────────────
