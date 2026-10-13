@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AssistantBench
+import com.domovoi.app.assistant.AssistantController
 import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
@@ -105,7 +106,20 @@ class AppContainer(context: Context) {
      *  model download the user starts, on a copy of the app's client WITHOUT
      *  the household token (the models come from public hosts): the same
      *  redirect and cleartext rules, no device token. */
-    val assistantBench: AssistantBench by lazy { AssistantBench(context, modelDownloader, phoneVoice) }
+    private val benchLazy: Lazy<AssistantBench> = lazy {
+        AssistantBench(context, modelDownloader, phoneVoice, beforeLlmLoad = { if (assistantLazy.isInitialized()) assistant.unload() })
+    }
+    val assistantBench: AssistantBench by benchLazy
+
+    /** The on-device assistant (assistant/AssistantController.kt): its model
+     *  download, the language model in memory and the on-phone
+     *  conversations. Built on first use. It never touches the network; the
+     *  download job does, through [modelDownloader]. It and the benchmark
+     *  each free the other's copy of the model before loading their own. */
+    private val assistantLazy: Lazy<AssistantController> = lazy {
+        AssistantController.forApp(context, beforeLoad = { if (benchLazy.isInitialized()) assistantBench.releaseModel() })
+    }
+    val assistant: AssistantController by assistantLazy
 
     /** The phone's own voice (Settings → Voice): Domovoi's Piper voice
      *  through the Kotlin phonemizer once downloaded, the server's "say it

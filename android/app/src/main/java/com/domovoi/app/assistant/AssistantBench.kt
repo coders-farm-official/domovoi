@@ -58,6 +58,9 @@ class AssistantBench(
     private val downloader: ModelDownloader,
     /** The phone's voice: Domovoi's own once downloaded (voice/PhoneVoice). */
     private val voices: VoiceSource? = null,
+    /** Called before the benchmark loads the language model: the assistant
+     *  frees its own copy, so the phone never holds two. */
+    private val beforeLlmLoad: () -> Unit = {},
 ) {
     private val app = context.applicationContext
     val store = ModelStore.forApp(app)
@@ -386,6 +389,12 @@ class AssistantBench(
 
     fun clearResults() = _state.update { it.copy(results = BenchResults(), liveText = "") }
 
+    /** Frees the benchmark's copy of the language model, unless a run is
+     *  using it: the assistant is about to load its own. */
+    fun releaseModel() {
+        if (_state.value.running == null && llm != null) closeLlm()
+    }
+
     fun report(): String =
         renderBenchReport(device, _state.value.results, SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()))
 
@@ -433,6 +442,7 @@ class AssistantBench(
         val key = backend to audio
         llm?.let { if (llmKey == key && it.isLoaded) return it }
         closeLlm()
+        runCatching { beforeLlmLoad() }
         memory("before loading the model")
         step("loading the model on ${backend.name}${if (audio) " with its audio encoder" else ""}")
         val engine = LiteRtLlmEngine(File(app.cacheDir, "litertlm"), audioInput = audio)

@@ -24,8 +24,8 @@ import java.security.MessageDigest
  * SHA-256 matches the catalog is renamed into place; on a mismatch the
  * `.part` is deleted and the file fetched once more before giving up.
  *
- * M0 runs this in the foreground from the benchmark card; M1 moves it into a
- * WorkManager job with the same rules.
+ * It runs inside the WorkManager job ([ModelDownloadWorker]) that both the
+ * assistant's setup screen and the benchmark card start.
  */
 class ModelDownloader(private val http: OkHttpClient) {
 
@@ -36,10 +36,7 @@ class ModelDownloader(private val http: OkHttpClient) {
         IOException("not enough free space: needs $needed bytes, $available available")
 
     /** Bytes of [model] already on disk (verified files and partial ones). */
-    fun bytesDone(model: CatalogModel, store: ModelStore): Long =
-        model.files.sumOf { f ->
-            if (store.isComplete(model, f)) f.size else partOf(store.fileFor(model, f)).let { if (it.isFile) it.length() else 0L }
-        }
+    fun bytesDone(model: CatalogModel, store: ModelStore): Long = store.bytesDone(model)
 
     /**
      * Downloads whatever of [model] is missing into [store] and marks it

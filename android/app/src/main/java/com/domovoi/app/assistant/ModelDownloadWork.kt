@@ -121,6 +121,10 @@ object ModelDownloads {
     const val UNIQUE_WORK = "assistant-models"
     const val UNIQUE_VOICE = "phone-voice"
     const val TAG_MOBILE_DATA = "assistant-models-mobile-data"
+
+    /** Each model a job fetches is also a tag, `model:<id>`, so whoever
+     *  watches the job knows what it is downloading. */
+    const val TAG_MODEL = "model:"
     internal const val KEY_MODELS = "models"
     internal const val KEY_ERROR = "error"
 
@@ -133,7 +137,10 @@ object ModelDownloads {
             .setConstraints(constraints(allowMobileData))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .setInputData(workDataOf(KEY_MODELS to models.map { it.id }.toTypedArray()))
-            .apply { if (allowMobileData) addTag(TAG_MOBILE_DATA) }
+            .apply {
+                if (allowMobileData) addTag(TAG_MOBILE_DATA)
+                models.forEach { addTag(TAG_MODEL + it.id) }
+            }
             .build()
 
     /** Starts (or restarts, with these models and this network rule) the job. */
