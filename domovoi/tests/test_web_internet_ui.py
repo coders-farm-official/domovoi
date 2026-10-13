@@ -662,7 +662,9 @@ def test_configuration_greys_nothing_when_the_internet_is_allowed(driven) -> Non
 def test_voices_grey_the_microsoft_controls_under_never(driven) -> None:
     o = driven["voices_never"]
     assert o["register"] == {"disabled": True, "title": NEEDS}
-    assert o["upload"]["disabled"] is False                                      # local voices stay
+    # local voices stay: the upload is greyed only until a name and both
+    # files are chosen, and says that, never the internet
+    assert o["upload"] == {"disabled": True, "title": "Choose a name, the model, the config first"}
     assert all(o["textInputs"][:2])                                              # the Edge name + id
     assert {"disabled": True, "title": NEEDS} in o["plays"]                      # Aria's sample
     assert {"disabled": False, "title": "Play a sample"} in o["plays"]           # Amy / Ryan

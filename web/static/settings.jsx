@@ -179,9 +179,32 @@ const GreetingsPanel = () => {
  *   DELETE /api/voices/{id}       · remove (refuses the default)
  */
 
-const _voiceFieldStyle = {
-  font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
-  border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
+// The Voices page's fields are the dashboard's own (`cal-inp`: the card
+// colour, the theme's border, the brand focus ring, light and dark); these
+// styles only lay them out.
+const _voiceFieldLayout = { minWidth: 0, boxSizing: 'border-box', maxWidth: '100%' };
+
+// A file picker in the dashboard's style, not the browser's raw "Choose
+// File" button: a themed button opens the hidden input, and the chosen
+// file's name (or "no file chosen") sits beside it.
+const VoiceFilePick = ({ label, accept, file, onPick, disabled = false }) => {
+  const ref = React.useRef(null);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+      <input ref={ref} type="file" accept={accept} hidden aria-label={label}
+             onChange={(e) => {
+               onPick((e.target.files && e.target.files[0]) || null);
+               e.target.value = '';   // picking the same file again still counts
+             }}/>
+      <Button type="button" icon="file" disabled={disabled}
+              onClick={() => ref.current && ref.current.click()}>{label}</Button>
+      <span title={file ? file.name : undefined}
+            style={{ fontSize: 12, color: file ? 'var(--fg)' : 'var(--fg-muted)', minWidth: 0, maxWidth: '100%',
+                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' }}>
+        {file ? file.name : 'no file chosen'}
+      </span>
+    </div>
+  );
 };
 
 // A play button plays the voice it names, or is not shown (owner,
@@ -219,9 +242,9 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, inter
                       disabled={sampling || cloudOff} onClick={() => onPlay(v)}/>
         : <span style={{ width: 28, flex: 'none' }} aria-hidden="true"/>}
       {editing ? (
-        <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
-               onKeyDown={(e) => e.key === 'Enter' && save()}
-               style={{ ..._voiceFieldStyle, flex: 1 }}/>
+        <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} autoFocus
+               aria-label="Voice name" onKeyDown={(e) => e.key === 'Enter' && save()}
+               style={{ ..._voiceFieldLayout, flex: 1, minWidth: 120 }}/>
       ) : (
         <div style={{ flex: 1, minWidth: 120 }}>
           <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
@@ -266,11 +289,11 @@ const RegisterEdge = ({ onAdd, internetOff = false }) => {
   return (
     <form onSubmit={submit}
           style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Aria)"
-             disabled={internetOff} style={{ ..._voiceFieldStyle, width: 160 }}/>
-      <input value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
-             placeholder="Edge voice id (e.g. en-US-AriaNeural)" disabled={internetOff}
-             style={{ ..._voiceFieldStyle, flex: 1, minWidth: 220 }}/>
+      <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Aria)"
+             aria-label="Name" disabled={internetOff} style={{ ..._voiceFieldLayout, flex: '1 1 140px' }}/>
+      <input className="cal-inp" value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
+             placeholder="Edge voice id (e.g. en-US-AriaNeural)" aria-label="Edge voice id" disabled={internetOff}
+             style={{ ..._voiceFieldLayout, flex: '3 1 220px' }}/>
       <Button variant="primary" icon="cloud" type="submit" disabled={internetOff}
               title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Register</Button>
       {internetOff && <NeedsInternetNote compact/>}
@@ -280,22 +303,23 @@ const RegisterEdge = ({ onAdd, internetOff = false }) => {
 
 const UploadPiper = ({ onUpload }) => {
   const [name, setName] = React.useState('');
-  const onnxRef = React.useRef(null);
-  const jsonRef = React.useRef(null);
+  const [onnx, setOnnx] = React.useState(null);
+  const [json, setJson] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  // "Upload voice" can only work with a name and both files: until then it
+  // is greyed and says what is missing.
+  const missing = [!name.trim() && 'a name', !onnx && 'the model', !json && 'the config'].filter(Boolean);
 
   const submit = async (e) => {
     e?.preventDefault?.();
     const n = name.trim();
-    const onnx = onnxRef.current?.files?.[0];
-    const json = jsonRef.current?.files?.[0];
     if (!n || !onnx || !json) return;
     setBusy(true);
     try {
       await onUpload(n, onnx, json);
       setName('');
-      if (onnxRef.current) onnxRef.current.value = '';
-      if (jsonRef.current) jsonRef.current.value = '';
+      setOnnx(null);
+      setJson(null);
     } finally {
       setBusy(false);
     }
@@ -303,19 +327,14 @@ const UploadPiper = ({ onUpload }) => {
 
   return (
     <form onSubmit={submit}
-          style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
-             style={{ ..._voiceFieldStyle, width: 200 }}/>
-      <label style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        Model (.onnx)
-        <input ref={onnxRef} type="file" accept=".onnx" style={{ display: 'block', marginTop: 4 }}/>
-      </label>
-      <label style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        Config (.onnx.json)
-        <input ref={jsonRef} type="file" accept=".json" style={{ display: 'block', marginTop: 4 }}/>
-      </label>
+          style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px' }}>
+      <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
+             aria-label="Name" style={{ ..._voiceFieldLayout, width: 240 }}/>
+      <VoiceFilePick label="Model (.onnx)" accept=".onnx" file={onnx} onPick={setOnnx} disabled={busy}/>
+      <VoiceFilePick label="Config (.onnx.json)" accept=".json" file={json} onPick={setJson} disabled={busy}/>
       <div>
-        <Button variant="primary" icon="upload" type="submit" disabled={busy}>
+        <Button variant="primary" icon="upload" type="submit" disabled={busy || missing.length > 0}
+                title={missing.length ? `Choose ${missing.join(', ')} first` : undefined}>
           {busy ? 'Uploading…' : 'Upload voice'}
         </Button>
       </div>
@@ -339,9 +358,11 @@ const UploadPiper = ({ onUpload }) => {
  *   POST   /api/voice/pronunciations/preview   · {word, say_like, voice?} → WAV (device tier)
  */
 
-const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters. Split the syllables with hyphens '
-  + 'and write the stressed one in CAPITALS: Domovoi = DOH-moe-voy, Nguyen = win. '
-  + 'Advanced: the voice’s own phonemes between slashes, /wɪn/.';
+const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters, the syllables split by hyphens and the '
+  + 'stressed one in CAPITALS: Domovoi = DOH-moe-voy, Kamron = KAM-ren, Siobhan = shiv-AWN, Nguyen = win. '
+  + 'The other syllables are said lightly. Sounds as dictionaries spell them: uh (but), ay (say), ee (see), '
+  + 'oh (go), oo (too), ow (now), zh (measure). Advanced: the voice’s own phonemes between slashes, /wɪn/ '
+  + '(hover a play button you have heard to see them).';
 
 const VoiceSettingsCards = ({ fire }) => {
   const { data, loading, error, refresh } = useApiObject('/api/voice');
@@ -352,6 +373,9 @@ const VoiceSettingsCards = ({ fire }) => {
   const [busy, setBusy] = React.useState(null);      // what is playing / saving
   const [word, setWord] = React.useState('');
   const [sayLike, setSayLike] = React.useState('');
+  // The voice's phonemes of each word heard here (lower-cased word -> the
+  // string): advanced detail, on the play buttons' hover, not in the toast.
+  const [heard, setHeard] = React.useState({});
   const audioRef = React.useRef(null);
   const view = current || data;
 
@@ -363,13 +387,18 @@ const VoiceSettingsCards = ({ fire }) => {
   React.useEffect(() => stopAudio, []);
 
   // Play a WAV the server synthesizes; `key` marks which button is busy.
-  const playFrom = async (key, path, opts) => {
+  // `say`: a "say it like" preview, toasted in plain words ("Kamron →
+  // KAM-ren"), its phonemes kept for the button's hover.
+  const playFrom = async (key, path, opts, say) => {
     stopAudio();
     setBusy(key);
     try {
       const r = await apiFetchRaw(path, opts || {});
       const phon = r.headers.get('X-Phonemes');
-      if (phon) fire(`🔊 ${decodeURIComponent(phon)}`);
+      if (say) {
+        fire(`🔊 ${say.word} → ${say.sayLike}`);
+        if (phon) setHeard((h) => ({ ...h, [say.word.toLowerCase()]: decodeURIComponent(phon) }));
+      }
       const said = r.headers.get('X-Sample-Text');
       if (said) fire(`🔊 ${decodeURIComponent(said)}`);
       const url = URL.createObjectURL(await r.blob());
@@ -406,7 +435,12 @@ const VoiceSettingsCards = ({ fire }) => {
   const preview = (w, s) => playFrom(`say:${w}`, '/api/voice/pronunciations/preview', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ word: w, say_like: s }),
-  });
+  }, { word: w, sayLike: s });
+  // "Hear it", with the voice's phonemes on hover once it has been heard.
+  const hearTitle = (w, base) => {
+    const ph = heard[(w || '').toLowerCase()];
+    return ph ? `${base} (the voice’s phonemes: /${ph.replace(/[.!?]$/, '')}/)` : base;
+  };
   const addEntry = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
     const w = word.trim(); const s = sayLike.trim();
@@ -433,7 +467,6 @@ const VoiceSettingsCards = ({ fire }) => {
     );
   }
   const lock = admin ? undefined : 'Sign in as an admin to change this';
-  const fieldStyle = { ..._voiceFieldStyle };
 
   return (
     <React.Fragment>
@@ -476,7 +509,7 @@ const VoiceSettingsCards = ({ fire }) => {
         {view.pronunciations.map((p) => (
           <div key={p.word} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
                                      borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
-            <IconButton name={busy === `say:${p.word}` ? 'loader' : 'play'} title="Hear it"
+            <IconButton name={busy === `say:${p.word}` ? 'loader' : 'play'} title={hearTitle(p.word, 'Hear it')}
                         disabled={!!busy} onClick={() => preview(p.word, p.say_like)}/>
             <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontWeight: 500 }}>{p.word}</div>
             <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontFamily: 'var(--font-mono, monospace)' }}>{p.say_like}</div>
@@ -486,11 +519,15 @@ const VoiceSettingsCards = ({ fire }) => {
         ))}
         <form onSubmit={addEntry}
               style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <input value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Siobhan)"
-                 aria-label="Word" maxLength={48} style={{ ...fieldStyle, width: 170 }}/>
-          <input value={sayLike} onChange={(e) => setSayLike(e.target.value)} placeholder="Say it like (e.g. shiv-AWN)"
-                 aria-label="Say it like" maxLength={100} style={{ ...fieldStyle, flex: 1, minWidth: 180 }}/>
-          <IconButton name={busy === `say:${word.trim()}` ? 'loader' : 'play'} title="Hear it before saving"
+          <input className="cal-inp" value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Kamron)"
+                 aria-label="Word" maxLength={48} style={{ ..._voiceFieldLayout, flex: '1 1 140px' }}/>
+          <input className="cal-inp" value={sayLike} onChange={(e) => setSayLike(e.target.value)}
+                 placeholder="Say it like (e.g. KAM-ren)" aria-label="Say it like" maxLength={100}
+                 style={{ ..._voiceFieldLayout, flex: '3 1 180px' }}/>
+          {/* type="button": a plain button in this form would also submit
+              it, saving the entry the owner only meant to hear. */}
+          <IconButton type="button" name={busy === `say:${word.trim()}` ? 'loader' : 'play'}
+                      title={hearTitle(word.trim(), 'Hear it before saving')}
                       disabled={!!busy || !word.trim() || !sayLike.trim()}
                       onClick={() => preview(word.trim(), sayLike.trim())}/>
           <Button variant="primary" type="submit" disabled={!admin || !!busy || !word.trim() || !sayLike.trim()}
