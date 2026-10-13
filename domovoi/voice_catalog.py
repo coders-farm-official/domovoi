@@ -1,77 +1,50 @@
-"""Curated TTS voice catalog + idempotent registry seeding.
+"""The voice registry's seeding: the three public-domain Piper voices.
 
-The core pre-populates the voices registry with a curated
-set of known-good voices: Edge cloud voices (download on demand, no file) and
-the three public-domain Piper voices Domovoi speaks with locally
-(``SHIPPED_VOICES`` in domovoi/clients/tts.py, auto-downloaded on first
-synth, or fetched ahead by the Linux provisioning).
+The core pre-populates the voices registry with the voices Domovoi speaks
+with locally (``SHIPPED_VOICES`` in domovoi/clients/tts.py, auto-downloaded
+on first synth, or fetched ahead by the Linux provisioning), and the
+configured Piper voice (``TTS_PIPER_VOICE``).
 
-The Piper voices Domovoi used to offer (``RETIRED_PIPER_VOICES``: lessac and
-the voices fine-tuned from it or from ryan, whose licences aren't
-permissive) are taken OUT of the registry at boot: their rows are deleted,
-and a default that pointed at one moves to the configured Piper voice. A
-room set to a removed voice then speaks in the default (the resolver falls
-back to it), and its clips are pruned with the row.
+Taken OUT of the registry at boot:
+
+* the Piper voices Domovoi used to offer (``RETIRED_PIPER_VOICES``: lessac
+  and the voices fine-tuned from it or from ryan, whose licences aren't
+  permissive);
+* every Microsoft Edge voice (engine ``edge``): the online voices were
+  dropped on 2026-10-12 (the owner's decision: Microsoft's service had
+  started refusing edge-tts, every reply went to Microsoft, and edge-tts is
+  LGPL), so a registered cloud voice is removed on the update.
+
+A removed row that was the default moves the default to the configured
+Piper voice; a room set to a removed voice speaks in the default (the
+resolver falls back to it, domovoi/streaming.py ``resolve_voice``), and
+its clips are pruned with the row.
 
 Controlled by ``SEED_VOICE_CATALOG`` (default on). Seeding is **idempotent
 by name + model_ref**, so it augments an existing registry on the next boot
 and never disturbs the chosen default — flip the flag off once you've
-curated the list (deleted rows would otherwise reappear on reboot).
+curated the list (deleted rows would otherwise reappear on reboot). The
+configured Piper voice is registered either way. Rows already in the
+registry are never removed, the retired and Edge voices excepted.
 
-Microsoft Edge voices send what Domovoi says to Microsoft, so they are an
-informed opt-in. The configured Edge voice (``TTS_EDGE_VOICE``) is
-registered only when the catalog is on or ``TTS_ENGINE=edge`` — a household
-that never chose Edge gets no Edge voice in its registry — and no Edge
-voice at all (configured or catalog) is registered under
-``INTERNET_ACCESS=never``. Rows already in the registry are never removed,
-the retired Piper voices excepted.
-
-Labels are the unique first-names you say ("switch to Jenny"); they're kept
-distinct across both engines so the DB's UNIQUE(name) is always satisfied.
+Labels are the unique first-names you say ("switch to Kristin"); the DB's
+UNIQUE(name) is always satisfied.
 """
 
 from __future__ import annotations
 
 import logging
 
-from domovoi import egress
 from domovoi.clients.tts import RETIRED_PIPER_VOICES, SHIPPED_VOICES
-from domovoi.config import settings
 
 log = logging.getLogger(__name__)
 
 
-# (label, Edge voice id). Curated from README.md's Edge table.
-EDGE_CATALOG: list[tuple[str, str]] = [
-    ("Aria", "en-US-AriaNeural"),
-    ("Jenny", "en-US-JennyNeural"),
-    ("Michelle", "en-US-MichelleNeural"),
-    ("Ana", "en-US-AnaNeural"),
-    ("Emma", "en-US-EmmaNeural"),
-    ("Ava", "en-US-AvaNeural"),
-    ("Guy", "en-US-GuyNeural"),
-    ("Christopher", "en-US-ChristopherNeural"),
-    ("Eric", "en-US-EricNeural"),
-    ("Brian", "en-US-BrianNeural"),
-    ("Andrew", "en-US-AndrewNeural"),
-    ("Roger", "en-US-RogerNeural"),
-    ("Steffan", "en-US-SteffanNeural"),
-    ("Sonia", "en-GB-SoniaNeural"),      # British female
-    ("Natasha", "en-AU-NatashaNeural"),  # Australian female
-    ("William", "en-AU-WilliamNeural"),  # Australian male
-    ("Clara", "en-CA-ClaraNeural"),      # Canadian female
-    ("Emily", "en-IE-EmilyNeural"),      # Irish female
-    ("Neerja", "en-IN-NeerjaNeural"),    # Indian female
-]
-
 # (label, Piper HF model_ref): the three public-domain voices.
 PIPER_CATALOG: list[tuple[str, str]] = [(v.name, v.model_ref) for v in SHIPPED_VOICES]
 
-
-def edge_label(voice_id: str) -> str:
-    """"en-US-AriaNeural" → "Aria" (friendly spoken name)."""
-    tail = voice_id.split("-")[-1] if "-" in voice_id else voice_id
-    return tail.replace("Neural", "").strip() or voice_id
+# Engines the registry no longer speaks: their rows are removed at boot.
+DROPPED_ENGINES: frozenset[str] = frozenset({"edge"})
 
 
 def piper_label(model_ref: str) -> str:
@@ -85,29 +58,13 @@ def piper_label(model_ref: str) -> str:
     return core.capitalize() or model_ref
 
 
-def planned_voices(
-    *,
-    include_catalog: bool,
-    edge_voice: str,
-    piper_voice: str,
-    include_edge_voice: bool,
-    include_edge_catalog: bool = True,
-) -> list[tuple[str, str, str]]:
-    """The de-duplicated ``(engine, name, model_ref)`` list to ensure.
-
-    Always includes the configured Piper voice, and the configured Edge
-    voice when ``include_edge_voice`` (so a default can point at either even
-    with the catalog disabled); prepends the full catalog when enabled — its
-    Edge half only when ``include_edge_catalog``. De-duped by ``(engine,
-    model_ref)`` keeping the first label, so a configured voice already in
-    the catalog isn't doubled. Pure: :func:`seed_voices` decides the flags."""
+def planned_voices(*, include_catalog: bool, piper_voice: str) -> list[tuple[str, str, str]]:
+    """The de-duplicated ``(engine, name, model_ref)`` list to ensure: the
+    catalog's three voices when enabled, and always the configured Piper
+    voice. De-duped by ``(engine, model_ref)`` keeping the first label."""
     rows: list[tuple[str, str, str]] = []
     if include_catalog:
-        if include_edge_catalog:
-            rows += [("edge", n, r) for n, r in EDGE_CATALOG]
         rows += [("piper", n, r) for n, r in PIPER_CATALOG]
-    if include_edge_voice:
-        rows.append(("edge", edge_label(edge_voice), edge_voice))
     rows.append(("piper", piper_label(piper_voice), piper_voice))
 
     seen: set[tuple[str, str]] = set()
@@ -120,52 +77,45 @@ def planned_voices(
     return out
 
 
-async def seed_voices(
-    repo,
-    *,
-    include_catalog: bool,
-    edge_voice: str,
-    piper_voice: str,
-    default_is_piper: bool,
-    include_edge_voice: bool | None = None,
-) -> int:
-    """Idempotently ensure the planned voices exist and exactly one default
-    is set. Returns the number of rows created.
+def _removed_on_boot(row: dict) -> str | None:
+    """Why a registry row goes at boot, or None when it stays."""
+    engine = (row["engine"] or "").strip().lower()
+    if engine in DROPPED_ENGINES:
+        return "a Microsoft Edge voice (the online voices were dropped)"
+    if engine == "piper" and row["model_ref"] in RETIRED_PIPER_VOICES:
+        return "a voice Domovoi no longer offers"
+    return None
 
-    ``include_edge_voice`` None (what the boot passes) derives it:
-    ``(include_catalog or settings.tts_engine == "edge")`` and the internet
-    answer isn't ``never``. Under ``never`` the catalog's Edge voices are
-    left out too. A row is skipped if its name (case-insensitive) or
-    ``(engine, model_ref)`` already exists, so re-running never duplicates
-    and never raises on the UNIQUE(name) constraint. An existing default is
-    preserved; only a registry with no default gets the configured engine's
-    voice promoted (falling back to the first row)."""
-    edge_allowed = not egress.internet_turned_off()
-    if include_edge_voice is None:
-        engine_is_edge = (settings.tts_engine or "").strip().lower() == "edge"
-        include_edge_voice = include_catalog or engine_is_edge
-    include_edge_voice = include_edge_voice and edge_allowed
 
+async def seed_voices(repo, *, include_catalog: bool, piper_voice: str) -> int:
+    """Remove the retired and Edge voices, idempotently ensure the planned
+    voices exist, and make sure exactly one default is set. Returns the
+    number of rows created.
+
+    A row is skipped if its name (case-insensitive) or ``(engine,
+    model_ref)`` already exists, so re-running never duplicates and never
+    raises on the UNIQUE(name) constraint. An existing default is
+    preserved; a registry with no default (or whose default was removed)
+    gets the configured Piper voice promoted (falling back to the first
+    row)."""
     existing = await repo.all()
-    retired = [v for v in existing if v["engine"] == "piper" and v["model_ref"] in RETIRED_PIPER_VOICES]
-    for v in retired:
+    removed = 0
+    for v in existing:
+        why = _removed_on_boot(v)
+        if why is None:
+            continue
         if v["is_default"]:
             await repo.clear_default()
         await repo.delete(v["id"])
-        log.info("voice registry: removed %s (%s), a voice Domovoi no longer offers", v["name"], v["model_ref"])
-    if retired:
+        removed += 1
+        log.info("voice registry: removed %s (%s), %s", v["name"], v["model_ref"], why)
+    if removed:
         existing = await repo.all()
     names = {v["name"].lower() for v in existing}
     refs = {(v["engine"], v["model_ref"]) for v in existing}
 
     created = 0
-    for engine, name, ref in planned_voices(
-        include_catalog=include_catalog,
-        edge_voice=edge_voice,
-        piper_voice=piper_voice,
-        include_edge_voice=include_edge_voice,
-        include_edge_catalog=edge_allowed,
-    ):
+    for engine, name, ref in planned_voices(include_catalog=include_catalog, piper_voice=piper_voice):
         if name.lower() in names or (engine, ref) in refs:
             continue
         await repo.create(name=name, engine=engine, model_ref=ref)
@@ -174,9 +124,8 @@ async def seed_voices(
         created += 1
 
     if await repo.get_default() is None:
-        target = ("piper", piper_voice) if default_is_piper else ("edge", edge_voice)
         rows = await repo.all()
-        match = next((v for v in rows if (v["engine"], v["model_ref"]) == target), None)
+        match = next((v for v in rows if (v["engine"], v["model_ref"]) == ("piper", piper_voice)), None)
         if match is None and rows:
             match = rows[0]
         if match is not None:

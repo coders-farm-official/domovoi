@@ -6945,48 +6945,6 @@
         }
       }
     },
-    "/api/voices/edge": {
-      "post": {
-        "tags": [
-          "voices"
-        ],
-        "summary": "Register Edge Voice",
-        "description": "Register a Microsoft Edge cloud voice by its voice id (e.g.\n``en-US-AriaNeural``). No file \u2014 the engine downloads on demand.\n409 under ``INTERNET_ACCESS=never``: the voice could never speak.",
-        "operationId": "register_edge_voice_api_voices_edge_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EdgeVoiceCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Voice"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/voices/piper": {
       "post": {
         "tags": [
@@ -14637,33 +14595,6 @@
         ],
         "title": "DropInStartRequest",
         "description": "Open a drop-in FROM the path's ``{room_id}`` (initiator) TO\n``target_room``."
-      },
-      "EdgeVoiceCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "voice_id": {
-            "type": "string",
-            "maxLength": 120,
-            "minLength": 1,
-            "title": "Voice Id"
-          },
-          "set_default": {
-            "type": "boolean",
-            "title": "Set Default",
-            "default": false
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "voice_id"
-        ],
-        "title": "EdgeVoiceCreate"
       },
       "Favorite": {
         "properties": {

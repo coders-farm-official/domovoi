@@ -131,7 +131,7 @@ def test_clips_rerender_only_when_an_entry_they_use_changes(monkeypatch, fresh_c
     plain = cs._spoken_key("I'm listening.", "piper")
     assert plain == "I'm listening."                      # no entry used: the hash is unchanged
     assert hey != "Hey, I'm Domovoi." and "domovoi=DOH-moe-voy" in hey
-    assert cs._spoken_key("Hey, I'm Domovoi.", "edge") == "Hey, I'm Domovoi."   # Edge ignores the list
+    assert cs._spoken_key("Hey, I'm Domovoi.", "system") == "Hey, I'm Domovoi."   # the OS voice ignores it
     fresh_converter.set_pronunciations([("Domovoi", "DOM-uh-voy")])
     assert cs._spoken_key("Hey, I'm Domovoi.", "piper") != hey
     assert cs._spoken_key("I'm listening.", "piper") == plain

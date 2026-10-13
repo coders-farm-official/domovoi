@@ -1552,7 +1552,7 @@ const _cfgInput = {
 const ConfigField = ({ f, value, onChange, internetOff = false }) => {
   // Under INTERNET_ACCESS=never a field that needs the internet is greyed —
   // never hidden — with "needs internet"; so is each choice that does
-  // (tts_engine's "edge"), unless it is the value already set.
+  // (a field's needs_internet_choices), unless it is the value already set.
   const greyed = !!internetOff && !!f.needs_internet;
   const greyChoices = internetOff ? (f.needs_internet_choices || []) : [];
   const greyTitle = greyed ? NEEDS_INTERNET_TEXT : undefined;

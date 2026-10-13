@@ -159,10 +159,11 @@ object ModelCatalog {
     val ljspeech = piperVoice("ljspeech", "Linda", "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22",
         4_972, "141d612cc0a95ed7efc1ca936b845c2364967f2e9217c5dbfcf69fc4d6c65860")
 
-    /** The phone's voices, the server's three; Norman is the default. */
+    /** The phone's voices, the server's three; Kristin is the default
+     *  (the server's DEFAULT_PIPER_VOICE since 2026-10-12, Norman before). */
     val voices: List<CatalogModel> = listOf(norman, kristin, ljspeech)
 
-    val defaultVoice: CatalogModel get() = norman
+    val defaultVoice: CatalogModel get() = kristin
 
     fun voice(id: String?): CatalogModel? = voices.firstOrNull { it.id == id }
 

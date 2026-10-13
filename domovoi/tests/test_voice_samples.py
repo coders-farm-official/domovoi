@@ -149,7 +149,9 @@ def test_the_registry_rows_say_what_plays_and_why_not(voices):
     assert got[0] == ("clip", None)
     assert got[1] == ("voice", None)                         # an en-us upload speaks now
     assert got[2][0] is None and "espeak's 'de' phonemes" in got[2][1]
-    assert got[3] == ("voice", None)
+    # a Microsoft Edge row left from an older release (the core removes them
+    # at its next start) plays nothing, and says why
+    assert got[3][0] is None and "Microsoft Edge voice" in got[3][1]
 
 
 def test_the_settings_page_hides_a_button_with_nothing_to_play():

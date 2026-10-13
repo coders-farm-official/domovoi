@@ -62,22 +62,14 @@ async def get_config() -> ConfigResponse:
         rows = await s.execute(text("SELECT room_id FROM mpd_rooms ORDER BY room_id"))
         rooms = [r[0] for r in rows.all()]
         # The voice that actually speaks is the registry default
-        # (`resolve_voice` in the core). `tts_edge_voice` only names Edge's
-        # voice and is set — to Aria — on every box, including ones that have
-        # never used Edge; reporting it here made a Piper-only box look like
-        # it was using a cloud voice. Fall back to the configured engine's
-        # own voice only when the registry is empty (pre-seed).
+        # (`resolve_voice` in the core). Fall back to the configured Piper
+        # voice only when the registry is empty (pre-seed).
         default_row = (
             await s.execute(
                 text("SELECT model_ref FROM voices WHERE is_default LIMIT 1")
             )
         ).first()
-    if default_row is not None:
-        tts_voice = str(default_row[0])
-    elif core_settings.tts_engine == "piper":
-        tts_voice = core_settings.tts_piper_voice
-    else:
-        tts_voice = core_settings.tts_edge_voice
+    tts_voice = str(default_row[0]) if default_row is not None else core_settings.tts_piper_voice
 
     return ConfigResponse(
         bot_name=core_settings.bot_name,

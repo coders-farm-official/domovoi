@@ -1,7 +1,8 @@
-"""B12, the voice parts (CONTRACT 7.4): under INTERNET_ACCESS=never the web
-refuses to register a Microsoft Edge voice or to sample one (409 before the
-core is asked), and the voice handler says why a cloud voice can't speak in
-the internet answer's words. Unset keeps today's behaviour and wording.
+"""B12, the voice parts (CONTRACT 7.4), since the Microsoft Edge voices
+were dropped (2026-10-12): there is no cloud voice to register or refuse;
+a Piper voice on this server samples under INTERNET_ACCESS=never as on any
+answer, a leftover Edge row is refused without asking the core, and the
+voice handler switches to any voice offline.
 
 DB-free: the registry and the core hop are fakes.
 """
@@ -74,32 +75,24 @@ def _web() -> AsyncClient:
                        headers={**BROWSER, **bearer("admin-token")})
 
 
+@pytest.mark.parametrize("answer", ["", "always", "never"])
 @pytest.mark.asyncio
-async def test_registering_an_edge_voice_is_refused_under_never(fake_registry) -> None:
-    with egress.override_policy("never"):
+async def test_there_is_no_edge_registration_any_more(fake_registry, answer) -> None:
+    with egress.override_policy(answer):
         async with _web() as c:
             r = await c.post("/api/voices/edge", json={"name": "Aria", "voice_id": "en-US-AriaNeural"})
-    assert r.status_code == 409
-    assert r.json()["detail"] == egress.TURNED_OFF_REASON
-    assert r.headers["x-domovoi-refusal"] == "internet-off"
+    assert r.status_code in (404, 405)
     assert FakeRepo.created == []  # nothing stored
 
 
+@pytest.mark.parametrize("answer", ["", "always", "never"])
 @pytest.mark.asyncio
-async def test_registering_an_edge_voice_still_works_unanswered(fake_registry) -> None:
-    async with _web() as c:
-        r = await c.post("/api/voices/edge", json={"name": "Aria", "voice_id": "en-US-AriaNeural"})
-    assert r.status_code == 201, r.text
-    assert FakeRepo.created and FakeRepo.created[0]["engine"] == "edge"
-
-
-@pytest.mark.asyncio
-async def test_sampling_an_edge_voice_is_refused_before_the_core_is_asked(fake_registry) -> None:
-    with egress.override_policy("never"):
+async def test_a_leftover_edge_row_is_refused_before_the_core_is_asked(fake_registry, answer) -> None:
+    with egress.override_policy(answer):
         async with _web() as c:
             r = await c.get("/api/voices/1/sample")
     assert r.status_code == 409
-    assert r.headers["x-domovoi-refusal"] == "internet-off"
+    assert "Microsoft Edge voice" in r.json()["detail"]
     assert fake_registry == []  # the core was never asked
 
 
@@ -124,43 +117,24 @@ async def test_sampling_a_piper_voice_still_works_under_never(fake_registry, mon
     assert fake_registry == [{"path": "/v1/admin/voices/sample", "body": {"name": "Amy"}}]
 
 
-@pytest.mark.parametrize("answer", ["", "always", "sometimes"])
-@pytest.mark.asyncio
-async def test_sampling_an_edge_voice_asks_the_core_otherwise(fake_registry, answer) -> None:
-    with egress.override_policy(answer):
-        async with _web() as c:
-            r = await c.get("/api/voices/1/sample")
-    assert r.status_code == 200
-    assert [x["body"] for x in fake_registry] == [{"name": "Guy"}]
-
-
 # ─── The voice handler's words ────────────────────────────────────────────
 
 
 @pytest.fixture
-def edge_voice(monkeypatch):
+def piper_voice(monkeypatch):
     async def lookup(name, session):
-        return {"id": 1, "name": "Guy", "engine": "edge", "model_ref": "en-US-GuyNeural"}
+        return {"id": 1, "name": "Kristin", "engine": "piper", "model_ref": "en_US-kristin-medium"}
 
     monkeypatch.setattr(VoiceHandler, "_lookup", staticmethod(lookup))
 
 
+@pytest.mark.parametrize("answer", ["", "never"])
 @pytest.mark.asyncio
-async def test_cloud_voice_refusal_names_the_internet_answer_under_never(edge_voice) -> None:
+async def test_every_voice_samples_and_switches_offline(piper_voice, answer) -> None:
     h = VoiceHandler()
     ctx = Context(room_id="kitchen", online=False)
-    with egress.override_policy("never"):
-        sample = await h._sample_response("guy", ctx, None)
-        switch = await h._switch_response("guy", ctx, None)
-    assert sample.text == "Guy is a cloud voice and I'm set to stay off the internet, so I can't play it."
-    assert switch.text.startswith("Guy is a cloud voice and I'm set to stay off the internet, so I can't switch")
-
-
-@pytest.mark.asyncio
-async def test_cloud_voice_refusal_keeps_todays_words_unanswered(edge_voice) -> None:
-    h = VoiceHandler()
-    ctx = Context(room_id="kitchen", online=False)
-    sample = await h._sample_response("guy", ctx, None)
-    switch = await h._switch_response("guy", ctx, None)
-    assert sample.text == "Guy is a cloud voice and I'm offline right now, so I can't play it."
-    assert switch.text == "Guy is a cloud voice and I'm offline right now, so I can't switch to it. Try a local voice."
+    with egress.override_policy(answer):
+        sample = await h._sample_response("kristin", ctx, None)
+        switch = await h._switch_response("kristin", ctx, None)
+    assert sample.voice_override == "Kristin" and "cloud" not in sample.text
+    assert switch.pi_action == "set_voice" and switch.pi_action_arg == "Kristin"

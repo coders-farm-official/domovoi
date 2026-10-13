@@ -2,8 +2,8 @@
 2026-10-12: every button answered "sample failed: 502 Bad Gateway").
 
 The web passes the core's own sentence through instead of a bare 502; the
-core's 409 names the reason the voice's engine gave (Microsoft's voice
-service refusing edge-tts with HTTP 403 that day). DB-free: the registry,
+core's 409 names the reason the voice's engine gave (a Piper voice that
+could not be fetched, say). DB-free: the registry,
 the core hop and the engines are fakes.
 """
 
@@ -24,7 +24,7 @@ from web.backend.domovoi_client import core_audio_refusal
 
 BROWSER = {"X-Requested-With": "XMLHttpRequest"}
 ROWS = [
-    {"id": 1, "name": "Eric", "engine": "edge", "model_ref": "en-US-EricNeural", "is_default": False},
+    {"id": 1, "name": "Cori", "engine": "piper", "model_ref": "en_GB-cori-high", "is_default": False},
 ]
 
 
@@ -65,7 +65,7 @@ def _web() -> AsyncClient:
 
 @pytest.mark.asyncio
 async def test_the_cores_refusal_reaches_the_page_in_its_own_words(registry, monkeypatch) -> None:
-    said = "Eric can't speak right now: Microsoft's voice service answered HTTP 403"
+    said = "Cori can't speak right now: Hugging Face is down"
     calls = _core_answers(monkeypatch, voices_api, 409, json.dumps({"detail": said}).encode())
     async with _web() as c:
         r = await c.get("/api/voices/1/sample")
@@ -91,11 +91,11 @@ async def test_an_unreachable_or_broken_core_is_a_502_that_says_so(registry, mon
     _core_answers(monkeypatch, voices_api, 0, b"")
     async with _web() as c:
         r = await c.get("/api/voices/1/sample")
-    assert r.status_code == 502 and r.json()["detail"] == "Eric's sample could not be made: the Domovoi server is unreachable"
+    assert r.status_code == 502 and r.json()["detail"] == "Cori's sample could not be made: the Domovoi server is unreachable"
     _core_answers(monkeypatch, voices_api, 500, b"Internal Server Error")
     async with _web() as c:
         r = await c.get("/api/voices/1/sample")
-    assert r.status_code == 502 and r.json()["detail"] == "Eric's sample could not be made (HTTP 500)"
+    assert r.status_code == 502 and r.json()["detail"] == "Cori's sample could not be made (HTTP 500)"
 
 
 @pytest.mark.asyncio
@@ -117,34 +117,26 @@ def test_core_audio_refusal_reads_only_a_detail_string():
 # ── the core: which rung failed, and why, in words ────────────────────────
 
 
-class _Refused(Exception):
-    """edge-tts's handshake error: a status, and the whole URL in the text."""
+def test_a_failed_piper_rung_is_said_in_words(monkeypatch):
+    def down(text, voice, speed):
+        raise OSError("en_GB-cori-high could not be fetched: Hugging Face is down")
 
-    status = 403
-
-    def __str__(self) -> str:
-        return "403, message='Invalid response status', url='wss://speech.platform.bing.com/x?TrustedClientToken=t'"
-
-
-def test_an_edge_refusal_is_said_without_its_url(monkeypatch):
-    def refuse(text, voice, speed):
-        raise _Refused()
-
-    monkeypatch.setattr(tts_mod, "_synth_edge_sync", refuse)
-    monkeypatch.setattr(tts_mod, "_synth_piper_sync", lambda *a: tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 22050))
-    client = tts_mod.RealTTSClient(preferred_engine="piper", edge_voice="x", piper_voice="p", speed=1.0)
-    with egress.override_policy("always"):
-        result = client._synth_detailed_blocking("hello", "edge", "en-US-EricNeural")
-    assert result.engine == "piper"
-    assert result.failures == ("edge: Microsoft's voice service answered HTTP 403",)
+    monkeypatch.setattr(tts_mod, "_synth_piper_sync", down)
+    monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda text: tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 16000))
+    client = tts_mod.RealTTSClient(preferred_engine="piper", piper_voice="p", speed=1.0)
+    result = client._synth_detailed_blocking("hello", "piper", "en_GB-cori-high")
+    assert result.engine == "system"
+    assert result.failures == ("piper: en_GB-cori-high could not be fetched: Hugging Face is down",)
     # equality (what callers compare) ignores the reasons
-    assert result == tts_mod.SynthResult(wav=result.wav, engine="piper", voice="p")
+    assert result == tts_mod.SynthResult(wav=result.wav, engine="system", voice=None)
 
 
 def test_failure_words():
     assert tts_mod.engine_failure_words("piper", ValueError("bad config")) == "piper: bad config"
-    assert tts_mod.engine_failure_words("edge", egress.InternetTurnedOff("Microsoft Edge voice")) == \
-        f"edge: {egress.TURNED_OFF_REASON}"
+    assert tts_mod.engine_failure_words("piper", egress.InternetTurnedOff("a Piper voice download")) == \
+        f"piper: {egress.TURNED_OFF_REASON}"
+    # a URL in a message is cut off
+    assert tts_mod.engine_failure_words("piper", OSError("HTTP 404, url='https://x/y'")) == "piper: HTTP 404"
     assert tts_mod.engine_failure_words("system", RuntimeError()) == "system: RuntimeError"
 
 
@@ -156,14 +148,13 @@ class _VoiceRow:
         pass
 
     async def get_by_name(self, name):
-        return {"id": 1, "name": name, "engine": "edge", "model_ref": "en-US-EricNeural", "is_default": False}
+        return {"id": 1, "name": name, "engine": "piper", "model_ref": "en_GB-cori-high", "is_default": False}
 
 
 class _FallbackTTS:
     async def synthesize_detailed(self, text, *, engine=None, voice=None):
-        return tts_mod.SynthResult(wav=tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 22050), engine="piper",
-                                   voice="en_US-norman-medium",
-                                   failures=("edge: Microsoft's voice service answered HTTP 403",))
+        return tts_mod.SynthResult(wav=tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 22050), engine="system",
+                                   voice=None, failures=("piper: Hugging Face is down",))
 
 
 @pytest.mark.asyncio
@@ -181,6 +172,6 @@ async def test_the_core_says_why_a_voice_cant_give_its_sample(monkeypatch) -> No
     monkeypatch.setattr(core_main, "get_tts_client", lambda: _FallbackTTS())
     async with AsyncClient(transport=ASGITransport(app=core_app), base_url="http://test",
                            headers={**BROWSER, **bearer("admin-token")}) as c:
-        r = await c.post("/v1/admin/voices/sample", json={"name": "Eric"})
+        r = await c.post("/v1/admin/voices/sample", json={"name": "Cori"})
     assert r.status_code == 409
-    assert r.json()["detail"] == "Eric can't speak right now: Microsoft's voice service answered HTTP 403"
+    assert r.json()["detail"] == "Cori can't speak right now: Hugging Face is down"

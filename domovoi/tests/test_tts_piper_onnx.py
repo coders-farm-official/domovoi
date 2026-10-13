@@ -238,7 +238,7 @@ def test_the_router_falls_through_when_a_voice_is_refused(monkeypatch, tmp_path)
     monkeypatch.setattr(tts_mod, "_piper_voice_cache", {})
     other = tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 16_000)
     monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda text: other)
-    client = tts_mod.RealTTSClient(preferred_engine="piper", edge_voice="x", piper_voice="german-voice", speed=1.0)
+    client = tts_mod.RealTTSClient(preferred_engine="piper", piper_voice="german-voice", speed=1.0)
     result = client._synth_detailed_blocking("hello")
     assert result.engine == "system"
     # ...and the UI can say why without loading the model.

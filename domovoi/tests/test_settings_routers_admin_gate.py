@@ -89,7 +89,9 @@ def test_the_expected_surface_is_what_got_gated() -> None:
     """Pin the shape so a route added later without the gate is a loud
     failure in the parametrized test above, not a silent shrink here."""
     counts = {name: len(_mutations(r)) for name, r in ROUTERS.items()}
-    assert counts == {"greetings": 3, "voices": 4, "wake_words": 12}
+    # voices: piper upload, patch, delete (the Edge registration was
+    # dropped on 2026-10-12)
+    assert counts == {"greetings": 3, "voices": 3, "wake_words": 12}
 
 
 # ─── HTTP: the gate through the real dependency, classifier stubbed ────────
@@ -198,7 +200,6 @@ def test_dashboard_cookie_alone_is_403_on_every_mutation(
     [
         ("POST", "/api/greetings", {"text": "hello there", "category": "generic"}),
         ("DELETE", "/api/greetings/1", None),
-        ("POST", "/api/voices/edge", {"name": "aria", "voice_id": "en-US-AriaNeural"}),
         ("DELETE", "/api/voices/1", None),
         ("POST", "/api/wake-words", {"name": "Hey Domovoi", "phrase": "hey domovoi"}),
         ("DELETE", "/api/wake-words/1", None),

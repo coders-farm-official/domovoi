@@ -4,7 +4,7 @@ Wire protocol v0.1 — `/v1/stream/{room_id}`. Bidirectional, mixed text+binary.
 
 Audio format on both directions: 16 kHz mono int16 little-endian PCM.
 Server declares the actual TTS sample rate per response in the
-`response_start` frame (Edge ≈ 24 kHz, Piper ≈ 22 kHz, system varies);
+`response_start` frame (Piper ≈ 22 kHz, system varies);
 clients should resample if their playback device can't accept it directly.
 
 Client → Server
@@ -1053,8 +1053,8 @@ def _resample_pcm(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
 
     A response announces ONE ``audio_sample_rate`` (the first sentence's) at
     ``response_start`` and the Pi plays the whole PCM stream at that rate. If
-    a later sentence falls back to a different TTS engine (edge 24 kHz →
-    piper 22 kHz on a transient edge failure mid-response), its PCM is at a
+    a later sentence falls back to a different TTS engine (piper 22 kHz →
+    the system voice on a Piper failure mid-response), its PCM is at a
     different native rate — played back at the announced rate it runs too
     fast/slow, garbling the tail of the response. Converting every sentence
     to the announced rate keeps playback correct without a wire-protocol /
@@ -4494,7 +4494,7 @@ class StreamSession:
         finally:
             # Cancel any in-flight synth on early exit (barge-in,
             # WS drop, exception) so we don't leak a background
-            # task waiting on edge-tts to return audio nobody will
+            # task waiting on a synthesis whose audio nobody will
             # ever play.
             if next_task is not None and not next_task.done():
                 next_task.cancel()

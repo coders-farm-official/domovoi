@@ -19,7 +19,7 @@ into ``<sounds_dir>/voices/<slug>/…`` (``settings.sounds_dir``, a
 runtime artifact dir under ``~/.domovoi/`` — NOT the repo's ``satellite/``
 tree) so each satellite syncs its own voice's clips and the greeting voice
 always matches the response voice. Rendering goes through the engine-aware
-TTS client (Piper or Edge, per the voice's ``engine``), and the resulting
+TTS client (Piper, per the voice's ``model_ref``), and the resulting
 WAV is encoded to MP3 (``lameenc``) because the Pi plays clips via
 ``mpg123``.
 
@@ -36,20 +36,14 @@ How it works:
 
 The marker written is the voice that ACTUALLY rendered the clip (the
 TTS client's ``synthesize_detailed`` reports the rung), not the voice that
-was asked for. A clip that a fallback rung rendered — Piper standing in for
-an unreachable Edge voice, or the system voice for a broken Piper model —
-therefore never matches its voice's marker, and is rendered again on the
-next pass where the real engine works, instead of sticking forever.
+was asked for. A clip that a fallback rung rendered — the system voice for
+a broken or missing Piper model — therefore never matches its voice's
+marker, and is rendered again on the next pass where the voice works,
+instead of sticking forever.
 
-Microsoft Edge voices are only rendered when Edge is usable: the internet
-answer allows it (``INTERNET_ACCESS`` is not ``never``) and the
-connectivity probe, when there is one, says online. Otherwise an Edge
-voice's MISSING clip is rendered at once with the default Piper voice as a
-stand-in (tagged as Piper), and an existing clip whose text is current is
-kept as it is — no Edge attempt, and no network timeout per clip. The same
-keep rule covers a Piper voice whose model isn't on disk while the internet
-isn't usable, so an offline pass doesn't re-render its system-voice clips
-every boot.
+A Piper voice whose model isn't on disk while the internet isn't usable
+(:func:`internet_usable`) keeps an existing clip whose text is current, so
+an offline pass doesn't re-render its system-voice clips every boot.
 
 Failures are non-fatal: a missing dep / network drop / DB hiccup logs and
 continues, leaving whatever MP3 the Pi already has — better than silence.
@@ -258,12 +252,11 @@ def _marker(engine: str, model_ref: str) -> str:
     return f"{engine}|{model_ref}"
 
 
-def edge_usable() -> bool:
-    """Whether a Microsoft Edge voice can render right now: the internet
-    answer allows it, and the connectivity probe (when the core has one
-    running) says online. Without a probe — a CLI render, or before the
-    probe starts — only the answer counts. The same test decides whether a
-    Piper voice that isn't on disk yet could be fetched."""
+def internet_usable() -> bool:
+    """Whether a Piper voice that isn't on disk yet could be fetched right
+    now: the internet answer allows it, and the connectivity probe (when the
+    core has one running) says online. Without a probe — a CLI render, or
+    before the probe starts — only the answer counts."""
     if not egress.internet_allowed():
         return False
     from domovoi import connectivity
@@ -280,18 +273,15 @@ def _recorded_text_hash(sidecar: Path) -> str | None:
     return lines[1].strip() if len(lines) >= 2 else None
 
 
-def _voice_can_render(engine: str, model_ref: str, *, edge_ok: bool) -> bool:
+def _voice_can_render(engine: str, model_ref: str, *, net_ok: bool) -> bool:
     """Whether a voice's own engine can render right now, judged without
-    trying: an Edge voice needs Edge usable; a Piper voice needs its model
-    on disk, or the internet usable to fetch it (the same test as Edge),
-    and a phoneme set the converter writes ("en" or "en-us")."""
+    trying: a Piper voice needs its model on disk, or the internet usable
+    to fetch it, and a phoneme set the converter writes ("en" or "en-us")."""
     eng = (engine or "").strip().lower()
-    if eng == "edge":
-        return edge_ok
     if eng == "piper":
         from domovoi.clients.tts import piper_voice_on_disk, piper_voice_problem
 
-        return (edge_ok or piper_voice_on_disk(model_ref)) and piper_voice_problem(model_ref) is None
+        return (net_ok or piper_voice_on_disk(model_ref)) and piper_voice_problem(model_ref) is None
     return True
 
 
@@ -302,7 +292,7 @@ def _render_voice(
     sidecar: Path,
     text: str,
     *,
-    edge_ok: bool,
+    net_ok: bool,
 ) -> tuple[str, str | None] | None:
     """The ``(engine, model_ref)`` to render a clip that needs it with, or
     None to keep the clip that is there.
@@ -311,70 +301,14 @@ def _render_voice(
     (:func:`_voice_can_render`) KEEPS its clip when the clip exists and its
     text is current — a real render from earlier, or an earlier stand-in —
     so a pass while offline re-renders nothing. A missing or out-of-date
-    clip is rendered at once: an Edge voice's with the default Piper voice
-    (``model_ref`` None) as a stand-in, with no Edge attempt; a Piper
-    voice's through the router, which falls to the system voice. Either
-    way the sidecar names the real renderer, so the first pass where the
-    voice's own engine works renders it again."""
-    if _voice_can_render(engine, model_ref, edge_ok=edge_ok):
+    clip is rendered at once through the router, which falls to the system
+    voice; the sidecar names the real renderer, so the first pass where the
+    voice works renders it again."""
+    if _voice_can_render(engine, model_ref, net_ok=net_ok):
         return engine, model_ref
     if clip.exists() and _recorded_text_hash(sidecar) == _hash(text):
         return None
-    if (engine or "").strip().lower() == "edge":
-        return "piper", None
     return engine, model_ref
-
-
-# Edge clips are decoded at 24 kHz (clients/tts.py) and encoded at that
-# rate; Piper renders at 22.05 kHz (some voices 16 kHz).
-EDGE_CLIP_SAMPLE_RATE = 24_000
-
-# MPEG audio sample rates by version bits (3 = MPEG-1, 2 = MPEG-2,
-# 0 = MPEG-2.5) and sample-rate index.
-_MPEG_RATES = {3: (44100, 48000, 32000), 2: (22050, 24000, 16000), 0: (11025, 12000, 8000)}
-
-
-def _mp3_sample_rate(path: Path) -> int | None:
-    """The sample rate of the first MPEG audio frame in ``path`` (skipping
-    an ID3v2 tag), or None when it can't be read."""
-    try:
-        with path.open("rb") as fh:
-            data = fh.read(16384)
-    except OSError:
-        return None
-    i = 0
-    if data[:3] == b"ID3" and len(data) >= 10:
-        size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
-        i = 10 + size
-    while i + 3 < len(data):
-        if data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0:
-            version = (data[i + 1] >> 3) & 0x3
-            layer = (data[i + 1] >> 1) & 0x3
-            rate_index = (data[i + 2] >> 2) & 0x3
-            if version != 1 and layer != 0 and rate_index != 3:
-                return _MPEG_RATES[version][rate_index]
-        i += 1
-    return None
-
-
-def _misattributed_edge_clip(mp3: Path, sidecar: Path, marker: str) -> bool:
-    """An Edge-marked clip that Edge did not render. Before the sidecar
-    named the rung that actually rendered a clip, an Edge voice's clip
-    rendered by a Piper or system stand-in (Edge unreachable) was marked
-    as the Edge voice anyway, so it never re-rendered — the "wrong voice
-    sticks forever" symptom. Such a clip is not at Edge's 24 kHz; this
-    finds it so the first pass where Edge works renders it again, once."""
-    if not marker.lower().startswith("edge|") or not mp3.exists():
-        return False
-    try:
-        recorded = sidecar.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    if not recorded or recorded[0].strip() != marker:
-        return False
-    rate = _mp3_sample_rate(mp3)
-    return rate is not None and rate != EDGE_CLIP_SAMPLE_RATE
-
 
 def _needs_regen(mp3: Path, sidecar: Path, marker: str, text: str) -> bool:
     """True if the MP3 is missing or the sidecar disagrees with the current
@@ -440,13 +374,7 @@ async def regenerate_if_needed() -> None:
     greeting_entries = _greeting_entries(greeting_rows)
     keep_slugs: set[str] = set()
     # Judged once per pass, so every clip of a pass agrees.
-    edge_ok = edge_usable()
-    if not edge_ok and any((v["engine"] or "").lower() == "edge" for v in voices):
-        log.info(
-            "clips: Microsoft Edge voices can't render right now (%s); their "
-            "missing clips use the default Piper voice until Edge works",
-            egress.TURNED_OFF_REASON if egress.internet_turned_off() else "offline",
-        )
+    net_ok = internet_usable()
 
     for v in voices:
         slug = voice_slug(v["name"])
@@ -460,13 +388,13 @@ async def regenerate_if_needed() -> None:
         # Canned + per-voice sample at the voice root.
         for mp3_name, sidecar_name, text in [*_CANNED, _sample_entry()]:
             await _regen_entry(
-                vdir, mp3_name, sidecar_name, text, marker, v, edge_ok=edge_ok
+                vdir, mp3_name, sidecar_name, text, marker, v, net_ok=net_ok
             )
 
         # Greetings under the voice's greetings/ subdir.
         for mp3_name, sidecar_name, text in greeting_entries:
             await _regen_entry(
-                gdir, mp3_name, sidecar_name, text, marker, v, edge_ok=edge_ok
+                gdir, mp3_name, sidecar_name, text, marker, v, net_ok=net_ok
             )
         _prune_greetings(gdir, {name for name, _, _ in greeting_entries})
 
@@ -481,31 +409,25 @@ async def _regen_entry(
     marker: str,
     voice: dict,
     *,
-    edge_ok: bool = True,
+    net_ok: bool = True,
 ) -> None:
     """Render one (mp3, sidecar, text) entry in ``directory`` for ``voice``
     if its sidecar marker is missing / disagrees. No-op when up to date;
     failures are logged and non-fatal (the Pi keeps its old copy). The
     sidecar records the voice that actually rendered the clip (see the
-    module docstring); ``edge_ok`` is :func:`edge_usable` for this pass."""
+    module docstring); ``net_ok`` is :func:`internet_usable` for this pass."""
     mp3_path = directory / mp3_name
     sidecar_path = directory / sidecar_name
     key = _spoken_key(text, voice["engine"])
     if not _needs_regen(mp3_path, sidecar_path, marker, key):
-        if not (edge_ok and _misattributed_edge_clip(mp3_path, sidecar_path, marker)):
-            return
-        log.info(
-            "clip %s for Edge voice %r was rendered by another voice by an "
-            "earlier version; rendering it again in its own voice",
-            mp3_name, voice["name"],
-        )
+        return
     plan = _render_voice(
         voice["engine"], voice["model_ref"], mp3_path, sidecar_path, key,
-        edge_ok=edge_ok,
+        net_ok=net_ok,
     )
     if plan is None:
         log.debug(
-            "clip %s for Edge voice %r kept until Edge is usable", mp3_name, voice["name"],
+            "clip %s for voice %r kept until its model can be fetched", mp3_name, voice["name"],
         )
         return
     engine, model_ref = plan
@@ -582,9 +504,8 @@ def regenerate_blocking() -> None:
 # no pairing, and — until the very last moment — no network to ask over.
 #
 # So these render once, in the household's default voice, at the moment a
-# card is prepared. `settings.tts_engine` is that default: it is `piper`
-# unless the household has deliberately chosen the web engine, and prep runs
-# here on the server where the network for that exists. They land in
+# card is prepared: the configured Piper voice (`settings.tts_piper_voice`).
+# They land in
 # sounds/setup/, which media prep already copies into the payload and stage 1
 # already lands at ~/.domovoi/sounds — so the delivery path needs nothing new.
 #
@@ -626,18 +547,8 @@ SETUP_LINES: list[tuple[str, str]] = [
 
 
 def default_voice() -> tuple[str, str]:
-    """The engine and model the household actually speaks in.
-
-    ``tts_engine`` defaults to ``piper`` because local-first is the product
-    promise; a household that has deliberately chosen the web engine is
-    honoured here too, since prep runs on the server where the network is.
-    While Edge isn't usable (:func:`edge_usable`) the clips render with the
-    default Piper voice instead, tagged as Piper, and render again in Edge
-    on a later prep once it is.
-    """
-    engine = (settings.tts_engine or "piper").strip().lower()
-    if engine == "edge":
-        return "edge", settings.tts_edge_voice
+    """The engine and model the household actually speaks in: the
+    configured Piper voice."""
     return "piper", settings.tts_piper_voice
 
 
@@ -656,7 +567,7 @@ async def render_setup_clips() -> tuple[int, list[str]]:
         _SETUP_DIR.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         return 0, [f"could not create {_SETUP_DIR}: {e}"]
-    edge_ok = edge_usable()
+    net_ok = internet_usable()
 
     for wav_name, text in SETUP_LINES:
         wav_path = _SETUP_DIR / wav_name
@@ -664,9 +575,9 @@ async def render_setup_clips() -> tuple[int, list[str]]:
         key = _spoken_key(text, engine)
         if not _needs_regen(wav_path, sidecar, marker, key):
             continue
-        plan = _render_voice(engine, model_ref, wav_path, sidecar, key, edge_ok=edge_ok)
+        plan = _render_voice(engine, model_ref, wav_path, sidecar, key, net_ok=net_ok)
         if plan is None:
-            continue  # an Edge-voiced clip, kept until Edge is usable
+            continue  # kept until the voice's model can be fetched
         rendered = await _synth_clip_wav(text, *plan)
         if rendered is None:
             problems.append(wav_name)

@@ -191,8 +191,8 @@ def test_a_room_s_own_voice_is_warmed_once(real_mode) -> None:
     assert path.endswith("en_US-kristin-medium.onnx")
 
 
-def test_a_cloud_voice_is_not_preloaded(real_mode) -> None:
-    real_mode.registry[None] = ("edge", "en-US-AriaNeural")
+def test_a_non_piper_voice_is_not_preloaded(real_mode) -> None:
+    real_mode.registry[None] = ("system", "")
     assert asyncio.run(speech_warmup.warm_room_voice(None)) is False
     assert real_mode.piper["loads"] == []
 

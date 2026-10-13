@@ -44,8 +44,11 @@ _REGISTRY: dict[str, dict[str, str]] = {
         "playlist": "core",
         "spoken_audio": "core",
     },
+    # V001 also seeded "edge" (the Microsoft Edge online voices). They were
+    # dropped on 2026-10-12: no row may be written on that engine any more
+    # (the boot removes old ones, domovoi/voice_catalog.py); the
+    # informational DB mirror keeps V001's row, which nothing reads.
     "tts_engine": {
-        "edge": "core",
         "piper": "core",
         "system": "core",
     },
