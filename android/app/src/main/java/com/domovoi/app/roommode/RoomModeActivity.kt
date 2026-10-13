@@ -23,6 +23,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -218,7 +220,12 @@ fun RoomDisplay(
     val spin = rememberInfiniteTransition(label = "ring")
     val pulse by spin.animateFloat(0.55f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "pulse")
     val turn by spin.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "turn")
-    Box(Modifier.fillMaxSize().background(Ink)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(Ink).safeDrawingPadding()) {
+        // An old phone is about 640 dp tall: everything a size down there,
+        // so the room fits without scrolling.
+        val compact = maxHeight < 720.dp
+        val ringSize = if (compact) 150.dp else 200.dp
+        val gap = if (compact) 12.dp else 24.dp
         Column(
             Modifier.fillMaxSize().offset(drift.x.dp, drift.y.dp).padding(24.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -227,11 +234,11 @@ fun RoomDisplay(
                 Text("domovoi room", color = Text2, fontSize = 13.sp)
                 MicChip(live = status?.micLive == true && running, muted = status?.muted == true || !running, red = red)
             }
-            Spacer(Modifier.height(24.dp))
-            Text(label, color = Text1, fontSize = 40.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-            Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(now)), color = Text2, fontSize = 56.sp, fontWeight = FontWeight.Light)
-            Spacer(Modifier.height(24.dp))
-            Box(Modifier.size(200.dp).semantics { contentDescription = "room state: ${RoomStatusText.label(ring)}" }, contentAlignment = Alignment.Center) {
+            Spacer(Modifier.height(gap))
+            Text(label, color = Text1, fontSize = if (compact) 30.sp else 40.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+            Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(now)), color = Text2, fontSize = if (compact) 40.sp else 56.sp, fontWeight = FontWeight.Light)
+            Spacer(Modifier.height(gap))
+            Box(Modifier.size(ringSize).semantics { contentDescription = "room state: ${RoomStatusText.label(ring)}" }, contentAlignment = Alignment.Center) {
                 Canvas(Modifier.fillMaxSize()) {
                     val stroke = 10.dp.toPx()
                     when (ring) {
@@ -247,23 +254,23 @@ fun RoomDisplay(
                 }
                 Text(RoomStatusText.label(ring), color = if (ring == RoomStatusText.Ring.MIC_BLOCKED) red else Text1, fontSize = 22.sp)
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(gap * 2 / 3))
             RoomStatusText.detail(status, running, wakeWord)?.let {
-                Text(it, color = Text2, fontSize = 16.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
+                Text(it, color = Text2, fontSize = if (compact) 14.sp else 16.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
             }
             if (approvalCode != null && running) {
                 Spacer(Modifier.height(12.dp))
-                Text(approvalCode.chunked(3).joinToString(" "), color = amber, fontSize = 48.sp, fontWeight = FontWeight.SemiBold)
-                BigButton("check now", Dim, Text1, onCheckNow)
+                Text(approvalCode.chunked(3).joinToString(" "), color = amber, fontSize = if (compact) 40.sp else 48.sp, fontWeight = FontWeight.SemiBold)
+                BigButton("check now", Dim, Text1, compact, onCheckNow)
             }
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(gap))
             if (running) {
                 val isMuted = status?.muted == true
-                BigButton(if (isMuted) "unmute" else "mute", if (isMuted) amber else Dim, if (isMuted) Color.Black else Text1, onMute)
+                BigButton(if (isMuted) "unmute" else "mute", if (isMuted) amber else Dim, if (isMuted) Color.Black else Text1, compact, onMute)
             } else {
-                BigButton("resume", amber, Color.Black, onResume)
+                BigButton("resume", amber, Color.Black, compact, onResume)
             }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(gap * 2 / 3))
             Box(
                 Modifier.clip(RoundedCornerShape(12.dp)).border(1.dp, Dim, RoundedCornerShape(12.dp))
                     .combinedClickable(onClick = {}, onLongClick = onExit)
@@ -299,9 +306,9 @@ private fun MicChip(live: Boolean, muted: Boolean, red: Color) {
 }
 
 @Composable
-private fun BigButton(text: String, bg: Color, fg: Color, onClick: () -> Unit) {
+private fun BigButton(text: String, bg: Color, fg: Color, compact: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.fillMaxWidth(0.7f).height(72.dp).clip(RoundedCornerShape(36.dp)).background(bg)
+        Modifier.fillMaxWidth(0.7f).height(if (compact) 56.dp else 72.dp).clip(RoundedCornerShape(36.dp)).background(bg)
             .combinedClickableCompat(onClick),
         contentAlignment = Alignment.Center,
     ) {

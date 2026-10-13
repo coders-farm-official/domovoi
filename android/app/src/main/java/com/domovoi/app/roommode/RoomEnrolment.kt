@@ -90,9 +90,13 @@ object RoomEnrolment {
         val core = params["core"]?.trim()?.takeIf { it.isNotEmpty() }
             ?: return Result.Invalid("the room code carries no server")
         val coreUrl = normalizeCore(core) ?: return Result.Invalid("the server address in the room code is not usable")
+        // A room is on the home network, like a Pi: its server is a
+        // home-network address or name (the app's cleartext list), https or
+        // not. A room code naming a public host — a link from a web page,
+        // say — never becomes a room that streams this mic out of the house.
         val host = coreUrl.toHttpUrlOrNull()?.host
-        if (!coreUrl.startsWith("https://") && !CleartextPolicy.cleartextPermitted(host)) {
-            return Result.Invalid(CleartextPolicy.refusalMessage(host ?: core))
+        if (!CleartextPolicy.cleartextPermitted(host)) {
+            return Result.Invalid("a room's server must be on the home network (a local address or a .local name), not ${host ?: core}")
         }
         val fp = params["fp"]?.trim()?.takeIf { it.isNotEmpty() }
             ?: return Result.Invalid("the room code carries no server fingerprint")

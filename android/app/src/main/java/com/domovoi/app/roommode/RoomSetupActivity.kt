@@ -29,6 +29,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -79,8 +80,10 @@ class RoomSetupActivity : ComponentActivity() {
         incoming = intent?.dataString
         setContent {
             DomovoiTheme(mode = ThemeMode.Dark) {
-                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
-                    RoomSetup(initialPayload = incoming, onDone = { begin(it) }, onCancel = { finish() })
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+                        RoomSetup(initialPayload = incoming, onDone = { begin(it) }, onCancel = { finish() })
+                    }
                 }
             }
         }

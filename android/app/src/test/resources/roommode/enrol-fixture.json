@@ -34,8 +34,8 @@
       "room_label": "Café & Kids' room"
     },
     {
-      "payload": "DOMOVOI-ROOM:1?core=https%3A%2F%2Fhome.example.com%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=2nd+floor&v=9",
-      "core": "https://home.example.com:6370",
+      "payload": "DOMOVOI-ROOM:1?core=https%3A%2F%2Fdomovoi.home.arpa%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=2nd+floor&v=9",
+      "core": "https://domovoi.home.arpa:6370",
       "fp": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
       "room": "room_2nd_floor",
       "room_label": "2nd floor"
@@ -59,6 +59,7 @@
     {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "fingerprint without SHA256:"},
     {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJ&room=kitchen", "why": "fingerprint too short"},
     {"payload": "domovoi-room:1?core=http%3A%2F%2F8.8.8.8%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "plain http to a public address"},
+    {"payload": "domovoi-room:1?core=https%3A%2F%2Fhome.example.com%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "a server outside the home network, even over https"},
     {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370%2Fapi&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "core with a path"},
     {"payload": "domovoi-room:1?core=http%3A%2F%2Fuser%3Apw%40192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "core with credentials"},
     {"payload": "domovoi-room:1?core=ftp%3A%2F%2F192.168.0.240&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "not http(s)"},

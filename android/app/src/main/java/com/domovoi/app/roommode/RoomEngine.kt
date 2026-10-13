@@ -153,8 +153,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var lastFrameAt = 0L
     private val framesThisMinute = AtomicInteger(0)
     private var healthSeq = 0
+    // CPU time since the last sample; the first one averages since the
+    // process started.
     private var lastCpu = 0L
-    private var lastCpuAt = 0L
+    private var lastCpuAt = Process.getStartElapsedRealtime()
 
     /** Starts the room. False (with the reason on [status]) when the mic
      *  is someone else's or the phone was never enrolled. */
@@ -173,8 +175,12 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         lease = l
         running = true
         network.start()
-        models.local(wakeWord)?.let { wantModels = it }
-        connectJob = scope.launch { connectLoop(enrol) }
+        connectJob = scope.launch {
+            // What is already here listens at once, before the server answers
+            // (re-hashed off the main thread).
+            models.local(wakeWord)?.let { if (wantModels == null) wantModels = it }
+            connectLoop(enrol)
+        }
         healthJob = scope.launch { healthLoop() }
         listenThread = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
@@ -391,6 +397,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     }
 
     private fun onResponseStart(f: RoomProtocol.ServerFrame.ResponseStart) {
+        Log.i(TAG, "reply at ${f.sampleRate} Hz")
         responseStarts.incrementAndGet()
         pendingMusic = null
         music.stop()
@@ -680,7 +687,11 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         }
         maybeStartMusic()
         val score = e.wake.accept(frame, n) ?: return false
-        return score > wakeThreshold
+        if (score > wakeThreshold) {
+            Log.i(TAG, "wake word (score %.2f)".format(score))
+            return true
+        }
+        return false
     }
 
     /** A whole turn from the wake: acknowledge, capture, reply, follow-ups. */
@@ -893,7 +904,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     private fun healthFacts(): HealthSample.Facts {
         val now = SystemClock.elapsedRealtime()
         val cpu = Process.getElapsedCpuTime()
-        val cpuPct = if (lastCpuAt > 0) (cpu - lastCpu) * 100.0 / maxOf(1L, now - lastCpuAt) else null
+        val cpuPct = (cpu - lastCpu) * 100.0 / maxOf(1L, now - lastCpuAt)
         lastCpu = cpu
         lastCpuAt = now
         val battery = RoomDevice.battery(context)

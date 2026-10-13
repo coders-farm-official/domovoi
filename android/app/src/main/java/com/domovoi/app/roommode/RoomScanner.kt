@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
@@ -41,7 +42,9 @@ fun RoomScanner(modifier: Modifier = Modifier, onCode: (String) -> Unit) {
             setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true))
         }
     }
-    val previewView = remember { PreviewView(context) }
+    // TextureView-backed (COMPATIBLE): stays inside its Compose bounds when
+    // the screen scrolls; a SurfaceView draws over its neighbours.
+    val previewView = remember { PreviewView(context).apply { implementationMode = PreviewView.ImplementationMode.COMPATIBLE } }
     DisposableEffect(owner) {
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -69,7 +72,7 @@ fun RoomScanner(modifier: Modifier = Modifier, onCode: (String) -> Unit) {
             executor.shutdown()
         }
     }
-    AndroidView(factory = { previewView }, modifier = modifier)
+    AndroidView(factory = { previewView }, modifier = modifier.clipToBounds())
 }
 
 private fun decode(reader: MultiFormatReader, image: ImageProxy): String? {

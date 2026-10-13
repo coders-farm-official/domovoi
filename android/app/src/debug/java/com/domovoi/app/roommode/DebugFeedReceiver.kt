@@ -22,7 +22,8 @@ import java.util.concurrent.LinkedBlockingQueue
  * `on true` replaces the room's mic with the feed (takes effect when the
  * room next opens its mic: mute and unmute, or start room mode after it);
  * `play` queues a raw 16 kHz mono PCM16 file from the app's external
- * `files/feed/`, played at real-time pace, low noise in between.
+ * `files/feed/` (or its internal one, for an Android whose adb cannot write
+ * Android/data), played at real-time pace, low noise in between.
  */
 class DebugFeedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -31,9 +32,11 @@ class DebugFeedReceiver : BroadcastReceiver() {
             Log.i(TAG, "feed ${if (RoomTestHooks.feed != null) "on" else "off"}")
         }
         intent.getStringExtra("play")?.let { name ->
-            val dir = context.getExternalFilesDir("feed") ?: return
-            val file = File(dir, name).takeIf { it.isFile && it.parentFile == dir } ?: run {
-                Log.w(TAG, "no feed file $name in $dir")
+            // The app's external files/feed (adb push), else its internal
+            // files/feed (`run-as … cp`, where adb cannot reach Android/data).
+            val dirs = listOfNotNull(context.getExternalFilesDir("feed"), File(context.filesDir, "feed"))
+            val file = dirs.map { File(it, name) }.firstOrNull { it.isFile && it.parentFile in dirs } ?: run {
+                Log.w(TAG, "no feed file $name in $dirs")
                 return
             }
             FeedSource.shared.queue(file.readBytes())
