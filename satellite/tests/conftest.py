@@ -78,6 +78,9 @@ REAL_CONFIG_DIR = REAL_HOME / ".domovoi"
 ROOT_CONFIG_DIR = Path("/etc/domovoi")
 # Root's state directory (satellite/net_settings.py keeps its record there).
 ROOT_STATE_DIR = Path("/var/lib/domovoi")
+# Root's units (satellite/net_settings.py installs domovoi-hostname.service
+# there and reads the boot step's enable link).
+ROOT_UNIT_DIR = Path("/etc/systemd/system")
 
 
 @pytest.fixture(scope="session")
@@ -119,7 +122,8 @@ def _relocate(value: Path, home: Path) -> Path | None:
     with it."""
     for root, stand_in in ((REAL_CONFIG_DIR, home / ".domovoi"),
                            (ROOT_CONFIG_DIR, home / "etc-domovoi"),
-                           (ROOT_STATE_DIR, home / "var-lib-domovoi")):
+                           (ROOT_STATE_DIR, home / "var-lib-domovoi"),
+                           (ROOT_UNIT_DIR, home / "etc-systemd-system")):
         try:
             rel = value.relative_to(root)
         except ValueError:

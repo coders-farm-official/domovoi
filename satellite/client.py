@@ -174,6 +174,15 @@ NET_SETTINGS_LOGGED = CONFIG_DIR / "net-settings.logged"
 HEALTH_HARD_EXIT_SEC = 45.0
 
 
+def _hostname() -> str | None:
+    """This unit's host name as the kernel has it now (what its next DHCP
+    request and mDNS announce), for the health sample."""
+    try:
+        return socket.gethostname()[:64] or None
+    except OSError:
+        return None
+
+
 def _hard_exit(code: int) -> None:
     """The backstop for a self-check exit stuck in its own shutdown."""
     try:
@@ -3442,19 +3451,44 @@ class Satellite:
     # has been upgraded but not rebooted: the health sample says so.
 
     _net_report_mtime: float | None = None
+    _net_report: dict[str, Any] | None = None
+    _net_report_read: bool = False
     _net_reboot_needed: str | None = None
     _net_reboot_said: bool = False
+    #: What the boot step did this boot (net_settings.assess), for the
+    #: health sample; None where there is nothing to say (not Linux).
+    _net_step: dict[str, Any] | None = None
 
     def _check_net_settings(self) -> None:
         try:
             mtime: float | None = net_settings.REPORT_PATH.stat().st_mtime
         except OSError:
             mtime = None
-        if mtime is not None and mtime == self._net_report_mtime:
-            return
-        first = self._net_report_mtime is None and not self._net_reboot_said
+        if not self._net_report_read or mtime != self._net_report_mtime:
+            self._read_net_report(mtime)
+        # Re-assessed every tick, not only when the record changes: "still
+        # running" turns into "did not run" as the boot gets older.
+        if sys.platform != "linux":
+            self._net_step, self._net_reboot_needed = None, None
+        else:
+            self._net_step, self._net_reboot_needed = net_settings.assess(
+                self._net_report, unit_state=net_settings.boot_step_unit_state(),
+                boot_id=net_settings._boot_id(), uptime=net_settings._uptime(),
+            )
+        if self._net_reboot_needed and not self._net_reboot_said:
+            self._net_reboot_said = True
+            log.warning("reboot needed: %s", self._net_reboot_needed)
+        elif not self._net_reboot_needed:
+            self._net_reboot_said = False
+
+    def _read_net_report(self, mtime: float | None) -> None:
+        """Read root's record and put a run nobody has logged yet into this
+        process's log (once per run, across restarts)."""
+        first = not self._net_report_read and not self._net_reboot_said
+        self._net_report_read = True
         self._net_report_mtime = mtime
         report = net_settings.read_report() if mtime is not None else None
+        self._net_report = report
         if report is not None:
             run_id = f"{report.get('boot_id')}:{report.get('ts')}"
             try:
@@ -3476,13 +3510,6 @@ class Satellite:
                     NET_SETTINGS_LOGGED.write_text(run_id + "\n", encoding="utf-8")
                 except OSError:
                     pass
-        installed = sys.platform == "linux" and net_settings.PROVISIONING_UNIT.exists()
-        self._net_reboot_needed = net_settings.reboot_needed(report, unit_installed=installed)
-        if self._net_reboot_needed and not self._net_reboot_said:
-            self._net_reboot_said = True
-            log.warning("reboot needed: %s", self._net_reboot_needed)
-        elif not self._net_reboot_needed:
-            self._net_reboot_said = False
 
     def _core_endpoint(self) -> tuple[str | None, int | None]:
         """``(host, port)`` of the configured core, or ``(None, None)``
@@ -3539,6 +3566,12 @@ class Satellite:
             # boot are not in place yet (satellite/net_settings.py). The
             # dashboard shows it; absent (None) when nothing is pending.
             "reboot_needed": self._net_reboot_needed,
+            # What root's boot-time network step did this boot (applied /
+            # unchanged / skipped / failed / not run / not installed /
+            # running, with the reason), and the name the router should
+            # be showing for this unit.
+            "net_step": self._net_step,
+            "hostname": _hostname(),
             "log_ring": {k: v for k, v in LOG_RING.stats().items() if k != "max_bytes"},
             "log_spool": {k: v for k, v in LOG_SPOOL.stats().items() if k != "max_bytes"},
         }

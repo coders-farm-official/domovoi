@@ -2,7 +2,10 @@
 # Render + install the Domovoi satellite systemd units for the CURRENT user
 # (replaces the PROVISIONING.md §8 heredoc). Installs:
 #   domovoi-satellite.service       (always)
-#   domovoi-provisioning.service    (--with-provisioning: USB adoption mode)
+#   domovoi-provisioning.service    (--with-provisioning: USB adoption mode
+#                                    and the boot-time network step, with
+#                                    domovoi-hostname.service, which sets
+#                                    the host name before the network)
 #   domovoi-kiosk.service           (--with-kiosk: video satellites)
 #
 # Usage:  sudo -E sh satellite/scripts/install-service.sh [--with-provisioning] [--with-kiosk]
@@ -28,7 +31,8 @@ for arg in "$@"; do
   case "$arg" in
     --with-provisioning)
       render "$HERE/scripts/domovoi-provisioning.service" domovoi-provisioning.service
-      UNITS="$UNITS domovoi-provisioning"
+      render "$HERE/scripts/domovoi-hostname.service" domovoi-hostname.service
+      UNITS="$UNITS domovoi-provisioning domovoi-hostname"
       ;;
     --with-kiosk)
       render "$HERE/domovoi-kiosk.service" domovoi-kiosk.service

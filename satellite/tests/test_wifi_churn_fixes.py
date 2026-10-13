@@ -213,11 +213,19 @@ def test_root_s_changes_are_logged_once(tmp_path, caplog, monkeypatch):
     assert "changed:" not in caplog.text
 
 
+def _booted(monkeypatch, *, unit_state="enabled", boot_id="b1", uptime=3600.0):
+    """A Linux satellite whose boot step is (or is not) installed, booted
+    ``uptime`` seconds ago."""
+    monkeypatch.setattr(client.sys, "platform", "linux")
+    monkeypatch.setattr(net_settings, "boot_step_unit_state", lambda: unit_state)
+    monkeypatch.setattr(net_settings, "_boot_id", lambda: boot_id)
+    monkeypatch.setattr(net_settings, "_uptime", lambda: uptime)
+
+
 def test_upgraded_but_not_rebooted_says_reboot_needed(monkeypatch, caplog):
     """The upgrade restarts the client only; root's boot-time step runs at
     the next boot. Until then the health sample carries the reason."""
-    monkeypatch.setattr(client.sys, "platform", "linux")
-    monkeypatch.setattr(net_settings, "PROVISIONING_UNIT", types.SimpleNamespace(exists=lambda: True))
+    _booted(monkeypatch)
     sat = object.__new__(client.Satellite)
     with caplog.at_level(logging.WARNING, logger="satellite"):
         sat._check_net_settings()
@@ -226,8 +234,7 @@ def test_upgraded_but_not_rebooted_says_reboot_needed(monkeypatch, caplog):
 
 
 def test_after_the_reboot_nothing_is_pending(tmp_path, monkeypatch):
-    monkeypatch.setattr(client.sys, "platform", "linux")
-    monkeypatch.setattr(net_settings, "PROVISIONING_UNIT", types.SimpleNamespace(exists=lambda: True))
+    _booted(monkeypatch)
     _report(tmp_path, changed=[])
     sat = object.__new__(client.Satellite)
     sat._check_net_settings()
@@ -240,6 +247,48 @@ def test_a_unit_without_the_boot_step_is_never_told_to_reboot(monkeypatch):
     sat = object.__new__(client.Satellite)
     sat._check_net_settings()
     assert sat._net_reboot_needed is None
+    # ...but it says why nothing applies the settings, rather than nothing.
+    assert sat._net_step["state"] == "not_installed"
+
+
+def test_the_step_s_outcome_follows_the_boot_without_a_new_record(tmp_path, monkeypatch):
+    """Right after a reboot the record is still the last boot's: "running",
+    no reboot asked for. The same record a few minutes later, when the step
+    never wrote one for this boot: "not run". Re-assessed every tick."""
+    _report(tmp_path, boot_id="b0", changed=[])
+    _booted(monkeypatch, boot_id="b1", uptime=30.0)
+    sat = object.__new__(client.Satellite)
+    sat._check_net_settings()
+    assert sat._net_step["state"] == "running" and sat._net_reboot_needed is None
+    _booted(monkeypatch, boot_id="b1", uptime=600.0)
+    sat._check_net_settings()
+    assert sat._net_step["state"] == "not_run" and "did not run this boot" in sat._net_step["detail"]
+    # The step writes this boot's record: read on the next tick.
+    import os as _os
+    import time as _time
+    _report(tmp_path, boot_id="b1", changed=["host name 'raspberrypi' -> 'domovoi-kitchen'"])
+    later = _time.time() + 5
+    _os.utime(net_settings.REPORT_PATH, (later, later))
+    sat._check_net_settings()
+    assert sat._net_step["state"] == "applied"
+    assert "domovoi-kitchen" in sat._net_step["detail"]
+
+
+def test_a_skipped_rename_is_in_the_health_sample_not_only_the_log(tmp_path, monkeypatch):
+    _report(tmp_path, changed=[], skipped=[
+        "host name 'kamrons-pi' looks chosen by a person; not renaming it to 'domovoi-kitchen'"])
+    _booted(monkeypatch)
+    sat = object.__new__(client.Satellite)
+    sat._check_net_settings()
+    assert sat._net_step["state"] == "skipped" and "kamrons-pi" in sat._net_step["detail"]
+    assert sat._net_reboot_needed is None
+
+
+def test_off_linux_there_is_no_step_to_report(monkeypatch):
+    monkeypatch.setattr(client.sys, "platform", "win32")
+    sat = object.__new__(client.Satellite)
+    sat._check_net_settings()
+    assert sat._net_step is None and sat._net_reboot_needed is None
 
 
 def test_the_health_sample_carries_reboot_needed():
@@ -247,6 +296,15 @@ def test_the_health_sample_carries_reboot_needed():
 
     src = inspect.getsource(client.Satellite._health_process_facts)
     assert '"reboot_needed": self._net_reboot_needed' in src
+    assert '"net_step": self._net_step' in src
+    assert '"hostname": _hostname()' in src
+
+
+def test_the_host_name_is_the_kernel_s(monkeypatch):
+    monkeypatch.setattr(client.socket, "gethostname", lambda: "domovoi-kitchen")
+    assert client._hostname() == "domovoi-kitchen"
+    monkeypatch.setattr(client.socket, "gethostname", lambda: (_ for _ in ()).throw(OSError()))
+    assert client._hostname() is None
 
 
 # ─── following the core to a new address ──────────────────────────────────
