@@ -61,8 +61,18 @@ def voice(monkeypatch, tmp_path):
     onnx = tmp_path / "en_US-norman-medium.onnx"
     onnx.write_bytes(b"model")
     Path(f"{onnx}.json").write_text(json.dumps(_config()), encoding="utf-8")
-    v = tts_mod.PiperVoice(onnx)
+    v = _checked(tts_mod.PiperVoice(onnx), session)
     v.test_session = session
+    return v
+
+
+def _checked(v, session):
+    """A stand-in voice after its one-time runaway check (the stand-in
+    says everything quickly, so short sentences are said alone), with the
+    check's calls forgotten: the tests below are about what a sentence
+    feeds the model."""
+    assert v.runs_away() is False
+    session.calls.clear()
     return v
 
 
@@ -114,7 +124,7 @@ def test_both_english_sets_speak(monkeypatch, tmp_path, espeak_voice, dialect):
     onnx = tmp_path / "mine.onnx"
     onnx.write_bytes(b"model")
     Path(f"{onnx}.json").write_text(json.dumps(_config(espeak_voice)), encoding="utf-8")
-    v = tts_mod.PiperVoice(onnx)
+    v = _checked(tts_mod.PiperVoice(onnx), session)
     assert v.dialect == dialect and tts_mod.piper_config_problem(_config(espeak_voice)) is None
     monkeypatch.setattr(tts_mod, "_piper_voice", lambda ref: v)
     assert _frames(tts_mod._synth_piper_sync("Better water, Domovoi.", "mine", 1.0)) > 0
@@ -137,7 +147,7 @@ def test_a_symbol_the_voice_lacks_is_said_as_the_nearest_one(monkeypatch, tmp_pa
     onnx = tmp_path / "small.onnx"
     onnx.write_bytes(b"model")
     Path(f"{onnx}.json").write_text(json.dumps(_config("en-us", phoneme_id_map=small)), encoding="utf-8")
-    v = tts_mod.PiperVoice(onnx)
+    v = _checked(tts_mod.PiperVoice(onnx), session)
     assert v.synthesize_pcm(["bˈɛɾɚ ɹᵻmˈaɪnd.", "ɹᵻpˈiːt."], 1.0)
     fed = [c["input"].tolist()[0] for c in session.calls]
     assert fed == [phoneme_ids("bˈɛtɚ ɹɪmˈaɪnd.", small), phoneme_ids("ɹɪpˈiːt.", small)]
