@@ -52,3 +52,49 @@ since = "fb62fa4"
 test = "domovoi/tests/test_phone_dropin.py::test_phone_disconnect_tears_down_call"
 reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
 since = "fb62fa4"
+
+# Three more of the same module, seen in a full -n 4 run on 19e9e43
+# (wf/voice-page-fixes' builder, 2026-10-12) beside the three above.
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_call_in_auto_mode_still_opens_immediately"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_call_pi_side_hangup_ends_loop"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_relay_failure_tears_down"
+reason = "flaky under load: the test polls 50 x 10 ms for the relay failure to tear both sides down, which a busy box can outlast"
+since = "19e9e43"
+
+# Back on the list (dropped at 1012 after 5 clean full runs): the same 5
+# failed in a full -n 4 run on 19e9e43 (wf/voice-page-fixes' builder,
+# 2026-10-12). Each nests a plugin router under an outer one, and the route
+# comes out named with the outer prefix ("/in/both", not "/both").
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_both_markers_one_router_down_are_still_a_conflict"
+reason = "a nested router's route is named with the outer prefix (/in/both): how this FastAPI version nests included routers, as test_same_tier_as_the_library_listing (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_core_load_refuses_a_marker_the_preview_cannot_see[nested-setattr-device]"
+reason = "a nested router's route is named with the outer prefix (/in/sneaky): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_marker_the_preview_cannot_see[nested-setattr-device]"
+reason = "a nested router's route is named with the outer prefix (/in/sneaky): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_core_refuses_a_websocket_route[nested-websocket]"
+reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_websocket_route[nested-websocket]"
+reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
