@@ -31,8 +31,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.overscroll
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.gestures.scrollBy
@@ -61,6 +69,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,6 +96,7 @@ import com.domovoi.app.ui.components.MarkdownText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -515,9 +525,19 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
     }
     val tail = transcript.lastOrNull()
     LaunchedEffect(tail) {
-        if (tail == null || tail.role == "user") return@LaunchedEffect
-        snapshotFlow { tail.content.length to tail.error }
-            .collect { if (following && tail.pending) listState.scrollBy(FOLLOW_STEP_PX) }
+        if (tail == null || tail.role == "user" || !tail.pending) return@LaunchedEffect
+        snapshotFlow { Triple(tail.content.length, tail.error, tail.pending) }
+            .takeWhile { (_, _, pending) -> pending }
+            .collect { if (following) listState.scrollBy(FOLLOW_STEP_PX) }
+        // Done. The stamp line (time and model) appears under the reply only
+        // now, a layout after `pending` drops, and nothing above followed it:
+        // a reply taller than the list ended with that line under the fold
+        // until the reader scrolled (2026-10-12, emulator, a streamed
+        // three-screen reply). Follow it in over the next few frames.
+        repeat(FINISH_FOLLOW_FRAMES) {
+            withFrameNanos { }
+            if (following && listState.canScrollForward) listState.scrollBy(FOLLOW_STEP_PX)
+        }
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -614,12 +634,14 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         ChatPaneGutter()
         ThreadTitleRow(thread, onBack)
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            items(transcript) { m -> MessageBubble(m, thread.id) }
+        Box(Modifier.weight(1f).fillMaxWidth().then(rememberFitStretch(listState))) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(transcript) { m -> MessageBubble(m, thread.id) }
+            }
         }
 
         if (attachments.isNotEmpty()) {
@@ -701,6 +723,54 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
             }
         }
         ChatPaneGutter()
+    }
+}
+
+/** True when a drag on the conversation gets [rememberFitStretch]'s stretch:
+ *  only while the list can scroll neither way. A list that can scroll draws
+ *  its own stretch at its ends and leaves nothing over for a second one. */
+internal fun fitStretches(canScrollBackward: Boolean, canScrollForward: Boolean): Boolean =
+    !canScrollBackward && !canScrollForward
+
+/**
+ * A conversation shorter than its pane still answers a drag.
+ *
+ * Compose foundation 1.7 draws no overscroll on a list that cannot scroll:
+ * ScrollingLogic dispatches it only when canScrollForward or
+ * canScrollBackward. So a thread that fits on screen (one picture and one
+ * multi-paragraph reply on a 1080x2520 phone) gave a drag no response at all.
+ * On the emulator a held 600px drag screenshots pixel-identical to the still
+ * frame, where a list that can scroll stretches. That reads as a locked
+ * screen: Kamron's "my scroll seems to be locked" (2026-10-12). Opening the
+ * keyboard shortens the pane until the same thread overflows by ~400px, which
+ * was his "when I click into the chat I can scroll a little bit". Nothing was
+ * locked; there was nothing to scroll and nothing said so.
+ *
+ * The list still hands an unusable drag to its nested-scroll parents, so this
+ * connection, on the box around the list, feeds what it leaves over to a
+ * stretch of the platform's own kind, and lets it spring back on release,
+ * while [fitStretches] says the list cannot scroll itself.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun rememberFitStretch(listState: LazyListState): Modifier {
+    val effect = ScrollableDefaults.overscrollEffect()
+    return remember(listState, effect) {
+        val fits = { fitStretches(listState.canScrollBackward, listState.canScrollForward) }
+        val connection = object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (!fits()) return Offset.Zero
+                // Nothing scrolls here: the effect pulls (or relaxes) its stretch.
+                return effect.applyToScroll(available, source) { Offset.Zero }
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (!fits() && !effect.isInProgress) return Velocity.Zero
+                effect.applyToFling(available) { Velocity.Zero }
+                return available
+            }
+        }
+        Modifier.nestedScroll(connection).overscroll(effect)
     }
 }
 
@@ -887,3 +957,7 @@ internal fun MessageBubble(m: LiveMessage, threadId: Long) {
 /** One follow step: more than any reply grows between two deltas, so a
  *  scrollBy of it always lands on the list's end (scrolling clamps there). */
 private const val FOLLOW_STEP_PX = 100_000f
+
+/** Frames the follow keeps watching after a reply is done, for its stamp
+ *  line to be laid out (about 160ms at 60Hz). */
+private const val FINISH_FOLLOW_FRAMES = 10
