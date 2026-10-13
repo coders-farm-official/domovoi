@@ -1,0 +1,71 @@
+{
+  "about": [
+    "Room-mode enrolment payloads: domovoi-room:1?core=<core base URL>&fp=<SHA256:... fingerprint>&room=<room name>, percent-encoded UTF-8, no secret in it.",
+    "The Android app's own copy of the cases, read by roommode/RoomEnrolmentTest.kt until docs/uml/spare-device-enrol-fixture.json (made with the dashboard side on wf/sat-pc) lands; the test reads that file instead whenever it exists.",
+    "valid[].core is the normalised core URL (port always spelled out, no trailing slash), room the room id the phone connects as (^[a-z][a-z0-9_]{0,31}$), room_label the name as given."
+  ],
+  "valid": [
+    {
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen",
+      "core": "http://192.168.0.240:6370",
+      "fp": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
+      "room": "kitchen",
+      "room_label": "kitchen"
+    },
+    {
+      "payload": "domovoi-room:1?core=http://192.168.0.240:6370&fp=SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=living_room",
+      "core": "http://192.168.0.240:6370",
+      "fp": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
+      "room": "living_room",
+      "room_label": "living_room"
+    },
+    {
+      "payload": "domovoi-room:1?room=Living%20Room&fp=SHA256%3AX%2BzrZv%2FIbzjZUnhsbWlsecLbwjndTpG0ZynXOif7V%2Bk&core=http%3A%2F%2Fdomovoi.local%3A6370%2F",
+      "core": "http://domovoi.local:6370",
+      "fp": "SHA256:X+zrZv/IbzjZUnhsbWlsecLbwjndTpG0ZynXOif7V+k",
+      "room": "living_room",
+      "room_label": "Living Room"
+    },
+    {
+      "payload": "domovoi-room:1?core=http%3A%2F%2F10.0.0.5%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=Caf%C3%A9+%26+Kids%27+room",
+      "core": "http://10.0.0.5:6370",
+      "fp": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
+      "room": "cafe_kids_room",
+      "room_label": "Café & Kids' room"
+    },
+    {
+      "payload": "DOMOVOI-ROOM:1?core=https%3A%2F%2Fhome.example.com%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=2nd+floor&v=9",
+      "core": "https://home.example.com:6370",
+      "fp": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
+      "room": "room_2nd_floor",
+      "room_label": "2nd floor"
+    },
+    {
+      "payload": "domovoi-room:1?core=http%3A%2F%2F%5Bfd00%3A%3A5%5D%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=study",
+      "core": "http://[fd00::5]:6370",
+      "fp": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
+      "room": "study",
+      "room_label": "study"
+    }
+  ],
+  "invalid": [
+    {"payload": "", "why": "empty"},
+    {"payload": "https://example.com/?core=x", "why": "not a room code"},
+    {"payload": "domovoi-room:2?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "a newer version"},
+    {"payload": "domovoi-room:1", "why": "no parameters"},
+    {"payload": "domovoi-room:1?fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "no core"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&room=kitchen", "why": "no fingerprint"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A", "why": "no room"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "fingerprint without SHA256:"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJ&room=kitchen", "why": "fingerprint too short"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F8.8.8.8%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "plain http to a public address"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370%2Fapi&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "core with a path"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2Fuser%3Apw%40192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "core with credentials"},
+    {"payload": "domovoi-room:1?core=ftp%3A%2F%2F192.168.0.240&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen", "why": "not http(s)"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kitchen&room=office", "why": "room named twice"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=kit%zzchen", "why": "bad percent escape"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=%C3%28", "why": "not UTF-8"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=%F0%9F%98%80", "why": "a room name with nothing to make an id of"},
+    {"payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.240%3A6370&fp=SHA256%3ALWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A&room=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "why": "room name over 80 characters"}
+  ]
+}

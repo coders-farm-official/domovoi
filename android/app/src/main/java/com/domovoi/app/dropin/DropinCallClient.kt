@@ -9,6 +9,8 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
+import com.domovoi.app.audio.MicArbiter
+import com.domovoi.app.audio.MicOwnership
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.DomovoiJson
@@ -57,6 +59,7 @@ class DropinCallClient(
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
     private var aec: AcousticEchoCanceler? = null
+    @Volatile private var micLease: MicOwnership.Lease? = null
     @Volatile private var running = false
     private var prevAudioMode = AudioManager.MODE_NORMAL
 
@@ -67,10 +70,20 @@ class DropinCallClient(
      * endpoint, then open the call. Must hold RECORD_AUDIO permission. */
     suspend fun start(roomId: String) {
         if (_state.value is CallState.Connecting || _state.value is CallState.Live) return
+        // One owner at a time (audio/MicArbiter.kt): no call while room
+        // mode or the chat mic has the microphone.
+        val lease = MicArbiter.tryAcquire(MicOwnership.Owner.DROP_IN)
+        if (lease == null) {
+            _state.value = CallState.Failed(MicArbiter.refusal(MicOwnership.Owner.DROP_IN) ?: "the microphone is in use")
+            return
+        }
+        micLease = lease
         _state.value = CallState.Connecting
         _muted.value = false
 
         val url = runCatching { resolveWsUrl(roomId) }.getOrElse {
+            micLease?.close()
+            micLease = null
             _state.value = CallState.Failed(it.message ?: "couldn't reach the server")
             return
         }
@@ -213,6 +226,8 @@ class DropinCallClient(
 
     private fun teardown() {
         running = false
+        micLease?.close()
+        micLease = null
         runCatching { record?.stop() }
         runCatching { record?.release() }
         record = null

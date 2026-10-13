@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import com.domovoi.app.audio.MicArbiter
+import com.domovoi.app.audio.MicOwnership
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -20,19 +22,29 @@ interface AudioSource {
 }
 
 /** The phone's microphone: 16 kHz mono PCM16, tuned for recognition. The
- *  caller holds RECORD_AUDIO; nothing is written to disk. */
-class AndroidMic : AudioSource {
+ *  caller holds RECORD_AUDIO; nothing is written to disk.
+ *
+ *  Room mode (roommode/RoomMic.kt) opens it too, with its own [audioSource]
+ *  (VOICE_COMMUNICATION, the platform's echo canceller, during a drop-in)
+ *  and a deeper buffer, and reads [sessionId] to attach the canceller. */
+class AndroidMic(
+    private val audioSource: Int = MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    private val bufferSeconds: Double = 0.5,
+) : AudioSource {
     private var record: AudioRecord? = null
+
+    /** The open recorder's audio session (0 when closed). */
+    val sessionId: Int get() = record?.audioSessionId ?: 0
 
     @SuppressLint("MissingPermission")
     override fun start() {
         val min = AudioRecord.getMinBufferSize(SPEECH_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val created = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            audioSource,
             SPEECH_SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(min, SPEECH_SAMPLE_RATE / 2 * 2),   // half a second
+            maxOf(min, (SPEECH_SAMPLE_RATE * bufferSeconds).toInt() * 2),
         )
         if (created.state != AudioRecord.STATE_INITIALIZED) {
             created.release()
@@ -90,11 +102,19 @@ class MicCapture(
     ): Utterance? = withContext(Dispatchers.IO) {
         stopRequested = false
         detector.reset()
+        // One owner at a time (audio/MicArbiter.kt): refused, with words,
+        // while room mode or a call has the microphone.
+        val lease = MicArbiter.acquireOrThrow(MicOwnership.Owner.ASSISTANT)
         val mic = source()
         val chunk = ShortArray(CHUNK_SAMPLES)
         var heard = 0L
         var speechStart: Long? = null
-        mic.start()
+        try {
+            mic.start()
+        } catch (e: Throwable) {
+            lease.close()
+            throw e
+        }
         try {
             while (true) {
                 ensureActive()
@@ -119,6 +139,7 @@ class MicCapture(
             null
         } finally {
             mic.stop()
+            lease.close()
         }
     }
 

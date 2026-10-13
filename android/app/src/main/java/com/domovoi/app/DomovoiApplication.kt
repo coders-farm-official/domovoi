@@ -10,6 +10,7 @@ import com.domovoi.app.alerts.TimerNotifier
 import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.NetworkWatch
+import com.domovoi.app.roommode.RoomStore
 
 class DomovoiApplication : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -31,9 +32,14 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         // A token-bearing save queued by an earlier process that is waiting
         // for a network must not resume on whichever comes next.
         DeviceDownloads.atStart(this)
-        container.bus.start()
-        container.alerts.start()
-        container.containerAlerts.start()
+        // Room mode (roommode/): the household side stays off — no state
+        // socket, no timer sync, nothing that would carry the household
+        // token — until the person exits room mode.
+        if (!RoomStore.isActive(this)) {
+            container.bus.start()
+            container.alerts.start()
+            container.containerAlerts.start()
+        }
         // Earlier crashes and Android's exit history, read off the main thread.
         Diagnostics.onLaunch(this)
     }

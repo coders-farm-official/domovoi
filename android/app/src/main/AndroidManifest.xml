@@ -33,6 +33,19 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
+    <!-- Room mode (roommode/): a spare phone as a room satellite. Its
+         foreground service listens with the screen off (type microphone,
+         Android 14+ needs the permission named) and speaks (mediaPlayback,
+         above); a Wi-Fi lock keeps its socket up; the Wi-Fi link speed and
+         signal go into its health sample; the camera reads the room code
+         (asked for only when "Scan" is pressed, and never required to
+         install). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
     <!-- Timer and reminder alerts (alerts/): a local alarm per running timer
          so the phone rings on time with the app closed. Exact alarms need
          SCHEDULE_EXACT_ALARM on API 31-32 (user-revocable; inexact without
@@ -94,6 +107,59 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Room mode (roommode/): its own task, its own launcher icon
+             ("Domovoi Room", the alias below), a consent screen first, then
+             the dark full-screen room display. The setup screen also takes
+             a domovoi-room: link (the room code a camera app read): it only
+             fills the form, nothing happens until the person confirms. -->
+        <activity
+            android:name=".roommode.RoomSetupActivity"
+            android:exported="true"
+            android:label="Domovoi Room"
+            android:taskAffinity="com.domovoi.app.room"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="domovoi-room" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".roommode.RoomModeActivity"
+            android:exported="false"
+            android:label="Domovoi Room"
+            android:taskAffinity="com.domovoi.app.room"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" />
+        <activity-alias
+            android:name=".RoomLauncher"
+            android:targetActivity=".roommode.RoomSetupActivity"
+            android:exported="true"
+            android:label="Domovoi Room"
+            android:icon="@mipmap/ic_launcher_room">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <service
+            android:name=".roommode.RoomService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|mediaPlayback" />
+        <!-- After a reboot a room that was listening posts "tap to resume":
+             Android starts no microphone service from the boot broadcast. -->
+        <receiver
+            android:name=".roommode.RoomBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Not exported: only this app's own immutable PendingIntents (a
              timer's alarm, the background sync's tick) and protected system

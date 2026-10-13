@@ -164,6 +164,10 @@ fun SatellitesScreen(embedded: Boolean = false) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     BroadcastComposer(onlineCount)
                 }
+                // "Use this device as a room" (roommode/).
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    com.domovoi.app.roommode.RoomModeEntryCard()
+                }
             }
         }
         if (open != null) {
