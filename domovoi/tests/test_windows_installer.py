@@ -128,7 +128,24 @@ def test_provision_pin_is_the_file_at_the_pinned_commit():
     )
     if proc.returncode != 0:
         pytest.skip(f"commit {commit[:7]} is not in this clone")
+    # GitHub raw serves the blob as committed: these exact bytes.
     assert hashlib.sha256(proc.stdout).hexdigest() == _pins()["ProvisionSha256"]
+    assert b"\r" not in proc.stdout, "provision.sh at the pinned commit must have LF endings"
+    # What the installer relies on (the port gate before the start, and the
+    # start-failure diagnostics in provision.log); the reason fb62fa4's
+    # builds carried their own copy.
+    text = proc.stdout.decode("utf-8")
+    assert "\n  --stop-before STEP " in text and "start_diagnostics()" in text
+
+
+def test_every_download_estimate_agrees():
+    """Setup's pages, the helper's no-internet message and the doc give the
+    same "about X-Y GB" for what an install downloads."""
+    found = []
+    for path in (SCRIPT, WIN / "helper" / "Preflight.cs", DOC):
+        found += [(path.name, m) for m in re.findall(r"(\d+(?:\.\d+)?-\d+(?:\.\d+)? GB)", path.read_text(encoding="utf-8"))]
+    assert len(found) >= 5, found
+    assert len({m for _, m in found}) == 1, found
 
 
 def test_the_script_uses_the_pins_and_the_ports():

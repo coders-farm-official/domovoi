@@ -29,7 +29,7 @@ asks) · [Security & privacy](SECURITY_PRIVACY.md)
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
 | Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. |
 | GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Whisper always runs on the CPU. |
-| Internet | Needed during setup (about 11-14 GB, most of it the AI models and voices) | Afterwards Domovoi works with or without it, as you answer in Setup. |
+| Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
 
@@ -91,7 +91,8 @@ that:
    are refused, because Domovoi's account and its Linux system can write
    there.
 5. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
-   from the pinned commit, each checked against a pinned SHA-256
+   from the pinned commit (GitHub's raw file at `DomovoiCommit`, today
+   `2f19bbd`), each checked against a pinned SHA-256
    (`windows/installer/pins.iss`). A build whose `provision.sh` is ahead of
    the pinned commit (`ProvisionBundled` in `pins.iss`) carries the script
    inside `DomovoiSetup.exe` instead; it is checked against its pin the
@@ -120,8 +121,9 @@ that:
    start`) and waits while a port Domovoi needs is taken, and Setup shows
    the same pop-up per program as its first check; once the port is free
    Domovoi starts by itself. (That needs a pinned `provision.sh` with
-   `--stop-before`; with an older one the start fails instead, and Setup
-   then shows the same pop-ups and carries on by itself after **Retry**.)
+   `--stop-before`, as the current pin's has; with an older one the start
+   fails instead, and Setup then shows the same pop-ups and carries on by
+   itself after **Retry**.)
    Domovoi's own Linux services never show up in Windows' port table, so
    only Windows programs are ever named.
 

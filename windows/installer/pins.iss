@@ -13,7 +13,7 @@
 ; from it. A full SHA, never a branch; release tags and their signers come
 ; with code signing (PLAN 10, section 14 item 29).
 #define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"
-#define DomovoiCommit "fb62fa42e5914c34ced39a102cef453df0daa2dc"
+#define DomovoiCommit "2f19bbd7c3264e3f52c1588c1425d37becde44d1"
 
 ; Does the dashboard at that commit give each Settings tab its own address
 ; (#settings/configuration/setup: Settings > Configuration with the
@@ -23,22 +23,22 @@
 ; first tab, and the steps say to click Configuration. Define it in the same
 ; edit that moves DomovoiCommit to a commit that has them;
 ; domovoi/tests/test_windows_installer.py checks it against the commit.
-; #define DashboardTabRoutes
+; 2f19bbd has them.
+#define DashboardTabRoutes
 
 ; provision.sh, the one script Setup runs inside the distro (as root); it
 ; then clones the repository at DomovoiCommit and reads every other pin
 ; from that checkout. Two ways to get it:
 ; * ProvisionBundled defined: the repository's scripts/linux/provision.sh as
 ;   this build's tree has it is packed inside DomovoiSetup.exe (nothing to
-;   download). For a test build whose provision.sh is ahead of the pinned
-;   commit: here fb62fa4's script plus wf/wininst-exe's --stop-before and
-;   start diagnostics, minus main's edge_tts and miniaudio import checks
-;   (130,360 bytes; fb62fa4's checkout still installs both, so the import
-;   check only asks for less), which nothing else in fb62fa4's checkout
-;   depends on. Take it out once the commit pinned has them.
-; * not defined: downloaded from the pinned commit (ProvisionUrl).
+;   download), for a test build whose provision.sh is ahead of the pinned
+;   commit. Builds pinned to fb62fa4 did this, for the --stop-before and
+;   start diagnostics fb62fa4's script lacked.
+; * not defined: downloaded from the pinned commit (ProvisionUrl). This
+;   build: 2f19bbd's script, which has both (130,360 bytes, LF; GitHub raw
+;   served exactly these bytes on 2026-10-13).
 ; Either way ProvisionSha256 is checked by the helper and by DomovoiHost.
-#define ProvisionBundled
+; #define ProvisionBundled
 #define ProvisionSource "..\..\scripts\linux\provision.sh"
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
 #define ProvisionSha256 "68088a139a044615d1f91cd4898474f56e10f6cc96a7577aa5bdfbdc54a7cd1d"

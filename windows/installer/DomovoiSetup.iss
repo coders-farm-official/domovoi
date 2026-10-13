@@ -449,7 +449,7 @@ begin
   S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it). Setup won''t use a C:\ProgramData\Domovoi it didn''t make.' + #13#10#13#10;
   N := N + 1;
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
-  S := S + 'Downloads: about 11-14 GB (the AI models and voices are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
+  S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
   S := S + 'Not changed: power and sleep settings (this test build doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
   S := S + 'This test build is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
   S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.';
@@ -508,7 +508,7 @@ var
   Y: Integer;
 begin
   InternetPage := CreateCustomPage(AfterID, 'Will this PC have internet after setup?', 'Pick one answer to continue.');
-  T := AddText(InternetPage, 'Setup needs the internet right now to download Domovoi (about 11-14 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.', 0, 0, False, False);
+  T := AddText(InternetPage, 'Setup needs the internet right now to download Domovoi (about 10.5-13.5 GB). After that, Domovoi works with or without it. Your voice and recordings never leave this PC either way.', 0, 0, False, False);
   Y := T.Top + T.Height + ScaleY(10);
   RadioAlways := AddRadio(InternetPage, 'Yes, always. It''s on our home internet.', Y);
   T := AddText(InternetPage, 'Turns on the extras that use the internet: web answers (weather, scores, news), song lyrics, other names for artists, podcast downloads. They pause by themselves if the internet drops.', RadioAlways.Top + RadioAlways.Height, ScaleX(18), True, False);
@@ -830,7 +830,7 @@ begin
   Result := False;
   WantAttempt := 0;
   Started := GetTickCount;
-  { Four hours: far more than a slow line needs for 11-14 GB. }
+  { Four hours: far more than a slow line needs for 10.5-13.5 GB. }
   LimitMs := 4 * 3600 * 1000;
   while True do
   begin
@@ -1147,7 +1147,11 @@ begin
   Result := 'Internet after setup:' + NewLine + Space + InternetAnswer + NewLine + NewLine +
     'Media folder:' + NewLine + Space + RemoveBackslashUnlessRoot(MediaPage.Values[0]) + NewLine + NewLine +
     'Domovoi:' + NewLine + Space + 'commit {#DomovoiCommit}' + NewLine + NewLine +
+#ifdef ProvisionBundled
     'Next, Setup downloads Ubuntu''s WSL image (418 MB), then installs.';
+#else
+    'Next, Setup downloads Ubuntu''s WSL image (418 MB) and provision.sh, then installs.';
+#endif
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
