@@ -116,8 +116,12 @@ trap 'exit 130' INT TERM
 # What a checkout would hold: tracked files (as they are on disk, edits
 # included) and new files git isn't told to ignore. Deleted ones are left
 # out. Outside a git checkout, the whole directory but .git and .venv.
-if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  git -C "$SRC" ls-files -z --cached --others --exclude-standard \
+# git runs from inside $SRC, not with -C "$SRC": with the path conversion
+# switched off above, Git Bash would hand git.exe a /c/... path it cannot
+# open, so every Windows run fell back to the copy-everything branch below
+# (build outputs, Gradle's held lock files and all).
+if (cd "$SRC" && git rev-parse --is-inside-work-tree) >/dev/null 2>&1; then
+  (cd "$SRC" && git ls-files -z --cached --others --exclude-standard) \
     | while IFS= read -r -d '' f; do [ -f "$SRC/$f" ] && printf '%s\0' "$f"; done >"$WORK/files"
 else
   (cd "$SRC" && find . \( -name .git -o -name .venv -o -name .test-results \) -prune -o -type f -print0) >"$WORK/files"
