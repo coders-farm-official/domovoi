@@ -653,6 +653,26 @@ Three settings every satellite carries since 2026-10-12, because the router kept
 
 **Who applies them.** `domovoi-provisioning.service` (root, before the client) runs on every boot: on an unprovisioned unit it is the setup portal; on a provisioned one it checks these three, applies whichever is missing, and exits. A **new card** gets them at the end of setup, before its first reboot as a satellite — nothing to do. An **existing card** gets them from the satellite upgrade: the upgrade replaces the code this service runs and restarts only the client, so **reboot the satellite once after upgrading it** (unplug it for a few seconds). Until it has — or while the last boot-time run reported an error — its Health card (and the Android app's satellite overview) says **reboot needed**, with the reason.
 
+**The name reaches the router at the first boot.** A router learns a device's name from its DHCP request, which NetworkManager sends as soon as the Wi-Fi joins, with whatever host name the unit has at that moment. Renamed later in the boot, a satellite kept `raspberrypi` on the router until it next reconnected, so every satellite needed a second reboot (2026-10-12). Three things now prevent that:
+
+- **`domovoi-hostname.service`** (root, oneshot, ordered before `NetworkManager.service` and `network-pre.target`) runs `python -m satellite.net_settings --before-network` on every boot: the host name only, before any DHCP request. It never waits for the network, restarts nothing and always exits 0; NetworkManager waits at most its 30 s start timeout. Stage 1 installs and enables it on a new card. On an older card the boot step installs it from `satellite/scripts/domovoi-hostname.service` (rendered with the account's home, written without following a link, enabled with `systemctl --no-reload enable`) and keeps it current after later upgrades.
+- **When the boot step does the rename itself** (the first boot after the upgrade, before that unit exists), it asks DHCP once more under the new name: `nmcli device modify wlan0 ipv4.dhcp-hostname domovoi-<room>`. This changes only the active connection; nothing is saved in the profile. NetworkManager restarts its DHCP client without leaving the network. It does this only right after an actual rename, only on the house profile, and only once the link is up (it waits up to 45 s). The router then shows the new name after a **single** reboot.
+- **A new card** is named before setup joins the house Wi-Fi, so even its first DHCP request carries `domovoi-<room>`.
+
+**What it did is on the Health card.** Each satellite's health sample carries `net_step` (what the step did on this boot) and `hostname` (the unit's name now). The Health card (Settings → Satellites → room → Overview) and the Android app's satellite overview show them as **boot network step**, with the reason:
+
+| State | Meaning |
+|---|---|
+| `applied` | Something changed this boot; the detail says what. |
+| `nothing to change` | Everything was already in place. |
+| `skipped` | Something was left alone on purpose, e.g. `host name 'kamrons-pi' looks chosen by a person`, or `no room_id in config.toml`. |
+| `failed` | Something could not be applied; the detail has the first error. It also shows **reboot needed**, because a reboot retries. |
+| `not run` | Either the step has not run since the code that needs it arrived (it shows **reboot needed**), or it did not run this boot at all: the unit is enabled, but no record for this boot appeared within 3 minutes. |
+| `running` | Less than 3 minutes since boot, and the step has not written this boot's record yet. |
+| `not installed` | Nothing runs the step at boot: there is no `domovoi-provisioning.service`, or it is not enabled. A reboot would not help, so **reboot needed** is never shown. |
+
+A satellite older than this shows neither field, and its card reads as before.
+
 **It also keeps root's record of the server's address** (`/etc/domovoi/server.url`, which the clock helper trusts over its caller) with the server when it moves: the client finds the server again by name and saves the new address in `config.toml`; at the next boot root makes that address sign a fresh challenge for itself with the root-owned identity pin before it updates its record. A server that does not answer that boot is tried again at the next. (On a card prepared since this change the clock helper does the same check itself on every connect, so the clock follows at once.) A video satellite's kiosk is restarted when the address changes, and the kiosk launcher clears Chromium's profile lock, which names the old host after a rename.
 
 **What changed is logged.** Each run writes `/var/lib/domovoi/net-settings.json` (root's directory, readable by the satellite user; what it changed, left alone, or could not do); the client reads it and logs every line, so it lands in the log the server keeps for the room (Settings → Satellites → room → Logs, *retained*) as `network settings (applied as root at boot): changed: …`. The service's own journal has the same lines: `journalctl -u domovoi-provisioning -b`.
@@ -663,7 +683,7 @@ Three settings every satellite carries since 2026-10-12, because the router kept
 sudo ~/satellite-venv/bin/python -m satellite.net_settings   # run from ~/domovoi
 ```
 
-It prints what it changed; a second run changes nothing. Its client never shows *reboot needed* (there is no boot-time step to wait for).
+It prints what it changed; a second run changes nothing. It also installs `domovoi-hostname.service`, so a later room rename reaches the router at the next boot. (Under `sudo`, `$HOME` is root's. The step finds the satellite account from the code tree it runs from, `~/domovoi/satellite`.) Its client never shows *reboot needed*, because there is no boot-time step to wait for. Its Health card says **not installed**, with this command.
 
 ## 9. Label the hardware
 

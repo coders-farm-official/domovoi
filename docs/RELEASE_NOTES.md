@@ -4,6 +4,41 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-12 (later) — The router learns a satellite's new name after one reboot
+
+Server, dashboard, satellite and Android update; no migration. After the
+Wi-Fi fixes below, each satellite renamed itself `domovoi-<room>` at the
+first reboot. But it did so after it had already asked the router for its
+address as `raspberrypi`, so the router showed the new name only after a
+**second** reboot. On 2026-10-12, dining-room had been rebooted twice and
+showed its name; office, garage and basement had been rebooted once and
+did not. What changes:
+
+* **The name is set before the Wi-Fi joins.** A new unit,
+  `domovoi-hostname.service`, sets the host name on every boot before
+  NetworkManager starts. A new card gets it from media prep. An older card
+  installs it at its next boot after the satellite upgrade. That same boot,
+  having renamed the unit, asks the router for its address once more under
+  the new name, so **one reboot is enough**. A new card is named before
+  setup even joins the house Wi-Fi.
+* **The Health card says what the boot step did.** It has a new **boot
+  network step** line: *applied* (what changed), *nothing to change*,
+  *skipped* (and why, e.g. a host name you chose yourself), *failed* (the
+  error), *not run* (and since when), *running*, or *not installed*. It
+  also shows the satellite's current **host name**, the one the router
+  should show. The Android app's satellite overview shows the same. A
+  satellite not yet upgraded shows neither.
+* **"Reboot needed" comes back once.** The boot step's version moved
+  from 1 to 2, so every upgraded satellite asks for one more reboot.
+  That reboot installs the unit that sets the name before the network
+  starts.
+
+**What to do:** update the server, upgrade each satellite (Settings →
+Satellites → the room → **Upgrade satellite**), then unplug each one for a
+few seconds once it says **reboot needed**. A satellite already renamed by
+an earlier reboot needs only that one. Check the router's client list
+afterwards, or the room's **boot network step** and **host name**.
+
 ## 2026-10-12 — Satellites stay on the Wi-Fi (upgrade each satellite, then reboot it once)
 
 Server, dashboard, satellite and Android update; no migration. The router
