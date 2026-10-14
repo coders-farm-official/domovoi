@@ -19,7 +19,15 @@ resolves, here, on a maintainer's machine:
    runs pip from its wheel);
 2. every file is downloaded into ``--cache`` and checked against the hash
    PyPI reported, and the embeddable zip from python.org is hashed;
-3. the lock is written (``--check``: compared with the one in the tree, and
+3. Microsoft's C++ runtime DLLs the wake word's onnxruntime imports and
+   doesn't carry (msvcp140.dll, msvcp140_1.dll; a dependency walk of every
+   PE file in the pinned wheels and the embeddable Python finds no other
+   missing one), taken from the ``msvc-runtime`` wheel on PyPI: the wheel is
+   pinned like the others, and each DLL inside it by its own SHA-256 and
+   size, after checking here that it is 14.44 or newer and carries a valid
+   Microsoft Authenticode signature (Windows only: elsewhere the tool
+   refuses to pin a new runtime);
+4. the lock is written (``--check``: compared with the one in the tree, and
    exit 1 if it would change).
 
 Moving a pin is a deliberate act: run it, read the diff (the licence column
@@ -52,6 +60,17 @@ BUNDLED_NOTES = {
                    "are deleted after install and never loaded",
     "onnxruntime": "third-party notices in the wheel (ThirdPartyNotices.txt), all permissive",
 }
+#: Microsoft's C++ runtime, shipped beside the satellite's python.exe: the
+#: PyPI ``msvc-runtime`` wheel (Christoph Gohlke's packaging of Microsoft's
+#: unmodified, Microsoft-signed redistributable files), and the DLLs from it.
+VC_RUNTIME = ("msvc-runtime", "14.44.35112")
+VC_RUNTIME_DLLS = ("msvcp140.dll", "msvcp140_1.dll")
+VC_RUNTIME_MIN = (14, 44)
+VC_RUNTIME_LICENSE = (
+    "Microsoft Visual C++ runtime: Microsoft Visual Studio 2022 Software License Terms, "
+    "\"Distributable Code\" (REDIST list, Visual C++ Runtime Files): may be copied and "
+    "distributed unmodified with a program (https://learn.microsoft.com/en-us/visualstudio/"
+    "releases/2022/redistribution); not open source")
 #: Removed from site-packages after install: never used, and not ours to ship.
 REMOVE_AFTER_INSTALL = [
     "_sounddevice_data/portaudio-binaries/libportaudio32bit-asio.dll",
@@ -117,6 +136,51 @@ def resolve(python: str, reqs: list[str], *, no_deps: bool = False) -> list[dict
     return out
 
 
+def _authenticode_ok(path: Path) -> bool:
+    """A valid Authenticode signature by a Microsoft signer (Windows only)."""
+    if sys.platform != "win32":
+        return False
+    ps = (Path(__import__("os").environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell"
+          / "v1.0" / "powershell.exe")
+    r = subprocess.run([str(ps), "-NoProfile", "-NonInteractive", "-Command",
+                        "$s = Get-AuthenticodeSignature -LiteralPath $env:F; "
+                        "'{0}|{1}' -f $s.Status, $s.SignerCertificate.Subject"],
+                       capture_output=True, text=True, env={**__import__("os").environ, "F": str(path)})
+    status, _, subject = r.stdout.strip().partition("|")
+    return status == "Valid" and "O=Microsoft Corporation" in subject
+
+
+def vc_runtime_entry(python: str, cache: Path) -> dict:
+    """The msvc-runtime wheel for this CPython, and the DLLs to take from it."""
+    import zipfile
+
+    sys.path.insert(0, str(ROOT))
+    from satellite import win32  # noqa: E402  (file versions; Windows only)
+
+    name, version = VC_RUNTIME
+    cache.mkdir(parents=True, exist_ok=True)
+    w = resolve(python, [f"{name}=={version}"], no_deps=True)[0]
+    file = w["url"].rsplit("/", 1)[-1]
+    sha, size = download(w["url"], cache / file, w["sha256"])
+    dlls = []
+    with zipfile.ZipFile(cache / file) as z:
+        for dll in VC_RUNTIME_DLLS:
+            member = f"{name.replace('-', '_')}-{version}.data/data/{dll}"
+            body = z.read(member)
+            out = cache / "vc-runtime" / dll
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(body)
+            got = win32.file_version(str(out))
+            if not got or tuple(got[:2]) < VC_RUNTIME_MIN:
+                raise SystemExit(f"{dll} in {file} is {got}, older than {VC_RUNTIME_MIN}")
+            if not _authenticode_ok(out):
+                raise SystemExit(f"{dll} in {file} does not carry a valid Microsoft signature")
+            dlls.append({"file": dll, "member": member, "version": ".".join(str(p) for p in got),
+                         "sha256": hashlib.sha256(body).hexdigest(), "size": len(body)})
+    return {"name": name, "version": version, "file": file, "url": w["url"], "sha256": sha, "size": size,
+            "license": VC_RUNTIME_LICENSE, "dlls": dlls}
+
+
 def build(python: str, pip_version: str, cache: Path) -> dict:
     cache.mkdir(parents=True, exist_ok=True)
     sat = ROOT / "satellite"
@@ -150,6 +214,7 @@ def build(python: str, pip_version: str, cache: Path) -> dict:
         "pip": {"name": "pip", "version": pip["version"], "file": pip_name, "url": pip["url"],
                 "sha256": pip_sha, "size": pip_size, "license": pip["license"]},
         "wheels": entries,
+        "vc_runtime": vc_runtime_entry(python, cache),
         "remove_after_install": REMOVE_AFTER_INSTALL,
     }
 

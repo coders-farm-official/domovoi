@@ -260,6 +260,31 @@
       "license": "BSD-3-Clause"
     }
   ],
+  "vc_runtime": {
+    "name": "msvc-runtime",
+    "version": "14.44.35112",
+    "file": "msvc_runtime-14.44.35112-cp314-cp314-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/d2/48/7fb574a4bfa697574a7dc7105bc15ef6882125e7c77c794c5e73429de832/msvc_runtime-14.44.35112-cp314-cp314-win_amd64.whl",
+    "sha256": "af179a6c552070e660493765efd5856283af3fed971ddc3577203a7d3f1ee8e7",
+    "size": 1976906,
+    "license": "Microsoft Visual C++ runtime: Microsoft Visual Studio 2022 Software License Terms, \"Distributable Code\" (REDIST list, Visual C++ Runtime Files): may be copied and distributed unmodified with a program (https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution); not open source",
+    "dlls": [
+      {
+        "file": "msvcp140.dll",
+        "member": "msvc_runtime-14.44.35112.data/data/msvcp140.dll",
+        "version": "14.44.35211.0",
+        "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+        "size": 557728
+      },
+      {
+        "file": "msvcp140_1.dll",
+        "member": "msvc_runtime-14.44.35112.data/data/msvcp140_1.dll",
+        "version": "14.44.35211.0",
+        "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d",
+        "size": 35952
+      }
+    ]
+  },
   "remove_after_install": [
     "_sounddevice_data/portaudio-binaries/libportaudio32bit-asio.dll",
     "_sounddevice_data/portaudio-binaries/libportaudio64bit-asio.dll",

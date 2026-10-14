@@ -75,9 +75,14 @@ def load_lock(path: Path) -> dict[str, Any]:
 
 
 def entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
-    """Every file the lock names: the Python zip, pip, the wheels."""
+    """Every file the lock names: the Python zip, pip, the wheels, and the
+    wheel Microsoft's C++ runtime DLLs are taken from (``vc_runtime``: the
+    satellite places them beside its Python; the core only caches and
+    serves the wheel, checked like the others)."""
     out = [lock.get("python") or {}, lock.get("pip") or {}]
     out += list(lock.get("wheels") or [])
+    if lock.get("vc_runtime"):
+        out.append(lock["vc_runtime"])
     return out
 
 

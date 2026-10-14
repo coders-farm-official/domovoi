@@ -457,8 +457,10 @@ class Platform:
 #: needs and does not carry: the embeddable Python brings vcruntime140*.dll,
 #: Windows itself brings neither of these. 14.44 is the toolset onnxruntime
 #: 1.31 is built with, and Microsoft's rule is a runtime at least as new as
-#: the toolset (scripts/install-windows.ps1 checks the same before anything
-#: is downloaded; a test holds the two equal).
+#: the toolset. The installer ships both beside the satellite's python.exe
+#: (windows-runtime.json ``vc_runtime``); this check is the fallback for an
+#: install whose copies have gone (a test holds the names and the minimum
+#: equal to the lock's).
 VC_RUNTIME_DLLS = ("msvcp140.dll", "msvcp140_1.dll")
 VC_RUNTIME_MIN = (14, 44)
 VC_REDIST_URL = "https://aka.ms/vc14/vc_redist.x64.exe"
@@ -492,9 +494,10 @@ def windows_runtime_problem(python_dir: Any, system_dir: Any,
     want = ".".join(str(p) for p in minimum)
     what = (f"Microsoft's Visual C++ runtime is not on this PC ({', '.join(missing)} missing)" if missing
             else f"Microsoft's Visual C++ runtime on this PC is older than {want} ({', '.join(old)})")
-    return (f"{what}, and the wake word can't load without it. Install \"Microsoft Visual C++ "
-            f"Redistributable (x64)\" from {VC_REDIST_URL} (it asks for an administrator once), "
-            "then start the satellite again.")
+    return (f"{what}: the copies the satellite installs beside its Python are gone, and the wake word "
+            "can't load without them. Paste the install command from the dashboard again (it puts them "
+            f"back), or install \"Microsoft Visual C++ Redistributable (x64)\" from {VC_REDIST_URL} (it "
+            "asks for an administrator once), then start the satellite again.")
 
 
 PC_PROFILES = frozenset({"generic_pc", "windows_pc"})

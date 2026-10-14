@@ -1988,12 +1988,14 @@ household token**: it reaches no dashboard route.
   junction) is refused — the same rule on every board, and for the code
   and plugin channels too.
 * Microsoft's C++ runtime (`msvcp140.dll`, `msvcp140_1.dll`, 14.44+,
-  which onnxruntime needs) comes from Microsoft's own redistributable,
-  installed by the person; the installer and the engine check for it and
-  name where to get it. Placing Microsoft's two DLLs beside the
-  satellite's Python instead (`-LocalVcRuntime`, from pinned, hashed
-  copies) is prepared but off: the lock pins none until that is decided.
-  Smart App Control's state is read, never changed.
+  which onnxruntime needs and doesn't carry) is shipped beside the
+  satellite's Python: Microsoft's unmodified, Microsoft-signed files from
+  the `msvc-runtime` wheel on PyPI, the wheel and each DLL pinned by
+  SHA-256 (the lock tool checks the signature and version before pinning).
+  **These copies are updated with Domovoi's lock, not by Windows Update**:
+  a fix Microsoft ships for them reaches a satellite when the lock moves.
+  The engine checks at start and, if they are gone, says how to put them
+  back. Smart App Control's state is read, never changed.
 * The health sample runs no Linux tool (`ip`, `vcgencmd`, `nmcli`) on
   Windows: Windows looks for a bare program name in the current folder
   and on PATH before System32. `powercfg` is called by its full path.

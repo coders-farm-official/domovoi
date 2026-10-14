@@ -16,11 +16,8 @@ In order:
      install record, its data folder, a server's files in this account, or
      a server answering on this PC): "use this PC as a room" will come with
      the server's own tray instead.
-  2. Before any download, refuses a PC without Microsoft's Visual C++
-     runtime (14.44 or newer: the wake word's onnxruntime needs it and
-     doesn't carry it), saying where to get it, and says plainly when Smart
-     App Control may block parts of the satellite. Then it gets the
-     embeddable Python that satellite\windows-runtime.json (in this
+  2. Says plainly when Smart App Control may block parts of the satellite.
+     Then it gets the embeddable Python that satellite\windows-runtime.json (in this
      same, already checked bundle) pins, from the Domovoi server or else
      python.org, and checks its SHA-256 and size.
   3. Hands over to satellite\win_install.py with that Python, which makes
@@ -35,8 +32,7 @@ changes the PC's policy, and a policy set by Group Policy still wins.
 
 Exit status: 0 done; 2 a usage error or a refused code; 3 the server did not
 prove its identity; 4 not approved in time (it keeps waiting); 5 this PC
-runs the Domovoi server; 6 this PC lacks Microsoft's Visual C++ runtime;
-1 anything else.
+runs the Domovoi server; 1 anything else.
 #>
 [CmdletBinding()]
 param(
@@ -49,10 +45,6 @@ param(
     [string]$InstallRoot = '',
     [switch]$Uninstall,
     [switch]$Purge,
-    # Not yet available (the owner's decision): put Microsoft's two C++
-    # runtime DLLs, pinned in windows-runtime.json, beside the satellite's
-    # Python instead of asking for the system-wide redistributable.
-    [switch]$LocalVcRuntime,
     # Tests only, and only ever given on the command line (nothing in an
     # install or in the dashboard's command passes them; no environment
     # variable is read): the Run/Uninstall values and the Start-menu
@@ -61,9 +53,7 @@ param(
     # window is treated as elevated (the refusal path only).
     [string]$TestRegistryFile = '',
     [string]$TestCorePcSignals = '',
-    [switch]$TestAsAdministrator,
-    # Tests only: accept an older C++ runtime (a test PC's own).
-    [string]$TestVcRuntimeMinimum = ''
+    [switch]$TestAsAdministrator
 )
 
 Set-StrictMode -Version 2.0
@@ -196,37 +186,7 @@ if (-not (Test-HomeCore $core)) {
 # A satellite already installed here keeps running until the server has
 # proven its fingerprint: win_install.py stops it just before it writes.
 
-# --- what Windows must already have --------------------------------------
-
-# Microsoft's C++ runtime: onnxruntime (the wake word) imports msvcp140.dll
-# and msvcp140_1.dll, at least the version it was built with, and does not
-# carry them; the embeddable Python brings only vcruntime140, and Windows
-# doesn't always have them. satellite\engine_platform.py VC_RUNTIME_* holds
-# the same (a test keeps the two equal), and the engine checks again at
-# every start.
-$VcRuntimeMinimum = [version]'14.44'
-
-function Get-VcRuntimeProblem([string]$Dir, [version]$Minimum) {
-    $missing = @()
-    $old = @()
-    foreach ($name in 'msvcp140.dll', 'msvcp140_1.dll') {
-        $f = Join-Path $Dir $name
-        if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { $missing += $name; continue }
-        $v = [Diagnostics.FileVersionInfo]::GetVersionInfo($f)
-        if ((New-Object Version($v.FileMajorPart, $v.FileMinorPart)) -lt $Minimum) {
-            $old += ('{0} {1}.{2}' -f $name, $v.FileMajorPart, $v.FileMinorPart)
-        }
-    }
-    if ($missing.Count -eq 0 -and $old.Count -eq 0) { return $null }
-    if ($missing.Count -gt 0) {
-        $what = "Microsoft's Visual C++ runtime is not on this PC ($($missing -join ', ') missing)"
-    } else {
-        $what = "Microsoft's Visual C++ runtime on this PC is older than $Minimum ($($old -join ', '))"
-    }
-    return ("$what, and the satellite's wake word can't load without it. Install " +
-            '"Microsoft Visual C++ Redistributable (x64)" from https://aka.ms/vc14/vc_redist.x64.exe ' +
-            '(it asks for an administrator once), then paste the command again. Nothing was changed.')
-}
+# --- what Windows may block ---------------------------------------------
 
 # Smart App Control (Windows 11) checks every program file, DLLs included;
 # some of the satellite's libraries are not signed. Read only, never changed.
@@ -258,11 +218,6 @@ function Get-SmartAppControlNote([string]$State) {
     return $null
 }
 
-if (-not $LocalVcRuntime) {
-    $vcMinimum = if ($TestVcRuntimeMinimum) { [version]$TestVcRuntimeMinimum } else { $VcRuntimeMinimum }
-    $vc = Get-VcRuntimeProblem (Join-Path $env:SystemRoot 'System32') $vcMinimum
-    if ($vc) { Fail $vc 6 }
-}
 $sac = Get-SmartAppControlNote (Get-SmartAppControlState)
 if ($sac) { Say ''; Say "Note: $sac"; Say '' }
 
@@ -321,7 +276,6 @@ try {
     if ($Permissions) { $argv += @('--permissions', $Permissions) }
     if ($Yes) { $argv += '--yes' }
     if ($NoStart) { $argv += '--no-start' }
-    if ($LocalVcRuntime) { $argv += '--local-vc-runtime' }
     if ($TestRegistryFile) { $argv += @('--registry-file', $TestRegistryFile) }
     & (Join-Path $py 'python.exe') @argv
     $code = $LASTEXITCODE

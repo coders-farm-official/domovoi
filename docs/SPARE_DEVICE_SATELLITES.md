@@ -329,15 +329,17 @@ data folder, a server's own files in your account, and a server answering on
 this PC). Using the server PC as a room will come with the server's own
 tray icon instead.
 
-**Microsoft's Visual C++ runtime, 14.44 or newer.** The wake word's
-onnxruntime needs `msvcp140.dll` and `msvcp140_1.dll` and does not bring
-them; Windows doesn't always have them (other programs usually install
-them). The installer checks before it downloads anything, and the
-satellite at every start; without them each says so and points to
-**"Microsoft Visual C++ Redistributable (x64)"**
-(<https://aka.ms/vc14/vc_redist.x64.exe>, from Microsoft; it asks for an
-administrator once, and it is installed for the whole PC). Install it, then
-paste the command again.
+**It brings Microsoft's Visual C++ runtime with it.** The wake word's
+onnxruntime needs `msvcp140.dll` and `msvcp140_1.dll` (14.44 or newer) and
+does not carry them, and Windows doesn't always have them. So the installer
+puts Microsoft's own copies **beside the satellite's Python** — unmodified,
+Microsoft-signed files, taken from the `msvc-runtime` package on PyPI and
+each checked against its SHA-256 in `windows-runtime.json`; nothing is
+installed for the rest of the PC, and no administrator is needed. **These
+copies are updated with Domovoi's lock, not by Windows Update.** If they
+have gone missing, the satellite says so at start (and how to put them
+back: paste the command again, or install Microsoft's own
+[redistributable](https://aka.ms/vc14/vc_redist.x64.exe)).
 
 **Smart App Control** (Windows 11) checks every program file, DLLs
 included, and some of the satellite's libraries are not signed yet (its
@@ -531,6 +533,7 @@ checked against the SHA-256 in `satellite/windows-runtime.json`:
 | tqdm | MPL-2.0 and MIT (unmodified) |
 | certifi | MPL-2.0 (unmodified) |
 | pip (used to install the others) | MIT |
+| Microsoft Visual C++ runtime (`msvcp140.dll`, `msvcp140_1.dll` 14.44, from the `msvc-runtime` wheel) | Microsoft's, not open source: the Visual Studio 2022 licence's "Distributable Code" ([REDIST list](https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution), Visual C++ Runtime Files) lets them be copied and distributed unmodified with a program — the same terms as the `vcruntime140.dll` Python itself ships |
 
 Nothing GPL or LGPL is bundled: there is no mpg123 on Windows (MP3 is
 decoded by dr_mp3), and sounddevice's ASIO-enabled PortAudio builds
@@ -547,7 +550,7 @@ same question as on every Pi; see the wake-word notes).
 | "never installed on the PC that runs the Domovoi server" | This PC runs the server. Use another PC. |
 | "did not prove it is the one in the code" | As on Linux: a different machine answers at that address. Compare the fingerprint with **Settings → About**. |
 | "running scripts is disabled on this system" | A Group Policy forbids scripts here; the installer can't run on this PC. |
-| "Microsoft's Visual C++ runtime is not on this PC" / "is older than 14.44" (the installer, or the tray) | Install **Microsoft Visual C++ Redistributable (x64)** from <https://aka.ms/vc14/vc_redist.x64.exe> (an administrator, once), then paste the command again, or **Start satellite** in the tray. |
+| "Microsoft's Visual C++ runtime is not on this PC" / "is older than 14.44" (the tray) | The copies installed beside its Python are gone. Paste the command again (it puts them back), or install **Microsoft Visual C++ Redistributable (x64)** from <https://aka.ms/vc14/vc_redist.x64.exe> (an administrator, once); then **Start satellite** in the tray. |
 | "Windows blocked part of this app", or it never starts, with Smart App Control on | Smart App Control blocks a file of the satellite's that isn't signed yet (see above). |
 | Grey tray icon, "not running: no pinned server identity" | Re-run the install command from the dashboard. |
 | "Domovoi satellite didn't start" with a line from `config.toml` | A value there it won't run on (a device name that is not "default", a number or a plain name; a typo'd setting). Fix that line in `%LOCALAPPDATA%\Domovoi\Satellite\.domovoi\config.toml` (the old file is `config.toml.bak` after a dashboard edit), then **Start satellite** in the tray menu. |

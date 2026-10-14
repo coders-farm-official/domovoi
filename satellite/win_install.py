@@ -119,43 +119,58 @@ def load_lock(bundle: Path) -> dict[str, Any]:
 VC_RUNTIME_FILES = ("msvcp140.dll", "msvcp140_1.dll")
 
 
-def vc_runtime_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
-    """The lock's pinned Microsoft C++ runtime DLLs (``vc_runtime``), for an
-    install that places them beside its Python (``--local-vc-runtime``).
-    Empty until the owner decides to ship them; each must name one of the
-    two DLLs, a SHA-256, a size and an https source."""
-    entries = lock.get("vc_runtime") or []
-    if not isinstance(entries, list):
-        raise InstallError(f"{LOCK_NAME}: vc_runtime is not a list")
-    for e in entries:
-        ok = (isinstance(e, dict) and e.get("file") in VC_RUNTIME_FILES
-              and re.fullmatch(r"[0-9a-f]{64}", str(e.get("sha256")))
-              and isinstance(e.get("size"), int) and 0 < e["size"] < 10_000_000
-              and str(e.get("url", "")).startswith("https://"))
+def vc_runtime_dlls(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    """The lock's Microsoft C++ runtime DLLs (``vc_runtime.dlls``): each
+    one of the two onnxruntime needs, a member of the pinned msvc-runtime
+    wheel, with its own SHA-256 and size."""
+    vc = lock.get("vc_runtime")
+    if not isinstance(vc, dict):
+        raise InstallError(f"{LOCK_NAME} pins no Microsoft C++ runtime (vc_runtime)")
+    dlls = vc.get("dlls")
+    prefix = f"{str(vc.get('name', '')).replace('-', '_')}-{vc.get('version')}.data/data/"
+    if not isinstance(dlls, list) or sorted(d.get("file") for d in dlls if isinstance(d, dict)) != \
+            sorted(VC_RUNTIME_FILES):
+        raise InstallError(f"{LOCK_NAME}: vc_runtime must name {', '.join(VC_RUNTIME_FILES)}")
+    for d in dlls:
+        ok = (d.get("member") == prefix + d["file"]
+              and re.fullmatch(r"[0-9a-f]{64}", str(d.get("sha256")))
+              and isinstance(d.get("size"), int) and 0 < d["size"] < 10_000_000)
         if not ok:
-            raise InstallError(f"{LOCK_NAME}: a vc_runtime entry is malformed: {e!r}"[:300])
-    return entries
+            raise InstallError(f"{LOCK_NAME}: a vc_runtime DLL is malformed: {d!r}"[:300])
+    return dlls
 
 
-def place_vc_runtime(root: Path, lock: dict[str, Any], *, core: str | None,
-                     opener: Callable[..., Any] | None = None) -> None:
-    """Microsoft's two C++ runtime DLLs beside the satellite's python.exe
-    ("app-local" deployment, which Windows loads before System32's), each
-    held to its pin. Refused when this build pins none."""
-    entries = vc_runtime_entries(lock)
-    if {e["file"] for e in entries} != set(VC_RUNTIME_FILES):
-        raise InstallError("this build of the satellite carries no pinned Visual C++ runtime files yet, so "
-                           "-LocalVcRuntime can't be used: install \"Microsoft Visual C++ Redistributable "
-                           "(x64)\" from https://aka.ms/vc14/vc_redist.x64.exe instead", 6)
-    stage = root / "cache" / "vc-runtime"
-    for entry in entries:
-        fetch_pinned(entry, stage, core=core, opener=opener)
-        shutil.copyfile(stage / entry["file"], root / "python" / entry["file"])
-    say("  Microsoft's C++ runtime placed beside the satellite's Python (each checked against its pin)")
+def place_vc_runtime(root: Path, lock: dict[str, Any], wheels_dir: Path) -> None:
+    """Microsoft's C++ runtime DLLs beside the satellite's python.exe (the
+    wake word's onnxruntime imports msvcp140.dll and msvcp140_1.dll, 14.44+,
+    and carries neither; Windows loads the copy beside python.exe before
+    System32's). Each is read from the pinned msvc-runtime wheel (already
+    fetched and checked) and written only if it is the pinned file."""
+    import hashlib
+    import zipfile
+
+    wheel = wheels_dir / lock["vc_runtime"]["file"]
+    with zipfile.ZipFile(wheel) as z:
+        for d in vc_runtime_dlls(lock):
+            body = z.read(d["member"])
+            if len(body) != d["size"] or hashlib.sha256(body).hexdigest() != d["sha256"]:
+                raise InstallError(f"{d['file']} in {wheel.name} is not the pinned file; nothing placed")
+            dest = root / "python" / d["file"]
+            part = dest.with_name(dest.name + ".part")
+            part.write_bytes(body)
+            os.replace(part, dest)
+    say("  Microsoft's C++ runtime (" + ", ".join(f"{d['file']} {d.get('version', '')}".strip()
+                                            for d in vc_runtime_dlls(lock)) + ") beside the satellite's Python")
 
 
 def lock_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
-    return [lock.get("python") or {}, lock.get("pip") or {}, *(lock.get("wheels") or [])]
+    """Every file the lock names, as the core lists them
+    (domovoi/satellite_windows.py entries): the Python, pip, the wheels,
+    and the wheel the C++ runtime DLLs come from."""
+    out = [lock.get("python") or {}, lock.get("pip") or {}, *(lock.get("wheels") or [])]
+    if isinstance(lock.get("vc_runtime"), dict):
+        out.append(lock["vc_runtime"])
+    return out
 
 
 def sha256_file(path: Path) -> str:
@@ -643,16 +658,15 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     replace_dir(bundle / "satellite", root / "app" / "satellite")
     shutil.copyfile(bundle / "satellite" / "scripts" / "uninstall-windows.ps1", root / "uninstall.ps1")
 
-    if getattr(args, "local_vc_runtime", False):
-        place_vc_runtime(root, lock, core=e.core, opener=opener)
-
     say("Getting the satellite's libraries (about 95 MB, each checked against its pinned SHA-256)...")
     wheels_dir = root / "cache" / "wheels"
     sources: dict[str, int] = {}
-    for entry in [lock["pip"], *lock["wheels"]]:
+    vc_runtime_dlls(lock)     # the lock pins the runtime properly before anything is fetched
+    for entry in [lock["pip"], *lock["wheels"], lock["vc_runtime"]]:
         where = fetch_pinned(entry, wheels_dir, core=e.core, opener=opener)
         sources[where] = sources.get(where, 0) + 1
     say("  " + ", ".join(f"{n} from {w}" for w, n in sorted(sources.items())))
+    place_vc_runtime(root, lock, wheels_dir)
     pip_install(root, wheels_dir, lock, run=run)
     shutil.rmtree(root / "cache", ignore_errors=True)
 
@@ -727,9 +741,6 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--power", choices=("ask", "no", "yes"), default="ask")
     i.add_argument("--yes", action="store_true")
     i.add_argument("--no-start", action="store_true")
-    i.add_argument("--local-vc-runtime", action="store_true",
-                   help="put the lock's pinned Microsoft C++ runtime DLLs beside the Python (not yet "
-                        "available: the lock pins none)")
     i.add_argument("--wait", type=int, default=900)
     i.add_argument("--registry-file", default=None,
                    help="TESTS ONLY: write the Run/Uninstall values and the shortcut to this JSON file")
