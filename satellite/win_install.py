@@ -496,9 +496,12 @@ def write_state(root: Path, **values: Any) -> None:
     path.write_text(json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def start(root: Path) -> None:
+def start(root: Path, *, test_hooks: bool = False) -> None:
+    """The supervisor (and through it the tray and the engine), detached.
+    ``test_hooks`` (tests only): its --test-audio-hooks."""
     subprocess.Popen(
-        [str(root / "python" / "pythonw.exe"), "-m", "satellite.win_service"],
+        [str(root / "python" / "pythonw.exe"), "-m", "satellite.win_service",
+         *(["--test-audio-hooks"] if test_hooks else [])],
         cwd=str(root / "app"), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, close_fds=True,
         creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
@@ -714,14 +717,18 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     say("  uninstall: Settings > Apps > Installed apps > Domovoi Satellite")
     if args.no_start:
         return 0
-    start(root)
+    start(root, test_hooks=bool(getattr(args, "test_audio_hooks", False)))
     if args.wait <= 0:
         return 0
     say("")
     say("Now approve it: in the dashboard, Settings -> Satellites, type the code shown below.")
     from satellite import control, pc_engine
 
-    final = pc_engine.wait_for_approval(control.default_address(root / ".domovoi"), timeout=args.wait)
+    # This process is the staged Python in %TEMP%; the engine runs the
+    # install's own (the pipe's client accepts only a server from that
+    # folder: control_win.PipeStream).
+    final = pc_engine.wait_for_approval(control.default_address(root / ".domovoi"), timeout=args.wait,
+                                        image_dir=str(root / "python"))
     if final == "connected":
         return 0
     say("Not approved yet. It keeps waiting in the background; the code is also in the tray,")
@@ -742,6 +749,8 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--yes", action="store_true")
     i.add_argument("--no-start", action="store_true")
     i.add_argument("--wait", type=int, default=900)
+    i.add_argument("--test-audio-hooks", action="store_true",
+                   help="TESTS ONLY: start the satellite with its supervisor's --test-audio-hooks")
     i.add_argument("--registry-file", default=None,
                    help="TESTS ONLY: write the Run/Uninstall values and the shortcut to this JSON file")
     args = parser.parse_args(argv)

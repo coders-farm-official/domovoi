@@ -100,6 +100,13 @@ def server_search(cfg: Any) -> str:
     :data:`SERVER_SEARCH`). A Pi always sweeps."""
     if not is_pc(cfg):
         return "sweep"
+    if os.environ.get("DOMOVOI_DEBUG_SERVER_SEARCH") == "address":
+        # A test hook that can only narrow the search: an end-to-end run
+        # against a throwaway core, where the house's own server answers to
+        # domovoi.local and must never be asked. On Windows it reaches the
+        # engine only through its supervisor's --test-audio-hooks.
+        log.warning("TEST HOOK: looking for the server at its address only (DOMOVOI_DEBUG_SERVER_SEARCH)")
+        return "address"
     chosen = getattr(cfg, "server_search", "") or ""
     if chosen in SERVER_SEARCH:
         return chosen
@@ -633,7 +640,8 @@ def cli(args: Any) -> int:
 
 def wait_for_approval(path: Path | str, *, timeout: float, out=None, poll: float = 1.0,
                       clock: Callable[[], float] = time.monotonic,
-                      sleep: Callable[[float], None] = time.sleep, show_code: bool = True) -> str:
+                      sleep: Callable[[float], None] = time.sleep, show_code: bool = True,
+                      image_dir: str | None = None) -> str:
     """The installer's last step: watch the engine until it is connected,
     printing the approval code while it waits — only when ``out`` is a
     terminal: an installer piped into a file or a CI log says where to find
@@ -648,7 +656,9 @@ def wait_for_approval(path: Path | str, *, timeout: float, out=None, poll: float
         on_terminal = bool(show_code) and bool(out.isatty())
     except (OSError, ValueError, AttributeError):
         on_terminal = False
-    client_ = control.ControlClient(path, timeout=5.0)
+    # image_dir (Windows): the folder the engine's Python runs from, when
+    # this waiter runs another one (the installer's staged Python).
+    client_ = control.ControlClient(path, timeout=5.0, **({"image_dir": image_dir} if image_dir else {}))
     deadline = clock() + timeout
     shown: str | None = None
     last_state = None

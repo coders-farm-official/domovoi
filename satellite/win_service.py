@@ -69,7 +69,7 @@ STATUS_NAME = "supervisor-status.json"
 #: when the supervisor is started with --test-audio-hooks, which nothing in
 #: an install does: a variable left in the account's environment can never
 #: swap a satellite's microphone for files on its own.
-PASS_THROUGH = ("DOMOVOI_DEBUG_MIC_DIR", "DOMOVOI_DEBUG_AUDIO_SINK")
+PASS_THROUGH = ("DOMOVOI_DEBUG_MIC_DIR", "DOMOVOI_DEBUG_AUDIO_SINK", "DOMOVOI_DEBUG_SERVER_SEARCH")
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
 

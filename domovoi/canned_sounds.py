@@ -90,6 +90,21 @@ def voice_slug(name: str) -> str:
     return slug or "voice"
 
 
+#: Windows device names: a file so named (any extension) opens a device on a
+#: Windows PC, and every satellite refuses a synced path holding one
+#: (satellite/sound_sync.py _DEVICE_NAMES; a test holds the two equal).
+WINDOWS_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                                  *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))})
+
+
+def wake_slug(name: str) -> str:
+    """A wake word's slug: :func:`voice_slug`, except that one that is a
+    Windows device name gets ``_word`` added ("Con" -> ``con_word``), so its
+    ``<slug>.onnx`` is a file every satellite takes."""
+    slug = voice_slug(name)
+    return f"{slug}_word" if slug.upper() in WINDOWS_DEVICE_NAMES else slug
+
+
 def voice_dir(name: str) -> Path:
     return _VOICES_ROOT / voice_slug(name)
 

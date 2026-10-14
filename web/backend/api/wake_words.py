@@ -8,7 +8,7 @@ phrase), record clips on a chosen room, kick off training once enough
 clips are captured, set the default, rename, tune the detection threshold,
 push a trained model to a satellite, and delete.
 
-The load-bearing identifier is the ``slug`` (= ``voice_slug(name)``): the
+The load-bearing identifier is the ``slug`` (= ``wake_slug(name)``): the
 served ``<slug>.onnx`` filename, the Pi's effective wake word, the
 openWakeWord prediction-dict key, and the model file stem all equal it.
 We derive it once on create so they never disagree — a mismatch and the
@@ -47,7 +47,7 @@ from sqlalchemy.exc import IntegrityError
 
 from domovoi.admin_auth import require_admin_mutation, require_device_read
 from domovoi import wake_clip_quality as wq
-from domovoi.canned_sounds import voice_slug
+from domovoi.canned_sounds import wake_slug
 from domovoi.config import settings
 from domovoi.db.repositories import WakeWordsRepository
 from domovoi.models import MAX_WAKE_PHRASE_CHARS, WAKE_PHRASE_PATTERN
@@ -241,11 +241,13 @@ async def list_wake_words() -> list[WakeWord]:
 )
 async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
     """Register a new wake word in the ``recording`` status. The slug is
-    derived from the name (``voice_slug``) and is the load-bearing runtime
-    identifier; a name OR slug collision raises ``IntegrityError`` → 409."""
+    derived from the name (``wake_slug``: ``voice_slug``, never a Windows
+    device name, which no satellite would sync) and is the load-bearing
+    runtime identifier; a name OR slug collision raises ``IntegrityError`` →
+    409."""
     name = payload.name.strip()
     phrase = payload.phrase.strip()
-    slug = voice_slug(name)
+    slug = wake_slug(name)
     threshold = payload.threshold if payload.threshold is not None else 0.5
     try:
         async with session_scope() as s:

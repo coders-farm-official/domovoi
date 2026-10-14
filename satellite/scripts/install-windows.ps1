@@ -49,11 +49,14 @@ param(
     # install or in the dashboard's command passes them; no environment
     # variable is read): the Run/Uninstall values and the Start-menu
     # shortcut go to this JSON file instead of the registry; the core-PC
-    # signals are pointed elsewhere (a JSON file naming them); and the
-    # window is treated as elevated (the refusal path only).
+    # signals are pointed elsewhere (a JSON file naming them); the window
+    # is treated as elevated (the refusal path only); and the satellite it
+    # starts gets its supervisor's --test-audio-hooks (a file-fed
+    # microphone, for an end-to-end run that lets the installer start it).
     [string]$TestRegistryFile = '',
     [string]$TestCorePcSignals = '',
-    [switch]$TestAsAdministrator
+    [switch]$TestAsAdministrator,
+    [switch]$TestAudioHooks
 )
 
 Set-StrictMode -Version 2.0
@@ -276,6 +279,7 @@ try {
     if ($Permissions) { $argv += @('--permissions', $Permissions) }
     if ($Yes) { $argv += '--yes' }
     if ($NoStart) { $argv += '--no-start' }
+    if ($TestAudioHooks) { $argv += '--test-audio-hooks' }
     if ($TestRegistryFile) { $argv += @('--registry-file', $TestRegistryFile) }
     & (Join-Path $py 'python.exe') @argv
     $code = $LASTEXITCODE

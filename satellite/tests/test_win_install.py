@@ -820,3 +820,39 @@ def test_no_environment_variable_steers_the_installer():
     text = (SCRIPTS / "install-windows.ps1").read_text(encoding="ascii")
     assert "DOMOVOI_TEST_COREPC_SIGNALS" not in text
     assert "$env:DOMOVOI" not in text
+
+
+
+def test_the_installer_waits_on_the_engine_of_the_install_s_own_python(tmp_path, monkeypatch):
+    """Round-2 re-check: win_install runs a staged Python; the wait for
+    approval names the install's own python folder as the engine's."""
+    from satellite import pc_engine
+
+    seen = {}
+    monkeypatch.setattr(enrolment, "verify", lambda e, opener=None, timeout=None: e.fp)
+    for name in ("stop_running", "protect_root", "replace_dir", "write_pth", "fetch_pinned", "place_vc_runtime",
+                 "pip_install", "register", "change_power", "start"):
+        monkeypatch.setattr(wi, name, lambda *a, **k: None)
+    monkeypatch.setattr(wi.shutil, "rmtree", lambda *a, **k: None)
+    from satellite import pc_install
+
+    monkeypatch.setattr(pc_install, "fetch_models", lambda *a, **k: None)
+    monkeypatch.setattr(pc_install, "write_config", lambda *a, **k: {})
+    monkeypatch.setattr(pc_engine, "wait_for_approval",
+                        lambda path, timeout, **kw: seen.update(kw, path=path) or "connected")
+    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    root = tmp_path / "root"
+    args = _args(tmp_path, payload, no_start=False, wait=30, profile=str(tmp_path))
+    monkeypatch.setattr(wi.shutil, "copyfile", lambda *a, **k: None)
+    assert wi.install(args) == 0
+    assert seen["image_dir"] == str(root / "python")
+
+
+def test_the_started_satellite_gets_test_hooks_only_when_asked(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(wi.subprocess, "Popen", lambda argv, **kw: seen.append(argv))
+    wi.start(tmp_path)
+    wi.start(tmp_path, test_hooks=True)
+    assert "--test-audio-hooks" not in seen[0] and seen[1][-1] == "--test-audio-hooks"
+    text = (SCRIPTS / "install-windows.ps1").read_text(encoding="ascii")
+    assert "if ($TestAudioHooks) { $argv += '--test-audio-hooks' }" in text

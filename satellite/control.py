@@ -542,15 +542,20 @@ class ControlClient:
     ``path`` is the Unix socket, or on Windows the pipe name
     (:func:`default_address`)."""
 
-    def __init__(self, path: Path | str, *, timeout: float = 5.0) -> None:
+    def __init__(self, path: Path | str, *, timeout: float = 5.0, image_dir: str | None = None) -> None:
         self.path = path if is_pipe_address(path) else Path(path)
         self.timeout = timeout
+        #: Windows: the folder the engine's python.exe must run from. None:
+        #: this process's own (the tray and the CLI run the install's
+        #: Python); the installer, which runs a staged Python in %TEMP%,
+        #: names the install's.
+        self.image_dir = image_dir
 
     def _connect(self) -> Any:
         if is_pipe_address(self.path):
             from satellite import control_win
 
-            return control_win.PipeStream(str(self.path), timeout=self.timeout)
+            return control_win.PipeStream(str(self.path), timeout=self.timeout, image_dir=self.image_dir)
         if not hasattr(socket, "AF_UNIX"):
             raise ConnectionError("no Unix sockets on this platform")
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

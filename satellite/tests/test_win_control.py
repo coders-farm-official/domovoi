@@ -391,3 +391,27 @@ def test_the_client_lends_the_server_no_rights():
         _winapi.CloseHandle(h)
     assert "error" not in box, box
     assert box.get("level") == 1, f"SecurityIdentification (1), not {box.get('level')}"
+
+
+
+def test_the_installer_s_wait_reaches_an_engine_in_another_python_folder(monkeypatch, tmp_path):
+    """Round-2 re-check: the installer waits from the staged Python in
+    %TEMP% while the engine runs the install's own. Taking its own folder
+    as the engine's, it never connected and waited out --wait (exit 4);
+    it names the install's folder instead."""
+    import io
+
+    from satellite import pc_engine
+
+    engine_dir = win32.own_image_dir()                       # where this "engine" (in-process) runs
+    monkeypatch.setattr(win32, "own_image_dir", lambda: str(tmp_path / "stage" / "python"))   # the staged one
+    name = _name()
+    stop = _serve(FakeEngine({"connection": "connected", "room": {"id": "den", "name": "Den"}}), name)
+    try:
+        out = io.StringIO()
+        assert pc_engine.wait_for_approval(name, timeout=3, poll=0.2, out=out) == "no_engine", \
+            "without the install's folder the staged Python refuses the engine"
+        got = pc_engine.wait_for_approval(name, timeout=10, poll=0.2, out=io.StringIO(), image_dir=engine_dir)
+        assert got == "connected"
+    finally:
+        stop()

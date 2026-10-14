@@ -700,3 +700,16 @@ def test_the_health_sample_runs_no_linux_tool_on_windows(tmp_path, monkeypatch):
     assert sample.get("gateway") is None
     assert health.run_tool(["ip", "route"]) is None
     assert health.read_default_gateway() is None
+
+
+def test_the_server_search_test_hook_only_narrows(monkeypatch):
+    """DOMOVOI_DEBUG_SERVER_SEARCH (passed only with the supervisor's
+    --test-audio-hooks on Windows) can make the search "address", nothing
+    wider."""
+    cfg = win_cfg()
+    assert pc_engine.server_search(cfg) == "names"
+    monkeypatch.setenv("DOMOVOI_DEBUG_SERVER_SEARCH", "sweep")
+    assert pc_engine.server_search(cfg) == "names"
+    monkeypatch.setenv("DOMOVOI_DEBUG_SERVER_SEARCH", "address")
+    assert pc_engine.server_search(cfg) == "address"
+    assert pc_engine.server_search(client.Config.from_toml({"device": {"profile": "xvf3800_usb"}})) == "sweep"
