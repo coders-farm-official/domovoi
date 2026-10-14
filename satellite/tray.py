@@ -54,6 +54,7 @@ SERVICE_UNIT = "domovoi-satellite.service"
 DEFAULT_SOCKET = Path.home() / ".domovoi" / control.SOCKET_NAME
 
 ICON_STATES = ("idle", "capturing", "muted", "speaking", "awaiting", "offline")
+NEWLINE = chr(10)
 
 # ─── the model: what a status looks like ─────────────────────────────────
 
@@ -252,7 +253,8 @@ class NotePlanner:
             what = PENDING_LABELS.get(p.get("kind"), "a change")
             notes.append(Note(
                 f"pending:{pid}", f"{room_name(st)}: the Domovoi server asks to apply {what}",
-                f"{p.get('summary', '')}. It waits for your OK (your choice: \"ask me\").",
+                NEWLINE.join([f"{p.get('summary', '')}. It waits for your OK (your choice: \"ask me\")."]
+                             + [f"  {line}" for line in p.get("details") or []]),
                 actions=[(f"approve:{pid}", "Allow"), (f"decline:{pid}", "Not now")],
                 persistent=True,
             ))
@@ -535,16 +537,19 @@ class StatusWindow:
                              state="normal" if st else "disabled")
         vol = (st or {}).get("volume")
         self.volume.config(text="—" if vol is None else f"{vol}%")
-        pending = tuple((p.get("id"), p.get("kind"), p.get("summary")) for p in (st or {}).get("pending") or [])
+        pending = tuple((p.get("id"), p.get("kind"), p.get("summary"), tuple(p.get("details") or ()))
+                        for p in (st or {}).get("pending") or [])
         if pending != self._pending_ids:
             self._pending_ids = pending
             for child in self.pending.winfo_children():
                 child.destroy()
-            for pid, kind, summary in pending:
+            for pid, kind, summary, details in pending:
                 line = self.tk.Frame(self.pending)
                 line.pack(fill="x", pady=2)
                 what = PENDING_LABELS.get(kind, kind)
-                self.tk.Label(line, text=f"{what}: {summary}", anchor="w", wraplength=200,
+                # Every change it would make, in full (never cut).
+                text = NEWLINE.join([f"{what}: {summary}", *(f"  {d}" for d in details)])
+                self.tk.Label(line, text=text, anchor="w", wraplength=200,
                               justify="left").pack(side="left", fill="x", expand=True)
                 self.tk.Button(line, text="Allow", command=lambda p=pid: self._do(f"approve:{p}")).pack(side="left")
                 self.tk.Button(line, text="Not now", command=lambda p=pid: self._do(f"decline:{p}")).pack(side="left")

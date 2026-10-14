@@ -125,14 +125,16 @@ def hello_fields(cfg: Any) -> dict[str, Any]:
 
 
 def filter_config_changes(changes: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """``(kept, refused)``: the protected keys are dropped."""
-    kept: dict[str, Any] = {}
-    refused: list[str] = []
-    for key, value in changes.items():
-        if key in PROTECTED_KEYS or key.startswith(PROTECTED_SECTIONS):
-            refused.append(key)
-        else:
-            kept[key] = value
+    """``(kept, refused)`` for a spare computer: satellite/remote_config.py's
+    screen, which holds every board to the dashboard's own settings and a
+    laptop also off the sections it never declared. The protected keys
+    above are never among what it keeps."""
+    from satellite import remote_config
+
+    kept, refused = remote_config.screen(changes, pc=True)
+    for key in [k for k in kept if k in PROTECTED_KEYS or k.startswith(PROTECTED_SECTIONS)]:
+        del kept[key]          # never reached: the screen keeps none of these
+        refused.append(repr(key)[:80])
     return kept, refused
 
 
@@ -152,6 +154,23 @@ def require_pin(cfg: Any) -> tuple[bool, str]:
         "set [satellite] server_fingerprint to the SHA256:… shown under "
         "Settings → About."
     )
+
+
+#: Files only a Domovoi *server* keeps in ~/.domovoi: its private key, its
+#: household device token, its setup code.
+CORE_MARKERS = ("server-identity.json", "device-token.txt", "setup-code.txt")
+
+
+def core_account(config_dir: Path) -> str | None:
+    """Why ``config_dir`` belongs to a Domovoi server, or None. A spare
+    computer's satellite must not share one: the two keep different things
+    under the same names (``sounds/``, ``wake_models/``), and the server's
+    private key sits there (security review of wf/sat-pc, S2)."""
+    for name in CORE_MARKERS:
+        if (Path(config_dir) / name).exists():
+            return (f"{Path(config_dir) / name} belongs to a Domovoi server: install the "
+                    "satellite under another account (a server and a satellite can't share ~/.domovoi)")
+    return None
 
 
 def read_muted() -> bool:
@@ -185,6 +204,20 @@ def show_code_on_tty(code: str | None, room: str, *, stream=None) -> bool:
         return True
     except (OSError, ValueError, AttributeError):
         return False
+
+
+def home_network_url(url: str) -> bool:
+    """Whether a ws/http URL's host is on the home network
+    (satellite/enrolment.py's rule, the one the enrolment code obeys)."""
+    import urllib.parse
+
+    from satellite import enrolment
+
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return bool(host) and enrolment.is_home_network_host(host)
 
 
 def dashboard_url(ws_url: str) -> str | None:
@@ -253,13 +286,18 @@ class SpareDeviceEngine:
 
     # ── "ask me" ───────────────────────────────────────────────────────
 
-    def _held(self, kind: str, summary: str, run: Callable[[], None]) -> bool:
+    def _held(self, kind: str, summary: str, run: Callable[[], None], *,
+              details: list[str] | tuple[str, ...] = ()) -> bool:
         """With the "ask me" permission, keep ``run`` for the person's OK
         and return True (the caller does nothing more). Otherwise False:
-        the caller runs it now, as a Pi would."""
+        the caller runs it now, as a Pi would. Something that can't be
+        shown whole is refused (and True: nothing runs)."""
         if not is_pc(self.cfg) or getattr(self.cfg, "permissions", "automatic") != "ask":
             return False
-        self._pending_actions().offer(kind, summary, run)
+        try:
+            self._pending_actions().offer(kind, summary, run, details=details)
+        except ValueError as e:
+            log.warning("ask me: refusing a %s the person could not be shown in full (%s)", kind, e)
         return True
 
     # ── mute ───────────────────────────────────────────────────────────
@@ -573,14 +611,21 @@ def cli(args: Any) -> int:
 
 def wait_for_approval(path: Path | str, *, timeout: float, out=None, poll: float = 1.0,
                       clock: Callable[[], float] = time.monotonic,
-                      sleep: Callable[[float], None] = time.sleep) -> str:
+                      sleep: Callable[[float], None] = time.sleep, show_code: bool = True) -> str:
     """The installer's last step: watch the engine until it is connected,
-    printing the approval code (to the installer's terminal, never a log)
-    while it waits. Returns the final connection state, or "timeout" /
-    "no_engine"."""
+    printing the approval code while it waits — only when ``out`` is a
+    terminal: an installer piped into a file or a CI log says where to find
+    the code instead (the code never goes to a log). ``show_code`` False
+    says the same even on a terminal (the installer passes it when its own
+    output is not one: sudo can hand the waiter a pty of its own). Returns
+    the final connection state, or "timeout" / "no_engine"."""
     if out is None:
         _printable_streams()
         out = sys.stdout
+    try:
+        on_terminal = bool(show_code) and bool(out.isatty())
+    except (OSError, ValueError, AttributeError):
+        on_terminal = False
     client_ = control.ControlClient(path, timeout=5.0)
     deadline = clock() + timeout
     shown: str | None = None
@@ -596,7 +641,14 @@ def wait_for_approval(path: Path | str, *, timeout: float, out=None, poll: float
             out.write(f"Approved: this device is now the {st['room'].get('name') or st['room'].get('id')}.\n")
             out.flush()
             return state
-        if state == "awaiting_approval":
+        if state == "awaiting_approval" and not on_terminal:
+            if last_state != state:
+                out.write(
+                    "\nWaiting for approval. The code is not printed here (this is not a\n"
+                    "terminal); it is in the tray, or run: python -m satellite.client --approval-code\n"
+                )
+                out.flush()
+        elif state == "awaiting_approval":
             try:
                 code = client_.call("code").get("code")
             except ConnectionError:

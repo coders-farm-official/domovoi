@@ -54,7 +54,7 @@
     "output": "one of `output_states`",
     "volume": "the last known output volume 0-100, or null",
     "permissions": "automatic | ask",
-    "pending": "[{id, kind, summary, received_at}] held for the person's OK (\"ask me\")",
+    "pending": "[{id, kind, summary, details, received_at}] held for the person's OK (\"ask me\"); details lists every change, one line each, never shortened (an action that cannot be shown whole is not held)",
     "battery": "{percent, charging, on_power} on a device with a battery (the health sample's object), else null",
     "version": "the satellite code's version label (the hello's synced_sha), or null"
   },
@@ -178,24 +178,24 @@
     },
     {
       "name": "approve_pending_update",
-      "engine": {"pending": [{"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code (44f0fff → 9c1d2aa)", "received_at": 1760280060.0}]},
+      "engine": {"pending": [{"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code (44f0fff → 9c1d2aa)", "details": [], "received_at": 1760280060.0}]},
       "request": {"verb": "approve", "action": "a1b2c3d4e5f6"},
       "response": {"ok": true, "verb": "approve",
-                   "done": [{"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code (44f0fff → 9c1d2aa)", "received_at": 1760280060.0}],
+                   "done": [{"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code (44f0fff → 9c1d2aa)", "details": [], "received_at": 1760280060.0}],
                    "pending": []},
       "ran": ["update"]
     },
     {
       "name": "decline_all",
       "engine": {"pending": [
-        {"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code", "received_at": 1760280060.0},
-        {"id": "0f9e8d7c6b5a", "kind": "restart", "summary": "the core asked for a restart", "received_at": 1760280070.0}
+        {"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code", "details": [], "received_at": 1760280060.0},
+        {"id": "0f9e8d7c6b5a", "kind": "restart", "summary": "the core asked for a restart", "details": [], "received_at": 1760280070.0}
       ]},
       "request": {"verb": "decline", "action": "all"},
       "response": {"ok": true, "verb": "decline",
                    "done": [
-                     {"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code", "received_at": 1760280060.0},
-                     {"id": "0f9e8d7c6b5a", "kind": "restart", "summary": "the core asked for a restart", "received_at": 1760280070.0}
+                     {"id": "a1b2c3d4e5f6", "kind": "update", "summary": "new satellite code", "details": [], "received_at": 1760280060.0},
+                     {"id": "0f9e8d7c6b5a", "kind": "restart", "summary": "the core asked for a restart", "details": [], "received_at": 1760280070.0}
                    ],
                    "pending": []},
       "ran": []

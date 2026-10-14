@@ -1511,6 +1511,8 @@ async def _satellite_for(
     supports = (snapshot.get("satellite_supports") or {}).get(room_id) if online else None
     if supports is not None and not isinstance(supports, list):
         supports = None
+    ignored = (snapshot.get("satellite_settings_ignored") or {}).get(room_id) if online else None
+    ignored = [str(x)[:160] for x in ignored][:8] if isinstance(ignored, list) and ignored else None
     display_dict = (snapshot.get("satellite_display") or {}).get(room_id)
     display = (
         SatelliteDisplay(
@@ -1555,6 +1557,7 @@ async def _satellite_for(
         timers_own_only=room_id in (own_only or {}),
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
+        settings_ignored=ignored,
     )
 
 

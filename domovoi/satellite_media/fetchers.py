@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -156,14 +157,38 @@ def satellite_requirements(repo_root: Path, target: dict[str, str] | None = None
         if not line or line.startswith("#"):
             continue
         if target is not None and ";" in line:
-            from packaging.markers import Marker
-
             spec, marker = (part.strip() for part in line.split(";", 1))
-            if not Marker(marker).evaluate(dict(target)):
+            if not marker_holds(marker, target):
                 continue
             line = spec
         out.append(line)
     return out
+
+
+_MARKER_TERM = re.compile(r'^\s*([a-z_]+)\s*(==|!=)\s*"([^"]*)"\s*$')
+
+
+def marker_holds(marker: str, env: dict[str, str]) -> bool:
+    """A requirement marker, evaluated for ``env``: the subset
+    satellite/requirements.txt uses (``name == "v"`` / ``name != "v"``
+    terms joined by ``and``/``or``, ``and`` binding tighter; no brackets),
+    with the standard library only. Anything else raises ValueError rather
+    than being guessed at; a test reads every marker in the file through
+    this. (packaging's Marker did this before, but packaging is not a
+    declared dependency of the core.)"""
+    if "(" in marker or ")" in marker or "'" in marker:
+        raise ValueError(f"unsupported requirement marker: {marker!r}")
+    alternatives = []
+    for alternative in re.split(r"\s+or\s+", marker.strip()):
+        terms = []
+        for term in re.split(r"\s+and\s+", alternative):
+            m = _MARKER_TERM.match(term)
+            if not m or m.group(1) not in env:
+                raise ValueError(f"unsupported requirement marker: {marker!r}")
+            name, op, value = m.groups()
+            terms.append((env[name] == value) == (op == "=="))
+        alternatives.append(all(terms))
+    return any(alternatives)
 
 
 def fetch_wheels(

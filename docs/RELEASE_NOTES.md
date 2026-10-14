@@ -49,12 +49,24 @@ Server, dashboard and satellite update; no migration. Pis are unchanged.
   The code is not a password: the device still waits for its approval code
   in the dashboard, like a Pi. Guide:
   [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md).
-* **The command is safe on a LAN without TLS**: it runs the download only
-  if its SHA-256 is the one the dashboard quoted, and the installer makes
-  the server prove its fingerprint before it writes anything; the device is
-  pinned to that server from then on and won't run unpinned. Make a fresh
-  command after updating Domovoi (an old one refuses the new download).
-  The server address in a code must be on the home network.
+* **The command checks what it runs**: it runs the download only if its
+  SHA-256 is the one the dashboard quoted, and the installer makes the
+  server prove its fingerprint before it writes anything; the device is
+  pinned to that server from then on and won't run unpinned. The command
+  itself is only as trustworthy as the dashboard page it is shown on, which
+  is plain HTTP on the LAN: check the fingerprint it prints against
+  **Settings → About** on another device. Make a fresh command after
+  updating Domovoi (an old one refuses the new download). The server
+  address in a code must be on the home network.
+* **Python packages from a hash-pinned list** (`satellite/locks/`, one per
+  Python version and machine): pip takes only the files whose SHA-256 the
+  list names, and builds nothing from source.
+* **Uninstall from root's own copy**,
+  `/usr/local/lib/domovoi-satellite/install-pc.sh --uninstall`: it acts only
+  on the paths written into it and on root's own record of what it
+  changed, never on anything the satellite's account can write.
+  `--purge` removes the satellite's files, and the installer refuses an
+  account that already runs a Domovoi server.
 * **The laptop asks you** whether the server may update and restart it on
   its own ("automatic", like a Pi) or must wait for your OK in the tray
   ("ask me"). Either way it gets **no root helpers**: no Wi-Fi re-joins, no
@@ -76,6 +88,19 @@ Server, dashboard and satellite update; no migration. Pis are unchanged.
 * Satellite media prep now evaluates `satellite/requirements.txt`'s
   platform markers for the board it prepares (the `onnxruntime==1.20.0`
   pin and `spidev` are ARM-only lines now); a Pi card gets what it got.
+* **Every satellite, Pis included: tighter settings from the server.** A
+  settings change from the server may name only the settings the
+  dashboard's form has, by their exact name (a near-miss such as a trailing
+  space is refused, not tidied up), and never the pinned server, its
+  address or the device section. An audio device name, from the server or
+  in `config.toml`, must be a plain ALSA device (`hw:1,0`,
+  `plughw:CARD=Device`, `default`, …): one that makes ALSA run a command
+  is refused, and so is the player's use of one. A **Pi** whose stored
+  config already names one (no SSH to fix it) starts on its board's
+  default for that setting and says so: **"a setting ignored"** on its
+  dashboard card and in its health block. A spare computer refuses to
+  start instead and says why (it has a terminal). A satellite's sound sync
+  now prunes only the clips it put there.
 
 ## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
 

@@ -127,6 +127,11 @@ const SatCard = ({ s, onOpen, tick }) => {
         {s.sat_type === 'video' && online && s.display && s.display.kiosk_alive === false && (
           <Pill tone="warn">kiosk dead</Pill>
         )}
+        {online && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 && (
+          <Pill tone="warn" title={s.settings_ignored.join('\n') + '\n(it uses its board\u2019s default instead)'}>
+            {s.settings_ignored.length === 1 ? 'a setting ignored' : `${s.settings_ignored.length} settings ignored`}
+          </Pill>
+        )}
         <Pill tone={online ? 'live' : 'idle'} live={online}>
           {online ? 'online' : s.status === 'waiting' ? 'waiting' : 'offline'}
         </Pill>
@@ -413,6 +418,8 @@ const SatHealthCard = ({ room, online }) => {
         {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
         {s && s.reboot_needed &&
           <Pill tone="warn" title={s.reboot_needed}>reboot needed</Pill>}
+        {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 &&
+          <Pill tone="warn" title={s.settings_ignored.join('\n')}>settings ignored</Pill>}
         {s && s.wifi && s.wifi.mode === 'ap' &&
           <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the satellite is bringing the house network back">setup hotspot on</Pill>}
         {s && s.mic_blocked === true &&
@@ -422,6 +429,11 @@ const SatHealthCard = ({ room, online }) => {
           <Pill tone="warn" title={s.throttled_flags.join(', ')}>throttled earlier this boot</Pill>}
         {hist && <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>{hist.samples} samples in 24 h</span>}
       </div>
+      {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {s.settings_ignored.join('; ')}. It uses its board’s default instead; a new value from the Settings tab replaces the stored one.
+        </div>
+      )}
       {s && s.reboot_needed && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
           {s.net_step && s.net_step.state === 'failed'

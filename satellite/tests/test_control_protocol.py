@@ -165,9 +165,17 @@ def test_an_unknown_kind_is_a_programming_error():
         control.PendingActions().offer("reboot", "x", lambda: None)
 
 
-def test_a_summary_is_bounded():
-    a = control.PendingActions().offer("config", "k" * 1000, lambda: None)
-    assert len(a.summary) == 300
+def test_what_cannot_be_shown_whole_is_not_held():
+    """Never shortened: a summary or a detail list too long to show in full
+    is refused, so nothing can hide behind the cut (review R2b)."""
+    p = control.PendingActions()
+    with pytest.raises(ValueError):
+        p.offer("config", "k" * 1000, lambda: None)
+    with pytest.raises(ValueError):
+        p.offer("config", "s", lambda: None, details=["x"] * (control.MAX_DETAILS + 1))
+    a = p.offer("config", "2 settings", lambda: None, details=["a.b = 1", "music.alsa_device = 'hw:1,0'"])
+    assert p.list()[0]["details"] == ["a.b = 1", "music.alsa_device = 'hw:1,0'"]
+    del a
 
 
 # ─── the server, over a loopback transport (any OS) ───────────────────────
@@ -417,3 +425,71 @@ def test_peer_uid_is_read_from_the_socket(tmp_path):
     finally:
         a.close()
         b.close()
+
+
+# ─── the peer-uid guard (review C4; needs root to make a second uid) ──────
+
+@posix_only
+@pytest.mark.skipif(not hasattr(os, "getuid") or os.getuid() != 0, reason="needs root (run-linux-tests.sh as root)")
+def test_C4_another_uid_is_closed_even_through_an_open_socket(tmp_path):
+    import tempfile
+
+    base = Path(tempfile.mkdtemp(dir="/tmp"))
+    os.chmod(base, 0o755)
+
+    class Api:
+        def control_status(self):
+            return {"connection": "connected"}
+
+    async def run():
+        tr = control.UnixSocketTransport(base / "d" / "control.sock")
+        server = control.ControlServer(Api(), tr)
+        await server.start()
+        os.chmod(base / "d", 0o755)
+        os.chmod(tr.path, 0o666)                # only the uid check left
+        pid = os.fork()
+        if pid == 0:
+            code = 3
+            try:
+                os.setuid(65534)
+                s = socket.socket(socket.AF_UNIX)
+                s.settimeout(3)
+                s.connect(str(tr.path))
+                s.sendall(b'{"verb":"status"}\n')
+                try:
+                    got = s.recv(100)
+                except ConnectionResetError:
+                    got = b""
+                code = 0 if got == b"" else 1
+            except OSError:
+                code = 2
+            os._exit(code)
+        while True:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                break
+            await asyncio.sleep(0.05)
+        await server.close()
+        return os.waitstatus_to_exitcode(status)
+
+    rc = asyncio.run(run())
+    assert rc == 0, {1: "uid 65534 got an answer", 2: "connect failed (test setup)"}.get(rc, rc)
+
+
+def test_a_peer_whose_uid_cannot_be_read_is_refused(monkeypatch):
+    """N2: no answer from SO_PEERCRED is not a pass."""
+    if not POSIX:
+        pytest.skip("Unix sockets")
+    import tempfile
+
+    monkeypatch.setattr(control, "peer_uid", lambda sock: None)
+    path = Path(tempfile.mkdtemp()) / "control.sock"
+    stop = _serve_in_thread(FakeEngine(), path)
+    try:
+        try:
+            got = control.ControlClient(path, timeout=2).call("status")
+        except (ConnectionError, OSError, ValueError):
+            got = None
+        assert got is None, got
+    finally:
+        stop()

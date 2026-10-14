@@ -112,6 +112,8 @@ PENDING_KINDS: dict[str, str] = {
     "wake_word": "a wake-word model pushed to this room (`set_wake_word`, ends in a restart)",
 }
 PERMISSIONS = ("automatic", "ask")
+#: The most lines a pending action may list (each shown, none cut).
+MAX_DETAILS = 40
 
 
 class ControlError(Exception):
@@ -132,10 +134,14 @@ class PendingAction:
     summary: str
     received_at: float
     run: Callable[[], None] = field(repr=False)
+    #: Every change it makes, one line each, never shortened (a settings
+    #: push lists each key and value): the person reads all of it before
+    #: allowing it.
+    details: tuple[str, ...] = ()
 
     def public(self) -> dict[str, Any]:
         return {"id": self.id, "kind": self.kind, "summary": self.summary,
-                "received_at": round(self.received_at, 3)}
+                "details": list(self.details), "received_at": round(self.received_at, 3)}
 
 
 class PendingActions:
@@ -153,12 +159,15 @@ class PendingActions:
         self._on_change = on_change or (lambda: None)
 
     def offer(self, kind: str, summary: str, run: Callable[[], None], *,
-              now: float | None = None) -> PendingAction:
+              now: float | None = None, details: list[str] | tuple[str, ...] = ()) -> PendingAction:
         if kind not in PENDING_KINDS:
             raise ValueError(f"unknown pending kind {kind!r}")
+        if len(summary) > 300 or len(details) > MAX_DETAILS or any(len(d) > 400 for d in details):
+            # Never shortened: what can't be shown whole is not offered.
+            raise ValueError("a pending action must be shown in full; this one is too long")
         action = PendingAction(
-            id=uuid.uuid4().hex[:12], kind=kind, summary=summary[:300],
-            received_at=time.time() if now is None else now, run=run,
+            id=uuid.uuid4().hex[:12], kind=kind, summary=summary,
+            received_at=time.time() if now is None else now, run=run, details=tuple(details),
         )
         with self._lock:
             self._items[kind] = action
@@ -327,7 +336,8 @@ class UnixSocketTransport:
     """``~/.domovoi/control.sock``: created 0600 (the umask is held at 077
     around the bind), in a directory made 0700; an old socket left by a
     crash is replaced, anything else at the path is left alone and the
-    channel stays off. Peers are held to this process's uid (or root)."""
+    channel stays off. Peers are held to this process's uid (or root); one
+    whose uid can't be read is refused."""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
@@ -355,8 +365,9 @@ class UnixSocketTransport:
         async def guarded(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             sock = writer.get_extra_info("socket")
             uid = peer_uid(sock) if sock is not None else None
-            if uid is not None and uid not in (own_uid, 0):
-                log.warning("control: refused a connection from uid %d", uid)
+            # A peer this process can't identify is refused like a stranger.
+            if uid is None or uid not in (own_uid, 0):
+                log.warning("control: refused a connection from uid %s", uid)
                 writer.close()
                 return
             await handler(reader, writer)
