@@ -48,8 +48,8 @@ param(
     # install or in the dashboard's command passes them; no environment
     # variable is read): the Run/Uninstall values and the Start-menu
     # shortcut go to this JSON file instead of the registry; the core-PC
-    # signals are pointed elsewhere (a JSON object); and the window is
-    # treated as elevated (the refusal path only).
+    # signals are pointed elsewhere (a JSON file naming them); and the
+    # window is treated as elevated (the refusal path only).
     [string]$TestRegistryFile = '',
     [string]$TestCorePcSignals = '',
     [switch]$TestAsAdministrator
@@ -111,7 +111,7 @@ function Get-CorePcReason {
     }
     if ($TestCorePcSignals) {
         # Tests only (see the parameter): point each signal somewhere else.
-        $t = $TestCorePcSignals | ConvertFrom-Json
+        $t = Get-Content -Raw -LiteralPath $TestCorePcSignals | ConvertFrom-Json
         foreach ($p in $t.PSObject.Properties) { $s[$p.Name] = [string]$p.Value }
     }
     if ($s.service -and (Get-Service -Name $s.service -ErrorAction SilentlyContinue)) {

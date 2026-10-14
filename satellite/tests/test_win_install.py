@@ -286,6 +286,13 @@ def test_the_scripts_parse(name):
 NOTHING = json.dumps({"service": "", "registry": "", "programdata": "", "profile": "", "probe": ""})
 
 
+def _signals(tmp_path: Path, signals) -> str:
+    """The installer's -TestCorePcSignals: a JSON file naming each signal."""
+    path = tmp_path / "corepc-signals.json"
+    path.write_text(signals if isinstance(signals, str) else json.dumps(signals), encoding="utf-8")
+    return str(path)
+
+
 @windows_only
 def test_a_pc_that_runs_the_domovoi_server_is_refused_before_anything(tmp_path):
     marker = tmp_path / "ProgramData-Domovoi"
@@ -295,7 +302,7 @@ def test_a_pc_that_runs_the_domovoi_server_is_refused_before_anything(tmp_path):
     signals = json.loads(NOTHING)
     signals["programdata"] = str(marker)
     r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), payload, "-InstallRoot", str(root),
-             "-TestCorePcSignals", json.dumps(signals)])
+             "-TestCorePcSignals", _signals(tmp_path, signals)])
     assert r.returncode == 5, r.stdout + r.stderr
     assert "never installed on the PC that runs the Domovoi server" in r.stderr
     assert not root.exists()
@@ -310,7 +317,7 @@ def test_a_server_s_files_in_this_account_count_as_a_server(tmp_path, marker):
     signals = json.loads(NOTHING)
     signals["profile"] = str(profile)
     r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), "domovoi-room:1?core=x", "-InstallRoot",
-             str(tmp_path / "S"), "-TestCorePcSignals", json.dumps(signals)])
+             str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, signals)])
     assert r.returncode == 5 and marker in r.stderr
 
 
@@ -325,7 +332,7 @@ def test_a_code_off_the_home_network_is_refused_before_any_download(tmp_path, pa
         payload = enrolment_payload_for(served.url)
     bundle = _bundle_copy(tmp_path, served)
     args = ["-File", str(bundle / "satellite" / "scripts" / "install-windows.ps1")] + ([payload] if payload else [])
-    r = _ps(args + ["-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", NOTHING], timeout=60)
+    r = _ps(args + ["-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, NOTHING)], timeout=60)
     assert r.returncode == 2, r.stdout + r.stderr
     assert "not on the home network" in r.stderr or "give the enrolment code" in r.stderr, r.stderr
     assert not (tmp_path / "S").exists()
@@ -652,7 +659,7 @@ def test_an_administrator_window_is_refused(tmp_path):
     """W27, through the refusal-only test switch (it can't make a refused
     install pass)."""
     r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), "x", "-InstallRoot", str(tmp_path / "S"),
-             "-TestAsAdministrator", "-TestCorePcSignals", NOTHING])
+             "-TestAsAdministrator", "-TestCorePcSignals", _signals(tmp_path, NOTHING)])
     assert r.returncode == 2 and "runs as administrator" in r.stderr, r.stdout + r.stderr
     assert not (tmp_path / "S").exists()
 
@@ -664,7 +671,7 @@ def test_the_server_s_windows_service_counts_as_a_server(tmp_path):
     signals = json.loads(NOTHING)
     signals["service"] = "EventLog"
     r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), "x", "-InstallRoot", str(tmp_path / "S"),
-             "-TestCorePcSignals", json.dumps(signals)])
+             "-TestCorePcSignals", _signals(tmp_path, signals)])
     assert r.returncode == 5 and "Windows service (EventLog)" in r.stderr, r.stdout + r.stderr
 
 
@@ -678,7 +685,7 @@ def test_a_server_answering_on_this_pc_counts_as_a_server(tmp_path, answer, refu
         signals = json.loads(NOTHING)
         signals["probe"] = srv.url + "/v1/health"
         r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), "-InstallRoot", str(tmp_path / "S"),
-                 "-TestCorePcSignals", json.dumps(signals)])
+                 "-TestCorePcSignals", _signals(tmp_path, signals)])
     finally:
         srv.close()
     assert srv.requests == ["/v1/health"]
@@ -695,7 +702,7 @@ def test_a_lock_naming_a_python_from_elsewhere_is_refused_before_any_download(tm
     bundle = _bundle_copy(tmp_path, served, url=served.url + "/python.zip")
     payload = enrolment_payload_for("http://domovoi-test-nowhere.home.arpa:6370")
     r = _ps(["-File", str(bundle / "satellite" / "scripts" / "install-windows.ps1"), payload,
-             "-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", NOTHING], timeout=60)
+             "-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, NOTHING)], timeout=60)
     assert r.returncode == 1 and "unexpected Python" in r.stderr, r.stdout + r.stderr
     assert served.requests == [] and not (bundle / "stage").exists()
 

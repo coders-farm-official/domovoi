@@ -2031,7 +2031,7 @@ microphone fed from WAV files, speakers that write WAV files; what the
 end-to-end tests use instead of a person's real devices) reach the engine
 only when its supervisor is started with `--test-audio-hooks`, which
 nothing in an install does, and the engine logs a warning whenever one is
-in use. The installer's own test seams (`-TestCorePcSignals`,
+in use. The installer's own test seams (`-TestCorePcSignals <file>`,
 `-TestRegistryFile`, `-TestAsAdministrator`) are parameters given on its
 command line, which the dashboard's command never passes; no environment
 variable steers it. A running satellite is stopped for a reinstall only
