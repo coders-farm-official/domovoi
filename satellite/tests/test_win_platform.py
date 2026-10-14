@@ -649,3 +649,33 @@ def test_an_engine_that_can_not_claim_its_pipe_leaves_before_the_microphone_open
     asyncio.run(sat.run())
     assert sat.exit_code == 78
     assert getattr(sat, "_playback_thread", None) is None
+
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows' program search")
+def test_the_health_sample_runs_no_linux_tool_on_windows(tmp_path, monkeypatch):
+    """Security review F5: the sampler ran ``ip route`` (and vcgencmd,
+    nmcli) by bare name every sample; Windows finds a bare name in the
+    program's folder, the current folder and PATH first, so a planted
+    ip.exe ran as the satellite's account. On Windows none of them runs."""
+    from satellite import health
+
+    bin_dir = tmp_path / "writable-path-dir"
+    bin_dir.mkdir()
+    shutil.copy(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe", bin_dir / "ip.exe")
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.chdir(bin_dir)
+    seen = []
+
+    def spy(argv, timeout=5.0):
+        out = health.run_tool(argv, timeout)
+        seen.append((argv[0], out))
+        return out
+
+    s = health.Sampler(battery_reader=lambda: {})
+    s.run = spy
+    sample = s.host()
+    assert seen and all(out is None for _tool, out in seen), seen   # nothing ran, the planted ip.exe included
+    assert sample.get("gateway") is None
+    assert health.run_tool(["ip", "route"]) is None
+    assert health.read_default_gateway() is None

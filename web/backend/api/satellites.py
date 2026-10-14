@@ -340,9 +340,18 @@ def install_command(core: str, bundle_sha256: str, payload: str) -> str:
     )
 
 
+#: Every character Windows PowerShell takes for a single quote: the ASCII
+#: one and the typographic ones (U+2018 to U+201B, which a phone's keyboard
+#: types in a room name). Security review of wf/sat-windows: doubling only
+#: the ASCII one let a typographic apostrophe end the string.
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
 def _ps_quote(value: str) -> str:
-    """A PowerShell single-quoted string literal (only ' needs doubling)."""
-    return "'" + value.replace("'", "''") + "'"
+    """A PowerShell single-quoted string literal: every character PowerShell
+    reads as a single quote is doubled (one of a pair is a literal), so no
+    value can end the string early."""
+    return "'" + "".join(c + c if c in _PS_SINGLE_QUOTES else c for c in value) + "'"
 
 
 def install_command_windows(core: str, bundle_sha256: str, payload: str) -> str:

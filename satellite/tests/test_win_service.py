@@ -201,3 +201,27 @@ def test_the_install_folder_is_the_python_s_parent(monkeypatch, tmp_path):
     monkeypatch.setattr(ws.sys, "executable", str(exe))
     assert ws.default_root() == tmp_path.resolve()
     assert ws.interpreter(tmp_path, windowed=False) == str(tmp_path / "python" / "python.exe")
+
+
+@pytest.mark.parametrize("argv,hooks", [([], False), (["--test-audio-hooks"], True)])
+def test_the_audio_hooks_reach_the_engine_only_with_the_flag(tmp_path, monkeypatch, argv, hooks):
+    """W9 (security review): an ordinary start (the sign-in entry, the
+    Start menu, the tray's Start) never passes the test hooks on."""
+    from types import SimpleNamespace
+
+    got = {}
+
+    class FakeSupervisor:
+        def __init__(self, root, **kw):
+            got.update(kw)
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(ws, "Supervisor", FakeSupervisor)
+    monkeypatch.setattr(ws.win32, "object_name", lambda kind, sid=None: f"test-{kind}")
+    monkeypatch.setattr(ws.win32, "SingleInstance",
+                        lambda name: SimpleNamespace(already_running=False, close=lambda: None))
+    monkeypatch.setattr(ws.win32, "NamedEvent", lambda name: SimpleNamespace(reset=lambda: None))
+    assert ws.main(["--root", str(tmp_path), "--no-tray", *argv]) == 0
+    assert got["test_hooks"] is hooks

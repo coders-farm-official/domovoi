@@ -343,7 +343,9 @@ command and press Enter. It:
    nothing is installed;
 4. asks **what the server may do on its own** ("automatic" or "ask me",
    the same as on Linux, below);
-5. installs into `%LOCALAPPDATA%\Domovoi\Satellite`: Python, its libraries
+5. installs into `%LOCALAPPDATA%\Domovoi\Satellite` (or an empty folder
+   inside your own user folder, `-InstallRoot`; it sets that folder's
+   permissions to you, SYSTEM and Administrators): Python, its libraries
    (each by its SHA-256, nothing resolved on the laptop), the satellite,
    the wake-word models (checked against their pins), and its settings in
    `.domovoi\config.toml` with your server pinned;
@@ -354,9 +356,12 @@ command and press Enter. It:
    its tray icon again after you stopped them);
 7. asks, one at a time, about **keeping it awake while plugged in**: never
    sleep, and keep running with the lid closed. Each defaults to **No**,
-   only the plugged-in setting changes (on battery it still sleeps), and the
-   uninstaller puts back what was there. A standard account may not be
-   allowed to change them; the installer says so and carries on;
+   only the plugged-in setting changes (on battery it still sleeps). The
+   change is to the PC's **active power plan, which every account on this
+   PC shares**; the uninstaller puts the exact values back in that plan
+   (and does not switch plans if you have chosen another since). A
+   standard account may not be allowed to change them; the installer says
+   so and carries on;
 8. starts it and waits for you to approve it, showing the **approval
    code**.
 

@@ -18,7 +18,11 @@ In order, and nothing written before step 2 has passed:
 2. make the core prove it holds that fingerprint — the address-bound
    ``/v1/health`` challenge every satellite runs — or stop (exit 3);
 3. ask what the server may do on its own: "automatic" or "ask me";
-4. install, per user, into ``%LOCALAPPDATA%\\Domovoi\\Satellite``: the
+4. stop a satellite already installed in that folder (only now, after the
+   proof), and install, per user, into
+   ``%LOCALAPPDATA%\\Domovoi\\Satellite`` — or another empty folder inside
+   the account's own folder, never through a link, with a DACL of its own
+   (this user, SYSTEM, Administrators; nothing inherited): the
    Python (``python\\``), every wheel the lock names — from the core's cache,
    or from python.org / PyPI when the core hasn't fetched them, each held to
    its SHA-256 and size either way — installed by pip with
@@ -183,12 +187,18 @@ def pth_name(python_dir: Path) -> str:
     return found[0].name
 
 
-def write_pth(python_dir: Path, extra: list[str], *, site: bool) -> None:
+def write_pth(python_dir: Path, extra: list[str]) -> None:
     """The embeddable Python's path file: its own zip, its folder, ``extra``
-    (relative to the Python folder), and ``import site`` for site-packages."""
+    (relative to the Python folder) and its own ``Lib\\site-packages`` —
+    and no ``import site``: with it, Python would also load this account's
+    user site-packages (``%APPDATA%\\Python\\Python314\\site-packages``),
+    its ``.pth`` files and ``usercustomize``, into every satellite process
+    (security review of wf/sat-windows). None of the pinned wheels ships a
+    ``.pth`` file, so nothing needs ``site``. UTF-8 without a BOM, which is
+    how Python reads a ``._pth`` (a BOM breaks its first line)."""
     zipname = pth_name(python_dir).replace("._pth", ".zip")
-    lines = [zipname, ".", *extra] + (["import site"] if site else [])
-    (python_dir / pth_name(python_dir)).write_bytes(("\r\n".join(lines) + "\r\n").encode("ascii"))
+    lines = [zipname, ".", *extra, "Lib\\site-packages"]
+    (python_dir / pth_name(python_dir)).write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
 
 
 def replace_dir(src: Path, dest: Path) -> None:
@@ -276,13 +286,26 @@ class Registry:
             doc = self._load()
             doc["shortcut"] = {"path": str(lnk), "target": target, "args": args, "workdir": workdir}
             return self._save(doc)
-        q = lambda s: "'" + str(s).replace("'", "''") + "'"  # noqa: E731
+        q = ps_quote
         script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({q(lnk)}); "
                   f"$s.TargetPath={q(target)}; $s.Arguments={q(args)}; $s.WorkingDirectory={q(workdir)}; "
                   f"$s.IconLocation={q(icon)}; $s.Description='Domovoi room satellite'; $s.Save()")
         lnk.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
                        capture_output=True, text=True, timeout=60, check=True, creationflags=CREATE_NO_WINDOW)
+
+
+#: Every character Windows PowerShell takes for a single quote: the ASCII
+#: one and the typographic ones (U+2018 to U+201B). An account named
+#: O’Brien, or a room typed on a phone, has the second kind.
+PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def ps_quote(value: Any) -> str:
+    """A PowerShell single-quoted string literal of ``value``: every
+    character PowerShell reads as a single quote is doubled (one of a pair
+    is a literal), so no value can end the string early."""
+    return "'" + "".join(c + c if c in PS_SINGLE_QUOTES else c for c in str(value)) + "'"
 
 
 def powershell() -> str:
@@ -329,8 +352,14 @@ def register(root: Path, room: str, version: str, reg: Registry) -> None:
 
 # ─── power (asked, plugged in only, default No) ───────────────────────────
 
+def powercfg_exe() -> str:
+    """Windows' own powercfg, by its full path: a bare name is looked for in
+    the current folder and on PATH first."""
+    return str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "powercfg.exe")
+
+
 def _powercfg(run: Callable[..., Any], *args: str) -> str:
-    r = run(["powercfg", *args], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+    r = run([powercfg_exe(), *args], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
     if r.returncode != 0:
         raise OSError((r.stderr or r.stdout or "powercfg failed").strip()[:200])
     return r.stdout or ""
@@ -434,19 +463,87 @@ def ask_choice(prompt: str, interactive: bool) -> bool:
 
 # ─── install ──────────────────────────────────────────────────────────────
 
-def check_install_root(root: Path) -> None:
-    """Refuse a folder that already holds something other than an earlier
-    install of this, and one where a Domovoi server keeps its files."""
+def _is_link(path: Path) -> bool:
+    """A symlink or a junction (``Path.is_symlink`` misses junctions)."""
+    if sys.platform == "win32":
+        from satellite import win32
+
+        return win32.is_reparse_point(str(path))
+    return path.is_symlink()
+
+
+def check_install_root(root: Path, profile: Path | None = None) -> None:
+    """Refuse a folder outside the account's own folder (``profile``: one
+    elsewhere, under ``C:\\`` say, inherits "Authenticated Users: Modify",
+    and a folder above it that others may rename can be swapped), one
+    reached through a link or junction, one that already holds something
+    other than an earlier install of this, and one where a Domovoi server
+    keeps its files. The folder itself then gets a DACL of its own
+    (:func:`protect_root`)."""
     from satellite import pc_engine
 
     shared = pc_engine.core_account(root / ".domovoi")
     if shared:
         raise InstallError(shared, 2)
-    if root.is_symlink():
-        raise InstallError(f"{root} is a link; not installing through it", 2)
+    root = Path(os.path.abspath(root))
+    if profile is not None:
+        home = Path(os.path.abspath(profile))
+        if root == home or not root.is_relative_to(home):
+            raise InstallError(f"{root} is not inside your own user folder ({home}); the satellite installs "
+                               "only there, where no other account can change it", 2)
+        chain = [root, *[a for a in root.parents if a != home and a.is_relative_to(home)]]
+    else:
+        chain = [root]
+    for folder in chain:
+        if _is_link(folder):
+            raise InstallError(f"{folder} is a link or junction; not installing through it", 2)
     if root.is_dir() and any(root.iterdir()) and not (root / ROOT_MARKER).is_file():
         raise InstallError(f"{root} is not empty and is not an earlier Domovoi Satellite install; "
-                           "choose an empty folder (-InstallRoot)", 2)
+                           "choose an empty folder inside your user folder (-InstallRoot)", 2)
+
+
+def protect_root(root: Path) -> None:
+    """The install folder belongs to this user (refused otherwise: its owner
+    could change its permissions back), and its DACL is this user, SYSTEM
+    and Administrators, inherited by everything inside, nothing from above."""
+    if sys.platform != "win32":
+        return
+    from satellite import win32
+
+    owner, me = win32.path_owner_sid(str(root)), win32.current_user_sid()
+    if owner != me:
+        raise InstallError(f"{root} belongs to another account ({owner}); choose a folder of your own", 2)
+    win32.protect_folder(str(root), me)
+
+
+STOP_WAIT_SEC = 20.0
+
+
+def stop_running(root: Path) -> None:
+    """Stop a satellite installed in ``root`` (its supervisor, engine and
+    tray, through this user's stop events), then end whatever of it is
+    left after :data:`STOP_WAIT_SEC`. Called only after the core has proven
+    its fingerprint: a refused install leaves the running one alone."""
+    if sys.platform != "win32" or not (root / "python").is_dir():
+        return
+    from satellite import win32
+
+    say("Stopping the satellite that is installed here, to install it again...")
+    for kind in (win32.STOP_EVENT, win32.TRAY_QUIT_EVENT):
+        event = win32.NamedEvent.open_existing(win32.object_name(kind))
+        if event is not None:
+            event.set()
+            event.close()
+    deadline = time.monotonic() + STOP_WAIT_SEC
+    while True:
+        left = win32.processes_under(str(root / "python"))
+        if not left:
+            return
+        if time.monotonic() > deadline:
+            for pid in left:
+                win32.terminate(pid)
+            return
+        time.sleep(0.5)
 
 
 def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.run,
@@ -497,11 +594,13 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     # 4. Files — only into an empty folder or an earlier install of this
     # (the uninstaller removes what it recognises, nothing else), and never
     # beside a Domovoi server's own files (security review of wf/sat-pc, S2).
-    check_install_root(root)
+    check_install_root(root, Path(args.profile) if getattr(args, "profile", None) else None)
+    stop_running(root)
     root.mkdir(parents=True, exist_ok=True)
+    protect_root(root)
     (root / ROOT_MARKER).write_text("Domovoi Satellite install folder\n", encoding="utf-8")
     replace_dir(staged, root / "python")
-    write_pth(root / "python", ["..\\app"], site=True)
+    write_pth(root / "python", ["..\\app"])
     (root / "app").mkdir(exist_ok=True)
     replace_dir(bundle / "satellite", root / "app" / "satellite")
     shutil.copyfile(bundle / "satellite" / "scripts" / "uninstall-windows.ps1", root / "uninstall.ps1")
@@ -596,6 +695,9 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
         except (AttributeError, ValueError):
             pass
+    # The account's own folder, before ~ is pointed elsewhere: the install
+    # folder must be inside it.
+    args.profile = os.environ.get("USERPROFILE") or str(Path.home())
     # Whatever a satellite module resolves as ~ is the install folder, never
     # this person's own profile (a Domovoi server keeps its data there).
     os.environ["USERPROFILE"] = str(Path(args.root))

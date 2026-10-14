@@ -114,6 +114,10 @@ def _kernel32():
     k.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
                                              ctypes.POINTER(wintypes.DWORD))
     k.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    k.K32EnumProcesses.argtypes = (ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+    k.K32EnumProcesses.restype = wintypes.BOOL
+    k.TerminateProcess.argtypes = (wintypes.HANDLE, wintypes.UINT)
+    k.TerminateProcess.restype = wintypes.BOOL
     return k
 
 
@@ -134,6 +138,20 @@ def _advapi32():
     a.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
     a.GetSidSubAuthority.argtypes = (wintypes.LPVOID, wintypes.DWORD)
     a.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
+    a.GetSecurityDescriptorDacl.argtypes = (wintypes.LPVOID, ctypes.POINTER(wintypes.BOOL),
+                                            ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.BOOL))
+    a.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    a.SetNamedSecurityInfoW.argtypes = (wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, wintypes.LPVOID,
+                                        wintypes.LPVOID, wintypes.LPVOID, wintypes.LPVOID)
+    a.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    a.GetNamedSecurityInfoW.argtypes = (wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD,
+                                        ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.LPVOID),
+                                        ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.LPVOID),
+                                        ctypes.POINTER(wintypes.LPVOID))
+    a.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    a.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = (
+        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(wintypes.LPWSTR), wintypes.LPVOID)
+    a.ConvertSecurityDescriptorToStringSecurityDescriptorW.restype = wintypes.BOOL
     return a
 
 
@@ -364,6 +382,149 @@ def own_image_dir() -> str:
     if not image:
         raise _winerror("QueryFullProcessImageNameW")
     return os.path.dirname(image)
+
+
+PROCESS_TERMINATE = 0x0001
+
+
+def process_ids() -> list[int]:
+    """Every process id on this PC (``K32EnumProcesses``)."""
+    k = _kernel32()
+    size = 4096
+    while True:
+        arr = (wintypes.DWORD * size)()
+        got = wintypes.DWORD(0)
+        if not k.K32EnumProcesses(arr, ctypes.sizeof(arr), ctypes.byref(got)):
+            raise _winerror("EnumProcesses")
+        n = got.value // ctypes.sizeof(wintypes.DWORD)
+        if n < size:
+            return [int(p) for p in arr[:n] if p]
+        size *= 2
+
+
+def processes_under(folder: str) -> list[int]:
+    """The processes (of any user this account may query) whose program is
+    inside ``folder``."""
+    import os
+
+    prefix = os.path.normcase(os.path.join(os.path.abspath(folder), ""))
+    out = []
+    for pid in process_ids():
+        if pid == os.getpid():
+            continue
+        image = process_image(pid)
+        if image and os.path.normcase(image).startswith(prefix):
+            out.append(pid)
+    return out
+
+
+def terminate(pid: int) -> bool:
+    k = _kernel32()
+    proc = k.OpenProcess(PROCESS_TERMINATE, False, int(pid))
+    if not proc:
+        return False
+    try:
+        return bool(k.TerminateProcess(proc, 1))
+    finally:
+        k.CloseHandle(proc)
+
+
+# ─── an install folder: its owner, its links, a DACL of its own ───────────
+
+SE_FILE_OBJECT = 1
+OWNER_SECURITY_INFORMATION = 0x1
+DACL_SECURITY_INFORMATION = 0x4
+PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def is_reparse_point(path: str) -> bool:
+    """A symlink, a junction or any other reparse point (``os.path.islink``
+    misses junctions)."""
+    import os
+
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return bool(getattr(st, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT) or os.path.islink(path)
+
+
+def folder_sddl(sid: str) -> str:
+    """The install folder's DACL: its user, SYSTEM and Administrators, full
+    control, inherited by everything inside, nothing inherited from above."""
+    return f"D:P(A;OICI;FA;;;{sid})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
+
+
+def _sd_from_sddl(sddl: str) -> wintypes.LPVOID:
+    a = _advapi32()
+    psd = wintypes.LPVOID()
+    if not a.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(psd), None):
+        raise _winerror("ConvertStringSecurityDescriptorToSecurityDescriptorW")
+    return psd
+
+
+def protect_folder(path: str, sid: str | None = None) -> None:
+    """Replace ``path``'s DACL with :func:`folder_sddl` (protected: nothing
+    inherited from the folder above, so an install root under ``C:\\`` does
+    not keep "Authenticated Users: Modify"). Windows carries it down to
+    what is inside."""
+    a, k = _advapi32(), _kernel32()
+    psd = _sd_from_sddl(folder_sddl(sid or current_user_sid()))
+    try:
+        present, defaulted = wintypes.BOOL(), wintypes.BOOL()
+        dacl = wintypes.LPVOID()
+        if not a.GetSecurityDescriptorDacl(psd, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)):
+            raise _winerror("GetSecurityDescriptorDacl")
+        err = a.SetNamedSecurityInfoW(str(path), SE_FILE_OBJECT,
+                                      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                      None, None, dacl, None)
+        if err:
+            raise OSError(0, f"SetNamedSecurityInfoW({path}) failed: {ctypes.FormatError(err).strip()}", None, err)
+    finally:
+        k.LocalFree(ctypes.cast(psd, wintypes.HLOCAL))
+
+
+def _named_sd(path: str, what: int) -> tuple[wintypes.LPVOID, wintypes.LPVOID]:
+    a = _advapi32()
+    owner, psd = wintypes.LPVOID(), wintypes.LPVOID()
+    err = a.GetNamedSecurityInfoW(str(path), SE_FILE_OBJECT, what,
+                                  ctypes.byref(owner) if what & OWNER_SECURITY_INFORMATION else None,
+                                  None, None, None, ctypes.byref(psd))
+    if err:
+        raise OSError(0, f"GetNamedSecurityInfoW({path}) failed: {ctypes.FormatError(err).strip()}", None, err)
+    return owner, psd
+
+
+def path_owner_sid(path: str) -> str:
+    a, k = _advapi32(), _kernel32()
+    owner, psd = _named_sd(path, OWNER_SECURITY_INFORMATION)
+    try:
+        text = wintypes.LPWSTR()
+        if not a.ConvertSidToStringSidW(owner, ctypes.byref(text)):
+            raise _winerror("ConvertSidToStringSidW")
+        try:
+            return str(text.value)
+        finally:
+            k.LocalFree(ctypes.cast(text, wintypes.HLOCAL))
+    finally:
+        k.LocalFree(ctypes.cast(psd, wintypes.HLOCAL))
+
+
+def path_dacl_sddl(path: str) -> str:
+    a, k = _advapi32(), _kernel32()
+    _owner, psd = _named_sd(path, DACL_SECURITY_INFORMATION)
+    try:
+        text = wintypes.LPWSTR()
+        if not a.ConvertSecurityDescriptorToStringSecurityDescriptorW(psd, 1, DACL_SECURITY_INFORMATION,
+                                                                      ctypes.byref(text), None):
+            raise _winerror("ConvertSecurityDescriptorToStringSecurityDescriptorW")
+        try:
+            return str(text.value)
+        finally:
+            k.LocalFree(ctypes.cast(text, wintypes.HLOCAL))
+    finally:
+        k.LocalFree(ctypes.cast(psd, wintypes.HLOCAL))
 
 
 def peer_problem(pid: int | None, own_sid: str | None = None, *, image_dir: str | None = None) -> str | None:

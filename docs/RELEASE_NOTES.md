@@ -46,6 +46,13 @@ are unchanged.
 * Fixed: retiring a room and then adding a room with the same name in the
   same server session left the new room's music player without its record,
   so the next retire left its container behind.
+* Every satellite: a sound or wake-word list can write only inside its own
+  cache, and only sound files / wake-word models; a path with a drive
+  letter, a colon, a backslash or one leading out through a link is
+  refused (it could reach a Windows PC's Startup folder).
+* A Windows satellite whose control pipe is already taken by another
+  program stops and says why in the tray, rather than listening with a
+  tray that can't see or mute it.
 
 ## 2026-10-13 — A spare Linux laptop or mini PC can be a room
 

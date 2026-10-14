@@ -313,7 +313,15 @@ class CpuMeter:
 
 def run_tool(argv: list[str], timeout: float = 5.0) -> str | None:
     """Run a read-only tool with stdout/stderr captured and closed. ``None``
-    when it is missing, fails, or times out — never an exception."""
+    when it is missing, fails, or times out — never an exception.
+
+    Never on Windows: the tools are Linux ones (``ip``, ``vcgencmd``,
+    ``nmcli``) run by bare name, and Windows looks for a bare name in the
+    program's folder, the current folder and PATH before System32 — a
+    planted ``ip.exe`` would run as the satellite's account every sample
+    (security review of wf/sat-windows)."""
+    if sys.platform == "win32":
+        return None
     try:
         result = subprocess.run(
             argv, capture_output=True, text=True, timeout=timeout,
@@ -641,6 +649,7 @@ class Sampler:
         nm: dict[str, Any] | None = self._ask(
             "nmcli", now, lambda: read_nm_state(self.run, self.wifi_device)
         )
+        # On Windows run_tool runs none of these Linux tools (see there).
         routes = self.run(["ip", "route"], timeout=5.0)
         gateway = parse_default_gateway(routes)
         # Only on a machine with a battery: a Pi's sample gains no keys.

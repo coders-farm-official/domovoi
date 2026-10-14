@@ -21,9 +21,10 @@ In order:
      python.org, and checks its SHA-256 and size.
   3. Hands over to satellite\win_install.py with that Python, which makes
      the server prove the fingerprint in the code BEFORE anything is
-     written, then installs into %LOCALAPPDATA%\Domovoi\Satellite, registers
-     it for this user (sign-in, Installed apps, Start menu), asks before any
-     power change, starts it and shows the approval code.
+     written or stopped, then (stopping a satellite already installed there)
+     installs into %LOCALAPPDATA%\Domovoi\Satellite, registers it for this
+     user (sign-in, Installed apps, Start menu), asks before any power
+     change, starts it and shows the approval code.
 
 -ExecutionPolicy Bypass applies to this one PowerShell process: nothing
 changes the PC's policy, and a policy set by Group Policy still wins.
@@ -43,9 +44,15 @@ param(
     [string]$InstallRoot = '',
     [switch]$Uninstall,
     [switch]$Purge,
-    # Tests only: the Run/Uninstall values and the Start-menu shortcut go to
-    # this JSON file instead of the registry.
-    [string]$TestRegistryFile = ''
+    # Tests only, and only ever given on the command line (nothing in an
+    # install or in the dashboard's command passes them; no environment
+    # variable is read): the Run/Uninstall values and the Start-menu
+    # shortcut go to this JSON file instead of the registry; the core-PC
+    # signals are pointed elsewhere (a JSON object); and the window is
+    # treated as elevated (the refusal path only).
+    [string]$TestRegistryFile = '',
+    [string]$TestCorePcSignals = '',
+    [switch]$TestAsAdministrator
 )
 
 Set-StrictMode -Version 2.0
@@ -85,7 +92,7 @@ if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -
     Fail 'this satellite needs 64-bit Windows on an Intel or AMD processor (x64)' 2
 }
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if ($TestAsAdministrator -or $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Fail ('this window runs as administrator. Open a normal PowerShell window (not "Run as administrator") ' +
           'and paste the command again: the satellite installs for you only and must never run with ' +
           'administrator rights.') 2
@@ -102,9 +109,9 @@ function Get-CorePcReason {
         profile     = (Join-Path $env:USERPROFILE '.domovoi')
         probe       = 'http://127.0.0.1:6370/v1/health'
     }
-    if ($env:DOMOVOI_TEST_COREPC_SIGNALS) {
-        # Tests only: point each signal somewhere else (or at nothing).
-        $t = $env:DOMOVOI_TEST_COREPC_SIGNALS | ConvertFrom-Json
+    if ($TestCorePcSignals) {
+        # Tests only (see the parameter): point each signal somewhere else.
+        $t = $TestCorePcSignals | ConvertFrom-Json
         foreach ($p in $t.PSObject.Properties) { $s[$p.Name] = [string]$p.Value }
     }
     if ($s.service -and (Get-Service -Name $s.service -ErrorAction SilentlyContinue)) {
@@ -175,32 +182,8 @@ if (-not (Test-HomeCore $core)) {
     Fail 'that is not a usable enrolment code: its server address is missing or not on the home network' 2
 }
 
-# --- a running satellite stops first (installing again) ------------------
-
-function Stop-Satellite([string]$Root) {
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    foreach ($kind in 'stop', 'tray-quit') {
-        try {
-            $e = [Threading.EventWaitHandle]::OpenExisting("Local\domovoi-satellite-$kind-$sid")
-            [void]$e.Set()
-            $e.Dispose()
-        } catch { }
-    }
-    $prefix = (Join-Path $Root 'python') + '\'
-    $deadline = (Get-Date).AddSeconds(20)
-    while ($true) {
-        $left = @(Get-Process -ErrorAction SilentlyContinue |
-                  Where-Object { $_.Path -and $_.Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) })
-        if ($left.Count -eq 0) { return }
-        if ((Get-Date) -gt $deadline) { $left | Stop-Process -Force -ErrorAction SilentlyContinue; return }
-        Start-Sleep -Milliseconds 500
-    }
-}
-
-if (Test-Path -LiteralPath (Join-Path $InstallRoot 'python')) {
-    Say 'Stopping the satellite that is installed here, to install it again...'
-    Stop-Satellite $InstallRoot
-}
+# A satellite already installed here keeps running until the server has
+# proven its fingerprint: win_install.py stops it just before it writes.
 
 # --- the pinned Python ---------------------------------------------------
 
@@ -243,9 +226,14 @@ try {
     [IO.Compression.ZipFile]::ExtractToDirectory($zip, $py)
     $pth = @(Get-ChildItem -LiteralPath $py -Filter 'python3*._pth')
     if ($pth.Count -ne 1) { Fail 'the Python download has no ._pth file' 1 }
-    # This Python sees only its own library and the checked bundle.
+    # This Python sees only its own library and the checked bundle (no
+    # site: nothing from this account's user site-packages). UTF-8 without
+    # a BOM, which is how Python reads a ._pth: the bundle's folder is under
+    # %TEMP%, inside the account's own folder, whose name may be anything
+    # (-Encoding Ascii turned "Jose" with an accent into "Jos?").
     $zipname = $pth[0].Name -replace '\._pth$', '.zip'
-    Set-Content -LiteralPath $pth[0].FullName -Encoding Ascii -Value @($zipname, '.', $BundleRoot)
+    [IO.File]::WriteAllLines($pth[0].FullName, [string[]]@($zipname, '.', $BundleRoot),
+                             (New-Object Text.UTF8Encoding($false)))
 
     $argv = @('-m', 'satellite.win_install', 'install', '--payload', $Payload, '--bundle', $BundleRoot,
               '--staged-python', $py, '--root', $InstallRoot, '--power', $Power, '--wait', [string]$Wait)

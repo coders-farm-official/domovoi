@@ -1906,14 +1906,22 @@ the server against the fingerprint, with the address-bound `/v1/health`
 challenge, **before anything is written**. pip installs the pinned wheels
 with `--require-hashes --no-index --no-deps` and a PATH holding only the
 new Python and System32, so nothing is resolved or built on the laptop.
+The installed Python sees only its own library, its own `site-packages`
+and the satellite: no `import site`, so the account's user site-packages
+(`%APPDATA%\Python\…`, its `.pth` files, `usercustomize`) never loads
+into a satellite process.
 After install, as for every satellite, the room's audio and the WebSocket
 frames are unencrypted and unauthenticated on the LAN until TLS lands
 ([backlog](#hardening-backlog--deferred-in-v1-on-purpose)); code, sound and
 wake-model lists are signed by the pinned key.
 
-**What it holds and where.** `%LOCALAPPDATA%\Domovoi\Satellite` (only that
-account, SYSTEM and Administrators can read it — the profile folder's own
-permissions): the embeddable Python, the satellite code, its config with
+**What it holds and where.** `%LOCALAPPDATA%\Domovoi\Satellite`, or another
+empty folder inside the account's own folder (`-InstallRoot`; one outside
+it, or reached through a link or junction, is refused). The installer
+sets that folder's permissions itself — the account, SYSTEM and
+Administrators, inherited by everything inside, nothing inherited from
+above — and refuses a folder another account owns. In it: the embeddable
+Python, the satellite code, its config with
 the pin, its room's pairing token, logs (`logs\satellite.log`, rotated,
 never the approval code). The engine runs with that folder as its home,
 so nothing lands in the account's own `~\.domovoi` — where a Domovoi server
@@ -1941,6 +1949,16 @@ household token**: it reaches no dashboard route.
 * It never sweeps the home network for a server that moved (security
   software reads that as a port scan): its address, then your server's
   announced names, each held to the pin.
+* The sound and wake-word lists (signed by the pinned key, synced on
+  connect without "ask me", like a Pi's) can write only inside their own
+  cache folders, and only their own types (`.mp3`/`.wav`; `.onnx`/
+  `.onnx.json`): a path with a drive, colon, backslash, UNC or device
+  prefix, `..`, or one that resolves outside the cache (a link or
+  junction) is refused — the same rule on every board, and for the code
+  and plugin channels too.
+* The health sample runs no Linux tool (`ip`, `vcgencmd`, `nmcli`) on
+  Windows: Windows looks for a bare program name in the current folder
+  and on PATH before System32. `powercfg` is called by its full path.
 * `set_config` from the core takes only the dashboard's own settings, by
   exact key (`satellite/remote_config.py`, the same rule as Linux): never
   the pin, the server address, `pc.*` (the permission, `server_search`) or
@@ -1979,7 +1997,11 @@ microphone fed from WAV files, speakers that write WAV files; what the
 end-to-end tests use instead of a person's real devices) reach the engine
 only when its supervisor is started with `--test-audio-hooks`, which
 nothing in an install does, and the engine logs a warning whenever one is
-in use.
+in use. The installer's own test seams (`-TestCorePcSignals`,
+`-TestRegistryFile`, `-TestAsAdministrator`) are parameters given on its
+command line, which the dashboard's command never passes; no environment
+variable steers it. A running satellite is stopped for a reinstall only
+after the server has proven its fingerprint.
 
 **Stopping and uninstalling.** The tray's Stop and the uninstaller set a
 per-account named event that the supervisor and the engine both wait on.
@@ -2001,6 +2023,12 @@ engine refuses to start beside them too.
 server's Windows service, its install record, its data folder, a server
 identity in the account's `~\.domovoi`, or a server answering on
 `127.0.0.1:6370`.
+
+**Quoting.** The dashboard's command and the Start-menu shortcut quote
+every value as a PowerShell string with every character PowerShell reads
+as a single quote doubled — the ASCII one and the typographic ones
+(U+2018–U+201B), which a phone types in a room name and an account's
+folder may contain.
 
 **The microphone indicator.** Windows' own microphone icon is on whenever
 the satellite listens for the wake word (always); the satellite's tray icon

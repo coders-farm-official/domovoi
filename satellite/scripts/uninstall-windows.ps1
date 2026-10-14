@@ -129,7 +129,9 @@ if ($TestRegistryFile) {
     }
 }
 
-# 3. The power settings the installer changed (validated: a plan id and numbers).
+# 3. The power settings the installer changed (validated: a plan id and
+# numbers), with Windows' own powercfg (never one found on PATH).
+$powercfg = Join-Path $env:SystemRoot 'System32\powercfg.exe'
 $stateFile = Join-Path $Root 'install-windows.json'
 if (Test-Path -LiteralPath $stateFile) {
     try { $state = Get-Content -Raw -LiteralPath $stateFile | ConvertFrom-Json } catch { $state = $null }
@@ -142,9 +144,15 @@ if (Test-Path -LiteralPath $stateFile) {
             $v = $power.$k
             if ($v -isnot [int] -and $v -isnot [long]) { continue }
             if ($v -lt 0 -or $v -gt 4294967295) { continue }
-            & powercfg /setacvalueindex $power.scheme $settings[$k][0] $settings[$k][1] ([string]$v) 2>$null
+            & $powercfg /setacvalueindex $power.scheme $settings[$k][0] $settings[$k][1] ([string]$v) 2>$null
         }
-        & powercfg /setactive $power.scheme 2>$null
+        # The values go back into the plan they were changed in. That plan
+        # is applied again only if it is still the active one: a plan the
+        # person has switched to since is left as it is.
+        $active = [string](& $powercfg /getactivescheme 2>$null)
+        if ($active.IndexOf([string]$power.scheme, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            & $powercfg /setactive $power.scheme 2>$null
+        }
         Say '  power settings put back as they were'
     }
 }
