@@ -116,6 +116,10 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # ── web: the auth surface itself ──────────────────────────────────
     ("web", "POST", "/api/auth/setup"): "IS the auth surface — requires the setup code, backoff-throttled",
     ("web", "POST", "/api/auth/login"): "IS the auth surface — password + backoff",
+    ("web", "POST", "/api/auth/resume"): (
+        "IS the auth surface — the session cookie, same origin and X-Requested-With, "
+        "inside the reload window after a password sign-in (test_admin_reload_resume.py)"
+    ),
     ("web", "POST", "/api/auth/logout"): "checks the Bearer inside the handler (401 without)",
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",

@@ -855,6 +855,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "playback. Applies immediately.",
         "bool", tier="hot",
     ),
+    # 'hot' holds for the web process too, like guest_queue_editing above:
+    # the web reads the live value from the core's snapshot.
+    FieldSpec(
+        "admin_reload_window_min", "Stay signed in after a reload", "Security",
+        "How long after you enter the admin password a reload of the "
+        "dashboard, or a new tab in the same browser, keeps you signed in "
+        "with no password prompt. Counted from when you signed in, not "
+        "from when you last did something. Only the browser you signed in "
+        "with gets it back, and signing out ends it at once. After it, a "
+        "reload can still look at everything but asks for the password "
+        "before changing anything. 0 = every reload asks again. Applies "
+        "immediately.",
+        "int", tier="hot", min=0, max=1440, unit="min",
+    ),
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "

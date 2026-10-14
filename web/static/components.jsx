@@ -197,6 +197,62 @@ const useAdminSignedIn = () => {
   } catch { return false; }
 };
 
+/* The admin sign-in as THIS tab holds it, with the reload window (owner
+ * decision 2026-10-14: a reload within an hour of signing in stays signed
+ * in). What the Settings Admin card, the sidebar footer and the Advanced
+ * note all read, so they never disagree:
+ *   live       — the Bearer is in this tab's memory;
+ *   resumable  — not yet, but this browser's session cookie is inside its
+ *                reload window: the first action takes the sign-in back
+ *                with no prompt (auth.js resume), so it is signed in too;
+ *   signedIn   — either of those;
+ *   viewOnly   — only the cookie, past the window: pages render, a change
+ *                asks for the password;
+ *   until      — "14:32", when a reload stops being signed in, while it
+ *                still is (null otherwise); endsAt is the same instant;
+ *   windowWords— the window's length ("an hour"), null when it is off or
+ *                the server is too old to say.
+ * Every Auth method is optional here: a page under an older auth.js (or a
+ * test's stub) reads as it did before the window existed. */
+const adminReloadState = () => {
+  const out = { live: false, resumable: false, signedIn: false, viewOnly: false,
+                endsAt: null, until: null, windowWords: null };
+  try {
+    if (typeof Auth === 'undefined') return out;
+    const st = Auth.status;
+    const cookie = !!(st && st.authenticated);
+    out.live = !!(Auth.isLoggedIn && Auth.isLoggedIn());
+    out.resumable = !out.live && cookie && !!(Auth.canResume && Auth.canResume());
+    out.signedIn = out.live || out.resumable;
+    out.viewOnly = !out.signedIn && cookie;
+    const ends = out.signedIn && Auth.resumeEndsAt ? Auth.resumeEndsAt() : null;
+    if (ends) {
+      out.endsAt = ends;
+      out.until = new Date(ends).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    out.windowWords = (Auth.reloadWindowWords && Auth.reloadWindowWords()) || null;
+  } catch { /* auth.js absent or older: the defaults above */ }
+  return out;
+};
+
+/* adminReloadState(), re-rendered on every sign-in, sign-out and status
+ * read, and ONCE more when the window closes — so "a reload keeps you
+ * signed in until 14:32" is gone at 14:32, with no countdown on the way. */
+const useAdminReloadState = () => {
+  const [, force] = React.useReducer((n) => n + 1, 0);
+  React.useEffect(() => {
+    if (typeof Auth === 'undefined' || !Auth.subscribe) return undefined;
+    try { return Auth.subscribe(force); } catch { return undefined; }
+  }, []);
+  const state = adminReloadState();
+  React.useEffect(() => {
+    if (!state.endsAt) return undefined;
+    const t = setTimeout(force, Math.max(0, state.endsAt - Date.now()) + 500);
+    return () => clearTimeout(t);
+  }, [state.endsAt]);
+  return state;
+};
+
 /* ---- the internet answer (INTERNET_ACCESS, Settings → Internet) ----
  * The household says once whether this box has internet: '' (not
  * answered yet — today's behaviour), 'always', 'sometimes' or 'never'.
@@ -1632,23 +1688,13 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
 //     the auth state honestly rather than inventing a person: the sidebar
 //     doubles as the answer to "why is that page asking me to sign in?".
 const SidebarFooter = () => {
-  const [, force] = React.useReducer((n) => n + 1, 0);
-
   // Auth lives in JS memory and changes on login/logout — re-render with it.
-  React.useEffect(() => {
-    if (typeof Auth === 'undefined') return;
-    try { return Auth.subscribe(force); } catch { /* auth.js absent */ }
-  }, []);
-
-  let signedIn = false;
-  // The cookie a reload keeps, with no admin sign-in in this tab: the
-  // Settings Admin card calls it "view only", so this says the same
-  // rather than "Not signed in" beside a card that says signed in.
-  let viewOnly = false;
-  try {
-    signedIn = typeof Auth !== 'undefined' && Auth.isLoggedIn();
-    viewOnly = !signedIn && typeof Auth !== 'undefined' && !!(Auth.status && Auth.status.authenticated);
-  } catch {}
+  // `signedIn` covers a reload inside the reload window too (it takes the
+  // sign-in back on its own). `viewOnly` is the cookie a reload keeps past
+  // the window, with no admin sign-in in this tab: the Settings Admin card
+  // calls it "view only", so this says the same rather than "Not signed
+  // in" beside a card that says signed in.
+  const { signedIn, viewOnly } = useAdminReloadState();
 
   const host = (() => {
     try { return ServerStore.currentLabel(); } catch { return window.location.host; }
@@ -2145,6 +2191,9 @@ const LoginModal = ({ onClose }) => {
   // password is asked for once, and this modal says why.
   let signingOut = false;
   try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
+  // Inside the reload window a sign-out never gets here (auth.js takes the
+  // sign-in back and signs it out); past it, the hint says how long it was.
+  const reloadWords = signingOut ? adminReloadState().windowWords : null;
   // The first field of the form on screen: the setup code on an unclaimed
   // box, the password otherwise. Once the status read says which, the
   // caret is there.
@@ -2228,10 +2277,12 @@ const LoginModal = ({ onClose }) => {
           )}
           {signingOut ? (
             <div className="hint login-sign-out-why">
-              This page was reloaded, so this tab no longer holds the admin
-              sign-in, and the server ends a session only for a tab that can
-              prove it holds one. Enter the password once to sign this
-              browser out.
+              {reloadWords
+                ? `This page was reloaded more than ${reloadWords} after you signed in, so `
+                : 'This page was reloaded, so '}
+              this tab no longer holds the admin sign-in, and the server ends
+              a session only for a tab that can prove it holds one. Enter the
+              password once to sign this browser out.
             </div>
           ) : (
             <div className="hint">
@@ -3083,7 +3134,7 @@ Object.assign(window, {
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
   satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
-  CaptureChip, useAdminSignedIn,
+  CaptureChip, useAdminSignedIn, adminReloadState, useAdminReloadState,
   TimerFireAlerts,
   CoverArt, libraryCoverUrl, coverMisses,
   ContainerGuardStore, useContainerGuard, containerGuardBanner, ContainerGuardBanner,

@@ -222,6 +222,15 @@
       // unpaired guest phone landing on Home sends nothing and sees no
       // prompt. Not awaited and never fatal — the dashboard renders
       // unnamed, queue entries just carry no tag.
+      // Who is this browser? Asked at once, beside the manifest, and waited
+      // for before the first render: inside the reload window (default an
+      // hour after the admin password was entered here) it also takes the
+      // admin sign-in back from the session cookie (auth.js resume), so a
+      // reload renders signed in, with no "view only" and no sign-in prompt
+      // flashing first. Capped, so a slow answer never holds the shell.
+      const authReady = (typeof Auth !== 'undefined' && Auth.ready)
+        ? Promise.race([Auth.ready(), new Promise((resolve) => setTimeout(resolve, 4000))])
+        : Promise.resolve();
       DeviceIdentity.boot();
 
       let manifest = { plugins: [], core_nav: {} };
@@ -245,6 +254,7 @@
           };
         });
       });
+      try { await authReady; } catch { /* never fatal: render as the status says */ }
       renderApp();
     };
 

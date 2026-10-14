@@ -1,0 +1,23 @@
+-- V028 — when each admin session last proved the password (2026-10-14).
+--
+-- Owner decision: a dashboard tab reloaded (or a new tab opened) in the same
+-- browser within 60 minutes of signing in stays signed in as the admin. The
+-- Bearer lives in the page's memory only and a reload forgets it; the
+-- HttpOnly session cookie the sign-in set survives, and POST
+-- /api/auth/resume hands that cookie's own token back to the page while
+-- now() is within ADMIN_RELOAD_WINDOW_MIN of signed_in_at
+-- (domovoi/admin_auth.py resume_session). Absolute, not sliding: using the
+-- session never moves signed_in_at; a login, first-run setup or a password
+-- change made with the session does.
+--
+-- NULL for every session that existed before this migration, on purpose.
+-- No DEFAULT now(): that would stamp every live session "just signed in"
+-- and make each one resumable for an hour after the upgrade. A NULL session
+-- never resumes and behaves exactly as before (a reload is view only) until
+-- its owner signs in again.
+--
+-- IF NOT EXISTS, so a lane patched by hand takes it again cleanly. No
+-- semicolon or double dash inside a statement: the test kits split this
+-- file naively.
+
+ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS signed_in_at TIMESTAMPTZ;

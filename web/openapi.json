@@ -12,7 +12,7 @@
           "auth"
         ],
         "summary": "Auth Status",
-        "description": "Open probe the dashboard uses to decide setup-vs-login-vs-quiet.\n``authenticated`` reflects the cookie OR a Bearer (GET state).",
+        "description": "Open probe the dashboard uses to decide setup-vs-login-vs-quiet.\n``authenticated`` reflects the cookie OR a Bearer (GET state).\n\n``resume_in_sec`` / ``resume_until`` are set while THIS browser's\nsession cookie is inside its reload window \u2014 what tells a reloaded\npage to ask ``POST /resume`` for its sign-in back, and what the\nSettings Admin card says it lasts until. Read-only: nothing slides.",
         "operationId": "auth_status_api_auth_status_get",
         "responses": {
           "200": {
@@ -20,9 +20,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Auth Status Api Auth Status Get"
                 }
@@ -105,6 +103,26 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/resume": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Resume",
+        "description": "Give a reloaded dashboard page its admin sign-in back (owner\ndecision 2026-10-14).\n\nThe page's Bearer lived in its memory and the reload forgot it; the\nHttpOnly session cookie the sign-in set survived and IS that token.\nThis hands it back \u2014 nothing new is minted \u2014 when ALL of these hold:\n\n* ``X-Requested-With`` (the dependency, and the process-wide write\n  backstop in front of it): a cross-site page cannot send it without\n  a preflight this server refuses;\n* the request is same-origin (:func:`same_origin`): not another port\n  on this host, not a second dashboard through the server switcher;\n* the cookie names a live session (not revoked, signed out, expired or\n  past the 90-day cap) whose ``signed_in_at`` is less than\n  ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).\n\n403 for the first two, 401 for the rest; nothing about the session\nchanges on a refusal. A success slides the session's expiry like any\nuse of it does, and says when the window ends. The cookie is not\nre-set: it is the one the sign-in set, unchanged.",
+        "operationId": "auth_resume_api_auth_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -206,7 +224,7 @@
           "auth"
         ],
         "summary": "Auth Change Password",
-        "description": "Change the admin password (old password re-verified, \u00a77.2).\nMutation \u21d2 Bearer-only. Every OTHER session is revoked: a token\nminted under the old password does not survive it; the calling\nsession stays logged in.",
+        "description": "Change the admin password (old password re-verified, \u00a77.2).\nMutation \u21d2 Bearer-only. Every OTHER session is revoked: a token\nminted under the old password does not survive it \u2014 and with it any\nreload window it had (``POST /resume``); the calling session stays\nlogged in, and having just proved the password, its own reload window\nstarts again.",
         "operationId": "auth_change_password_api_auth_password_post",
         "requestBody": {
           "content": {
@@ -12033,7 +12051,7 @@
           "models"
         ],
         "summary": "Delete Installed",
-        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.",
+        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.\n\nWhen Ollama refuses, the detail is Ollama's own reason (\"model 'x' not\nfound\"), not httpx's message: that was a status line, the URL and a\nlink to MDN, which is what the Models page put in front of the person\n(2026-10-13).",
         "operationId": "delete_installed_api_models__name__delete",
         "parameters": [
           {

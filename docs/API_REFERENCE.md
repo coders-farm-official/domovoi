@@ -35,6 +35,10 @@ values — only their sha256 is stored — with a 30-day sliding expiry under a
 90-day absolute cap; changing the password revokes every other session. Both
 processes validate against the same `admin_sessions` table, so a token
 minted by the dashboard works on the core too. See `domovoi/admin_auth.py`.
+The dashboard keeps the token in page memory only; for
+`ADMIN_RELOAD_WINDOW_MIN` (default 60) minutes after the password sign-in a
+reloaded page takes the same token back from the HttpOnly session cookie
+(`POST /api/auth/resume`, same origin only; §3.1).
 
 The **device token** is one secret per install, minted at the first boot of
 either process into the `household_device_tokens` table and mirrored to
@@ -552,13 +556,14 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/auth/status` | Open | — | `{setup_complete, authenticated}` — the dashboard's setup-vs-login probe. `authenticated` reflects cookie or Bearer. |
-| `POST /api/auth/setup` | Open (requires setup code) | `{setup_code, password}` (password ≥10 chars) | First-run claim of the admin tier. `403` wrong/missing/expired code (the code is valid for 24 h from when it was written), `409` already set up. Returns `{ok, token}` and sets the session cookie. Deletes the code file and rotates the household device token. |
-| `POST /api/auth/login` | Open (backoff-throttled) | `{password, label?}` | Verify the password (per-source exponential backoff; `429` + `Retry-After` while throttled, `401` wrong password), mint a token, set the cookie. Returns `{ok, token}`. |
+| `GET /api/auth/status` | Open | — | `{setup_complete, authenticated, reload_window_min, resume_until, resume_in_sec}` — the dashboard's setup-vs-login probe. `authenticated` reflects cookie or Bearer. `reload_window_min` is the live `ADMIN_RELOAD_WINDOW_MIN` (0 = off). `resume_until` (ISO 8601, the server's clock) and `resume_in_sec` (whole seconds left, rounded up — what a client should count from) are set while the session the `domovoi_admin` cookie names is inside its reload window, `null` otherwise. Read-only: it slides nothing. |
+| `POST /api/auth/setup` | Open (requires setup code) | `{setup_code, password}` (password ≥10 chars) | First-run claim of the admin tier. `403` wrong/missing/expired code (the code is valid for 24 h from when it was written), `409` already set up. Returns `{ok, token, reload_window_min, resume_until, resume_in_sec}` and sets the session cookie. Deletes the code file and rotates the household device token. |
+| `POST /api/auth/login` | Open (backoff-throttled) | `{password, label?}` | Verify the password (per-source exponential backoff; `429` + `Retry-After` while throttled, `401` wrong password), mint a token, set the cookie. Returns `{ok, token, reload_window_min, resume_until, resume_in_sec}` — the reload window starts now. |
+| `POST /api/auth/resume` | The session cookie, same origin, `X-Requested-With` | — (an empty JSON object) | A reloaded dashboard page takes its admin sign-in back (2026-10-14). Returns `{ok, token, reload_window_min, resume_until, resume_in_sec}`, where `token` is the cookie's OWN session token (nothing is minted), with `Cache-Control: no-store`; slides that session's expiry like any use. Only while `now − signed_in_at < ADMIN_RELOAD_WINDOW_MIN` (absolute: counted from the password sign-in, a first-run setup or a password change made with that session, never from use). `403` without `X-Requested-With`, or when the request is not same-origin: `Origin` must be exactly this request's scheme, host and port (`Host`), or, with no `Origin`, `Sec-Fetch-Site` must be `same-origin`; neither header is a `403` too. `401` with no cookie, or a cookie whose session is signed out, revoked, expired, past the 90-day cap, from before V028, or outside the window (and always with the window at 0). A refusal changes nothing. A Bearer alone resumes nothing. |
 | `POST /api/auth/logout` | Bearer only | — | Revoke the *calling* session and clear the cookie. `401` without a Bearer (a cross-site POST with just the cookie can't log you out). |
 | `GET /api/auth/sessions` | Bearer or cookie | — | `{"sessions": [{token_hash, label, created_at, expires_at, last_used_at, current}]}` for the revoke UI. |
 | `DELETE /api/auth/sessions/{token_hash}` | Bearer only | — | Revoke a session by hash. `404` unknown hash. |
-| `POST /api/auth/password` | Bearer only | `{old_password, new_password}` | Change the admin password (old one re-verified). Every other session is revoked; returns `{ok, revoked_sessions}`. |
+| `POST /api/auth/password` | Bearer only | `{old_password, new_password}` | Change the admin password (old one re-verified). Every other session is revoked (and with it any reload window it had); the calling session's own reload window starts again. Returns `{ok, revoked_sessions}`. |
 | `GET /api/auth/device-token` | **Admin, security tier** (read: Bearer or cookie) | — | `{token, header}` — the household device token, from the same table the core reads. `401` unauthenticated, `501` before setup. The dashboard calls it right after a login to pair the browser, and Settings → Devices renders it for an admin. |
 | `POST /api/auth/device-token` | **Admin, security tier** | `{"token": "..."}` | Set the household token to one an admin chose — the web mirror of the core's `POST /v1/admin/device-token`, same table, same rule, same 400s. Settings → Devices → Household token → `set…` calls this. It writes the shared row directly, so the same restart-both warning applies: a web on the new build can set a chosen token that a core still on the old build will refuse. |
 | `POST /api/auth/device-token/rotate` | **Admin, security tier** | — | Rotate the household token (`{token, header, rotated}`); the core sees the new one immediately and the file mirror is rewritten. |

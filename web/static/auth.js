@@ -6,12 +6,26 @@
  * HttpOnly SameSite=Strict cookie the login endpoint sets lets plain
  * GET page loads render authenticated state after a reload.
  *
- * So a reloaded tab is VIEW-ONLY: `status.authenticated` (the cookie) with
- * no token. It renders; every change asks for the password again, and
- * the settings it reads come back with secrets masked and without the
- * advanced section (CORE-6). The Settings Admin card says so and offers
- * "sign in again", and the reads whose answer depends on the credential
- * re-read on every credentialVersion change (data.js refetchOnAuth).
+ * A reload forgets the token — but NOT within the reload window (owner
+ * decision 2026-10-14: "refreshing should not lose admin on the same
+ * machine, same session"). For ADMIN_RELOAD_WINDOW_MIN (default 60)
+ * minutes after the password was entered in this browser, the status read
+ * says so (`resume_in_sec`) and `resume()` asks POST /api/auth/resume for
+ * the session's own token back: the HttpOnly cookie proves the browser,
+ * the server checks the origin and the window. The shell's boot waits on
+ * it (`ready()`, index.html), so a reload inside the window renders signed
+ * in, with no prompt and no "view only" in between; a refused action
+ * tries it before it opens the sign-in prompt (ensureLoggedIn /
+ * requestLogin). The token goes back into memory ONLY, never into web
+ * storage. The window counts from the sign-in, not from use.
+ *
+ * Past the window a reloaded tab is VIEW-ONLY: `status.authenticated` (the
+ * cookie) with no token. It renders; every change asks for the password
+ * again, and the settings it reads come back with secrets masked and
+ * without the advanced section (CORE-6). The Settings Admin card says so
+ * and offers "sign in again", and the reads whose answer depends on the
+ * credential re-read on every credentialVersion change (data.js
+ * refetchOnAuth).
  *
  * The DEVICE TOKEN is different: it is the household's credential for
  * ordinary actions (queue edits, announcements, intents…), not a
@@ -48,9 +62,25 @@ const Auth = (() => {
   // null = not yet probed; {setup_complete, authenticated} afterwards.
   let status = null;
   // Bumped whenever a credential appears or goes away (login, setup,
-  // logout, pair, unpair) so a hook that errored can tell "something
-  // changed since my 401" from "the modal merely opened".
+  // logout, pair, unpair, resume) so a hook that errored can tell
+  // "something changed since my 401" from "the modal merely opened".
   let credentialVersion = 0;
+  // The reload window (owner decision 2026-10-14). `resumeEndsAt`: when
+  // this browser's session stops being resumable, on THIS browser's clock
+  // (Date.now() + the server's `resume_in_sec`, never its wall-clock
+  // `resume_until`: a device whose clock is off would otherwise ask, or
+  // say, the wrong thing); null = not resumable. `windowMin`: the window's
+  // length as the server last said it (null = never said: an older server).
+  let resumeEndsAt = null;
+  let windowMin = null;
+  let resuming = null;       // the one POST /api/auth/resume in flight
+  // The server refused a resume on this page (the window closed early, the
+  // session ended, or this origin is not the page's own — a proxy in
+  // front, say). Not asked again until a sign-in or a fresh page load:
+  // every status read would otherwise send one more refused request.
+  let resumeRefused = false;
+  let statusRead = null;     // the one GET /api/auth/status in flight
+  let readyPromise = null;   // ready(): the first status read (+ resume)
   const listeners = new Set();
   // The modal host's own channel (subscribeModal): told about EVERY
   // change, like any listener, and also — alone — the moment a sign-in
@@ -186,6 +216,85 @@ const Auth = (() => {
     return false;
   };
 
+  // ── The reload window ───────────────────────────────────────────
+  // What a status / login / setup / resume answer says about it.
+  const noteWindow = (data) => {
+    if (!data || typeof data !== 'object') return;
+    if (typeof data.reload_window_min === 'number') windowMin = data.reload_window_min;
+    const sec = data.resume_in_sec;
+    resumeEndsAt = (typeof sec === 'number' && sec > 0) ? Date.now() + sec * 1000 : null;
+  };
+  const resumeOpen = () => resumeEndsAt !== null && resumeEndsAt > Date.now();
+  // A reloaded tab whose browser can take its sign-in back: no token in
+  // memory, the cookie session good, the window open, the server trusted.
+  const mayResume = () => !token && !resumeRefused && !!status && !!status.authenticated
+    && resumeOpen() && trusted();
+
+  // Take this browser's admin sign-in back after a reload (POST
+  // /api/auth/resume). The server answers only the page holding the
+  // session cookie, from this origin, inside the window, with the cookie's
+  // OWN token — this exact session, nothing new — which goes into memory
+  // and nowhere else. Resolves true when a token is in memory afterwards.
+  // One request at a time; never throws. A refusal closes the window here
+  // (the cards say "view only"); an unreachable server leaves it, so the
+  // next action tries again.
+  const resume = () => {
+    if (token) return Promise.resolve(true);
+    if (!mayResume()) return Promise.resolve(false);
+    if (resuming) return resuming;
+    resuming = (async () => {
+      let data = null;
+      try {
+        // post(): the cookie rides along, with the preflight-forcing header.
+        data = await post('/api/auth/resume', {});
+      } catch (e) {
+        // Unreachable: the window stays and nothing else changes, so the
+        // next action tries again. Any answer that is not a yes closes it.
+        if (!(e && e.unreachable)) { resumeRefused = true; resumeEndsAt = null; }
+      }
+      resuming = null;
+      // A sign-in that landed meanwhile stands; it is the newer credential.
+      if (token) return true;
+      if (!data || typeof data.token !== 'string' || !data.token) {
+        if (data) { resumeRefused = true; resumeEndsAt = null; }
+        notify();
+        return false;
+      }
+      token = data.token;
+      status = Object.assign({}, status, { setup_complete: true, authenticated: true });
+      noteWindow(data);
+      credentialVersion += 1;
+      // The sign-in paired this browser; a browser whose storage was
+      // cleared since gets the household token the same way (autoPair).
+      if (!readDeviceToken()) { try { await autoPair(); } catch { /* best effort */ } }
+      notify();
+      return true;
+    })();
+    return resuming;
+  };
+
+  // How long the window is, in words for a sentence ("an hour", "90
+  // minutes"); null when it is off or the server never said.
+  const windowWords = () => {
+    const m = windowMin;
+    if (typeof m !== 'number' || !(m > 0)) return null;
+    if (m % 60 === 0) {
+      const h = m / 60;
+      if (h === 1) return 'an hour';
+      if (h === 24) return 'a day';
+      return `${h} hours`;
+    }
+    return m === 1 ? 'a minute' : `${m} minutes`;
+  };
+
+  // The login prompt itself, opened once (no resume attempt).
+  const openLogin = () => {
+    if (modalOpen) return;
+    modalOpen = true;
+    modalSeq += 1;
+    notify();
+  };
+
   // The bearer a 2xx login/setup answer carries. An answer without one
   // signed nobody in, and says so in the modal rather than closing it on
   // a sign-in that did not happen.
@@ -217,9 +326,13 @@ const Auth = (() => {
   // prompt for the length of the token fetch, so both come down together
   // once autoPair has answered it. A login modal opened AGAIN meanwhile
   // (a new opening, modalSeq) is a new prompt and is left alone.
-  const signedIn = async (newToken) => {
+  const signedIn = async (newToken, data) => {
     token = newToken;
     status = { setup_complete: true, authenticated: true };
+    // The answer says when a reload stops being signed in (the window
+    // starts now). An older server says nothing, and nothing is assumed.
+    resumeRefused = false;
+    noteWindow(data);
     credentialVersion += 1;
     const opening = modalSeq;
     if (modalOpen && !pairModalOpen) {
@@ -241,6 +354,27 @@ const Auth = (() => {
     get status() { return status; },
     get credentialVersion() { return credentialVersion; },
     DEVICE_TOKEN_HEADER,
+
+    // ── The reload window (owner decision 2026-10-14) ───────────────
+    // When a reload of this browser stops being signed in (Date.now()
+    // milliseconds), while it still is; null otherwise.
+    resumeEndsAt: () => (resumeOpen() ? resumeEndsAt : null),
+    // A reloaded tab that will take its sign-in back on its first action
+    // (or right now, resume()) without a prompt.
+    canResume: () => mayResume(),
+    // The window's length in words ("an hour"), null when it is off.
+    reloadWindowWords: () => windowWords(),
+    resume: () => resume(),
+    // The shell waits on this before it renders (index.html): the first
+    // status read and the resume it may lead to. Never rejects.
+    ready() {
+      if (!readyPromise) {
+        readyPromise = Promise.resolve()
+          .then(() => this.refreshStatus())
+          .catch(() => status);
+      }
+      return readyPromise;
+    },
 
     // ── Device token ────────────────────────────────────────────────
     normalizeDeviceToken,
@@ -286,12 +420,16 @@ const Auth = (() => {
       return () => modalListeners.delete(fn);
     },
 
-    // Called by data.js on a 401/403 — pops the login modal once.
+    // Called by data.js on a 401/403 — pops the login modal once. Inside
+    // the reload window the sign-in comes back first, with no prompt
+    // (resume); the modal opens only if it can't.
     requestLogin() {
       if (modalOpen) return;
-      modalOpen = true;
-      modalSeq += 1;
-      notify();
+      if (mayResume()) {
+        resume().then((ok) => { if (!ok && !token) openLogin(); });
+        return;
+      }
+      openLogin();
     },
 
     // Called by data.js when a refusal names the device token — pops
@@ -336,16 +474,26 @@ const Auth = (() => {
     // match counts as not-signed-in and prompts. Omit it and any live
     // token satisfies the call, which is what a caller asking "is
     // anyone signed in?" means.
+    //
+    // Inside the reload window a tab with no token takes this browser's
+    // sign-in back first (resume) and only prompts if that fails — the
+    // replayed request then goes out with no modal at all. The resumed
+    // token is the session's own, so a refusal of THAT token still
+    // prompts, as above.
     ensureLoggedIn(refusedToken) {
       const usable = () => !!token && token !== refusedToken;
       if (usable()) return Promise.resolve(true);
-      this.requestLogin();
-      return new Promise((resolve) => {
-        const un = this.subscribe(() => {
-          if (usable()) { un(); resolve(true); }
-          else if (!modalOpen) { un(); resolve(false); }
+      const prompt = () => {
+        openLogin();
+        return new Promise((resolve) => {
+          const un = this.subscribe(() => {
+            if (usable()) { un(); resolve(true); }
+            else if (!modalOpen) { un(); resolve(false); }
+          });
         });
-      });
+      };
+      if (!mayResume()) return prompt();
+      return resume().then(() => (usable() ? true : prompt()));
     },
 
     // The pairing twin of ensureLoggedIn: resolve true once a device
@@ -373,13 +521,23 @@ const Auth = (() => {
     closeModal() { modalOpen = false; notify(); },
     closePairModal() { pairModalOpen = false; notify(); },
 
-    async refreshStatus() {
-      try {
-        const r = await fetch(`${base()}/api/auth/status`, { credentials: 'include' });
-        if (r.ok) status = await r.json();
-      } catch { /* server unreachable — leave stale */ }
-      notify();
-      return status;
+    // One read at a time: a second caller while one is in flight gets
+    // that one's answer. A tab inside the reload window takes its sign-in
+    // back before this resolves, so whoever waits on it (ready(), the
+    // Settings Admin card) sees "signed in", never "view only" first.
+    refreshStatus() {
+      if (statusRead) return statusRead;
+      statusRead = (async () => {
+        try {
+          const r = await fetch(`${base()}/api/auth/status`, { credentials: 'include' });
+          if (r.ok) { status = await r.json(); noteWindow(status); }
+        } catch { /* server unreachable — leave stale */ }
+        statusRead = null;
+        if (mayResume()) await resume();
+        notify();
+        return status;
+      })();
+      return statusRead;
     },
 
     async setup(setupCode, password) {
@@ -389,7 +547,7 @@ const Auth = (() => {
       // Setup ROTATES the household token: whatever this browser held
       // from the pre-setup window is stale now. signedIn fetches the
       // fresh one (autoPair).
-      await signedIn(sessionToken(data));
+      await signedIn(sessionToken(data), data);
       return data;
     },
 
@@ -398,7 +556,7 @@ const Auth = (() => {
         password, label: label || 'dashboard',
       });
       // An admin login pairs the browser without a prompt (autoPair).
-      await signedIn(sessionToken(data));
+      await signedIn(sessionToken(data), data);
       return data;
     },
 
@@ -411,7 +569,9 @@ const Auth = (() => {
       // out). Sending the cookie alone was refused 401, the cookie
       // survived, and this tab said "signed out" until the next reload
       // said "signed in" again. So a tab holding only the cookie asks for
-      // the password once, and revokes the session that proves.
+      // the password once, and revokes the session that proves — unless
+      // the reload window is still open, when it takes the sign-in back
+      // without asking (ensureLoggedIn → resume) and signs THAT out.
       if (!token && status && status.authenticated) {
         loginReason = 'sign-out';
         let proved = false;
@@ -427,6 +587,9 @@ const Auth = (() => {
       } catch { /* best-effort */ }
       token = null;
       if (status) status.authenticated = false;
+      // The session is gone server-side and its cookie with it: nothing
+      // left to resume.
+      resumeEndsAt = null;
       credentialVersion += 1;
       // The device token stays: it is the household's, not the admin's.
       notify();

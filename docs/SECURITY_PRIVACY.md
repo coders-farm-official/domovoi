@@ -1047,7 +1047,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
 | **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
-| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
+| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
 "requires the admin password" — but none of those routes is open any more.
@@ -1129,10 +1129,86 @@ reason, so a new route cannot quietly ship open.
   core trusts `X-Forwarded-For` only from loopback, where the web process
   runs.
 - **CSRF stance:** login also sets a `SameSite=Strict`, `HttpOnly` cookie —
-  but the cookie can only *render* authenticated GET state. **Every
-  mutation requires the `Authorization: Bearer` header** (the dashboard
-  holds the token in JS memory). A cross-site POST carries nothing that
-  authorizes it.
+  but the cookie by itself can only *render* authenticated GET state.
+  **Every mutation requires the `Authorization: Bearer` header** (the
+  dashboard holds the token in JS memory). A cross-site POST carries
+  nothing that authorizes it. The one thing the cookie does beyond
+  rendering is let the dashboard's own page take its Bearer back after a
+  reload, inside the reload window — next.
+
+### Staying signed in across a reload
+
+Owner decision, 2026-10-14: "If someone logs in with admin, from that
+device, that exact session, they should be good for within 60 mins of
+signing in. Refreshing should not lose admin on the same machine, same
+session."
+
+**What a reload can do now.** For **60 minutes** after you enter the admin
+password in a browser, reloading the dashboard, or opening it in another
+tab of that same browser, is fully signed in: no password prompt, and
+every admin action works, the security tier included, exactly as before
+the reload. The minutes count from the password sign-in (or a password
+change made from that session), never from use, so a busy session does
+not stretch them. After that, a reload is **view only** as it always was:
+pages render, and the first change asks for the password. A tab that was
+never reloaded keeps its sign-in as before. The Settings → Configuration
+Admin card says until when a reload keeps you signed in. The length is
+Settings → Configuration → Security → **Stay signed in after a reload**
+(`ADMIN_RELOAD_WINDOW_MIN`, minutes, 0–1440, default 60, applies at once);
+**0** turns it off and every reload is view only again.
+
+**How.** The server stamps each session with the moment it last proved
+the password (`admin_sessions.signed_in_at`, V028). The cookie the sign-in
+set is that session's token. A reloaded page asks `POST
+/api/auth/resume`, which hands the cookie's **own** token back — nothing
+new is minted — only when all of these hold:
+
+* the request carries the session cookie, and that session is live: not
+  signed out, revoked, expired or past the 90-day cap;
+* `now − signed_in_at` is inside the window;
+* it carries `X-Requested-With`;
+* it is **same-origin**: `Origin` is exactly the scheme, host and port the
+  request was sent to (its `Host`); a request with no `Origin` must carry
+  `Sec-Fetch-Site: same-origin`, and one with neither is refused.
+
+The page puts the token back into memory and nowhere else — never
+`localStorage` or `sessionStorage` — and the cookie stays `HttpOnly;
+SameSite=Strict`. A refusal changes nothing about the session.
+
+**Why this is not a CSRF hole.** A page on another site cannot use it:
+`SameSite=Strict` keeps the browser from attaching the cookie to its
+request at all, and `X-Requested-With` forces a CORS preflight that this
+server only answers for its own port. The same-origin rule closes the
+case those two leave open: a page on the same *host* but another port — a
+different service on the box, or a second Domovoi dashboard reached
+through the server switcher — is the same *site*, so the browser does
+attach the cookie, and the CORS allowance for the server switcher would
+let that page read the answer. It is refused before the cookie is looked
+at. And a page that could make the request without reading the answer
+would gain nothing: the token travels in the response body, and the
+request itself changes nothing.
+
+**What ends it, at once:** signing out in any tab of that browser (it
+revokes the session and drops the cookie), revoking the session, changing
+the password from another session (every other session is revoked),
+`--reset-admin`, setting the window to 0. **Another device never inherits
+it:** it holds its own cookie, or none, and a fresh sign-in on another
+device does not extend this browser's window. Sessions that existed
+before the upgrade carry no `signed_in_at` and never resume until their
+owner signs in again.
+
+**What it costs, said plainly.** Inside the window, anyone at the unlocked
+computer — the next person at a shared family PC — gets the admin tier by
+reloading the page, exactly as they would have by using the tab before
+the reload. Sign out when you are done on a shared computer (that ends it
+immediately), or set the window to 0. And a script running inside the
+dashboard's own origin (an injected script, if one ever got in) can now
+take the token from a reloaded tab within the window, where before it
+could read it only from a tab that had signed in; this does not widen
+what such a script could do to a signed-in tab. Behind a reverse proxy
+that shows the browser a different scheme or port than the dashboard
+sees, the same-origin rule refuses the resume and a reload is view only,
+as before (uvicorn believes `X-Forwarded-Proto` from loopback only).
 - **Forgot the password?** `python -m domovoi.main --reset-admin` on the
   server clears the credential and every session and prints a fresh setup
   code. Requires being at the machine — same proof-of-possession logic.

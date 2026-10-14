@@ -1615,6 +1615,12 @@ async def admin_snapshot() -> dict[str, Any]:
         # reason: the web hop refuses a guest itself while it is off, and
         # its own settings copy goes stale the moment Settings saves it.
         "guest_queue_editing": bool(settings.guest_queue_editing),
+        # How long after the admin password was entered a reloaded
+        # dashboard tab may take its sign-in back (POST /api/auth/resume on
+        # the web, owner decision 2026-10-14). Live here for the same
+        # reason: the web decides every resume, and its own settings copy
+        # goes stale the moment Settings saves this.
+        "admin_reload_window_min": int(settings.admin_reload_window_min),
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),

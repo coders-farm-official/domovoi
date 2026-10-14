@@ -670,6 +670,12 @@ const VoicesPanel = () => {
  * used to say "signed in" for both and offer only "sign out", which is
  * how the owner signed out, signed in, reloaded, and never saw Advanced.
  *
+ * Since 2026-10-14 a reload inside the reload window (default an hour
+ * after the password was entered in this browser) takes the live sign-in
+ * back by itself (auth.js resume), so the card says "signed in" and when a
+ * reload stops keeping it ("until 14:32" — once, no countdown). Only past
+ * the window is a reloaded tab "view only" (adminReloadState, components.jsx).
+ *
  * On an unclaimed box, arriving here (the tab, or its address
  * #settings/configuration) opens the first-run admin setup by itself, once
  * per arrival, as soon as a fresh status read says the box is unclaimed:
@@ -682,6 +688,8 @@ const VoicesPanel = () => {
  */
 const AdminSection = ({ setupAsked = false }) => {
   const [, force] = React.useReducer((x) => x + 1, 0);
+  // live / resumable / view only, and until when a reload keeps it.
+  const reload = useAdminReloadState();
   // The first fresh answer this arrival got: 'unclaimed' | 'claimed' | null.
   const [arrived, setArrived] = React.useState(null);
   React.useEffect(() => {
@@ -698,8 +706,10 @@ const AdminSection = ({ setupAsked = false }) => {
   const st = Auth.status;
   const needsSetup = st && st.setup_complete === false;
   const hostKind = useHostKind(!!needsSetup);
-  const live = Auth.isLoggedIn();
-  const viewOnly = !live && !!(st && st.authenticated);
+  // Signed in: the sign-in is in this tab, or this browser takes it back
+  // on its own (inside the reload window). View only: past the window.
+  const live = reload.signedIn;
+  const viewOnly = reload.viewOnly;
   // Claimed here, on the installer's address: drop its marker in place.
   const claimedHere = arrived === 'unclaimed' && !!st && st.setup_complete !== false;
   React.useEffect(() => {
@@ -739,14 +749,25 @@ const AdminSection = ({ setupAsked = false }) => {
               : 'This Domovoi’s admin account is already set up: sign in with its password.'}
           </span>
         )}
+        {live && reload.until && (
+          // When a reload stops keeping the sign-in: said once, in its own
+          // row, gone when it passes (useAdminReloadState) — no countdown.
+          <span className="admin-reload-until"
+                style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
+            Reloading this page, or opening Domovoi in another tab of this
+            browser, keeps you signed in until {reload.until}.
+          </span>
+        )}
         {viewOnly && (
           // Its own row UNDER the pill and both buttons (order: 1): inline, the
           // long sentence pushed "sign out" onto a line of its own, away
           // from "sign in again".
           <span className="admin-view-only"
                 style={{ fontSize: 12, color: 'var(--fg-muted)', flexBasis: '100%', order: 1 }}>
-            A page reload keeps this browser signed in for viewing, but forgets
-            the admin sign-in this tab needs to change settings or see
+            {reload.windowWords
+              ? `A page reload more than ${reload.windowWords} after you signed in keeps this browser signed in for viewing, but forgets`
+              : 'A page reload keeps this browser signed in for viewing, but forgets'}
+            {' '}the admin sign-in this tab needs to change settings or see
             Advanced. Sign in again to get it back.
           </span>
         )}
@@ -1136,10 +1157,22 @@ const ConfigPanel = ({ setupAsked = false }) => {
     setRetrying(true);
     try { await refresh(); } finally { setRetrying(false); }
   };
-  const signIn = () => { try { Auth.openModal(); } catch { /* auth.js absent */ } };
+  // Inside the reload window this browser's sign-in comes back with no
+  // prompt (auth.js resume); the login modal is for when it can't.
+  const signIn = () => {
+    try {
+      if (Auth.canResume && Auth.canResume()) {
+        Auth.resume().then((ok) => { if (!ok) Auth.openModal(); });
+        return;
+      }
+      Auth.openModal();
+    } catch { /* auth.js absent */ }
+  };
   const signInForAdvanced = () => { setWantAdvanced(true); signIn(); };
   let signedInHere = false;
   try { signedInHere = Auth.isLoggedIn(); } catch { /* auth.js absent */ }
+  // The reload window's length in words, for the note below ("an hour").
+  const reloadWords = adminReloadState().windowWords;
 
   const setEdit = (name, v) => setEdits(prev => ({ ...prev, [name]: v }));
   const valueOf = (f) => (f.name in edits ? edits[f.name] : f.value);
@@ -1238,9 +1271,9 @@ const ConfigPanel = ({ setupAsked = false }) => {
                       : 'Advanced settings — database URL, ports, paths — need an admin sign-in in this tab.'}
                   </div>
                   <div style={{ marginTop: 4 }}>
-                    A page reload keeps you signed in for viewing, but forgets the
-                    admin sign-in that Advanced and saving changes here need — sign
-                    in again after a reload.
+                    {reloadWords
+                      ? `A page reload more than ${reloadWords} after you signed in keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again to get it back.`
+                      : 'A page reload keeps you signed in for viewing, but forgets the admin sign-in that Advanced and saving changes here need — sign in again after a reload.'}
                   </div>
                   <div style={{ marginTop: 8 }}>
                     <Button variant="primary" icon="key" onClick={signInForAdvanced}>

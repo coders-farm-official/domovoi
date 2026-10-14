@@ -21,9 +21,13 @@ exponential backoff that counts the attempt BEFORE the verify) and mints
 a 256-bit bearer token of which only the sha256 is stored, with a
 **30-day sliding expiry** under a **90-day absolute cap**. Mutating admin
 endpoints accept ONLY ``Authorization: Bearer`` — the ``SameSite=Strict``
-cookie set at login exists solely so plain GET page loads can render
-authenticated state (CSRF: a cross-site POST carries nothing that
-authorizes it). Changing the password revokes every other session.
+cookie set at login lets plain GET page loads render authenticated state
+(CSRF: a cross-site POST carries nothing that authorizes it), and for the
+reload window after the password was proved (default 60 minutes) lets the
+page that holds it take its own Bearer back (``POST /api/auth/resume``:
+same origin, ``X-Requested-With``; :func:`resume_session`). The cookie
+itself still authorizes no mutation anywhere. Changing the password
+revokes every other session.
 ``python -m domovoi.main --reset-admin`` clears the credential + sessions
 and regenerates the setup code.
 
@@ -79,6 +83,7 @@ import secrets
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -86,6 +91,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from domovoi.config import ADMIN_RELOAD_WINDOW_MAX_MIN
 from domovoi.db.session import session_scope
 
 log = logging.getLogger(__name__)
@@ -441,12 +447,17 @@ _sha256 = token_sha256  # internal alias
 
 async def create_session(session: AsyncSession, label: str | None = None) -> str:
     """Mint a 256-bit bearer token; store only its sha256. Returns the
-    raw token — the ONLY time it exists outside the caller's memory."""
+    raw token — the ONLY time it exists outside the caller's memory.
+
+    Called only once the password (login) or the setup code plus a new
+    password (first-run setup) has been proved, so the row is stamped
+    ``signed_in_at = now()``: the moment the reload window
+    (:func:`resume_session`) counts from."""
     token = secrets.token_hex(32)  # 256 bits
     await session.execute(
         text(
-            "INSERT INTO admin_sessions (token_hash, label, expires_at) "
-            f"VALUES (:h, :label, now() + interval '{SESSION_TTL_DAYS} days')"
+            "INSERT INTO admin_sessions (token_hash, label, expires_at, signed_in_at) "
+            f"VALUES (:h, :label, now() + interval '{SESSION_TTL_DAYS} days', now())"
         ),
         {"h": _sha256(token), "label": label},
     )
@@ -485,6 +496,151 @@ async def revoke_session(session: AsyncSession, token_hash: str) -> bool:
         )
     ).first()
     return row is not None
+
+
+# ─── Resuming the sign-in after a reload (owner decision 2026-10-14) ──────
+#
+# "If someone logs in with admin, from that device, that exact session,
+# they should be good for within 60 mins of signing in. Refreshing should
+# not lose admin on the same machine, same session."
+#
+# The dashboard holds its Bearer in JS memory only, so a reload forgets it;
+# the HttpOnly ``SameSite=Strict`` cookie the sign-in set survives, and it
+# carries the SAME token. ``signed_in_at`` (V028) is when the session last
+# PROVED the password: the login or first-run setup that minted it
+# (:func:`create_session`), or a password change made with it
+# (:func:`mark_signed_in`). For ``window_min`` minutes after that moment the
+# web process hands the cookie's own token back to the page holding the
+# cookie (``POST /api/auth/resume``, which adds the same-origin and
+# ``X-Requested-With`` rules). ABSOLUTE, not sliding: using the session
+# never moves ``signed_in_at``; only the password does. A session minted
+# before V028 has ``signed_in_at`` NULL and never resumes.
+#
+# Nothing new is minted. The resumed page holds exactly the session the
+# sign-in made, so signing out from any tab, revoking it, a password change
+# from another session and ``--reset-admin`` (which all delete the row) end
+# the resume too, and another browser — which has its own cookie, or none —
+# never inherits it.
+
+# The longest window an admin may choose (Settings → Configuration). One
+# day: past that, "stay signed in" is a different feature with a different
+# threat model, not a reload. One number, in domovoi/config.py.
+RELOAD_WINDOW_MAX_MIN = ADMIN_RELOAD_WINDOW_MAX_MIN
+
+
+@dataclass(frozen=True)
+class ResumeWindow:
+    """When a session's reload window ends, by the DATABASE's clock (the
+    one ``signed_in_at`` was stamped with), and how many seconds of it are
+    left (rounded up, so at least 1 while it is open). A browser counts
+    from ``remaining_sec`` on its own clock, never from ``until``: a phone
+    whose clock is off would otherwise say "signed in until" a time that
+    is not."""
+
+    until: datetime
+    remaining_sec: int
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "resume_until": self.until.isoformat(),
+            "resume_in_sec": self.remaining_sec,
+        }
+
+
+def clamp_reload_window(value: Any) -> int:
+    """A window in whole minutes, 0..:data:`RELOAD_WINDOW_MAX_MIN`, from
+    whatever the setting holds. Anything that is not a whole number —
+    ``True`` included, which Python counts as one — is 0: closed, the
+    behaviour before the setting existed."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, min(RELOAD_WINDOW_MAX_MIN, value))
+
+
+# The deadline is the end of the window or the session's 90-day absolute
+# cap, whichever comes first: a window never outlives the session. Where
+# _RESUME_LIVE_SQL holds, both are after now(), so the seconds left (rounded
+# up) are at least 1.
+_RESUME_DEADLINE_SQL = (
+    "LEAST(signed_in_at + make_interval(mins => :w), "
+    f"created_at + interval '{SESSION_MAX_AGE_DAYS} days')"
+)
+_RESUME_LIVE_SQL = (
+    "token_hash = :h AND expires_at > now() "
+    f"AND created_at > now() - interval '{SESSION_MAX_AGE_DAYS} days' "
+    "AND signed_in_at IS NOT NULL "
+    "AND signed_in_at > now() - make_interval(mins => :w)"
+)
+
+
+async def resume_deadline(
+    session: AsyncSession, token: str | None, window_min: int
+) -> ResumeWindow | None:
+    """Read-only: the reload window of the live session ``token`` names,
+    or None when it has none (no token, an unknown / expired / revoked
+    session, a session from before V028, a window of 0, or a window that
+    has closed). Moves nothing — the status probe calls it on every page
+    load."""
+    window = clamp_reload_window(window_min)
+    if not token or window <= 0:
+        return None
+    row = (
+        await session.execute(
+            text(
+                f"SELECT {_RESUME_DEADLINE_SQL} AS until, "
+                f"ceil(EXTRACT(EPOCH FROM ({_RESUME_DEADLINE_SQL} - now())))::int "
+                "AS remaining "
+                f"FROM admin_sessions WHERE {_RESUME_LIVE_SQL}"
+            ),
+            {"h": _sha256(token), "w": window},
+        )
+    ).first()
+    if row is None:
+        return None
+    return ResumeWindow(until=row.until, remaining_sec=int(row.remaining))
+
+
+async def resume_session(
+    session: AsyncSession, token: str | None, window_min: int
+) -> ResumeWindow | None:
+    """The resume itself: validate the session the way
+    :func:`validate_token` does (expiry slid, ``last_used_at`` stamped,
+    the 90-day cap held) AND require its reload window to be open, in one
+    statement, so nothing can revoke it between the two checks. Returns
+    the window, or None — and touches nothing — when the session is not
+    resumable for any reason."""
+    window = clamp_reload_window(window_min)
+    if not token or window <= 0:
+        return None
+    row = (
+        await session.execute(
+            text(
+                "UPDATE admin_sessions SET last_used_at = now(), "
+                "expires_at = LEAST("
+                f"now() + interval '{SESSION_TTL_DAYS} days', "
+                f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
+                f"WHERE {_RESUME_LIVE_SQL} "
+                f"RETURNING {_RESUME_DEADLINE_SQL} AS until, "
+                f"ceil(EXTRACT(EPOCH FROM ({_RESUME_DEADLINE_SQL} - now())))::int "
+                "AS remaining"
+            ),
+            {"h": _sha256(token), "w": window},
+        )
+    ).first()
+    if row is None:
+        return None
+    return ResumeWindow(until=row.until, remaining_sec=int(row.remaining))
+
+
+async def mark_signed_in(session: AsyncSession, token_hash: str | None) -> None:
+    """Restart a session's reload window: it has just proved the password
+    again (a password change re-verifies the old one)."""
+    if not token_hash:
+        return
+    await session.execute(
+        text("UPDATE admin_sessions SET signed_in_at = now() WHERE token_hash = :h"),
+        {"h": token_hash},
+    )
 
 
 async def revoke_other_sessions(session: AsyncSession, keep_token_hash: str | None) -> int:

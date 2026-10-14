@@ -197,7 +197,12 @@ async def test_reset_admin_clears_credential_and_sessions() -> None:
         # Old token dead, tier unclaimed again (plugin mgmt fails closed
         # with 501 pre-setup, so probe via the web status endpoint).
         r = await client.get("/api/auth/status", headers=_bearer(token))
-        assert r.json() == {"setup_complete": False, "authenticated": False}
+        body = r.json()
+        assert (body["setup_complete"], body["authenticated"]) == (False, False)
+        # …and the cookie the setup set resumes nothing (2026-10-14).
+        assert body["resume_in_sec"] is None
+        r = await client.post("/api/auth/resume", headers={"Origin": "http://test"})
+        assert r.status_code == 401
 
 
 # ─── The setup code stays out of the logs (owner decision, 2026-10-11) ─────
