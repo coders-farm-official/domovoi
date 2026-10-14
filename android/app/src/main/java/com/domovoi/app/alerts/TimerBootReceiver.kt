@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.domovoi.app.DomovoiApplication
+import com.domovoi.app.net.HouseholdLock
 import kotlinx.coroutines.launch
 
 /**
@@ -18,6 +19,8 @@ class TimerBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
         if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        // Room mode: nothing household is re-armed on a room phone.
+        if (HouseholdLock.roomModeActive) return
         val app = context.applicationContext as? DomovoiApplication ?: return
         val pending = goAsync()
         receiverScope.launch {

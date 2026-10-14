@@ -10,6 +10,8 @@ import com.domovoi.app.alerts.TimerNotifier
 import com.domovoi.app.diagnostics.Diagnostics
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.NetworkWatch
+import com.domovoi.app.net.HouseholdLock
+import com.domovoi.app.roommode.RoomStore
 
 class DomovoiApplication : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
@@ -22,6 +24,9 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0) watchMainThreadIo()
         TimerNotifier.createChannel(this)
         IncidentNotifier.createChannel(this)
+        // Before anything can make a request: in room mode the household
+        // token goes on none (net/HouseholdLock.kt).
+        HouseholdLock.roomModeActive = RoomStore.isActive(this)
         container = AppContainer(this)
         // A new network — a different default, the Wi-Fi under a VPN, new
         // addresses on the same one — means the saved server proves itself
@@ -31,9 +36,17 @@ class DomovoiApplication : Application(), ImageLoaderFactory {
         // A token-bearing save queued by an earlier process that is waiting
         // for a network must not resume on whichever comes next.
         DeviceDownloads.atStart(this)
-        container.bus.start()
-        container.alerts.start()
-        container.containerAlerts.start()
+        // Room mode (roommode/): the household side stays off until the
+        // person exits room mode. The state socket and the alerts are not
+        // started; the timer receivers stand down (the chain and the
+        // mirrored alarms were cancelled on entry, TimerAlerts.
+        // pauseForRoomMode); and no request carries the household token
+        // whatever starts it (HouseholdLock, DeviceAuthInterceptor).
+        if (!RoomStore.isActive(this)) {
+            container.bus.start()
+            container.alerts.start()
+            container.containerAlerts.start()
+        }
         // Earlier crashes and Android's exit history, read off the main thread.
         Diagnostics.onLaunch(this)
     }

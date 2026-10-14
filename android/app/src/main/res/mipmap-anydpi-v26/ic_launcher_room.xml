@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The "Domovoi Room" launcher icon (the activity-alias in the manifest):
+     the room ring and microphone on black. The monochrome layer is the same
+     drawing, for Android 13+ themed icons. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@android:color/black" />
+    <foreground android:drawable="@drawable/ic_launcher_room_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_room_foreground" />
+</adaptive-icon>

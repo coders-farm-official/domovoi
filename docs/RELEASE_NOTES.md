@@ -4,6 +4,47 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — Android: a spare phone or tablet as a room (room mode)
+
+Server and Android update; no migration, no satellite upgrade.
+
+* **An old phone or tablet can be a room.** On its charger, it listens for
+  the wake word, answers, plays the room's music, takes announcements and
+  (on phones with an echo canceller) drop-ins, like a Pi satellite. Open
+  **Domovoi Room** (a second icon the app adds) or Settings → Satellites →
+  **Use this device as a room**, read the explainer, allow the
+  microphone, scan or paste the room code from the dashboard, and approve
+  the six-digit code the phone shows. Guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode).
+* **Before the first phone room: refresh the satellite media caches once**
+  (dashboard, Settings → Satellites → prepare satellite media → Refresh
+  caches; needs the internet). The phone runs the same openWakeWord models
+  as a Pi and fetches them from the server's new signed `/v1/wake-base`
+  channel, which serves only what that cache holds. Without it the room
+  connects but says the server has no wake-word models yet.
+* **A room phone holds only its room's own key** and the server's pinned
+  fingerprint, never the household pairing. On a phone that is also a
+  household device, the normal app is locked while it is a room, the
+  household's timers, live updates and downloads stop on it, and leaving
+  takes the phone's PIN, pattern or fingerprint: such a phone **needs a
+  screen lock to be a room**. Leaving offers to keep the room or forget it
+  ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#a-room-phone-android-room-mode)).
+* **A room's server must be on the home network** (a private address, or a
+  `.local`, `.home.arpa`, `.lan` or `.internal` name), https or not: a room
+  code naming anything else is refused.
+* **It works on 32-bit phones and from Android 8.0** (the armeabi-v7a APK
+  too): room mode uses none of the on-device assistant's libraries.
+* **What Android asks of it:** a notification and the green mic dot for as
+  long as it listens; after a restart, one tap on "tap to resume"; the
+  microphone privacy toggle makes it deaf, and the screen and the
+  dashboard then say **mic blocked**.
+* **The app's other microphone users take turns:** a phone drop-in call,
+  the chat mic and the on-device assistant now say "the microphone is in
+  use by …" instead of being silenced by Android when another one has it.
+* Building: CameraX and ZXing's core (Apache-2.0) join the app for the
+  room code's scanner. The dashboard side of "add a spare device" (the
+  room code and its QR) is in the Linux spare-device notes below.
+
 ## 2026-10-13 — A spare Windows laptop or PC can be a room
 
 Server, dashboard and satellite update; no migration. Pis and Linux laptops

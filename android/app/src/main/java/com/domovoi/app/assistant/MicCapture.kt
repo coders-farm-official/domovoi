@@ -22,19 +22,29 @@ interface AudioSource {
 }
 
 /** The phone's microphone: 16 kHz mono PCM16, tuned for recognition. The
- *  caller holds RECORD_AUDIO; nothing is written to disk. */
-class AndroidMic : AudioSource {
+ *  caller holds RECORD_AUDIO; nothing is written to disk.
+ *
+ *  Room mode (roommode/RoomMic.kt) opens it too, with its own [audioSource]
+ *  (VOICE_COMMUNICATION, the platform's echo canceller, during a drop-in)
+ *  and a deeper buffer, and reads [sessionId] to attach the canceller. */
+class AndroidMic(
+    private val audioSource: Int = MediaRecorder.AudioSource.VOICE_RECOGNITION,
+    private val bufferSeconds: Double = 0.5,
+) : AudioSource {
     private var record: AudioRecord? = null
+
+    /** The open recorder's audio session (0 when closed). */
+    val sessionId: Int get() = record?.audioSessionId ?: 0
 
     @SuppressLint("MissingPermission")
     override fun start() {
         val min = AudioRecord.getMinBufferSize(SPEECH_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val created = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            audioSource,
             SPEECH_SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(min, SPEECH_SAMPLE_RATE / 2 * 2),   // half a second
+            maxOf(min, (SPEECH_SAMPLE_RATE * bufferSeconds).toInt() * 2),
         )
         if (created.state != AudioRecord.STATE_INITIALIZED) {
             created.release()

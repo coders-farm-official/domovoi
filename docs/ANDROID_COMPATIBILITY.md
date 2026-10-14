@@ -60,6 +60,7 @@ version from 8.0.
 | Notifications | on, no prompt | on, no prompt | on, no prompt | on, no prompt | asked at first start | as the Android version |
 | Problem reports | degraded: crashes and freezes; no "not responding" closes, and the card says so | degraded: as 8 | works: crashes, freezes, "not responding" closes | works | works | works |
 | On-device assistant benchmark (Settings → About) | works; its results lack the thermal status and name the board, not the chip | works; thermal status from 10 | works | works; chip name from 12 | works | **hidden** |
+| Room mode (this device as a room) | works; the mic service starts from the room screen | works | works; mic only "while using the app": the service starts from the room screen, and after a restart needs one tap | works; the mic privacy toggle shows as **mic blocked**; the notification's Stop asks for the unlock | works; notifications asked for in the explainer; Android 14+ declares the microphone service type | works (ONNX Runtime only) |
 | Documents "download all" (zip) | degraded: lands in the app's own folder (Android/data/…/Download) | degraded on 9: as 8; works on 10 (public Downloads) | works | works | works | as the Android version |
 
 Notes:
@@ -85,6 +86,14 @@ Notes:
   benchmark card is not shown, the local Settings screen doesn't mention the
   assistant, and the licences list leaves out the models only the assistant
   downloads.
+
+- **Room mode** runs openWakeWord and the Silero voice detector on ONNX
+  Runtime, the runtime the phone's voice already ships for all four ABIs,
+  and loads nothing of the on-device assistant's (LiteRT-LM,
+  sherpa-onnx). The QR scanner (CameraX) is asked for only when "Scan" is
+  pressed, and the camera is not required to install. Drop-ins need the
+  phone's echo canceller (`AcousticEchoCanceler.isAvailable()`); a phone
+  without one is a room without drop-ins (the emulator images have none).
 
 ## What was tested
 
@@ -117,6 +126,27 @@ and it ran out of memory preparing the phone's voice. Real phones set it,
 as do the other images (192 MB). With the emulator given the same 192 MB
 (`setprop dalvik.vm.heapgrowthlimit 192m` as root, then a runtime restart)
 the same steps pass; the app's Java heap peaked at about 48 MB there.
+
+**Room mode, 2026-10-13** (`wf/room-mode`), against a throwaway core and
+dashboard (`ft.py up --with-core`, strict pairing on, Whisper tiny, the
+openWakeWord models seeded into the run's satellite media cache), the
+room's mic fed recorded speech through the debug build's feed (never the
+host's microphone). The core was reached as `127.0.0.1` through `adb
+reverse`; the security review's fix round (same day) made the room code
+refuse loopback, as the shared enrolment contract does, so a rerun dials
+the host as `10.0.2.2` (in 10/8) with that name in the throwaway core's
+`TRUSTED_HOSTS`:
+
+| Image | APK | Result |
+|---|---|---|
+| `android-35` x86_64 | default | explainer (Start disabled until scrolled), room code by `domovoi-room:` link, parked with its code, wrong code refused and right code approved through the dashboard API, "check now" to ready; "Hey Jarvis" (score 0.96) → chime → "what time is it?" → early commit → reply played; mute (wake word ignored) and unmute; an announcement played; the normal app redirected to the room screen while active; the service's type is microphone + mediaPlayback; reinstall while active → "tap to resume" → resumed; Stop listening from the notification → Resume; Exit: unlock prompt cancelled (still a room), then the PIN → the normal app |
+| `android-30` x86 (32-bit only) | x86 | a second device for an approved room: "Another device is this room" shown; Exit on a phone without a screen lock (the dialog); a new room parked, approved, wake (0.87) → reply; compact layout on 1080x1920; the room's music (ExoPlayer on the room's MPD stream, `music_ready` → MPD resumed) |
+| `android-30` x86 | armeabi-v7a, through the image's ARM translation | the same room after the update: wake (0.78–0.96) → reply |
+| `android-26` x86_64 (8.0) | default | explainer, parked, approved, wake (0.95) → reply; the normal app redirected to the room screen |
+
+Not tested on the emulator: drop-ins (no image has an echo canceller), a
+real microphone, wake accuracy at a distance, days on a charger. Those
+need real phones.
 
 ### 32-bit on the emulator
 

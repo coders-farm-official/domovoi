@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.domovoi.app.DomovoiApplication
+import com.domovoi.app.net.HouseholdLock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -75,6 +76,10 @@ class TimerAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val timerId = intent.getLongExtra(EXTRA_TIMER_ID, -1L)
         if (timerId < 0) return
+        // Room mode: a household timer mirrored here before does not ring
+        // on the room phone (the mirror is cleared on entry; this is the
+        // backstop for an alarm already in flight).
+        if (HouseholdLock.roomModeActive) return
         val serverKey = intent.getStringExtra(EXTRA_SERVER_KEY)
         val app = context.applicationContext as? DomovoiApplication ?: return
         val pending = goAsync()

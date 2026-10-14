@@ -66,13 +66,21 @@ class AlertsManifestTest {
     }
 
     /** The background sync runs from an alarm chain, not a service: the
-     *  app's own services are media playback only. The one data-sync
-     *  foreground service is WorkManager's, for the on-device assistant's
-     *  model download (assistant/ModelDownloadWork.kt), not the alerts. */
+     *  app's own services are media playback and room mode's (a spare
+     *  phone as a room: roommode/RoomService.kt, not exported). The one
+     *  data-sync foreground service is WorkManager's, for the on-device
+     *  assistant's model download (assistant/ModelDownloadWork.kt), not the
+     *  alerts. */
     @Test fun theBackgroundSyncNeedsNoForegroundService() {
         val workManager = "androidx.work.impl.foreground.SystemForegroundService"
         val services = elements("service")
-        assertEquals(listOf(".player.PlaybackService"), services.map { it.attr("name") }.filter { it != workManager })
+        assertEquals(
+            setOf(".player.PlaybackService", ".roommode.RoomService"),
+            services.map { it.attr("name") }.filter { it != workManager }.toSet(),
+        )
+        val room = services.single { it.attr("name") == ".roommode.RoomService" }
+        assertEquals("false", room.attr("exported"))
+        assertEquals("microphone|mediaPlayback", room.attr("foregroundServiceType"))
         val dataSync = services.filter { it.attr("foregroundServiceType")?.contains("dataSync") == true }
         assertEquals(listOf(workManager), dataSync.map { it.attr("name") })
     }

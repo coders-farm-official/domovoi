@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the room-mode test feed (DebugFeedReceiver). Only a
+     sender holding DUMP may use it — adb's shell does, an installed app
+     cannot — and a release APK does not contain it at all. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".roommode.DebugFeedReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.domovoi.app.debug.ROOM_FEED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

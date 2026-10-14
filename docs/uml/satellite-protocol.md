@@ -173,17 +173,26 @@ methods refuse again underneath (`satellite_abilities.NotDeclared`), so no
 path reaches the socket.
 
 **Shared fixtures.** [`satellite-fixtures.json`](satellite-fixtures.json)
-holds a 2-Mic HAT Pi, an XVF3800 Pi, a `linux_pc` and an `android_room`:
+holds a 2-Mic HAT Pi, an XVF3800 Pi, a `linux_pc`, a `windows_pc` and an
+`android_room`:
 each one's `hello`, the `ready` the core answers a paired one with (minus
 `bot_name`), a `health` frame and what the core keeps of it, and what the
 core may send it (`frames_sent` / `frames_never`, the `upgrade` extra
 field, the settings sections hidden, the `pi_action`s kept, the dashboard
 actions offered). The core's tests (`domovoi/tests/test_satellite_supports.py`)
 and the Pi client's (`satellite/tests/test_protocol_fixtures.py`) read it,
-and the Android room mode's JVM tests are meant to, so the implementations
-can't drift apart. The `linux_pc`, `windows_pc` and `android_room` entries are drafts
-for S1 and S3; change them with the code that sends them. Tokens and codes
-in it are placeholders.
+and the Android room mode's JVM tests (`android/.../roommode/RoomProtocolTest.kt`)
+do too, so the implementations can't drift apart. The `android_room` entry
+is what the app's room mode sends on a phone with an echo canceller (one
+without leaves `full_duplex` out, and so gets no drop-ins); the `linux_pc`
+and `windows_pc` entries are what a spare Linux or Windows computer sends
+(`satellite/pc_engine.py` `hello_fields()`). Change them with the code that
+sends them. Tokens and codes in it are placeholders.
+
+A phone in room mode runs openWakeWord on ONNX Runtime with the same
+models as a Pi; it fetches the base models from the core's signed
+`/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
+`/v1/wake-models`, as a Pi does.
 
 ## Enrolling a spare device (`domovoi-room:1`)
 

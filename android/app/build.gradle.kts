@@ -115,6 +115,24 @@ android {
             val voiceApi = rootProject.file("../docs/uml/voice-api-fixture.json")
             test.systemProperty("domovoi.voice_api.fixture", voiceApi.absolutePath)
             test.inputs.file(voiceApi).withPathSensitivity(PathSensitivity.RELATIVE)
+            // Room mode (roommode/): the satellite protocol fixtures the core's
+            // and the Pi's tests read too, and the shared enrolment payload
+            // cases (docs/uml/spare-device-enrol-fixture.json, also read by
+            // satellite/enrolment.py's and the dashboard's tests).
+            val satFixtures = rootProject.file("../docs/uml/satellite-fixtures.json")
+            test.systemProperty("domovoi.satellite.fixtures", satFixtures.absolutePath)
+            test.inputs.file(satFixtures).withPathSensitivity(PathSensitivity.RELATIVE)
+            val enrolFixture = rootProject.file("../docs/uml/spare-device-enrol-fixture.json")
+            test.systemProperty("domovoi.enrol.fixture", enrolFixture.absolutePath)
+            test.inputs.file(enrolFixture).withPathSensitivity(PathSensitivity.RELATIVE)
+            // The pinned openWakeWord models (domovoi/satellite_media/fetchers.py)
+            // and the room's wake-word models are not in the repo (their
+            // licence); the parity tests run when -Pdomovoi.oww.dir points at
+            // a folder holding them (e.g. the openwakeword package's
+            // resources/models) and skip otherwise.
+            (findProperty("domovoi.oww.dir") as String?)?.let { test.systemProperty("domovoi.oww.dir", it) }
+            (findProperty("domovoi.room.clips") as String?)?.let { test.systemProperty("domovoi.room.clips", it) }
+            test.systemProperty("domovoi.repo.dir", rootProject.file("..").absolutePath)
         }
     }
 }
@@ -237,6 +255,12 @@ dependencies {
     // The model download runs as a WorkManager job, so it survives leaving
     // the app, an app restart and a dropped Wi-Fi connection.
     implementation(libs.androidx.work.runtime.ktx)
+    // Room mode's QR scanner (roommode/RoomScanner.kt): CameraX for the
+    // preview and its frames, ZXing's core decoder for the code. Apache-2.0.
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+    implementation(libs.zxing.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)

@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import com.domovoi.app.audio.MicArbiter
+import com.domovoi.app.audio.MicOwnership
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -108,12 +110,20 @@ class HoldToTalkRecorder(
      *  opened still counts. */
     suspend fun record(onLevel: (Float) -> Unit = {}): Recording? = withContext(Dispatchers.IO) {
         if (cancelled) return@withContext null
+        // One owner at a time (audio/MicArbiter.kt): refused, with words,
+        // while room mode or a call has the microphone.
+        val lease = MicArbiter.acquireOrThrow(MicOwnership.Owner.CHAT_MIC)
         val mic = source()
         val chunk = ShortArray(CHUNK_SAMPLES)
         val out = ByteArrayOutputStream(VOICE_SAMPLE_RATE * 2 * 4)
         val cap = (maxSeconds * VOICE_SAMPLE_RATE).toLong()
         var heard = 0L
-        mic.start()
+        try {
+            mic.start()
+        } catch (e: Throwable) {
+            lease.close()
+            throw e
+        }
         try {
             while (true) {
                 ensureActive()
@@ -132,6 +142,7 @@ class HoldToTalkRecorder(
             null
         } finally {
             mic.stop()
+            lease.close()
         }
     }
 

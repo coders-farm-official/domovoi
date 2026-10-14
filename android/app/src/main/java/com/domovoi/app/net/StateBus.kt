@@ -58,6 +58,17 @@ class StateBus(private val api: ApiClient, private val prefs: Prefs) {
         }
     }
 
+    /** Closes the socket and stops reconnecting (room mode: the household
+     *  side is off while the phone is a room). [start] opens it again. */
+    @Synchronized
+    fun stop() {
+        started = false
+        reconnectJob?.cancel()
+        ws?.cancel()
+        ws = null
+        _connected.value = false
+    }
+
     @Synchronized
     private fun restart() {
         ws?.cancel()

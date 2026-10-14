@@ -17,6 +17,8 @@ import androidx.core.content.ContextCompat
 import com.domovoi.app.alerts.CONTAINERS_ROUTE
 import com.domovoi.app.alerts.EXTRA_ROUTE
 import com.domovoi.app.diagnostics.Diagnostics
+import com.domovoi.app.roommode.RoomModeActivity
+import com.domovoi.app.roommode.RoomStore
 import com.domovoi.app.ui.shell.AppShell
 import com.domovoi.app.ui.theme.DomovoiTheme
 
@@ -31,6 +33,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Room mode locks the normal app (roommode/): the room screen
+        // instead, until the person exits there with the phone's unlock.
+        if (toRoomIfLocked()) return
         enableEdgeToEdge()
         // Android 13+ hides media notifications unless the user grants
         // POST_NOTIFICATIONS — without this the playback controls never
@@ -94,10 +99,21 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (toRoomIfLocked()) return
         (application as DomovoiApplication).container.alerts.onAppResumed()
         // The container guard re-reads on every return: an incident may have
         // opened or closed off screen, and its banner should say so now.
         (application as DomovoiApplication).container.containerAlerts.onAppResumed()
+    }
+
+    /** True (and on its way to the room screen) while room mode is on.
+     *  The household task leaves Recents too: no screenshot of it stays
+     *  there while the phone is a room. */
+    private fun toRoomIfLocked(): Boolean {
+        if (!RoomStore.isActive(this)) return false
+        startActivity(Intent(this, RoomModeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        finishAndRemoveTask()
+        return true
     }
 
     private fun routeFrom(intent: Intent?) {

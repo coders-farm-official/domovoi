@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.domovoi.app.DomovoiApplication
+import com.domovoi.app.net.HouseholdLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -337,6 +338,15 @@ class TimerSync(
         return result
     }
 
+    /** Room mode (roommode/): the chain stops; [onStart] begins it again
+     *  when the phone leaves room mode. */
+    suspend fun stop() {
+        armLock.withLock {
+            alarm.cancel()
+            plannedAt = null
+        }
+    }
+
     /** The chain's alarm rang. */
     suspend fun onTick(): TickResult {
         arm(SyncReason.TICK)
@@ -424,6 +434,8 @@ class AndroidSyncAlarm(context: Context) : SyncAlarm {
 class TimerSyncReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_TIMER_SYNC) return
+        // Room mode: no household sync (and no next tick) on a room phone.
+        if (HouseholdLock.roomModeActive) return
         val app = context.applicationContext as? DomovoiApplication ?: return
         val pending = goAsync()
         receiverScope.launch {

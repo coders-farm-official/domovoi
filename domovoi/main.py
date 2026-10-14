@@ -1577,6 +1577,32 @@ async def wake_models_file(path: str) -> FileResponse:
     return FileResponse(target, media_type="application/octet-stream")
 
 
+# A fifth file channel, for spare-device satellites (an Android phone in room
+# mode): the openWakeWord base models the satellite media cache holds, each
+# matching its pin (domovoi/wake_base_models.py). Signed only — nothing older
+# than the signature reads it — and only verified, pinned .onnx files are
+# listed or served.
+@app.get("/v1/wake-base/manifest.sig")
+async def wake_base_manifest_signed() -> dict[str, Any]:
+    """``{name: sha256}`` of the served base models, in a signed envelope."""
+    from domovoi import wake_base_models
+
+    manifest = await asyncio.to_thread(wake_base_models.served_models)
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(wake_base_models.WAKE_BASE_CHANNEL, manifest)
+
+
+@app.get("/v1/wake-base/{name}")
+async def wake_base_file(name: str) -> FileResponse:
+    """One base model, by the name the manifest lists; 404 otherwise."""
+    from domovoi import wake_base_models
+
+    target = await asyncio.to_thread(wake_base_models.model_path, name)
+    if target is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target, media_type="application/octet-stream")
+
+
 # ─── Admin endpoints (used by the web management UI) ─────────────────────
 # Surface the core's *running-process* state to the web backend
 # (which lives in a different process and can't reach `app.state`
