@@ -2385,11 +2385,14 @@ case_gpu_runtime_key_file_with_a_second_key_only_warns() {
   check "no source" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
   check "no toolkit" not_called "install -y --no-install-recommends nvidia"
   check "Docker left alone" not_called "nvidia-ctk"
-  # The next run tries again (its check fails while the runtime is missing).
+  check "the helper recorded the failure" grep -q "^reason=failed: NVIDIA's apt key" "$ROOT/var/lib/domovoi-gpu-runtime/last-failure"
+  # The next run tries again (its check fails while the runtime is missing):
+  # a provision run passes --force, so the fresh record holds nothing off.
   rm -f "$STATE/nvidia-extra-key"
   run_prov "${wsl_args[@]}" --skip-models
   check "next run exit 0" eq "$RC" 0
   check "next run sets it up" called "install -y --no-install-recommends $NVIDIA_PKGS"
+  check "next run: the record removed" absent "$ROOT/var/lib/domovoi-gpu-runtime/last-failure"
   end_case
 }
 
@@ -2527,11 +2530,32 @@ case_gpu_runtime_helper_interface() {
   check "another source for it: nothing written" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
   check "another source for it: no download" not_called "curl"
   check "another source for it: no apt" not_called "apt-get"
+  local rec=$ROOT/var/lib/domovoi-gpu-runtime/last-failure
+  check "another source for it: recorded" grep -q "^reason=refused: NVIDIA's apt repository is already set up in /etc/apt/sources.list.d/nvidia-container-toolkit.list" "$rec"
   rm -f "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.list"
-  run_gpu --internet sometimes --no-restart
+  # The record holds the same pins off for a day (--retry-after), --check
+  # included; --force, or --retry-after 0, tries.
+  run_gpu --internet sometimes
+  check "held off: 0" eq "$RC" 0
+  check "held off: the summary" eq "${LAST%%: the last try*}" "gpu-runtime: not retried"
+  check "held off: since when" said "gpu-runtime: not retried: the last try was refused at "
+  check "held off: why" said "(NVIDIA's apt repository is already set up in /etc/apt/sources.list.d/nvidia-container-toolkit.list"
+  check "held off: until when" said "; it is tried again at the first update or Restart after "
+  check "held off: no download" not_called "curl"
+  check "held off: no apt" not_called "apt-get"
+  run_gpu --check
+  check "held off: --check 0, nothing to do now" eq "$RC" 0
+  check "held off: --check says why" eq "${LAST%%: the last try*}" "gpu-runtime: not retried"
+  run_gpu --check --force
+  check "--check --force: 1" eq "$RC" 1
+  check "--check --force: what is to do" eq "${LAST%% (*}" "gpu-runtime: not in place: install $NVIDIA_PKGS; put the nvidia runtime in /etc/docker/daemon.json; restart Docker to load the nvidia runtime"
+  run_gpu --internet sometimes --retry-after 0 --dry-run
+  check "--retry-after 0: tried (a dry run here)" eq "${LAST%% (*}" "gpu-runtime: dry run, nothing changed"
+  run_gpu --internet sometimes --no-restart --force
   check "--no-restart: 0" eq "$RC" 0
   check "--no-restart: says a restart is needed" eq "$LAST" "gpu-runtime: NVIDIA Container Toolkit 1.20.1-1 installed, Docker configured; Docker not restarted (--no-restart): restart it to load the nvidia runtime (WSL: yes; internet: sometimes)"
   check "--no-restart: not restarted" not_called "systemctl restart"
+  check "set up: the record removed" absent "$rec"
   run_gpu --check
   check "not loaded yet: --check 1" eq "$RC" 1
   check "not loaded yet: what is to do" eq "$LAST" "gpu-runtime: not in place: restart Docker to load the nvidia runtime (WSL: yes; internet: unanswered)"
@@ -2557,6 +2581,8 @@ case_gpu_runtime_helper_interface() {
   check "bad --wsl: 2" eq "$RC" 2
   run_gpu --detect --check
   check "two modes: 2" eq "$RC" 2
+  run_gpu --retry-after soon
+  check "bad --retry-after: 2" eq "$RC" 2
   run_gpu --bogus
   check "unknown option: 2" eq "$RC" 2
   run_gpu --help

@@ -1568,9 +1568,12 @@ do_docker() {
 # that would bring a driver, Docker that won't start with the runtime) is a
 # warning, not the end of the install: wake-word training is optional and
 # then runs on the CPU, nothing was installed or daemon.json is back as it
-# was, and the step runs again on the next provision run (its check fails
-# while the runtime is missing) and at every update or Restart
-# (apply-update.sh).
+# was. The helper records the failure, and the update unit
+# (apply-update.sh) tries again a day later, or at once when the
+# dashboard's "Check the GPU and trainer again" asks. A provision run is
+# asked for, so it always tries (--force, in the step's check too): the
+# step runs again on the next provision run while the runtime is missing,
+# whatever the record says.
 gpu_runtime_script() { printf '%s' "$CHECKOUT/scripts/linux/gpu-runtime.sh"; }
 # The helper to ask: the checkout's, or in a dry run before the clone the
 # copy beside this script.
@@ -1609,7 +1612,8 @@ inputs_gpu_runtime() {
   echo "wsl=$WSL"
   file_sig "$(gpu_runtime_script)"
 }
-check_gpu_runtime() { gpu_runtime --check --manifest "$MANIFEST_FILE" >/dev/null 2>&1; }
+# --force: a recorded failure is no "nothing to do" here.
+check_gpu_runtime() { gpu_runtime --check --force --manifest "$MANIFEST_FILE" >/dev/null 2>&1; }
 plan_gpu_runtime() {
   echo "NVIDIA's key: exactly one primary key, fingerprint ${M[nvidia_key_fpr]}, exported alone to /etc/apt/keyrings/nvidia-container-toolkit.asc"
   echo "/etc/apt/sources.list.d/nvidia-container-toolkit.sources: ${M[nvidia_repo_url]} /"
@@ -1621,7 +1625,7 @@ do_gpu_runtime() {
   [ -f "$(gpu_runtime_script)" ] || die "the checkout has no scripts/linux/gpu-runtime.sh"
   # Its lines go to the log as they come; its summary (the last line) is
   # this step's message, or the reason it stopped.
-  { rc=0; gpu_runtime --manifest "$MANIFEST_FILE" || rc=$?; echo "$rc" >"$out.rc"; } 2>&1 | tee "$out"
+  { rc=0; gpu_runtime --force --manifest "$MANIFEST_FILE" || rc=$?; echo "$rc" >"$out.rc"; } 2>&1 | tee "$out"
   rc=$(cat "$out.rc" 2>/dev/null || echo 1)
   summary=$(sed -n 's/^gpu-runtime: //p' "$out" | tail -n 1)
   if [ "$rc" != 0 ]; then

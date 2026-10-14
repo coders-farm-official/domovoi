@@ -7,14 +7,16 @@
 #
 #   sudo bash gpu-runtime.sh                     # set it up when a GPU is visible
 #   sudo bash gpu-runtime.sh --internet never    # only what needs no download
+#   sudo bash gpu-runtime.sh --force             # try again now, whatever failed before
 #   bash gpu-runtime.sh --detect                 # status 0: an NVIDIA GPU is visible
 #   bash gpu-runtime.sh --check                  # status 0: nothing to do
 #
 # Two scripts call it, as they call os-jobs.sh: scripts/linux/provision.sh
-# (its gpu-runtime step, right after the docker step) and
-# scripts/linux/apply-update.sh (on every update or restart that
-# domovoi-update.service runs, while core and web are stopped). So a box
-# installed before this existed gets it at its next update or Restart.
+# (its gpu-runtime step, right after the docker step, always with --force)
+# and scripts/linux/apply-update.sh (on every update or restart that
+# domovoi-update.service runs, while core and web are stopped; with --force
+# when the dashboard's "Check the GPU and trainer again" asked for it). So a
+# box installed before this existed gets it at its next update or Restart.
 #
 # An NVIDIA GPU is visible when:
 #   WSL          /dev/dxg is there (Windows hands a GPU to the distro) and
@@ -69,6 +71,20 @@
 #                putting the file back brings it up.
 # A box already set up is left alone: no download, no restart.
 #
+# After a failure: a run that failed or refused while setting the toolkit
+# up (a key that isn't the pinned one, apt failing or bringing a driver,
+# Docker that won't start with the runtime) records it in
+# /var/lib/domovoi-gpu-runtime/last-failure, root's, readable by everyone:
+# three lines, pins=<sha256 of the manifest's nvidia_* and libnvidia_*
+# keys>, at=<epoch seconds>, reason=<the summary line after "gpu-runtime: ">.
+# Until --retry-after seconds have passed since then, a run for the same
+# pins changes nothing and touches no network (no apt-get update, no Docker
+# restart at every update and Restart), and says so: "gpu-runtime: not
+# retried: ..." (status 0, --check too). New pins, --force, or the time
+# passing try again. No GPU, internet access turned off and bad usage are
+# not failures and record nothing; a run that finds the runtime in place,
+# or sets it up, removes the record.
+#
 # Options:
 #   --manifest FILE     the pin manifest (default: provision-manifest.conf
 #                       beside this script); only its nvidia_* and
@@ -88,15 +104,23 @@
 #                       unit then restarts domovoi-db itself)
 #   --no-restart        configure Docker but don't restart it; the summary
 #                       says that a restart is needed
+#   --force             try again even though the last try for these pins
+#                       failed less than --retry-after seconds ago (with
+#                       --check: say what is to do, whatever that record says)
+#   --retry-after SEC   how long a recorded failure holds off the next try
+#                       (default 86400, a day; 0 always tries)
 #
 # Output: one line per thing it does, then one summary line that starts
 # with "gpu-runtime: ", for example "gpu-runtime: already in place (...)",
 # "gpu-runtime: NVIDIA Container Toolkit 1.20.1-1 installed, Docker
 # configured and restarted", "gpu-runtime: no NVIDIA GPU visible (...);
-# nothing to do", "gpu-runtime: failed: <why>" or "gpu-runtime: refused:
-# <why>". Exit status: 0 done or nothing to do (--check: nothing to do;
-# --detect: a GPU is visible), 1 failed or refused (--check: something to
-# do; --detect: no GPU), 2 bad usage.
+# nothing to do", "gpu-runtime: not retried: the last try failed at <when>
+# (<why>); it is tried again at the first update or Restart after <when>,
+# or on Check the GPU and trainer again", "gpu-runtime: failed: <why>" or
+# "gpu-runtime: refused: <why>". Exit status: 0 done or nothing to do
+# (not retried too; --check: nothing to do now; --detect: a GPU is
+# visible), 1 failed or refused (--check: something to do; --detect: no
+# GPU), 2 bad usage.
 #
 # DOMOVOI_PROVISION_ROOT with DOMOVOI_PROVISION_TEST_HARNESS=1 is for the
 # tests only (scripts/linux/tests/test-provision.sh and
@@ -153,6 +177,8 @@ KEYRING=$ROOT$KEYRING_PATH
 SOURCES=$APT_ETC/sources.list.d/nvidia-container-toolkit.sources
 DAEMON_JSON=$ROOT/etc/docker/daemon.json
 STATE_DIR=$ROOT/var/lib/domovoi-gpu-runtime
+# The last failure ("After a failure" above).
+FAILURE_FILE=$STATE_DIR/last-failure
 DOCKER_UNIT=docker.service
 # How long Docker may take to answer after a restart (the spike's took 15 s).
 DOCKER_WAIT=60
@@ -165,6 +191,8 @@ CHECK=0
 DRY_RUN=0
 FLAG=""
 NO_RESTART=0
+FORCE=0
+RETRY_AFTER=86400
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 usage_error() { printf '%s: %s\n' "$PROG" "$1" >&2; exit 2; }
@@ -183,11 +211,16 @@ while [ $# -gt 0 ]; do
     --check) CHECK=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --no-restart) NO_RESTART=1; shift ;;
+    --force) FORCE=1; shift ;;
+    --retry-after) [ $# -ge 2 ] || usage_error "--retry-after needs a number of seconds"; RETRY_AFTER=$2; shift 2 ;;
+    --retry-after=*) RETRY_AFTER=${1#*=}; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage_error "unknown option: $1" ;;
   esac
 done
 case $INTERNET in ""|always|sometimes|never) ;; *) usage_error "--internet must be always, sometimes, never or empty: $INTERNET" ;; esac
+[[ $RETRY_AFTER =~ ^[0-9]{1,10}$ ]] || usage_error "--retry-after must be a whole number of seconds: $RETRY_AFTER"
+RETRY_AFTER=$((10#$RETRY_AFTER))
 [ $((DETECT + CHECK + DRY_RUN)) -le 1 ] || usage_error "--detect, --check and --dry-run go one at a time"
 
 detect_wsl() {
@@ -211,19 +244,78 @@ esac
 
 SAID=0
 WORK=""
+# 1 once a real run starts setting the toolkit up: from then on a failure
+# or a refusal is recorded ("After a failure" above).
+TRYING=0
 # finish CODE TEXT: the summary line, then exit CODE.
-finish() { local code=$1; shift; printf '%s: %s\n' "$PROG" "$*"; SAID=1; exit "$code"; }
+finish() {
+  local code=$1; shift
+  if [ "$code" = 1 ] && [ "$TRYING" = 1 ]; then record_failure "$*"; fi
+  printf '%s: %s\n' "$PROG" "$*"; SAID=1; exit "$code"
+}
 fail() { finish 1 "failed: $*"; }
+# succeed TEXT: the runtime is in place after a real run, so the last
+# failure is forgotten; then the summary line.
+succeed() { clear_failure; finish 0 "$*"; }
 on_exit() {
   local rc=$?
   if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
   # A command that failed where nothing expected it (set -e): still one
   # summary line, so a caller always has one to show.
   if [ "$SAID" = 0 ] && [ "$rc" != 0 ] && [ "$rc" != 2 ]; then
+    if [ "$TRYING" = 1 ]; then record_failure "failed: stopped unexpectedly (exit $rc)"; fi
     printf '%s: failed: stopped unexpectedly (exit %s)\n' "$PROG" "$rc"
   fi
 }
 trap on_exit EXIT
+
+# ─── The last failure ────────────────────────────────────────────────────
+
+# Seconds since the epoch, and one of them as the box's local time.
+now_s() { printf '%s' "${EPOCHSECONDS:-$(date +%s)}"; }
+at_time() { printf '%(%Y-%m-%d %H:%M %Z)T' "$1"; }
+
+# PINS: the sha256 of the manifest's nvidia keys (load_manifest sets it);
+# empty when it can't be had, and then nothing is recorded or held off.
+PINS=""
+# record_failure REASON: last-failure says these pins failed now, and why.
+# Never fails: the run's own summary matters more than the record.
+record_failure() {
+  local reason=${1//[[:cntrl:]]/ } tmp
+  [ -n "$PINS" ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  tmp=$(mktemp "$STATE_DIR/.last-failure.XXXXXX" 2>/dev/null) || return 0
+  if printf 'pins=%s\nat=%s\nreason=%s\n' "$PINS" "$(now_s)" "${reason:0:600}" >"$tmp" 2>/dev/null \
+      && chmod 0644 "$tmp" 2>/dev/null && mv -f "$tmp" "$FAILURE_FILE" 2>/dev/null; then
+    echo "recorded in ${FAILURE_FILE#"$ROOT"}: not tried again for these pins for ${RETRY_AFTER}s, unless with --force"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
+  return 0
+}
+clear_failure() {
+  [ -e "$FAILURE_FILE" ] || return 0
+  if rm -f "$FAILURE_FILE" 2>/dev/null; then echo "removed ${FAILURE_FILE#"$ROOT"}: the last failure is past"; fi
+  return 0
+}
+# read_failure: status 0 when last-failure is a record for these pins;
+# FAIL_AT and FAIL_REASON then say when and why.
+FAIL_AT=""
+FAIL_REASON=""
+read_failure() {
+  local line pins="" at="" reason=""
+  [ -n "$PINS" ] && [ -f "$FAILURE_FILE" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+      pins=*) pins=${line#pins=} ;;
+      at=*) at=${line#at=} ;;
+      reason=*) reason=${line#reason=} ;;
+    esac
+  done <"$FAILURE_FILE" 2>/dev/null || return 1
+  [[ $at =~ ^[0-9]{1,12}$ ]] && [ "$pins" = "$PINS" ] || return 1
+  FAIL_AT=$((10#$at))
+  FAIL_REASON=${reason//[[:cntrl:]]/ }
+}
 
 where() { printf 'WSL: %s; internet: %s' "$([ "$WSL" = 1 ] && echo yes || echo no)" "${INTERNET:-unanswered}"; }
 
@@ -294,6 +386,10 @@ load_manifest() {
   done
 }
 load_manifest
+# What a recorded failure was for: new pins (a version, the key, the
+# repository) are tried at once.
+PINS=$(for k in "${MANIFEST_KEYS[@]}"; do printf '%s=%s\n' "$k" "${M[$k]}"; done | sha256sum | cut -d' ' -f1) || PINS=""
+[[ $PINS =~ ^[0-9a-f]{64}$ ]] || PINS=""
 
 # ─── What is there ───────────────────────────────────────────────────────
 
@@ -389,7 +485,23 @@ DAEMON_OK=1; daemon_has_nvidia || DAEMON_OK=0
 LOADED_OK=1; runtime_loaded || LOADED_OK=0
 
 if [ -z "$MISSING" ] && [ "$APT_OK" = 1 ] && [ "$DAEMON_OK" = 1 ] && [ "$LOADED_OK" = 1 ]; then
+  # Set up by hand since a failure, say: a real run forgets it.
+  if [ "$CHECK" = 0 ] && [ "$DRY_RUN" = 0 ]; then clear_failure; fi
   finish 0 "already in place (NVIDIA Container Toolkit $(toolkit_version); Docker has the nvidia runtime; $(where))"
+fi
+
+# Not in place, and the last try for these pins failed less than
+# RETRY_AFTER seconds ago: nothing again yet (no download, no apt, no Docker
+# restart). A record from the future (the clock went back) holds nothing off.
+if [ "$FORCE" = 0 ] && read_failure; then
+  now=$(now_s)
+  if [ "$now" -ge "$FAIL_AT" ] && [ $((now - FAIL_AT)) -lt "$RETRY_AFTER" ]; then
+    case $FAIL_REASON in
+      "refused: "*) last="was refused at $(at_time "$FAIL_AT") (${FAIL_REASON#refused: })" ;;
+      *) last="failed at $(at_time "$FAIL_AT") (${FAIL_REASON#failed: })" ;;
+    esac
+    finish 0 "not retried: the last try $last; it is tried again at the first update or Restart after $(at_time $((FAIL_AT + RETRY_AFTER))), or on Check the GPU and trainer again"
+  fi
 fi
 
 if [ "$CHECK" = 1 ]; then
@@ -425,6 +537,8 @@ fi
 command -v docker >/dev/null 2>&1 || fail "Docker Engine is not installed (scripts/linux/provision.sh installs it before this)"
 
 WORK=$(mktemp -d)
+# From here on a failure or a refusal is recorded (finish).
+TRYING=1
 
 # write_if_changed DEST < CONTENT: DEST (0644, root's: this runs as root) by
 # rename from a dot-named temp file beside it. Status 0 when it wrote, 1
@@ -613,8 +727,8 @@ fi
 if [ "${#what[@]}" -eq 0 ]; then
   note=""
   [ "$APT_SKIPPED" = 0 ] || note="; NVIDIA's apt key and source not refreshed: internet access is turned off"
-  finish 0 "already in place (NVIDIA Container Toolkit $VER; Docker has the nvidia runtime; $(where))$note"
+  succeed "already in place (NVIDIA Container Toolkit $VER; Docker has the nvidia runtime; $(where))$note"
 fi
 summary=$(IFS='|'; printf '%s' "${what[*]}" | sed 's/|/, /g')
 [ "$APT_SKIPPED" = 0 ] || summary+="; NVIDIA's apt key and source not refreshed: internet access is turned off"
-finish 0 "$summary ($(where))"
+succeed "$summary ($(where))"

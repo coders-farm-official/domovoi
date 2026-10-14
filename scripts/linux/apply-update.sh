@@ -68,8 +68,14 @@
 #      bounces Postgres and the rooms' players (restart: unless-stopped, so
 #      they come back) and step 7 restarts domovoi-db after it. Never fatal
 #      and no rollback for it: a failure is a `warn` step; a step is recorded
-#      only when something changed (ok) or the helper failed (warn).
-#      DOMOVOI_MANAGE_GPU_RUNTIME=0 leaves it alone.
+#      only when something changed (ok) or the helper failed (warn). A
+#      failure is not tried again for a day (the helper's last-failure
+#      record; its "not retried" adds no step), so a box where it can't be
+#      set up doesn't run apt-get update, or restart Docker, at every
+#      Restart; the dashboard's "Check the GPU and trainer again" leaves
+#      gpu-runtime-retry in the core's wake_trainer dir
+#      (~/.domovoi/wake_trainer), and the next run tries at once (--force)
+#      and removes it. DOMOVOI_MANAGE_GPU_RUNTIME=0 leaves it alone.
 #   7. systemctl restart domovoi-db: compose up plus Flyway.
 #   8. Start core and web; both must answer their health endpoint within
 #      DOMOVOI_UPDATE_HEALTH_TIMEOUT seconds.
@@ -558,10 +564,23 @@ on_exit() {
 
 # ─── Who owns the checkout, and where things live ────────────────────────
 
-# The last KEY=value for KEY in domovoi/.env, quotes stripped, or empty.
+# KEY's value in domovoi/.env as the core reads it, or empty: through the
+# checkout's own reader (python -m domovoi.config_env_writer --get KEY,
+# python-dotenv, as the service user, like internet_policy), so a quoted
+# value that spans lines is one value here too, never a KEY=value line of
+# its own (review of 2026-10-13: a bot name carrying a WAKE_TRAINER_IMAGE
+# line named the image root's update rebuilt). Needs VENV_DIR resolved.
+# Only when that reader can't answer (a checkout from before it, a venv
+# that doesn't run) is the file read line by line, as before, and the
+# journal says so: the last KEY=value, quotes stripped.
 dotenv_get() {
   local f=$REPO_DIR/domovoi/.env v
   [ -r "$f" ] || return 0
+  if v=$(as_user "$VENV_DIR/bin/python" -m domovoi.config_env_writer --get "$1" 2>/dev/null); then
+    printf '%s' "$v"
+    return 0
+  fi
+  log "domovoi/.env: $1 read line by line: this checkout's python -m domovoi.config_env_writer --get could not read it" >&2
   v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n 1 | tr -d '\r')
   v=${v%\"}; v=${v#\"}; v=${v%\'}; v=${v#\'}
   printf '%s' "$v"
@@ -1692,6 +1711,24 @@ reconcile_os_jobs() {
   return 0
 }
 
+# Where the dashboard's "Check the GPU and trainer again" leaves its flag
+# (gpu_runtime_retry_flag in domovoi/wake_trainer_setup.py): gpu-runtime-retry
+# in the core's wake_trainer dir, beside its wake_models dir (WAKE_MODELS_DIR
+# in domovoi/.env, else ~/.domovoi/wake_models of the service user). Empty
+# when that can't be told.
+gpu_retry_flag() {
+  local d home=""
+  d=$(dotenv_get WAKE_MODELS_DIR)
+  if [ -z "$d" ] || [[ $d == "~"* ]]; then
+    home=$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6) || home=""
+    [ -n "$home" ] || return 0
+    if [ -z "$d" ]; then d=$home/.domovoi/wake_models; else d=$home${d#\~}; fi
+  fi
+  [[ $d == /* ]] || return 0
+  d=${d%/}
+  printf '%s/wake_trainer/gpu-runtime-retry' "${d%/*}"
+}
+
 # Docker's way to an NVIDIA GPU (the NVIDIA Container Toolkit), set up by
 # scripts/linux/gpu-runtime.sh, the helper provision.sh runs too, where an
 # NVIDIA GPU is visible: so a box installed before it existed gets it at
@@ -1701,12 +1738,14 @@ reconcile_os_jobs() {
 # run restarted Docker. The helper downloads nothing under never. It never
 # fails the run and is never rolled back; a step is recorded only when the
 # helper changed something (ok) or failed (warn, with the helper's own
-# summary line as the detail, never a tool's raw output). No GPU, or set up
-# already, adds nothing to the result. Callers run it as
-# `reconcile_gpu_runtime || true`, so nothing in it can end the run while
-# the services are stopped.
+# summary line as the detail, never a tool's raw output). No GPU, set up
+# already, or a recent failure the helper does not retry yet, adds nothing
+# to the result. The dashboard's retry flag (gpu_retry_flag) makes it try
+# at once. Callers run it as `reconcile_gpu_runtime || true`, so nothing in
+# it can end the run while the services are stopped.
 reconcile_gpu_runtime() {
-  local policy t0 out rc=0 summary flag=$UPDATE_DIR/gpu-runtime-restarted
+  local policy t0 out rc=0 summary flag=$UPDATE_DIR/gpu-runtime-restarted retry
+  local -a force=()
   GPU_DOCKER_RESTARTED=0
   case "$(printf '%s' "$MANAGE_GPU_RUNTIME" | tr '[:upper:]' '[:lower:]')" in
     0|false|no|off) log "Docker's GPU runtime left alone (DOMOVOI_MANAGE_GPU_RUNTIME=$MANAGE_GPU_RUNTIME)"; return 0 ;;
@@ -1725,23 +1764,33 @@ reconcile_gpu_runtime() {
     log "this checkout can't say the internet answer: Docker's GPU runtime left as it is"
     return 0
   fi
+  # Root only asks whether the flag is there; the service user's own file
+  # is removed as that user, once the helper ran.
+  retry=$(gpu_retry_flag)
+  if [ -n "$retry" ] && [ -e "$retry" ]; then
+    force=(--force)
+    log "the dashboard asked to check the GPU again ($retry): Docker's GPU runtime is tried now, whatever failed before"
+  fi
   t0=$(now_ms)
   log "step gpu-runtime"
   rm -f "$flag"
   set +e
-  out=$(bash "$GPU_RUNTIME" --internet "$policy" --restart-flag "$flag" 2>&1)
+  out=$(bash "$GPU_RUNTIME" --internet "$policy" --restart-flag "$flag" ${force[@]+"${force[@]}"} 2>&1)
   rc=$?
   set -e
   if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
   if [ -e "$flag" ]; then GPU_DOCKER_RESTARTED=1; fi
   rm -f "$flag"
+  if [ "${#force[@]}" -gt 0 ] && ! as_user rm -f -- "$retry"; then
+    log "could not remove $retry: the next update or Restart tries Docker's GPU runtime at once again"
+  fi
   summary=$(printf '%s\n' "$out" | sed -n 's/^gpu-runtime: //p' | tail -n 1)
   if [ "$rc" -ne 0 ]; then
     add_step gpu-runtime warn "$t0" "$(trunc "Docker's GPU runtime: ${summary:-the helper stopped (exit $rc)}" 600)"
     log "step gpu-runtime failed (exit $rc); not fatal, the run goes on"
   else
     case $summary in
-      "no NVIDIA GPU visible"*|"already in place"*|"not installed: "*) ;;
+      "no NVIDIA GPU visible"*|"already in place"*|"not installed: "*|"not retried: "*) ;;
       *) add_step gpu-runtime ok "$t0" "$(trunc "${summary:-done}" 600)" ;;
     esac
   fi
@@ -2124,8 +2173,9 @@ main() {
   # The unit starts in /, and the service user's commands (python -m pip
   # puts the cwd on sys.path) should run somewhere they can read.
   cd "$REPO_DIR"
-  resolve_core_state_dir
+  # The venv first: dotenv_get reads domovoi/.env through it.
   resolve_venv
+  resolve_core_state_dir
   resolve_mpd_names
 
   if ! HEAD_SHA=$(git_as rev-parse --verify HEAD) || ! is_sha "$HEAD_SHA"; then
