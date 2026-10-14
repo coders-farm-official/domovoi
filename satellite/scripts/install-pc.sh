@@ -248,8 +248,8 @@ uninstall() {
   else
     say "  kept $CONFIG_DIR/config.toml (--purge removes it)"
   fi
-  say "Done. In the dashboard, remove the room too (Settings -> Satellites -> the room -> Remove):"
-  say "that frees its name and stops its music player."
+  say "Done. In the dashboard, retire the room too once it shows offline"
+  say "(Settings -> Satellites -> the room -> Retire room): that frees its name and removes its music player."
 }
 
 if [ "$UNINSTALL" = 1 ]; then

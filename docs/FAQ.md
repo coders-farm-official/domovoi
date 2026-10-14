@@ -109,6 +109,21 @@ A room *is* a satellite. To add one:
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by that `room_id`.
 
+## Can an old laptop or phone be a room?
+
+Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) can be a room
+today: in the dashboard, as admin, **Settings → Satellites → add a spare
+device**, name the room, and run the one-line command it shows on that
+computer. It installs the satellite, makes sure it's talking to *your*
+server, and shows an approval code to type into the dashboard. A tray
+icon shows when its microphone is live and mutes it. An old **Android
+phone or tablet** joins through the app's room mode by scanning the QR code
+on the same card. Either is a real room: wake word, music, timers,
+announcements, and guests can control its music while it plays. What they
+don't do is the Pi-only part (LED ring, Wi-Fi self-healing, plugins that
+install something as root). Setup, power and battery advice:
+[Satellites on spare devices](SPARE_DEVICE_SATELLITES.md).
+
 ## Can another device on my network pretend to be one of my rooms?
 
 Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired room is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).

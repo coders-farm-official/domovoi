@@ -1727,6 +1727,118 @@ nothing recorded is unaffected.
 from the card, keeps its name: it is a different directory, root-owned, and
 no core keeps a key there.
 
+## Spare-device satellites (laptops and phones)
+
+Since 2026-10-13 a spare Linux laptop or mini PC can be a room
+([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md)), and an Android
+phone through the app's room mode. Neither is a dedicated, root-managed Pi,
+so three things differ: how the device learns which server is yours, what
+it holds, and what that server may do to it.
+
+### The enrolment code, and the install command on a LAN without TLS
+
+The admin's **Settings → Satellites → add a spare device** (admin tier,
+`POST /api/satellites/enrolment`) makes one enrolment payload,
+`domovoi-room:1?core=<address>&fp=<fingerprint>&room=<name>`
+([uml/satellite-protocol.md](uml/satellite-protocol.md#enrolling-a-spare-device-domovoi-room1)),
+shown inside a one-line Linux command and as a QR code. The trust model:
+
+1. **The dashboard pins the bytes.** The command quotes the SHA-256 of the
+   exact satellite bundle the core serves (`/v1/satellite-code/bundle.tar.gz`,
+   built deterministically) and runs nothing unless `sha256sum -c` matches.
+   A host answering in the core's place, or changing the download on the
+   way, hands over different bytes and the command stops.
+2. **The device pins the server before it writes anything.** The verified
+   installer makes the address in the code sign a fresh nonce and the
+   address it dialed (the same `/v1/health` challenge every satellite runs),
+   checks the key against the fingerprint in the code, and only then writes
+   the pin into its config. From then on every connection, code update,
+   wake-model and sound list is held to that pin; a spare computer **refuses
+   to start without one** (exit 78; its unit does not retry) and never falls
+   back to trusting the first server that answers.
+3. **The code is not a credential.** It carries an address, a public
+   fingerprint and a room name. Joining still needs a person to type the
+   device's six-digit approval code into the dashboard (strict pairing), as
+   for a Pi.
+
+The address must be on the home network — an RFC 1918 IPv4 address, IPv6
+unique-local or link-local, or a name ending in `.local`, `.home.arpa`,
+`.lan` or `.internal` — or the device refuses the code
+(`not_home_network`), https or not: a code shown on some web page cannot
+point a room's microphone at a server outside the house.
+
+**What this does not cover, plainly.** The dashboard page itself is plain
+HTTP on the LAN (TLS is on the [backlog](#hardening-backlog--deferred-in-v1-on-purpose)):
+someone able to rewrite that page in transit could hand you a different
+command, exactly as they could read the admin password typed into it. To
+rule that out, compare the fingerprint the command prints ("…proved it is
+SHA256:…") with **Settings → About** on another device. The satellite's
+audio is unencrypted on the LAN, as a Pi's is.
+
+### What a spare computer holds, and what the server may do to it
+
+* **Its own room's key only.** A laptop holds its pairing token
+  (`~/.domovoi/pairing_token`, 0600) and the pinned fingerprint — never the
+  household device token, so it can reach no file, chat, people or music
+  route of the dashboard. **Retire room** (or **Reset pairing**) in the
+  dashboard revokes it. A phone in room mode holds the same: its room's key
+  and the pin.
+* **No root helpers, ever.** The installer never installs
+  `domovoi-apply-payload`, `domovoi-sync-time`, `domovoi-reboot`, a sudoers
+  line or `wpa_cli`. The hello declares only what such a device can do, so
+  the server never sends — and the dashboard never offers — Wi-Fi, LED,
+  mic-gain, clock, display or root plugin-payload actions
+  ([Declared abilities](uml/satellite-protocol.md#declared-abilities-supports-and-board));
+  plugins that install something as root on a satellite stay Pi-only. A
+  code update to a laptop carries `"plugin_payloads": false` and the laptop
+  applies none in any case.
+* **Unprivileged services.** Desktop: a `systemd --user` unit of the
+  account the installer ran as, with linger (it starts at boot), so it runs
+  where that account's sound server is. Headless: a system unit as its own
+  nologin account `domovoi-sat`, which owns only `/var/lib/domovoi-sat`,
+  with the rest of the system read-only (`ProtectSystem=strict`,
+  `ProtectHome`). Both are `NoNewPrivileges`; a restart is the engine
+  exiting 75 for its unit to start it again, so no sudo is ever needed. The
+  installer itself uses sudo for apt, linger, the headless account and the
+  power settings the person agrees to, each asked first, and records what it
+  changed so `--uninstall` undoes exactly that.
+* **The person chooses what the server may do on its own**
+  (`[pc] permissions`):
+
+  | | "automatic" | "ask" |
+  |---|---|---|
+  | signed code updates, restarts, settings and wake-word pushes | run on arrival, like a Pi | held until the person allows each (tray, or `--approve`) |
+  | runs as | the satellite's account, no way to gain privileges | the same |
+
+  With "automatic", your server's key can run code as that account — the
+  same trust a Pi gives it, minus root. That is why the guide asks for a
+  dedicated account for the satellite. The server can never change the
+  permission, the pin or the device profile: a `set_config` carrying
+  `pc.*`, `satellite.server_fingerprint` or `device.profile` is dropped by
+  the device.
+
+### The local control socket
+
+The engine and its tray talk over `~/.domovoi/control.sock`, created 0600
+in a 0700 directory; a connecting process whose uid (`SO_PEERCRED`) is
+neither the engine's nor root is closed at once. Nothing on it reaches the
+network. Anything already running as that account can mute, unmute, set
+the volume, read the approval code and **allow a held update** — "ask me"
+protects the computer from the server, not from software its own account
+already runs. The approval code is never written to the journal: the
+terminal shows it only when it is a real terminal, and otherwise it is in
+the tray, `--approval-code`, and `~/.domovoi/approval_code` (0600).
+
+### The microphone indicator
+
+A laptop has no LED ring, so the tray's icon is the indicator: a **filled
+red microphone whenever audio is leaving for the server** (a command, an
+intercom call, a chat, a wake-word recording), an outline while it only
+listens locally for the wake word, struck through when muted. Mute closes
+the capture stream itself, so the desktop's own microphone indicator goes
+out too, and it is kept across restarts. A headless box has no visible
+indicator; the guide says so.
+
 ## Satellite pairing (WS auth)
 
 The satellite WebSocket (`/v1/stream/{room_id}`) authenticates each device

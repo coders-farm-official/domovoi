@@ -4,6 +4,44 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — A spare Linux laptop or mini PC can be a room
+
+Server, dashboard and satellite update; no migration. Pis are unchanged.
+
+* **Settings → Satellites → add a spare device** (admin): name the room and
+  get a **one-line install command** for a Debian or Ubuntu laptop or mini
+  PC, and a **QR code** of the same enrolment code for a phone's room mode.
+  The code is not a password: the device still waits for its approval code
+  in the dashboard, like a Pi. Guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md).
+* **The command is safe on a LAN without TLS**: it runs the download only
+  if its SHA-256 is the one the dashboard quoted, and the installer makes
+  the server prove its fingerprint before it writes anything; the device is
+  pinned to that server from then on and won't run unpinned. Make a fresh
+  command after updating Domovoi (an old one refuses the new download).
+  The server address in a code must be on the home network.
+* **The laptop asks you** whether the server may update and restart it on
+  its own ("automatic", like a Pi) or must wait for your OK in the tray
+  ("ask me"). Either way it gets **no root helpers**: no Wi-Fi re-joins, no
+  clock setting, and **plugins that install something as root on a
+  satellite stay Pi-only** for now. The dashboard doesn't offer those for
+  a laptop.
+* **A tray icon** shows when the microphone is live (filled red), mutes it,
+  shows the approval code and the waiting updates; plain GNOME gets the
+  same controls in a small window from the app menu. Headless boxes use
+  `python -m satellite.client --status|--approval-code|--mute|--unmute`.
+* **Battery in a room's health block** (a laptop's level, charging, on the
+  charger), with a nudge to set a charge limit when it sits full on the
+  charger. The installer offers one (and lid/sleep settings), each asked,
+  each defaulting to No.
+* The core serves the satellite code as one file too
+  (`/v1/satellite-code/bundle.tar.gz` and its `bundle.sha256`), open like
+  the rest of the satellite channel and held by the container guard's
+  freeze.
+* Satellite media prep now evaluates `satellite/requirements.txt`'s
+  platform markers for the board it prepares (the `onnxruntime==1.20.0`
+  pin and `spidev` are ARM-only lines now); a Pi card gets what it got.
+
 ## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
 
 New Android build only; nothing changes on the server.
