@@ -222,8 +222,9 @@ stays yours to do:
   three Piper voices (about 130 MB, downloaded on first use unless the
   provisioning fetched them).
 - **Topic news every morning** (`NEWS_AUTO_FETCH`).
-- **A custom wake word.** The trainer downloads about 8 GB of training
-  data the first time. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
+- **A custom wake word.** Turning training on (Settings → Wake Words)
+  downloads about 22 GB once: the trainer's image and its training data.
+  Under No it can't be turned on. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
 
 ---
 
@@ -276,8 +277,9 @@ needs something it can only download is usually the day the line is down.
       in `domovoi/.env` and one restart while online downloads them.
       Voices you upload on Settings → Voices are already on the server.
 - [ ] **The fast lane**, if you use it: `python -m domovoi.fast_lane fetch`.
-- [ ] **A custom wake word**, if you want one: train it now (the trainer
-      downloads its training data the first time).
+- [ ] **A custom wake word**, if you want one: turn training on in
+      Settings → Wake Words and train it now (about 22 GB, once). Under No
+      training is refused, even with the data already downloaded.
 - [ ] **Install the plugins you want** (the Plugins page). Installing one
       from GitHub, and the Python packages it needs, takes the internet.
 - [ ] **Fill the satellite media cache**

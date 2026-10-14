@@ -4,6 +4,93 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — Wake-word training: turn it on in Settings, train on the GPU
+
+Server and dashboard update; no migration. A Linux server or the Windows
+install with an NVIDIA GPU also gets the NVIDIA Container Toolkit at its
+next update. What changes:
+
+* **Training is switched on from the dashboard.** Settings → Wake Words has
+  a **Wake-word training** card (admin). Off, it lists what training needs
+  against this server: about 32 GB of disk the first time, a download of
+  about 22 GB, once, a server with 24 GB of memory, and the time per
+  word (about 20 minutes on an NVIDIA GPU, about 75 on 8 CPU cores). It
+  refuses, saying why, when the internet answer is **No**, the disk or
+  memory is short, or Docker isn't running. **Turn on wake-word training**
+  builds the trainer image, checks the GPU, downloads the training data and
+  switches training on, in the background, with progress and errors that
+  stay; no shell, no restart. Before, training had to be set up by hand
+  (`WAKE_WORD_TRAINER_ENABLED`, `WAKE_WORD_TRAIN_COMMAND`), which the
+  Windows install couldn't do at all. **Train** is greyed until training is
+  on.
+* **"Hey Domovoi" trains.** A phrase with a word openWakeWord's dictionary
+  lacks ("domovoi", "domo") failed every run: the model upstream downloads
+  for such words is no longer served. The core now sends the phrase's
+  pronunciations from Domovoi's own phonemizer, the "say it like" list
+  first (Domovoi = DOH-moe-voy); espeak-ng inside the trainer image covers
+  only a word it sent nothing for. Training again on a new set of clips now
+  uses them (it reused the first run's features), and under WSL a training
+  lands on the card it picked (it took the first card whatever it chose).
+* **A training never outlives its run.** A time limit, a cancel or a core
+  shutdown left the training container running, and the next try started a
+  second one. The container is now named and labelled, a leftover is
+  removed before each run, the wrapper removes its container at its
+  deadline and when told to stop, and the core sweeps once after each
+  start. A word cut off by a restart stays queued and trains again
+  afterwards. Each word's whole output is kept in
+  `~/.domovoi/wake_trainer/logs/<slug>.log`.
+* **Voice keeps priority while a word trains.** The container is capped
+  (all but a quarter of the CPUs, a low CPU weight, 12 GB of memory with no
+  swap) and lowers its own priority; on a GPU server it takes the least
+  busy card, away from the chat model. A CPU-only server asks before
+  training is turned on and before each **Train**, with the estimate and
+  "voice answers more slowly".
+* **New settings** in Settings → Configuration → Wake words (advanced):
+  training on or off, the **Training time limit** (a fixed hour before; now
+  sized to the server unless set: an hour on a GPU, at least two on the
+  CPU), synthetic clips, validation clips, steps, the share of recorded
+  clips, CPUs and memory. Every `WAKE_TRAINER_*` line in `domovoi/.env`
+  now reaches the trainer; the systemd drop-in the docs used to ask for is
+  no longer needed. The command, the image and the docker binary stay out
+  of the dashboard on purpose: they name what runs as the service user.
+* **The trainer image is pinned:** the base image by digest, openWakeWord
+  and piper-sample-generator by commit, every Python package by version
+  (`scripts/wake_word/docker/constraints.txt`), the synthetic voice and the
+  feature models by SHA-256.
+* **The NVIDIA Container Toolkit** on a Linux server or the Windows install,
+  only where an NVIDIA GPU is visible (`scripts/linux/gpu-runtime.sh`):
+  NVIDIA's apt repository with its key checked against a pinned
+  fingerprint, the toolkit at 1.20.1-1 (not held), the `nvidia` runtime in
+  Docker's configuration and a Docker restart; never a driver. A fresh
+  install runs it as `provision.sh`'s new `gpu-runtime` step, an existing
+  one at its next update or **Restart Domovoi**, while core and web are
+  stopped (Postgres and the rooms' players restart once). Under **No** the
+  update downloads nothing; `DOMOVOI_MANAGE_GPU_RUNTIME=0` in
+  `/etc/default/domovoi-update` leaves it alone. The update unit also
+  rebuilds the trainer image after an update that changes it, only where a
+  household built it (`DOMOVOI_MANAGE_WAKE_TRAINER=0` leaves it alone).
+  docs/LINUX_HOST.md, "Wake-word training".
+* **Licence:** a model trained at home is for that household. It can't be
+  shipped as a Domovoi default or shared, because the training data is
+  non-commercial (`scripts/wake_word/README.md`, section 5).
+* API: `GET /v1/admin/wake/trainer` (admin read) and
+  `POST /v1/admin/wake/trainer/enable` (security tier: Bearer only, 501
+  before setup, 409 with the reason it can't start), and the dashboard's
+  `GET /api/wake-words/trainer` and `POST /api/wake-words/trainer/enable`
+  (docs/API_REFERENCE.md).
+
+**What to do:** on a server with an NVIDIA GPU, update first (**Pull the
+latest**, then **Restart to apply changes**), so Docker can reach the card.
+Then, as the admin, Settings → Wake Words → **Turn on wake-word training**,
+confirm, and wait: about 13 minutes on a fast line for the build and the
+data download (you can leave the page). Create a wake word, record at least 15 clips on a
+satellite (hundreds for an XVF3800), **Train** (about 20 minutes on the
+GPU), and push it to a room. On the Windows install the card's disk check
+sees the distro's own disk, not the system drive: make sure the system
+drive has about 32 GB free (docs/WINDOWS_HOST.md, "Training wake words").
+A trainer set up by hand keeps working: its time limit is now two hours
+unless you set one.
+
 ## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
 
 New Android build only; nothing changes on the server.

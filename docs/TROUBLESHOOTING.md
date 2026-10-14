@@ -5,6 +5,7 @@ Symptom → cause → fix, grouped by area. Start with [Which logs to check](#wh
 - [Satellite won't connect](#satellite-wont-connect)
 - [No TTS audio / Domovoi is silent](#no-tts-audio--domovoi-is-silent)
 - [Wake word not triggering](#wake-word-not-triggering)
+- [Wake-word training](#wake-word-training)
 - [Music won't play](#music-wont-play)
 - [Acquisitions / downloads stuck](#acquisitions--downloads-stuck)
 - [Dashboard can't reach the core](#dashboard-cant-reach-the-core)
@@ -89,11 +90,38 @@ The TTS engine chain is **piper → system** (every voice is local; the Microsof
 | Triggers on random speech/TV | Threshold too low | Raise the threshold; if false triggers happen during playback, check that `[barge_in] require_wake_word` is still `true` (the default) for that room |
 | Custom wake word never fires after "push to room" | Model/sidecar mismatch on the Pi | The push writes the slug to `~/.domovoi/wake` and the model must exist as `~/.domovoi/wake_models/<slug>.onnx` (synced from the server's `/v1/wake-models` channel). Check the satellite log for sync errors; delete the `~/.domovoi/wake` sidecar to revert to the configured word |
 | Custom word fires poorly vs. the built-in | Too few / low-quality training clips | Server refuses training below 15 clips, but good models want far more — record hundreds on the actual satellite mic (especially XVF3800), then retrain; use the clip-quality scores shown while recording |
-| Word sits in "training" forever | Trainer disabled or unconfigured | Training is Linux-only, so on the Windows server it shells out: set `WAKE_WORD_TRAINER_ENABLED=true` **and** `WAKE_WORD_TRAIN_COMMAND` to your WSL2/Docker pipeline (see `scripts/wake_word/README.md` and `DOCKER_TRAINER.md`). An empty command marks queued words failed with a runbook pointer |
+| Word sits in "training" forever | Training is off: nothing trains while it is, and a word queued then waits | Settings → Wake Words → **Turn on wake-word training** (an admin, once; see [Wake-word training](#wake-word-training) below). With training on and no command set (`WAKE_WORD_TRAIN_COMMAND` empty), a queued word fails with a pointer to that card instead |
 | The first words of a command are missing | Spoken over the wake acknowledgement, which the satellite does not listen to, by design | Wait for the greeting or chime to finish. If that wait is too long for the room, set **Wake acknowledgement** (dashboard → satellite → Settings, `[wake] ack_mode`) to "Short chime, then listen" (about 0.5 s) or "Light only, listen right away" |
 | A long pause after the wake word before it listens | The spoken greeting plays to its end first — about 1.2 s with a Piper voice | The satellite log's `wake ack:` line gives the exact wait. Use the chime or light-only acknowledgement for the room |
 | No greeting or chime after the wake word, only the light | `[wake] ack_mode = "none"` (or, with ack_mode unset, `[greeting] enabled = false`); or music was playing (the spoken greeting is skipped then); or `mpg123`/`aplay` is missing, or can't open the output device | Set the acknowledgement in the satellite's Settings; the log says `wake ack: greeting skipped (music was playing)`, `could not run …`, or `… exited with status N …` — for the last, check `[music] alsa_device` |
 | (Developers) model scores never move when feeding audio manually | openWakeWord chunk-size quirk | `predict()` needs chunks in multiples of 80 ms (1280 samples @ 16 kHz); sub-minimum chunks make the model silently return nothing. The client accumulates 30 ms mic frames into 1280-sample slices — keep that buffering if you touch the audio loop |
+
+## Wake-word training
+
+Training runs on the server, in a Docker container, once an admin turns it
+on in Settings → Wake Words ([`scripts/wake_word/README.md`](../scripts/wake_word/README.md)).
+A word's row shows the end of the trainer's output when it fails; the whole
+output of its last run is in `~/.domovoi/wake_trainer/logs/<slug>.log` on
+the server. A failed word trains again on the clips it has: press
+**Train** on it again (or record a new take first).
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| "Training can't be turned on here: Internet access is turned off for this server" | The internet answer is **No**: turning training on downloads the trainer and its data, about 22 GB, once | Answer **Sometimes** or **Yes** in Settings → Internet while you turn training on and train; the downloaded data stays. Every training is refused under **No** |
+| "... training needs a 24 GB server" | The server has less memory than the standard model tier's line (`MemTotal` under 22,528 MiB); training uses about 10 GB beside the voice pipeline | A server with 24 GB or more. On the Windows install that means a PC with about 32 GB: the distro gets the PC's memory minus 8 GB ([WINDOWS_HOST.md](WINDOWS_HOST.md#training-wake-words)) |
+| "Only N GB of disk is free; training needs about M GB plus 5 GB to spare" | Docker's data folder (`/var/lib/docker`, or the home drive under Docker Desktop) lacks the room: about 32 GB the first time | Free space there, then reload the page. On the Windows install the check sees the distro's own disk, not the system drive: keep the system drive's free space in mind too |
+| "Docker is not running" / "Docker is not installed on this server" | Training runs in a Docker container | Start Docker (`sudo systemctl start docker`; Docker Desktop on a development PC). The provisioning installs Docker Engine on a Linux server and the Windows install |
+| The card says the server has an NVIDIA card but Docker can't use it yet; it offers only the CPU | Docker Engine has no NVIDIA Container Toolkit yet (an install from before 2026-10-13) | Update from the dashboard (**Pull the latest**, then **Restart to apply changes**): the update unit installs it ([LINUX_HOST.md](LINUX_HOST.md#wake-word-training)). Then turn training on. Already on: **Check the GPU and trainer again** |
+| The setup stops at "Check the GPU": "Docker can't reach the GPU (...)" with **Use the CPU** | `docker run --gpus all` failed: the toolkit is missing or Docker wasn't restarted after it, or (bare metal) the NVIDIA driver isn't working | Update, or **Restart Domovoi** (which reruns `scripts/linux/gpu-runtime.sh`), then **Try again**. Settings → Version's last update shows a `gpu-runtime` warning with the reason when the helper failed. **Use the CPU** trains without it: about 75 minutes a word on 8 cores, voice slower meanwhile |
+| "Interrupted: Domovoi restarted while training was being set up" | The core stopped (a restart, an update) during the setup job | **Try again**: it reuses what was done (the build cache, the data already downloaded) |
+| The setup fails at "Build the trainer" or "Download the training data" | The download or build failed (a network drop, a full disk); the card shows what it printed last | **Try again**: the build cache and a partial data download are reused |
+| Every training fails with "image ... not found locally" | `wake_word_trainer_enabled` was switched on in Settings → Configuration without the card's setup, or the image was removed | Settings → Wake Words → **Turn on wake-word training** (or, when on, **Check the GPU and trainer again**), which builds it |
+| "train command timed out after N s and was stopped", or "exited 124" with "the training time limit ... ran out" | The word took longer than **Training time limit** (Settings → Configuration → Wake words): sized to the server by default (an hour on a GPU, at least two on the CPU), too short for raised sample counts | Raise the time limit, or lower **Synthetic clips per wake word**. The container was removed; the synthetic clips made so far are kept and reused when the word trains again |
+| "exited 137", or the log shows a stage that "exited -9" | The kernel stopped the training for running out of memory inside its cap (**Memory for training**, 12 GB) | Raise **Memory for training**, or lower the sample counts |
+| A word was training when the server restarted | Working as intended | The training container is removed and the word stays queued; it trains again once the core is back |
+| The log says `backend = CPU` on a box with an NVIDIA GPU | The trainer's own GPU check failed at the start of that run | As for "Docker can't reach the GPU" above; [DOCKER_TRAINER.md](../scripts/wake_word/DOCKER_TRAINER.md#troubleshooting) has the one-line check |
+| Voice is slow while a word trains | A CPU-only server: training takes most of the processor for about 75 minutes a word | Expected, and the dashboard said so before the Train. Lower **CPUs for training** to leave voice more, at the cost of a longer training |
+| `docker ps` shows a `domovoi-wake-train` container while no word trains | Left over from a run the core could not stop (killed hard) | `python scripts/wake_word/train_wake_word.py --stop` from the checkout as the service user, or restart the core, which removes it at its first check |
 
 ## Domovoi answers itself / a turn nobody spoke
 

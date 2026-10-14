@@ -480,6 +480,8 @@ dashboard reads the incidents itself and proxies these.
 | `POST /v1/admin/wake/record/stop` | **Admin (Bearer)** | `{room_id}` | Stop an in-progress recording; the Pi resumes its wake loop. |
 | `POST /v1/admin/wake/push` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Push a trained model: the Pi writes the slug to its wake sidecar, syncs from `/v1/wake-models`, and restarts. `409` when not trained yet, or for a device that declared `supports` without `wake_models`. |
 | `POST /v1/admin/wake/score` | **Admin (Bearer)** | `{wake_word_id}` | Offline-score recorded clips against the trained model (per-clip max score + silence baseline). `409` no model, `501` when openWakeWord isn't installed. |
+| `GET /v1/admin/wake/trainer` | **Admin read (Bearer or cookie)** | — | Settings → Wake Words' training card (`domovoi/wake_trainer_setup.py`): `{enabled, job, gpu_name, training_active, timeout_sec, timeout_auto, requirements}`. `enabled`: training is on (the setting, and a command). `job` is the "Turn on wake-word training" job, kept in `~/.domovoi/wake_trainer/setup.json`: `{state: idle\|running\|failed\|done, stage: image\|gpu\|data\|settings\|null, percent, message, error, log_tail: [str], needs_cpu_confirm, started_at, finished_at}`; a job the core stopped in the middle of reads `failed` with "Interrupted: …". `gpu_name`: the card the job's GPU check found. `training_active`: a word is training now. `timeout_sec`: the time limit a training gets now, `timeout_auto` when that is sized to the server (`wake_word_train_timeout_sec` = 0). `requirements` (cached for about 10 s, and for as long as a setup job or a training runs): `{docker: {ok, version, os, runtimes, error}, gpus: [{name, mem_used_mb, mem_total_mb}], gpu, estimate, disk: {free_gb, need_gb, headroom_gb, path, total_first_gb}, memory: {total_gb, need_gb}, download_gb, image: {name, present, current}, data_ready, refusals: [str], notes: [str]}`, where `estimate` is `{device: "gpu", minutes_per_word, first_minutes, gpu_names}` or `{device: "cpu", minutes_per_word, first_minutes, cpus, physical_cores, measured}`, and a non-empty `refusals` is what the enable below would answer `409` with. |
+| `POST /v1/admin/wake/trainer/enable` | **Admin, security tier** | `{"cpu_ok": bool}` (default `false`) | Turn wake-word training on: one background job, as the service user, builds the trainer image (labelled with the git tree id of `scripts/wake_word/docker`), checks the GPU with `--gpus all` when the host has an NVIDIA card, downloads the training data (`--warm`), then writes `WAKE_WORD_TRAINER_ENABLED=true` and `WAKE_WORD_TRAIN_COMMAND` to `domovoi/.env`, applies them and starts the trainer worker. Returns the status above at once; poll the `GET`. `cpu_ok: true` is the admin's yes to training on the CPU. `409` with the reason in `detail` when it can't start: a refusal (internet turned off, too little disk or memory, no Docker), a server that would train on the CPU without `cpu_ok`, a job already running, or a word training right now. `501` before setup. A GPU Docker can't reach is not a `409`: the job stops at `stage: "gpu"` with `needs_cpu_confirm: true`, and the same call with `cpu_ok: true` goes on without it. |
 
 ### 2.8 Admin: music and library
 
@@ -1083,22 +1085,27 @@ the `GET /api/voice` body, then asks the core to reload the list
 
 Reads are **Open**, except a clip's audio — a recording of somebody in the
 house saying the phrase — which is **Device read** (paired devices only; the
-dashboard's `<audio>` carries the token as `?device_token=`). Every mutation
+dashboard's `<audio>` carries the token as `?device_token=`), and the
+training card's status, an **Admin read**. Every mutation
 (`POST` / `PATCH` / `DELETE`, including
 clip selection and deletion and the record / score / push proxies) is
 **Admin (Bearer)** via `require_admin_mutation` — this surface decides what
-the house listens for. Recording, scoring, and pushing proxy to the core (which owns
-the satellite sessions, openWakeWord, and the model files); training is
-picked up by the core's background trainer. The default wake word is
-`hey_jarvis`; this surface is how you train a custom one (e.g. "Hey Domovoi").
+the house listens for — except turning training on, which is the **Admin,
+security tier**. Recording, scoring, pushing and the training switch proxy to
+the core (which owns the satellite sessions, openWakeWord, the model files
+and the trainer); training is picked up by the core's background trainer.
+The default wake word is `hey_jarvis`; this surface is how you train a
+custom one (e.g. "Hey Domovoi").
 
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/wake-words` | — | Registry: slug, status (`recording`/`training`/`ready`/`failed`), clip counts, threshold. |
-| `POST /api/wake-words` | `WakeWordCreate` | Create a wake word (starts in `recording`). `201`. `phrase` must match `^[A-Za-z0-9 ,.'-]+$` (letters, digits, spaces and spoken punctuation, ≤ 120 chars) — it becomes an argument to the operator's `WAKE_WORD_TRAIN_COMMAND`, so `422` for anything else. |
+| `POST /api/wake-words` | `WakeWordCreate` | Create a wake word (starts in `recording`). `201`. `phrase` must match `^[A-Za-z0-9 ,.'-]+$` (letters, digits, spaces and spoken punctuation, ≤ 120 chars) — it becomes an argument to the training command (`WAKE_WORD_TRAIN_COMMAND`), so `422` for anything else. |
 | `POST /api/wake-words/{id}/record/start` | `{room_id}` | Proxy → core: satellite starts capturing positive clips. |
 | `POST /api/wake-words/{id}/record/stop` | `{room_id}` | Proxy → core: stop capturing. |
-| `POST /api/wake-words/{id}/train` | — | Queue training (the background trainer picks it up). |
+| `POST /api/wake-words/{id}/train` | — | Queue training (the background trainer picks it up). Needs the word in `recording`, or `failed` (it trains again on the clips it has), with at least `wake_word_min_clips` (15) selected clips, else `409`. The route doesn't check that training is on: the dashboard greys **Train** until it is, and a word queued while it is off waits in `training`. |
+| `GET /api/wake-words/trainer` | **Admin read** | Proxy → `GET /v1/admin/wake/trainer` (§2.7) with the caller's credentials: whether training is on, the setup job, and what training needs against this server. |
+| `POST /api/wake-words/trainer/enable` | **Admin, security tier** · `{cpu_ok}` | Proxy → `POST /v1/admin/wake/trainer/enable` (§2.7): `200` with the status (the job runs in the background), `409` with the reason it can't start, `501` before setup. |
 | `GET /api/wake-words/{id}/clips` | — | Recorded clips with quality analysis + selection state. |
 | `GET /api/wake-words/{id}/clips/{name}/audio` | **Device read** · `?variant=raw\|trimmed` | Listen to one clip. |
 | `PATCH /api/wake-words/{id}/clips/{name}` | `{selected}` | Include/exclude one clip from training. |
