@@ -17,14 +17,14 @@ in it is here, where it is tested:
   else from openWakeWord's own release.
 * ``wait`` — watch the new engine until it is approved, printing the
   approval code only to a terminal (never to a log, never into a pipe).
-* ``purge`` — the uninstaller's ``--purge`` on a desktop: remove the
-  satellite's own files from ``~/.domovoi`` and nothing a Domovoi server
-  keeps there. Run as the satellite's account, never as root.
 
 What the installer changed on the system (linger, units, power settings)
 is recorded by the shell script itself, in a root-owned file root alone
 reads (``/var/lib/domovoi-satellite/install.json``); nothing here writes
-or reads it (security review of wf/sat-pc, B3).
+or reads it (security review of wf/sat-pc, B3). Nothing here runs at
+uninstall either: ``--purge`` uses root's copy of
+``satellite/scripts/purge-satellite-files.py`` with the system's
+``python3 -I``, never this code, which the satellite's account can change.
 
 Stdlib only, plus the satellite package's own stdlib modules: it runs with
 the venv's python, but nothing here needs a wheel.
@@ -36,7 +36,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import sys
 import time
 import urllib.request
@@ -59,26 +58,6 @@ WAKE_BASE_CHANNEL = "satellite-wake-base"
 #: Approval state a new core or room must not inherit.
 _APPROVAL_FILES = ("approved", "approval_code", "pending-server.json", "pairing_token",
                    "server-fingerprint.json")
-#: What a Domovoi server keeps in ~/.domovoi (pc_engine.CORE_MARKERS; a
-#: test holds them equal). ``purge`` leaves shared names alone when one is there.
-CORE_MARKERS = ("server-identity.json", "device-token.txt", "setup-code.txt")
-#: Every file a satellite keeps in ~/.domovoi: ``purge`` removes these, the
-#: config's dated backups and the ``previous-enrolment-*`` folders, the
-#: clips the sounds record names, and (when no server shares the directory)
-#: the sounds and wake_models folders. Nothing else.
-SATELLITE_FILES = (
-    "config.toml", "approved", "approval_code", "pairing_token", "pending-server.json",
-    "server-fingerprint.json", "server.url", "synced_sha", "synced_manifest.json",
-    "upgrade_pending.json", "satellite_backup.tar", "log-spool.txt", "last-health.json",
-    "self-restarts.json", "muted", "voice", "wake", "wake_threshold", "manifest-serials.json",
-    "net-settings.logged", "plugin_payload_state.json", "plugin_payload_manifest.json",
-    "pending_payload.json", "provisioning_state.json", "image_sat_type", "image_device_profile",
-    "ap.json", "setup_gadget.img", "control.sock", "install-pc.json",
-)
-SATELLITE_DIRS = ("plugin_payloads",)
-#: satellite/sound_sync.py RECORD_NAME (sound_sync needs requests; this
-#: module stays stdlib-only, so a test holds the two equal).
-SOUNDS_RECORD = ".satellite-synced.json"
 
 
 # ─── config ───────────────────────────────────────────────────────────────
@@ -226,84 +205,6 @@ def fetch_models(dest: Path, *, core: str | None, fp: str | None, opener=None,
     return got
 
 
-# ─── purge ────────────────────────────────────────────────────────────────
-
-def _inside(base: Path, rel: str) -> Path | None:
-    """``base/rel`` when no part of it below ``base`` is a link, else None."""
-    if not rel or rel.startswith("/") or "\\" in rel or any(part in ("", ".", "..") for part in rel.split("/")):
-        return None
-    p = base
-    for part in rel.split("/"):
-        p = p / part
-        if p.is_symlink() and p != base / rel:
-            return None
-    return p
-
-
-def _remove(p: Path) -> bool:
-    try:
-        if p.is_symlink() or p.is_file() or p.is_socket():
-            p.unlink()
-            return True
-        if p.is_dir():
-            shutil.rmtree(p)
-            return True
-    except OSError:
-        pass
-    return False
-
-
-def purge(config_dir: Path) -> list[str]:
-    """Remove the satellite's own files from ``config_dir`` (see
-    SATELLITE_FILES) and return what went. A link is removed, never
-    followed. With a Domovoi server's files in the same directory, the
-    folders both use (``sounds``, ``wake_models``) lose only the clips the
-    satellite's sounds record names."""
-    config_dir = Path(config_dir)
-    removed: list[str] = []
-    if config_dir.is_symlink() or not config_dir.is_dir():
-        return removed
-    server = any((config_dir / m).exists() for m in CORE_MARKERS)
-    names = list(SATELLITE_FILES) + list(SATELLITE_DIRS)
-    names += sorted(p.name for p in config_dir.glob("config.toml.bak-*"))
-    names += sorted(p.name for p in config_dir.glob("previous-enrolment-*"))
-    for name in names:
-        if _remove(config_dir / name):
-            removed.append(name)
-    sounds = config_dir / "sounds"
-    if sounds.is_dir() and not sounds.is_symlink():
-        try:
-            recorded = json.loads((sounds / SOUNDS_RECORD).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            recorded = None
-        if isinstance(recorded, list):
-            for rel in recorded:
-                p = _inside(sounds, rel) if isinstance(rel, str) else None
-                if p is not None and (p.is_file() or p.is_symlink()) and _remove(p):
-                    removed.append(f"sounds/{rel}")
-            _remove(sounds / SOUNDS_RECORD)
-            # Folders left empty, deepest first; a linked folder is not entered.
-            for dirpath, dirnames, _files in os.walk(sounds, topdown=False):
-                for name in dirnames:
-                    d = os.path.join(dirpath, name)
-                    if not os.path.islink(d):
-                        try:
-                            os.rmdir(d)
-                        except OSError:
-                            pass
-            try:
-                sounds.rmdir()
-                removed.append("sounds")
-            except OSError:
-                pass
-        elif not server and _remove(sounds):
-            removed.append("sounds")
-    wake = config_dir / "wake_models"
-    if not server and not wake.is_symlink() and wake.is_dir() and _remove(wake):
-        removed.append("wake_models")
-    return removed
-
-
 # ─── command line ─────────────────────────────────────────────────────────
 
 def _main(argv: list[str]) -> int:
@@ -321,8 +222,6 @@ def _main(argv: list[str]) -> int:
     w.add_argument("--timeout", type=float, default=900.0)
     w.add_argument("--show-code", action="store_true",
                    help="print the approval code (the script passes it only when its own output is a terminal)")
-    p = sub.add_parser("purge")
-    p.add_argument("--config-dir", type=Path, required=True)
     args = parser.parse_args(argv)
 
     if args.cmd == "config":
@@ -345,8 +244,7 @@ def _main(argv: list[str]) -> int:
 
         final = pc_engine.wait_for_approval(args.socket, timeout=args.timeout, show_code=args.show_code)
         return 0 if final == "connected" else 4
-    print(json.dumps(purge(args.config_dir)))
-    return 0
+    return 64
 
 
 if __name__ == "__main__":

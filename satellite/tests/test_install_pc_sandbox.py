@@ -79,8 +79,12 @@ def _clean() -> None:
     for p in (UNINSTALLER.parent, RECORD.parent, SAT_HOME):
         shutil.rmtree(p, ignore_errors=True)
     for p in (DROPIN, Path("/etc/root-canary"), Path("/etc/sudoers.d/90-keep-me"), Path("/tmp/ran-as-root"),
-              Path("/tmp/systemctl.log"), Path("/usr/local/sbin/systemctl"), Path("/etc/pip.conf")):
+              Path("/tmp/systemctl.log"), Path("/usr/local/sbin/systemctl"), Path("/etc/pip.conf"),
+              Path("/etc/sudoers.d/kid"), *[Path("/tmp") / n for n in TICKET_PROBES]):
         p.unlink(missing_ok=True)
+    # sudo's tickets, every account's: a test's terminal never lends one to the next.
+    for ts in (Path("/run/sudo/ts"), Path("/var/run/sudo/ts"), Path("/var/lib/sudo/ts")):
+        shutil.rmtree(ts, ignore_errors=True)
 
 
 @pytest.fixture
@@ -145,6 +149,9 @@ def core():
     finally:
         server.shutdown()
 
+
+#: Files the poisoned account code and the checks write: who they ran as.
+TICKET_PROBES = ("account-code-ran-as", "pth-ran-as", "after-install", "after-uninstall", "ticket-control")
 
 ENV = {"DOMOVOI_TEST_SYSTEMD_RUNTIME": "/nonexistent", "PATH": "/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"}
 FLAGS = "--yes --permissions automatic --skip-apt --power no --wait 0"
@@ -255,3 +262,132 @@ def test_S2_an_account_that_runs_a_domovoi_server_is_refused(sandbox, core):
     assert r.returncode == 2 and "runs a Domovoi server" in r.stderr, (r.stdout, r.stderr)
     assert not UNINSTALLER.exists() and not Path("/home/kid/.local/share/domovoi-satellite").exists()
     assert Path("/home/kid/.domovoi/server-identity.json").exists()
+
+
+# ─── round 2: a desktop's sudo ticket never meets the account's code ──────
+
+needs_sudo = pytest.mark.skipif(shutil.which("sudo") is None or shutil.which("script") is None,
+                                reason="needs sudo and script in the image (Dockerfile.pytest)")
+KID_HOME = Path("/home/kid")
+KID_PREFIX = KID_HOME / ".local/share/domovoi-satellite"
+
+
+def _kid_with_a_sudo_password() -> None:
+    """The guide's desktop: the account types its password for sudo."""
+    sh("useradd -m -s /bin/bash kid && echo 'kid:pw' | chpasswd")
+    Path("/etc/sudoers.d").mkdir(exist_ok=True)
+    rule = Path("/etc/sudoers.d/kid")
+    rule.write_text("kid ALL=(ALL) ALL\n", encoding="utf-8")
+    rule.chmod(0o440)
+
+
+def _as_kid_on_a_terminal(cmd: str, *, timeout: float = 240) -> subprocess.CompletedProcess:
+    """``cmd`` as kid on a terminal of its own (script(1)), typing kid's
+    password each time sudo asks for it (and only then, like a person): a
+    sudo ticket for that terminal is live from the first answer on, as on
+    a real desktop."""
+    import select
+    import time as _time
+
+    inner = "cd /home/kid && " + cmd
+    proc = subprocess.Popen(
+        ["runuser", "-u", "kid", "--", "script", "-qec", inner, "/dev/null"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd="/",
+        env={**os.environ, **ENV, "HOME": str(KID_HOME)},
+    )
+    end = _time.monotonic() + timeout
+    out = b""
+    answered = 0
+    while _time.monotonic() < end:
+        ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+        if ready:
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk:
+                break
+            out += chunk
+        asked = out.count(b"password for kid")
+        if asked > answered:
+            _time.sleep(0.3)
+            proc.stdin.write(b"pw\n")
+            proc.stdin.flush()
+            answered = asked
+    if proc.poll() is None and _time.monotonic() >= end:
+        proc.kill()
+    rc = proc.wait(timeout=30)
+    text = out.decode("utf-8", "replace").replace("\r", "")
+    return subprocess.CompletedProcess(proc.args, rc, text + f"\n[sudo asked {answered} time(s)]", "")
+
+
+def _probe(name: str) -> str:
+    f = Path("/tmp") / name
+    return f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+
+
+@needs_sudo
+def test_round2_the_sandbox_s_sudo_ticket_is_real(sandbox):
+    """The control: in this sandbox, once sudo has had the password, the
+    same terminal gets root without it — what the tests below rule out."""
+    _kid_with_a_sudo_password()
+    _as_kid_on_a_terminal("sudo true; sudo -n id > /tmp/ticket-control 2>&1", timeout=60)
+    assert "uid=0" in _probe("ticket-control")
+
+
+POISON = ('import subprocess as _s; _s.run("sudo -n id > /tmp/account-code-ran-as 2>&1", shell=True)')
+PTH = 'import subprocess; subprocess.run("sudo -n id > /tmp/pth-ran-as 2>&1", shell=True)'
+
+
+def _kid_s_poisoned_install(sandbox: Path) -> None:
+    """A desktop install whose account has had its way with everything it
+    owns: its code tree and its venv (a .pth runs at Python's start)."""
+    KID_PREFIX.mkdir(parents=True)
+    shutil.copytree(sandbox / "satellite", KID_PREFIX / "satellite")
+    for py in ("pc_install.py", "client.py", "__init__.py"):
+        f = KID_PREFIX / "satellite" / py
+        f.write_text(POISON + "\n" + f.read_text(encoding="utf-8").replace(
+            "from __future__ import annotations\n", ""), encoding="utf-8")
+    sh(f"python3 -m venv {KID_PREFIX}/venv")
+    for site in (KID_PREFIX / "venv" / "lib").glob("python3*/site-packages"):
+        (site / "zz-evil.pth").write_text(PTH + "\n", encoding="utf-8")
+    (KID_HOME / ".domovoi").mkdir(exist_ok=True)
+    (KID_HOME / ".domovoi" / "config.toml").write_text("x\n", encoding="utf-8")
+    sh(f"chown -R kid:kid {KID_HOME}")
+
+
+@needs_sudo
+def test_round2_a_desktop_uninstall_purge_runs_none_of_the_account_s_code(sandbox):
+    """The reviewer's proof: root's copy used sudo (linger), then ran the
+    account's own pc_install.py for --purge in the same terminal, and that
+    code got uid=0 from the cached ticket. Now nothing of the account's
+    runs at all, and sudo forgets the password at the end."""
+    _kid_with_a_sudo_password()
+    _kid_s_poisoned_install(sandbox)
+    script = sandbox / "satellite" / "scripts"
+    sh(f"install -d -o root -g root -m 0755 {UNINSTALLER.parent} {RECORD.parent} "
+       f"&& install -m 0755 {script}/install-pc.sh {UNINSTALLER} "
+       f"&& install -m 0644 {script}/purge-satellite-files.py {UNINSTALLER.parent}/purge-satellite-files.py")
+    RECORD.write_text(json.dumps({"mode": "desktop", "account": "kid", "linger_enabled_by_installer": True,
+                                  "logind_dropin": True}), encoding="utf-8")
+    r = _as_kid_on_a_terminal(f"bash {UNINSTALLER} --uninstall --purge; sudo -n id > /tmp/after-uninstall 2>&1")
+    assert "Done." in r.stdout, r.stdout[-1500:]
+    assert _probe("account-code-ran-as") == "" and _probe("pth-ran-as") == "", "the account's code ran"
+    assert "uid=0" not in _probe("after-uninstall"), "the terminal kept a sudo ticket"
+    assert not (KID_HOME / ".domovoi" / "config.toml").exists() and not KID_PREFIX.exists()
+    assert not RECORD.exists() and not UNINSTALLER.parent.exists()
+
+
+@needs_sudo
+def test_round2_a_desktop_reinstall_never_runs_the_old_venv_and_drops_the_ticket(sandbox, core):
+    """Re-installing over a poisoned install: every sudo step first, then
+    `sudo -k`, then a fresh venv (the old one, .pth and all, is removed
+    without being run). pip has no index here, so the run stops there."""
+    _kid_with_a_sudo_password()
+    _kid_s_poisoned_install(sandbox)
+    r = _as_kid_on_a_terminal(
+        f"bash {sandbox}/satellite/scripts/install-pc.sh {FLAGS} --mode desktop '{core}'; "
+        "sudo -n id > /tmp/after-install 2>&1")
+    assert f"proved it is {FP}" in r.stdout and "Setting up Python" in r.stdout, r.stdout[-2000:]
+    assert _probe("pth-ran-as") == "", "the old venv ran"
+    assert "uid=0" not in _probe("account-code-ran-as"), _probe("account-code-ran-as")
+    assert "uid=0" not in _probe("after-install"), "the terminal kept a sudo ticket"
+    assert not (KID_PREFIX / "venv" / "lib").exists() or not list(
+        (KID_PREFIX / "venv" / "lib").glob("python3*/site-packages/zz-evil.pth"))
