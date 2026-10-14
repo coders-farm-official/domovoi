@@ -2120,6 +2120,187 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
   );
 };
 
+/* ---- Add a spare device (S1, 2026-10-13) ------------------------------
+ * A Linux laptop, a mini PC or a phone becomes a room. The admin names the
+ * room; the server answers with one enrolment payload
+ * (`domovoi-room:1?core=…&fp=…&room=…`, docs/uml/satellite-protocol.md)
+ * shown two ways: inside a one-line install command for Linux, and as a
+ * QR code for a phone's room mode. The payload carries no secret: the new
+ * device still shows up above, waiting for its approval code. Admin only
+ * (the route is too). The QR library loads only when a code is drawn. */
+const _spareQrScript = { p: null };
+const spareLoadQr = () => {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  if (!_spareQrScript.p) {
+    _spareQrScript.p = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = '/vendor/qrcode/qrcode.js';
+      el.onload = () => (window.qrcode ? resolve(window.qrcode) : reject(new Error('no qrcode')));
+      el.onerror = () => { _spareQrScript.p = null; reject(new Error('the QR library did not load')); };
+      document.head.appendChild(el);
+    });
+  }
+  return _spareQrScript.p;
+};
+
+// The QR's modules, drawn as SVG squares (no innerHTML).
+const SpareQr = ({ text }) => {
+  const [matrix, setMatrix] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    setMatrix(null); setErr(null);
+    spareLoadQr().then((qrcode) => {
+      const qr = qrcode(0, 'M');
+      qr.addData(text);
+      qr.make();
+      const n = qr.getModuleCount();
+      const dark = [];
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) dark.push([r, c]);
+      if (alive) setMatrix({ n, dark });
+    }).catch((e) => { if (alive) setErr(e.message || String(e)); });
+    return () => { alive = false; };
+  }, [text]);
+  if (err) return <div style={{ fontSize: 12, color: 'var(--err)' }}>couldn’t draw the QR code: {err}</div>;
+  if (!matrix) return <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>drawing the QR code…</div>;
+  const q = 4;   // the quiet zone, in modules
+  const size = matrix.n + 2 * q;
+  return (
+    <svg className="spare-qr" role="img" aria-label="QR code of the enrolment payload"
+         viewBox={`0 0 ${size} ${size}`} width="216" height="216" shapeRendering="crispEdges"
+         style={{ background: '#fff', borderRadius: 'var(--r-sm)', flex: 'none' }}>
+      <rect width={size} height={size} fill="#fff"/>
+      {matrix.dark.map(([r, c]) => <rect key={`${r}-${c}`} x={c + q} y={r + q} width="1" height="1" fill="#000"/>)}
+    </svg>
+  );
+};
+
+const SpareDeviceCard = ({ fire }) => {
+  const admin = useAdminSignedIn();
+  const [open, setOpen] = React.useState(false);
+  const [room, setRoom] = React.useState('');
+  const [core, setCore] = React.useState('');
+  const [editCore, setEditCore] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [res, setRes] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  if (!admin) return null;
+
+  const make = async () => {
+    if (!room.trim() || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const body = { room: room.trim() };
+      if (editCore && core.trim()) body.core = core.trim();
+      const r = await apiPost('/api/satellites/enrolment', body);
+      setRes(r);
+      if (!editCore) setCore(r.core);
+    } catch (e) {
+      setRes(null);
+      setErr(apiErrorText(e, 0));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(res.command);
+      fire('install command copied');
+    } catch (e) {
+      fire('select the command and copy it by hand (the browser refused the clipboard)');
+    }
+  };
+
+  return (
+    <div className="spare-device-card"
+         style={{ background: 'var(--card)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
+      <button onClick={() => setOpen(o => !o)}
+              style={{ font: 'inherit', width: '100%', textAlign: 'left', cursor: 'pointer',
+                       background: 'none', border: 'none', padding: '14px 16px',
+                       display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg)' }}>
+        <Icon name="laptop" size={16}/>
+        <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>add a spare device</span>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+          a Linux laptop or mini PC, or a phone
+        </span>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
+      </button>
+      {open && (
+        <div style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            Name the room the device will be. It joins like a Pi: it waits above for its
+            approval code, and nothing in this command or code is a password.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}
+                   onKeyDown={e => { if (e.key === 'Enter') make(); }}
+                   placeholder="room name, e.g. Kid's Room" aria-label="room name"
+                   style={{ ...smInput, minWidth: 220 }}/>
+            <Button variant="primary" icon="qr-code" disabled={!room.trim() || busy} onClick={make}>
+              {busy ? 'making…' : 'make the code'}
+            </Button>
+            <label style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={editCore} onChange={e => setEditCore(e.target.checked)}/>
+              a different server address
+            </label>
+            {editCore && (
+              <input value={core} onChange={e => setCore(e.target.value)} className="mono"
+                     placeholder="http://192.168.0.117:6370" aria-label="server address"
+                     style={{ ...smInput, minWidth: 220 }}/>
+            )}
+          </div>
+          {err && (
+            <div role="alert" style={{ fontSize: 12, color: 'var(--err)' }}>
+              {err}{/home network/.test(err) && !editCore
+                ? ' — tick “a different server address” and give its address on your network.' : ''}
+            </div>
+          )}
+          {res && (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                It connects as <span className="mono">{res.room_id}</span> to{' '}
+                <span className="mono">{res.core}</span>.
+              </div>
+              {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn)' }}>{res.conflict}</div>}
+              <div className="spare-device-body" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="label">linux laptop or mini pc (debian or ubuntu)</div>
+                  <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                    On the device, signed in as the account it will run as, open a terminal and
+                    paste this. It installs the satellite and shows the approval code.
+                  </div>
+                  <pre className="mono spare-command" tabIndex={0}
+                       style={{ margin: 0, padding: 10, fontSize: 11.5, lineHeight: 1.45,
+                                whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
+                                background: 'var(--bg-sunken, var(--bg))', border: '1px solid var(--border)',
+                                borderRadius: 'var(--r-sm)', maxHeight: 160, overflow: 'auto' }}>{res.command}</pre>
+                  <div><Button icon="copy" onClick={copy}>copy the command</Button></div>
+                  <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+                    It runs the download only if it is exactly the bundle this server serves now
+                    (SHA-256 <span className="mono">{res.bundle_sha256.slice(0, 16)}…</span>), then checks
+                    the server is the one with fingerprint{' '}
+                    <span className="mono" style={{ wordBreak: 'break-all' }}>{res.fingerprint}</span>{' '}
+                    (Settings → About shows it) before it writes anything. Make a new command after
+                    updating Domovoi.
+                  </div>
+                </div>
+                <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="label">phone or tablet</div>
+                  <SpareQr text={res.payload}/>
+                  <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', maxWidth: 216, lineHeight: 1.5 }}>
+                    In the Domovoi app: Settings → Satellites → Use this device as a room, then scan.
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* The satellites view. `embedded` is how Settings → Satellites shows it
  * (SatellitesPanel): under the Settings header, with the roster's counts
  * as its first line. Without it, the same view as a page of its own, which
@@ -2268,6 +2449,8 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       <Broadcast onlineCount={onlineCount} fire={fire}/>
 
       <PrepareMediaCard fire={fire}/>
+
+      <SpareDeviceCard fire={fire}/>
 
       <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire} refresh={refresh}/>
       {adoptTarget && (

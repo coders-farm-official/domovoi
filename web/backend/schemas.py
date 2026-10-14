@@ -732,6 +732,17 @@ class PendingSatellite(BaseModel):
     parse_error: str | None = None
 
 
+class SpareDeviceEnrolRequest(BaseModel):
+    """Settings → Satellites → Add a spare device: the room the laptop or
+    phone will be, and optionally the core address it should dial when the
+    one this server finds for itself is not the one the LAN reaches (a
+    second network card). The answer is the enrolment payload, the Linux
+    install command and what the QR code carries."""
+
+    room: str = Field(..., min_length=1, max_length=64)
+    core: str | None = Field(default=None, max_length=256)
+
+
 class SatelliteApproveRequest(BaseModel):
     """Approve a parked satellite by the code it is showing and saying.
 

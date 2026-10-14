@@ -82,6 +82,7 @@ from web.backend.schemas import (
     Satellite,
     SatelliteApproveRequest,
     SatelliteDisplay,
+    SpareDeviceEnrolRequest,
     SatellitePairing,
     Session,
     Timer,
@@ -299,6 +300,103 @@ async def list_approvals(request: Request):
             headers=auth_forward_headers(request),
         )
     )
+
+
+# ─── spare devices: the enrolment payload and the install command ─────────
+#
+# Settings → Satellites → "Add a spare device" (S1, 2026-10-13). One payload,
+# `domovoi-room:1?core=…&fp=…&room=…` (satellite/enrolment.py), shown two
+# ways: inside a one-line Linux install command, and as a QR code for a
+# phone's room mode. It carries no secret — the device still has to be
+# approved with its code below — so what this route hands out is an
+# address, a public fingerprint and the digest of public code.
+
+
+def _advertised_core_http() -> str:
+    """The core's base URL as other devices on the LAN dial it: the same
+    address USB adoption writes into a Pi (SATELLITE_ADOPTION_ADVERTISE_URL,
+    `auto` by default), as http(s)."""
+    ws = satellite_adoption.advertised_domovoi_url()
+    scheme, sep, rest = ws.partition("://")
+    return ("https" if scheme == "wss" else "http") + sep + rest
+
+
+def install_command(core: str, bundle_sha256: str, payload: str) -> str:
+    """The one line the dashboard shows for a Linux laptop. It downloads the
+    satellite bundle from the core, runs it only if its SHA-256 is the one
+    quoted here, and hands the payload to satellite/scripts/install-pc.sh,
+    which makes the core prove its fingerprint before writing anything.
+    wget first (on every Debian and Ubuntu desktop), curl if it is not."""
+    import shlex
+
+    url = f"{core.rstrip('/')}/v1/satellite-code/bundle.tar.gz"
+    q = shlex.quote
+    return (
+        'd=$(mktemp -d) && { wget -qO "$d/s.tgz" ' + q(url)
+        + ' || curl -fsSLo "$d/s.tgz" ' + q(url) + '; }'
+        + ' && echo ' + q(f"{bundle_sha256}  ") + '"$d/s.tgz" | sha256sum -c --quiet -'
+        + ' && tar -xzf "$d/s.tgz" -C "$d"'
+        + ' && bash "$d/satellite/scripts/install-pc.sh" ' + q(payload)
+    )
+
+
+async def _room_in_use(room_id: str) -> str | None:
+    """Why a new device can't simply take this room, or None."""
+    rooms = {r["room_id"] for r in await _list_rooms()}
+    pairings = await _list_pairings()
+    if room_id in pairings:
+        return (f"{room_id} is already paired with a device: the new one will be refused "
+                "until that room is removed (or its pairing reset) — or pick another name")
+    if room_id in rooms:
+        return (f"{room_id} already exists: remove it first if this device replaces "
+                "the one that was there, or pick another name")
+    return None
+
+
+@router.post(
+    "/enrolment",
+    # An admin's: this is how a device is invited into the house (it is
+    # still approved separately, with its code). Nothing is written.
+    dependencies=[Depends(require_admin_read)],
+)
+async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request):
+    """The enrolment payload for a spare device, the install command for a
+    Linux laptop, and the parts the page shows beside them (the room id the
+    device will connect as, the fingerprint to compare with Settings →
+    About, a warning when the room is taken). 422 for a room name or an
+    address the payload can't carry — one off the home network included,
+    so a loopback address found on a box with no LAN is said, not handed
+    out (``{reason, message}``); 503
+    when the Domovoi server is not answering or has no identity; 423 while
+    the container guard holds the satellite channel."""
+    from satellite import enrolment
+
+    status, health = await get_admin("/v1/health", headers=auth_forward_headers(request))
+    identity = health.get("identity") if status == 200 and isinstance(health, dict) else None
+    fingerprint = identity.get("fingerprint") if isinstance(identity, dict) else None
+    if not fingerprint:
+        raise HTTPException(status_code=503, detail="the Domovoi server is not answering with its identity")
+    status, digest = await get_admin("/v1/satellite-code/bundle.sha256",
+                                     headers=auth_forward_headers(request))
+    if status != 200 or not isinstance(digest, dict) or not digest.get("sha256"):
+        return bridge_response(status if status != 200 else 503, digest)
+    core = (body.core or "").strip() or _advertised_core_http()
+    try:
+        payload = enrolment.build(core, fingerprint, body.room)
+        parsed = enrolment.parse(payload)
+    except enrolment.EnrolmentError as e:
+        raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
+    return {
+        "payload": payload,
+        "room": parsed.room,
+        "room_id": parsed.room_id,
+        "core": parsed.core,
+        "fingerprint": parsed.fp,
+        "bundle_sha256": digest["sha256"],
+        "bundle_size": digest.get("size"),
+        "command": install_command(parsed.core, digest["sha256"], payload),
+        "conflict": await _room_in_use(parsed.room_id),
+    }
 
 
 @router.post(

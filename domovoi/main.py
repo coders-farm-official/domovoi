@@ -1337,6 +1337,51 @@ async def satellite_code_manifest_signed() -> dict[str, Any]:
     return identity.signed_manifest(server_identity.CODE_CHANNEL, manifest)
 
 
+@app.get("/v1/satellite-code/bundle.tar.gz")
+async def satellite_code_bundle() -> FastAPIResponse:
+    """The satellite tree as one deterministic ``.tar.gz`` — what a spare
+    computer's install command downloads (Settings → Satellites → Add a
+    spare device). The same files as the manifest above, under
+    ``satellite/``. The command runs it only after matching its SHA-256
+    against the digest the dashboard quoted
+    (``/v1/satellite-code/bundle.sha256``), so this is safe to serve as
+    openly as the rest of the channel. 423 while the container guard's
+    freeze is on. Declared before the catch-all so the literal wins."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle
+
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return FastAPIResponse(
+        content=bundle.data,
+        media_type="application/gzip",
+        headers={
+            "Content-Disposition": 'attachment; filename="domovoi-satellite.tar.gz"',
+            "X-Content-SHA256": bundle.sha256,
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/v1/satellite-code/bundle.sha256")
+async def satellite_code_bundle_digest() -> dict[str, Any]:
+    """The bundle's SHA-256 and size: what the dashboard writes into the
+    install command it shows. Public, like the bundle itself."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle
+
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return {
+        "sha256": bundle.sha256,
+        "size": len(bundle.data),
+        "files": bundle.files,
+        "path": "/v1/satellite-code/bundle.tar.gz",
+    }
+
+
 @app.get("/v1/satellite-code/{path:path}")
 async def satellite_code_file(path: str) -> FileResponse:
     """Serve one allowlisted file from satellite/. Guarded against
