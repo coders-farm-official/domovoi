@@ -60,7 +60,13 @@ words under it, and:
 - **mute**: closes the microphone (Android's green dot goes off). Anyone in
   the room can mute it, from the lock screen too;
 - **exit room mode**: hold it, then unlock with the phone's PIN, pattern or
-  fingerprint. On a phone with no screen lock it asks first and says so.
+  fingerprint, and choose to **keep this room** (come back to it later) or
+  **forget this room** (its key is deleted from the phone). A phone used
+  only as a room may have no screen lock: Exit then asks for a
+  confirmation, which anyone can give. A phone that is also paired with
+  your household **needs a screen lock to be a room**: without one room
+  mode does not start, and if the lock is removed while it runs the room
+  stops listening and asks for one.
 
 The screen moves its contents a few pixels every minute so a display left
 on does not burn in. It is shown over the lock screen.
@@ -86,8 +92,11 @@ handing the room silence.
 ## Android's rules
 
 - **A notification stays** while the room listens ("Domovoi Room ·
-  kitchen"), with **Stop listening** (behind the phone's unlock on Android
-  12+). The **green microphone dot** stays on. Both are expected.
+  kitchen"), with **Stop listening**, which turns the microphone off but
+  does not leave room mode (the normal app stays locked until someone
+  resumes or exits on the room screen). On Android 12 and later it asks for
+  the phone's unlock first; on older Android anyone who can open the
+  notifications can press it. The **green microphone dot** stays on. Both are expected.
 - **After a restart** Android lets no app start listening by itself: the
   phone shows **"…is not listening — tap to resume"**. One tap.
 - **Battery optimisation**: turn it off for Domovoi (the explainer has a
@@ -117,13 +126,15 @@ You can turn your own phone into a room for a while. Then:
 | The room screen says | What to do |
 |---|---|
 | waiting for approval | Approve it on the dashboard with the code on the phone. |
-| Another device is this room on the server | That room is paired with another device. On the dashboard, open the room and reset its pairing, or exit and choose another name. |
+| Another device is this room on the server | That room is paired with another device. On the dashboard, open the room and reset its pairing, or hold Exit, forget this room and choose another name. |
+| This room was removed on the dashboard | The room was removed (or its pairing reset) after it had been approved. Approve it again with the code shown, or hold Exit and forget it. |
+| Not listening: … needs a screen lock | This phone is also paired with your household. Set a PIN, pattern or password; the room starts again. |
 | Another device is already waiting for approval as this room | Reject the other request on the dashboard, or wait three minutes. |
 | …this is a different server… / …would not sign for… | The address in the room code answered with a different key, or something is relaying it. Make a new room code on the right server. A server reached through a name or a forwarded port needs that name in its `TRUSTED_HOSTS`. |
 | The server has no wake-word models yet | Dashboard: Settings → Satellites → prepare satellite media → Refresh caches. |
 | The server does not hand wake-word models to phones yet | Update the Domovoi server. |
 | waiting for Wi-Fi | The phone has no Wi-Fi. Room mode never uses mobile data. |
-| (on the room code screen) a room's server must be on the home network | The room code names a server outside your home network. A room only talks to a server at a local address or a `.local` / `.home.arpa` / `.lan` name. |
+| (on the room code screen) … is not on the home network | The room code names a server outside your home network. A room only talks to a server at a private address (10.x, 172.16-31.x, 192.168.x, IPv6 fc00::/7 or fe80::/10) or a name ending in `.local`, `.home.arpa`, `.lan` or `.internal`; not loopback, not 100.64.x (carrier NAT), not 169.254.x. |
 | mic blocked | Turn the microphone back on in quick settings, or end the call. |
 | Not listening. Tap Resume | Someone pressed Stop listening, or the phone restarted. |
 

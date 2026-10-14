@@ -126,7 +126,11 @@ the same steps pass; the app's Java heap peaked at about 48 MB there.
 dashboard (`ft.py up --with-core`, strict pairing on, Whisper tiny, the
 openWakeWord models seeded into the run's satellite media cache), the
 room's mic fed recorded speech through the debug build's feed (never the
-host's microphone):
+host's microphone). The core was reached as `127.0.0.1` through `adb
+reverse`; the security review's fix round (same day) made the room code
+refuse loopback, as the shared enrolment contract does, so a rerun dials
+the host as `10.0.2.2` (in 10/8) with that name in the throwaway core's
+`TRUSTED_HOSTS`:
 
 | Image | APK | Result |
 |---|---|---|

@@ -24,9 +24,14 @@ Server and Android update; no migration, no satellite upgrade.
   connects but says the server has no wake-word models yet.
 * **A room phone holds only its room's own key** and the server's pinned
   fingerprint, never the household pairing. On a phone that is also a
-  household device, the normal app is locked while it is a room, and
-  leaving takes the phone's PIN, pattern or fingerprint
+  household device, the normal app is locked while it is a room, the
+  household's timers, live updates and downloads stop on it, and leaving
+  takes the phone's PIN, pattern or fingerprint: such a phone **needs a
+  screen lock to be a room**. Leaving offers to keep the room or forget it
   ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#a-room-phone-android-room-mode)).
+* **A room's server must be on the home network** (a private address, or a
+  `.local`, `.home.arpa`, `.lan` or `.internal` name), https or not: a room
+  code naming anything else is refused.
 * **It works on 32-bit phones and from Android 8.0** (the armeabi-v7a APK
   too): room mode uses none of the on-device assistant's libraries.
 * **What Android asks of it:** a notification and the green mic dot for as
