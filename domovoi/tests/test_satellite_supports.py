@@ -43,7 +43,7 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURES = json.loads((REPO / "docs" / "uml" / "satellite-fixtures.json").read_text(encoding="utf-8"))
 DEVICES: dict[str, dict[str, Any]] = FIXTURES["devices"]
 PI_DEVICES = ("pi_2mic_hat", "pi_xvf3800")
-SPARE_DEVICES = ("linux_pc", "android_room")
+SPARE_DEVICES = ("linux_pc", "windows_pc", "android_room")
 GATES: dict[str, list[str]] = FIXTURES["frame_gates"]
 
 
@@ -627,9 +627,9 @@ async def test_the_snapshot_lists_supports_and_board_only_for_devices_that_sent_
     assert snap["satellite_supports"] == {
         DEVICES[d]["hello"]["room_id"]: DEVICES[d]["expect"]["supports_shown"] for d in SPARE_DEVICES
     }
-    assert snap["satellite_board"] == {"study": "linux_pc", "nursery": "android_room"}
+    assert snap["satellite_board"] == {"study": "linux_pc", "den": "windows_pc", "nursery": "android_room"}
     assert snap["satellite_full_duplex"] == {
-        "kitchen": False, "living-room": True, "study": False, "nursery": True,
+        "kitchen": False, "living-room": True, "study": False, "den": False, "nursery": True,
     }
 
 

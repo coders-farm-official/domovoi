@@ -9,19 +9,22 @@ behaviour as one implementation, byte for byte what it was:
   the canned clip, and the chime. Pi and Linux PC: ``mpg123``/``aplay`` on
   an ALSA device (:class:`AlsaAudioOut`). The engine starts, watches and
   stops it as a process (its own process group); a platform without
-  mpg123 supplies its own player program here.
+  mpg123 supplies its own player program here — Windows:
+  :class:`WindowsAudioOut`, ``python -m satellite.win_player``.
 * :class:`VolumeBackend` — the one output gain voice and music ride
   through. Pi: an ALSA mixer control (:class:`AmixerVolume`). Laptop: the
   sound server's default sink, ``wpctl`` (PipeWire) or ``pactl``
-  (PulseAudio), found by :class:`AutoVolume`.
+  (PulseAudio), found by :class:`AutoVolume`. Windows: Core Audio's
+  default speakers (:class:`WindowsVolume`).
 * :class:`ServiceControl` — how the engine restarts itself after a config
   change or an upgrade. Pi: ``sudo -n systemctl --no-block restart``
   (:class:`SudoSystemctl`, the sudoers line in PROVISIONING.md). Laptop:
   no privilege at all — the engine exits with :data:`EXIT_RESTART` and its
   unit's ``RestartForceExitStatus=75`` starts it again
-  (:class:`ExitToRestart`); a Windows service wrapper can do the same.
+  (:class:`ExitToRestart`); on Windows the supervisor
+  (satellite/win_service.py) does the same.
 * The control channel's transport — :mod:`satellite.control`
-  (``ControlTransport``; a Unix socket here).
+  (``ControlTransport``; a Unix socket on Linux, a named pipe on Windows).
 
 :func:`for_profile` picks the set for a config. Stdlib only.
 """
@@ -47,8 +50,8 @@ EXIT_RESTART = 75
 #: down, saying why, instead of looping.
 EXIT_UNPINNED = 78
 
-#: ``[audio] volume_backend`` values.
-VOLUME_BACKENDS = ("amixer", "wpctl", "pactl", "auto", "none")
+#: ``[audio] volume_backend`` values ("windows": Core Audio, windows_pc's).
+VOLUME_BACKENDS = ("amixer", "wpctl", "pactl", "auto", "windows", "none")
 
 Runner = Callable[..., Any]
 
@@ -80,6 +83,59 @@ class AlsaAudioOut:
 
     def wav_argv(self, device: str, path: str) -> list[str]:
         return ["aplay", "-q", "-D", device, path]
+
+
+class WindowsAudioOut:
+    """Windows: ``python -m satellite.win_player`` as the player process
+    (miniaudio's MP3 decoder and PortAudio; no mpg123, nothing LGPL). The
+    device is ``[music] alsa_device``'s Windows meaning: ``default`` (the
+    speakers Windows has chosen), a device number, or part of a device
+    name. The wake acknowledgement plays inside the engine instead
+    (:meth:`spawn_ack`): a new process is too slow for it."""
+
+    def __init__(self, python: str | None = None) -> None:
+        import sys
+
+        self.python = python or sys.executable
+
+    def _argv(self, *rest: str) -> list[str]:
+        return [self.python, "-m", "satellite.win_player", *rest]
+
+    @staticmethod
+    def _device(device: str) -> str:
+        """Only a name devices.valid_windows_device accepts reaches the
+        player's command line; anything else plays on the default."""
+        from satellite import devices
+
+        if devices.valid_windows_device(device) and device is not None:
+            return str(device)
+        log.warning("not a Windows audio device name: %r; using the default", str(device)[:40])
+        return "default"
+
+    def stream_argv(self, device: str, url: str) -> list[str]:
+        return self._argv("stream", url, "--device", self._device(device))
+
+    def mp3_argv(self, device: str, path: str, gain: float) -> list[str]:
+        args = self._argv("mp3", path, "--device", self._device(device))
+        if gain != 1.0:
+            args += ["--gain", f"{float(gain):g}"]
+        return args
+
+    def wav_argv(self, device: str, path: str) -> list[str]:
+        return self._argv("wav", path, "--device", self._device(device))
+
+    def spawn_ack(self, argv: list[str]) -> Any:
+        """The acknowledgement for one of this class's argvs, played on a
+        thread of the engine (satellite.win_player.InProcessPlay)."""
+        from satellite import win_player
+
+        rest = argv[3:]
+        kind, path = rest[0], rest[1]
+        opts = dict(zip(rest[2::2], rest[3::2]))
+        return win_player.InProcessPlay(
+            kind, path, gain=float(opts.get("--gain", 1.0)),
+            device=win_player._device(opts.get("--device")),
+        )
 
 
 # ─── volume ───────────────────────────────────────────────────────────────
@@ -246,9 +302,49 @@ class AutoVolume:
         return backend.set(level) if backend is not None else False
 
 
+class WindowsVolume:
+    """Windows: the default speakers' master volume through Core Audio
+    (``IAudioEndpointVolume``, satellite/win32.py) — the taskbar slider.
+    Setting it also unmutes, as amixer's ``unmute`` does on a Pi."""
+
+    name = "windows"
+
+    def __init__(self, endpoint: Any = None) -> None:
+        self._endpoint = endpoint
+
+    def _ep(self) -> Any:
+        if self._endpoint is None:
+            from satellite import win32
+
+            self._endpoint = win32.EndpointVolume()
+        return self._endpoint
+
+    def available(self) -> bool:
+        import sys
+
+        return self._endpoint is not None or sys.platform == "win32"
+
+    def get(self) -> int | None:
+        try:
+            return _volume.clamp(round(self._ep().get_scalar() * 100))
+        except OSError as e:
+            log.warning("Windows volume read failed: %s", e)
+            return None
+
+    def set(self, level: int) -> bool:
+        try:
+            self._ep().set_scalar(_volume.clamp(level) / 100.0, unmute=True)
+        except OSError as e:
+            log.warning("Windows volume change failed: %s", e)
+            return False
+        return True
+
+
 def volume_backend(kind: str, *, card: str, control: str | None,
                    run: Runner | None = None,
                    which: Callable[[str], str | None] = shutil.which) -> VolumeBackend:
+    if kind == "windows":
+        return WindowsVolume()
     if kind == "amixer":
         return AmixerVolume(card, control, run=run)
     if kind == "wpctl":
@@ -317,7 +413,7 @@ class ExitToRestart:
         self._request_exit = request_exit
 
     def describe(self) -> str:
-        return f"exit {EXIT_RESTART} (the unit starts it again)"
+        return f"exit {EXIT_RESTART} (its unit or supervisor starts it again)"
 
     def restart(self) -> bool:
         log.info("self-restart: exiting with %d so the service starts again", EXIT_RESTART)
@@ -338,7 +434,9 @@ class Platform:
         self.control_socket = control_socket
 
 
-PC_PROFILES = frozenset({"generic_pc"})
+PC_PROFILES = frozenset({"generic_pc", "windows_pc"})
+#: The spare-computer profile for Windows (satellite/devices.py).
+WINDOWS_PROFILE = "windows_pc"
 
 
 def is_pc(cfg: Any) -> bool:
@@ -346,11 +444,26 @@ def is_pc(cfg: Any) -> bool:
     return getattr(getattr(cfg, "device", None), "name", "") in PC_PROFILES
 
 
+def is_windows_pc(cfg: Any) -> bool:
+    return getattr(getattr(cfg, "device", None), "name", "") == WINDOWS_PROFILE
+
+
 def for_profile(cfg: Any, *, request_exit: Callable[[int], None]) -> Platform:
     """The Pi profiles keep exactly what they had (amixer on the profile's
     mixer, sudo systemctl, no control socket). ``generic_pc`` gets the
-    sound server's volume, exit-to-restart and the control socket."""
+    sound server's volume, exit-to-restart and the control socket;
+    ``windows_pc`` the Windows player and Core Audio volume, and the same
+    exit-to-restart (its supervisor, satellite/win_service.py, starts the
+    engine again) and control channel (a named pipe)."""
     pc = is_pc(cfg)
+    if is_windows_pc(cfg):
+        kind = getattr(cfg, "volume_backend", "") or "windows"
+        return Platform(
+            audio_out=WindowsAudioOut(),
+            volume=volume_backend(kind, card="0", control=None),
+            service=ExitToRestart(request_exit),
+            control_socket=_control_socket(cfg, True),
+        )
     kind = getattr(cfg, "volume_backend", "") or ("auto" if pc else "amixer")
     return Platform(
         audio_out=AlsaAudioOut(),

@@ -306,9 +306,13 @@ async def test_connections_past_the_limit_are_closed(monkeypatch):
 
 def test_the_default_transport_is_the_socket_in_the_config_dir(tmp_path):
     if not POSIX:
-        with pytest.raises(NotImplementedError):
-            control.default_transport(tmp_path)
+        # Windows: the user's named pipe (satellite/tests/test_win_platform.py).
+        from satellite import control_win
+
+        assert isinstance(control.default_transport(tmp_path), control_win.NamedPipeTransport)
+        assert control.is_pipe_address(control.default_address(tmp_path))
         return
+    assert control.default_address(tmp_path) == tmp_path / "control.sock"
     t = control.default_transport(tmp_path)
     assert isinstance(t, control.UnixSocketTransport)
     assert t.path == tmp_path / "control.sock"

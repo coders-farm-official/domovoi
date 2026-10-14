@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 import threading
 import time
 import types
@@ -123,7 +124,8 @@ def test_a_pi_hello_has_no_board_and_no_list():
 
 def test_an_unpinned_laptop_does_not_start(tmp_path, capsys):
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text('[device]\nprofile = "generic_pc"\n[satellite]\nroom_id = "study"\n'
+    profile = "windows_pc" if sys.platform == "win32" else "generic_pc"
+    cfg_path.write_text(f'[device]\nprofile = "{profile}"\n[satellite]\nroom_id = "study"\n'
                         'domovoi_url = "ws://127.0.0.1:6370"\n', encoding="utf-8")
     assert client.main(["--config", str(cfg_path)]) == engine_platform.EXIT_UNPINNED
     assert "no pinned Domovoi server identity" in capsys.readouterr().err

@@ -25,6 +25,11 @@ so ``client.py`` gains hooks rather than a second program:
 * **The control channel** (:mod:`satellite.control`) and its CLI
   (:func:`cli`): ``--status``, ``--approval-code``, ``--mute``,
   ``--unmute``, ``--pending``, ``--approve``, ``--decline``.
+* **Windows** (``windows_pc``, 2026-10-13): the same, with board
+  ``windows_pc``, the control channel on a named pipe, the log in a file
+  the supervisor keeps (satellite/win_service.py), a stop that the tray or
+  the uninstaller asks for through a named event, and no subnet sweep when
+  the core moves (:func:`server_search`).
 
 A Pi (any other profile) never reaches any of it: every hook in the client
 asks :func:`satellite.engine_platform.is_pc` first.
@@ -50,6 +55,14 @@ MUTED_SIDECAR = CONFIG_DIR / "muted"
 #: The web dashboard's port on the core's host ("Open dashboard").
 DASHBOARD_PORT = 6369
 BOARD = "linux_pc"
+#: How a spare computer looks for its core when the enrolled address stops
+#: answering (``[pc] server_search``): "sweep" — its name, the address, then
+#: the /24 sweep (a Pi's order, and generic_pc's); "names" — its name and the
+#: address, no sweep (windows_pc's default: a Windows laptop probing every
+#: address on the home network looks like a port scan to its security
+#: software, and the enrolment gave the exact address); "address" — only
+#: the address.
+SERVER_SEARCH = ("sweep", "names", "address")
 
 #: What a laptop can do, as the hello's ``supports`` names it. Restart and
 #: code sync are there in both permissions: with "ask me" they are held for
@@ -77,6 +90,22 @@ def is_pc(cfg: Any) -> bool:
     return engine_platform.is_pc(cfg)
 
 
+def board_for(cfg: Any) -> str:
+    """The hello's ``board``: the profile's (``linux_pc``, ``windows_pc``)."""
+    return getattr(getattr(cfg, "device", None), "board", "") or BOARD
+
+
+def server_search(cfg: Any) -> str:
+    """``[pc] server_search``, or the profile's default (see
+    :data:`SERVER_SEARCH`). A Pi always sweeps."""
+    if not is_pc(cfg):
+        return "sweep"
+    chosen = getattr(cfg, "server_search", "") or ""
+    if chosen in SERVER_SEARCH:
+        return chosen
+    return "names" if engine_platform.is_windows_pc(cfg) else "sweep"
+
+
 def full_duplex(cfg: Any) -> bool:
     """Echo cancellation: the profile's, or ``[device] full_duplex`` on a
     laptop with a USB speakerphone that cancels its own echo."""
@@ -92,7 +121,7 @@ def hello_fields(cfg: Any) -> dict[str, Any]:
     fd = full_duplex(cfg)
     if fd:
         supports.append("chat_mode")
-    return {"board": BOARD, "supports": supports, "supports_full_duplex": fd}
+    return {"board": board_for(cfg), "supports": supports, "supports_full_duplex": fd}
 
 
 def filter_config_changes(changes: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
@@ -296,7 +325,7 @@ class SpareDeviceEngine:
         now = time.monotonic()
         cache = getattr(self, "_battery_cache", None)
         if cache is None or now - cache[0] > 60.0:
-            cache = (now, health.read_battery())
+            cache = (now, health.read_battery_here())
             self._battery_cache = cache
         b = cache[1].get("battery")
         return dict(b) if isinstance(b, dict) else None
@@ -312,7 +341,7 @@ class SpareDeviceEngine:
             host = None
         return {
             "protocol": control.PROTOCOL,
-            "board": BOARD,
+            "board": board_for(self.cfg),
             "room": {"id": self.cfg.room_id, "name": getattr(self.cfg, "room_name", "") or self.cfg.room_id},
             "server": {"url": url, "host": host or None, "fingerprint": fp, "pinned": bool(fp)},
             "dashboard": dashboard_url(url),
@@ -356,6 +385,10 @@ class SpareDeviceEngine:
 
     def control_logs_path(self) -> dict[str, Any]:
         scope = os.environ.get("DOMOVOI_SERVICE_SCOPE", "")
+        if scope == "windows":
+            folder = os.environ.get("DOMOVOI_LOG_DIR") or str(CONFIG_DIR)
+            return {"kind": "file", "path": folder,
+                    "hint": f"satellite.log in {folder} (the newest lines at the end)"}
         if scope == "user":
             hint = "journalctl --user -u domovoi-satellite -e"
         elif scope == "system":
@@ -383,7 +416,36 @@ class SpareDeviceEngine:
     def control_pending(self) -> control.PendingActions:
         return self._pending_actions()
 
+    def _watch_windows_stop(self) -> None:
+        """Windows: a stop asked for by the tray ("Stop satellite") or the
+        uninstaller arrives as a named event (satellite/win32.py
+        STOP_EVENT), the counterpart of systemd's SIGTERM. Watched on a
+        daemon thread; setting it shuts the engine down as a signal
+        would."""
+        if not engine_platform.is_windows_pc(self.cfg) or sys.platform != "win32":
+            return
+        import threading
+
+        from satellite import win32
+
+        try:
+            event = win32.NamedEvent(win32.object_name(win32.STOP_EVENT))
+        except OSError as e:
+            log.warning("the stop event could not be opened (%s); stop the satellite from the tray "
+                        "or Task Manager", e)
+            return
+
+        def wait() -> None:
+            while not self.shutdown_event.is_set():
+                if event.wait(1.0):
+                    log.info("stop asked for (the tray or the uninstaller)")
+                    self._request_exit(0)
+                    return
+
+        threading.Thread(target=wait, name="windows-stop", daemon=True).start()
+
     async def _start_control(self) -> None:
+        self._watch_windows_stop()
         if not self._platform.control_socket:
             return
         from satellite import client
@@ -420,8 +482,10 @@ def add_cli_arguments(parser) -> None:
                        help="List updates and restarts waiting for your OK (\"ask me\").")
     group.add_argument("--approve", metavar="ID", help="Run a waiting action (its id, or all).")
     group.add_argument("--decline", metavar="ID", help="Drop a waiting action (its id, or all).")
-    group.add_argument("--control-socket", type=Path, default=None,
-                       help=f"The engine's control socket (default: {CONFIG_DIR / control.SOCKET_NAME}).")
+    group.add_argument("--control-socket", default=None,
+                       help="The engine's control socket, or on Windows its pipe "
+                            f"(default: {CONFIG_DIR / control.SOCKET_NAME}, or "
+                            "\\\\.\\pipe\\domovoi-satellite-<your SID>).")
 
 
 def wants_cli(args: Any) -> bool:
@@ -451,11 +515,22 @@ def _status_text(st: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _printable_streams() -> None:
+    """A Windows console or pipe that can't show a character (the arrows
+    and dots in a status) shows "?" instead of failing the command."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def cli(args: Any) -> int:
     """Answer one CLI flag through the control channel. Exit codes: 0 done,
     1 the engine refused, 2 nothing to say (no code: not waiting), 3 the
     engine isn't running."""
-    path = getattr(args, "control_socket", None) or (CONFIG_DIR / control.SOCKET_NAME)
+    _printable_streams()
+    path = getattr(args, "control_socket", None) or control.default_address(CONFIG_DIR)
     client_ = control.ControlClient(path)
     try:
         if args.status:
@@ -490,18 +565,22 @@ def cli(args: Any) -> int:
             print(f"{verb}d: {d['kind']}: {d['summary']}")
         return 0
     except ConnectionError as e:
-        print(f"{e}. Is the satellite running? (systemctl --user status domovoi-satellite)", file=sys.stderr)
+        hint = ("start it from the Start menu: Domovoi Satellite" if sys.platform == "win32"
+                else "systemctl --user status domovoi-satellite")
+        print(f"{e}. Is the satellite running? ({hint})", file=sys.stderr)
         return 3
 
 
-def wait_for_approval(path: Path, *, timeout: float, out=None, poll: float = 1.0,
+def wait_for_approval(path: Path | str, *, timeout: float, out=None, poll: float = 1.0,
                       clock: Callable[[], float] = time.monotonic,
                       sleep: Callable[[float], None] = time.sleep) -> str:
     """The installer's last step: watch the engine until it is connected,
     printing the approval code (to the installer's terminal, never a log)
     while it waits. Returns the final connection state, or "timeout" /
     "no_engine"."""
-    out = out if out is not None else sys.stdout
+    if out is None:
+        _printable_streams()
+        out = sys.stdout
     client_ = control.ControlClient(path, timeout=5.0)
     deadline = clock() + timeout
     shown: str | None = None
@@ -539,9 +618,9 @@ def wait_for_approval(path: Path, *, timeout: float, out=None, poll: float = 1.0
 
 # Re-exported for the client's hooks.
 __all__ = [
-    "BOARD", "CONFIG_DIR", "MUTED_SIDECAR", "PC_SUPPORTS", "REFUSALS",
-    "SpareDeviceEngine", "add_cli_arguments", "cli", "dashboard_url",
+    "BOARD", "CONFIG_DIR", "MUTED_SIDECAR", "PC_SUPPORTS", "REFUSALS", "SERVER_SEARCH",
+    "SpareDeviceEngine", "add_cli_arguments", "board_for", "cli", "dashboard_url",
     "filter_config_changes", "full_duplex", "hello_fields", "is_pc",
-    "read_muted", "require_pin", "show_code_on_tty", "wait_for_approval",
+    "read_muted", "require_pin", "server_search", "show_code_on_tty", "wait_for_approval",
     "wants_cli", "write_muted",
 ]

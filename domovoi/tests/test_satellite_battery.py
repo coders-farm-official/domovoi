@@ -45,7 +45,7 @@ def test_the_journal_line_says_the_battery_only_when_there_is_one():
     assert sh.format_health_line("study", held).endswith(" battery=80% on power")
 
 
-@pytest.mark.parametrize("device", ["linux_pc", "android_room"])
+@pytest.mark.parametrize("device", ["linux_pc", "windows_pc", "android_room"])
 def test_the_spare_devices_in_the_fixtures_send_the_object(device):
     frame = FIXTURES["devices"][device]["health"]["frame"]
     assert set(frame["battery"]) == {"percent", "charging", "on_power"}

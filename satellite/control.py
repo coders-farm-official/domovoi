@@ -28,8 +28,10 @@ permission, ``approve`` / ``decline`` a pending update or restart
 
 Who may connect: the engine's own user. The Unix socket is created 0600
 inside the 0700 config dir, and a peer whose uid is neither the engine's
-nor root is turned away (``SO_PEERCRED``). Nothing here reaches the
-network.
+nor root is turned away (``SO_PEERCRED``). On Windows the same protocol
+runs over a named pipe whose DACL admits only that user, which refuses
+network clients, and whose two ends check each other's user
+(:mod:`satellite.control_win`). Nothing here reaches the network.
 
 Stdlib only. The engine side is asyncio (:class:`ControlServer`); the
 client side is a plain blocking socket (:class:`ControlClient`) so the CLI
@@ -380,14 +382,32 @@ def default_socket_path(config_dir: Path) -> Path:
     return Path(config_dir) / SOCKET_NAME
 
 
+#: Where a Windows control channel lives: ``\\.\pipe\domovoi-satellite-<SID>``.
+PIPE_PREFIX = "\\\\.\\pipe\\"
+
+
+def is_pipe_address(address: object) -> bool:
+    return isinstance(address, str) and address.startswith(PIPE_PREFIX)
+
+
+def default_address(config_dir: Path) -> Path | str:
+    """Where this platform's engine listens: the socket in the config dir
+    on Linux, the user's named pipe on Windows (satellite/control_win.py)."""
+    if sys.platform == "win32":
+        from satellite import win32
+
+        return win32.control_pipe_name()
+    return default_socket_path(config_dir)
+
+
 def default_transport(config_dir: Path) -> ControlTransport:
     """The platform's transport. Linux (and any POSIX): the Unix socket.
-    Windows has none yet — the Windows satellite adds a named pipe here."""
+    Windows: a named pipe only this user can open, with the same framing
+    (satellite/control_win.py)."""
     if sys.platform == "win32":
-        raise NotImplementedError(
-            "no control transport on Windows yet: a named pipe with the same "
-            "line framing (docs/uml/satellite-control-fixture.json)"
-        )
+        from satellite import control_win
+
+        return control_win.NamedPipeTransport(limit=MAX_LINE + 2)
     return UnixSocketTransport(default_socket_path(config_dir))
 
 
@@ -507,13 +527,19 @@ class ControlServer:
 
 class ControlClient:
     """A blocking client. ``call`` sends one request and returns its
-    response dict; ``watch`` yields the status, then every change."""
+    response dict; ``watch`` yields the status, then every change.
+    ``path`` is the Unix socket, or on Windows the pipe name
+    (:func:`default_address`)."""
 
-    def __init__(self, path: Path, *, timeout: float = 5.0) -> None:
-        self.path = Path(path)
+    def __init__(self, path: Path | str, *, timeout: float = 5.0) -> None:
+        self.path = path if is_pipe_address(path) else Path(path)
         self.timeout = timeout
 
-    def _connect(self) -> socket.socket:
+    def _connect(self) -> Any:
+        if is_pipe_address(self.path):
+            from satellite import control_win
+
+            return control_win.PipeStream(str(self.path), timeout=self.timeout)
         if not hasattr(socket, "AF_UNIX"):
             raise ConnectionError("no Unix sockets on this platform")
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -528,7 +554,7 @@ class ControlClient:
         return sock
 
     @staticmethod
-    def _lines(sock: socket.socket) -> Iterator[dict[str, Any]]:
+    def _lines(sock: Any) -> Iterator[dict[str, Any]]:
         buf = b""
         while True:
             chunk = sock.recv(65536)

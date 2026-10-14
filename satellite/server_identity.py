@@ -49,6 +49,7 @@ import json
 import logging
 import os
 import secrets
+import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -97,7 +98,14 @@ LEGACY_RECORD_SIDECAR = CONFIG_DIR / "server-identity.json"
 # the satellite user can read it and cannot rewrite it. Shares the core's
 # filename but never the core's directory — /etc/domovoi is root-owned and
 # installed from the card, and no core keeps its key there.
-ROOT_PIN = Path("/etc/domovoi/server-identity.json")
+#
+# None on Windows (spare-device satellites, 2026-10-13): there is no such
+# root-owned place there, and the POSIX path would name a file at the root
+# of the system drive, where any account may create a folder — another
+# person on the PC could plant a pin that outranks this one's config and
+# point its microphone at a core of their own. A Windows satellite's pin is
+# its config's, in the user's own %LOCALAPPDATA%.
+ROOT_PIN: Path | None = None if sys.platform == "win32" else Path("/etc/domovoi/server-identity.json")
 # A discovered address waiting for the dashboard to approve this device.
 # Deliberately NOT config.toml: an address that no human has agreed to is
 # not configuration yet.
@@ -357,7 +365,8 @@ def pinned_fingerprint(configured: object = None) -> tuple[str | None, str]:
     disagrees with it is said out loud as the tampering or the mistake it
     is."""
     from_config = normalize_fingerprint(configured)
-    from_image = normalize_fingerprint(_read_json(ROOT_PIN).get("fingerprint"))
+    from_image = (normalize_fingerprint(_read_json(ROOT_PIN).get("fingerprint"))
+                  if ROOT_PIN is not None else None)
     if from_image:
         if from_config and from_config != from_image:
             log.error(

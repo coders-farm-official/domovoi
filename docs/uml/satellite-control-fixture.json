@@ -11,7 +11,7 @@
   "protocol": 1,
   "transport": {
     "linux": "AF_UNIX stream socket ~/.domovoi/control.sock, mode 0600 in a 0700 directory; a peer whose uid (SO_PEERCRED) is neither the engine's nor root is closed at once",
-    "windows": "not built yet: a named pipe, same framing, same verbs"
+    "windows": "named pipe \\\\.\\pipe\\domovoi-satellite-<user SID>:a protected DACL granting only that user, PIPE_REJECT_REMOTE_CLIENTS, the first instance claimed with FILE_FLAG_FIRST_PIPE_INSTANCE; the engine closes a client whose process is another user's, and the client refuses a pipe served by another user's process (satellite/control_win.py)"
   },
   "framing": {
     "encoding": "UTF-8 JSON, one object per line, terminated by \\n",

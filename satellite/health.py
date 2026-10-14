@@ -37,6 +37,7 @@ import logging
 import os
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,6 +218,17 @@ def read_battery(root: str | os.PathLike[str] = "/sys/class/power_supply") -> di
         on_power = None
     return {"battery": {"percent": round(sum(levels) / len(levels)),
                         "charging": charging, "on_power": on_power}}
+
+
+def read_battery_here() -> dict[str, Any]:
+    """This machine's battery in the health shape, whatever the OS: the
+    kernel's power_supply class on Linux, ``GetSystemPowerStatus`` on
+    Windows (satellite/win32.py). ``{}`` without one."""
+    if sys.platform == "win32":
+        from satellite import win32
+
+        return win32.power_status()
+    return read_battery()
 
 
 def count_fds(path: str | os.PathLike[str] = "/proc/self/fd") -> int | None:
@@ -581,6 +593,9 @@ class Sampler:
     seq: int = 0
     # The device whose link state is asked of NetworkManager.
     wifi_device: str = "wlan0"
+    # Where the battery comes from: None reads <sys_root>/class/power_supply
+    # (Linux); a Windows engine passes satellite.win32.power_status.
+    battery_reader: Callable[[], dict[str, Any]] | None = None
     # `vcgencmd` is absent on anything but a Pi, `nmcli` on a hand-built
     # unit: after TOOL_MISS_LATCH misses in a row a tool is left alone for
     # TOOL_RETRY_SEC, so such a board does not spawn a failing process every
@@ -629,7 +644,8 @@ class Sampler:
         routes = self.run(["ip", "route"], timeout=5.0)
         gateway = parse_default_gateway(routes)
         # Only on a machine with a battery: a Pi's sample gains no keys.
-        battery = read_battery(os.path.join(self.sys_root, "class/power_supply"))
+        battery = (self.battery_reader() if self.battery_reader is not None
+                   else read_battery(os.path.join(self.sys_root, "class/power_supply")))
         return {
             **battery,
             "rss_kb": status["rss_kb"],

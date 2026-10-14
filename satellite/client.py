@@ -49,6 +49,7 @@ from satellite import (
     chime,
     code_sync,
     config_writer,
+    debug_audio,
     devices,
     discovery,
     display_power,
@@ -183,6 +184,13 @@ def _hostname() -> str | None:
         return socket.gethostname()[:64] or None
     except OSError:
         return None
+
+
+def _reboot_helper_installed(cfg: Any) -> bool:
+    """Whether the root reboot helper is there to ask. Never on a Windows
+    satellite: the POSIX path would be a file at the root of the system
+    drive, which any account can create."""
+    return not engine_platform.is_windows_pc(cfg) and REBOOT_HELPER.exists()
 
 
 def _hard_exit(code: int) -> None:
@@ -605,6 +613,9 @@ class Config:
     # [device] full_duplex on generic_pc: a USB speakerphone that cancels
     # its own echo. None = the profile's (no).
     full_duplex_override: bool | None = None
+    # [pc] server_search: how a spare computer looks for a core that moved
+    # ("sweep", "names", "address"; "" = the profile's, pc_engine.server_search).
+    server_search: str = ""
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -693,6 +704,24 @@ class Config:
             )
         control_enabled = d.get("control", {}).get("enabled")
         fd_override = d.get("device", {}).get("full_duplex")
+        if profile.name == "windows_pc":
+            # A Windows device name reaches PortAudio and the player's
+            # command line: only "default", a number or a plain name
+            # (devices.valid_windows_device), whatever the dashboard sent.
+            for where, value in (("[audio] input_device", audio.get("input_device")),
+                                 ("[audio] output_device", audio.get("output_device")),
+                                 ("[music] alsa_device", music.get("alsa_device"))):
+                if not devices.valid_windows_device(value):
+                    raise ValueError(
+                        f"{where} {str(value)[:40]!r} is not a Windows audio device: use "
+                        "\"default\", a device number, or a name from --list-devices"
+                    )
+        server_search = str(pc.get("server_search", "") or "")
+        if server_search and server_search not in pc_engine.SERVER_SEARCH:
+            raise ValueError(
+                f"unknown [pc] server_search {server_search!r}. Valid values: "
+                f"{', '.join(pc_engine.SERVER_SEARCH)}."
+            )
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -856,6 +885,7 @@ class Config:
             volume_backend=volume_backend,
             control_enabled=control_enabled if isinstance(control_enabled, bool) else None,
             full_duplex_override=fd_override if isinstance(fd_override, bool) else None,
+            server_search=server_search,
         )
 
 
@@ -1734,7 +1764,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 _enqueue(frame)
 
         try:
-            self._input_stream = sd.RawInputStream(
+            self._input_stream = debug_audio.input_stream(
+                sd,
                 samplerate=SAMPLE_RATE,
                 channels=channels,
                 dtype=dev.capture_dtype,
@@ -2607,8 +2638,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
         would be false here."""
         self._stop_ack()  # never two at once
         t0 = time.monotonic()
+        # A platform whose player is slow to start plays the acknowledgement
+        # in-process instead (Windows: engine_platform.WindowsAudioOut).
+        spawn = getattr(self._platform.audio_out, "spawn_ack", None)
         try:
-            proc = subprocess.Popen(
+            proc = spawn(argv) if spawn is not None else subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -2802,7 +2836,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # sentence pipelining handles the inter-sentence gap.
             rate = src_sr if device_rate is None else device_rate
             try:
-                out_stream = sd.RawOutputStream(
+                out_stream = debug_audio.output_stream(
+                    sd,
                     samplerate=rate, channels=1, dtype="int16",
                     device=self.cfg.output_device,
                 )
@@ -2825,7 +2860,8 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     "default %d Hz", device_rate, e, rate,
                 )
                 try:
-                    out_stream = sd.RawOutputStream(
+                    out_stream = debug_audio.output_stream(
+                        sd,
                         samplerate=rate, channels=1, dtype="int16",
                         device=self.cfg.output_device,
                     )
@@ -3501,6 +3537,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
     _net_step: dict[str, Any] | None = None
 
     def _check_net_settings(self) -> None:
+        if engine_platform.is_windows_pc(getattr(self, "cfg", None)):
+            # Root's record lives under /var/lib on a Linux box; on Windows
+            # that path is the system drive's root, writable by anyone.
+            self._net_step, self._net_reboot_needed = None, None
+            return
         try:
             mtime: float | None = net_settings.REPORT_PATH.stat().st_mtime
         except OSError:
@@ -3828,7 +3869,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
             last_reboot_note=self._health_last_reboot_note,
             escalate_after=float(self._hcfg("no_server_escalate_min", 5.0)) * 60.0,
             reboot_after=float(self._hcfg("reboot_after_min", 15.0)) * 60.0,
-            reboot_helper=REBOOT_HELPER.exists(),
+            reboot_helper=_reboot_helper_installed(self.cfg),
             mic_silence_limit=float(self._hcfg("mic_silence_sec", 30.0)),
             heartbeat_limit=float(self._hcfg("heartbeat_stale_sec", 60.0)),
         )
@@ -3967,6 +4008,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         log.warning("self-check: capture stream reopened (%s)", reason)
 
     def _health_reboot(self, reason: str) -> None:
+        if not _reboot_helper_installed(self.cfg):
+            log.warning("self-check: a reboot is called for (%s), but this device has no "
+                        "reboot helper; not rebooting", reason)
+            return
         if self._health_budget is not None:
             self._health_budget.record("reboot", reason)
         previous = self._last_health.last_exit_reason if self._last_health is not None else None
@@ -7401,7 +7446,9 @@ class Satellite(pc_engine.SpareDeviceEngine):
         LOG_SPOOL_HANDLER.set_mode("offline")
         if self._hcfg("enabled", False):
             self._last_health = health.LastHealth(LAST_HEALTH_PATH)
-            self._health_sampler = health.Sampler()
+            self._health_sampler = health.Sampler(
+                battery_reader=health.read_battery_here if sys.platform == "win32" else None,
+            )
             try:
                 self._prev_health = self._last_health.take_previous()
             except Exception as e:  # noqa: BLE001
@@ -7904,6 +7951,11 @@ def _setup_status(state: str, *args: str) -> None:
     because of it, and on a hand-built unit the helper simply isn't there.
     """
     helper = "/usr/local/sbin/domovoi-status"
+    if sys.platform == "win32":
+        # No root helper on Windows, and that POSIX path would name a file
+        # at the root of the system drive, where any account may create
+        # one: never run it (and never hand it the approval code).
+        return
     try:
         if not os.access(helper, os.X_OK):
             return
@@ -8386,8 +8438,13 @@ def _locate_server(cfg: "Config") -> "tuple[Any, bool, str | None]":
         return None, is_auto, configured
     pending, _pending_fp = server_identity.read_pending_server()
     last_known = pending if is_auto else configured
+    # A spare computer may ask for less than the Pi's full order
+    # ([pc] server_search): no /24 sweep ("names", windows_pc's default),
+    # or only its enrolled address ("address").
+    search = pc_engine.server_search(cfg)
     found = discovery.locate(
-        names=discovery.server_names(),
+        names=() if search == "address" else discovery.server_names(),
+        scan=search == "sweep",
         last_known=last_known,
         expected_fingerprint=expected,
         # A refusal at the last-known address: its machine is there and not
@@ -8541,6 +8598,16 @@ def main(argv: list[str] | None = None) -> int:
     # An enrolled spare computer never trusts the first server that
     # answers: no pinned identity, no satellite. Its unit does not restart
     # it for this exit code (RestartPreventExitStatus).
+    # On Windows the satellite is always the windows_pc profile (its player,
+    # its volume, its pipe, the gates on POSIX paths that would name files
+    # anyone can create at the root of the system drive); windows_pc runs
+    # nowhere else.
+    if engine_platform.is_windows_pc(cfg) != (sys.platform == "win32"):
+        want = "windows_pc" if sys.platform == "win32" else "a Pi profile or generic_pc"
+        log.error("not starting: [device] profile %r does not run on %s", cfg.device.name, sys.platform)
+        print(f"domovoi-satellite: [device] profile = {cfg.device.name!r} does not run on "
+              f"{sys.platform}; use {want}", file=sys.stderr)
+        return 2
     if pc_engine.is_pc(cfg):
         pinned, detail = pc_engine.require_pin(cfg)
         if not pinned:
