@@ -939,7 +939,15 @@ again. The update unit runs it on every
 update and every Restart, while core and web are stopped, so a box installed
 before it existed gets it at its next one ([Updates from the
 dashboard](#updates-from-the-dashboard), step 7); there it never fails the
-run, and under **No** it downloads nothing. A Docker restart stops every
+run, and under **No** it downloads nothing. A try that failed or refused is
+recorded (`/var/lib/domovoi-gpu-runtime/last-failure`: the pins, when, why)
+and the update unit doesn't repeat it for a day, so a box where it can't be
+set up doesn't run `apt-get update` and restart Docker at every Restart. It
+tries at once when the pins change, when `provision.sh` runs (it passes
+`--force`), and at the next update or Restart after an admin presses **Turn
+on wake-word training** or **Check the GPU and trainer again** on a box
+whose card Docker can't use (the core leaves
+`~/.domovoi/wake_trainer/gpu-runtime-retry`). A Docker restart stops every
 container for a moment: Postgres and the rooms' players come back by
 themselves (`restart: unless-stopped`), and the update unit restarts
 `domovoi-db` after it. To keep the toolkit in your own hands, put
@@ -949,6 +957,11 @@ scripts leave it alone then. By hand: `sudo bash
 change nothing, `--detect` only says whether a GPU is visible). A word then
 trains in about 20 minutes (26 the first time), on the least busy card, so
 generating the synthetic speech stays off the card holding the chat model.
+Once training is set up for the GPU, a training whose GPU Docker can't reach
+(the toolkit removed, the card gone) fails saying so (the wrapper's exit 75)
+instead of running for over an hour on the CPU under a limit sized for the
+GPU: Restart, then **Check the GPU and trainer again**, or turn training on
+again with the CPU.
 
 **On a CPU-only box** (no NVIDIA GPU) training works, slower: about 75
 minutes a word on 8 cores at the defaults (measured; the card scales that
@@ -961,7 +974,19 @@ inside; the time limit sizes itself to the box (twice the estimate, at
 least two hours).
 
 **After an update** that changes `scripts/wake_word/docker`, the update unit
-rebuilds the trainer image (step 13), only on a box that built it.
+rebuilds the trainer image (step 13), only on a box that built it. Answering
+**No** in Settings → Internet while that rebuild, or a "Turn on" job's build
+or download, is running stops it (the core stops the rebuild unit's `docker
+build`, and the job's container), and the core checks again when it starts.
+
+**Stopping and turning off.** A word that is training has a **Stop
+training** button: its container is stopped (it removes its copies of the
+recordings first) and the word goes back to *recording* with its clips. **Turn
+off and free the space** shows what the trainer image and the cache volume
+take, then switches training off and removes both, with Docker's build cache;
+trained models and recordings stay. By hand, the same:
+`docker image rm domovoi-wake-trainer:latest`, `docker volume rm
+domovoi_oww_cache`, `docker builder prune`.
 
 ---
 
@@ -1054,7 +1079,10 @@ does this:
    `domovoi-db` after it. It can't fail the update and is never rolled
    back: a `gpu-runtime` step is recorded only when it changed something
    (`ok`) or failed (`warn`, with the helper's reason). No GPU, or nothing
-   to do: nothing is recorded. Under `never` nothing is downloaded.
+   to do: nothing is recorded. Under `never` nothing is downloaded. A failed
+   try is not repeated for a day ("not retried", nothing recorded), unless
+   the pins changed or the dashboard left its retry flag
+   (`~/.domovoi/wake_trainer/gpu-runtime-retry`, removed once read).
    `DOMOVOI_MANAGE_GPU_RUNTIME=0` skips it.
 8. `systemctl restart domovoi-db`: compose up plus Flyway.
 9. Start core and web. Both must answer `/v1/health` (core, :6370) and

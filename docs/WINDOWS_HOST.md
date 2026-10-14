@@ -273,25 +273,32 @@ PC needs for it:
   `nvidia` runtime in Docker's configuration, and a Docker restart
   (Postgres and the rooms' players stop for a moment and come back by
   themselves). It never installs a Linux NVIDIA driver: the driver is
-  Windows'. A **new install** gets it during Setup (`provision.sh`'s
-  `gpu-runtime` step). An **existing install** gets it at its next update
-  from the dashboard (**Pull the latest**, then **Restart to apply
-  changes**), and every **Restart Domovoi** after that checks it is still
-  in place. With the internet answer **No**, the update downloads
-  nothing, so the toolkit isn't installed then; Setup installs it whatever
-  the answer, like everything else it downloads. More:
+  Windows'. Setup installs Domovoi at the commit the installer is pinned
+  to, and until the installer is re-pinned to a commit that has this
+  helper, a **new install** doesn't get the toolkit during Setup: like an
+  **existing install**, it gets it at its first update from the dashboard
+  (**Pull the latest**, then **Restart to apply changes**). Once the
+  installer is re-pinned past it, Setup installs it (`provision.sh`'s
+  `gpu-runtime` step). After that every **Restart Domovoi** checks it is
+  still in place. A try that failed is not repeated at every Restart: the
+  next one is a day later, or at the next Restart after you press **Turn
+  on wake-word training** or **Check the GPU and trainer again**. With the
+  internet answer **No**, the update downloads nothing, so the toolkit
+  isn't installed then. More:
   [LINUX_HOST.md, Wake-word training](LINUX_HOST.md#wake-word-training).
 - **Memory.** Training needs the distro to see 24 GB, the line where it
   gets the standard models. The distro gets the PC's memory minus 8 GB,
   so that means a PC with about 32 GB or more; below that the card says
-  training can't be turned on here.
+  training can't be turned on here, in the PC's terms ("this PC has about
+  24 GB").
 - **Disk and download.** About 22 GB downloaded, once, and about 32 GB
   more disk the first time (the trainer and its training data), then
   about 0.5 GB per wake word, in the distro's disk
   (`C:\ProgramData\Domovoi\distro\ext4.vhdx`), which grows on the system
-  drive. The card checks the free space on the distro's own disk, which
-  can show far more than the system drive really has: make sure the
-  system drive has that room before you turn training on.
+  drive. Domovoi can't see how much of C: is free (the distro's own disk
+  is a 1 TB virtual one, whatever C: holds), so the card shows no number
+  here: it asks you to confirm that C: has at least 40 GB free before it
+  turns training on. Look in File Explorer, **This PC**.
 - **Time.** About 20 minutes a wake word on the GPU (26 the first time;
   measured on an RTX 4070 Ti SUPER). Generating the synthetic speech fills
   a 16 GB card, so the trainer takes the least busy card, away from the one
@@ -308,7 +315,10 @@ at a time.
 On a PC with an NVIDIA card, update first: until the toolkit is there the
 card says Docker can't use the card yet, and offers only the processor.
 With the toolkit in place after the update, **Check the GPU and trainer
-again** (or **Try again**) finds the GPU. Without an NVIDIA card, training
+again** (or **Try again**) finds the GPU. Once training is set up for the
+GPU, a **Train** while Docker can't reach it (the toolkit lost, the card
+gone) fails saying so instead of running for over an hour on the
+processor. Without an NVIDIA card, training
 runs on the processor: about 75 minutes a word on 8 cores, and voice
 answers more slowly while it runs. The card says so and asks before
 turning training on and again before each **Train**.

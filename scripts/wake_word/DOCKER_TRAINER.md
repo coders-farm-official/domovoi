@@ -131,6 +131,15 @@ docker build \
 | `melspectrogram.onnx`, `embedding_model.onnx` (openWakeWord v0.5.1 release assets) | SHA-256 checked at build. |
 | The apt packages (`espeak-ng`, `ffmpeg`, `build-essential`, ...) | Not pinned: whatever the base's Ubuntu archive serves that day, checked by apt against the archive's signature. |
 
+The training data (downloaded at run time, not at build) is pinned in
+`docker/entrypoint.py`:
+
+| Input | Pinned how |
+|---|---|
+| `davidscripka/openwakeword_features` (Hugging Face) | `FEATURES_REVISION` = `985bf1b` (the dataset commit); both `.npy` files checked against `FEATURES_SHA256` (their LFS ids at that commit) before the first training uses them. A cache filled before the pins is checked once (about a minute for the 17.3 GB file), then `.oww_data_verified_<rev>` marks it. A mismatch refuses the run (exit 4). |
+| `davidscripka/MIT_environmental_impulse_responses` (Hugging Face) | `RIRS_REVISION` = `b824a1e`. Its 270 WAVs are not hashed one by one: the commit holds them. |
+| `fma_sample.zip`, `fsd50k_sample.zip` (Backblaze B2) | `BACKGROUND_ZIP_SHA256`, checked before unpacking; a mismatch refuses the run. |
+
 To move a pin: change it, rebuild, train once, and check
 `train_config.template.yaml` against the new commit's `train.py`.
 
@@ -255,9 +264,10 @@ anything:
    The entrypoint stores a digest of the real clip set the features were
    computed from (`.real_clips.sha256`, written after a successful augment) and
    drops the four feature files when the set changes; the run's `real_*.wav`
-   copies are removed at its end (finished or failed: they are recordings of
-   somebody's voice) and made again by the next run. Synthetic clips stay
-   cached.
+   copies are removed at its end (finished, failed or stopped: they are
+   recordings of somebody's voice) and made again by the next run, and every
+   run starts by removing any an earlier, killed run left. Synthetic clips
+   stay cached.
 
 **`--shm-size`.** The training DataLoader's worker processes pass batches through
 `/dev/shm`; Docker's 64 MB default overflows mid-train
@@ -279,6 +289,7 @@ run the container by hand, add `--shm-size=2g` yourself.
 | `WAKE_TRAINER_CPUSET` | — (`--cpuset-cpus`) | none | a fixed set of CPUs, e.g. `16-31` |
 | `WAKE_TRAINER_MEMORY` | — (`--memory`, `--memory-swap` the same) | `12g` | memory cap, no swap on top; never more than the Docker host minus 6 GB (at least 4 GB). The core sets it from **Memory for training** (`WAKE_TRAINER_MEMORY_GB`) |
 | `WAKE_TRAINER_DEADLINE_SEC` | — | set by the core: its time limit minus 60 s | the wrapper removes its container when this runs out (exit 124) |
+| `WAKE_TRAINER_REQUIRE_GPU` | — | set by the core (`1`) when the dashboard's setup found the GPU | the wrapper refuses to train on the CPU when its GPU check fails (exit 75, the reason in the log) |
 | `WAKE_TRAINER_CONTAINER` | — (`--name`) | `domovoi-wake-train` | the container's name |
 | `WAKE_TRAINER_SHM_SIZE` | — (`--shm-size`) | `2g` | shared memory for DataLoader workers |
 | `WAKE_TRAINER_IMAGE` | — | `domovoi-wake-trainer:latest` | image to run (a published tag to skip building) |
@@ -292,7 +303,7 @@ environment, and the core's trainer worker builds that environment: the
 core's own, plus every `WAKE_TRAINER_*` line in `domovoi/.env`, plus the
 values of the settings in **Settings → Configuration → Wake words**
 (samples, steps, recorded share, CPUs, memory; 0 means the default here),
-plus `WAKE_TRAINER_DEADLINE_SEC` and `WAKE_PRONUNCIATIONS`. A variable in
+plus `WAKE_TRAINER_DEADLINE_SEC`, `WAKE_TRAINER_REQUIRE_GPU` and `WAKE_PRONUNCIATIONS`. A variable in
 the core's process environment wins over the `.env` line. So a `.env` line
 is enough; no systemd drop-in is needed. `WAKE_TRAINER_IMAGE`,
 `WAKE_TRAINER_CACHE_VOLUME` and `WAKE_TRAINER_DOCKER` are deliberately not
@@ -396,15 +407,30 @@ killed, so the wrapper and the worker take care of it:
   out (exit 124) and when it gets SIGTERM, SIGINT or SIGHUP (exit 128 plus
   the signal). systemd stopping `domovoi-core` reaches it: the unit's
   `KillMode=control-group` signals every process in it.
+- Removing means `docker stop -t 10` first, then `docker rm -f`. The
+  container runs under `--init`, so the entrypoint gets the SIGTERM (as PID
+  1 it would ignore it) and unwinds through the `finally` that removes the
+  run's copies of the recorded clips. Then a throwaway container of the
+  image scrubs any `runs/*/*/positive_train/real_*.wav` left in the cache
+  volume (a run killed with SIGKILL can't clean up after itself); nothing
+  when the volume doesn't exist.
 - `python train_wake_word.py --stop` removes every container with the
-  label, and says "no training container to stop" when there is none.
+  label and scrubs those copies, and says "no training container to stop"
+  when there is none. `--forget SLUG` removes a word's folder from the
+  cache volume (the core runs it when a wake word is deleted), `--keep-only
+  A,B` every folder but those words' (the worker's first check after a
+  start, with the words that exist).
 - The core's worker trains words one after another, and nothing while
   training is off or while the dashboard's setup job runs (the image may be
   rebuilding). At its limit or at a shutdown it asks the command to stop
   (SIGTERM to its process group; on Windows it removes the container first,
   which ends `docker run`), kills it after 30 s, then runs `--stop`. At its
-  first check after a start it runs `--stop` once, for a container a crashed
-  core left behind. A word cut off by a shutdown stays queued and trains
+  first check after a start it runs `--stop --keep-only <the words that
+  exist>` once, for a container or copies a crashed core left behind and
+  the files of words deleted while it was down. **Stop training** on a word
+  that trains does the same as the limit (the word goes back to *recording*
+  with its clips, not queued again); on a queued word it puts it back at
+  once. A word cut off by a shutdown stays queued and trains
   again after the restart; one that ran out of time is failed, the message
   naming the time limit.
 - The whole output of each word's last run is in
@@ -454,8 +480,10 @@ synthetic clips + computed features live under `/data/cache/runs/<slug>/`
 tops up to `n_samples`, and augmentation is skipped only while the real clip
 set is the one the features were computed from (patch 8 above). The copies
 of the word's recorded clips a run puts in `positive_train/real_*.wav` are
-removed at the end of the run; deleting the wake word in the dashboard does
-not clear the folder.
+removed at the end of the run, however it ends (above); deleting the wake
+word in the dashboard removes its folder too. **Turn off and free the
+space** (Settings → Wake Words) removes the whole volume, the image and
+Docker's build cache, after showing their size.
 
 The dashboard's setup warms it. By hand (the first Train otherwise spends
 ~6 min downloading on a fast line):

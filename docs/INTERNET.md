@@ -224,7 +224,8 @@ stays yours to do:
 - **Topic news every morning** (`NEWS_AUTO_FETCH`).
 - **A custom wake word.** Turning training on (Settings → Wake Words)
   downloads about 22 GB once: the trainer's image and its training data.
-  Under No it can't be turned on. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
+  Under No it can't be turned on, and answering No while it downloads stops
+  the download. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
 
 ---
 

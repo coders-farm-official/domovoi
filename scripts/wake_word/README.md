@@ -31,8 +31,12 @@ work, when:
 
 - **internet access is turned off** (Settings → Internet → No): turning
   it on downloads about 22 GB, once;
-- **too little disk** is free (the need above plus 5 GB);
-- **the server has less than 24 GB of memory**;
+- **too little disk** is free (the need above plus 5 GB). On the Windows
+  install Domovoi can't see the Windows drive, so the card shows no free
+  space there and the confirm dialog asks you to tick that C: has at least
+  40 GB free;
+- **the server has less than 24 GB of memory** (on the Windows install, the
+  card says it in the PC's terms: a PC with about 32 GB or more);
 - **Docker is not installed or not running**.
 
 On **Turn on wake-word training** a confirm dialog repeats the needs. A
@@ -74,7 +78,18 @@ reuses what was done (Docker's build cache, the data already downloaded).
 - **Use the CPU** appears when the GPU check failed.
 - **Check the GPU and trainer again** (once training is on) runs the job
   again: a quick rebuild when nothing changed, the GPU check, the data
-  check. Use it after the NVIDIA Container Toolkit arrives.
+  check. Use it after the NVIDIA Container Toolkit arrives. On a box whose
+  NVIDIA card Docker can't use yet, it (and **Turn on**) also asks the next
+  update or Restart to set the toolkit up at once, even within a day of a
+  failed try.
+- **Turn off and free the space** (once training is on) shows what the
+  trainer image and its data take, then switches training off and removes
+  them (the image, Docker's build cache for it, the `domovoi_oww_cache`
+  volume with every word's training files). Trained wake words and their
+  recordings stay; turning training on again downloads it all again.
+- Answering **No** in Settings → Internet while the job builds or
+  downloads stops it ("Stopped: internet access was turned off"), and stops
+  a rebuild an update left running too.
 
 On a Linux server or the Windows install, an update that changes
 `scripts/wake_word/docker` rebuilds the image by itself
@@ -166,6 +181,20 @@ systemd drop-in is no longer needed. Every knob:
   its first check after a start it does that once more, for a container a
   crashed core left behind. A word that ran out of time is failed, the
   message naming the time limit.
+- **Stop training.** A word that is training has a **Stop training**
+  button: the run stops (its container, and the copies of the recordings
+  with it) and the word goes back to *recording* with its clips, not queued
+  again.
+- **The GPU it was set up for.** Once the setup found the GPU, a training
+  whose GPU check fails (the toolkit lost, the card gone) is refused with
+  the reason instead of running for over an hour on the CPU under the GPU's
+  time limit.
+- **No recordings left behind.** The copies of the recorded clips a run
+  puts in the cache volume go at its end however it ends: finished,
+  failed, stopped, timed out or cut off by a restart (the container gets a
+  stop signal and a 10 s grace first). A run killed outright is scrubbed by
+  the next stop, run or start. Deleting a wake word removes its training
+  files from the volume too.
 - **Live voice keeps priority.** The container gets `--cpus` (all but a
   quarter of the CPUs, at least two left), `--cpu-shares 128` (voice wins
   every contended slice), `--memory 12g` with no swap (never more than the
