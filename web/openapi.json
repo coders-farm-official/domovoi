@@ -4503,6 +4503,46 @@
         }
       }
     },
+    "/api/satellites/windows-runtime": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Runtime Status",
+        "description": "Whether the core holds every file of the Windows satellite's runtime\n(``ready``, ``missing``, ``bytes_total``, ``bytes_cached``, ``fetch``).",
+        "operationId": "windows_runtime_status_api_satellites_windows_runtime_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-runtime/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Runtime Fetch",
+        "description": "Start fetching the Windows satellite's runtime onto the core.",
+        "operationId": "windows_runtime_fetch_api_satellites_windows_runtime_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/approvals/{room_id}/approve": {
       "post": {
         "tags": [

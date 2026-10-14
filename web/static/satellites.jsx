@@ -2175,6 +2175,90 @@ const SpareQr = ({ text }) => {
   );
 };
 
+/* The Windows laptop's command (2026-10-13). The same trust model as the
+ * Linux one: the bundle's SHA-256 is checked before anything runs, the
+ * server proves its fingerprint before anything is written. It installs for
+ * the signed-in account only, with no administrator rights; the Python and
+ * libraries it needs come from this server's cache when an admin has
+ * fetched them (here), else straight from python.org and PyPI — the same
+ * pinned files either way. Unsigned for now: said plainly. */
+const spareMb = (b) => b == null ? '—' : `${Math.round(b / 1e6)} MB`;
+const SpareWindows = ({ res, fire }) => {
+  const [rt, setRt] = React.useState(res.windows_runtime || null);
+  const [fetching, setFetching] = React.useState(false);
+  React.useEffect(() => { setRt(res.windows_runtime || null); }, [res]);
+  React.useEffect(() => {
+    if (!rt || !rt.fetch || !rt.fetch.running) return undefined;
+    const t = setInterval(async () => {
+      try { setRt(await apiGet('/api/satellites/windows-runtime')); } catch (e) { /* keep the last */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [rt && rt.fetch && rt.fetch.running]);
+  const getFiles = async () => {
+    setFetching(true);
+    try {
+      setRt(await apiPost('/api/satellites/windows-runtime/fetch', {}));
+    } catch (e) {
+      fire(apiErrorText(e, 0));
+    } finally {
+      setFetching(false);
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(res.command_windows);
+      fire('Windows install command copied');
+    } catch (e) {
+      fire('select the command and copy it by hand (the browser refused the clipboard)');
+    }
+  };
+  const running = !!(rt && rt.fetch && rt.fetch.running);
+  return (
+    <div className="spare-windows" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="label">windows laptop or pc (windows 10 or 11, 64-bit)</div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+        On the PC, signed in as the person whose account it will run in (a normal window, not
+        "Run as administrator"), open Windows PowerShell or Terminal and paste this. It installs
+        for that account only, needs no administrator rights, and listens while that account is
+        signed in. Not on the PC that runs this Domovoi server: it refuses there.
+      </div>
+      <pre className="mono spare-command spare-command-windows" tabIndex={0}
+           style={{ margin: 0, padding: 10, fontSize: 11.5, lineHeight: 1.45,
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
+                    background: 'var(--bg-sunken, var(--bg))', border: '1px solid var(--border)',
+                    borderRadius: 'var(--r-sm)', maxHeight: 160, overflow: 'auto' }}>{res.command_windows}</pre>
+      <div><Button icon="copy" onClick={copy}>copy the Windows command</Button></div>
+      <div role="note" className="spare-windows-unsigned"
+           style={{ fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+        Not signed yet: the satellite's own code carries no Coders Farm signature (Python itself is
+        signed by the Python Software Foundation). Windows Security or another antivirus may warn
+        about a command that downloads and starts programs; Windows shows its microphone-in-use
+        icon the whole time the satellite listens for the wake word.
+      </div>
+      {rt && (
+        <div className="spare-windows-runtime" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+          {rt.ready
+            ? <>This server holds the Windows files (Python {rt.python} and its libraries,
+                {' '}{spareMb(rt.bytes_total)}): the PC gets them from here.</>
+            : <>This server doesn't hold the Windows files yet (Python {rt.python} and its libraries,
+                {' '}{spareMb(rt.bytes_total)}{rt.bytes_cached ? `, ${spareMb(rt.bytes_cached)} so far` : ''}).
+                Get them now, or the PC downloads the same pinned files from python.org and PyPI
+                itself.{' '}
+                {rt.fetch && rt.fetch.ok === false && rt.fetch.message
+                  ? <span style={{ color: 'var(--err)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+          {!rt.ready && (
+            <div style={{ marginTop: 6 }}>
+              <Button icon="download" disabled={running || fetching} onClick={getFiles}>
+                {running ? 'getting the Windows files…' : 'get the Windows files'}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SpareDeviceCard = ({ fire }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
@@ -2222,7 +2306,7 @@ const SpareDeviceCard = ({ fire }) => {
         <Icon name="laptop" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>add a spare device</span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-          a Linux laptop or mini PC, or a phone
+          a Linux or Windows laptop or PC, or a phone
         </span>
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
       </button>
@@ -2293,6 +2377,7 @@ const SpareDeviceCard = ({ fire }) => {
                   </div>
                 </div>
               </div>
+              {res.command_windows && <SpareWindows res={res} fire={fire}/>}
             </>
           )}
         </div>
