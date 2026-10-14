@@ -194,11 +194,17 @@ WAKE_TRAINER_N_SAMPLES=200 WAKE_TRAINER_N_SAMPLES_VAL=50 WAKE_TRAINER_STEPS=2000
 A **production-quality** model needs far more data + steps (per upstream's own
 guidance): `WAKE_TRAINER_N_SAMPLES` **≥ 10000–50000** (20k+ recommended, 100k+
 best), `WAKE_TRAINER_N_SAMPLES_VAL` ~2000, `WAKE_TRAINER_STEPS` ~**50000** (the
-image default). Generation + training at those sizes runs ~1–2 h on the
-RTX 4070 Ti Super and will exceed the Domovoi server worker's **3600 s** timeout —
-warm the synthetic clips/features first (the run dir is resumable) or raise the
-worker timeout. Recording **more real positive clips** than the 30 in
-`~/.domovoi/wake_clips/<slug>/` also helps materially.
+image default). Measured 2026-10-13 at the image defaults (5,000 samples,
+50,000 steps, warm cache): about 20 min on one RTX 4070 Ti SUPER (generation
+5-6 min, augmentation 4 min, training 10 min) and about 75 min on 8 CPU
+cores, where generating the 12,000 synthetic clips takes about an hour
+(training itself runs at ~110 steps/s either way: the model is tiny). The
+first run adds the dataset download (5.6 min at ~90 MB/s). Synthetic
+generation grows linearly with `WAKE_TRAINER_N_SAMPLES`, so 20k+ samples go
+past the worker's fixed **3600 s** timeout even on that GPU — warm the
+synthetic clips first (the run dir is resumable). Recording **more real
+positive clips** than the 30 in `~/.domovoi/wake_clips/<slug>/` also helps
+materially.
 
 ---
 

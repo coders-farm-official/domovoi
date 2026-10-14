@@ -364,9 +364,12 @@ def main() -> int:
             gpu_flag = ["--gpus", "all"]
             backend = "GPU all" if count <= 1 else "GPU all (smi unavailable)"
     else:
-        log("No usable GPU runtime detected; training on CPU (slower, "
-            "~12-24h vs ~1-2h on GPU). This is fully supported — the same "
-            "image runs CPU-only when --gpus is omitted.")
+        log("No usable GPU runtime detected; training on CPU (at the defaults "
+            "about 75 min on 8 cores against about 20 min on an RTX 4070 Ti "
+            "SUPER, measured 2026-10-13; the synthetic speech generation is "
+            "the slow part). The same image runs CPU-only when --gpus is "
+            "omitted. On Docker Engine with an NVIDIA card, install the "
+            "NVIDIA Container Toolkit (DOCKER_TRAINER.md).")
 
     # (4) Build + run.
     clips_src = to_docker_mount_source(args.clips)
