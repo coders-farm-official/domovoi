@@ -265,6 +265,10 @@ SECURITY_TIER_ROUTES = [
     # is a config write.
     ("core", "POST", "/v1/admin/wake/trainer/enable"),
     ("web", "POST", "/api/wake-words/trainer/enable"),
+    # ...and "Turn off and free the space": two settings off, Docker's
+    # image and volume removed.
+    ("core", "POST", "/v1/admin/wake/trainer/disable"),
+    ("web", "POST", "/api/wake-words/trainer/disable"),
 ]
 
 

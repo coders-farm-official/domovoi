@@ -40,7 +40,7 @@ def box(monkeypatch, tmp_path):
     calls: list[list[str]] = []
     state = {"gpus": [], "runtimes": ["io.containerd.runc.v2", "runc"], "probe_ok": True,
              "build_rc": 0, "warm_rc": 0, "mem_mib": 64 * 1024, "free_gb": 500.0,
-             "docker_ok": True, "image": (False, None)}
+             "docker_ok": True, "image": (False, None), "wsl": False}
 
     def docker_info():
         if not state["docker_ok"]:
@@ -82,6 +82,9 @@ def box(monkeypatch, tmp_path):
     monkeypatch.setattr(wts, "source_tree_id", lambda: "a" * 40)
     monkeypatch.setattr(wts, "_disk_free_gb", lambda info: (state["free_gb"], "/var/lib/docker"))
     monkeypatch.setattr(wts, "_mem_total_mib", lambda: state["mem_mib"])
+    # Not the Windows install's distro unless a test says so (the Linux
+    # harness itself may run in WSL).
+    monkeypatch.setattr(wts, "on_wsl", lambda: state["wsl"])
     monkeypatch.setattr(wts, "_physical_cores", lambda: 8)
     monkeypatch.setattr(wts, "_stream", stream)
     monkeypatch.setattr(wts, "_run", run)
@@ -301,3 +304,262 @@ def test_a_set_time_limit_wins(box, monkeypatch):
     assert wts.train_timeout_sec() == 4321
     monkeypatch.setattr(settings, "wake_word_train_timeout_sec", 0)
     assert wts.train_timeout_sec() == 7200       # nothing recorded: the CPU floor
+
+
+# ─── review fix round (2026-10-13) ────────────────────────────────────────
+
+def _memory_cap_gb(total_ram_gb: float) -> int:
+    """windows/common/WslConfig.cs MemoryCapGb, transcribed (what the
+    Windows installer gives the distro)."""
+    labelled = round(total_ram_gb)
+    if labelled < 24:
+        return 10
+    return max(16, min(64, labelled - 8))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pc_gb", [16, 24, 28, 30])
+async def test_on_windows_the_memory_refusal_is_in_the_pcs_terms(box, pc_gb):
+    """The distro gets the PC's memory minus 8 GB: a 24 GB PC was told "this
+    server has 16 GB; training needs a 24 GB server" (review)."""
+    box["state"]["wsl"] = True
+    box["state"]["mem_mib"] = _memory_cap_gb(pc_gb) * 1024 - 300   # MemTotal reads a bit under
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    text = " ".join(req["refusals"])
+    assert "Training needs a PC with about 32 GB of memory or more" in text
+    assert ("this PC has less than 24 GB" if pc_gb < 24 else f"this PC has about {pc_gb} GB") in text
+    assert "server" not in text
+    assert req["memory"]["pc_need_gb"] == 32
+
+
+@pytest.mark.asyncio
+async def test_on_windows_a_32_gb_pc_is_enough(box):
+    box["state"].update(wsl=True, mem_mib=_memory_cap_gb(32) * 1024 - 300)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    assert req["refusals"] == [] and req["memory"]["pc"] == "about 32 GB"
+
+
+@pytest.mark.asyncio
+async def test_on_windows_no_disk_number_and_the_person_confirms_c(box):
+    """Docker's data root is inside the distro's 1 TB virtual disk ("1015 GB
+    free" in the e2e distro) and the distro can't see C:: no number, no
+    refusal from it, and "Turn on" needs the person's word for C:."""
+    box["state"].update(wsl=True, free_gb=1015.0)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+        assert req["disk"]["free_gb"] is None and req["disk"]["confirm_gb"] == 40
+        assert req["refusals"] == []
+        assert any("can't see how much space is free on the Windows drive (C:)" in n
+                   for n in req["notes"])
+        with pytest.raises(wts.Refused, match="Confirm that C: has at least 40 GB free"):
+            await wts.start(cpu_ok=True)
+        await wts.start(cpu_ok=True, disk_ok=True)
+        await _finish()
+    assert (await wts.status())["job"]["state"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_elsewhere_the_disk_is_measured_and_no_confirm_is_asked(box):
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+        assert req["disk"]["free_gb"] == 500.0 and req["disk"]["confirm_gb"] is None
+        await wts.start(cpu_ok=True)
+        await _finish()
+
+
+@pytest.mark.asyncio
+async def test_two_overlapping_turn_ons_start_one_job(box, monkeypatch):
+    """Review: both passed the job check while the first was still in
+    ``requirements`` (seconds on a loaded box), so two jobs ran and the
+    second one's cleanup removed the first one's download container. The
+    review's own test (functional-testing/review-wake-gpu), now passing."""
+    real_requirements = wts.requirements
+    jobs: list[str] = []
+
+    async def slow_requirements(force: bool = False):
+        out = await real_requirements(force=force)
+        await asyncio.sleep(0.3)
+        return out
+
+    async def fake_job(cpu_ok, gpus, ncpu, physical):
+        jobs.append("job")
+        await asyncio.sleep(0.5)
+
+    monkeypatch.setattr(wts, "requirements", slow_requirements)
+    monkeypatch.setattr(wts, "_job", fake_job)
+    with egress.override_policy("always"):
+        results = await asyncio.gather(
+            wts.start(cpu_ok=True), wts.start(cpu_ok=True), return_exceptions=True)
+        await asyncio.sleep(0.8)
+    refused = [r for r in results if isinstance(r, wts.Refused)]
+    assert len(jobs) == 1 and len(refused) == 1, results
+    assert "already being set up" in str(refused[0])
+
+
+@pytest.mark.asyncio
+async def test_internet_never_stops_the_job_and_its_download(box, monkeypatch):
+    """Review: answering "never" mid-setup let the 18 GB download run on.
+    The internet_access hook (main.py) calls on_internet_answer: the job
+    stops, the download container goes, and the job says why."""
+    started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    removed: list[str] = []
+
+    def stream(argv, timeout, on_line, on_cancel=None):
+        box["calls"].append(argv)
+        if argv[:2] == ["docker", "build"]:
+            return 0, []
+        loop.call_soon_threadsafe(started.set)
+        assert wts._CANCEL.wait(10), "never told to stop"
+        if on_cancel is not None:
+            on_cancel()
+        return None, [f"stopped: {wts._CANCEL_REASON}"]
+
+    monkeypatch.setattr(wts, "_stream", stream)
+    monkeypatch.setattr(wts, "_remove_warm", lambda: removed.append("warm"))
+    rebuild: list[str] = []
+    monkeypatch.setattr(wts, "stop_background_rebuild", lambda reason: rebuild.append(reason))
+    with egress.override_policy("always"):
+        await wts.start(cpu_ok=True)
+        await asyncio.wait_for(started.wait(), 10)
+    with egress.override_policy("never"):
+        wts.on_internet_answer()
+        await _finish()
+        await asyncio.sleep(0.1)
+    st = await wts.status()
+    assert st["job"]["state"] == "failed"
+    assert st["job"]["error"].startswith("Stopped: internet access was turned off")
+    assert "warm" in removed and rebuild and settings.wake_word_trainer_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_internet_still_allowed_stops_nothing(box, monkeypatch):
+    rebuild: list[str] = []
+    monkeypatch.setattr(wts, "stop_background_rebuild", lambda reason: rebuild.append(reason))
+    with egress.override_policy("always"):
+        wts.on_internet_answer()
+        await asyncio.sleep(0.05)
+    assert rebuild == [] and not wts._CANCEL.is_set()
+
+
+def test_the_update_rebuild_is_stopped_through_its_unit(box, monkeypatch):
+    """Only the unit's main process, and only when it is a docker build."""
+    killed: list[int] = []
+    procs = {"cmd": b"/usr/bin/docker\0build\0-t\0domovoi-wake-trainer:latest\0"}
+
+    class R:
+        returncode, stdout, stderr = 0, "4242\n", ""
+
+    monkeypatch.setattr(wts, "_run", lambda argv, t: R())
+    monkeypatch.setattr(wts.os, "kill", lambda pid, sig: killed.append(pid), raising=False)
+    real_read = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: procs["cmd"]
+                        if self.as_posix() == "/proc/4242/cmdline" else real_read(self))
+    assert wts.stop_background_rebuild("internet off") is True and killed == [4242]
+    procs["cmd"] = b"/usr/bin/sleep\0600\0"
+    assert wts.stop_background_rebuild("internet off") is False and killed == [4242]
+    R.stdout = "0\n"                          # the unit isn't running
+    assert wts.stop_background_rebuild("internet off") is False
+
+
+@pytest.mark.asyncio
+async def test_a_card_docker_cant_use_asks_for_the_gpu_runtime_again(box):
+    """Turn on with an NVIDIA card and no runtime leaves the flag
+    apply-update.sh reads: the next update or Restart sets the runtime up
+    again instead of waiting out its day after a failure."""
+    box["state"].update(gpus=GPU)            # runtimes: no nvidia
+    with egress.override_policy("always"):
+        await wts.start(cpu_ok=True)
+        await _finish()
+    assert wts.gpu_runtime_retry_flag().is_file()
+
+
+@pytest.mark.asyncio
+async def test_no_flag_when_docker_has_the_runtime(box):
+    box["state"].update(gpus=GPU, runtimes=["nvidia", "runc"])
+    with egress.override_policy("always"):
+        await wts.start(cpu_ok=True)
+        await _finish()
+    assert not wts.gpu_runtime_retry_flag().exists()
+
+
+def _footprint_docker(monkeypatch, calls, image=True, volume=True):
+    df = ('[{"Name":"domovoi_oww_cache","Size":"17.9GB"},'
+          '{"Name":"other","Size":"1GB"}]')
+
+    def run(argv, timeout):
+        calls.append(argv)
+
+        class R:
+            returncode, stdout, stderr = 0, "", ""
+        r = R()
+        if argv[:3] == ["docker", "image", "inspect"]:
+            r.returncode, r.stdout = (0, "12400000000\n") if image else (1, "")
+        elif argv[:3] == ["docker", "volume", "inspect"]:
+            r.returncode = 0 if volume else 1
+        elif argv[:3] == ["docker", "system", "df"]:
+            r.stdout = df
+        return r
+
+    monkeypatch.setattr(wts, "_run", run)
+
+
+def test_the_footprint_is_dockers_own_sizes(box, monkeypatch):
+    calls: list[list[str]] = []
+    _footprint_docker(monkeypatch, calls)
+    fp = wts.footprint()
+    assert fp["image_bytes"] == 12_400_000_000 and fp["volume_bytes"] == 17_900_000_000
+    assert fp["total_bytes"] == 30_300_000_000
+    _footprint_docker(monkeypatch, calls, image=False, volume=False)
+    fp = wts.footprint()
+    assert fp["image_bytes"] is None and fp["volume_bytes"] is None and fp["total_bytes"] is None
+
+
+@pytest.mark.asyncio
+async def test_turn_off_frees_the_space_and_switches_off(box, monkeypatch):
+    calls: list[list[str]] = []
+    _footprint_docker(monkeypatch, calls)
+    sql: list[str] = []
+
+    class S:
+        async def execute(self, stmt, *a, **k):
+            sql.append(str(stmt))
+
+    from contextlib import asynccontextmanager
+
+    from domovoi.db import session as db_session
+
+    @asynccontextmanager
+    async def scope():
+        yield S()
+
+    monkeypatch.setattr(db_session, "session_scope", scope)
+    with egress.override_policy("always"):
+        await wts.start(cpu_ok=True)
+        await _finish()
+    assert settings.wake_word_trainer_enabled is True
+    out = await wts.turn_off()
+    assert out["errors"] == [] and out["freed"]["total_bytes"] == 30_300_000_000
+    assert ["docker", "image", "rm", "-f", "domovoi-wake-trainer:latest"] in calls
+    assert ["docker", "volume", "rm", "-f", "domovoi_oww_cache"] in calls
+    assert ["docker", "builder", "prune", "-f"] in calls
+    assert settings.wake_word_trainer_enabled is False and settings.wake_word_train_command == ""
+    text = box["env"].read_text(encoding="utf-8")
+    assert "WAKE_WORD_TRAINER_ENABLED=false" in text and "WHISPER_MODEL=small.en" in text
+    assert any("SET status = 'recording'" in q and "WHERE status = 'training'" in q for q in sql)
+    st = await wts.status()
+    assert st["enabled"] is False and st["requirements"]["data_ready"] is False
+    assert st["job"]["message"].startswith("Turned off")
+
+
+@pytest.mark.asyncio
+async def test_turn_off_waits_for_a_training_or_a_job(box, monkeypatch):
+    monkeypatch.setattr(wwt, "training_active", lambda: True)
+    with pytest.raises(wts.Refused, match="stop it first"):
+        await wts.turn_off()
+    monkeypatch.setattr(wwt, "training_active", lambda: False)
+    monkeypatch.setattr(wts, "_STARTING", True)
+    with pytest.raises(wts.Refused, match="being set up"):
+        await wts.turn_off()

@@ -152,6 +152,12 @@ _INTERNET_OFF_MSG = (
 # A training is running in this process (read by the setup job and the
 # dashboard's status).
 _ACTIVE = threading.Event()
+# The word training now, and how to stop it (the dashboard's Stop).
+_CURRENT: dict = {"id": None, "cancel": None, "slug": None}
+# Words the dashboard asked to stop while they trained.
+_STOP_REQUESTED: set[int] = set()
+# The wrapper's exit when the trainer was set up for a GPU it can't reach.
+_EXIT_NO_GPU = 75
 # The orphan sweep runs once per process, at the first tick.
 _SWEPT = False
 
@@ -159,6 +165,59 @@ _SWEPT = False
 def training_active() -> bool:
     return _ACTIVE.is_set()
 
+
+def current_training() -> int | None:
+    """The id of the word training right now, or None."""
+    return _CURRENT["id"] if _ACTIVE.is_set() else None
+
+
+def request_stop(wake_word_id: int) -> bool:
+    """The dashboard's Stop on a word that is training now: stop the run
+    (its container, and the copies of the recordings with it); the worker
+    then puts the word back to "recording". False when it isn't the one
+    training (a queued word is the caller's to put back)."""
+    cancel = _CURRENT.get("cancel")
+    if _CURRENT.get("id") != wake_word_id or cancel is None or not _ACTIVE.is_set():
+        return False
+    _STOP_REQUESTED.add(wake_word_id)
+    cancel.set()
+    return True
+
+
+def forget_word(slug: str, wait_sec: float = 120.0) -> bool:
+    """A deleted word's training files leave the cache volume (``--forget``).
+    When it is the word training right now, that run is stopped first (its
+    container goes, the copies of the recordings with it) and this waits
+    for it to end. Blocking (a worker thread)."""
+    wid = _CURRENT.get("id")
+    if wid is not None and _CURRENT.get("slug") == slug and request_stop(wid):
+        deadline = time.monotonic() + wait_sec
+        while _ACTIVE.is_set() and time.monotonic() < deadline:
+            time.sleep(0.5)
+    return run_wrapper_maintenance("--forget", slug)
+
+
+def run_wrapper_maintenance(*args: str) -> bool:
+    """``train_wake_word.py --stop`` / ``--forget SLUG`` / ``--keep-only
+    A,B`` with the trainer's environment, when the configured command is
+    the repo's wrapper. Blocking (a worker thread). True when it ran and
+    said so."""
+    from domovoi import wake_trainer_setup
+
+    stop = wake_trainer_setup.wrapper_stop_argv(settings.wake_word_train_command or "")
+    if not stop:
+        return False
+    argv = [*stop[:-1], *args]
+    try:
+        r = subprocess.run(argv, env=trainer_env(60), capture_output=True, text=True, timeout=600,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("wake-word trainer: %s failed: %s", " ".join(args), e)
+        return False
+    if r.returncode != 0:
+        log.warning("wake-word trainer: %s exited %s: %s", " ".join(args), r.returncode,
+                    (r.stderr or r.stdout or "").strip()[-300:])
+    return r.returncode == 0
 
 @dataclass
 class TrainRun:
@@ -492,13 +551,17 @@ class WakeWordTrainer(Worker):
         stop = wake_trainer_setup.wrapper_stop_argv(settings.wake_word_train_command or "")
         if not stop:
             return
+        # A container, or copies of recordings, a killed core left; and the
+        # training files of words deleted while the core couldn't be told.
         try:
-            await asyncio.to_thread(
-                subprocess.run, stop, env=trainer_env(60), capture_output=True,
-                text=True, timeout=60,
-            )
-        except (OSError, subprocess.SubprocessError) as e:
-            log.warning("wake-word trainer: leftover-container sweep failed: %s", e)
+            async with session_scope() as s:
+                rows = (await s.execute(text("SELECT slug FROM wake_words"))).all()
+            keep = ",".join(r[0] for r in rows)
+        except Exception as e:  # noqa: BLE001 - the sweep is best effort
+            log.warning("wake-word trainer: no word list for the sweep (%s)", e)
+            keep = None
+        args = ["--stop"] + (["--keep-only", keep] if keep is not None else [])
+        await asyncio.to_thread(run_wrapper_maintenance, *args)
 
     async def _train_one(self) -> int:
         """Train (or fail) the oldest queued wake word. Returns 1 if a row was
@@ -592,11 +655,18 @@ class WakeWordTrainer(Worker):
         pron = await asyncio.to_thread(phrase_pronunciations, phrase)
         synth = await asyncio.to_thread(synthesis_ipa, phrase)
         env = trainer_env(timeout, pron, synth)
+        if wake_trainer_setup.recorded_gpu():
+            # Set up for the GPU: refuse the CPU rather than train for over
+            # an hour under a limit sized for the GPU (review, 2026-10-13).
+            env["WAKE_TRAINER_REQUIRE_GPU"] = "1"
+        else:
+            env.pop("WAKE_TRAINER_REQUIRE_GPU", None)
         stop_argv = wake_trainer_setup.wrapper_stop_argv(cmd_template)
         log_path = _log_dir() / f"{slug}.log"
         cancel = threading.Event()
 
         log.info("wake-word trainer: training slug=%s via %r (limit %d s)", slug, argv, timeout)
+        _CURRENT.update(id=wake_word_id, cancel=cancel, slug=slug)
         _ACTIVE.set()
         try:
             fut = asyncio.ensure_future(asyncio.to_thread(
@@ -623,6 +693,26 @@ class WakeWordTrainer(Worker):
             return 1
         finally:
             _ACTIVE.clear()
+            _CURRENT.update(id=None, cancel=None, slug=None)
+
+        if wake_word_id in _STOP_REQUESTED:
+            # The dashboard's Stop: back to "recording" with its clips, not
+            # queued again (the run's container and copies are gone).
+            _STOP_REQUESTED.discard(wake_word_id)
+            await self._mark_stopped(wake_word_id)
+            log.info("wake-word trainer: slug=%s stopped from the dashboard", slug)
+            return 1
+
+        if result.returncode == _EXIT_NO_GPU:
+            await self._mark_failed(
+                wake_word_id,
+                "not trained: training was set up for the GPU, and Docker can't reach it "
+                "now; it would take over an hour on the CPU under a time limit sized for "
+                "the GPU. Settings > Wake Words > Check the GPU and trainer again "
+                "(Restart Domovoi first if the GPU runtime was lost), or turn training on "
+                "again with the CPU. " + error_tail(result.output, 400),
+            )
+            return 1
 
         if result.cancelled or result.returncode in _STOPPED_CODES:
             # systemd's SIGTERM reaches the wrapper too (one control group),
@@ -678,6 +768,16 @@ class WakeWordTrainer(Worker):
             await WakeWordsRepository(s).mark_ready(wake_word_id, model_ref)
             # Same session as the status flip so the dashboard's LISTEN task
             # sees 'ready' on the post-COMMIT delivery.
+            await s.execute(
+                text("SELECT pg_notify('wake_words_changed', :p)"),
+                {"p": str(wake_word_id)},
+            )
+
+    async def _mark_stopped(self, wake_word_id: int) -> None:
+        async with session_scope() as s:
+            from domovoi.db.repositories import WakeWordsRepository
+
+            await WakeWordsRepository(s).mark_stopped(wake_word_id)
             await s.execute(
                 text("SELECT pg_notify('wake_words_changed', :p)"),
                 {"p": str(wake_word_id)},

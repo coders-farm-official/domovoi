@@ -140,6 +140,11 @@ MEMORY = os.environ.get("WAKE_TRAINER_MEMORY", "12g")
 # no limit of its own). The core's worker sets it a minute under its own
 # limit, so the container is gone before the worker gives up on the run.
 DEADLINE_SEC = os.environ.get("WAKE_TRAINER_DEADLINE_SEC", "")
+# "1" when the trainer was set up for a GPU: a training then refuses to run
+# on the CPU (exit 75) when the GPU can't be reached, instead of taking
+# over an hour under a limit sized for the GPU.
+REQUIRE_GPU = os.environ.get("WAKE_TRAINER_REQUIRE_GPU", "") == "1"
+EXIT_NO_GPU = 75
 # Pronunciations for the phrase's words from the core's own phonemizer
 # ("domovoi=D OW1 M OW2 V OY2;..."), passed to the container's
 # train_runner.py, which prefers them to espeak-ng's.
@@ -406,6 +411,10 @@ def build_run_argv(
     where the one card the container sees has that UUID."""
     argv: list[str] = [
         *docker_argv(), "run", "--rm",
+        # An init as PID 1, so SIGTERM (docker stop, the docker client's
+        # signal proxy) reaches the entrypoint, which then removes its
+        # copies of the recorded clips; PID 1 itself ignores SIGTERM.
+        "--init",
         # A fixed name (Docker refuses a second container by that name) and
         # the label --stop and the next run look for.
         "--name", CONTAINER,
@@ -442,28 +451,81 @@ def build_run_argv(
     return argv
 
 
+# How long a stopped training container gets to clean up after itself
+# (the entrypoint removes its copies of the recorded clips on SIGTERM)
+# before it is killed.
+STOP_GRACE_SEC = 10
+_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}$")
+
+
+def _docker(args: list[str], timeout: float) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run([*docker_argv(), *args], capture_output=True, text=True,
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"docker {args[0]} failed ({e})")
+        return None
+
+
 def remove_training_containers(reason: str) -> int:
-    """``docker rm -f`` every container carrying the training label (the
-    probe's included). Returns how many it removed. Never raises."""
-    try:
-        r = subprocess.run(
-            [*docker_argv(), "ps", "-aq", "--filter", f"label={LABEL}"],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        log(f"could not list training containers ({e})")
-        return 0
-    ids = r.stdout.split() if r.returncode == 0 else []
-    if not ids:
-        return 0
-    try:
-        subprocess.run([*docker_argv(), "rm", "-f", *ids],
-                       capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as e:
-        log(f"could not remove training container(s) {' '.join(ids)} ({e})")
-        return 0
-    log(f"removed {len(ids)} training container(s) ({reason})")
+    """Stop every container carrying the training label (the probe's
+    included): ``docker stop`` first, so a training run gets
+    ``STOP_GRACE_SEC`` to remove its copies of the recorded clips, then
+    ``docker rm -f``; then :func:`scrub_cache` for whatever a killed run
+    left. Returns how many containers it removed. Never raises."""
+    r = _docker(["ps", "-aq", "--filter", f"label={LABEL}"], 30)
+    ids = r.stdout.split() if r is not None and r.returncode == 0 else []
+    if ids:
+        _docker(["stop", "-t", str(STOP_GRACE_SEC), *ids], 30 + STOP_GRACE_SEC)
+        _docker(["rm", "-f", *ids], 60)
+        log(f"removed {len(ids)} training container(s) ({reason})")
+    scrub_cache(f"find /data/cache/runs -path '*/positive_train/real_*.wav' -delete",
+                "copies of recorded clips")
     return len(ids)
+
+
+def _cache_volume_exists() -> bool:
+    r = _docker(["volume", "inspect", CACHE_VOLUME], 30)
+    return r is not None and r.returncode == 0
+
+
+def scrub_cache(script: str, what: str) -> bool:
+    """Run ``script`` (sh) in a throwaway container of the trainer image
+    with the cache volume at /data/cache: how the copies of recorded clips
+    a stopped or killed run left, or a deleted word's files, are removed.
+    Nothing when the volume or the image isn't there (training never
+    turned on: never creates the volume). True when it ran."""
+    if not _cache_volume_exists():
+        return False
+    r = _docker(["image", "inspect", IMAGE], 30)
+    if r is None or r.returncode != 0:
+        log(f"no {IMAGE} image to remove {what} with")
+        return False
+    r = _docker(["run", "--rm", "--label", f"{LABEL}-clean=1", "-v", f"{CACHE_VOLUME}:/data/cache",
+                 "--entrypoint", "sh", IMAGE, "-c", f"mkdir -p /data/cache/runs && {script}"], 300)
+    ok = r is not None and r.returncode == 0
+    if not ok:
+        log(f"could not remove {what} from {CACHE_VOLUME}")
+    return ok
+
+
+def forget_words(slugs: list[str]) -> bool:
+    """Remove these words' run folders (synthetic clips, features, any
+    copies of recordings) from the cache volume: a deleted wake word."""
+    slugs = [x for x in slugs if _SLUG_RE.match(x)]
+    if not slugs:
+        return True
+    return scrub_cache("rm -rf " + " ".join(f"/data/cache/runs/{x}" for x in slugs),
+                       "the deleted words' training files")
+
+
+def keep_only_words(slugs: list[str]) -> bool:
+    """Remove every run folder but these words' (wake words deleted while
+    the core couldn't be told)."""
+    keep = " ".join(x for x in slugs if _SLUG_RE.match(x))
+    script = ('for d in /data/cache/runs/*; do [ -d "$d" ] || continue; '
+              'case " ' + keep + ' " in *" ${d##*/} "*) ;; *) rm -rf "$d" ;; esac; done')
+    return scrub_cache(script, "deleted words' training files")
 
 
 class _Stopped(Exception):
@@ -537,18 +599,28 @@ def _reap(proc: subprocess.Popen) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Portable openWakeWord docker trainer wrapper")
     ap.add_argument("--stop", action="store_true",
-                    help="remove any training container and exit (the worker's timeout/cancel)")
+                    help="remove any training container and the copies of recorded clips "
+                         "it left, and exit (the worker's timeout/cancel/stop)")
+    ap.add_argument("--forget", action="append", default=[], metavar="SLUG",
+                    help="remove a deleted word's training files from the cache volume")
+    ap.add_argument("--keep-only", metavar="SLUG,SLUG",
+                    help="remove the training files of every word not listed")
     ap.add_argument("--clips", help="host positive-clips dir ({clips_dir})")
     ap.add_argument("--phrase", help="wake phrase, e.g. 'hey domovoi' ({phrase})")
     ap.add_argument("--slug", help="model slug; output is <slug>.onnx ({slug})")
     ap.add_argument("--out", help="host output path <...>/<slug>.onnx ({out})")
     args = ap.parse_args()
 
-    if args.stop:
-        n = remove_training_containers("asked to stop")
-        if not n:
-            log("no training container to stop")
-        return 0
+    if args.stop or args.forget or args.keep_only is not None:
+        ok = True
+        if args.stop:
+            if not remove_training_containers("asked to stop"):
+                log("no training container to stop")
+        if args.forget:
+            ok = forget_words(args.forget) and ok
+        if args.keep_only is not None:
+            ok = keep_only_words([x for x in args.keep_only.split(",") if x]) and ok
+        return 0 if ok else 1
     missing = [f"--{k}" for k in ("clips", "phrase", "slug", "out") if not getattr(args, k)]
     if missing:
         ap.error("the following arguments are required: " + ", ".join(missing))
@@ -637,6 +709,13 @@ def main() -> int:
                 # passed -> let Docker expose all GPUs.
                 gpu_flag = ["--gpus", "all"]
                 backend = "GPU all" if count <= 1 else "GPU all (smi unavailable)"
+        elif REQUIRE_GPU:
+            log("ERROR: training was set up for the GPU, and Docker can't reach it now "
+                "(the GPU probe above says why). Not training on the CPU: it would take "
+                "over an hour under a time limit sized for the GPU. Settings > Wake Words "
+                "> Check the GPU and trainer again (Restart Domovoi first if the NVIDIA "
+                "Container Toolkit was lost), or turn training on again with the CPU.")
+            return EXIT_NO_GPU
         else:
             log("No usable GPU runtime detected; training on CPU (at the defaults "
                 "about 75 min on 8 cores against about 20 min on an RTX 4070 Ti "

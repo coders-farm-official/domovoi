@@ -69,6 +69,9 @@ IMAGE_GB = 12.4            # the trainer image on disk
 DATA_GB = 17.9             # the three datasets in the cache volume
 PER_WORD_GB = 0.5          # one word's synthetic clips and features
 HEADROOM_GB = 5.0          # what must still be free afterwards
+# On the Windows install the free space of C: can't be seen from the
+# distro: "Turn on" asks the person to confirm this much is free there.
+WSL_CONFIRM_GB = 40
 # The one-time download, measured in the 2026-10-13 end-to-end run: the
 # 3.2 GB base image, the packages and models the build fetches, and the
 # 17.9 GB of training data (about 22.5 GB came in over the network).
@@ -102,7 +105,11 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _LOCK = threading.Lock()
 _STATE: dict[str, Any] | None = None
 _TASK: asyncio.Task | None = None
+# A start (or a turn-off) between its first check and its job.
+_STARTING = False
 _CANCEL = threading.Event()
+# Why the running job was told to stop ("" = the core is shutting down).
+_CANCEL_REASON = ""
 _REQ_CACHE: tuple[float, dict[str, Any]] | None = None
 _REQ_TTL_SEC = 10.0
 
@@ -219,8 +226,8 @@ def _update(**kw: Any) -> None:
 
 
 def reset_for_tests() -> None:
-    global _STATE, _TASK, _REQ_CACHE
-    _STATE, _TASK, _REQ_CACHE = None, None, None
+    global _STATE, _TASK, _REQ_CACHE, _STARTING
+    _STATE, _TASK, _REQ_CACHE, _STARTING = None, None, None, False
     _CANCEL.clear()
 
 
@@ -308,6 +315,31 @@ def _disk_free_gb(info: dict[str, Any]) -> tuple[float | None, str]:
         except OSError:
             continue
     return None, ""
+
+
+def on_wsl() -> bool:
+    """The Windows install's distro (or any WSL): Domovoi can't see the
+    Windows drive there, and its memory is a share of the PC's."""
+    try:
+        from domovoi.host_kind import is_wsl
+
+        return is_wsl()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def pc_memory_gb(distro_mib: int) -> tuple[int | None, str]:
+    """(the PC's memory in GB, as words) behind a WSL distro's MemTotal,
+    by the Windows installer's rule (windows/common/WslConfig.cs
+    MemoryCapGb): a PC under 24 GB gives the distro 10 GB, a larger one
+    its memory minus 8 GB, at most 64."""
+    gb = distro_mib / 1024
+    if gb < 12:
+        return None, "less than 24 GB"
+    if gb >= 63:
+        return None, "72 GB or more"
+    pc = int(round(gb + 8))
+    return pc, f"about {pc} GB"
 
 
 def _mem_total_mib() -> int | None:
@@ -407,7 +439,15 @@ async def requirements(force: bool = False) -> dict[str, Any]:
         st = dict(_load())
     image_current = present and label == src and src != "unknown"
     data_ready = bool(st.get("data_ready"))
-    free_gb, disk_path = await asyncio.to_thread(_disk_free_gb, info)
+    wsl = on_wsl()
+    if wsl:
+        # Docker's data root is inside the distro's virtual disk (up to
+        # 1 TB, whatever C: holds; 1015 GB "free" in the 2026-10-13 test),
+        # and the distro can't see C: (automount is off). No number, then:
+        # the person confirms C: has the room.
+        free_gb, disk_path = None, ""
+    else:
+        free_gb, disk_path = await asyncio.to_thread(_disk_free_gb, info)
     mem_mib = _mem_total_mib()
     physical = _physical_cores()
     ncpu = int(info.get("ncpu") or 0) or (os.cpu_count() or 0)
@@ -425,15 +465,29 @@ async def requirements(force: bool = False) -> dict[str, Any]:
         refusals.append(f"{info.get('error') or 'Docker is not available'}: training runs "
                         "in a Docker container.")
     if mem_mib is not None and mem_mib < MIN_MEM_MIB:
-        refusals.append(
-            f"This server has {mem_mib / 1024:.0f} GB of memory; training needs a 24 GB "
-            "server (it uses about 10 GB while the voice pipeline keeps running)."
-        )
+        if wsl:
+            _pc, pc_words = pc_memory_gb(mem_mib)
+            refusals.append(
+                f"Training needs a PC with about 32 GB of memory or more, and this PC has "
+                f"{pc_words}: Windows gives Domovoi the PC's memory minus 8 GB (here "
+                f"{mem_mib / 1024:.0f} GB), and training needs 24 GB of that (it uses about "
+                "10 GB while the voice pipeline keeps running)."
+            )
+        else:
+            refusals.append(
+                f"This server has {mem_mib / 1024:.0f} GB of memory; training needs a 24 GB "
+                "server (it uses about 10 GB while the voice pipeline keeps running)."
+            )
     if free_gb is not None and free_gb < need_gb + HEADROOM_GB:
         refusals.append(
             f"Only {free_gb:.0f} GB of disk is free; training needs about {need_gb:.0f} GB "
             f"plus {HEADROOM_GB:.0f} GB to spare."
         )
+    elif free_gb is None and wsl:
+        notes.append(
+            "Domovoi can't see how much space is free on the Windows drive (C:), where "
+            f"its disk lives. Training needs about {need_gb:.0f} GB of it: check that C: has "
+            f"at least {WSL_CONFIRM_GB} GB free before you turn it on.")
     elif free_gb is None:
         notes.append("Couldn't measure the free disk space; training needs about "
                      f"{need_gb:.0f} GB.")
@@ -447,8 +501,10 @@ async def requirements(force: bool = False) -> dict[str, Any]:
     if gpus and not runtime_ok:
         notes.append(
             f"This server has an NVIDIA card ({gpus[0]['name']}), but Docker can't use it "
-            "yet: the NVIDIA Container Toolkit comes with the next Domovoi update "
-            "(scripts/linux/gpu-runtime.sh). Until then training runs on the CPU."
+            "yet: Domovoi sets up the NVIDIA Container Toolkit at its next update or "
+            "Restart (scripts/linux/gpu-runtime.sh; after a failed try it waits a day, "
+            "unless you turn training on, or check again, first). Until then training "
+            "runs on the CPU."
         )
     if gpus and probe is False:
         notes.append("The last check found Docker can't reach the GPU, so training runs "
@@ -469,9 +525,14 @@ async def requirements(force: bool = False) -> dict[str, Any]:
         "estimate": estimate,
         "disk": {"free_gb": None if free_gb is None else round(free_gb, 1),
                  "need_gb": round(need_gb), "headroom_gb": HEADROOM_GB, "path": disk_path,
-                 "total_first_gb": round(IMAGE_GB + DATA_GB + PER_WORD_GB + 1)},
+                 "total_first_gb": round(IMAGE_GB + DATA_GB + PER_WORD_GB + 1),
+                 # On WSL: no number; "Turn on" asks to confirm C: has this much.
+                 "confirm_gb": WSL_CONFIRM_GB if wsl else None},
         "memory": {"total_gb": None if mem_mib is None else round(mem_mib / 1024, 1),
-                   "need_gb": 24},
+                   "need_gb": 24,
+                   "pc": (pc_memory_gb(mem_mib)[1] if wsl and mem_mib else None),
+                   "pc_need_gb": 32 if wsl else None},
+        "wsl": wsl,
         "download_gb": DOWNLOAD_GB,
         "image": {"name": image, "present": present, "current": image_current},
         "data_ready": data_ready,
@@ -561,7 +622,7 @@ def _stream(argv: list[str], timeout: float, on_line: Callable[[str], None],
     rc = proc.wait()
     done.set()
     if _CANCEL.is_set():
-        tail.append("stopped: Domovoi is shutting down")
+        tail.append(f"stopped: {_CANCEL_REASON or 'Domovoi is shutting down'}")
         return None, list(tail)
     if time.monotonic() > deadline:
         tail.append(f"stopped after {int(timeout)} s")
@@ -574,6 +635,8 @@ _WARM_BYTES = re.compile(r"warm: (\d+) bytes")
 
 
 def _fail(stage: str, error: str, tail: list[str], **extra: Any) -> None:
+    if _CANCEL.is_set() and _CANCEL_REASON:
+        error = f"Stopped: {_CANCEL_REASON}. Turn training on again once that has changed."
     _update(state="failed", stage=stage, error=error, log_tail=tail[-25:],
             finished_at=_now(), **extra)
     log.warning("wake-word training setup failed at %s: %s", stage, error)
@@ -707,7 +770,9 @@ async def _job(cpu_ok: bool, gpus: list[dict[str, Any]], ncpu: int,
             name = name if gpu else None
         _update(gpu=gpu, gpu_name=name, cpu_estimate_min=cpu_estimate_min(ncpu, physical))
         if _CANCEL.is_set():
-            return
+            if _CANCEL_REASON:          # told to stop (internet turned off): say so
+                _fail("data", "Stopped", [])
+            return                      # a shutdown: the next start reads "interrupted"
         if not await asyncio.to_thread(_warm):
             return
         _switch_on()
@@ -727,26 +792,71 @@ async def _job(cpu_ok: bool, gpus: list[dict[str, Any]], ncpu: int,
         _REQ_CACHE = None
 
 
-async def start(cpu_ok: bool = False) -> dict[str, Any]:
+def busy() -> bool:
+    """A job runs, or a "Turn on" (or "Turn off") is between its checks and
+    its job: the next one is refused."""
+    return _STARTING or job_running()
+
+
+def gpu_runtime_retry_flag() -> Path:
+    """Read by scripts/linux/apply-update.sh (as root) at the next update
+    or Restart: set up Docker's GPU runtime again now, instead of after its
+    one-day wait since the last failure."""
+    return state_dir() / "gpu-runtime-retry"
+
+
+async def start(cpu_ok: bool = False, disk_ok: bool = False) -> dict[str, Any]:
     """Start the job. Raises :class:`Refused` (with the reason) when it
     can't: a refusal from :func:`requirements`, a job or a training already
-    running, or a CPU-only server without ``cpu_ok``."""
-    global _TASK
+    running, a CPU-only server without ``cpu_ok``, or the Windows install
+    (which can't see C:'s free space) without ``disk_ok``.
+
+    One at a time: the check and the claim are one step (``_STARTING`` is
+    set before the first await), so two overlapping requests can't both
+    start a job (review of 2026-10-13: the second one's cleanup removed the
+    first one's download container)."""
+    global _TASK, _STARTING
     from domovoi.workers import wake_word_trainer as wwt
 
-    if job_running():
+    if busy():
         raise Refused("Training is already being set up.")
     if wwt.training_active():
         raise Refused("A wake word is training right now; wait for it to finish.")
+    _STARTING = True
+    try:
+        return await _start(cpu_ok, disk_ok)
+    finally:
+        _STARTING = False
+
+
+async def _start(cpu_ok: bool, disk_ok: bool) -> dict[str, Any]:
+    global _TASK, _CANCEL_REASON
     req = await requirements(force=True)
     if req["refusals"]:
         raise Refused(" ".join(req["refusals"]))
+    if req["disk"].get("confirm_gb") and not disk_ok:
+        raise Refused(
+            "Domovoi can't see how much space is free on the Windows drive (C:). Confirm "
+            f"that C: has at least {req['disk']['confirm_gb']} GB free to turn training on."
+        )
     if not req["gpu"] and not cpu_ok:
         raise Refused(
             f"This server trains on the CPU: about {req['estimate']['minutes_per_word']} "
             "minutes a wake word, and voice gets slower meanwhile. Confirm to use the CPU."
         )
+    if req["gpus"] and "nvidia" not in (req["docker"].get("runtimes") or []) \
+            and "docker desktop" not in (req["docker"].get("os") or "").lower():
+        # The card is there and Docker can't use it: ask the update unit to
+        # set up the GPU runtime again at the next update or Restart, not
+        # after its one-day wait (scripts/linux/gpu-runtime.sh).
+        try:
+            flag = gpu_runtime_retry_flag()
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text(_now() + "\n", encoding="utf-8")
+        except OSError as e:
+            log.warning("wake-word training setup: no GPU-runtime retry flag (%s)", e)
     _CANCEL.clear()
+    _CANCEL_REASON = ""
     with _LOCK:
         st = _load()
         keep = {k: st.get(k) for k in ("data_ready", "image_src")}
@@ -761,6 +871,172 @@ async def start(cpu_ok: bool = False) -> dict[str, Any]:
         _job(cpu_ok, req["gpus"], ncpu, _physical_cores()), name="wake-trainer-setup",
     )
     return await status()
+
+
+def cancel_job(reason: str) -> bool:
+    """Stop a running job (its docker build or download and the download
+    container) for ``reason``; the job then fails saying so. True when
+    one was running."""
+    global _CANCEL_REASON
+    if not job_running():
+        return False
+    _CANCEL_REASON = reason
+    _CANCEL.set()
+    log.warning("wake-word training setup stopped: %s", reason)
+    return True
+
+
+# The transient unit scripts/linux/apply-update.sh starts for an image
+# rebuild after an update (as this service user, `docker build`).
+REBUILD_UNIT = "domovoi-wake-trainer-build"
+
+
+def stop_background_rebuild(reason: str) -> bool:
+    """Stop the update's background rebuild of the trainer image, if one
+    runs: the unit's main process (the `docker build` client, this same
+    user's, so no privilege is needed) gets SIGTERM, and BuildKit cancels
+    the build with it. Blocking; True when it stopped one."""
+    import signal
+
+    try:
+        r = _run(["systemctl", "show", "-p", "MainPID", "--value", REBUILD_UNIT], 15)
+        pid = int((r.stdout or "0").strip() or 0)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    if pid <= 1:
+        return False
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if b"build" not in cmdline or not any(c.endswith(b"docker") for c in cmdline):
+            return False
+        os.kill(pid, signal.SIGTERM)
+    except (OSError, ValueError) as e:
+        log.warning("could not stop the trainer image rebuild (pid %s): %s", pid, e)
+        return False
+    log.warning("stopped the trainer image rebuild (%s): %s", REBUILD_UNIT, reason)
+    return True
+
+
+def on_internet_answer() -> None:
+    """The ``internet_access`` reapply hook, and the boot check: under
+    never, nothing of the trainer's may download, so a "Turn on" job (its
+    build or the 18 GB download) and the update's image rebuild stop."""
+    if not egress.internet_turned_off():
+        return
+    reason = "internet access was turned off (Settings > Internet)"
+    cancel_job(reason)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        stop_background_rebuild(reason)
+        return
+    task = loop.create_task(asyncio.to_thread(stop_background_rebuild, reason),
+                            name="wake-trainer-rebuild-stop")
+    _PENDING.add(task)
+    task.add_done_callback(_PENDING.discard)
+
+
+_PENDING: set = set()
+
+
+# ── turn off and free the space ──────────────────────────────────────────
+
+_SIZE_RE = re.compile(r"^\s*([0-9.]+)\s*([kKMGT]?B)\s*$")
+
+
+def _parse_size(text: str) -> int | None:
+    m = _SIZE_RE.match(text or "")
+    if not m:
+        return None
+    mult = {"B": 1, "kB": 1e3, "KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12}[m.group(2)]
+    return int(float(m.group(1)) * mult)
+
+
+def footprint() -> dict[str, Any]:
+    """What "Turn off and free the space" removes, as Docker counts it: the
+    trainer image's size and the cache volume's (the training data and
+    every word's training files). Blocking; a part Docker can't size is
+    None (shown as "size unknown", never guessed)."""
+    image = settings.wake_trainer_image
+    volume = settings.wake_trainer_cache_volume
+    out: dict[str, Any] = {"image": image, "image_bytes": None, "volume": volume,
+                           "volume_bytes": None, "image_present": False,
+                           "volume_present": False}
+    try:
+        r = _run(["docker", "image", "inspect", "-f", "{{.Size}}", image], 30)
+        if r.returncode == 0:
+            out["image_present"] = True
+            out["image_bytes"] = int((r.stdout or "0").strip() or 0)
+        r = _run(["docker", "volume", "inspect", volume], 30)
+        out["volume_present"] = r.returncode == 0
+        if out["volume_present"]:
+            r = _run(["docker", "system", "df", "-v", "--format", "{{json .Volumes}}"], 120)
+            for v in json.loads(r.stdout or "[]") if r.returncode == 0 else []:
+                if v.get("Name") == volume:
+                    out["volume_bytes"] = _parse_size(v.get("Size", ""))
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log.warning("wake-word training footprint: %s", e)
+    known = [b for b in (out["image_bytes"], out["volume_bytes"]) if b is not None]
+    out["total_bytes"] = sum(known) if known else None
+    return out
+
+
+async def turn_off() -> dict[str, Any]:
+    """Settings off, then the trainer image, its build cache and the
+    cache volume removed (the training data and every word's synthetic
+    clips, features and any copies of recordings). Trained models and the
+    recorded clips stay; queued words go back to "recording". Refused
+    while a job or a training runs. Returns what was freed."""
+    global _STARTING, _STATE, _REQ_CACHE
+    from domovoi.config_env_writer import write_env_values
+    from domovoi.workers import wake_word_trainer as wwt
+
+    if busy():
+        raise Refused("Training is being set up; wait for it to finish.")
+    if wwt.training_active():
+        raise Refused("A wake word is training; stop it first.")
+    _STARTING = True
+    try:
+        before = await asyncio.to_thread(footprint)
+        write_env_values({"wake_word_trainer_enabled": False, "wake_word_train_command": ""})
+        settings.wake_word_trainer_enabled = False
+        settings.wake_word_train_command = ""
+        errors: list[str] = []
+        steps = []
+        if before["image_present"]:
+            steps.append(["docker", "image", "rm", "-f", before["image"]])
+        if before["volume_present"]:
+            steps.append(["docker", "volume", "rm", "-f", before["volume"]])
+        steps.append(["docker", "builder", "prune", "-f"])
+        for argv in steps:
+            try:
+                r = await asyncio.to_thread(_run, argv, 300)
+                if r.returncode != 0:
+                    errors.append(f"{' '.join(argv[:3])}: "
+                                  f"{(r.stderr or r.stdout or '').strip().splitlines()[-1:] or ''}")
+            except (OSError, subprocess.SubprocessError) as e:
+                errors.append(f"{' '.join(argv[:3])}: {e}")
+        try:
+            from domovoi.db.session import session_scope
+            from sqlalchemy import text
+
+            async with session_scope() as s:
+                await s.execute(text(
+                    "UPDATE wake_words SET status = 'recording', "
+                    "error = 'Training was turned off.', updated_at = NOW() "
+                    "WHERE status = 'training'"))
+                await s.execute(text("SELECT pg_notify('wake_words_changed', 'all')"))
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"queued words: {e}")
+        with _LOCK:
+            _STATE = _blank()
+            _STATE.update(message="Turned off; the trainer and its data were removed.")
+            _save()
+        log.info("wake-word training turned off; freed %s bytes", before.get("total_bytes"))
+        return {"freed": before, "errors": errors}
+    finally:
+        _REQ_CACHE = None
+        _STARTING = False
 
 
 async def shutdown() -> None:

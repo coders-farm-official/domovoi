@@ -288,6 +288,8 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
 class TrainerEnableBody(BaseModel):
     # Yes to training on the CPU (over an hour a word; voice slower meanwhile).
     cpu_ok: bool = False
+    # The Windows install can't see C:'s free space: the admin confirms it.
+    disk_ok: bool = False
 
 
 @router.get("/trainer", dependencies=[Depends(require_admin_read)])
@@ -305,8 +307,39 @@ async def trainer_enable(body: TrainerEnableBody, request: Request):
     """Start "Turn on wake-word training" on the core: 200 with the status
     (the job runs in the background), 409 with the reason it can't."""
     status, payload = await post_admin(
-        "/v1/admin/wake/trainer/enable", {"cpu_ok": body.cpu_ok},
+        "/v1/admin/wake/trainer/enable", {"cpu_ok": body.cpu_ok, "disk_ok": body.disk_ok},
         timeout=60.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.get("/trainer/footprint", dependencies=[Depends(require_admin_read)])
+async def trainer_footprint(request: Request):
+    """What "Turn off and free the space" would remove, as Docker sizes it."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/trainer/footprint", timeout=150.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/trainer/disable", dependencies=[Depends(require_admin_security)])
+async def trainer_disable(request: Request):
+    """Turn training off and free the space (the core removes the trainer
+    image, its build cache and the cache volume); 409 while it is busy."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/trainer/disable", {}, timeout=600.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/{wake_word_id}/train/stop", dependencies=[Depends(require_admin_mutation)])
+async def train_stop(wake_word_id: int, request: Request):
+    """Stop this word's training (running or queued): it goes back to
+    "recording" with its clips. Proxies the core, which owns the run."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/train/stop", {"wake_word_id": wake_word_id},
+        timeout=90.0, headers=auth_forward_headers(request),
     )
     return bridge_response(status, payload)
 
@@ -598,7 +631,7 @@ async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
 
 
 @router.delete("/{wake_word_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
-async def delete_wake_word(wake_word_id: int) -> None:
+async def delete_wake_word(wake_word_id: int, request: Request) -> None:
     async with session_scope() as s:
         repo = WakeWordsRepository(s)
         removed = await repo.delete(wake_word_id)
@@ -630,3 +663,8 @@ async def delete_wake_word(wake_word_id: int) -> None:
         import shutil
 
         shutil.rmtree(cdir, ignore_errors=True)
+    # Its training files in the trainer's cache volume (features, synthetic
+    # clips, any copies of the recordings) go too; the core owns Docker.
+    # Best effort: the worker's sweep after its next start catches a miss.
+    await post_admin("/v1/admin/wake/forget", {"slug": slug}, timeout=10.0,
+                     headers=auth_forward_headers(request))

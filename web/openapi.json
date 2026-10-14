@@ -7471,6 +7471,87 @@
         }
       }
     },
+    "/api/wake-words/trainer/footprint": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Footprint",
+        "description": "What \"Turn off and free the space\" would remove, as Docker sizes it.",
+        "operationId": "trainer_footprint_api_wake_words_trainer_footprint_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/disable": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Disable",
+        "description": "Turn training off and free the space (the core removes the trainer\nimage, its build cache and the cache volume); 409 while it is busy.",
+        "operationId": "trainer_disable_api_wake_words_trainer_disable_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/{wake_word_id}/train/stop": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Train Stop",
+        "description": "Stop this word's training (running or queued): it goes back to\n\"recording\" with its clips. Proxies the core, which owns the run.",
+        "operationId": "train_stop_api_wake_words__wake_word_id__train_stop_post",
+        "parameters": [
+          {
+            "name": "wake_word_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Wake Word Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/record/start": {
       "post": {
         "tags": [
@@ -19528,6 +19609,11 @@
           "cpu_ok": {
             "type": "boolean",
             "title": "Cpu Ok",
+            "default": false
+          },
+          "disk_ok": {
+            "type": "boolean",
+            "title": "Disk Ok",
             "default": false
           }
         },

@@ -2027,6 +2027,24 @@ class WakeWordsRepository:
         )
         return row.first() is not None
 
+    async def mark_stopped(self, wake_word_id: int) -> bool:
+        """Put a ``training`` word back to ``recording`` (the dashboard's
+        Stop): its clips stay, it is not queued again, and its row says it
+        was stopped. False when it wasn't training."""
+        row = await self.s.execute(
+            text(
+                """
+                UPDATE wake_words
+                SET status = 'recording', error = 'Training stopped from the dashboard.',
+                    updated_at = NOW()
+                WHERE id = :id AND status = 'training'
+                RETURNING id
+                """
+            ),
+            {"id": wake_word_id},
+        )
+        return row.first() is not None
+
     async def next_training(self) -> dict | None:
         """Oldest ``training`` row — the trainer worker's queue head."""
         row = await self.s.execute(

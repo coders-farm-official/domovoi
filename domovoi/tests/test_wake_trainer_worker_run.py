@@ -36,7 +36,14 @@ WRAPPER = (Path(__file__).resolve().parents[2] / "scripts" / "wake_word"
 
 
 class FakeSession:
-    async def execute(self, *a, **k):
+    slugs: list[str] = ["hey_domovoi", "hey_domo"]
+
+    async def execute(self, stmt, *a, **k):
+        if "SELECT slug FROM wake_words" in str(stmt):
+            class Rows:
+                def all(self_inner):
+                    return [(x,) for x in FakeSession.slugs]
+            return Rows()
         return None
 
 
@@ -44,6 +51,7 @@ class FakeQueue:
     rows: list[dict] = []
     failed: list[tuple[int, str]] = []
     ready: list[tuple[int, str]] = []
+    stopped: list[int] = []
 
     def __init__(self, _s) -> None:
         pass
@@ -57,11 +65,15 @@ class FakeQueue:
     async def mark_ready(self, wid, ref):
         FakeQueue.ready.append((wid, ref))
 
+    async def mark_stopped(self, wid):
+        FakeQueue.stopped.append(wid)
+        return True
+
 
 @pytest.fixture
 def queue(monkeypatch, tmp_path):
     FakeQueue.rows = [{"id": 7, "slug": "hey_domovoi", "phrase": "hey domovoi"}]
-    FakeQueue.failed, FakeQueue.ready = [], []
+    FakeQueue.failed, FakeQueue.ready, FakeQueue.stopped = [], [], []
 
     @asynccontextmanager
     async def scope():
@@ -224,7 +236,9 @@ async def test_the_first_tick_removes_a_container_a_crashed_core_left(queue, mon
         await wwt.WakeWordTrainer().tick()
         FakeQueue.rows = [{"id": 8, "slug": "hey_domo", "phrase": "hey domo"}]
         await wwt.WakeWordTrainer().tick()
-    assert len(swept) == 1 and swept[0][-1] == "--stop"
+    # Once, and with the words that still exist: a deleted word's training
+    # files (and copies of recordings a killed run left) go too.
+    assert len(swept) == 1 and swept[0][-3:] == ["--stop", "--keep-only", "hey_domovoi,hey_domo"]
 
 
 @pytest.mark.asyncio
@@ -301,3 +315,57 @@ def test_only_words_with_a_household_or_lexicon_pronunciation_are_sent():
     assert wwt.synthesis_ipa("hello domo") == "domo=dˈoʊmoʊ"
     assert wwt.synthesis_ipa("hey jarvis") == ""          # espeak-ng's own reading stays
     assert wwt.synthesis_ipa("hey ollama") == "ollama=oʊlˈɑːmə"   # a lexicon fix
+
+
+# ─── review fix round (2026-10-13) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_stop_puts_the_word_back_to_recording_not_queued(queue, monkeypatch):
+    """The dashboard's Stop on the word that is training: the run is
+    cancelled (its container and the copies of the recordings go) and the
+    word goes back to "recording" with its clips; not failed, not queued."""
+    started = threading.Event()
+
+    def blocking(argv, **kw):
+        started.set()
+        assert kw["cancel"].wait(30), "the stop never came"
+        return wwt.TrainRun(None, "", cancelled=True)
+
+    monkeypatch.setattr(wwt, "run_train_command", blocking)
+    with egress.override_policy("always"):
+        task = asyncio.create_task(wwt.WakeWordTrainer().tick())
+        while not started.is_set():
+            await asyncio.sleep(0.05)
+        assert wwt.current_training() == 7
+        assert wwt.request_stop(8) is False          # not the one training
+        assert wwt.request_stop(7) is True
+        assert await asyncio.wait_for(task, 30) == 1
+    assert FakeQueue.stopped == [7]
+    assert FakeQueue.failed == [] and FakeQueue.ready == []
+    assert wwt.current_training() is None and wwt.request_stop(7) is False
+
+
+@pytest.mark.asyncio
+async def test_set_up_for_the_gpu_the_run_must_have_it(queue, monkeypatch):
+    """Review 2026-10-13: a GPU that went away (the toolkit lost, the card
+    gone) trained silently on the CPU under the GPU's one-hour limit. Set
+    up for the GPU, the wrapper is told to refuse the CPU (exit 75), and
+    the word fails saying why."""
+    monkeypatch.setattr(wts, "recorded_gpu", lambda: True)
+    seen = _capture(monkeypatch, result=wwt.TrainRun(75, "[wake-trainer] ERROR: set up for the GPU"))
+    with egress.override_policy("always"):
+        await wwt.WakeWordTrainer().tick()
+    assert seen["env"]["WAKE_TRAINER_REQUIRE_GPU"] == "1"
+    (wid, error), = FakeQueue.failed
+    assert wid == 7 and "set up for the GPU, and Docker can't reach it" in error
+    assert "Check the GPU and trainer again" in error
+
+
+@pytest.mark.asyncio
+async def test_set_up_for_the_cpu_the_gpu_isnt_required(queue, monkeypatch):
+    monkeypatch.setattr(wts, "recorded_gpu", lambda: False)
+    monkeypatch.setenv("WAKE_TRAINER_REQUIRE_GPU", "1")      # a stale one never leaks in
+    seen = _capture(monkeypatch)
+    with egress.override_policy("always"):
+        await wwt.WakeWordTrainer().tick()
+    assert "WAKE_TRAINER_REQUIRE_GPU" not in seen["env"]

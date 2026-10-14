@@ -67,6 +67,58 @@ BACKGROUND_ZIP_URLS = [
     "https://f002.backblazeb2.com/file/openwakeword-resources/data/fsd50k_sample.zip",
 ]
 
+# Pins (read 2026-10-13): the Hugging Face dataset commits the downloads
+# come from, the SHA-256 of the two feature files at that commit (their LFS
+# object ids) and of the two background zips. A file that doesn't match is
+# refused. The MIT impulse responses stream through `datasets` at their
+# pinned commit; their 270 WAVs are not hashed one by one.
+FEATURES_REPO = "davidscripka/openwakeword_features"
+FEATURES_REVISION = "985bf1b47e7f19c07741af82bfe32d5a9dc56096"
+FEATURES_SHA256 = {
+    "openwakeword_features_ACAV100M_2000_hrs_16bit.npy":
+        "721a66d0682c65a1b5c1da0aa109409cede1d20e28b15235c344b000cbb7654f",
+    "validation_set_features.npy":
+        "a56a8a0f8e0efb91900acc6de4c0cdf4c564842e8475a7d49b36c039e17a690f",
+}
+RIRS_REPO = "davidscripka/MIT_environmental_impulse_responses"
+RIRS_REVISION = "b824a1ef2821f112fda0b9cb26e4278c62b425bb"
+BACKGROUND_ZIP_SHA256 = {
+    "fma_sample.zip": "bcf6b79a279ecb02f321dfaf6354f274955c4c770cfe5b6101016604b6bff1a5",
+    "fsd50k_sample.zip": "faef06b7d4ebc3e59b083a1158337f75db7465af3cd62ddd3ef19266d20bf036",
+}
+# Written once the feature files were checked against FEATURES_SHA256 (a
+# cache filled before the pins gets checked once).
+VERIFIED = CACHE / f".oww_data_verified_{FEATURES_REVISION[:12]}"
+
+
+def sha256_file(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_features() -> None:
+    """Every pinned feature file is there and matches its SHA-256 (about a
+    minute for the 17.3 GB one, once)."""
+    if VERIFIED.is_file():
+        return
+    log("checking the training data against its pinned SHA-256 (once) ...")
+    for name, want in FEATURES_SHA256.items():
+        hits = sorted(FEATURES_DIR.rglob(name))
+        if not hits:
+            die(f"{name} is missing from {FEATURES_DIR}", 4)
+        got = sha256_file(hits[0])
+        if got != want:
+            die(f"{name} has SHA-256 {got}, the pinned commit's is {want}: refused. "
+                f"Remove the cache volume (Settings > Wake Words > Turn off and free the "
+                f"space) and turn training on again.", 4)
+    VERIFIED.write_text("ok\n")
+    log("training data matches its pins.")
+
 
 def log(msg: str) -> None:
     print(f"[entrypoint] {msg}", flush=True)
@@ -107,6 +159,7 @@ def ensure_dataset() -> None:
     if SENTINEL.is_file():
         log(f"cache HIT: dataset present at {CACHE} (sentinel exists) — "
             f"skipping ~17.5 GB download.")
+        verify_features()
         return
     log(f"cache MISS: downloading one-time openWakeWord feature dataset into "
         f"{CACHE} (~17.5 GB; first run only) ...")
@@ -116,14 +169,16 @@ def ensure_dataset() -> None:
         # Precomputed ACAV100M negative features + validation set used by
         # openWakeWord training. ~17.5 GB on disk.
         snapshot_download(
-            "davidscripka/openwakeword_features",
+            FEATURES_REPO,
             repo_type="dataset",
+            revision=FEATURES_REVISION,
             local_dir=str(FEATURES_DIR),
         )
     except Exception as e:
         die(f"feature dataset download failed: {e}. Re-running resumes "
             f"(huggingface_hub caches partial files); check container network "
             f"+ that the named cache volume has room for ~17.5 GB.", 4)
+    verify_features()
     SENTINEL.write_text("ok\n")
     log("cache download complete; sentinel written.")
 
@@ -143,7 +198,7 @@ def ensure_rirs() -> None:
         import numpy as np
         import scipy.io.wavfile
         rir = datasets.load_dataset(
-            "davidscripka/MIT_environmental_impulse_responses",
+            RIRS_REPO, revision=RIRS_REVISION,
             split="train", streaming=True,
         )
         n = 0
@@ -182,6 +237,12 @@ def ensure_background() -> None:
                 tmp_path = tmp.name
             log(f"  fetching {url}")
             urllib.request.urlretrieve(url, tmp_path)
+            name = url.rsplit("/", 1)[-1]
+            got = sha256_file(Path(tmp_path))
+            if got != BACKGROUND_ZIP_SHA256.get(name):
+                os.unlink(tmp_path)
+                die(f"{name} has SHA-256 {got}, pinned {BACKGROUND_ZIP_SHA256.get(name)}: "
+                    f"refused.", 4)
             with zipfile.ZipFile(tmp_path) as zf:
                 for member in zf.namelist():
                     if member.lower().endswith(".wav"):
@@ -338,6 +399,46 @@ def reset_for_real_clips(model_dir: Path, wavs: list[Path]) -> bool:
     if stamp.is_file():
         stamp.unlink()
     return dropped
+
+
+def scrub_real_copies(runs: Path) -> int:
+    """Remove every run's copies of recorded clips (``real_*.wav``) under
+    ``runs``: what a stopped or killed run left. The next run of a word
+    copies its originals again."""
+    n = 0
+    if runs.is_dir():
+        for f in runs.glob("*/*/positive_train/real_*.wav"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
+    if n:
+        log(f"removed {n} copies of recorded clips an earlier run left in the cache volume")
+    return n
+
+
+class Stopped(SystemExit):
+    """SIGTERM/SIGINT/SIGHUP: unwind, so the ``finally`` that removes the
+    run's copies of the recorded clips runs (docker stop, or the docker
+    client's signal proxy; the container runs under --init so the signal
+    reaches this process)."""
+
+
+def _on_stop_signal(signum, _frame) -> None:
+    raise Stopped(128 + signum)
+
+
+def install_stop_handlers() -> None:
+    import signal
+
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _on_stop_signal)
+            except (OSError, ValueError):
+                pass
 
 
 def drop_real_copies(model_dir: Path) -> int:
@@ -539,6 +640,7 @@ def warm() -> int:
 
 
 def main() -> int:
+    install_stop_handlers()
     lower_priority()
     if "--warm" in sys.argv[1:]:
         return warm()
@@ -555,6 +657,8 @@ def main() -> int:
     ensure_rirs()          # MIT impulse-response WAVs for augmentation
     ensure_background()    # background-noise WAVs for augmentation
 
+    # Copies a stopped or killed earlier run (of any word) left behind.
+    scrub_real_copies(CACHE / "runs")
     work = CACHE / "runs" / slug
     work.mkdir(parents=True, exist_ok=True)
 

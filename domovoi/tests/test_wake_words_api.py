@@ -39,6 +39,23 @@ def _clean_wake_words():
     yield
 
 
+@pytest.fixture(autouse=True)
+def core_calls(monkeypatch):
+    """The core is never reached from here (a live one may run on :6370 on a
+    dev box): ``post_admin`` answers "unreachable" and records the call.
+    The proxy tests below stub it again for their own answers."""
+    import web.backend.api.wake_words as wake_api
+
+    calls: list[tuple[str, dict]] = []
+
+    async def _unreachable(path, body=None, timeout=30.0, headers=None):
+        calls.append((path, body))
+        return 0, None
+
+    monkeypatch.setattr(wake_api, "post_admin", _unreachable)
+    return calls
+
+
 def _create(client: TestClient, name: str = "Hey Domovoi", phrase: str = "hey domovoi", **kw):
     body = {"name": name, "phrase": phrase, **kw}
     return client.post("/api/wake-words", json=body)
@@ -225,14 +242,19 @@ def test_train_gated_on_selected_count(tmp_path, monkeypatch) -> None:
 
 
 @requires_db
-def test_delete_recording_row_succeeds() -> None:
+def test_delete_recording_row_succeeds(core_calls) -> None:
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Disposable", phrase="hey disposable").json()["id"]
         r = client.delete(f"/api/wake-words/{wid}")
+        # The core down: the delete still succeeds (the worker's sweep
+        # removes the training files after its next start).
         assert r.status_code == 204
         # Gone from the list.
         listing = client.get("/api/wake-words").json()
         assert all(w["id"] != wid for w in listing)
+    # Its training files in the trainer's cache volume are the core's to
+    # remove (review 2026-10-13: features and copies outlived the word).
+    assert core_calls == [("/v1/admin/wake/forget", {"slug": "disposable"})]
 
 
 @requires_db

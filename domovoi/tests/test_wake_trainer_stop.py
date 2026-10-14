@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -44,9 +45,10 @@ tw = _wrapper()
 
 # A docker stand-in: logs every call as a JSON line, answers info/inspect,
 # lists the "containers" in its state file for `ps --filter label=...`,
-# forgets them on `rm -f`, fails the GPU probe (a CPU host), and makes the
-# training `run` add itself to the state file, sleep FAKE_RUN_SEC and exit
-# FAKE_RUN_RC.
+# forgets them on `rm -f`, fails the GPU probe (a CPU host), answers the
+# cache volume's inspect (FAKE_VOLUME=0: no volume), runs the cache scrub
+# (`run --entrypoint sh`, exit FAKE_SCRUB_RC) and makes the training `run`
+# add itself to the state file, sleep FAKE_RUN_SEC and exit FAKE_RUN_RC.
 FAKE_DOCKER = r'''
 import json, os, sys, time
 state = os.environ["FAKE_STATE"]
@@ -66,6 +68,8 @@ if cmd == "info":
     sys.exit(0)
 if cmd == "image":
     sys.exit(0)
+if cmd == "volume":
+    sys.exit(1 if os.environ.get("FAKE_VOLUME") == "0" else 0)
 if cmd == "ps":
     print("\n".join(listed()))
     sys.exit(0)
@@ -80,6 +84,8 @@ if cmd == "rm":
             pass
     sys.exit(0)
 if cmd == "run":
+    if "--entrypoint" in args and args[args.index("--entrypoint") + 1] == "sh":
+        sys.exit(int(os.environ.get("FAKE_SCRUB_RC", "0")))     # the cache scrub
     if "--entrypoint" in args:
         sys.exit(1)          # the GPU probe: no GPU here
     open(os.path.join(state, "run.pid"), "w").write(str(os.getpid()))
@@ -126,6 +132,12 @@ def _the_run(calls):
     runs = [c for c in calls if c and c[0] == "run" and "--entrypoint" not in c]
     assert len(runs) == 1, calls
     return runs[0]
+
+
+def _scrubs(calls):
+    """The scripts the cache scrubs ran (``sh -c``), in order."""
+    return [c[-1] for c in calls if c and c[0] == "run" and "--entrypoint" in c
+            and c[c.index("--entrypoint") + 1] == "sh"]
 
 
 # ─── the wrapper ──────────────────────────────────────────────────────────
@@ -176,6 +188,88 @@ def test_stop_removes_every_training_container(fake_docker):
     assert r.returncode == 0
     assert ["rm", "-f", "a1", "b2"] in fake_docker["calls"]()
     assert fake_docker["run"]("--stop").returncode == 0   # nothing left: still fine
+
+
+def test_stop_gives_the_run_time_to_clean_up_then_scrubs_the_copies(fake_docker):
+    # Review 2026-10-13: `docker rm -f` alone killed the run before its
+    # finally removed the copies of the household's recordings, and they
+    # stayed in the cache volume. Now: `docker stop` (SIGTERM, a grace
+    # period), then `rm -f`, then a scrub of whatever a killed run left.
+    (fake_docker["state"] / "containers").write_text("a1", encoding="utf-8")
+    assert fake_docker["run"]("--stop").returncode == 0
+    calls = fake_docker["calls"]()
+    stop_at = calls.index(["stop", "-t", str(tw.STOP_GRACE_SEC), "a1"])
+    rm_at = calls.index(["rm", "-f", "a1"])
+    assert stop_at < rm_at
+    scrubs = _scrubs(calls)
+    assert len(scrubs) == 1 and "positive_train/real_*.wav' -delete" in scrubs[0]
+    scrub = next(c for c in calls if c and c[0] == "run" and "sh" in c)
+    assert scrub[scrub.index("-v") + 1] == f"{tw.CACHE_VOLUME}:/data/cache"
+    assert "--rm" in scrub and calls.index(scrub) > rm_at
+    # A killed core's leftovers are scrubbed even with no container left.
+    (fake_docker["state"] / "calls.jsonl").unlink()
+    assert fake_docker["run"]("--stop").returncode == 0
+    assert len(_scrubs(fake_docker["calls"]())) == 1
+
+
+def test_no_cache_volume_no_scrub(fake_docker):
+    # Training never turned on: --stop must not create the volume.
+    assert fake_docker["run"]("--stop", FAKE_VOLUME="0").returncode == 0
+    assert _scrubs(fake_docker["calls"]()) == []
+
+
+def test_every_run_starts_by_scrubbing_leftover_copies(fake_docker):
+    r = fake_docker["run"](FAKE_RUN_RC="0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = fake_docker["calls"]()
+    scrub_at = next(i for i, c in enumerate(calls) if c and c[0] == "run" and "sh" in c)
+    assert scrub_at < calls.index(_the_run(calls))
+
+
+def test_the_run_has_an_init_so_sigterm_reaches_the_entrypoint(fake_docker):
+    # PID 1 ignores SIGTERM unless it installs a handler; with --init the
+    # entrypoint is a child of tini and its handler removes the copies.
+    assert fake_docker["run"](FAKE_RUN_RC="0").returncode == 0
+    assert "--init" in _the_run(fake_docker["calls"]())
+
+
+def test_forget_removes_a_deleted_words_folder_only(fake_docker):
+    r = fake_docker["run"]("--stop", "--forget", "hey_domo", "--forget", "../etc")
+    assert r.returncode == 0, r.stdout + r.stderr
+    scrubs = _scrubs(fake_docker["calls"]())
+    assert any(x.endswith("rm -rf /data/cache/runs/hey_domo") for x in scrubs), scrubs
+    assert not any("etc" in x for x in scrubs)
+    assert fake_docker["run"]("--stop", "--forget", "hey_domo", FAKE_SCRUB_RC="1").returncode == 1
+
+
+@pytest.mark.skipif(not shutil.which("sh"), reason="needs a POSIX sh")
+def test_keep_only_removes_every_other_words_folder(tmp_path):
+    # The script the sweep runs in the container, run here on a copy of
+    # the layout (/data/cache/runs/<slug>/...).
+    seen = []
+    tw_scrub = tw.scrub_cache
+    try:
+        tw.scrub_cache = lambda script, what: seen.append(script) or True
+        assert tw.keep_only_words(["hey_domovoi", "hello_domo", "bad slug"])
+    finally:
+        tw.scrub_cache = tw_scrub
+    runs = tmp_path / "data" / "cache" / "runs"
+    for slug in ("hey_domovoi", "hello_domo", "hey_gone", "hey_domovoi_old"):
+        (runs / slug / slug / "positive_train").mkdir(parents=True)
+        (runs / slug / slug / "positive_train" / "real_0001.wav").write_bytes(b"x")
+    script = seen[0].replace("/data/cache", tmp_path.as_posix() + "/data/cache")
+    r = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert sorted(x.name for x in runs.iterdir()) == ["hello_domo", "hey_domovoi"]
+
+
+def test_a_trainer_set_up_for_the_gpu_refuses_the_cpu(fake_docker):
+    # Review 2026-10-13: a GPU that went away trained silently on the CPU
+    # for over an hour under the GPU's time limit. Now exit 75, no run.
+    r = fake_docker["run"](FAKE_RUN_RC="0", WAKE_TRAINER_REQUIRE_GPU="1")
+    assert r.returncode == tw.EXIT_NO_GPU == 75, r.stdout + r.stderr
+    assert "set up for the GPU" in r.stderr
+    assert not [c for c in fake_docker["calls"]() if c and c[0] == "run" and "--entrypoint" not in c]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
