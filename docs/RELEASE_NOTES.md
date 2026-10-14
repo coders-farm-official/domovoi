@@ -28,7 +28,11 @@ Server, dashboard and satellite update; no migration. Pis are unchanged.
   Python version and machine): pip takes only the files whose SHA-256 the
   list names, and builds nothing from source.
 * **Uninstall from root's own copy**,
-  `/usr/local/lib/domovoi-satellite/install-pc.sh --uninstall`: it acts only
+  `bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall` in the
+  satellite's account, or, for a dedicated account, from your
+  administrator's account with `sudo … --uninstall --account <its account>`.
+  The installer and uninstaller fix their PATH and name every tool in full.
+  It acts only
   on the paths written into it and on root's own record of what it
   changed, never on anything the satellite's account can write.
   `--purge` removes the satellite's files (root's copy of its purger, under

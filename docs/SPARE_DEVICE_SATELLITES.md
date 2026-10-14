@@ -148,10 +148,10 @@ Pi-only for now.)
 **Automatic** is like a Pi: hands off. Updates then run as the account
 the satellite uses, and the installer needed that account to use `sudo` —
 so code your server sends could reach root the next time that account uses
-sudo. Use a **dedicated account** for it, and take its sudo away once the
-install is done (`sudo deluser <account> sudo`; give it back to uninstall),
-or use the **headless** mode below, whose account has neither sudo nor a
-login. **Ask me** suits a computer someone also uses: nothing new runs
+sudo (see "What the satellite can do as your account", below). If you'd
+rather keep it apart, use a **dedicated account** and take its sudo away
+once the install is done (`sudo deluser <account> sudo`), or the
+**headless** mode below, whose account has neither sudo nor a login. **Ask me** suits a computer someone also uses: nothing new runs
 until they say so. Change it later in `~/.domovoi/config.toml` (`[pc]
 permissions = "automatic"` or `"ask"`) and restart the satellite; the
 server can never change it for you, nor the pinned server, its address or
@@ -250,17 +250,36 @@ wait until an admin clears it.
 
 ### Removing it
 
+In the account the satellite runs as:
+
 ```
 bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall          # keeps ~/.domovoi/config.toml
 bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall --purge  # the settings too
 # headless:  sudo bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall --purge
 ```
 
+It asks for your password for the last steps (linger, the power settings).
+If you gave the satellite a **dedicated account**, remove it from your own
+administrator's account instead, naming that account:
+
+```
+sudo bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall --purge --account <its account>
+```
+
 Run the copy in `/usr/local/lib/domovoi-satellite`, which belongs to root:
 never the `install-pc.sh` inside the satellite's own folder, which the
-satellite's account (and your server's updates) can change. A desktop
-install is removed as its own account (it asks for your password), a
-headless one with `sudo`.
+satellite's account (and your server's updates) can change.
+
+**What the satellite can do as your account.** A desktop satellite runs as
+the account you installed it in, with that account's rights: with
+"automatic", code your server sends runs as you, and could do whatever a
+program you run can — including use sudo the next time you type your
+password in that account. That is the same trust you give any program you
+install, and for most homes the simple choice is your everyday account.
+If you want the satellite kept apart from it, make a dedicated account,
+take its sudo away after the install, never type an administrator's
+password into it, and uninstall from your administrator's account with
+`--account`, as above.
 
 It undoes what the installer changed (the service, linger if it turned it
 on, the tray, the power settings it made, all from root's own record) and

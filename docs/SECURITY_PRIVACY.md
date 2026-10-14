@@ -1829,17 +1829,32 @@ to pinned SHA-256s the same way.
   unit, the lid-switch drop-in, the charge-limit rule, the four sleep
   targets); it never runs code, or reads a list of paths, from anything
   the satellite's account can write — not the satellite's code tree, not
-  its venv. A desktop's `--purge` is root's copy of
-  `satellite/scripts/purge-satellite-files.py` under the system's
-  `python3 -I`, and removes only the satellite's files from `~/.domovoi`;
-  on a headless box the account's own files are removed as that account,
-  and `--purge` ends with `userdel -r`. The **installer** does run the
+  its venv, not its PATH. A desktop install is removed by its own account
+  (its part first, with no sudo used yet: the user unit, the tray, the
+  files; then root's part; it ends with `sudo -k`), or, for a dedicated
+  account, as root from an administrator's account
+  (`sudo bash … --uninstall --account NAME`): root then stops the
+  account's user unit through that account's systemd
+  (`systemctl --user -M NAME@`) and removes its files as the account
+  (`runuser`, a clean environment). Either way `--purge` is root's copy of
+  `satellite/scripts/purge-satellite-files.py` under `/usr/bin/python3
+  -I`, run as the account, and removes only the satellite's files from
+  `~/.domovoi`. On a
+  headless box the account's own files are removed as that account, and
+  `--purge` ends with `userdel -r`. The **installer** does run the
   satellite's code, as the satellite's account and only after every sudo
   step: on a desktop it then makes sudo forget the password (`sudo -k`)
   first, builds a fresh venv (an old one is removed unrun), and runs that
   code in a session with no terminal (`setsid`), so nothing it starts can
-  use a sudo ticket of yours; the uninstaller ends with `sudo -k` too. The
-  installer refuses an account whose `~/.domovoi` belongs to a Domovoi
+  use a sudo ticket of yours. Both fix `PATH` to the system's directories,
+  drop the caller's exported shell functions, `BASH_ENV`, `ENV`, `CDPATH`,
+  `GLOBIGNORE` and `PYTHON*` settings before anything runs, and name
+  every tool by its full path (`/usr/bin/sudo`, `/usr/bin/python3`, …).
+  What an account's own shell does before a script starts (its rc files,
+  `BASH_ENV`, a process waiting for the next sudo) no script can undo:
+  for an everyday account that is the trade above; a dedicated account is
+  uninstalled from an administrator's account instead.
+  The installer refuses an account whose `~/.domovoi` belongs to a Domovoi
   server.
 * **The person chooses what the server may do on its own**
   (`[pc] permissions`):
@@ -1857,8 +1872,15 @@ to pinned SHA-256s the same way.
   satellite, not what code as that account could do. Use a **dedicated
   account without sudo** for a desktop satellite where you can (give it
   sudo for the install, take it away afterwards with `sudo deluser
-  <account> sudo`, and give it back to uninstall), or the headless mode,
-  whose `domovoi-sat` account has no sudo and no login. Whatever the permission, the device itself refuses what a
+  <account> sudo`; it never needs sudo again, and nobody should type an
+  administrator's password into it), or the headless mode, whose
+  `domovoi-sat` account has no sudo and no login. **The trade, plainly:**
+  a satellite in someone's everyday account (the simple, usual choice) has
+  that account's rights, so code the server sends could do whatever that
+  person's programs can, using sudo the next time they type their password
+  there included; that is the trust any installed program gets, and the
+  installer does not ask for more. A dedicated account keeps it apart, and
+  is uninstalled from an administrator's account (`--account`, below). Whatever the permission, the device itself refuses what a
   frame must not do (security review of wf/sat-pc, B1/B2): a `set_config`
   may carry only the settings the dashboard's own form has, as exact
   `section.key` names (a key with a space, a capital or an extra dot is

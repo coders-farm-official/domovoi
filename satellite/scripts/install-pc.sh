@@ -7,6 +7,7 @@
 #
 #   bash install-pc.sh [options] 'domovoi-room:1?core=...&fp=...&room=...'
 #   bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall [--purge]
+#   sudo bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall [--purge] --account NAME
 #
 # Current Debian (12, 13) and Ubuntu (24.04 and later). Run it as the
 # account the satellite should use, NOT as root: it asks for sudo for the
@@ -62,12 +63,33 @@
 #   --wait SECONDS               how long step 10 waits (default 900; 0: don't)
 #   --uninstall [--purge]        undo all of it (--purge: the config too);
 #                                run root's copy, as the uninstall line says
+#   --account NAME               with --uninstall of a desktop install, run
+#                                as root from an administrator's account
+#                                (sudo): the account the satellite runs as.
+#                                For a dedicated satellite account; in your
+#                                everyday account, just run --uninstall there
 #
 # Exit status: 0 done; 2 a usage error or a refused payload; 3 the core
 # did not prove its identity; 4 not approved before --wait ran out (the
 # satellite keeps waiting in the background); 1 anything else.
 
 set -euo pipefail
+
+# A fixed PATH, and none of the caller's shell hooks, exported functions or
+# Python settings: nothing the account put on its PATH (~/.local/bin, which
+# Debian's stock ~/.profile adds) and no function it exported may stand in
+# for a tool this script runs; sudo, python3 and the tools that change
+# accounts are spelled in full below as well. (Security review of
+# wf/sat-pc, round 3. What a compromised account's shell does before this
+# line, BASH_ENV included, no script can undo: root's part of an uninstall
+# is therefore run from an administrator's account, see uninstall below.)
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset BASH_ENV ENV CDPATH GLOBIGNORE
+for _f in $(compgen -A function); do unset -f "$_f"; done
+for _f in $(compgen -e); do case $_f in PYTHON*) unset "$_f" ;; esac; done
+unset _f
+PY=/usr/bin/python3
 
 # ─── arguments ───────────────────────────────────────────────────────────
 
@@ -82,12 +104,13 @@ SKIP_APT=0
 WAIT_SEC=900
 UNINSTALL=0
 PURGE=0
+ACCOUNT=""
 # Test seam (the harness in satellite/tests/ sets it): where systemd lives.
 SYSTEMD_RUNTIME=${DOMOVOI_TEST_SYSTEMD_RUNTIME:-/run/systemd/system}
 
 die() { echo "install-pc: $*" >&2; exit "${2:-1}"; }
 say() { printf '%s\n' "$*"; }
-usage() { sed -n '/^#   bash install-pc.sh/,/^#   bash .*--uninstall/p' "$0" | sed 's/^#   //'; }
+usage() { /usr/bin/sed -n '/^#   bash install-pc.sh/,/^#   bash .*--uninstall/p' "$0" | /usr/bin/sed 's/^#   //'; }
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -101,6 +124,7 @@ while [ $# -gt 0 ]; do
     --wait) WAIT_SEC=${2:-}; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge) PURGE=1; shift ;;
+    --account) ACCOUNT=${2:-}; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     domovoi-room:*|DOMOVOI-ROOM:*) PAYLOAD=$1; shift ;;
     *) die "unknown argument: $1 (--help)" 2 ;;
@@ -113,6 +137,10 @@ case $CHARGE_LIMIT in ''|*[!0-9]*) die "--charge-limit is a number" 2 ;; esac
 [ "$CHARGE_LIMIT" -ge 50 ] && [ "$CHARGE_LIMIT" -le 100 ] || die "--charge-limit is 50 to 100" 2
 case $WAIT_SEC in ''|*[!0-9]*) die "--wait is a number of seconds" 2 ;; esac
 if [ "$ASSUME_YES" = 1 ] && [ "$POWER" = ask ]; then POWER=no; fi
+if [ -n "$ACCOUNT" ]; then
+  [ "$UNINSTALL" = 1 ] || die "--account is for --uninstall (run from an administrator's account)" 2
+  [[ $ACCOUNT =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "--account is an account name" 2
+fi
 
 INTERACTIVE=0
 if [ -t 0 ] && [ -t 1 ] && [ "$ASSUME_YES" = 0 ]; then INTERACTIVE=1; fi
@@ -124,19 +152,19 @@ ask_yes_no() {  # ask_yes_no "question" -> 0 for yes; the default is No
   case $answer in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 
-[ "$(uname -s)" = Linux ] || die "this installer is for Linux (Debian or Ubuntu)" 2
-if [ "$(id -u)" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "${MODE:-}" != headless ]; then
+[ "$(/usr/bin/uname -s)" = Linux ] || die "this installer is for Linux (Debian or Ubuntu)" 2
+if [ "$(/usr/bin/id -u)" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "${MODE:-}" != headless ]; then
   die "run this as the account the satellite should use, not as root (it asks for sudo when it needs it); for a box with no desktop, add --mode headless" 2
 fi
 
-SUDO=sudo
-if [ "$(id -u)" = 0 ]; then SUDO=""; fi
+SUDO=/usr/bin/sudo
+if [ "$(/usr/bin/id -u)" = 0 ]; then SUDO=""; fi
 need_sudo() {
   [ -z "$SUDO" ] && return 0
-  command -v sudo >/dev/null 2>&1 || die "sudo is needed for the system steps; install it, or run the system steps as root"
+  [ -x /usr/bin/sudo ] || die "sudo is needed for the system steps; install it, or run the system steps as root"
 }
 
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+HERE=$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)
 
 SAT_ACCOUNT=domovoi-sat
 SAT_HOME_HEADLESS=/var/lib/domovoi-sat
@@ -168,8 +196,8 @@ graphical_session() {
   [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && return 0
   command -v loginctl >/dev/null 2>&1 || return 1
   local s
-  for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk -v u="$(id -un)" '$3==u {print $1}'); do
-    case $(loginctl show-session "$s" -p Type --value 2>/dev/null) in x11|wayland) return 0 ;; esac
+  for s in $(/usr/bin/loginctl list-sessions --no-legend 2>/dev/null | /usr/bin/awk -v u="$(/usr/bin/id -un)" '$3==u {print $1}'); do
+    case $(/usr/bin/loginctl show-session "$s" -p Type --value 2>/dev/null) in x11|wayland) return 0 ;; esac
   done
   return 1
 }
@@ -179,8 +207,15 @@ layout() {
     RUN_AS=$SAT_ACCOUNT
     HOME_DIR=$SAT_HOME_HEADLESS
     PREFIX=$HOME_DIR/app
+  elif [ -n "$ACCOUNT" ] && [ "$ACCOUNT" != "$(/usr/bin/id -un)" ]; then
+    # Root, removing another account's desktop install: its home as the
+    # account database has it, not anything from the environment.
+    RUN_AS=$ACCOUNT
+    HOME_DIR=$(/usr/bin/getent passwd "$ACCOUNT" | /usr/bin/cut -d: -f6)
+    [ -n "$HOME_DIR" ] || die "there is no account $ACCOUNT" 2
+    PREFIX=$HOME_DIR/.local/share/domovoi-satellite
   else
-    RUN_AS=$(id -un)
+    RUN_AS=$(/usr/bin/id -un)
     HOME_DIR=$HOME
     PREFIX=$HOME_DIR/.local/share/domovoi-satellite
   fi
@@ -188,35 +223,35 @@ layout() {
   VENV=$PREFIX/venv
 }
 
-as_sat() {  # run a command as the satellite's account (on a desktop: you)
+as_sat() {  # run a command as the satellite's account ($RUN_AS)
   # In a session of its own (setsid), stdin from nowhere: whatever the
   # satellite's code starts has no terminal to borrow a sudo ticket from or
   # to type into. Its output still reaches this terminal.
-  if [ "$MODE" != headless ]; then
-    (cd / && setsid -w "$@" </dev/null)
-  elif [ -z "$SUDO" ]; then
+  if [ "$(/usr/bin/id -u)" = 0 ]; then
     # Root: runuser, with a clean environment and the account's home.
-    (cd / && runuser -u "$SAT_ACCOUNT" -- setsid -w env -i HOME="$HOME_DIR" LANG=C.UTF-8 \
-      PATH=/usr/local/bin:/usr/bin:/bin "$@" </dev/null)
+    (cd / && /usr/sbin/runuser -u "$RUN_AS" -- /usr/bin/setsid -w /usr/bin/env -i HOME="$HOME_DIR" \
+      LANG=C.UTF-8 PATH=/usr/bin:/bin "$@" </dev/null)
+  elif [ "$RUN_AS" = "$(/usr/bin/id -un)" ]; then
+    (cd / && /usr/bin/setsid -w "$@" </dev/null)
   else
-    (cd / && $SUDO -u "$SAT_ACCOUNT" -H -- setsid -w "$@" </dev/null)
+    (cd / && $SUDO -u "$RUN_AS" -H -- /usr/bin/setsid -w "$@" </dev/null)
   fi
 }
 
 forget_sudo() {  # sudo forgets this terminal's password: nothing after can use it
-  if [ -n "$SUDO" ] && command -v sudo >/dev/null 2>&1; then sudo -k 2>/dev/null || true; fi
+  if [ -n "$SUDO" ] && [ -x /usr/bin/sudo ]; then /usr/bin/sudo -k 2>/dev/null || true; fi
 }
 
 sat_account_state() {  # prints "absent", "ok", or why the existing account is not ours
   local ent uid home shell g
-  if ! ent=$(getent passwd "$SAT_ACCOUNT"); then echo absent; return 0; fi
-  uid=$(printf '%s' "$ent" | cut -d: -f3)
-  home=$(printf '%s' "$ent" | cut -d: -f6)
-  shell=$(printf '%s' "$ent" | cut -d: -f7)
+  if ! ent=$(/usr/bin/getent passwd "$SAT_ACCOUNT"); then echo absent; return 0; fi
+  uid=$(printf '%s' "$ent" | /usr/bin/cut -d: -f3)
+  home=$(printf '%s' "$ent" | /usr/bin/cut -d: -f6)
+  shell=$(printf '%s' "$ent" | /usr/bin/cut -d: -f7)
   if [ "$home" != "$SAT_HOME_HEADLESS" ]; then echo "its home is $home, not $SAT_HOME_HEADLESS"; return 0; fi
   case $shell in */nologin|*/false) ;; *) echo "it can log in ($shell)"; return 0 ;; esac
   if [ "$uid" -le 0 ] || [ "$uid" -ge 1000 ]; then echo "it is not a system account (uid $uid)"; return 0; fi
-  for g in $(id -nG "$SAT_ACCOUNT"); do
+  for g in $(/usr/bin/id -nG "$SAT_ACCOUNT"); do
     case $g in "$SAT_ACCOUNT"|audio) ;; *) echo "it is in the group $g"; return 0 ;; esac
   done
   echo ok
@@ -226,9 +261,9 @@ core_marker_in() {  # core_marker_in DIR -> prints the first server file found t
   local f
   for f in $CORE_MARKERS; do
     if [ "$MODE" = headless ]; then
-      $SUDO test -e "$1/$f" && { echo "$1/$f"; return 0; }
+      $SUDO /usr/bin/test -e "$1/$f" && { echo "$1/$f"; return 0; }
     else
-      test -e "$1/$f" && { echo "$1/$f"; return 0; }
+      [ -e "$1/$f" ] && { echo "$1/$f"; return 0; }
     fi
   done
   return 0
@@ -236,14 +271,20 @@ core_marker_in() {  # core_marker_in DIR -> prints the first server file found t
 
 have_systemd() { [ -d "$SYSTEMD_RUNTIME" ]; }
 
-user_systemctl() { systemctl --user "$@"; }
+user_systemctl() {  # the satellite account's own systemd (root reaches it with -M)
+  if [ "$(/usr/bin/id -u)" = 0 ] && [ "$RUN_AS" != root ]; then
+    /usr/bin/systemctl --user -M "$RUN_AS@" "$@"
+  else
+    /usr/bin/systemctl --user "$@"
+  fi
+}
 
 # ─── root's record ───────────────────────────────────────────────────────
 
 record_set() {  # record_set KEY=JSON ...: root's record of what this installer changed
   need_sudo
-  $SUDO install -d -o root -g root -m 0755 "$RECORD_DIR"
-  $SUDO python3 -I -c '
+  $SUDO /usr/bin/install -d -o root -g root -m 0755 "$RECORD_DIR"
+  $SUDO $PY -I -c '
 import json, os, sys
 path = sys.argv[1]
 doc = {}
@@ -269,8 +310,8 @@ os.replace(tmp, path)
 
 record_get() {  # record_get KEY -> its value ("" when absent); only a root-owned record counts
   [ -f "$RECORD" ] && [ ! -L "$RECORD" ] || return 0
-  [ "$(stat -c %u "$RECORD")" = 0 ] && [ "$(stat -c %u "$RECORD_DIR")" = 0 ] || return 0
-  python3 -I -c '
+  [ "$(/usr/bin/stat -c %u "$RECORD")" = 0 ] && [ "$(/usr/bin/stat -c %u "$RECORD_DIR")" = 0 ] || return 0
+  $PY -I -c '
 import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as f:
@@ -292,20 +333,20 @@ else:
 # ─── uninstall ───────────────────────────────────────────────────────────
 
 purge_satellite_files() {  # the satellite's own files in $CONFIG_DIR, and only those
-  # Root's copy of the purger with the system's python3 -I: nothing the
-  # satellite's account can change runs here (its code could otherwise use
-  # a sudo ticket this terminal holds). On a computer that also runs a
-  # Domovoi server, ~/.domovoi holds that server's key, voices and wake
-  # models too, and the purger leaves them.
-  if [ -f "$PURGER" ] && [ ! -L "$PURGER" ] && [ "$(stat -c %u "$PURGER")" = 0 ]; then
-    python3 -I "$PURGER" "$CONFIG_DIR" >/dev/null
+  # Root's copy of the purger under the system's python3 -I, run as the
+  # account (its files, its rights): nothing the satellite's account can
+  # change runs here. On a computer that also runs a Domovoi server,
+  # ~/.domovoi holds that server's key, voices and wake models too, and the
+  # purger leaves them.
+  if [ -f "$PURGER" ] && [ ! -L "$PURGER" ] && [ "$(/usr/bin/stat -c %u "$PURGER")" = 0 ]; then
+    as_sat $PY -I "$PURGER" "$CONFIG_DIR" >/dev/null
   else
     local f
     for f in config.toml approved approval_code pairing_token pending-server.json \
              server-fingerprint.json synced_sha synced_manifest.json upgrade_pending.json \
              satellite_backup.tar log-spool.txt last-health.json self-restarts.json muted voice wake \
              wake_threshold manifest-serials.json install-pc.json control.sock; do
-      rm -f "$CONFIG_DIR/$f"
+      as_sat /usr/bin/rm -f "$CONFIG_DIR/$f"
     done
     say "  kept $CONFIG_DIR/sounds and wake_models (root's purger is missing, so which files there are the satellite's is not known)"
   fi
@@ -317,14 +358,13 @@ uninstall() {
   recorded_account=$(record_get account)
   if [ -z "$MODE" ]; then MODE=$recorded_mode; fi
   if [ -z "$MODE" ]; then
-    if [ -f "/etc/systemd/system/$UNIT" ] && grep -q "User=$SAT_ACCOUNT" "/etc/systemd/system/$UNIT" 2>/dev/null; then
+    if [ -f "/etc/systemd/system/$UNIT" ] && /usr/bin/grep -q "User=$SAT_ACCOUNT" "/etc/systemd/system/$UNIT" 2>/dev/null; then
       MODE=headless
     else
       MODE=desktop
     fi
   fi
   case $MODE in desktop|headless) ;; *) MODE=desktop ;; esac
-  layout
   local how="bash $UNINSTALLER --uninstall"
   [ "$MODE" = headless ] && how="sudo $how"
   # Root runs only root's copy of this script: the one in the satellite's
@@ -335,56 +375,74 @@ uninstall() {
   case $HERE/ in
     "$SAT_HOME_HEADLESS"/*) die "this copy belongs to the satellite's account; do not run it as root (see docs/SPARE_DEVICE_SATELLITES.md, Removing it)" 2 ;;
   esac
-  if [ "$MODE" = desktop ]; then
-    if [ "$(id -u)" = 0 ]; then
-      die "a desktop install is removed by its own account${recorded_account:+ ($recorded_account)}, not root: $how" 2
+  if [ "$MODE" = desktop ] && [ "$(/usr/bin/id -u)" = 0 ]; then
+    # Root, from an administrator's account (--account, or root's record):
+    # for a dedicated satellite account, so nobody types an administrator's
+    # password into it. The account's files still go as the account.
+    ACCOUNT=${ACCOUNT:-$recorded_account}
+    [ -n "$ACCOUNT" ] || die "--account NAME: the account the satellite runs as" 2
+    if [ -n "$recorded_account" ] && [ "$ACCOUNT" != "$recorded_account" ]; then
+      die "the satellite was installed for $recorded_account, not $ACCOUNT" 2
     fi
-    if [ -n "$recorded_account" ] && [ "$recorded_account" != "$(id -un)" ]; then
-      die "the satellite was installed for $recorded_account: run this as that account" 2
+    local ent
+    ent=$(/usr/bin/getent passwd "$ACCOUNT") || die "there is no account $ACCOUNT" 2
+    [ "$(printf '%s' "$ent" | /usr/bin/cut -d: -f3)" != 0 ] || die "--account is the satellite's account, not root" 2
+  elif [ "$MODE" = desktop ]; then
+    # The account itself (the usual way, in your everyday account).
+    if [ -n "$ACCOUNT" ] && [ "$ACCOUNT" != "$(/usr/bin/id -un)" ]; then
+      die "--account is for running this as root from an administrator's account: sudo $how --account $ACCOUNT" 2
     fi
+    if [ -n "$recorded_account" ] && [ "$recorded_account" != "$(/usr/bin/id -un)" ]; then
+      die "the satellite was installed for $recorded_account: run this as that account, or from an administrator's account: sudo $how --account $recorded_account" 2
+    fi
+    ACCOUNT=""
   fi
+  layout
   need_sudo
   say "Removing the Domovoi satellite ($MODE install)..."
   if [ "$MODE" = desktop ]; then
-    # Your part first, with no sudo used yet, and none of the satellite's
-    # own code run at all; root's part after.
+    # The account's part first, with no sudo used yet and none of the
+    # satellite's own code run at all: its unit stopped (root reaches the
+    # account's own systemd with -M), its files removed as the account
+    # (from root: runuser, a clean environment). Root's part after.
     if have_systemd; then
       user_systemctl disable --now "$UNIT" >/dev/null 2>&1 || true
     fi
-    rm -f "$HOME_DIR/.config/systemd/user/$UNIT"
-    have_systemd && user_systemctl daemon-reload >/dev/null 2>&1 || true
-    pkill -u "$(id -un)" -f 'python -m satellite.tray' >/dev/null 2>&1 || true
-    rm -f "$HOME_DIR/.config/autostart/domovoi-satellite-tray.desktop" \
+    /usr/bin/pkill -u "$RUN_AS" -f 'python -m satellite.tray' >/dev/null 2>&1 || true
+    as_sat /usr/bin/rm -f "$HOME_DIR/.config/systemd/user/$UNIT" \
+          "$HOME_DIR/.config/systemd/user/default.target.wants/$UNIT" \
+          "$HOME_DIR/.config/autostart/domovoi-satellite-tray.desktop" \
           "$HOME_DIR/.local/share/applications/domovoi-satellite.desktop"
+    have_systemd && user_systemctl daemon-reload >/dev/null 2>&1 || true
     if [ "$PURGE" = 1 ]; then
       purge_satellite_files
       say "  the satellite's settings and records are gone"
     else
       say "  kept $CONFIG_DIR/config.toml (--purge removes it)"
     fi
-    rm -rf "$PREFIX"
+    as_sat /usr/bin/rm -rf "$PREFIX"
     if [ "$(record_get linger_enabled_by_installer)" = 1 ]; then
-      $SUDO loginctl disable-linger "$RUN_AS" || true
+      $SUDO /usr/bin/loginctl disable-linger "$RUN_AS" || true
       say "  linger turned off again (the installer had turned it on)"
     fi
   else
-    if have_systemd; then $SUDO systemctl disable --now "$UNIT" >/dev/null 2>&1 || true; fi
-    $SUDO rm -f "/etc/systemd/system/$UNIT"
-    have_systemd && $SUDO systemctl daemon-reload || true
+    if have_systemd; then $SUDO /usr/bin/systemctl disable --now "$UNIT" >/dev/null 2>&1 || true; fi
+    $SUDO /usr/bin/rm -f "/etc/systemd/system/$UNIT"
+    have_systemd && $SUDO /usr/bin/systemctl daemon-reload || true
   fi
   # Power settings: only what this installer changed (root's record), and
   # only at the fixed paths and units above.
   for t in $(record_get masked_targets); do
     case " $SLEEP_TARGETS " in
-      *" $t "*) $SUDO systemctl unmask "$t" >/dev/null 2>&1 || true ;;
+      *" $t "*) $SUDO /usr/bin/systemctl unmask "$t" >/dev/null 2>&1 || true ;;
     esac
   done
   if [ "$(record_get logind_dropin)" = 1 ]; then
-    $SUDO rm -f "$LOGIND_DROPIN"
+    $SUDO /usr/bin/rm -f "$LOGIND_DROPIN"
     say "  lid switch: back to your system's setting after the next reboot"
   fi
   if [ "$(record_get charge_rule)" = 1 ]; then
-    $SUDO rm -f "$CHARGE_RULE"
+    $SUDO /usr/bin/rm -f "$CHARGE_RULE"
     say "  charge limit rule removed (the current limit stays until a reboot)"
   fi
   if [ "$MODE" = headless ]; then
@@ -392,10 +450,10 @@ uninstall() {
     state=$(sat_account_state)
     case $state in
       ok)
-        as_sat rm -rf "$PREFIX"
+        as_sat /usr/bin/rm -rf "$PREFIX"
         if [ "$PURGE" = 1 ]; then
           # userdel removes its home without following links out of it.
-          $SUDO userdel -r "$SAT_ACCOUNT" >/dev/null 2>&1 || true
+          $SUDO /usr/sbin/userdel -r "$SAT_ACCOUNT" >/dev/null 2>&1 || true
           say "  removed the $SAT_ACCOUNT account and its home"
         else
           say "  kept $CONFIG_DIR/config.toml (--purge removes it, and the $SAT_ACCOUNT account)"
@@ -404,12 +462,12 @@ uninstall() {
       *) say "  left the $SAT_ACCOUNT account and its home alone: $state" ;;
     esac
   fi
-  $SUDO rm -f "$RECORD"
-  $SUDO rmdir "$RECORD_DIR" 2>/dev/null || true
+  $SUDO /usr/bin/rm -f "$RECORD"
+  $SUDO /usr/bin/rmdir "$RECORD_DIR" 2>/dev/null || true
   # Last: this file itself (bash keeps reading the open copy).
-  $SUDO rm -f "$PURGER"
-  $SUDO rm -f "$UNINSTALLER"
-  $SUDO rmdir "$ROOT_LIB" 2>/dev/null || true
+  $SUDO /usr/bin/rm -f "$PURGER"
+  $SUDO /usr/bin/rm -f "$UNINSTALLER"
+  $SUDO /usr/bin/rmdir "$ROOT_LIB" 2>/dev/null || true
   forget_sudo
   say "Done. In the dashboard, retire the room too once it shows offline"
   say "(Settings -> Satellites -> the room -> Retire room): that frees its name and removes its music player."
@@ -429,8 +487,8 @@ esac
 # ─── 1. the payload, and the core proves who it is ───────────────────────
 
 [ -n "$PAYLOAD" ] || die "give the enrolment payload ('domovoi-room:1?...') from the dashboard: Settings -> Satellites -> Add a spare device" 2
-command -v python3 >/dev/null 2>&1 || die "python3 is needed (sudo apt install python3)"
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+[ -x "$PY" ] || die "python3 is needed (sudo apt install python3)"
+$PY -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
   || die "Python 3.11 or newer is needed (Debian 12, Ubuntu 24.04 and later have it)"
 if [ -r /etc/os-release ]; then
   # shellcheck disable=SC1091
@@ -442,8 +500,8 @@ if [ -r /etc/os-release ]; then
 fi
 # The Python packages come from a hash-pinned list made for this Python and
 # machine (satellite/scripts/lock-pc-requirements.sh); none, no install.
-PYTAG=$(python3 -I -c 'import sys; print("cp%d%d" % sys.version_info[:2])')
-LOCK_REL=satellite/locks/pc-$PYTAG-$(uname -m).txt
+PYTAG=$($PY -I -c 'import sys; print("cp%d%d" % sys.version_info[:2])')
+LOCK_REL=satellite/locks/pc-$PYTAG-$(/usr/bin/uname -m).txt
 if [ ! -f "$SRC/$LOCK_REL" ]; then
   die "there is no pinned package list for Python $PYTAG on $(uname -m) yet, so nothing was installed (lists: $(cd "$SRC/satellite/locks" && ls pc-*.txt 2>/dev/null | sed 's/^pc-//; s/\.txt$//' | tr '\n' ' '))" 2
 fi
@@ -453,17 +511,17 @@ ERRFILE=$(mktemp)
 set +e
 # -P: nothing from the current directory is importable; the bundle is
 # named explicitly.
-ENROL_JSON=$(env PYTHONPATH="$SRC" python3 -P -m satellite.enrolment verify "$PAYLOAD" 2>"$ERRFILE")
+ENROL_JSON=$(/usr/bin/env PYTHONPATH="$SRC" $PY -P -s -m satellite.enrolment verify "$PAYLOAD" 2>"$ERRFILE")
 rc=$?
 set -e
-msg=$(cat "$ERRFILE" 2>/dev/null || true)
-rm -f "$ERRFILE"
+msg=$(/usr/bin/cat "$ERRFILE" 2>/dev/null || true)
+/usr/bin/rm -f "$ERRFILE"
 if [ "$rc" = 3 ]; then
   die "the server at that address did not prove it is the one in the code, so nothing was installed: $msg" 3
 elif [ "$rc" != 0 ]; then
   die "that is not a usable enrolment code: $msg" 2
 fi
-enrol() { printf '%s' "$ENROL_JSON" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
+enrol() { printf '%s' "$ENROL_JSON" | $PY -I -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "$1"; }
 CORE=$(enrol core); FP=$(enrol fp); ROOM=$(enrol room); ROOM_ID=$(enrol room_id)
 say "  $CORE proved it is $FP"
 say "  this device will be the room \"$ROOM\" ($ROOM_ID)"
@@ -518,19 +576,19 @@ say "Installing for $RUN_AS ($MODE): code in $PREFIX, settings in $CONFIG_DIR, u
 # which has no sudo, the same way.
 
 need_sudo
-$SUDO install -d -o root -g root -m 0755 "$ROOT_LIB"
+$SUDO /usr/bin/install -d -o root -g root -m 0755 "$ROOT_LIB"
 if ! [ "$HERE/install-pc.sh" -ef "$UNINSTALLER" ]; then
-  $SUDO install -o root -g root -m 0755 "$HERE/install-pc.sh" "$UNINSTALLER"
+  $SUDO /usr/bin/install -o root -g root -m 0755 "$HERE/install-pc.sh" "$UNINSTALLER"
 fi
-$SUDO install -o root -g root -m 0644 "$HERE/purge-satellite-files.py" "$PURGER"
-record_set "mode=\"$MODE\"" "account=\"$RUN_AS\"" "installed_at=$(date +%s)"
+$SUDO /usr/bin/install -o root -g root -m 0644 "$HERE/purge-satellite-files.py" "$PURGER"
+record_set "mode=\"$MODE\"" "account=\"$RUN_AS\"" "installed_at=$(/usr/bin/date +%s)"
 
 # ─── 4. system packages ──────────────────────────────────────────────────
 
 missing_pkgs() {
   local p out=""
   for p in "$@"; do
-    dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || out="$out $p"
+    /usr/bin/dpkg-query -W -f '${Status}' "$p" 2>/dev/null | /usr/bin/grep -q "install ok installed" || out="$out $p"
   done
   printf '%s' "$out"
 }
@@ -540,9 +598,9 @@ if [ "$SKIP_APT" = 0 ]; then
   MISSING=$(missing_pkgs $PKGS)
   if [ -n "$MISSING" ]; then
     say "Installing system packages:$MISSING"
-    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    $SUDO /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update -qq
     # shellcheck disable=SC2086
-    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $MISSING
+    $SUDO /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $MISSING
   fi
 fi
 
@@ -550,26 +608,26 @@ fi
 
 if [ "$MODE" = headless ]; then
   if [ "$SAT_STATE" = absent ]; then
-    $SUDO useradd --system --create-home --home-dir "$SAT_HOME_HEADLESS" --shell /usr/sbin/nologin "$SAT_ACCOUNT"
+    $SUDO /usr/sbin/useradd --system --create-home --home-dir "$SAT_HOME_HEADLESS" --shell /usr/sbin/nologin "$SAT_ACCOUNT"
     say "  created the $SAT_ACCOUNT account (no login, no sudo)"
   fi
   # Root touches the home directory itself (its parent is root's), never
   # anything inside it: that is the account's, and is done as the account.
-  if [ ! -d "$HOME_DIR" ] || [ -L "$HOME_DIR" ] || [ "$($SUDO stat -c %U "$HOME_DIR")" != "$SAT_ACCOUNT" ]; then
+  if [ ! -d "$HOME_DIR" ] || [ -L "$HOME_DIR" ] || [ "$($SUDO /usr/bin/stat -c %U "$HOME_DIR")" != "$SAT_ACCOUNT" ]; then
     die "$HOME_DIR is not $SAT_ACCOUNT's own directory; remove the account (sudo userdel -r $SAT_ACCOUNT) and run the command again" 2
   fi
-  $SUDO chmod 0750 "$HOME_DIR"
-  $SUDO usermod -aG audio "$SAT_ACCOUNT"
+  $SUDO /usr/bin/chmod 0750 "$HOME_DIR"
+  $SUDO /usr/sbin/usermod -aG audio "$SAT_ACCOUNT"
 elif have_systemd; then
-  if [ "$(loginctl show-user "$RUN_AS" -p Linger --value 2>/dev/null || echo no)" != yes ]; then
-    $SUDO loginctl enable-linger "$RUN_AS"
+  if [ "$(/usr/bin/loginctl show-user "$RUN_AS" -p Linger --value 2>/dev/null || echo no)" != yes ]; then
+    $SUDO /usr/bin/loginctl enable-linger "$RUN_AS"
     record_set "linger_enabled_by_installer=true"
     say "  linger on: the satellite starts at boot, before anyone signs in"
   fi
   # The sound devices belong to whoever sits at the screen; in the audio
   # group the satellite can still open them when nobody is signed in.
-  if ! id -nG "$RUN_AS" | tr ' ' '\n' | grep -qx audio; then
-    $SUDO usermod -aG audio "$RUN_AS"
+  if ! /usr/bin/id -nG "$RUN_AS" | /usr/bin/tr ' ' '\n' | /usr/bin/grep -qx audio; then
+    $SUDO /usr/sbin/usermod -aG audio "$RUN_AS"
     record_set "audio_group_added=true"
     say "  $RUN_AS joined the audio group (sound while nobody is signed in; takes effect at the next sign-in)"
   fi
@@ -585,12 +643,12 @@ power_change() {  # power_change "question" -> 0 to make the change
   esac
 }
 if have_systemd; then
-  if [ -d /proc/acpi/button/lid ] || ls /sys/class/power_supply/BAT* >/dev/null 2>&1; then
+  if [ -d /proc/acpi/button/lid ] || /usr/bin/ls /sys/class/power_supply/BAT* >/dev/null 2>&1; then
     if power_change "Keep running with the lid closed (the lid switch does nothing)?"; then
-      $SUDO mkdir -p "$(dirname "$LOGIND_DROPIN")"
+      $SUDO /usr/bin/mkdir -p "$(/usr/bin/dirname "$LOGIND_DROPIN")"
       printf '%s\n' "# Domovoi satellite: closing the lid does not suspend (install-pc.sh)." \
         "[Login]" "HandleLidSwitch=ignore" "HandleLidSwitchExternalPower=ignore" "HandleLidSwitchDocked=ignore" \
-        | $SUDO tee "$LOGIND_DROPIN" >/dev/null
+        | $SUDO /usr/bin/tee "$LOGIND_DROPIN" >/dev/null
       record_set "logind_dropin=true"
       say "  lid switch ignored from the next reboot (the desktop's own lid setting may need the same)"
     fi
@@ -598,8 +656,8 @@ if have_systemd; then
   if power_change "Never sleep or hibernate (the screen can still turn off)?"; then
     MASKED=""
     for t in $SLEEP_TARGETS; do
-      if [ "$(systemctl is-enabled "$t" 2>/dev/null || true)" != masked ]; then
-        $SUDO systemctl mask "$t" >/dev/null 2>&1 && MASKED="$MASKED \"$t\","
+      if [ "$(/usr/bin/systemctl is-enabled "$t" 2>/dev/null || true)" != masked ]; then
+        $SUDO /usr/bin/systemctl mask "$t" >/dev/null 2>&1 && MASKED="$MASKED \"$t\","
       fi
     done
     record_set "masked_targets=[${MASKED%,}]"
@@ -608,16 +666,16 @@ if have_systemd; then
   RULES=""
   for BAT in /sys/class/power_supply/BAT*; do
     [ -e "$BAT/charge_control_end_threshold" ] || continue
-    if power_change "Stop charging $(basename "$BAT") at $CHARGE_LIMIT% (kinder to a battery that is always plugged in)?"; then
-      RULES="${RULES}SUBSYSTEM==\"power_supply\", KERNEL==\"$(basename "$BAT")\", ATTR{charge_control_end_threshold}=\"$CHARGE_LIMIT\"
+    if power_change "Stop charging $(/usr/bin/basename "$BAT") at $CHARGE_LIMIT% (kinder to a battery that is always plugged in)?"; then
+      RULES="${RULES}SUBSYSTEM==\"power_supply\", KERNEL==\"$(/usr/bin/basename "$BAT")\", ATTR{charge_control_end_threshold}=\"$CHARGE_LIMIT\"
 "
-      echo "$CHARGE_LIMIT" | $SUDO tee "$BAT/charge_control_end_threshold" >/dev/null \
+      echo "$CHARGE_LIMIT" | $SUDO /usr/bin/tee "$BAT/charge_control_end_threshold" >/dev/null \
         || say "  this laptop refused the limit now; the rule tries again at every boot"
       say "  $(basename "$BAT") stops charging at $CHARGE_LIMIT%"
     fi
   done
   if [ -n "$RULES" ]; then
-    printf '%s' "$RULES" | $SUDO tee "$CHARGE_RULE" >/dev/null
+    printf '%s' "$RULES" | $SUDO /usr/bin/tee "$CHARGE_RULE" >/dev/null
     record_set "charge_rule=true"
   fi
 fi
@@ -631,25 +689,25 @@ fi
 # ─── 7. the code, a fresh venv, the models ───────────────────────────────
 
 if [ "$MODE" = headless ]; then
-  STAGE=$(mktemp -d)
-  cp -a "$SRC/satellite" "$STAGE/satellite"
-  chmod -R a+rX "$STAGE"
-  as_sat mkdir -p "$PREFIX"
-  as_sat rm -rf "$PREFIX/satellite"
-  as_sat cp -a "$STAGE/satellite" "$PREFIX/satellite"
-  rm -rf "$STAGE"
+  STAGE=$(/usr/bin/mktemp -d)
+  /usr/bin/cp -a "$SRC/satellite" "$STAGE/satellite"
+  /usr/bin/chmod -R a+rX "$STAGE"
+  as_sat /usr/bin/mkdir -p "$PREFIX"
+  as_sat /usr/bin/rm -rf "$PREFIX/satellite"
+  as_sat /usr/bin/cp -a "$STAGE/satellite" "$PREFIX/satellite"
+  /usr/bin/rm -rf "$STAGE"
 else
-  mkdir -p "$PREFIX"
-  rm -rf "$PREFIX/satellite"
-  cp -a "$SRC/satellite" "$PREFIX/satellite"
+  /usr/bin/mkdir -p "$PREFIX"
+  /usr/bin/rm -rf "$PREFIX/satellite"
+  /usr/bin/cp -a "$SRC/satellite" "$PREFIX/satellite"
 fi
-as_sat find "$PREFIX/satellite" -name __pycache__ -type d -prune -exec rm -rf {} +
+as_sat /usr/bin/find "$PREFIX/satellite" -name __pycache__ -type d -prune -exec /usr/bin/rm -rf {} +
 
 say "Setting up Python (this downloads the satellite's libraries, a few minutes)..."
 # A fresh venv every time: an old one is the account's, and nothing in it
 # (a planted .pth runs at Python's start) is ever run.
-as_sat rm -rf "$VENV"
-as_sat python3 -I -m venv "$VENV"
+as_sat /usr/bin/rm -rf "$VENV"
+as_sat $PY -I -m venv "$VENV"
 # Every package, its version and the SHA-256 of every file pip may take are
 # in the list (it reached this computer inside the checked bundle); pip
 # refuses anything else, and builds nothing from source.
@@ -657,20 +715,20 @@ as_sat "$VENV/bin/pip" install --no-input -q --disable-pip-version-check \
   --require-hashes --only-binary=:all: --no-deps -r "$PREFIX/$LOCK_REL"
 OWW_DIR=$(as_sat "$VENV/bin/python" -c 'import os, openwakeword; print(os.path.join(os.path.dirname(openwakeword.__file__), "resources", "models"))')
 say "Fetching the wake-word models (checked against their pinned SHA-256)..."
-as_sat sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install models --dest '$OWW_DIR' --payload \"\$1\"" _ "$PAYLOAD" >/dev/null \
+as_sat /usr/bin/sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install models --dest '$OWW_DIR' --payload \"\$1\"" _ "$PAYLOAD" >/dev/null \
   || die "the wake-word models could not be fetched (the error is above); run the command again when the internet is back"
 
 # ─── 8. the config ───────────────────────────────────────────────────────
 
-CONFIG_REPORT=$(as_sat sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install config --config '$CONFIG_DIR/config.toml' --permissions '$PERMISSIONS' --payload \"\$1\"" _ "$PAYLOAD")
-BACKUP=$(printf '%s' "$CONFIG_REPORT" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("backup") or "")')
+CONFIG_REPORT=$(as_sat /usr/bin/sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install config --config '$CONFIG_DIR/config.toml' --permissions '$PERMISSIONS' --payload \"\$1\"" _ "$PAYLOAD")
+BACKUP=$(printf '%s' "$CONFIG_REPORT" | $PY -I -c 'import json,sys; print(json.load(sys.stdin).get("backup") or "")')
 [ -z "$BACKUP" ] || say "  your previous config is kept as $BACKUP"
 say "  wrote $CONFIG_DIR/config.toml (pinned to $FP)"
 
 # ─── 9. the service, the tray ────────────────────────────────────────────
 
 render() {  # render TEMPLATE -> stdout
-  sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@USER@|$RUN_AS|g" -e "s|@HOME@|$HOME_DIR|g" "$1"
+  /usr/bin/sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@USER@|$RUN_AS|g" -e "s|@HOME@|$HOME_DIR|g" "$1"
 }
 
 STARTED=0
@@ -678,13 +736,13 @@ if ! have_systemd; then
   say "systemd is not running here, so no service was installed. Run the satellite by hand:"
   say "  cd $PREFIX && $VENV/bin/python -m satellite.client"
 elif [ "$MODE" = desktop ]; then
-  mkdir -p "$HOME_DIR/.config/systemd/user"
+  /usr/bin/mkdir -p "$HOME_DIR/.config/systemd/user"
   render "$SRC/satellite/scripts/domovoi-satellite-user.service" >"$HOME_DIR/.config/systemd/user/$UNIT"
-  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(/usr/bin/id -u)}
   # A user manager that linger has only just started needs a moment.
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     [ -S "$XDG_RUNTIME_DIR/bus" ] || [ -S "$XDG_RUNTIME_DIR/systemd/private" ] && break
-    sleep 1
+    /usr/bin/sleep 1
   done
   user_systemctl daemon-reload
   if [ "$NO_START" = 1 ]; then
@@ -694,8 +752,8 @@ elif [ "$MODE" = desktop ]; then
     user_systemctl restart "$UNIT"
     STARTED=1
   fi
-  mkdir -p "$HOME_DIR/.config/autostart" "$HOME_DIR/.local/share/applications"
-  cat >"$HOME_DIR/.config/autostart/domovoi-satellite-tray.desktop" <<EOF
+  /usr/bin/mkdir -p "$HOME_DIR/.config/autostart" "$HOME_DIR/.local/share/applications"
+  /usr/bin/cat >"$HOME_DIR/.config/autostart/domovoi-satellite-tray.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Domovoi Satellite tray
@@ -707,7 +765,7 @@ Terminal=false
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
 EOF
-  cat >"$HOME_DIR/.local/share/applications/domovoi-satellite.desktop" <<EOF
+  /usr/bin/cat >"$HOME_DIR/.local/share/applications/domovoi-satellite.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Domovoi Satellite
@@ -719,13 +777,13 @@ Terminal=false
 Categories=AudioVideo;Utility;
 EOF
   if [ "$NO_START" = 0 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    (cd "$PREFIX" && setsid "$VENV/bin/python" -m satellite.tray >/dev/null 2>&1 </dev/null &) || true
+    (cd "$PREFIX" && /usr/bin/setsid "$VENV/bin/python" -m satellite.tray >/dev/null 2>&1 </dev/null &) || true
   fi
 else
-  render "$SRC/satellite/scripts/domovoi-satellite-system.service" | $SUDO tee "/etc/systemd/system/$UNIT" >/dev/null
-  $SUDO systemctl daemon-reload
-  $SUDO systemctl enable "$UNIT" >/dev/null
-  if [ "$NO_START" = 0 ]; then $SUDO systemctl restart "$UNIT"; STARTED=1; fi
+  render "$SRC/satellite/scripts/domovoi-satellite-system.service" | $SUDO /usr/bin/tee "/etc/systemd/system/$UNIT" >/dev/null
+  $SUDO /usr/bin/systemctl daemon-reload
+  $SUDO /usr/bin/systemctl enable "$UNIT" >/dev/null
+  if [ "$NO_START" = 0 ]; then $SUDO /usr/bin/systemctl restart "$UNIT"; STARTED=1; fi
 fi
 forget_sudo
 
@@ -751,7 +809,7 @@ if [ "$STARTED" = 1 ] && [ "$WAIT_SEC" -gt 0 ]; then
     SHOW_CODE=--show-code
     say "Now approve it: in the dashboard, Settings -> Satellites, type the code shown below."
   fi
-  if as_sat sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install wait --socket '$CONFIG_DIR/control.sock' --timeout '$WAIT_SEC' $SHOW_CODE"; then
+  if as_sat /usr/bin/sh -c "cd '$PREFIX' && '$VENV/bin/python' -m satellite.pc_install wait --socket '$CONFIG_DIR/control.sock' --timeout '$WAIT_SEC' $SHOW_CODE"; then
     exit 0
   fi
   say "Not approved yet. It keeps waiting in the background; the code is also in the tray,"
