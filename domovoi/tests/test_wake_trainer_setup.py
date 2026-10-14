@@ -374,6 +374,17 @@ async def test_on_windows_no_disk_number_and_the_person_confirms_c(box):
 
 
 @pytest.mark.asyncio
+async def test_on_windows_once_all_is_there_the_note_says_per_word(box):
+    # e2e 2026-10-14: "Training needs about 0 GB of it" once training was on.
+    box["state"].update(wsl=True, image=(True, "a" * 40))
+    wts._update(data_ready=True)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    text = " ".join(req["notes"])
+    assert "0 GB" not in text and "half a gigabyte" in text
+
+
+@pytest.mark.asyncio
 async def test_elsewhere_the_disk_is_measured_and_no_confirm_is_asked(box):
     with egress.override_policy("always"):
         req = await wts.requirements(force=True)

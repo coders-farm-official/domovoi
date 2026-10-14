@@ -485,13 +485,18 @@ async def requirements(force: bool = False) -> dict[str, Any]:
             f"plus {HEADROOM_GB:.0f} GB to spare."
         )
     elif free_gb is None and wsl:
-        notes.append(
-            "Domovoi can't see how much space is free on the Windows drive (C:), where "
-            f"its disk lives. Training needs about {need_gb:.0f} GB of it: check that C: has "
-            f"at least {WSL_CONFIRM_GB} GB free before you turn it on.")
+        if need_gb >= 1:
+            notes.append(
+                "Domovoi can't see how much space is free on the Windows drive (C:), where "
+                f"its disk lives. Training needs about {need_gb:.0f} GB of it: check that C: "
+                f"has at least {WSL_CONFIRM_GB} GB free before you turn it on.")
+        else:
+            notes.append(
+                "Domovoi can't see how much space is free on the Windows drive (C:), where "
+                "its disk lives. Each wake word takes about half a gigabyte of it.")
     elif free_gb is None:
         notes.append("Couldn't measure the free disk space; training needs about "
-                     f"{need_gb:.0f} GB.")
+                     + (f"{need_gb:.0f} GB." if need_gb >= 1 else "half a gigabyte a wake word."))
 
     runtime_ok = "nvidia" in (info.get("runtimes") or []) or "docker desktop" in (info.get("os") or "").lower()
     probe = st.get("gpu") if image_current else None
