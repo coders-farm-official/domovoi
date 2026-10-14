@@ -15,14 +15,18 @@
 #                  -t domovoi-wake-trainer:cpu scripts/wake_word/docker
 # (The default below is the GPU-capable image, which is what the shared Domovoi
 #  box and most contributors want.)
-ARG BASE=pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+# Pinned by digest (read with `docker buildx imagetools inspect` on
+# 2026-10-13): a tag can be pushed again.
+ARG BASE=pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime@sha256:0a3b9fedefe1f61ac4d5a9de9015c0863db27ca0fde2d4e37e6268147980b726
 FROM ${BASE}
 
 # Pin third-party repos by commit so the build doesn't drift as upstream master
-# moves (openWakeWord/piper notebooks have known breakage churn). Override at
-# build time if you need a newer/forked SHA.
-ARG OWW_REF=main
-ARG PSG_REF=master
+# moves (openWakeWord/piper notebooks have known breakage churn): the commits
+# the 2026-10-13 spike trained with, on the GPU and on the CPU. Override at
+# build time for a newer/forked SHA (and check train_config.template.yaml
+# against that commit's train.py).
+ARG OWW_REF=368c03716d1e92591906a84949bc477f3a834455
+ARG PSG_REF=f1988a4d54eddb23d99e86f0adfef6226a85acc7
 # When BASE is a non-torch image (e.g. python:3.11-slim for CPU/arm), set this
 # to a pip index so torch gets installed. Empty => assume torch is already in
 # the base (the pytorch/pytorch case) and DON'T reinstall it (reinstalling can
@@ -32,7 +36,14 @@ ARG TORCH_INDEX=""
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_CONSTRAINT=/opt/constraints.txt \
     OWW_CACHE=/data/cache
+
+# Every package the pip installs below bring in, at the version the
+# 2026-10-13 spike image resolved (its `pip freeze`, less what the base image
+# ships): PIP_CONSTRAINT holds every pip install in this file to it, so a
+# rebuild months from now installs the same set.
+COPY constraints.txt /opt/constraints.txt
 
 # System deps:
 #   espeak-ng + libespeak-ng1  -> espeak-phonemizer (piper-sample-generator)
@@ -83,7 +94,8 @@ RUN git clone https://github.com/dscripka/piper-sample-generator.git /opt/piper-
 RUN mkdir -p /opt/piper-sample-generator/models && \
     wget -q -O /opt/piper-sample-generator/models/en-us-libritts-high.pt \
       'https://github.com/rhasspy/piper-sample-generator/releases/download/v1.0.0/en-us-libritts-high.pt' && \
-    test "$(stat -c%s /opt/piper-sample-generator/models/en-us-libritts-high.pt)" -gt 50000000
+    echo "5258f21adf77c29248d9a89d51ca9492f6e75a498140584dcbed0edcab81960a  /opt/piper-sample-generator/models/en-us-libritts-high.pt" \
+      | sha256sum -c -
 
 # ── openWakeWord ─────────────────────────────────────────────────────────────
 RUN git clone https://github.com/dscripka/openWakeWord.git /opt/openWakeWord && \
@@ -106,6 +118,7 @@ RUN sed -i 's/if args\.convert_to_tflite:/if args.convert_to_tflite is True:/' \
 
 # piper-sample-generator deps (audiomentations, espeak-phonemizer, numpy,
 # webrtcvad). We DELIBERATELY do not let it reinstall torch on the CUDA base.
+# Unpinned names here; constraints.txt (PIP_CONSTRAINT) fixes their versions.
 RUN pip install --no-cache-dir \
         audiomentations espeak-phonemizer numpy webrtcvad soundfile && \
     pip install --no-cache-dir -e /opt/openWakeWord && \
@@ -150,11 +163,15 @@ RUN pip install --no-cache-dir \
 # (used by both --augment_clips and --train_model) hard-requires these and would
 # otherwise try to fetch them at run time (network dependency mid-train). The
 # v0.5.1 GitHub-release assets that download_models() pulls are exactly what the
-# notebook fetches by hand.
+# notebook fetches by hand. The two feature models every trained wake word
+# depends on are checked against the SHA-256 of the spike's copies.
 RUN cd /opt/openWakeWord && \
     python -c "import openwakeword.utils as u; u.download_models([])" && \
-    test -f /opt/openWakeWord/openwakeword/resources/models/melspectrogram.onnx && \
-    test -f /opt/openWakeWord/openwakeword/resources/models/embedding_model.onnx
+    cd /opt/openWakeWord/openwakeword/resources/models && \
+    printf '%s  %s\n' \
+      ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f melspectrogram.onnx \
+      70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f embedding_model.onnx \
+      | sha256sum -c -
 
 # Our entrypoint + YAML template (rendered per-run from env by the entrypoint).
 COPY entrypoint.py /opt/entrypoint.py

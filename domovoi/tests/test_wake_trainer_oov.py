@@ -96,3 +96,59 @@ def test_the_image_copies_the_runner_where_the_entrypoint_looks():
     dockerfile = (DOCKER_DIR / "Dockerfile").read_text(encoding="utf-8")
     entrypoint = _load("entrypoint")
     assert f"COPY train_runner.py {entrypoint.TRAIN_RUNNER.as_posix()}" in dockerfile
+
+
+# ─── the host's pronunciations (domovoi/phonemizer, MIT) come first ───────
+
+def test_host_pronunciations_parse_and_refuse_anything_else():
+    got = runner.parse_pronunciations("domovoi=D OW1 M OW2 V OY2;domo=D OW1 M OW2")
+    assert got == {"domovoi": "D OW1 M OW2 V OY2", "domo": "D OW1 M OW2"}
+    assert runner.parse_pronunciations("x=$(reboot);y=D AA1 Q;=HH EY1;z") == {}
+    assert runner.parse_pronunciations("") == {}
+
+
+class _FakePronouncing:
+    """The bits of ``pronouncing`` add_pronunciations touches."""
+
+    def __init__(self, known):
+        from collections import defaultdict
+
+        self.lookup = defaultdict(list, {k: list(v) for k, v in known.items()})
+        self.pronunciations = []
+
+    def init_cmu(self):
+        pass
+
+    def phones_for_word(self, word):
+        return self.lookup.get(word.lower(), [])
+
+
+def test_the_hosts_pronunciation_wins_and_espeak_covers_the_rest(monkeypatch):
+    fake = _FakePronouncing({"hey": ["HH EY1"], "hello": ["HH AH0 L OW1"]})
+    monkeypatch.setitem(sys.modules, "pronouncing", fake)
+    monkeypatch.setattr(runner, "espeak_ipa", lambda word: "dˈoʊmoʊ")
+    added = runner.add_pronunciations(
+        "hey domovoi domo hello",
+        {"domovoi": "D OW1 M OW2 V OY2", "hello": "HH EH0 L OW1"},
+    )
+    assert added["domovoi"] == ("D OW1 M OW2 V OY2", "Domovoi's phonemizer")
+    assert added["domo"] == ("D OW1 M OW0", "espeak-ng")
+    # A listed word goes first even over the dictionary's own entry...
+    assert fake.phones_for_word("hello")[0] == "HH EH0 L OW1"
+    # ...and a dictionary word nobody sent is left alone.
+    assert "hey" not in added and fake.phones_for_word("hey") == ["HH EY1"]
+
+
+def test_warm_downloads_and_trains_nothing(monkeypatch, tmp_path, capsys):
+    entrypoint = _load("entrypoint")
+    done = []
+    monkeypatch.setattr(entrypoint, "CACHE", tmp_path)
+    for name in ("ensure_dataset", "ensure_rirs", "ensure_background"):
+        monkeypatch.setattr(entrypoint, name, lambda n=name: done.append(n))
+    monkeypatch.setattr(entrypoint, "run_stage", lambda *a, **k: done.append("TRAINED"))
+    monkeypatch.setattr(entrypoint, "lower_priority", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["entrypoint.py", "--warm"])
+    monkeypatch.delenv("WAKE_SLUG", raising=False)
+    assert entrypoint.main() == 0
+    assert done == ["ensure_dataset", "ensure_rirs", "ensure_background"]
+    assert "warm: 0 bytes in the cache" in capsys.readouterr().out

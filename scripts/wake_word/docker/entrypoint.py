@@ -20,6 +20,11 @@ accordingly. Steps:
      <slug>.onnx present at the host {out}, which is /data/models/<slug>.onnx
      via the bind mount).
 
+``--warm`` (no WAKE_SLUG needed) does step 2 only and exits: the
+dashboard's "Turn on wake-word training" runs it once, so the first Train
+doesn't start with an 18 GB download. Either way the process lowers its
+own CPU/IO priority first (WAKE_NICE, default 10).
+
 NOTHING here assumes a GPU exists or knows any host path — /data/clips,
 /data/models, /data/cache are fixed in-container mountpoints the wrapper binds.
 """
@@ -433,7 +438,70 @@ def export_model(work: Path, slug: str) -> None:
     log(f"exported model: {src} -> {dst}")
 
 
+def lower_priority() -> None:
+    """Run (and let every stage this starts run) at a low CPU and disk
+    priority inside the container: nice 10, and the idle I/O class where
+    the kernel's scheduler honours one. The host wrapper's cgroup limits
+    (--cpus, --cpu-shares, --memory) are what keep live voice responsive
+    against this container; this only orders the work inside it. Best
+    effort: WAKE_NICE=0 turns it off."""
+    try:
+        n = int(os.environ.get("WAKE_NICE", "10") or "0")
+    except ValueError:
+        n = 10
+    if n <= 0 or not hasattr(os, "nice"):
+        return
+    try:
+        os.nice(n)
+    except OSError as e:
+        log(f"could not lower the CPU priority: {e}")
+    if shutil.which("ionice"):
+        subprocess.run(["ionice", "-c", "3", "-p", str(os.getpid())],
+                       capture_output=True, check=False)
+
+
+def cache_bytes() -> int:
+    total = 0
+    for root, _dirs, files in os.walk(CACHE):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def warm() -> int:
+    """``--warm``: download the datasets into the cache volume and stop
+    (the dashboard's "Turn on wake-word training" runs this once, so the
+    first Train doesn't wait on ~18 GB). Prints a progress line with the
+    cache's size every 15 s while it works, and nothing is trained."""
+    import threading
+
+    log(f"warming the training data cache at {CACHE}")
+    stop = threading.Event()
+
+    def report() -> None:
+        while not stop.wait(15):
+            print(f"[entrypoint] warm: {cache_bytes()} bytes in the cache", flush=True)
+
+    t = threading.Thread(target=report, daemon=True)
+    t.start()
+    try:
+        ensure_dataset()
+        ensure_rirs()
+        ensure_background()
+    finally:
+        stop.set()
+    print(f"[entrypoint] warm: {cache_bytes()} bytes in the cache", flush=True)
+    log("DONE: the training data cache is ready.")
+    return 0
+
+
 def main() -> int:
+    lower_priority()
+    if "--warm" in sys.argv[1:]:
+        return warm()
     slug = os.environ.get("WAKE_SLUG", "").strip()
     phrase = os.environ.get("WAKE_PHRASE", "").strip()
     if not slug:
