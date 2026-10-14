@@ -128,10 +128,15 @@ object ModelCatalog {
     /** What the assistant's benchmark downloads and runs. */
     val assistant: List<CatalogModel> = listOf(gemma4E2b, moonshineTinyEn, moonshineBaseEn, sileroVad)
 
-    /** What the assistant itself downloads before its first answer: the
-     *  language model, for text chat (M1). Voice (M2) adds its speech model
-     *  and voice detector here. */
-    val chat: List<CatalogModel> = listOf(gemma4E2b)
+    /** What the assistant listens with: Moonshine tiny for speech to text
+     *  (M0: 21-121 ms per question on the owner's phone) and Silero VAD for
+     *  the end of speech. */
+    val listening: List<CatalogModel> = listOf(moonshineTinyEn, sileroVad)
+
+    /** Everything the assistant downloads in its setup: the language model,
+     *  for text chat, and what it listens with, for voice. A phone set up
+     *  before voice (M1) has only the first; the mic offers the rest. */
+    val chat: List<CatalogModel> = listOf(gemma4E2b) + listening
 
     /** The language model the assistant answers with. */
     val chatModel: CatalogModel get() = gemma4E2b

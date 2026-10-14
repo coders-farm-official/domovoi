@@ -315,6 +315,13 @@ class PhoneVoice(
      *  not downloaded (the caller falls back to Android's TextToSpeech). */
     override suspend fun open(): PhoneSpeech? {
         if (System.currentTimeMillis() - fetchedAtMs > REFETCH_MS) withTimeoutOrNull(FETCH_TIMEOUT_MS) { fetchFromServer() }
+        return openOnPhone()
+    }
+
+    /** [open] without asking the server for its voice and list first: the
+     *  on-device assistant, which never talks to a server, speaks with what
+     *  the phone already has (the pick, the cached server voice and list). */
+    suspend fun openOnPhone(): PhoneSpeech? {
         val voice = PhoneVoiceChoice.effective(prefs.voiceChoice.value, cachedInfo()?.server_voice)
         if (!withContext(Dispatchers.IO) { store.isInstalled(voice) }) return null
         val p = phonemizer()

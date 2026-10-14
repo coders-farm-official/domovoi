@@ -66,6 +66,10 @@ internal class AssistantActions(
     val open: (String) -> Unit = {},
     val delete: (String) -> Unit = {},
     val clearAll: () -> Unit = {},
+    /** The mic button (asks for the permission first, in the app). */
+    val talk: () -> Unit = {},
+    val downloadVoice: () -> Unit = {},
+    val setSpeakTyped: (Boolean) -> Unit = {},
 )
 
 /**
@@ -136,10 +140,22 @@ fun AssistantScreen() {
             assistant.download()
         }
     }
-    AssistantContent(ui, actionsFor(assistant, download))
+    // The mic permission is asked on the first tap of the mic, with its
+    // reason in the toast if it is refused.
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) assistant.talk() else toast("the microphone permission is needed to talk to Domovoi on this phone")
+    }
+    val talk = {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            assistant.talk()
+        } else {
+            askMic.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    AssistantContent(ui, actionsFor(assistant, download, talk))
 }
 
-private fun actionsFor(a: AssistantController, download: () -> Unit) = AssistantActions(
+private fun actionsFor(a: AssistantController, download: () -> Unit, talk: () -> Unit) = AssistantActions(
     download = download,
     pauseDownload = a::pauseDownload,
     cancelDownload = a::cancelDownload,
@@ -153,6 +169,9 @@ private fun actionsFor(a: AssistantController, download: () -> Unit) = Assistant
     open = a::open,
     delete = a::delete,
     clearAll = a::clearAll,
+    talk = talk,
+    downloadVoice = a::downloadVoice,
+    setSpeakTyped = a::setSpeakTyped,
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */

@@ -23,6 +23,10 @@ interface AssistantSettings {
 
     /** How long the last finished download took, ms. */
     var lastDownloadMs: Long?
+
+    /** Read typed questions' replies aloud too. Off (plan decision 7):
+     *  replies to spoken questions are spoken, typed ones stay silent. */
+    var speakTyped: Boolean
 }
 
 /** In memory only: for tests. */
@@ -32,6 +36,7 @@ class MemoryAssistantSettings(
     override var currentConversation: String? = null,
     override var downloadStartedAt: Long? = null,
     override var lastDownloadMs: Long? = null,
+    override var speakTyped: Boolean = false,
 ) : AssistantSettings
 
 /** The app's: SharedPreferences `assistant`. */
@@ -58,7 +63,12 @@ class PhoneAssistantSettings(context: Context) : AssistantSettings {
         get() = prefs.getLong(K_TOOK, -1).takeIf { it >= 0 }
         set(value) = prefs.edit().apply { if (value == null) remove(K_TOOK) else putLong(K_TOOK, value) }.apply()
 
+    override var speakTyped: Boolean
+        get() = prefs.getBoolean(K_SPEAK_TYPED, false)
+        set(value) = prefs.edit().putBoolean(K_SPEAK_TYPED, value).apply()
+
     private companion object {
+        const val K_SPEAK_TYPED = "speak_typed_replies"
         const val K_BACKEND = "backend"
         const val K_MOBILE = "allow_mobile_data"
         const val K_CURRENT = "current_conversation"

@@ -1,8 +1,14 @@
 package com.domovoi.app.assistant
 
+import android.Manifest
 import android.content.ComponentCallbacks2
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.util.Log
+import androidx.core.content.ContextCompat
+import com.domovoi.app.audio.MicArbiter
+import com.domovoi.app.audio.MicOwnership
 import androidx.work.WorkInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -69,8 +75,32 @@ data class AssistantUi(
     val history: List<ConversationSummary> = emptyList(),
     /** How long the last finished download took, ms. */
     val lastDownloadMs: Long? = null,
+    /** The listening models (speech to text, the voice detector). */
+    val voiceSetup: ModelSetup = ModelSetup.Checking,
+    /** What the listening models take, all told. */
+    val voiceBytes: Long = ModelCatalog.listening.sumOf { it.totalBytes },
+    val voicePhase: VoicePhase = VoicePhase.Idle,
+    /** The mic has heard speech in this turn (a tap now sends it). */
+    val heardSpeech: Boolean = false,
+    /** Typed questions' replies are read aloud too (plan decision 7: off). */
+    val speakTyped: Boolean = false,
+    /** Which voice speaks, once it has been opened. */
+    val voiceName: String? = null,
+    /** The last stop's tap to silence, ms. */
+    val lastStopMs: Long? = null,
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
+
+    /** Everything a voice turn needs is on the phone. */
+    val voiceReady: Boolean get() = voiceSetup == ModelSetup.Installed
+
+    /** Free space the speech files still need. */
+    val voiceBytesNeeded: Long
+        get() = (voiceBytes - when (val s = voiceSetup) {
+            is ModelSetup.Missing -> s.bytesDone
+            is ModelSetup.Downloading -> s.bytesDone
+            else -> voiceBytes
+        }).coerceAtLeast(0) + ModelDownloader.SPACE_MARGIN
 
     /** Free space the download still needs: what is left to fetch plus the
      *  margin the downloader keeps free. */
@@ -99,6 +129,11 @@ data class AssistantUi(
  *   unless the GPU is chosen; unloaded five minutes after the assistant
  *   leaves the screen, or at once when Android asks for memory, so playback
  *   and the rest of the app are not starved.
+ * - **Voice:** push-to-talk ([VoiceSession]): the mic opens on a tap (one
+ *   owner at a time), the voice detector hears the end of speech, Moonshine
+ *   transcribes, the reply streams as a typed one does and is read aloud
+ *   sentence by sentence in the phone's own voice. Replies to typed
+ *   questions stay silent unless the owner turns that on.
  * - **Conversations:** kept on the phone ([ConversationStore]); the model
  *   sees the system prompt and the conversation, nothing else, and only as
  *   much of a long conversation as fits its context ([HistoryWindow]).
@@ -120,8 +155,18 @@ class AssistantController(
     /** Called before the model loads: frees a copy the benchmark holds. */
     private val beforeLoad: () -> Unit = {},
     private val unloadAfterMs: Long = UNLOAD_AFTER_MS,
-    /** What the assistant downloads; the first is the language model. */
+    /** What the assistant downloads: the language model and the listening
+     *  models. */
     private val models: List<CatalogModel> = ModelCatalog.chat,
+    /** The mic, the voice detector, speech to text and the voice; null: no
+     *  voice (tests of the text chat). */
+    private val voiceKit: VoiceKit? = null,
+    /** Audio focus for a voice turn (the music pauses, then ducks). */
+    private val focus: TurnFocus = TurnFocus.None,
+    /** The app holds RECORD_AUDIO. */
+    private val micAllowed: () -> Boolean = { true },
+    /** Who else holds the mic, in words (audio/MicArbiter.kt); null: free. */
+    private val micRefusal: () -> String? = { null },
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -131,6 +176,8 @@ class AssistantController(
             allowMobileData = settings.allowMobileData,
             backend = settings.backend,
             lastDownloadMs = settings.lastDownloadMs,
+            voiceBytes = models.filter { it.kind != ModelKind.LLM }.sumOf { it.totalBytes },
+            speakTyped = settings.speakTyped,
         ),
     )
     val state: StateFlow<AssistantUi> = _state
@@ -140,6 +187,7 @@ class AssistantController(
     val messages: SharedFlow<String> = _messages
 
     private val chatModel = models.first { it.kind == ModelKind.LLM }
+    private val voiceModels = models.filter { it.kind != ModelKind.LLM }
 
     private val engineLock = Mutex()
     @Volatile private var engine: LlmEngine? = null
@@ -157,7 +205,29 @@ class AssistantController(
     private var watchedJob: String? = null
     private var window = HistoryWindow()
 
+    /** The push-to-talk turn (VoiceSession.kt); null without a [voiceKit]. */
+    private val voice: VoiceSession? = voiceKit?.let { kit ->
+        VoiceSession(
+            scope = scope,
+            blocker = ::voiceBlocker,
+            listen = { onSpeech -> kit.mic.listen(kit.detector(), onSpeechStart = onSpeech) },
+            endListening = { kit.mic.stop() },
+            transcribe = { kit.recognizer().transcribe(it) },
+            answer = ::answerSpoken,
+            voice = { kit.speech().also { _state.update { s -> s.copy(voiceName = kit.voiceName) } } },
+            stopModel = { engine?.cancel() },
+            focus = focus,
+            work = io,
+            clock = nanos,
+        )
+    }
+
     init {
+        voice?.let { v ->
+            scope.launch { v.phase.collect { p -> _state.update { it.copy(voicePhase = p) } } }
+            scope.launch { v.heardSpeech.collect { h -> _state.update { it.copy(heardSpeech = h) } } }
+            scope.launch { v.problems.collect { say(it) } }
+        }
         scope.launch {
             withContext(io) {
                 val id = settings.currentConversation
@@ -186,6 +256,7 @@ class AssistantController(
                 stopReply()
                 closeEngine()
             }
+            if (!_state.value.voiceReady && _state.value.voicePhase == VoicePhase.Idle) voiceKit?.close()
             if (screensShowing > 0) prepare()
         }
     }
@@ -199,13 +270,32 @@ class AssistantController(
             say("not enough free space: the download needs ${gb(ui.bytesNeeded)}")
             return
         }
-        // A job already running (the benchmark's) keeps its models.
-        val running = lastJob?.takeIf { it.active }?.models.orEmpty()
-        val wanted = (known().filter { it.id in running } + models).distinctBy { it.id }
-        settings.downloadStartedAt = clock()
-        jobs.start(wanted, settings.allowMobileData)
+        startJob(models)
         _state.update { it.copy(setup = ModelSetup.Downloading(chatDone(null), "starting")) }
         say("download started; it carries on if you leave the app")
+    }
+
+    /** Downloads the listening models alone (a phone set up for text only,
+     *  before voice arrived). */
+    fun downloadVoice() {
+        val ui = _state.value
+        if (ui.tier == DeviceTier.Unsupported || ui.voiceReady || voiceModels.isEmpty()) return
+        if (ui.freeBytes != null && ui.freeBytes < ui.voiceBytesNeeded) {
+            say("not enough free space: the speech files need ${gb(ui.voiceBytesNeeded)}")
+            return
+        }
+        startJob(voiceModels)
+        _state.update { it.copy(voiceSetup = ModelSetup.Downloading(voiceDone(null), "starting")) }
+        say("downloading the speech files; it carries on if you leave the app")
+    }
+
+    /** Starts the job for [wanted]; a job already running (the benchmark's)
+     *  keeps its models. The downloader skips whatever is installed. */
+    private fun startJob(wanted: List<CatalogModel>) {
+        val running = lastJob?.takeIf { it.active }?.models.orEmpty()
+        val all = (known().filter { it.id in running } + wanted).distinctBy { it.id }
+        settings.downloadStartedAt = clock()
+        jobs.start(all, settings.allowMobileData)
     }
 
     /** Stops the job; the partial file stays, and download resumes it. */
@@ -246,12 +336,13 @@ class AssistantController(
     /** Deletes the model from the phone (it can be downloaded again). */
     fun deleteModel() {
         scope.launch {
-            if (lastJob?.let { it.active && it.coversChat() } == true) {
+            if (lastJob?.let { it.active && it.covers(models) } == true) {
                 say("a model download is running; pause or cancel it first")
                 return@launch
             }
             stopReply()
             closeEngine()
+            voiceKit?.close()
             val freed = withContext(io) {
                 val before = models.sumOf { store.bytesOnDisk(it) }
                 val ok = models.map { store.delete(it) }.all { it }
@@ -267,11 +358,16 @@ class AssistantController(
 
     private fun readDisk() {
         diskDone = models.associate { it.id to store.bytesDone(it) }
-        val installed = models.all { store.isInstalled(it) }
+        val installed = store.isInstalled(chatModel)
+        val voiceInstalled = voiceModels.all { store.isInstalled(it) }
         val free = runCatching { store.usableBytes() }.getOrNull()
         _state.update { ui ->
             val job = lastJob
-            ui.copy(setup = setupFor(installed, job, null), freeBytes = free)
+            ui.copy(
+                setup = setupFor(installed, job, null),
+                voiceSetup = voiceSetupFor(voiceInstalled, job, null),
+                freeBytes = free,
+            )
         }
     }
 
@@ -279,7 +375,7 @@ class AssistantController(
         val done = chatDone(progress)
         return when {
             installed -> ModelSetup.Installed
-            job != null && job.active && job.coversChat() -> {
+            job != null && job.active && job.covers(models) -> {
                 val status = describeDownload(job.state, job.attempts, job.mobileData, job.error)
                 ModelSetup.Downloading(done, status.note)
             }
@@ -288,7 +384,29 @@ class AssistantController(
         }
     }
 
-    private fun DownloadJob.coversChat(): Boolean = models.isEmpty() || this@AssistantController.models.any { it.id in models }
+    /** The listening models' state: installed, being fetched, or missing. */
+    private fun voiceSetupFor(installed: Boolean, job: DownloadJob?, progress: DownloadProgress?): ModelSetup {
+        val done = voiceDone(progress)
+        return when {
+            installed -> ModelSetup.Installed
+            job != null && job.active && job.covers(voiceModels) -> {
+                val status = describeDownload(job.state, job.attempts, job.mobileData, job.error)
+                ModelSetup.Downloading(done, status.note)
+            }
+            job != null && job.state == WorkInfo.State.FAILED && job.covers(voiceModels) ->
+                ModelSetup.Missing(done, job.error ?: "download failed")
+            else -> ModelSetup.Missing(done)
+        }
+    }
+
+    /** True when the job fetches any of [list] (a job from before jobs named
+     *  their models counts as fetching everything). */
+    private fun DownloadJob.covers(list: List<CatalogModel>): Boolean =
+        models.isEmpty() || list.any { it.id in models }
+
+    private fun voiceDone(progress: DownloadProgress?): Long = voiceModels.sumOf { m ->
+        if (progress?.modelId == m.id) progress.modelDone else diskDone[m.id] ?: 0L
+    }
 
     /** The chat models' bytes so far: the job's own count for the one it is
      *  on, the disk's for the rest. */
@@ -308,7 +426,12 @@ class AssistantController(
             if (previous?.progress?.modelId != progress?.modelId || previous?.id != job.id) {
                 withContext(io) { diskDone = models.associate { it.id to store.bytesDone(it) } }
             }
-            _state.update { it.copy(setup = if (it.installed) it.setup else setupFor(false, job, progress)) }
+            _state.update {
+                it.copy(
+                    setup = if (it.installed) it.setup else setupFor(false, job, progress),
+                    voiceSetup = if (it.voiceReady) it.voiceSetup else voiceSetupFor(false, job, progress),
+                )
+            }
             return
         }
         withContext(io) { readDisk() }
@@ -324,7 +447,9 @@ class AssistantController(
                         settings.downloadStartedAt = null
                         _state.update { it.copy(lastDownloadMs = took) }
                     }
-                    if (_state.value.installed) say("the model is downloaded and checked")
+                    val fetchedModel = job.models.isEmpty() || chatModel.id in job.models
+                    if (fetchedModel && _state.value.installed) say("the model is downloaded and checked")
+                    else if (!fetchedModel && _state.value.voiceReady) say("the speech files are downloaded and checked")
                 }
                 WorkInfo.State.FAILED -> say("download failed: ${job.error ?: "unknown error"}")
                 else -> {}
@@ -348,6 +473,14 @@ class AssistantController(
         say("the model runs on the ${backend.name}")
     }
 
+    /** Typed questions' replies read aloud too, or (the default, plan
+     *  decision 7) only replies to spoken questions. */
+    fun setSpeakTyped(on: Boolean) {
+        settings.speakTyped = on
+        _state.update { it.copy(speakTyped = on) }
+        say(if (on) "replies to typed questions are spoken too" else "only replies to spoken questions are spoken")
+    }
+
     // ── The engine ──────────────────────────────────────────────────────
 
     /** Loads the model in the background if it is installed and not loaded
@@ -356,8 +489,21 @@ class AssistantController(
         val ui = _state.value
         if (!ui.installed || ui.tier == DeviceTier.Unsupported) return
         if (ui.engine is EngineState.Unloaded && loadJob?.isActive != true) {
-            loadJob = scope.launch { ensureEngine() }
+            loadJob = scope.launch {
+                ensureEngine()
+                // The voice's parts next, so the first spoken turn does not
+                // wait for them.
+                if (_state.value.voiceReady) warmVoice()
+            }
+        } else if (ui.voiceReady && ui.voiceName == null) {
+            scope.launch { warmVoice() }
         }
+    }
+
+    private suspend fun warmVoice() {
+        val kit = voiceKit ?: return
+        kit.warmUp()
+        _state.update { it.copy(voiceName = kit.voiceName) }
     }
 
     fun retryLoad() {
@@ -413,7 +559,8 @@ class AssistantController(
             loadJob?.cancel()
             stopReply()
             closeEngine()
-            _state.update { it.copy(engine = EngineState.Unloaded) }
+            voiceKit?.close()
+            _state.update { it.copy(engine = EngineState.Unloaded, voiceName = null) }
         }
     }
 
@@ -431,19 +578,24 @@ class AssistantController(
     fun screenHidden() {
         screensShowing = (screensShowing - 1).coerceAtLeast(0)
         if (screensShowing > 0) return
+        // The mic is open only while the assistant is on screen.
+        if (_state.value.voicePhase == VoicePhase.Listening) voice?.stop()
         unloadTimer?.cancel()
         unloadTimer = scope.launch {
             delay(unloadAfterMs)
-            while (_state.value.replying) delay(REPLY_POLL_MS)
+            while (_state.value.replying || voice?.active == true) delay(REPLY_POLL_MS)
             if (screensShowing == 0 && engine != null) {
                 closeEngine()
+                voiceKit?.close()
+                _state.update { it.copy(voiceName = null) }
             }
         }
     }
 
     /** Android asks the app for memory ([ComponentCallbacks2]). */
     fun onTrimMemory(level: Int) {
-        if (shouldUnload(level, _state.value.replying, screensShowing > 0) && engine != null) unload()
+        val busy = _state.value.replying || voice?.active == true
+        if (shouldUnload(level, busy, screensShowing > 0) && engine != null) unload()
     }
 
     /** Registers for Android's memory warnings. Called once, by AppContainer. */
@@ -464,16 +616,80 @@ class AssistantController(
     fun send(text: String) {
         val said = text.trim()
         val ui = _state.value
-        if (said.isEmpty() || ui.replying || !ui.installed) return
+        if (said.isEmpty() || ui.replying || !ui.installed || voice?.active == true) return
         val now = clock()
         val asked = ui.conversation.let {
             it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, said, now))
         }
         _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
-        replyJob = scope.launch { reply(asked) }
+        val v = voice
+        if (settings.speakTyped && v != null && ui.voiceReady) {
+            v.answerAloud { onDelta -> reply(asked, onDelta) }
+        } else {
+            replyJob = scope.launch { reply(asked) }
+        }
     }
 
-    private suspend fun reply(asked: StoredConversation) {
+    // ── Voice ───────────────────────────────────────────────────────────
+
+    /** The mic button: starts a spoken turn, ends listening, or stops it
+     *  all ([VoiceSession.tap]). */
+    fun talk() {
+        voice?.tap()
+    }
+
+    /** Why a spoken turn cannot start now, in words; null: it can. */
+    private fun voiceBlocker(): String? {
+        val ui = _state.value
+        return when {
+            ui.tier == DeviceTier.Unsupported -> "this phone can't run the assistant"
+            !ui.installed -> "the model isn't on the phone yet"
+            !ui.voiceReady -> "the speech files aren't on the phone yet"
+            ui.replying -> "a reply is still being written; stop it first"
+            !micAllowed() -> "the microphone permission is needed to talk to Domovoi on this phone"
+            else -> micRefusal()
+        }
+    }
+
+    /** A spoken question: the transcript joins the conversation (marked
+     *  spoken) and the reply streams as a typed one does, [onDelta] reading
+     *  it aloud. Returns how to file the turn's timing with the reply. */
+    private suspend fun answerSpoken(transcript: String, onDelta: (String) -> Unit): (VoiceTiming) -> Unit {
+        val now = clock()
+        val asked = _state.value.conversation.let {
+            it.copy(updated = now, messages = it.messages + StoredMessage(Speaker.USER, transcript, now, spoken = true))
+        }
+        _state.update { it.copy(conversation = asked, replying = true, thinking = true) }
+        val done = reply(asked, onDelta)
+        return { timing -> fileTiming(done, timing) }
+    }
+
+    /** Writes a spoken turn's timing onto its reply (the long-press details)
+     *  and logs it, for the gate's numbers. */
+    private fun fileTiming(done: StoredConversation, timing: VoiceTiming) {
+        Log.i(TAG, "voice turn: end of speech to first word ${timing.toFirstWordMs} ms (+${timing.silenceWaitMs} ms " +
+            "silence wait), speech to text ${timing.sttMs} ms, first text ${timing.firstTextMs} ms")
+        val index = done.messages.lastIndex
+        if (index < 0 || done.messages[index].fromUser) return
+        val timed = done.messages[index].copy(
+            voiceMs = timing.toFirstWordMs, silenceWaitMs = timing.silenceWaitMs, sttMs = timing.sttMs,
+        )
+        updateMessage(done.id, index, timed)
+    }
+
+    /** Replaces message [index] of conversation [id], on screen and on disk. */
+    private fun updateMessage(id: String, index: Int, message: StoredMessage) {
+        scope.launch {
+            val current = _state.value.conversation.takeIf { it.id == id }
+                ?: withContext(io) { conversations.load(id) } ?: return@launch
+            if (index !in current.messages.indices) return@launch
+            val changed = current.copy(messages = current.messages.toMutableList().also { it[index] = message })
+            _state.update { if (it.conversation.id == id) it.copy(conversation = changed) else it }
+            withContext(NonCancellable) { save(changed) }
+        }
+    }
+
+    private suspend fun reply(asked: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
         save(asked)
         val backend = settings.backend
         val llm = try {
@@ -484,8 +700,7 @@ class AssistantController(
         }
         if (llm == null) {
             val why = (_state.value.engine as? EngineState.Failed)?.reason ?: "the model did not load"
-            finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
-            return
+            return finishReply(asked, StoredMessage(Speaker.DOMOVOI, "", clock(), error = "The model could not start: $why"))
         }
         val turns = modelHistory(asked.messages)
         window = window.next(asked.id, turns)
@@ -498,33 +713,38 @@ class AssistantController(
             llm.reply(Persona.SYSTEM_PROMPT, window.of(turns)).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                 text.append(delta)
+                onDelta(delta)
                 _state.update { ui ->
                     ui.copy(thinking = text.isBlank(), conversation = asked.copy(messages = asked.messages + live()))
                 }
             }
             val stats = llm.lastStats()
-            finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
+            return finishReply(asked, live().copy(firstTextMs = firstMs, tokensPerS = stats?.decodeTokensPerS?.takeIf { it > 0 }))
         } catch (e: CancellationException) {
-            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs))
+            finishReply(asked, live().copy(stopped = true, firstTextMs = firstMs, stopMs = voice?.lastStopMs))
             throw e
         } catch (e: Throwable) {
-            finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
+            return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
     }
 
-    private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage) {
+    private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
         val done = asked.copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
-        _state.update { it.copy(conversation = done, replying = false, thinking = false) }
+        _state.update { it.copy(conversation = done, replying = false, thinking = false, lastStopMs = voice?.lastStopMs) }
         withContext(NonCancellable) { save(done) }
+        return done
     }
 
-    /** Stops the reply being written; what it has so far stays. */
+    /** Stops the reply being written and any voice: what it has so far stays. */
     fun stop() {
+        voice?.stop()
         engine?.cancel()
         replyJob?.cancel()
+        voice?.lastStopMs?.let { ms -> _state.update { it.copy(lastStopMs = ms) } }
     }
 
     private suspend fun stopReply() {
+        voice?.stopAndWait()
         val job = replyJob ?: return
         engine?.cancel()
         job.cancel()
@@ -599,18 +819,28 @@ class AssistantController(
         private const val REPLY_POLL_MS = 2_000L
         private const val STOP_WAIT_MS = 10_000L
 
-        /** The app's assistant, built by AppContainer. */
-        fun forApp(context: Context, beforeLoad: () -> Unit): AssistantController {
+        private const val TAG = "Assistant"
+
+        /** The app's assistant, built by AppContainer. [phoneVoice]: the
+         *  phone's own Domovoi voice, opened without asking a server. */
+        fun forApp(context: Context, beforeLoad: () -> Unit, phoneVoice: suspend () -> PhoneSpeech?): AssistantController {
             val app = context.applicationContext
+            val store = ModelStore.forApp(app)
             return AssistantController(
                 memory = DeviceTiers.read(app),
-                store = ModelStore.forApp(app),
+                store = store,
                 conversations = ConversationStore(File(app.filesDir, "assistant")),
                 jobs = WorkDownloadJobs(app),
                 settings = PhoneAssistantSettings(app),
                 newEngine = { LiteRtLlmEngine(File(app.cacheDir, "litertlm")) },
                 scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
                 beforeLoad = beforeLoad,
+                voiceKit = PhoneVoiceKit(app, store, phoneVoice = phoneVoice),
+                focus = PhoneTurnFocus(app),
+                micAllowed = {
+                    ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                },
+                micRefusal = { MicArbiter.refusal(MicOwnership.Owner.ASSISTANT) },
             ).also { it.attach(app) }
         }
 

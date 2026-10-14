@@ -25,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -38,6 +40,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,8 +63,10 @@ import com.domovoi.app.assistant.AssistantUi
 import com.domovoi.app.assistant.ConversationSummary
 import com.domovoi.app.assistant.EngineState
 import com.domovoi.app.assistant.LlmBackend
+import com.domovoi.app.assistant.ModelSetup
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.StoredMessage
+import com.domovoi.app.assistant.VoicePhase
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
@@ -113,6 +118,7 @@ internal fun AssistantChat(ui: AssistantUi, actions: AssistantActions) {
 private fun ChatPane(ui: AssistantUi, actions: AssistantActions, onHistory: () -> Unit, onModel: () -> Unit) {
     val toast = LocalToast.current
     var draft by rememberSaveable { mutableStateOf("") }
+    var offerSpeechFiles by remember { mutableStateOf(false) }
     val messages = ui.conversation.messages
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         AssistantTitle(Modifier.padding(top = 8.dp)) {
@@ -135,8 +141,9 @@ private fun ChatPane(ui: AssistantUi, actions: AssistantActions, onHistory: () -
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     EmptyState(
                         "Ask Domovoi anything",
-                        "Answers come from a model running on this phone, with no server and no internet. " +
-                            "Conversations stay on this phone; Chat, which talks to your Domovoi server, is separate.",
+                        "Type, or tap the mic and speak. Answers come from a model running on this phone, with no " +
+                            "server and no internet. Conversations stay on this phone; Chat, which talks to your " +
+                            "Domovoi server, is separate.",
                     )
                 }
             } else {
@@ -155,16 +162,37 @@ private fun ChatPane(ui: AssistantUi, actions: AssistantActions, onHistory: () -
                 }
             }
         }
-        EngineLine(ui, actions, onModel)
+        if (ui.voicePhase != VoicePhase.Idle) VoiceLine(ui) else EngineLine(ui, actions, onModel)
+        if (offerSpeechFiles) SpeechFilesDialog(ui, actions) { offerSpeechFiles = false }
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 10.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             LocalComposerField.current(draft, { draft = it }, Modifier.weight(1f))
-            if (ui.replying) {
+            if (ui.voicePhase != VoicePhase.Idle) {
+                // One button for the turn: while it listens and has heard
+                // you, it sends what you said; otherwise it stops it all.
+                val done = ui.voicePhase == VoicePhase.Listening && ui.heardSpeech
+                IconButton(onClick = actions.talk) {
+                    Icon(if (done) Icons.Filled.Check else Icons.Filled.Stop,
+                        contentDescription = if (done) "done speaking" else "stop", tint = Domovoi.colors.brand)
+                }
+            } else if (ui.replying) {
                 IconButton(onClick = actions.stop) {
                     Icon(Icons.Filled.Stop, contentDescription = "stop", tint = Domovoi.colors.brand)
+                }
+            } else if (draft.isBlank()) {
+                // Nothing typed: the mic.
+                IconButton(onClick = {
+                    when (val v = ui.voiceSetup) {
+                        ModelSetup.Installed -> actions.talk()
+                        is ModelSetup.Downloading ->
+                            toast("the speech files are downloading: ${progressLine(v.bytesDone, ui.voiceBytes)}")
+                        else -> offerSpeechFiles = true
+                    }
+                }) {
+                    Icon(Icons.Filled.Mic, contentDescription = "talk", tint = Domovoi.colors.brand)
                 }
             } else {
                 val canSend = draft.isNotBlank()
@@ -178,6 +206,41 @@ private fun ChatPane(ui: AssistantUi, actions: AssistantActions, onHistory: () -
             }
         }
     }
+}
+
+/** Before the first spoken turn on a phone set up for text only: the
+ *  speech files, cost first. */
+@Composable
+private fun SpeechFilesDialog(ui: AssistantUi, actions: AssistantActions, onDismiss: () -> Unit) {
+    ConfirmDialog(
+        title = "download the speech files?",
+        body = "Talking to Domovoi on this phone needs Moonshine (speech to text) and Silero (end of speech), " +
+            "${fmtBytes(ui.voiceBytes)}, downloaded once" +
+            (if (ui.allowMobileData) "." else " over Wi-Fi.") +
+            " Your voice is heard on the phone only; the audio is never kept.",
+        confirmLabel = "download (${fmtBytes(ui.voiceBytes)})",
+        onConfirm = actions.downloadVoice,
+        onDismiss = onDismiss,
+    )
+}
+
+/** Above the composer during a spoken turn: what it is doing now. */
+@Composable
+private fun VoiceLine(ui: AssistantUi) {
+    val (pill, hint) = voiceLine(ui.voicePhase, ui.heardSpeech)
+    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Pill(pill, if (ui.voicePhase == VoicePhase.Listening) Tone.Warn else Tone.Brand, live = true)
+        hint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted) }
+    }
+}
+
+/** The pill and the hint for a phase. */
+internal fun voiceLine(phase: VoicePhase, heardSpeech: Boolean): Pair<String, String?> = when (phase) {
+    VoicePhase.Listening -> if (heardSpeech) "hearing you" to "stop talking, or tap done" else "listening" to "ask your question"
+    VoicePhase.Transcribing -> "transcribing" to null
+    VoicePhase.Thinking -> "thinking" to "tap stop to cancel"
+    VoicePhase.Speaking -> "speaking" to "tap stop to silence it"
+    VoicePhase.Idle -> "" to null
 }
 
 /** Above the composer: the model loading, failing, or thinking. */
@@ -236,6 +299,10 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean) {
                 Column {
                     if (isUser) {
                         Text(m.text, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fg)
+                        if (m.spoken) {
+                            Text("spoken", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgFaint,
+                                modifier = Modifier.padding(top = 2.dp))
+                        }
                     } else if (m.text.isNotEmpty() || writing) {
                         MarkdownText(m.text, trailing = if (writing) " ▍" else "")
                     }
@@ -267,9 +334,15 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean) {
 internal fun replyDetails(m: StoredMessage): String? {
     if (m.fromUser) return null
     val parts = listOfNotNull(
+        m.voiceMs?.let {
+            String.format(Locale.US, "%.2f s from end of speech to first word (+%.1f s silence wait)", it / 1000.0,
+                (m.silenceWaitMs ?: 0) / 1000.0)
+        },
+        m.sttMs?.let { "heard in $it ms" },
         m.firstTextMs?.let { String.format(Locale.US, "%.2f s to first words", it / 1000.0) },
         m.tokensPerS?.let { String.format(Locale.US, "%.1f tokens/s", it) },
         m.backend,
+        m.stopMs?.let { "silenced $it ms after stop" },
     )
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
@@ -363,7 +436,8 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
         PaneTitle("The model on this phone", onClose)
         DomovoiCard(Modifier.fillMaxWidth()) {
             Text(model.name, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
-            Text("${model.kind.label} · ${fmtBytes(model.totalBytes)} on the phone · ${model.license}",
+            Text("${model.kind.label} · ${fmtBytes(model.totalBytes)} on the phone · ${model.license}" +
+                " (with the speech files: ${fmtBytes(ui.totalBytes)})",
                 style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
             Text(engineSummary(ui.engine), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted,
                 modifier = Modifier.padding(top = 6.dp))
@@ -392,6 +466,33 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             OutlinedButton(onClick = { confirmDelete = true }) { Text("delete model", color = Domovoi.colors.err) }
         }
         DomovoiCard(Modifier.fillMaxWidth()) {
+            Text("Speech", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+            Text(speechSummary(ui), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+            if (!ui.voiceReady && ui.voiceSetup !is ModelSetup.Downloading &&
+                ui.voiceSetup != ModelSetup.Checking
+            ) {
+                TextButton(onClick = actions.downloadVoice) {
+                    Text("download the speech files (${fmtBytes(ui.voiceBytes)})", color = Domovoi.colors.brand)
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = ui.speakTyped, onCheckedChange = actions.setSpeakTyped)
+                Column(Modifier.padding(start = 10.dp)) {
+                    Text("read typed replies aloud too", style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fg)
+                    Text(
+                        "Replies to spoken questions are always spoken. Off: replies to typed ones stay silent.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                }
+            }
+            ui.lastStopMs?.let {
+                Text("Last stop: silent $it ms after the tap.", style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgSubtle, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+        DomovoiCard(Modifier.fillMaxWidth()) {
             Text("Conversations", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
             Text(
                 "${ui.history.size} kept on this phone, in the app's private storage and outside backups. The model " +
@@ -407,8 +508,8 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
     if (confirmDelete) {
         ConfirmDialog(
             title = "delete the model?",
-            body = "Frees ${fmtBytes(model.totalBytes)} on this phone. The assistant can't answer without it; you can " +
-                "download it again. Your conversations stay.",
+            body = "Frees ${fmtBytes(ui.totalBytes)} on this phone (the language model and the speech files). The " +
+                "assistant can't answer without them; you can download them again. Your conversations stay.",
             confirmLabel = "delete model",
             destructive = true,
             onConfirm = actions.deleteModel,
@@ -435,6 +536,22 @@ private fun PaneTitle(title: String, onBack: () -> Unit) {
         }
         Text(title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
     }
+}
+
+/** What listens and what speaks, in a sentence or two. */
+internal fun speechSummary(ui: AssistantUi): String {
+    val listens = when (val v = ui.voiceSetup) {
+        ModelSetup.Installed ->
+            "Listens with Moonshine (speech to text) and Silero (end of speech), on the phone."
+        is ModelSetup.Downloading ->
+            "The speech files are downloading: ${progressLine(v.bytesDone, ui.voiceBytes)}."
+        else -> "Talking needs the speech files (${fmtBytes(ui.voiceBytes)}), downloaded once."
+    }
+    val speaks = ui.voiceName?.let {
+        if (it.startsWith("this phone")) " Speaks with $it; Domovoi's own voice is downloaded in Settings → Voice."
+        else " Speaks with $it, the voice picked in Settings → Voice."
+    } ?: " Speaks with the voice picked in Settings → Voice once it is downloaded, else the phone's own."
+    return listens + speaks
 }
 
 internal fun engineSummary(engine: EngineState): String = when (engine) {
