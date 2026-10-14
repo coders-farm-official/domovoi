@@ -1913,7 +1913,17 @@ engine claims the name with `FILE_FLAG_FIRST_PIPE_INSTANCE` and refuses to
 share it, the engine closes a client whose process is another account's,
 and the tray and CLI refuse a pipe served by another account's process —
 so another person signed in on the same PC can neither talk to it nor sit
-on its name and show the tray a "muted" that isn't true.
+on its name and show the tray a "muted" that isn't true. The tray and the
+CLI open the pipe at identification level (`SECURITY_SQOS_PRESENT |
+SECURITY_IDENTIFICATION`): whoever serves it can learn who connected, never
+act as them.
+
+**Test hooks.** `DOMOVOI_DEBUG_MIC_DIR` / `DOMOVOI_DEBUG_AUDIO_SINK` (a
+microphone fed from WAV files, speakers that write WAV files; what the
+end-to-end tests use instead of a person's real devices) reach the engine
+only when its supervisor is started with `--test-audio-hooks`, which
+nothing in an install does, and the engine logs a warning whenever one is
+in use.
 
 **Stopping and uninstalling.** The tray's Stop and the uninstaller set a
 per-account named event that the supervisor and the engine both wait on.
