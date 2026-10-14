@@ -1129,12 +1129,17 @@ reason, so a new route cannot quietly ship open.
   core trusts `X-Forwarded-For` only from loopback, where the web process
   runs.
 - **CSRF stance:** login also sets a `SameSite=Strict`, `HttpOnly` cookie —
-  but the cookie by itself can only *render* authenticated GET state.
+  a random secret of its own, never the Bearer (see *What a service on the
+  same box can do with the cookie*, below) — but the cookie by itself can
+  only *render* authenticated GET state.
   **Every mutation requires the `Authorization: Bearer` header** (the
   dashboard holds the token in JS memory). A cross-site POST carries
   nothing that authorizes it. The one thing the cookie does beyond
   rendering is let the dashboard's own page take its Bearer back after a
   reload, inside the reload window — next.
+- **Forgot the password?** `python -m domovoi.main --reset-admin` on the
+  server clears the credential and every session and prints a fresh setup
+  code. Requires being at the machine — same proof-of-possession logic.
 
 ### Staying signed in across a reload
 
@@ -1159,13 +1164,18 @@ Settings → Configuration → Security → **Stay signed in after a reload**
 
 **How.** The server stamps each session with the moment it last proved
 the password (`admin_sessions.signed_in_at`, V028). The cookie the sign-in
-set is that session's token. A reloaded page asks `POST
-/api/auth/resume`, which hands the cookie's **own** token back — nothing
-new is minted — only when all of these hold:
+set is a 256-bit secret of its own; the session row keeps only its
+sha256, beside the session's Bearer *wrapped* under it (XOR with an
+HMAC-SHA256 of the cookie), so the database alone never yields the Bearer.
+A reloaded page asks `POST /api/auth/resume`, which unwraps that
+session's **own** Bearer and hands it back — nothing new is minted — only
+when all of these hold:
 
 * the request carries the session cookie, and that session is live: not
   signed out, revoked, expired or past the 90-day cap;
-* `now − signed_in_at` is inside the window;
+* `now − signed_in_at` is inside the window (and `signed_in_at` is not in
+  the future: a database clock stepped back after a sign-in does not
+  stretch the window);
 * it carries `X-Requested-With`;
 * it is **same-origin**: `Origin` is exactly the scheme, host and port the
   request was sent to (its `Host`); a request with no `Origin` must carry
@@ -1194,8 +1204,30 @@ the password from another session (every other session is revoked),
 `--reset-admin`, setting the window to 0. **Another device never inherits
 it:** it holds its own cookie, or none, and a fresh sign-in on another
 device does not extend this browser's window. Sessions that existed
-before the upgrade carry no `signed_in_at` and never resume until their
-owner signs in again.
+before the upgrade carry no `signed_in_at` and no cookie of their own:
+their old cookie (which was the Bearer) stops working at all after the
+upgrade, so that browser reads as signed out once and its owner signs in
+again; a tab still holding the Bearer in memory keeps working. The
+dashboard reads the window live from the core; while the core is down or
+restarting it uses the smaller of the last value it saw and the one it
+started with (0, no resume, if it has seen none), so an admin who turned
+it off is not turned back on by a restart.
+
+**What a service on the same box can do with the cookie.** A browser
+sends a cookie to every *port* of the host that set it, so every other
+service on the Domovoi server — a plugin's container, a room's MPD
+stream, anything else the household runs there — receives the dashboard
+cookie with each request the browser makes to it. Until 2026-10-14 that
+cookie *was* the admin Bearer: such a service held a full admin token for
+up to 90 days. Now it holds the cookie only. With it, a service that
+chooses to misuse it can still read what an admin's view-only page
+reads (settings with their secrets masked, the household token, the
+recordings list) for the session's life, and — **inside the reload
+window only** — call `POST /api/auth/resume` itself, forging the
+`Origin` and `X-Requested-With` headers a browser would not let a page
+forge, and get that session's Bearer. Outside the window the cookie is
+never a Bearer. Setting the window to 0 removes that path entirely; not
+running services you don't trust on the Domovoi server removes the rest.
 
 **What it costs, said plainly.** Inside the window, anyone at the unlocked
 computer — the next person at a shared family PC — gets the admin tier by
@@ -1209,9 +1241,6 @@ what such a script could do to a signed-in tab. Behind a reverse proxy
 that shows the browser a different scheme or port than the dashboard
 sees, the same-origin rule refuses the resume and a reload is view only,
 as before (uvicorn believes `X-Forwarded-Proto` from loopback only).
-- **Forgot the password?** `python -m domovoi.main --reset-admin` on the
-  server clears the credential and every session and prints a fresh setup
-  code. Requires being at the machine — same proof-of-possession logic.
 
 ## Plugin trust model — read this before installing anything
 

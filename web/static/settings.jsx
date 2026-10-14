@@ -723,6 +723,9 @@ const AdminSection = ({ setupAsked = false }) => {
   const alreadySetUp = setupAsked && arrived === 'claimed' && !needsSetup;
   // Not returned: a view-only tab's sign-out waits on the password prompt.
   const signOut = () => { Auth.logout(); };
+  // Why the last sign-out did not happen (the server never confirmed it).
+  let signOutError = null;
+  try { signOutError = Auth.signOutError || null; } catch { /* older Auth */ }
   return (
     <Card title="Admin"
           sub="Gates settings edits, plugin management, satellite upgrades, and deleting files. Saving a document, everyday playback and browsing never need it.">
@@ -747,6 +750,17 @@ const AdminSection = ({ setupAsked = false }) => {
             {live
               ? 'This Domovoi’s admin account is already set up, and you’re signed in.'
               : 'This Domovoi’s admin account is already set up: sign in with its password.'}
+          </span>
+        )}
+        {live && signOutError && (
+          // A sign-out the server never confirmed: the session and its
+          // cookie are still alive there, so this browser IS still signed
+          // in, and says so rather than "signed out" (auth.js logout).
+          <span className="admin-sign-out-failed"
+                style={{ fontSize: 12, color: 'var(--err)', flexBasis: '100%', order: 1 }}>
+            Not signed out — {signOutError}, so this browser is still signed
+            in.{' '}
+            <button type="button" className="home-link" onClick={signOut}>try again</button>
           </span>
         )}
         {live && reload.until && (

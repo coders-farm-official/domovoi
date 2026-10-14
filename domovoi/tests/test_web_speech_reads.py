@@ -51,6 +51,7 @@ from domovoi.tests.auth_testkit import (
     _db,  # noqa: F401 — fixture
     bearer,
     claim_admin,
+    claim_admin_with_cookie,
     db_device_token,
     install_fake_db,
     web_app,
@@ -298,7 +299,7 @@ async def test_the_real_household_token_reads_the_rows_and_nothing_else_does(
     # db_session truncates the people / conversation / notes / memory tables
     # first; _db gives fresh auth state and a dead core hop.
     async with web_client() as setup:
-        admin = await claim_admin(setup)
+        admin, admin_cookie = await claim_admin_with_cookie(setup)
     token = await db_device_token()
     assert token, "setup should have minted a household token"
     pid = await _seed_person_with_a_turn_and_a_memory()
@@ -320,7 +321,7 @@ async def test_the_real_household_token_reads_the_rows_and_nothing_else_does(
         for label, client in (
             ("household token", _client({HEADER: token})),
             ("admin bearer", _client(bearer(admin))),
-            ("dashboard cookie", _client(cookies={COOKIE: admin})),
+            ("dashboard cookie", _client(cookies={COOKIE: admin_cookie})),
             ("query token", _client()),
         ):
             async with client as c:

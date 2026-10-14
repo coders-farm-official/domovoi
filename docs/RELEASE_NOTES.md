@@ -26,8 +26,15 @@ update applies the migration.
 * **Settings → Configuration → Security → Stay signed in after a reload**
   sets the minutes (0 to 1440); **0** is the old behaviour, where every
   reload is view only.
-* **Sign in once after updating.** A sign-in from before this update
-  doesn't get the hour; the next one does.
+* **Sign in once after updating.** The dashboard's sign-in cookie is now a
+  secret of its own rather than the admin token itself (a browser sends a
+  cookie to every port of the server, so other services there used to see
+  the token). A browser signed in before the update therefore shows
+  **signed out** after its next reload; sign in once and it is back, with
+  the hour. A tab you haven't reloaded stays signed in.
+* **A sign-out that didn't reach the server says so** ("Not signed out —
+  the Domovoi server did not answer … try again") instead of showing
+  signed out while the server still had you signed in.
 * **API:** `POST /api/auth/resume` (new), and `GET /api/auth/status`,
   `POST /api/auth/login` and `/setup` now also answer
   `reload_window_min`, `resume_until` and `resume_in_sec`

@@ -15,16 +15,20 @@ the password behind the per-source exponential backoff and mints a
 set the ``SameSite=Strict`` ``HttpOnly`` cookie so plain GET page loads
 render authenticated state — mutations everywhere accept ONLY
 ``Authorization: Bearer`` (the dashboard JS holds the token in memory).
+The cookie is a secret of its own, never the Bearer
+(:func:`domovoi.admin_auth.issue_session_cookie`): a browser sends a
+cookie to every port of its host, so whatever else runs on the box sees
+it.
 
 A reload forgets that in-memory token. For ``ADMIN_RELOAD_WINDOW_MIN``
 (default 60) minutes after the password was entered, ``POST /resume``
-gives the page holding the cookie its own token back — owner decision
-2026-10-14, "refreshing should not lose admin on the same machine, same
-session". It answers only a same-origin request (:func:`same_origin`)
-carrying ``X-Requested-With``, and only for the cookie's own session
-inside its window (:func:`domovoi.admin_auth.resume_session`). ``GET
-/status`` says whether this browser can (``resume_in_sec``), so the page
-asks only when it can.
+gives the page holding the cookie its session's token back — owner
+decision 2026-10-14, "refreshing should not lose admin on the same
+machine, same session". It answers only a same-origin request
+(:func:`same_origin`) carrying ``X-Requested-With``, and only for the
+cookie's own session inside its window
+(:func:`domovoi.admin_auth.resume_session`). ``GET /status`` says whether
+this browser can (``resume_in_sec``), so the page asks only when it can.
 
 v1 runs over plain LAN HTTP (TLS is on the documented hardening
 backlog), so the cookie is NOT marked ``Secure``.
@@ -60,20 +64,37 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 COOKIE_MAX_AGE_SEC = admin_auth.SESSION_TTL_DAYS * 86400
 
 
+# The last live window the core's snapshot carried, clamped; None until the
+# first one arrives after this process started.
+_last_live_window: int | None = None
+
+
 def reload_window_min() -> int:
     """The live ``ADMIN_RELOAD_WINDOW_MIN``, in minutes (0 = off).
 
     Edited through the core (Settings → Configuration, tier ``hot``),
     which mutates the CORE's settings; this process's copy is whatever
     ``.env`` said when it booted. So the value comes from the core's
-    snapshot (refreshed every 1.5 s), falling back to this process's own
-    copy only while the core has not answered — the same rule as
-    ``guest_queue_editing``. Either way it is clamped to 0..1440, and a
-    value that is not a whole number reads as 0."""
+    snapshot (refreshed every 1.5 s), clamped to 0..1440; a value that is
+    not a whole number is not a value.
+
+    While the snapshot is missing (the core down, restarting, or slow to
+    answer one poll) the answer may only get SMALLER, never wider than what
+    an admin last set (review finding 2): the smaller of this process's
+    boot-time copy and the last live value seen, and 0 — no resume — when
+    no live value has been seen since this process started. An admin who
+    turned it off is not turned back on by a core restart."""
+    global _last_live_window
     live = (get_cached_snapshot() or {}).get("admin_reload_window_min")
     if isinstance(live, int) and not isinstance(live, bool):
-        return admin_auth.clamp_reload_window(live)
-    return admin_auth.clamp_reload_window(core_settings.admin_reload_window_min)
+        _last_live_window = admin_auth.clamp_reload_window(live)
+        return _last_live_window
+    if _last_live_window is None:
+        return 0
+    return min(
+        _last_live_window,
+        admin_auth.clamp_reload_window(core_settings.admin_reload_window_min),
+    )
 
 
 def _resume_fields(
@@ -169,10 +190,13 @@ def setup_code_refusal() -> str:
     )
 
 
-def _set_session_cookie(response: JSONResponse, token: str) -> None:
+def _set_session_cookie(response: JSONResponse, cookie: str) -> None:
+    """The browser's session cookie: the secret
+    :func:`domovoi.admin_auth.issue_session_cookie` minted for it, never the
+    Bearer (every port on this host receives it)."""
     response.set_cookie(
         admin_auth.COOKIE_NAME,
-        token,
+        cookie,
         max_age=COOKIE_MAX_AGE_SEC,
         httponly=True,
         samesite="strict",
@@ -243,13 +267,14 @@ async def auth_setup(body: SetupRequest, request: Request) -> JSONResponse:
         # The household device token was readable by anyone on the LAN
         # during the pre-setup window; a fresh one starts with the admin.
         device_token = await admin_auth.rotate_device_token(s)
+        cookie = await admin_auth.issue_session_cookie(s, token)
         window = reload_window_min()
-        resume = await admin_auth.resume_deadline(s, token, window)
+        resume = await admin_auth.resume_deadline(s, cookie, window)
     admin_auth.LOGIN_BACKOFF.record_success(source)
     admin_auth.delete_setup_code()
     admin_auth.write_device_token_file(device_token)
     response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, cookie)
     return response
 
 
@@ -267,11 +292,12 @@ async def auth_login(body: LoginRequest, request: Request) -> JSONResponse:
             admin_auth.LOGIN_BACKOFF.record_failure(source)
             raise HTTPException(status_code=401, detail="wrong password")
         token = await admin_auth.create_session(s, label=body.label)
+        cookie = await admin_auth.issue_session_cookie(s, token)
         window = reload_window_min()
-        resume = await admin_auth.resume_deadline(s, token, window)
+        resume = await admin_auth.resume_deadline(s, cookie, window)
     admin_auth.LOGIN_BACKOFF.record_success(source)
     response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
-    _set_session_cookie(response, token)
+    _set_session_cookie(response, cookie)
     return response
 
 
@@ -292,8 +318,11 @@ async def auth_resume(request: Request) -> JSONResponse:
     decision 2026-10-14).
 
     The page's Bearer lived in its memory and the reload forgot it; the
-    HttpOnly session cookie the sign-in set survived and IS that token.
-    This hands it back — nothing new is minted — when ALL of these hold:
+    HttpOnly session cookie the sign-in set survived. The cookie is not the
+    Bearer, but the session row keeps the Bearer wrapped under it
+    (:func:`domovoi.admin_auth.resume_session`), so this hands the
+    session's own Bearer back — nothing new is minted — when ALL of these
+    hold:
 
     * ``X-Requested-With`` (the dependency, and the process-wide write
       backstop in front of it): a cross-site page cannot send it without
@@ -314,14 +343,15 @@ async def auth_resume(request: Request) -> JSONResponse:
             request.headers.get("origin"), request.headers.get("sec-fetch-site"),
         )
         raise HTTPException(status_code=403, detail=_RESUME_CROSS_SITE_DETAIL)
-    token = admin_auth.cookie_token(request)
-    if token is None:
+    cookie = admin_auth.cookie_token(request)
+    if cookie is None:
         raise HTTPException(status_code=401, detail=_RESUME_NO_COOKIE_DETAIL)
     window = reload_window_min()
     async with session_scope() as s:
-        resume = await admin_auth.resume_session(s, token, window)
-    if resume is None:
+        resumed = await admin_auth.resume_session(s, cookie, window)
+    if resumed is None:
         raise HTTPException(status_code=401, detail=_RESUME_CLOSED_DETAIL)
+    token, resume = resumed
     response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
     # The answer is a credential: never kept by a cache on the way.
     response.headers["Cache-Control"] = "no-store"
@@ -349,9 +379,14 @@ async def auth_sessions(request: Request) -> dict:
     result = await admin_auth.check_admin_request(request)
     if result not in ("ok", "cookie-only"):
         raise HTTPException(status_code=401, detail="admin session required")
-    current = admin_auth.bearer_token(request) or admin_auth.cookie_token(request)
-    current_hash = admin_auth.token_sha256(current) if current else None
+    bearer = admin_auth.bearer_token(request)
     async with session_scope() as s:
+        # The Bearer's session, or the one the browser cookie names (the
+        # cookie is its own secret, not the token).
+        current_hash = (
+            admin_auth.token_sha256(bearer) if bearer
+            else await admin_auth.cookie_session_hash(s, admin_auth.cookie_token(request))
+        )
         sessions = await admin_auth.list_sessions(s)
     for entry in sessions:
         entry["current"] = entry["token_hash"] == current_hash

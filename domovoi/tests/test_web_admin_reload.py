@@ -59,6 +59,8 @@ RELOAD_PRELUDE = r"""
 window.__win = { min: __WINDOW_MIN, left: __LEFT_SEC };
 window.__resumeDown = 0;
 window.__resumeRefuse = false;
+window.__resumeNoToken = false;
+window.__logoutMode = null;
 const __baseFetch = fetch;
 fetch = async (url, opts) => {
   const o = opts || {};
@@ -75,8 +77,20 @@ fetch = async (url, opts) => {
     if (!hd['X-Requested-With']) return __answer(403, { detail: 'X-Requested-With header required' });
     if (!cookieLive) return __answer(401, { detail: 'no admin sign-in in this browser to resume' });
     if (!open || window.__resumeRefuse) return __answer(401, { detail: 'sign in again' });
+    if (window.__resumeNoToken) return __answer(200, { ok: true });
     return __answer(200, { ok: true, token: srv.cookie, reload_window_min: window.__win.min,
                            resume_in_sec: window.__win.left, resume_until: '2026-10-14T12:00:00+00:00' });
+  }
+  // A sign-out the server never confirms: 'down' (no answer), '502', or
+  // '401' (the session had already ended there, which IS signed out).
+  if (method === 'POST' && path === '/api/auth/logout' && window.__logoutMode) {
+    window.__fetches.push({ method, path, who: `logout-${window.__logoutMode}` });
+    if (window.__logoutMode === 'down') throw new TypeError('Failed to fetch');
+    if (window.__logoutMode === '401') {
+      srv.sessions.clear(); srv.cookie = null;
+      return __answer(401, { detail: 'admin session required' });
+    }
+    return __answer(502, { detail: 'Bad Gateway' });
   }
   const res = await __baseFetch(url, opts);
   if (method === 'GET' && path === '/api/auth/status' && res.ok) {
@@ -222,6 +236,74 @@ SCENARIOS["login_starts_the_window"] = scenario(
     cookie=None, left_sec=None,
 )
 
+# Review finding 1: a sign-out the server never confirmed. The tab must not
+# say "signed out" while the session and its cookie live on, because the
+# next status read would quietly take the admin sign-in back.
+SIGN_OUT_FAILS = r"""
+const booted = full();
+w.__logoutMode = __MODE;
+const ret = await A.logout(); await step();
+const failed = full();
+const failedLine = h.findAll((e) => w.__cls(e).includes('admin-sign-out-failed'))
+  .map((e) => e.text).join(' ');
+const server = { live: w.__srv.sessions.has('old-session'), cookie: w.__srv.cookie };
+await A.refreshStatus(); await step();
+const reread = full();
+// The server is back: "try again" signs out for real.
+w.__logoutMode = null;
+const retry = h.find((e) => e.type === 'button' && e.text.trim() === 'try again');
+if (retry) { await h.click((e) => e === retry); await step(); }
+return { booted, ret, failed, failedLine, server, reread, retried: !!retry, after: full(),
+         error: A.signOutError, posts: posts() };
+"""
+for _mode in ("down", "502"):
+    SCENARIOS[f"sign_out_fails_{_mode}"] = scenario(
+        SIGN_OUT_FAILS.replace("__MODE", json.dumps(_mode)))
+# A 401 from the sign-out: the session had already ended there. That IS
+# signed out, and the tab says so.
+SCENARIOS["sign_out_already_gone"] = scenario(
+    r"""
+    w.__logoutMode = '401';
+    const ret = await A.logout(); await step();
+    return { ret, after: full(), error: A.signOutError };
+    """,
+)
+# M23: a READ refused on a tab that can resume takes the sign-in back
+# through requestLogin — no prompt.
+SCENARIOS["refused_read_resumes_without_a_prompt"] = scenario(
+    r"""
+    const booted = full();
+    const read = await w.apiGet('/api/broken').then(() => 'ok', (e) => e.status);
+    await step();
+    return { booted, read, after: full(), posts: posts() };
+    """,
+    pre="w.__resumeDown = 2;",
+)
+# M21: a 2xx resume that carries no token is a refusal, and is not asked again.
+SCENARIOS["resume_without_a_token_is_a_refusal"] = scenario(
+    r"""
+    const booted = full();
+    await A.refreshStatus(); await step();
+    return { booted, after: full(), resumes: posts().length };
+    """,
+    pre="w.__resumeNoToken = true;",
+)
+# M24: a password sign-in clears an earlier refusal, so a later cookie
+# session in this browser (another tab signed in) resumes here again.
+SCENARIOS["a_sign_in_clears_a_refusal"] = scenario(
+    r"""
+    const refused = full();
+    await A.login('the-admin-password'); await step();
+    await A.logout(); await step();
+    // Another tab of this browser signs in: a new cookie session, inside its window.
+    w.__srv.sessions.add('tab-2-session'); w.__srv.cookie = 'tab-2-session';
+    w.__resumeRefuse = false; w.__win.left = 3000;
+    await A.refreshStatus(); await step();
+    return { refused, after: full(), posts: posts() };
+    """,
+    pre="w.__resumeRefuse = true;",
+)
+
 
 @pytest.fixture(scope="module")
 def driven(tmp_path_factory) -> dict:
@@ -352,3 +434,55 @@ def test_a_password_sign_in_starts_the_window(driven) -> None:
     assert "keeps you signed in until" in after["until"]
     assert o["words"] == "an hour"
     assert "/api/auth/resume none" not in o["posts"]
+
+
+@pytest.mark.parametrize("mode", ["down", "502"])
+def test_a_sign_out_the_server_never_confirmed_does_not_claim_signed_out(driven, mode) -> None:
+    o = driven[f"sign_out_fails_{mode}"]
+    assert o["booted"]["token"] == "old-session"
+    assert o["ret"] is False
+    failed = o["failed"]
+    # Still signed in, and it says the sign-out did not happen.
+    assert failed["token"] == "old-session"
+    assert "signed in" in failed["pills"] and "signed out" not in failed["pills"]
+    assert failed["who"] == ["Admin"]
+    assert "Not signed out" in o["failedLine"] and "still signed in" in o["failedLine"]
+    assert o["server"] == {"live": True, "cookie": "old-session"}
+    # The next status read changes nothing: no quiet resurrection.
+    assert o["reread"]["token"] == "old-session"
+    assert "signed in" in o["reread"]["pills"]
+    # "try again" with the server back signs out for real.
+    assert o["retried"] is True
+    assert o["after"]["token"] is None and "signed out" in o["after"]["pills"]
+    assert o["error"] is None
+    assert o["posts"][-1] == "/api/auth/logout bearer"
+
+
+def test_a_sign_out_refused_as_already_gone_is_signed_out(driven) -> None:
+    o = driven["sign_out_already_gone"]
+    assert o["ret"] is True
+    assert o["after"]["token"] is None and "signed out" in o["after"]["pills"]
+    assert o["error"] is None
+
+
+def test_a_refused_read_resumes_without_a_prompt(driven) -> None:
+    o = driven["refused_read_resumes_without_a_prompt"]
+    assert o["booted"]["token"] is None and o["booted"]["canResume"] is True
+    assert o["read"] == 401                       # the read itself still failed…
+    assert o["after"]["modal"] is False           # …but no prompt: the sign-in came back
+    assert o["after"]["token"] == "old-session"
+    assert o["posts"] == ["/api/auth/resume cookie"] * 3
+
+
+def test_a_resume_answer_without_a_token_is_a_refusal(driven) -> None:
+    o = driven["resume_without_a_token_is_a_refusal"]
+    assert o["booted"]["token"] is None and o["booted"]["canResume"] is False
+    assert "signed in (view only after reload)" in o["booted"]["pills"]
+    assert o["resumes"] == 1                       # not asked again
+
+
+def test_a_password_sign_in_clears_an_earlier_refusal(driven) -> None:
+    o = driven["a_sign_in_clears_a_refusal"]
+    assert o["refused"]["token"] is None and o["refused"]["canResume"] is False
+    assert o["after"]["token"] == "tab-2-session"
+    assert o["posts"][-1] == "/api/auth/resume cookie"

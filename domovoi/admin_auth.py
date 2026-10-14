@@ -21,12 +21,14 @@ exponential backoff that counts the attempt BEFORE the verify) and mints
 a 256-bit bearer token of which only the sha256 is stored, with a
 **30-day sliding expiry** under a **90-day absolute cap**. Mutating admin
 endpoints accept ONLY ``Authorization: Bearer`` — the ``SameSite=Strict``
-cookie set at login lets plain GET page loads render authenticated state
-(CSRF: a cross-site POST carries nothing that authorizes it), and for the
-reload window after the password was proved (default 60 minutes) lets the
-page that holds it take its own Bearer back (``POST /api/auth/resume``:
-same origin, ``X-Requested-With``; :func:`resume_session`). The cookie
-itself still authorizes no mutation anywhere. Changing the password
+cookie set at login is a secret of its own, never the Bearer
+(:func:`issue_session_cookie`): it lets plain GET page loads render
+authenticated state (CSRF: a cross-site POST carries nothing that
+authorizes it), and for the reload window after the password was proved
+(default 60 minutes) lets the page that holds it take its Bearer back
+(``POST /api/auth/resume``: same origin, ``X-Requested-With``;
+:func:`resume_session`). The cookie itself authorizes no mutation
+anywhere. Changing the password
 revokes every other session.
 ``python -m domovoi.main --reset-admin`` clears the credential + sessions
 and regenerates the setup code.
@@ -76,6 +78,7 @@ fingerprint pinning. v1 admin flows run over plain LAN HTTP.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
 import os
 import re
@@ -498,6 +501,120 @@ async def revoke_session(session: AsyncSession, token_hash: str) -> bool:
     return row is not None
 
 
+# ─── The browser's session cookie: its own secret, never the Bearer ───────
+#
+# Review finding 4 (2026-10-14). The cookie used to carry the Bearer itself,
+# and a browser sends a cookie to every PORT of its host: each other service
+# on the Domovoi server (a plugin's container, a room's MPD stream, anything
+# else the household runs there) received a 90-day admin token with every
+# request the browser made to it. Now login and setup give the browser a
+# cookie of its own — 256 random bits — and the session row keeps only its
+# sha256 (``cookie_hash``, V028) beside the Bearer WRAPPED under it
+# (``cookie_token``: the token XORed with HMAC-SHA256(cookie, a label), so
+# the database alone never yields the Bearer, and the cookie yields it only
+# through ``POST /api/auth/resume``, inside the reload window).
+#
+# What the cookie does: render authenticated GET state (the read tier, as
+# before) and, inside the reload window, resume. What it never is: a
+# Bearer. A session created before V028 has no ``cookie_hash``, so its old
+# cookie — the raw Bearer — stops rendering anything after the upgrade: the
+# browser reads as signed out until its owner signs in once more (a tab
+# that still holds the Bearer in memory keeps working).
+
+_COOKIE_WRAP_LABEL = b"domovoi admin session cookie: wraps the session token"
+
+
+def _cookie_pad(cookie: str) -> bytes:
+    return hmac.new(cookie.encode(), _COOKIE_WRAP_LABEL, hashlib.sha256).digest()
+
+
+def _xor_hex(value_hex: str | None, cookie: str) -> str | None:
+    """``value`` (64 hex: 32 bytes) XOR the cookie's pad, as hex, or None
+    for anything that is not 32 bytes of hex."""
+    if not value_hex:
+        return None
+    try:
+        raw = bytes.fromhex(value_hex)
+    except ValueError:
+        return None
+    pad = _cookie_pad(cookie)
+    if len(raw) != len(pad):
+        return None
+    return bytes(a ^ b for a, b in zip(raw, pad)).hex()
+
+
+def wrap_token(token: str, cookie: str) -> str | None:
+    """The Bearer, wrapped under the cookie (hex). None for a token that is
+    not the 64-hex form :func:`create_session` mints."""
+    return _xor_hex(token, cookie)
+
+
+def unwrap_token(wrapped: str | None, cookie: str) -> str | None:
+    """:func:`wrap_token` undone: the Bearer, given the right cookie."""
+    return _xor_hex(wrapped, cookie)
+
+
+async def issue_session_cookie(session: AsyncSession, token: str) -> str:
+    """Give the session ``token`` names a browser cookie of its own and
+    return it: a fresh 256-bit secret, stored as its sha256 beside the
+    Bearer wrapped under it. Called by login and setup right after
+    :func:`create_session`; the value goes into the ``Set-Cookie`` and
+    nowhere else."""
+    cookie = secrets.token_urlsafe(32)  # 256 bits
+    await session.execute(
+        text(
+            "UPDATE admin_sessions SET cookie_hash = :ch, cookie_token = :ct "
+            "WHERE token_hash = :h"
+        ),
+        {"ch": _sha256(cookie), "ct": wrap_token(token, cookie), "h": _sha256(token)},
+    )
+    return cookie
+
+
+# A live session by the row's own rules: the sliding expiry and the 90-day
+# cap. Shared by the cookie's checks below.
+_SESSION_LIVE_SQL = (
+    "expires_at > now() "
+    f"AND created_at > now() - interval '{SESSION_MAX_AGE_DAYS} days'"
+)
+
+
+async def validate_cookie(session: AsyncSession, cookie: str | None) -> bool:
+    """:func:`validate_token` for the browser cookie: True iff it names a
+    live session, sliding that session's expiry like any use. A pre-V028
+    cookie (the raw Bearer) matches nothing."""
+    if not cookie:
+        return False
+    row = (
+        await session.execute(
+            text(
+                "UPDATE admin_sessions SET last_used_at = now(), "
+                "expires_at = LEAST("
+                f"now() + interval '{SESSION_TTL_DAYS} days', "
+                f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
+                f"WHERE cookie_hash = :ch AND {_SESSION_LIVE_SQL} "
+                "RETURNING 1"
+            ),
+            {"ch": _sha256(cookie)},
+        )
+    ).first()
+    return row is not None
+
+
+async def cookie_session_hash(session: AsyncSession, cookie: str | None) -> str | None:
+    """Read-only: the ``token_hash`` of the session the cookie names (the
+    session list marks it "current"), or None."""
+    if not cookie:
+        return None
+    row = (
+        await session.execute(
+            text("SELECT token_hash FROM admin_sessions WHERE cookie_hash = :ch"),
+            {"ch": _sha256(cookie)},
+        )
+    ).first()
+    return row.token_hash if row else None
+
+
 # ─── Resuming the sign-in after a reload (owner decision 2026-10-14) ──────
 #
 # "If someone logs in with admin, from that device, that exact session,
@@ -505,16 +622,17 @@ async def revoke_session(session: AsyncSession, token_hash: str) -> bool:
 # not lose admin on the same machine, same session."
 #
 # The dashboard holds its Bearer in JS memory only, so a reload forgets it;
-# the HttpOnly ``SameSite=Strict`` cookie the sign-in set survives, and it
-# carries the SAME token. ``signed_in_at`` (V028) is when the session last
-# PROVED the password: the login or first-run setup that minted it
-# (:func:`create_session`), or a password change made with it
-# (:func:`mark_signed_in`). For ``window_min`` minutes after that moment the
-# web process hands the cookie's own token back to the page holding the
-# cookie (``POST /api/auth/resume``, which adds the same-origin and
+# the HttpOnly ``SameSite=Strict`` cookie the sign-in set survives.
+# ``signed_in_at`` (V028) is when the session last PROVED the password: the
+# login or first-run setup that minted it (:func:`create_session`), or a
+# password change made with it (:func:`mark_signed_in`). For ``window_min``
+# minutes after that moment the web process unwraps the session's Bearer
+# with the cookie and hands it back to the page holding the cookie
+# (``POST /api/auth/resume``, which adds the same-origin and
 # ``X-Requested-With`` rules). ABSOLUTE, not sliding: using the session
 # never moves ``signed_in_at``; only the password does. A session minted
-# before V028 has ``signed_in_at`` NULL and never resumes.
+# before V028 has neither ``signed_in_at`` nor a cookie of its own and
+# never resumes.
 #
 # Nothing new is minted. The resumed page holds exactly the session the
 # sign-in made, so signing out from any tab, revoking it, a password change
@@ -565,24 +683,27 @@ _RESUME_DEADLINE_SQL = (
     "LEAST(signed_in_at + make_interval(mins => :w), "
     f"created_at + interval '{SESSION_MAX_AGE_DAYS} days')"
 )
+# `signed_in_at <= now()` (review finding 3): a stamp from the future — the
+# database clock stepped back after the sign-in — would otherwise stretch
+# the window by the size of the step. Such a session does not resume.
 _RESUME_LIVE_SQL = (
-    "token_hash = :h AND expires_at > now() "
-    f"AND created_at > now() - interval '{SESSION_MAX_AGE_DAYS} days' "
+    f"cookie_hash = :ch AND {_SESSION_LIVE_SQL} "
     "AND signed_in_at IS NOT NULL "
+    "AND signed_in_at <= now() "
     "AND signed_in_at > now() - make_interval(mins => :w)"
 )
 
 
 async def resume_deadline(
-    session: AsyncSession, token: str | None, window_min: int
+    session: AsyncSession, cookie: str | None, window_min: int
 ) -> ResumeWindow | None:
-    """Read-only: the reload window of the live session ``token`` names,
-    or None when it has none (no token, an unknown / expired / revoked
-    session, a session from before V028, a window of 0, or a window that
-    has closed). Moves nothing — the status probe calls it on every page
-    load."""
+    """Read-only: the reload window of the live session the browser
+    ``cookie`` names, or None when it has none (no cookie, an unknown /
+    expired / revoked session, a session from before V028, a window of 0,
+    or a window that has closed). Moves nothing — the status probe calls it
+    on every page load."""
     window = clamp_reload_window(window_min)
-    if not token or window <= 0:
+    if not cookie or window <= 0:
         return None
     row = (
         await session.execute(
@@ -592,7 +713,7 @@ async def resume_deadline(
                 "AS remaining "
                 f"FROM admin_sessions WHERE {_RESUME_LIVE_SQL}"
             ),
-            {"h": _sha256(token), "w": window},
+            {"ch": _sha256(cookie), "w": window},
         )
     ).first()
     if row is None:
@@ -601,16 +722,16 @@ async def resume_deadline(
 
 
 async def resume_session(
-    session: AsyncSession, token: str | None, window_min: int
-) -> ResumeWindow | None:
-    """The resume itself: validate the session the way
-    :func:`validate_token` does (expiry slid, ``last_used_at`` stamped,
-    the 90-day cap held) AND require its reload window to be open, in one
-    statement, so nothing can revoke it between the two checks. Returns
-    the window, or None — and touches nothing — when the session is not
-    resumable for any reason."""
+    session: AsyncSession, cookie: str | None, window_min: int
+) -> tuple[str, ResumeWindow] | None:
+    """The resume itself: find the live session the browser ``cookie``
+    names, inside its reload window, slide its expiry the way any use does
+    — one statement, so nothing can revoke it between the checks — and
+    unwrap its Bearer with the cookie. Returns ``(token, window)``, or None
+    when the session is not resumable for any reason. The unwrapped token
+    must hash to the row's own ``token_hash``, or nothing is returned."""
     window = clamp_reload_window(window_min)
-    if not token or window <= 0:
+    if not cookie or window <= 0:
         return None
     row = (
         await session.execute(
@@ -620,16 +741,20 @@ async def resume_session(
                 f"now() + interval '{SESSION_TTL_DAYS} days', "
                 f"created_at + interval '{SESSION_MAX_AGE_DAYS} days') "
                 f"WHERE {_RESUME_LIVE_SQL} "
-                f"RETURNING {_RESUME_DEADLINE_SQL} AS until, "
+                f"RETURNING token_hash, cookie_token, {_RESUME_DEADLINE_SQL} AS until, "
                 f"ceil(EXTRACT(EPOCH FROM ({_RESUME_DEADLINE_SQL} - now())))::int "
                 "AS remaining"
             ),
-            {"h": _sha256(token), "w": window},
+            {"ch": _sha256(cookie), "w": window},
         )
     ).first()
     if row is None:
         return None
-    return ResumeWindow(until=row.until, remaining_sec=int(row.remaining))
+    token = unwrap_token(row.cookie_token, cookie)
+    if token is None or not hmac.compare_digest(_sha256(token), row.token_hash):
+        log.warning("a session cookie matched, but the token it wraps did not; not resumed")
+        return None
+    return token, ResumeWindow(until=row.until, remaining_sec=int(row.remaining))
 
 
 async def mark_signed_in(session: AsyncSession, token_hash: str | None) -> None:
@@ -1067,6 +1192,8 @@ def bearer_token(request: Request) -> str | None:
 
 
 def cookie_token(request: Request) -> str | None:
+    """The browser's session cookie as sent: its own secret since V028
+    (:func:`issue_session_cookie`), never the Bearer."""
     return request.cookies.get(COOKIE_NAME) or None
 
 
@@ -1117,7 +1244,9 @@ async def check_admin_request(
             # classifies as invalid — the caller sent broken credentials.
             return "invalid"
         cookie = cookie_token(request)
-        if cookie is not None and await validate_token(s, cookie):
+        # The browser cookie is its own secret, checked against the row's
+        # cookie_hash: never a Bearer (review finding 4, 2026-10-14).
+        if cookie is not None and await validate_cookie(s, cookie):
             return "cookie-only"
         return "no-auth" if cookie is None else "invalid"
 

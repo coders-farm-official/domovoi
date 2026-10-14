@@ -79,6 +79,10 @@ const Auth = (() => {
   // front, say). Not asked again until a sign-in or a fresh page load:
   // every status read would otherwise send one more refused request.
   let resumeRefused = false;
+  // Why the last sign-out did not happen ("the Domovoi server did not
+  // answer"), or null. Set by logout() when the server never confirmed it;
+  // cleared by any sign-in, a resume, or a sign-out that went through.
+  let signOutError = null;
   let statusRead = null;     // the one GET /api/auth/status in flight
   let readyPromise = null;   // ready(): the first status read (+ resume)
   const listeners = new Set();
@@ -232,9 +236,10 @@ const Auth = (() => {
 
   // Take this browser's admin sign-in back after a reload (POST
   // /api/auth/resume). The server answers only the page holding the
-  // session cookie, from this origin, inside the window, with the cookie's
-  // OWN token — this exact session, nothing new — which goes into memory
-  // and nowhere else. Resolves true when a token is in memory afterwards.
+  // session cookie, from this origin, inside the window, with that
+  // session's OWN token — this exact session, nothing new — which goes into
+  // memory and nowhere else. (The cookie is a secret of its own, never the
+  // token: it is what the server unwraps the token with.) Resolves true when a token is in memory afterwards.
   // One request at a time; never throws. A refusal closes the window here
   // (the cards say "view only"); an unreachable server leaves it, so the
   // next action tries again.
@@ -261,6 +266,7 @@ const Auth = (() => {
         return false;
       }
       token = data.token;
+      signOutError = null;
       status = Object.assign({}, status, { setup_complete: true, authenticated: true });
       noteWindow(data);
       credentialVersion += 1;
@@ -332,6 +338,7 @@ const Auth = (() => {
     // The answer says when a reload stops being signed in (the window
     // starts now). An older server says nothing, and nothing is assumed.
     resumeRefused = false;
+    signOutError = null;
     noteWindow(data);
     credentialVersion += 1;
     const opening = modalSeq;
@@ -353,6 +360,8 @@ const Auth = (() => {
     get pairModalOpen() { return pairModalOpen; },
     get status() { return status; },
     get credentialVersion() { return credentialVersion; },
+    // Why the last sign-out did not go through, or null (logout()).
+    get signOutError() { return signOutError; },
     DEVICE_TOKEN_HEADER,
 
     // ── The reload window (owner decision 2026-10-14) ───────────────
@@ -561,7 +570,9 @@ const Auth = (() => {
     },
 
     // Resolves true once signed out, false when a cookie-only tab's
-    // password prompt (below) was dismissed and nothing changed.
+    // password prompt (below) was dismissed and nothing changed, or when
+    // the server never confirmed the sign-out (then `signOutError` says
+    // why, and the tab is still signed in).
     async logout() {
       // A reload keeps the HttpOnly cookie but forgets the bearer, and the
       // server ends a session only for a Bearer (POST /api/auth/logout: a
@@ -578,13 +589,29 @@ const Auth = (() => {
         try { proved = await this.ensureLoggedIn(); } finally { loginReason = null; }
         if (!proved) { notify(); return false; }
       }
+      let answer = null;
       try {
-        await fetch(`${base()}/api/auth/logout`, {
+        answer = await fetch(`${base()}/api/auth/logout`, {
           method: 'POST',
           headers: { ...this.headers(), 'X-Requested-With': 'XMLHttpRequest' },
           credentials: 'include',
         });
-      } catch { /* best-effort */ }
+      } catch { answer = null; }
+      // Signed out only when the server says so (2xx), or says there was
+      // nothing left to end (401: the session had already gone). Anything
+      // else — no answer, a 5xx — leaves the session AND its cookie alive
+      // on the server, and saying "signed out" would be a lie the next
+      // status read takes back: inside the reload window it would resume
+      // full admin on its own (review finding 1, 2026-10-14). So this tab
+      // keeps its sign-in and says the sign-out did not happen.
+      if (!answer || !(answer.ok || answer.status === 401)) {
+        signOutError = answer
+          ? `the Domovoi server answered ${answer.status}`
+          : 'the Domovoi server did not answer';
+        notify();
+        return false;
+      }
+      signOutError = null;
       token = null;
       if (status) status.authenticated = false;
       // The session is gone server-side and its cookie with it: nothing

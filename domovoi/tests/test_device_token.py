@@ -35,6 +35,7 @@ from domovoi.tests.auth_testkit import (
     _db_sync,  # noqa: F401 — fixture
     bearer,
     claim_admin,
+    claim_admin_with_cookie,
     core_app,
     core_client,
     db_device_token,
@@ -298,7 +299,7 @@ async def test_both_processes_share_one_row(_db) -> None:
 @pytest.mark.asyncio
 async def test_core_device_token_read_and_rotate(_db) -> None:
     async with web_client() as web:
-        admin = await claim_admin(web)
+        admin, admin_cookie = await claim_admin_with_cookie(web)
     async with core_client() as core:
         r = await core.get("/v1/admin/device-token")
         assert r.status_code == 401
@@ -322,7 +323,7 @@ async def test_core_device_token_read_and_rotate(_db) -> None:
         assert await admin_auth.validate_device_token(s, token) is False
         assert await admin_auth.validate_device_token(s, rotated) is True
     async with AsyncClient(
-        transport=ASGITransport(app=core_app), base_url="http://test", cookies={COOKIE: admin}
+        transport=ASGITransport(app=core_app), base_url="http://test", cookies={COOKIE: admin_cookie}
     ) as core:
         # The cookie renders the read, never the rotation.
         assert (await core.get("/v1/admin/device-token")).status_code == 200
@@ -493,7 +494,7 @@ async def test_core_set_stores_the_chosen_token_verbatim(_db) -> None:
 @pytest.mark.asyncio
 async def test_web_set_behaves_identically_and_hits_the_same_row(_db) -> None:
     async with web_client() as web:
-        admin = await claim_admin(web)
+        admin, admin_cookie = await claim_admin_with_cookie(web)
     # A FRESH client: claim_admin leaves the session cookie on its own, and
     # the cookie is a 403 on this tier rather than the 401 a caller with no
     # credential at all gets.
@@ -512,7 +513,7 @@ async def test_web_set_behaves_identically_and_hits_the_same_row(_db) -> None:
     # The cookie renders the read, never the write (the security tier).
     async with AsyncClient(
         transport=ASGITransport(app=web_app), base_url="http://test",
-        headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin}
+        headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin_cookie}
     ) as web:
         assert (await web.get("/api/auth/device-token")).status_code == 200
         r = await web.post("/api/auth/device-token", json={"token": "another-fine-token"})
@@ -605,7 +606,7 @@ async def test_a_chosen_token_can_be_replaced_by_a_generated_one_again(_db) -> N
 @pytest.mark.asyncio
 async def test_web_device_token_mirror_behaves_like_the_core(_db) -> None:
     async with web_client() as web:
-        admin = await claim_admin(web)
+        admin, admin_cookie = await claim_admin_with_cookie(web)
     async with web_client() as fresh:
         assert (await fresh.get("/api/auth/device-token")).status_code == 401
         r = await fresh.get("/api/auth/device-token", headers=bearer(admin))
@@ -619,7 +620,7 @@ async def test_web_device_token_mirror_behaves_like_the_core(_db) -> None:
         assert rotated != token
     async with AsyncClient(
         transport=ASGITransport(app=web_app), base_url="http://test",
-        headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin}
+        headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin_cookie}
     ) as web:
         assert (await web.get("/api/auth/device-token")).json()["token"] == rotated
         assert (await web.post("/api/auth/device-token/rotate")).status_code == 403

@@ -28,13 +28,19 @@ cookie's own token back to the page that holds it while
 * the setting: default 60, 0..1440, a bad ``.env`` value reads as 0, the
   web reads the live value from the core's snapshot (clamped), and the
   core's snapshot carries it;
-* the migration: a nullable column with NO default, so the sessions that
-  existed before it never resume.
+* the migration: nullable columns with NO default, so the sessions that
+  existed before it never resume;
+* review round 1 (2026-10-14): the browser cookie is a secret of its own,
+  never the Bearer (the row keeps its sha256 and the Bearer wrapped under
+  it; a pre-V028 cookie renders nothing), a sign-in stamped in the future
+  does not resume, the window never outlives the 90-day cap, and a missing
+  core snapshot never widens the window (0 until one has been seen).
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -55,6 +61,7 @@ from domovoi.tests.auth_testkit import (
     claim_admin,
     core_client,
     make_request,
+    session_cookie,
     web_client,
 )
 from domovoi.tests.conftest import requires_db
@@ -66,7 +73,7 @@ REQUESTED_WITH = {"X-Requested-With": "domovoi-tests"}
 SAME_ORIGIN = {**REQUESTED_WITH, "Origin": ORIGIN}
 MIGRATION = (
     Path(__file__).resolve().parents[1] / "db" / "migrations"
-    / "V028__admin_session_signed_in_at.sql"
+    / "V028__admin_session_reload_cookie.sql"
 )
 
 
@@ -75,6 +82,7 @@ def window(monkeypatch):
     """The live window the web reads (the core's snapshot), set per test.
     Defaults to the shipped 60 minutes."""
     state = {"snapshot": {"admin_reload_window_min": 60}}
+    monkeypatch.setattr(auth_api, "_last_live_window", None)
     monkeypatch.setattr(auth_api, "get_cached_snapshot", lambda: state["snapshot"])
 
     def set_window(value, *, snapshot: bool = True):
@@ -83,38 +91,58 @@ def window(monkeypatch):
     return set_window
 
 
-def browser(token: str | None, **headers) -> AsyncClient:
-    """A browser tab after a reload: the session cookie, no Bearer."""
-    cookies = {COOKIE: token} if token else {}
+@dataclass(frozen=True)
+class Signin:
+    """One password sign-in, as a browser holds it: the Bearer the answer
+    carried and the cookie it set (its own secret since V028)."""
+
+    token: str
+    cookie: str
+
+
+def _cookie_of(who) -> str | None:
+    return who.cookie if isinstance(who, Signin) else who
+
+
+def _token_of(who) -> str:
+    return who.token if isinstance(who, Signin) else who
+
+
+def browser(who, **headers) -> AsyncClient:
+    """A browser tab after a reload: the session cookie, no Bearer. `who`
+    is a Signin, a raw cookie value, or None."""
+    cookie = _cookie_of(who)
+    cookies = {COOKIE: cookie} if cookie else {}
     return AsyncClient(
         transport=ASGITransport(app=web_app), base_url=ORIGIN,
         headers={**SAME_ORIGIN, **headers}, cookies=cookies,
     )
 
 
-async def login(label: str = "dashboard") -> str:
+async def login(label: str = "dashboard") -> Signin:
     """A fresh password sign-in (a new browser, its own cookie)."""
     admin_auth.LOGIN_BACKOFF.reset()
     async with web_client() as c:
         r = await c.post("/api/auth/login", json={"password": STRONG_PW, "label": label})
     assert r.status_code == 200, r.text
-    return r.json()["token"]
+    return Signin(token=r.json()["token"], cookie=session_cookie(r))
 
 
-async def row(token: str):
+async def row(who):
     async with engine.begin() as conn:
         return (
             await conn.execute(
                 text(
-                    "SELECT signed_in_at, last_used_at, expires_at, created_at "
+                    "SELECT signed_in_at, last_used_at, expires_at, created_at, "
+                    "cookie_hash, cookie_token "
                     "FROM admin_sessions WHERE token_hash = :h"
                 ),
-                {"h": admin_auth.token_sha256(token)},
+                {"h": admin_auth.token_sha256(_token_of(who))},
             )
         ).first()
 
 
-async def signed_in_ago(token: str, minutes: float) -> None:
+async def signed_in_ago(who, minutes: float) -> None:
     """Fake the clock: the sign-in happened `minutes` ago."""
     async with engine.begin() as conn:
         await conn.execute(
@@ -122,7 +150,7 @@ async def signed_in_ago(token: str, minutes: float) -> None:
                 "UPDATE admin_sessions SET signed_in_at = now() - make_interval(secs => :s) "
                 "WHERE token_hash = :h"
             ),
-            {"s": minutes * 60, "h": admin_auth.token_sha256(token)},
+            {"s": minutes * 60, "h": admin_auth.token_sha256(_token_of(who))},
         )
 
 
@@ -131,13 +159,13 @@ async def session_count() -> int:
         return (await conn.execute(text("SELECT count(*) FROM admin_sessions"))).scalar_one()
 
 
-async def resume(token: str | None, **headers):
-    async with browser(token, **headers) as c:
+async def resume(who, **headers):
+    async with browser(who, **headers) as c:
         return await c.post("/api/auth/resume")
 
 
-async def status(token: str | None) -> dict:
-    async with browser(token) as c:
+async def status(who) -> dict:
+    async with browser(who) as c:
         r = await c.get("/api/auth/status")
     assert r.status_code == 200, r.text
     return r.json()
@@ -165,7 +193,7 @@ async def test_a_reload_inside_the_window_gets_the_same_session_back(_db, window
     assert r.status_code == 200, r.text
     body = r.json()
     # The cookie's own token — "that exact session" — and nothing minted.
-    assert body["token"] == token
+    assert body["token"] == token.token
     assert await session_count() == sessions
     assert 3590 <= body["resume_in_sec"] <= 3600
     assert body["reload_window_min"] == 60
@@ -215,7 +243,7 @@ async def test_security_tier_routes_work_after_a_resume(_db, window) -> None:
         r = await c.post("/api/auth/device-token/rotate")
     assert r.status_code == 403
     async with AsyncClient(
-        transport=ASGITransport(app=core_app), base_url=ORIGIN, cookies={COOKIE: token},
+        transport=ASGITransport(app=core_app), base_url=ORIGIN, cookies={COOKIE: token.cookie},
     ) as core:
         r = await core.post("/v1/admin/config", json={"changes": {}})
     assert r.status_code == 403
@@ -253,7 +281,7 @@ async def test_using_the_session_never_moves_the_window(_db, window) -> None:
     # Busy all along: Bearer and cookie reads, a resume.
     async with web_client() as c:
         for _ in range(3):
-            assert (await c.get("/api/auth/sessions", headers=bearer(token))).status_code == 200
+            assert (await c.get("/api/auth/sessions", headers=bearer(token.token))).status_code == 200
     r = await resume(token)
     assert r.status_code == 200, r.text
     assert 50 <= r.json()["resume_in_sec"] <= 60
@@ -273,7 +301,7 @@ async def test_a_password_change_restarts_the_callers_own_window(_db, window) ->
         r = await c.post(
             "/api/auth/password",
             json={"old_password": STRONG_PW, "new_password": "another-good-password"},
-            headers=bearer(token),
+            headers=bearer(token.token),
         )
     assert r.status_code == 200, r.text
     st = await status(token)
@@ -289,7 +317,7 @@ async def test_signing_out_ends_the_resume(_db, window) -> None:
         await claim_admin(c)
     token = await login()
     async with browser(token) as c:
-        r = await c.post("/api/auth/logout", headers=bearer(token))
+        r = await c.post("/api/auth/logout", headers=bearer(token.token))
         assert r.status_code == 200
         # The browser is told to drop the cookie…
         assert COOKIE in r.headers.get("set-cookie", "")
@@ -307,8 +335,8 @@ async def test_a_revoked_session_does_not_resume(_db, window) -> None:
     phone = await login("phone")
     async with web_client() as c:
         r = await c.request(
-            "DELETE", f"/api/auth/sessions/{admin_auth.token_sha256(laptop)}",
-            headers=bearer(phone),
+            "DELETE", f"/api/auth/sessions/{admin_auth.token_sha256(laptop.token)}",
+            headers=bearer(phone.token),
         )
     assert r.status_code == 200, r.text
     assert (await resume(laptop)).status_code == 401
@@ -325,7 +353,7 @@ async def test_a_password_change_elsewhere_ends_every_other_resume(_db, window) 
         r = await c.post(
             "/api/auth/password",
             json={"old_password": STRONG_PW, "new_password": "another-good-password"},
-            headers=bearer(phone),
+            headers=bearer(phone.token),
         )
     assert r.status_code == 200, r.text
     assert (await resume(laptop)).status_code == 401
@@ -341,7 +369,7 @@ async def test_an_expired_session_does_not_resume(_db, window) -> None:
         await conn.execute(
             text("UPDATE admin_sessions SET expires_at = now() - interval '1 second' "
                  "WHERE token_hash = :h"),
-            {"h": admin_auth.token_sha256(token)},
+            {"h": admin_auth.token_sha256(token.token)},
         )
     assert (await resume(token)).status_code == 401
 
@@ -357,10 +385,127 @@ async def test_a_session_from_before_the_migration_never_resumes(_db, window) ->
                  "VALUES (:h, 'old', now() + interval '30 days')"),
             {"h": admin_auth.token_sha256(old)},
         )
+    # The browser of such a session holds the OLD cookie: the raw Bearer.
+    # After the upgrade it renders nothing and resumes nothing — the owner
+    # signs in once more (review finding 4: force a fresh sign-in)…
     st = await status(old)
-    assert st["authenticated"] is True          # it still renders, as before
+    assert st["authenticated"] is False
     assert st["resume_in_sec"] is None
     assert (await resume(old)).status_code == 401
+    async with AsyncClient(
+        transport=ASGITransport(app=core_app), base_url=ORIGIN, cookies={COOKIE: old},
+    ) as core:
+        assert (await core.get("/v1/admin/config")).status_code == 401
+    # …while a tab still holding that Bearer in memory keeps working.
+    async with web_client() as c:
+        assert (await c.get("/api/auth/sessions", headers=bearer(old))).status_code == 200
+
+
+# ═══ The cookie is its own secret, never the Bearer (review finding 4) ═══════
+
+
+@requires_db
+async def test_the_cookie_is_not_the_bearer_and_the_db_holds_neither(_db, window) -> None:
+    code = admin_auth.generate_setup_code()
+    admin_auth.write_setup_code(code)
+    async with web_client() as c:
+        r = await c.post("/api/auth/setup", json={"setup_code": code, "password": STRONG_PW})
+    assert r.status_code == 200
+    setup = Signin(token=r.json()["token"], cookie=session_cookie(r))
+    signin = await login()
+    for s in (setup, signin):
+        assert s.cookie and s.cookie != s.token
+        assert s.token not in s.cookie and s.cookie not in s.token
+        stored = await row(s)
+        # Only hashes, and the Bearer wrapped: none of the three raw values.
+        assert stored.cookie_hash == admin_auth.token_sha256(s.cookie)
+        assert stored.cookie_token and stored.cookie_token != s.token
+        assert s.cookie not in (stored.cookie_hash, stored.cookie_token)
+        assert admin_auth.unwrap_token(stored.cookie_token, s.cookie) == s.token
+        assert admin_auth.unwrap_token(stored.cookie_token, s.cookie + "x") != s.token
+    assert setup.cookie != signin.cookie
+
+
+@requires_db
+async def test_the_cookie_renders_and_resumes_but_is_no_bearer(_db, window) -> None:
+    async with web_client() as c:
+        await claim_admin(c)
+    s = await login()
+    # It renders admin GET state, on both processes…
+    assert (await status(s))["authenticated"] is True
+    async with AsyncClient(
+        transport=ASGITransport(app=core_app), base_url=ORIGIN, cookies={COOKIE: s.cookie},
+    ) as core:
+        assert (await core.get("/v1/admin/config")).status_code == 200
+        # …but presented AS a Bearer it is nothing.
+        r = await core.get("/v1/admin/config", headers=bearer(s.cookie))
+        assert r.status_code == 401
+    # The session list marks the cookie's own session current.
+    async with browser(s) as c:
+        sessions = (await c.get("/api/auth/sessions")).json()["sessions"]
+    current = [x for x in sessions if x["current"]]
+    assert [x["token_hash"] for x in current] == [admin_auth.token_sha256(s.token)]
+    assert all("cookie" not in key for x in sessions for key in x)
+
+
+@requires_db
+async def test_a_cookie_whose_wrapped_token_does_not_match_never_resumes(_db, window) -> None:
+    async with web_client() as c:
+        await claim_admin(c)
+    s = await login()
+    other = await login("other")
+    # The row's wrapped token swapped for another session's: the cookie
+    # still finds the row, but what it unwraps is not that row's token.
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE admin_sessions SET cookie_token = :ct WHERE token_hash = :h"),
+            {"ct": admin_auth.wrap_token(other.token, s.cookie),
+             "h": admin_auth.token_sha256(s.token)},
+        )
+    r = await resume(s)
+    assert r.status_code == 401
+    assert "token" not in r.json()
+
+
+# ═══ Clock edges (review finding 3) ════════════════════════════════════════
+
+
+@requires_db
+async def test_a_sign_in_stamped_in_the_future_does_not_resume(_db, window) -> None:
+    """The database clock stepped back after the sign-in: the stamp is in
+    the future, and it must not stretch the window by the step."""
+    async with web_client() as c:
+        await claim_admin(c)
+    s = await login()
+    await signed_in_ago(s, -300)            # five hours ahead of now()
+    assert (await resume(s)).status_code == 401
+    assert (await status(s))["resume_in_sec"] is None
+
+
+@requires_db
+async def test_the_window_never_outlives_the_90_day_cap(_db, window) -> None:
+    async with web_client() as c:
+        await claim_admin(c)
+    s = await login()
+    cap = admin_auth.SESSION_MAX_AGE_DAYS
+    async with engine.begin() as conn:
+        # Created just under the cap ago, signed in again a minute ago.
+        await conn.execute(
+            text("UPDATE admin_sessions SET created_at = now() - make_interval(days => :d) "
+                 "+ interval '10 minutes', signed_in_at = now() - interval '1 minute' "
+                 "WHERE token_hash = :h"),
+            {"d": cap, "h": admin_auth.token_sha256(s.token)},
+        )
+    r = await resume(s)
+    assert r.status_code == 200, r.text
+    assert r.json()["resume_in_sec"] <= 600          # the cap, not the hour
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE admin_sessions SET created_at = now() - make_interval(days => :d) "
+                 "- interval '1 minute' WHERE token_hash = :h"),
+            {"d": cap, "h": admin_auth.token_sha256(s.token)},
+        )
+    assert (await resume(s)).status_code == 401
 
 
 # ═══ This browser, this session ════════════════════════════════════════════
@@ -379,7 +524,7 @@ async def test_another_devices_fresh_sign_in_lends_this_browser_nothing(_db, win
     # The phone's cookie resumes the phone's session, and only that.
     r = await resume(phone)
     assert r.status_code == 200
-    assert r.json()["token"] == phone
+    assert r.json()["token"] == phone.token
 
 
 @requires_db
@@ -400,7 +545,7 @@ async def test_a_bearer_alone_resumes_nothing(_db, window) -> None:
     async with web_client() as c:
         await claim_admin(c)
     token = await login()
-    r = await resume(None, Authorization=f"Bearer {token}")
+    r = await resume(None, Authorization=f"Bearer {token.token}")
     assert r.status_code == 401
 
 
@@ -414,7 +559,7 @@ async def test_the_resume_needs_x_requested_with(_db, window) -> None:
     token = await login()
     async with AsyncClient(
         transport=ASGITransport(app=web_app), base_url=ORIGIN,
-        headers={"Origin": ORIGIN}, cookies={COOKIE: token},
+        headers={"Origin": ORIGIN}, cookies={COOKIE: token.cookie},
     ) as c:
         r = await c.post("/api/auth/resume")
     assert r.status_code == 403
@@ -501,6 +646,7 @@ def _req(origin: str | None, host: str, scheme: str = "http", fetch_site: str | 
         ("http://192.168.1.10:6369", "192.168.1.10:6390", "http", False),
         ("http://192.168.1.11:6369", "192.168.1.10:6369", "http", False),
         ("https://box.lan", "box.lan", "http", False),
+        ("https://box.lan:6369", "box.lan:6369", "http", False),   # only the scheme differs
         ("http://box.lan:abc", "box.lan", "http", False),
         ("ftp://box.lan", "box.lan", "http", False),
         ("http://box.lan", "", "http", False),
@@ -547,16 +693,56 @@ async def test_the_window_is_read_live_and_shrinking_it_applies_at_once(_db, win
         ({"admin_reload_window_min": 0}, 0),
         ({"admin_reload_window_min": 99999}, ADMIN_RELOAD_WINDOW_MAX_MIN),
         ({"admin_reload_window_min": -3}, 0),
-        ({"admin_reload_window_min": True}, 30),           # not a number: own copy
-        ({"admin_reload_window_min": "45"}, 30),
-        ({}, 30),                                          # an older core
-        (None, 30),                                        # the core is down
+        # Not a live value, and none seen yet since this process started: 0.
+        ({"admin_reload_window_min": True}, 0),
+        ({"admin_reload_window_min": "45"}, 0),
+        ({}, 0),                                           # an older core
+        (None, 0),                                         # the core is down
     ],
 )
 def test_the_web_reads_the_window_from_the_cores_snapshot(monkeypatch, snapshot, read) -> None:
+    monkeypatch.setattr(auth_api, "_last_live_window", None)
     monkeypatch.setattr(auth_api, "get_cached_snapshot", lambda: snapshot)
     monkeypatch.setattr(core_settings, "admin_reload_window_min", 30)   # this process's copy
     assert auth_api.reload_window_min() == read
+
+
+@pytest.mark.parametrize(
+    ("last_live", "own", "read"),
+    [
+        (0, 60, 0),       # an admin turned it off: a missing snapshot keeps it off
+        (15, 60, 15),     # an admin shortened it: still short
+        (120, 60, 60),    # an admin lengthened it: no longer than this process booted with
+        (60, 0, 0),
+    ],
+)
+def test_a_missing_snapshot_never_widens_the_window(monkeypatch, last_live, own, read) -> None:
+    """Review finding 2: the core down or restarting must not hand the
+    web's boot-time .env copy back the last word."""
+    snapshot = {"value": {"admin_reload_window_min": last_live}}
+    monkeypatch.setattr(auth_api, "_last_live_window", None)
+    monkeypatch.setattr(auth_api, "get_cached_snapshot", lambda: snapshot["value"])
+    monkeypatch.setattr(core_settings, "admin_reload_window_min", own)
+    assert auth_api.reload_window_min() == admin_auth.clamp_reload_window(last_live)
+    snapshot["value"] = None                     # a poll missed
+    assert auth_api.reload_window_min() == read
+    snapshot["value"] = {}                       # or an answer without the field
+    assert auth_api.reload_window_min() == read
+
+
+@requires_db
+async def test_a_live_zero_holds_while_the_core_snapshot_is_missing(_db, window, monkeypatch) -> None:
+    """The reviewer's R1, end to end: 0 saved live, then the core's snapshot
+    goes missing; the web's boot copy (60) does not reopen the resume."""
+    async with web_client() as c:
+        await claim_admin(c)
+    monkeypatch.setattr(core_settings, "admin_reload_window_min", 60)
+    s = await login()
+    window(0)
+    assert (await resume(s)).status_code == 401
+    window(None, snapshot=False)
+    assert (await resume(s)).status_code == 401
+    assert (await status(s))["reload_window_min"] == 0
 
 
 def test_clamp_reload_window() -> None:
@@ -620,37 +806,50 @@ def _migration_sql() -> str:
     )
 
 
-def test_the_migration_adds_a_nullable_column_with_no_default() -> None:
-    statements = [s.strip() for s in _migration_sql().split(";") if s.strip()]
+def test_the_migration_adds_nullable_columns_with_no_default() -> None:
+    statements = [" ".join(x.split()) for x in _migration_sql().split(";") if x.strip()]
     assert statements == [
-        "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS signed_in_at TIMESTAMPTZ"
+        "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS signed_in_at TIMESTAMPTZ",
+        "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS cookie_hash TEXT",
+        "ALTER TABLE admin_sessions ADD COLUMN IF NOT EXISTS cookie_token TEXT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_sessions_cookie_hash "
+        "ON admin_sessions (cookie_hash) WHERE cookie_hash IS NOT NULL",
     ]
 
 
 @requires_db
-async def test_the_migrated_column_is_there_and_reapplying_it_is_a_no_op(_db) -> None:
+async def test_the_migrated_columns_are_there_and_reapplying_is_a_no_op(_db) -> None:
     async with engine.begin() as conn:
-        col = (
-            await conn.execute(
-                text(
-                    "SELECT data_type, is_nullable, column_default "
-                    "FROM information_schema.columns "
-                    "WHERE table_name = 'admin_sessions' AND column_name = 'signed_in_at'"
+        cols = {
+            r.column_name: r
+            for r in (
+                await conn.execute(
+                    text(
+                        "SELECT column_name, data_type, is_nullable, column_default "
+                        "FROM information_schema.columns WHERE table_name = 'admin_sessions' "
+                        "AND column_name IN ('signed_in_at', 'cookie_hash', 'cookie_token')"
+                    )
                 )
-            )
-        ).one()
-        assert col.data_type == "timestamp with time zone"
-        assert col.is_nullable == "YES"
-        assert col.column_default is None
-        # A row written the way every pre-V028 build wrote one keeps NULL.
+            ).all()
+        }
+        assert cols["signed_in_at"].data_type == "timestamp with time zone"
+        assert cols["cookie_hash"].data_type == "text"
+        assert cols["cookie_token"].data_type == "text"
+        for col in cols.values():
+            assert col.is_nullable == "YES"
+            assert col.column_default is None
+        # A row written the way every pre-V028 build wrote one keeps NULLs.
         await conn.execute(
             text("INSERT INTO admin_sessions (token_hash, expires_at) "
                  "VALUES ('pre-v028', now() + interval '1 day')")
         )
-        await conn.execute(text(_migration_sql().strip().rstrip(";")))
-        value = (
+        for statement in _migration_sql().split(";"):
+            if statement.strip():
+                await conn.execute(text(statement))
+        values = (
             await conn.execute(
-                text("SELECT signed_in_at FROM admin_sessions WHERE token_hash = 'pre-v028'")
+                text("SELECT signed_in_at, cookie_hash, cookie_token FROM admin_sessions "
+                     "WHERE token_hash = 'pre-v028'")
             )
-        ).scalar_one()
-        assert value is None
+        ).one()
+        assert tuple(values) == (None, None, None)
