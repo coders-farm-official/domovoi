@@ -64,9 +64,11 @@ PC_SUPPORTS: tuple[str, ...] = (
 )
 #: Settings the core may never change on a laptop, whatever it sends: the
 #: identity it is pinned to, the permission the person chose, and the
-#: profile (which decides whether it restarts itself with sudo).
-PROTECTED_KEYS = frozenset({"satellite.server_fingerprint", "device.profile"})
-PROTECTED_SECTIONS = ("pc.",)
+#: [device] section — the profile (which decides whether it restarts itself
+#: with sudo) and full_duplex (whether a call may open the mic while the
+#: speaker plays) are the owner's to say.
+PROTECTED_KEYS = frozenset({"satellite.server_fingerprint"})
+PROTECTED_SECTIONS = ("pc.", "device.")
 #: The ``error`` reasons that mean the core turned this device away.
 REFUSALS = ("pairing_rejected", "approval_conflict", "approval_rejected", "room_taken")
 

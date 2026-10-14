@@ -359,6 +359,8 @@ def test_the_core_may_not_change_a_laptop_s_trust_settings(monkeypatch):
 def test_nothing_but_protected_keys_changes_nothing():
     kept, refused = pc_engine.filter_config_changes({"pc.permissions": "automatic"})
     assert kept == {} and refused == ["pc.permissions"]
+    kept, refused = pc_engine.filter_config_changes({"device.full_duplex": True, "wake.threshold": 0.6})
+    assert kept == {"wake.threshold": 0.6} and refused == ["device.full_duplex"]
 
 
 def test_a_laptop_never_syncs_its_clock_through_a_root_helper(monkeypatch):

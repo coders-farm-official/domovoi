@@ -1813,9 +1813,10 @@ audio is unencrypted on the LAN, as a Pi's is.
   With "automatic", your server's key can run code as that account — the
   same trust a Pi gives it, minus root. That is why the guide asks for a
   dedicated account for the satellite. The server can never change the
-  permission, the pin or the device profile: a `set_config` carrying
-  `pc.*`, `satellite.server_fingerprint` or `device.profile` is dropped by
-  the device.
+  permission, the pin or the `[device]` section (the profile, and
+  `full_duplex`, which would let a call open the mic while the speaker
+  plays): a `set_config` carrying `pc.*`, `device.*` or
+  `satellite.server_fingerprint` is dropped by the device.
 
 ### The local control socket
 
