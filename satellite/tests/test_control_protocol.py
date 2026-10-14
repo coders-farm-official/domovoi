@@ -482,8 +482,10 @@ def test_a_peer_whose_uid_cannot_be_read_is_refused(monkeypatch):
     path = Path(tempfile.mkdtemp()) / "control.sock"
     stop = _serve_in_thread(FakeEngine(), path)
     try:
-        with pytest.raises((ConnectionError, OSError, StopIteration, ValueError)):
-            got = control.ControlClient(path).call("status")
-            raise ValueError(got) if got else ConnectionError("closed")
+        try:
+            got = control.ControlClient(path, timeout=2).call("status")
+        except (ConnectionError, OSError, ValueError):
+            got = None
+        assert got is None, got
     finally:
         stop()

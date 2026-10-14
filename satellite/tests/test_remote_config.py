@@ -69,6 +69,17 @@ def test_R1_no_spelling_of_the_pin_key_changes_the_pin(make, key):
     assert server_identity.pinned_fingerprint(cfg.server_fingerprint) == (FP, "config")
 
 
+@pytest.mark.parametrize("key", ["wake.threshold ", " wake.threshold", "Wake.threshold", "wake.threshold\t",
+                                 "wake..threshold", "wake.threshold.x", "wake.thresh\u043eld", "wake.threshold\n"])
+@pytest.mark.parametrize("pc", [True, False], ids=["laptop", "pi"])
+def test_R1_the_screen_refuses_a_near_miss_of_a_settable_key(key, pc):
+    """Not only the pin: a key that would become a settable one once
+    tidied up is refused as it is, before any writer sees it."""
+    accepted, refused = remote_config.screen({key: 0.5}, pc=pc)
+    assert accepted == {} and refused == [repr(key)[:80]]
+    assert remote_config.screen({"wake.threshold": 0.5}, pc=pc) == ({"wake.threshold": 0.5}, [])
+
+
 def test_R1_the_writer_itself_refuses_a_key_that_is_not_canonical():
     for key in ("satellite.server_fingerprint ", "a.b.c", "a", ".b", "A.b", "a. b", "a.b\n"):
         with pytest.raises(ValueError):
