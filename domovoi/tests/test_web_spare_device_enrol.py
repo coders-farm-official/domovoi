@@ -113,10 +113,10 @@ async def test_no_identity_is_a_503_and_a_frozen_channel_passes_its_423_on(core)
 
 
 def test_the_route_is_an_admin_s():
-    from domovoi.admin_auth import require_admin_read
+    from domovoi.admin_auth import require_admin_mutation
 
     route = next(r for r in web_sats.router.routes if r.path == "/api/satellites/enrolment")
-    assert any(d.dependency is require_admin_read for d in route.dependencies)
+    assert any(d.dependency is require_admin_mutation for d in route.dependencies)
 
 
 # ─── the command ──────────────────────────────────────────────────────────

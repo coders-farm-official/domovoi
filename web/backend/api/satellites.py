@@ -356,8 +356,9 @@ async def _room_in_use(room_id: str) -> str | None:
 @router.post(
     "/enrolment",
     # An admin's: this is how a device is invited into the house (it is
-    # still approved separately, with its code). Nothing is written.
-    dependencies=[Depends(require_admin_read)],
+    # still approved separately, with its code). Nothing is written, but it
+    # is an admin action and a POST, so it takes the admin write gate.
+    dependencies=[Depends(require_admin_mutation)],
 )
 async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request):
     """The enrolment payload for a spare device, the install command for a
