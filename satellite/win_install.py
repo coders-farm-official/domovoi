@@ -385,12 +385,31 @@ def change_power(answer: Callable[[str], bool], run: Callable[..., Any] = subpro
 
 # ─── the state record, start, wait ────────────────────────────────────────
 
+def read_state(root: Path) -> dict[str, Any]:
+    try:
+        doc = json.loads((root / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def merge_power(old: Any, new: dict[str, Any]) -> dict[str, Any]:
+    """What the uninstaller puts back: the value from BEFORE the first
+    install that changed a setting. Installing again over an install that
+    already changed it records "0" (its own value) as "before"; that must
+    not replace the person's original."""
+    if not isinstance(old, dict) or old.get("scheme") != new.get("scheme"):
+        return new
+    merged = dict(new)
+    for key in POWER_SETTINGS:
+        if isinstance(old.get(key), int):
+            merged[key] = old[key]
+    return merged
+
+
 def write_state(root: Path, **values: Any) -> None:
     path = root / STATE_FILE
-    try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        doc = {}
+    doc = read_state(root)
     doc.update(values)
     path.write_text(json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -513,7 +532,7 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
         answer = lambda q: ask_choice(q, interactive)  # noqa: E731
     power = change_power(answer, run=run)
     if power:
-        write_state(root, power=power)
+        write_state(root, power=merge_power(read_state(root).get("power"), power))
 
     say("")
     say(f"Installed. This PC is the room \"{e.room}\" ({e.room_id}). It runs while you are signed in.")

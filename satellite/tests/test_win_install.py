@@ -379,3 +379,12 @@ def test_uninstall_leaves_an_entry_that_points_elsewhere(tmp_path):
     r = _ps(["-File", str(root / "uninstall.ps1"), "-Quiet", "-TestRegistryFile", str(stub)])
     assert r.returncode == 0, r.stderr
     assert json.loads(stub.read_text(encoding="utf-8-sig")) == other
+
+
+def test_installing_again_keeps_the_person_s_original_power_values():
+    first = {"scheme": "381b4222-f694-41f0-9685-ff5bb260df2e", "standby": 1800, "hibernate": 3600}
+    again = {"scheme": "381b4222-f694-41f0-9685-ff5bb260df2e", "standby": 0, "hibernate": 0, "lid": 1}
+    assert wi.merge_power(first, again) == {"scheme": first["scheme"], "standby": 1800, "hibernate": 3600, "lid": 1}
+    other_plan = dict(again, scheme="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c")
+    assert wi.merge_power(first, other_plan) == other_plan
+    assert wi.merge_power(None, again) == again
