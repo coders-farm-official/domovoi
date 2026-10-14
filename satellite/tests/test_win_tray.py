@@ -267,3 +267,18 @@ def test_the_tray_opens_only_a_web_address_or_a_folder(monkeypatch, tmp_path):
     for bad in (r"C:\Windows\System32\calc.exe", "file:///C:/x", "", "ms-settings:privacy"):
         assert win_tray._open(bad) is False
     assert opened == ["http://192.168.0.117:6369", str(tmp_path)]
+
+
+@windows_only
+def test_a_settings_refusal_toast_shows_the_problem_not_the_path():
+    """The engine's line names the whole config path first; the toast has
+    255 characters, so it keeps the file's name and the problem."""
+    folder = "C:\\Users\\Jos\u00e9\\AppData\\Local\\Domovoi\\Satellite\\.domovoi\\" + "x" * 60
+    reason = (f"not starting: its settings in {folder}\\config.toml don't load: [music] alsa_device "
+              "'x & calc.exe' is not a Windows audio device: use \"default\", a device number, or a name "
+              "from --list-devices")
+    body = win_tray.refusal_note(reason).body
+    assert body.startswith("config.toml doesn't load: [music] alsa_device 'x & calc.exe' is not a Windows audio device")
+    assert folder not in body and len(body) <= win_tray.INFO_MAX
+    assert win_tray.refusal_note("not starting: another process holds the pipe").body.startswith(
+        "another process holds the pipe.")

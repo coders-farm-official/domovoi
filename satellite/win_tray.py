@@ -225,8 +225,23 @@ REFUSED_TITLE = "Domovoi satellite didn't start"
 REFUSED_AFTER = " Fix that, then choose Start satellite in this menu."
 
 
+def _short_reason(reason: str) -> str:
+    """The engine's line, with what a toast has no room for taken out: the
+    leading "not starting: ", and a settings file's full path (its name is
+    enough; the tooltip, the log and ``--status`` have the rest), so the
+    problem itself is what shows."""
+    import ntpath
+    import re
+
+    m = re.match(r"not starting: its settings in (.+?) don't load: (.*)", reason, re.S)
+    if m:
+        return f"{ntpath.basename(m.group(1))} doesn't load: {m.group(2)}"
+    return reason[len("not starting: "):] if reason.startswith("not starting: ") else reason
+
+
 def refusal_note(reason: str) -> tray.Note:
     """The toast for a refusal: the engine's reason, then what to do."""
+    reason = _short_reason(reason)
     room = INFO_MAX - len(REFUSED_AFTER)
     why = reason if len(reason) <= room else reason[:room - 1].rstrip() + "…"
     if not why.endswith((".", "…")):
