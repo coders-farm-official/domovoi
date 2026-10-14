@@ -92,6 +92,29 @@ def test_a_spare_pc_gets_auto_volume_exit_to_restart_and_the_socket():
     assert plat.service.restart() is True and exits == [ep.EXIT_RESTART]
 
 
+def test_a_real_laptop_config_gets_the_control_socket_and_can_turn_it_off():
+    """From a parsed config.toml (control_enabled is None unless set)."""
+    from satellite.tests._client_import import import_client
+
+    client = import_client()
+    cfg = client.Config.from_toml({"device": {"profile": "generic_pc"}})
+    assert ep.for_profile(cfg, request_exit=lambda c: None).control_socket is True
+    off = client.Config.from_toml({"device": {"profile": "generic_pc"}, "control": {"enabled": False}})
+    assert ep.for_profile(off, request_exit=lambda c: None).control_socket is False
+    pi = client.Config.from_toml({"device": {"profile": "xvf3800_usb"}})
+    assert ep.for_profile(pi, request_exit=lambda c: None).control_socket is False
+
+
+def test_probing_for_a_sound_server_is_quiet_until_one_answers(caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="satellite.platform")
+    run, _ = recorder({"pactl": Done(1, err="Connection refused")})
+    vol = ep.AutoVolume("0", None, run=run, which=lambda name: "/usr/bin/pactl" if name == "pactl" else None)
+    assert vol.get() is None
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
 def test_an_explicit_volume_backend_wins():
     cfg = pi_cfg(volume_backend="pactl")
     assert isinstance(ep.for_profile(cfg, request_exit=lambda c: None).volume, ep.PactlVolume)

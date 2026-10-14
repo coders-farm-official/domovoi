@@ -99,14 +99,15 @@ def _runner(run: Runner | None) -> Runner:
     return run if run is not None else subprocess.run
 
 
-def _run(run: Runner | None, argv: list[str], what: str) -> subprocess.CompletedProcess | None:
+def _run(run: Runner | None, argv: list[str], what: str, *, quiet: bool = False) -> subprocess.CompletedProcess | None:
+    level = logging.DEBUG if quiet else logging.WARNING
     try:
         r = _runner(run)(argv, capture_output=True, text=True, timeout=5.0)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
-        log.warning("%s failed: %s", what, e)
+        log.log(level, "%s failed: %s", what, e)
         return None
     if r.returncode != 0:
-        log.warning("%s failed: %s", what, (r.stderr or "").strip()[:160])
+        log.log(level, "%s failed: %s", what, (r.stderr or "").strip()[:160])
         return None
     return r
 
@@ -129,8 +130,10 @@ class AmixerVolume:
 
     name = "amixer"
 
-    def __init__(self, card: str, control: str | None, *, run: Runner | None = None) -> None:
+    def __init__(self, card: str, control: str | None, *, run: Runner | None = None,
+                 quiet: bool = False) -> None:
         self.card, self.control, self._run = str(card), control, run
+        self.quiet = quiet
 
     def available(self) -> bool:
         return bool(self.control)
@@ -139,7 +142,7 @@ class AmixerVolume:
         if not self.control:
             return None
         r = _run(self._run, _volume.get_command(self.card, self.control),
-                 f"amixer get {self.control!r} on card {self.card}")
+                 f"amixer get {self.control!r} on card {self.card}", quiet=self.quiet)
         return _volume.parse_volume_percent(r.stdout) if r else None
 
     def set(self, level: int) -> bool:
@@ -154,14 +157,15 @@ class WpctlVolume:
 
     name = "wpctl"
 
-    def __init__(self, *, run: Runner | None = None) -> None:
+    def __init__(self, *, run: Runner | None = None, quiet: bool = False) -> None:
         self._run = run
+        self.quiet = quiet
 
     def available(self) -> bool:
         return True
 
     def get(self) -> int | None:
-        r = _run(self._run, _volume.wpctl_get_command(), "wpctl get-volume")
+        r = _run(self._run, _volume.wpctl_get_command(), "wpctl get-volume", quiet=self.quiet)
         return _volume.parse_wpctl_volume(r.stdout) if r else None
 
     def set(self, level: int) -> bool:
@@ -174,14 +178,15 @@ class PactlVolume:
 
     name = "pactl"
 
-    def __init__(self, *, run: Runner | None = None) -> None:
+    def __init__(self, *, run: Runner | None = None, quiet: bool = False) -> None:
         self._run = run
+        self.quiet = quiet
 
     def available(self) -> bool:
         return True
 
     def get(self) -> int | None:
-        r = _run(self._run, _volume.pactl_get_command(), "pactl get-sink-volume")
+        r = _run(self._run, _volume.pactl_get_command(), "pactl get-sink-volume", quiet=self.quiet)
         return _volume.parse_pactl_volume(r.stdout) if r else None
 
     def set(self, level: int) -> bool:
@@ -200,12 +205,14 @@ class AutoVolume:
     def __init__(self, card: str, control: str | None, *, run: Runner | None = None,
                  which: Callable[[str], str | None] = shutil.which) -> None:
         self._candidates: list[VolumeBackend] = []
+        # Probed quietly: until one answers, a missing sound server is the
+        # normal state of a box that is still booting, or of one with none.
         if which("wpctl"):
-            self._candidates.append(WpctlVolume(run=run))
+            self._candidates.append(WpctlVolume(run=run, quiet=True))
         if which("pactl"):
-            self._candidates.append(PactlVolume(run=run))
+            self._candidates.append(PactlVolume(run=run, quiet=True))
         if control and which("amixer"):
-            self._candidates.append(AmixerVolume(card, control, run=run))
+            self._candidates.append(AmixerVolume(card, control, run=run, quiet=True))
         self._chosen: VolumeBackend | None = None
         self._lock = threading.Lock()
 
@@ -222,6 +229,7 @@ class AutoVolume:
             for backend in self._candidates:
                 level = backend.get()
                 if level is not None:
+                    backend.quiet = False
                     self._chosen = backend
                     log.info("volume: using %s (now %d%%)", backend.name, level)
                     return backend, level
@@ -352,5 +360,12 @@ def for_profile(cfg: Any, *, request_exit: Callable[[int], None]) -> Platform:
             control=getattr(cfg, "output_mixer_control", None),
         ),
         service=ExitToRestart(request_exit) if pc else SudoSystemctl(),
-        control_socket=bool(getattr(cfg, "control_enabled", pc)),
+        control_socket=_control_socket(cfg, pc),
     )
+
+
+def _control_socket(cfg: Any, pc: bool) -> bool:
+    """``[control] enabled`` when the config says; else the profile's (on
+    for a spare computer, off on a Pi)."""
+    configured = getattr(cfg, "control_enabled", None)
+    return pc if configured is None else bool(configured)
