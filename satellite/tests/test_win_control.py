@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 from ctypes import wintypes
+from pathlib import Path
 
 import pytest
 
@@ -128,7 +129,7 @@ def test_the_client_refuses_a_pipe_served_by_someone_else(monkeypatch):
     stop = _serve(FakeEngine(), name)
     try:
         monkeypatch.setattr(win32, "peer_is_this_user", lambda pid, own_sid=None: False)
-        with pytest.raises(ConnectionError, match="not yours"):
+        with pytest.raises(ConnectionError, match="not this user's"):
             control.ControlClient(name).call("status")
     finally:
         stop()
@@ -201,3 +202,192 @@ def test_the_pipe_s_dacl_is_this_user_alone_and_remote_clients_are_refused(monke
     open_mode, pipe_mode = calls[0][1], calls[0][2]
     assert open_mode & win32.FILE_FLAG_FIRST_PIPE_INSTANCE
     assert pipe_mode & win32.PIPE_REJECT_REMOTE_CLIENTS
+
+
+# ─── security review of wf/sat-windows: F2, the low-integrity squatter, W6 ──
+
+LOW_SERVER = r"""
+import _winapi, sys, time
+name = sys.argv[1]
+h = _winapi.CreateNamedPipe(name, 0x3 | 0x00080000, 0, 1, 65536, 65536, 0, _winapi.NULL)
+print("created", flush=True)
+_winapi.ConnectNamedPipe(h, _winapi.NULL)
+try:
+    _winapi.ReadFile(h, 65536)
+    _winapi.WriteFile(h, b'{"ok": true, "verb": "status", "mic": "muted", "connection": "connected"}\n')
+except OSError:
+    pass
+time.sleep(1)
+"""
+
+
+def _low_integrity_python(tmp_path):
+    """A copy of this Python labelled low integrity: what it starts runs as
+    this user in a sandbox (as a browser's renderer does). Nothing it runs
+    writes anything (-B)."""
+    import os
+    import shutil
+    import subprocess
+
+    base = Path(win32.own_image_dir())
+    d = tmp_path / "lowpy"
+    d.mkdir()
+    for pattern in ("python.exe", "python3*.dll", "vcruntime140*.dll"):
+        for f in base.glob(pattern):
+            shutil.copy2(f, d / f.name)
+    exe = d / "python.exe"
+    icacls = Path(os.environ["SystemRoot"]) / "System32" / "icacls.exe"
+    r = subprocess.run([str(icacls), str(exe), "/setintegritylevel", "low"], capture_output=True, text=True)
+    if r.returncode != 0:
+        pytest.skip(f"could not label a copy of python.exe low: {r.stdout} {r.stderr}")
+    return exe
+
+
+def test_the_client_refuses_a_low_integrity_process_sitting_on_the_name(tmp_path):
+    """The reviewer's lowil_squat probe: a sandboxed process of this same
+    user creates the pipe and answers "muted". The SID matches; the
+    integrity level does not, so the tray never believes it."""
+    import os
+    import subprocess
+
+    exe = _low_integrity_python(tmp_path)
+    name = _name()
+    env = dict(os.environ, PYTHONHOME=sys.base_prefix)
+    proc = subprocess.Popen([str(exe), "-B", "-s", "-c", LOW_SERVER, name], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        first = proc.stdout.readline().strip()
+        if first != "created":
+            pytest.skip(f"the low-integrity Python did not start: {proc.stderr.read()[-300:]}")
+        rid = win32.process_integrity_rid(proc.pid)
+        assert rid is not None and rid < win32.SECURITY_MANDATORY_MEDIUM_RID, rid
+        assert win32.peer_is_this_user(proc.pid), "the same user: only the integrity level tells them apart"
+        with pytest.raises(ConnectionError, match="low integrity"):
+            control.ControlClient(name, timeout=3).call("status")
+    finally:
+        proc.kill()
+        proc.wait(10)
+
+
+def test_the_client_talks_only_to_this_install_s_python(monkeypatch, tmp_path):
+    name = _name()
+    stop = _serve(FakeEngine(), name)
+    try:
+        assert control.ControlClient(name).call("status")["ok"]
+        monkeypatch.setattr(win32, "own_image_dir", lambda: str(tmp_path))
+        with pytest.raises(ConnectionError, match="not this satellite's Python"):
+            control.ControlClient(name).call("status")
+    finally:
+        stop()
+
+
+def test_the_engine_refuses_a_low_integrity_client(monkeypatch):
+    name = _name()
+    stop = _serve(FakeEngine(), name)
+    try:
+        import os
+
+        real = win32.process_integrity_rid
+        monkeypatch.setattr(win32, "process_integrity_rid",
+                            lambda pid: win32.SECURITY_MANDATORY_LOW_RID if pid == os.getpid() else real(pid))
+        # The client's own check of the server would refuse too (same
+        # process); skip it to see the engine's side.
+        monkeypatch.setattr(control_win.PipeStream, "__init__", _raw_client)
+        sock = control_win.PipeStream(name)
+        try:
+            sock.sendall(b'{"verb":"status"}\n')
+            assert sock.recv(4096) == b"", "the engine answered a sandboxed client"
+        finally:
+            sock.close()
+    finally:
+        stop()
+
+
+def _raw_client(self, name, timeout=3, **_kw):
+    import _winapi
+
+    self._winapi = _winapi
+    self.timeout = timeout
+    self._h = _winapi.CreateFile(name, control_win.GENERIC_READ | control_win.GENERIC_WRITE, 0, _winapi.NULL,
+                                 control_win.OPEN_EXISTING, win32.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+
+
+def test_a_squatted_name_stops_the_engine_with_78_before_it_listens(monkeypatch, capsys):
+    """F2: the engine used to carry on with no control channel (a live mic
+    the tray called "not running", Mute disabled). Now it asks to exit 78
+    and says why in the line the supervisor keeps for the tray."""
+    import _winapi
+    import types
+
+    from satellite import engine_platform, pc_engine
+
+    name = _name()
+    squat = _winapi.CreateNamedPipe(name, 0x3 | win32.FILE_FLAG_OVERLAPPED | win32.FILE_FLAG_FIRST_PIPE_INSTANCE,
+                                    0, 255, 4096, 4096, 0, _winapi.NULL)
+    try:
+        monkeypatch.setattr(control, "default_transport", lambda _d: control_win.NamedPipeTransport(name))
+        asked = []
+        eng = types.SimpleNamespace(
+            _platform=types.SimpleNamespace(control_socket=True),
+            cfg=types.SimpleNamespace(device=types.SimpleNamespace(name="windows_pc")),
+            _watch_windows_stop=lambda: None, _request_exit=asked.append,
+        )
+        asyncio.run(pc_engine.SpareDeviceEngine._start_control(eng))
+    finally:
+        _winapi.CloseHandle(squat)
+    assert asked == [engine_platform.EXIT_CONFIG] and getattr(eng, "_control_server", None) is None
+    err = capsys.readouterr().err
+    assert err.startswith("domovoi-satellite: not starting: another process holds this satellite's control pipe")
+
+
+def test_the_client_lends_the_server_no_rights():
+    """W6: the client opens the pipe with SECURITY_SQOS_PRESENT |
+    SECURITY_IDENTIFICATION, so a server can learn who connected but never
+    act as them: the token it gets is identification-level."""
+    import _winapi
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32.GetCurrentThread.restype = wintypes.HANDLE
+    adv.ImpersonateNamedPipeClient.argtypes = (wintypes.HANDLE,)
+    adv.OpenThreadToken.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, ctypes.POINTER(wintypes.HANDLE))
+    adv.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+                                        ctypes.POINTER(wintypes.DWORD))
+    name = _name()
+    h = _winapi.CreateNamedPipe(name, 0x3 | win32.FILE_FLAG_FIRST_PIPE_INSTANCE, 0, 1, 4096, 4096, 0, _winapi.NULL)
+    box = {}
+
+    def serve():
+        try:
+            _winapi.ConnectNamedPipe(h, _winapi.NULL)
+        except OSError:
+            pass
+        _winapi.ReadFile(h, 16)
+        if not adv.ImpersonateNamedPipeClient(wintypes.HANDLE(h)):
+            box["error"] = ctypes.get_last_error()
+            return
+        try:
+            tok = wintypes.HANDLE()
+            if not adv.OpenThreadToken(k32.GetCurrentThread(), win32.TOKEN_QUERY, True, ctypes.byref(tok)):
+                box["error"] = ctypes.get_last_error()
+                return
+            level, got = wintypes.DWORD(), wintypes.DWORD()
+            adv.GetTokenInformation(tok, 9, ctypes.byref(level), 4, ctypes.byref(got))   # TokenImpersonationLevel
+            box["level"] = level.value
+            k32.CloseHandle(tok)
+        finally:
+            adv.RevertToSelf()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    try:
+        sock = control_win.PipeStream(name, timeout=3)
+        try:
+            sock.sendall(b"x")
+            t.join(5)
+        finally:
+            sock.close()
+    finally:
+        _winapi.CloseHandle(h)
+    assert "error" not in box, box
+    assert box.get("level") == 1, f"SecurityIdentification (1), not {box.get('level')}"

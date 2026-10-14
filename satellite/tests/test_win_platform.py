@@ -631,3 +631,21 @@ def test_set_config_writes_nothing_a_windows_satellite_would_refuse(tmp_path, mo
     sat._apply_config_changes({"music.alsa_device": "Speakers (Realtek(R) Audio)"})
     assert 'alsa_device = "Speakers (Realtek(R) Audio)"' in path.read_text(encoding="utf-8")
     assert restarts == [1]
+
+
+def test_an_engine_that_can_not_claim_its_pipe_leaves_before_the_microphone_opens(monkeypatch):
+    """F2 (security review): exit 78 is asked for in _start_control; run()
+    returns right there, with no microphone, playback or session."""
+    import asyncio
+
+    sat = client.Satellite(win_cfg())
+
+    async def no_pipe():
+        sat._request_exit(ep.EXIT_CONFIG)
+
+    monkeypatch.setattr(sat, "_arm_upgrade_watchdog", lambda: None)
+    monkeypatch.setattr(sat, "_start_control", no_pipe)
+    monkeypatch.setattr(sat, "_start_voice_input", lambda *a, **k: pytest.fail("the microphone opened"))
+    asyncio.run(sat.run())
+    assert sat.exit_code == 78
+    assert getattr(sat, "_playback_thread", None) is None

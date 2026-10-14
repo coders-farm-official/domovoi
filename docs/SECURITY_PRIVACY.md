@@ -1960,11 +1960,16 @@ household token**: it reaches no dashboard route.
 its DACL grants that account alone (no Everyone, no Administrators;
 low-integrity and app-container processes of the same account can't write
 to it either), `PIPE_REJECT_REMOTE_CLIENTS` keeps it off the network, the
-engine claims the name with `FILE_FLAG_FIRST_PIPE_INSTANCE` and refuses to
-share it, the engine closes a client whose process is another account's,
-and the tray and CLI refuse a pipe served by another account's process —
-so another person signed in on the same PC can neither talk to it nor sit
-on its name and show the tray a "muted" that isn't true. The tray and the
+engine claims the name with `FILE_FLAG_FIRST_PIPE_INSTANCE` and, when
+something else already holds it (another account signed in first, or a
+low-integrity process of this one — pipe names are machine-wide and a
+sandbox can create one), does not run at all: it exits 78 before the
+microphone opens, and the tray says why. Each end checks the other's
+process: this account, at medium integrity or above — and the tray and
+CLI also require the server to be the install's own Python — so neither
+another person on the same PC nor a sandboxed program of this one can
+talk to it, or sit on its name and show the tray a "muted" that isn't
+true. The tray and the
 CLI open the pipe at identification level (`SECURITY_SQOS_PRESENT |
 SECURITY_IDENTIFICATION`): whoever serves it can learn who connected, never
 act as them.

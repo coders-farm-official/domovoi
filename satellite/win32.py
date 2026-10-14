@@ -111,6 +111,9 @@ def _kernel32():
     k.CreateMutexW.restype = wintypes.HANDLE
     k.GetSystemPowerStatus.argtypes = (ctypes.POINTER(SYSTEM_POWER_STATUS),)
     k.GetSystemPowerStatus.restype = wintypes.BOOL
+    k.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                             ctypes.POINTER(wintypes.DWORD))
+    k.QueryFullProcessImageNameW.restype = wintypes.BOOL
     return k
 
 
@@ -127,6 +130,10 @@ def _advapi32():
     a.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = (
         wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID), ctypes.POINTER(wintypes.ULONG))
     a.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    a.GetSidSubAuthorityCount.argtypes = (wintypes.LPVOID,)
+    a.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+    a.GetSidSubAuthority.argtypes = (wintypes.LPVOID, wintypes.DWORD)
+    a.GetSidSubAuthority.restype = ctypes.POINTER(wintypes.DWORD)
     return a
 
 
@@ -283,6 +290,103 @@ def peer_is_this_user(pid: int | None, own_sid: str | None = None) -> bool:
         return False
     theirs = process_user_sid(pid)
     return theirs is not None and theirs == (own_sid or current_user_sid())
+
+
+#: TOKEN_INFORMATION_CLASS TokenIntegrityLevel, and the mandatory-label RIDs.
+TOKEN_INTEGRITY_LEVEL_CLASS = 25
+SECURITY_MANDATORY_LOW_RID = 0x1000
+SECURITY_MANDATORY_MEDIUM_RID = 0x2000
+
+
+def _token_integrity_rid(token: wintypes.HANDLE) -> int:
+    a = _advapi32()
+    need = wintypes.DWORD(0)
+    a.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL_CLASS, None, 0, ctypes.byref(need))
+    if not need.value:
+        raise _winerror("GetTokenInformation(size)")
+    buf = ctypes.create_string_buffer(need.value)
+    if not a.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL_CLASS, buf, need, ctypes.byref(need)):
+        raise _winerror("GetTokenInformation")
+    # TOKEN_MANDATORY_LABEL { SID_AND_ATTRIBUTES Label { PSID Sid; ... } }:
+    # the level is the label SID's last sub-authority.
+    psid = ctypes.cast(buf, ctypes.POINTER(wintypes.LPVOID))[0]
+    count = a.GetSidSubAuthorityCount(psid)
+    return int(a.GetSidSubAuthority(psid, count[0] - 1)[0])
+
+
+def process_integrity_rid(pid: int) -> int | None:
+    """Another process's integrity level (``SECURITY_MANDATORY_*_RID``), or
+    None when Windows won't say."""
+    if not IS_WINDOWS:
+        raise NotWindows("this needs Windows")
+    k, a = _kernel32(), _advapi32()
+    proc = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not proc:
+        return None
+    try:
+        token = wintypes.HANDLE()
+        if not a.OpenProcessToken(proc, TOKEN_QUERY, ctypes.byref(token)):
+            return None
+        try:
+            return _token_integrity_rid(token)
+        except OSError:
+            return None
+        finally:
+            k.CloseHandle(token)
+    finally:
+        k.CloseHandle(proc)
+
+
+def process_image(pid: int) -> str | None:
+    """The full path of the program another process runs, or None."""
+    if not IS_WINDOWS:
+        raise NotWindows("this needs Windows")
+    k = _kernel32()
+    proc = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not proc:
+        return None
+    try:
+        size = wintypes.DWORD(32768)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if not k.QueryFullProcessImageNameW(proc, 0, buf, ctypes.byref(size)):
+            return None
+        return buf.value
+    finally:
+        k.CloseHandle(proc)
+
+
+def own_image_dir() -> str:
+    """The folder of this process's own program (not ``sys.executable``,
+    which a venv's launcher reports in place of the real interpreter)."""
+    import os
+
+    image = process_image(os.getpid())
+    if not image:
+        raise _winerror("QueryFullProcessImageNameW")
+    return os.path.dirname(image)
+
+
+def peer_problem(pid: int | None, own_sid: str | None = None, *, image_dir: str | None = None) -> str | None:
+    """Why the process at the other end of a control pipe is not to be
+    trusted, or None when it is: it must run as this user, at medium
+    integrity or above (a low-integrity process of the same user — a
+    sandbox — can create a pipe of any name too), and, with ``image_dir``,
+    run a program from that folder (the satellite's own Python: the engine,
+    the tray and the CLI all run from the install's ``python\\``)."""
+    import os
+
+    if not pid:
+        return "Windows did not name the process"
+    if not peer_is_this_user(pid, own_sid):
+        return f"process {pid} is not this user's"
+    rid = process_integrity_rid(pid)
+    if rid is None or rid < SECURITY_MANDATORY_MEDIUM_RID:
+        return f"process {pid} runs at low integrity (a sandbox), not as the satellite"
+    if image_dir is not None:
+        image = process_image(pid)
+        if not image or os.path.normcase(os.path.dirname(image)) != os.path.normcase(image_dir):
+            return f"process {pid} is not this satellite's Python ({image or 'unknown program'})"
+    return None
 
 
 # ─── named events and a single-instance mutex ─────────────────────────────

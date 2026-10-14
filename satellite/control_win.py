@@ -14,12 +14,17 @@ from:
 * **No network clients** — ``PIPE_REJECT_REMOTE_CLIENTS``: pipes are
   otherwise reachable over SMB from other machines.
 * **The name claimed first** — ``FILE_FLAG_FIRST_PIPE_INSTANCE``: if another
-  process (another user, signed in first) already holds a pipe of this name,
-  the engine refuses to share it and the channel stays off, said in its log.
-* **Both ends checked** — the engine closes a client whose process is not
-  this user's (``GetNamedPipeClientProcessId``), and the client — the tray,
-  the CLI, the installer — refuses a pipe served by anyone else
-  (``GetNamedPipeServerProcessId``), so nobody can sit on the name and feed
+  process (another user signed in first, or a low-integrity process of this
+  one) already holds a pipe of this name, the engine refuses to share it
+  and does not run at all (exit 78, the reason in the tray): a satellite
+  listening with no way for its tray to see or mute it is worse than one
+  that says why it stopped (security review of wf/sat-windows, F2).
+* **Both ends checked** (:func:`win32.peer_problem`) — the engine closes a
+  client that is not this user's at medium integrity or above
+  (``GetNamedPipeClientProcessId``), and the client — the tray, the CLI,
+  the installer — talks only to a server that is this user's, at medium
+  integrity or above, running this install's own Python
+  (``GetNamedPipeServerProcessId``): nobody can sit on the name and feed
   the tray a "muted" that isn't true, or read the approval code.
 
 The engine side is asyncio's proactor loop (the Windows default): pipe
@@ -126,8 +131,9 @@ class NamedPipeTransport:
         pipe = writer.get_extra_info("pipe")
         handle = getattr(pipe, "handle", None)
         pid = win32.pipe_client_pid(handle) if handle is not None else None
-        if not win32.peer_is_this_user(pid, self._own_sid):
-            log.warning("control: refused a pipe client (pid %s) that is not this user's", pid)
+        problem = win32.peer_problem(pid, self._own_sid)
+        if problem:
+            log.warning("control: refused a pipe client: %s", problem)
             writer.close()
             return
         assert self._handler is not None
@@ -191,7 +197,8 @@ class PipeStream:
     ``settimeout``, ``close``. Overlapped I/O, so reads and writes honour
     the timeout. Refuses a pipe served by another user's process."""
 
-    def __init__(self, name: str, *, timeout: float | None = 5.0, own_sid: str | None = None) -> None:
+    def __init__(self, name: str, *, timeout: float | None = 5.0, own_sid: str | None = None,
+                 image_dir: str | None = None) -> None:
         import _winapi
 
         self._winapi = _winapi
@@ -215,11 +222,12 @@ class PipeStream:
                     f"the satellite engine isn't answering on {name} ({e.strerror or e})"
                 ) from e
         pid = win32.pipe_server_pid(self._h)
-        if not win32.peer_is_this_user(pid, own_sid):
+        # The engine runs this install's own Python, as does every client of
+        # it (the tray is its pythonw.exe, the CLI its python.exe).
+        problem = win32.peer_problem(pid, own_sid, image_dir=image_dir or win32.own_image_dir())
+        if problem:
             self.close()
-            raise ConnectionError(
-                f"{name} is served by a process that is not yours (pid {pid}); not talking to it"
-            )
+            raise ConnectionError(f"{name} is not served by this satellite ({problem}); not talking to it")
 
     def settimeout(self, timeout: float | None) -> None:
         self.timeout = timeout

@@ -492,6 +492,19 @@ class SpareDeviceEngine:
         try:
             await server.start()
         except (OSError, NotImplementedError) as e:
+            if engine_platform.is_windows_pc(getattr(self, "cfg", None)):
+                # Someone holds the pipe's name (another account, or a
+                # low-integrity process of this one): a satellite listening
+                # with a tray that can't see or mute it, or one fed by the
+                # squatter, is worse than one that stops and says why. Exit
+                # 78 before the microphone opens; the supervisor keeps this
+                # line as the reason the tray shows.
+                log.error("control channel not started (%s); not running without it", e)
+                print("domovoi-satellite: not starting: another process holds this satellite's control "
+                      "pipe, so its tray could not see or mute it. Sign out and in again (or restart the "
+                      "PC), then choose Start satellite.", file=sys.stderr, flush=True)
+                self._request_exit(engine_platform.EXIT_CONFIG)
+                return
             log.warning("control channel not started (%s): the tray and the CLI can't reach this engine", e)
             return
         self._control_server = server

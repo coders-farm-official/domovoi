@@ -7460,8 +7460,12 @@ class Satellite(pc_engine.SpareDeviceEngine):
             )
 
         self._leds.start()
-        # The local control channel (a spare computer's tray and CLI).
+        # The local control channel (a spare computer's tray and CLI). A
+        # Windows engine that can't claim it asks to exit (78): it leaves
+        # here, before the microphone opens.
         await self._start_control()
+        if self.shutdown_event.is_set():
+            return
         # Voice-off seam: a mic-less build ([mic] enabled=false, the video
         # kiosk default) skips capture AND the mic thread — the wake model
         # only ever loads inside _mic_thread_run, so this also skips the
