@@ -5,21 +5,31 @@
 # through DOMOVOI_PROVISION_ROOT (/etc, /proc, /var/lib, /usr/local, the
 # service user's home), clones a throwaway origin repository that carries
 # just the files the script reads (the pin manifest, docs/LINUX_HOST.md's
-# Ollama pin, the shipped units, the real os-jobs.sh, a lock header, a stub
-# install-update-unit.sh), and puts PATH shims in front of everything that
-# would touch the machine: apt-get, dpkg-query, apt-mark, curl, gpg,
-# systemctl, docker, useradd, usermod, passwd, id, getent, runuser, install,
-# chown, flock, mount, umount, mountpoint, findmnt, timedatectl, readlink,
-# visudo, sudo, journalctl, tar, python3 and the venv's python. Every shim
+# Ollama pin, the shipped units, the real os-jobs.sh and gpu-runtime.sh, a
+# lock header, a stub install-update-unit.sh), and puts PATH shims in front
+# of everything that would touch the machine: apt-get, dpkg-query, apt-mark,
+# curl, gpg, systemctl, docker, useradd, usermod, passwd, id, getent,
+# runuser, install, chown, flock, mount, umount, mountpoint, findmnt,
+# timedatectl, readlink, visudo, sudo, journalctl, tar, nvidia-smi,
+# nvidia-ctk, python3 and the venv's python. Every shim
 # logs its call and can be told to fail. git, sha256sum and the rest of
 # coreutils are real. Nothing touches the host, so this runs under Git Bash
 # as well as on Linux.
 #
 # The shims model just enough to test the script's decisions:
 #   * dpkg-query answers for what the apt-get shim "installed", at the
-#     version it was asked for (pkg=ver), else "1";
+#     version it was asked for (pkg=ver), else "1"; `apt-get install -s`
+#     prints the "Inst" lines of a simulation (plus apt-simulate-extra's);
+#   * a GPU is the case's to give: gpu_wsl puts /dev/dxg and WSL's
+#     libcuda.so.1 in the root, gpu_bare has nvidia-smi list one (it fails
+#     otherwise); nvidia-ctk writes the nvidia runtime into the root's
+#     daemon.json, which dockerd (the systemctl shim) reads at each start
+#     and `docker info` lists, or refuses to start with while
+#     docker-rejects-nvidia is set;
 #   * curl serves a fake Ollama tarball for the release URL (or a tampered
-#     one when ollama-tampered is set), the Docker key, Ollama's API
+#     one when ollama-tampered is set), the Docker and NVIDIA keys (and a
+#     second key in the file when docker-extra-key / nvidia-extra-key is
+#     set), Ollama's API
 #     (/api/version, /api/tags, /api/pull streaming, the pull recording the
 #     registry digest from the manifest, or a wrong one when
 #     pull-wrong-digest is set) and the two health URLs (up while the unit
@@ -114,9 +124,10 @@ build_origin() {
   sed "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
     "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
   cp "$REAL_REPO"/scripts/linux/units/*.service "$o/scripts/linux/units/"
-  # The real helper: provision.sh runs it from the checkout, under the
+  # The real helpers: provision.sh runs them from the checkout, under the
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
+  cp "$REAL_REPO/scripts/linux/gpu-runtime.sh" "$o/scripts/linux/gpu-runtime.sh"
   cat >"$o/scripts/linux/install-update-unit.sh" <<'SH'
 #!/usr/bin/env bash
 echo "install-update-unit $*" >>"$SHIM_STATE/calls.log"
@@ -196,11 +207,30 @@ write_shims() {
 
   # Also notes what its descriptors point at: a child of the script must
   # not hold the run lock.
+  # install -s (a simulation) prints apt's "Inst <pkg> (<ver> ...)" lines
+  # for what it was asked, plus the lines in apt-simulate-extra (a driver
+  # that would come along), and installs nothing.
   cat >"$bin/apt-get" <<'SH'
 #!/usr/bin/env bash
 echo "apt-get $*" >>"$SHIM_STATE/calls.log"
 for f in /proc/$$/fd/*; do readlink "$f" 2>/dev/null; done >>"$SHIM_STATE/apt-fds"
 [ ! -f "$SHIM_STATE/apt-fail" ] || { echo "E: fixture failure" >&2; exit 100; }
+for a in "$@"; do
+  case $a in
+    -s|--simulate|--dry-run|--just-print)
+      echo "NOTE: This is only a simulation!"
+      install=0
+      for b in "$@"; do
+        case $b in
+          install) install=1 ;;
+          -*) ;;
+          *) if [ "$install" = 1 ]; then p=${b%%=*}; v=1; [[ $b == *=* ]] && v=${b#*=}; echo "Inst $p ($v fixture [amd64])"; fi ;;
+        esac
+      done
+      [ ! -f "$SHIM_STATE/apt-simulate-extra" ] || cat "$SHIM_STATE/apt-simulate-extra"
+      exit 0 ;;
+  esac
+done
 install=0
 for a in "$@"; do
   case $a in
@@ -299,6 +329,9 @@ case $url in
   https://download.docker.com/linux/ubuntu/gpg)
     printf 'KEY %s\n' "$(cat "$SHIM_STATE/docker-fpr")" >"$out"
     [ ! -f "$SHIM_STATE/docker-extra-key" ] || printf 'KEY %s\n' "$(cat "$SHIM_STATE/docker-extra-key")" >>"$out" ;;
+  https://nvidia.github.io/libnvidia-container/gpgkey)
+    printf 'KEY %s\n' "$(cat "$SHIM_STATE/nvidia-fpr")" >"$out"
+    [ ! -f "$SHIM_STATE/nvidia-extra-key" ] || printf 'KEY %s\n' "$(cat "$SHIM_STATE/nvidia-extra-key")" >>"$out" ;;
   https://github.com/ollama/ollama/releases/download/v*/ollama-linux-amd64.tar.zst)
     src=$SHIM_WORK/ollama.tar.zst
     [ ! -f "$SHIM_STATE/ollama-tampered" ] || src=$SHIM_WORK/ollama-tampered.tar.zst
@@ -348,20 +381,39 @@ for a in "$@"; do
 done
 cmd=${args[0]-}
 units=("${args[@]:1}")
+# dockerd reads /etc/docker/daemon.json when it starts (docker-loaded keeps
+# what it read; the docker shim's `info` lists the runtimes from it). With
+# docker-rejects-nvidia, a daemon.json naming the nvidia runtime keeps it
+# from starting.
+docker_starts() {
+  local cfg=$SHIM_ROOT/etc/docker/daemon.json
+  if [ -f "$SHIM_STATE/docker-rejects-nvidia" ] && grep -q '"nvidia"' "$cfg" 2>/dev/null; then return 1; fi
+  if [ -f "$cfg" ]; then cp "$cfg" "$SHIM_STATE/docker-loaded"; else : >"$SHIM_STATE/docker-loaded"; fi
+}
 case $cmd in
   is-active)
     if [ -f "$SHIM_STATE/active/${units[0]}" ]; then [ "$quiet" = 1 ] || echo active; exit 0; fi
+    if [ -f "$SHIM_STATE/failed/${units[0]}" ]; then [ "$quiet" = 1 ] || echo failed; exit 3; fi
     [ "$quiet" = 1 ] || echo inactive; exit 3 ;;
   is-enabled)
     if [ -f "$SHIM_STATE/enabled/${units[0]}" ]; then echo enabled; exit 0; fi
     echo disabled; exit 1 ;;
-  enable) for u in "${units[@]}"; do touch "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || touch "$SHIM_STATE/active/$u"; done ;;
+  enable)
+    for u in "${units[@]}"; do
+      touch "$SHIM_STATE/enabled/$u"
+      [ "$now" = 0 ] || touch "$SHIM_STATE/active/$u"
+      if [ "$now" = 1 ] && [ "$u" = docker.service ]; then docker_starts || true; fi
+    done ;;
   disable) for u in "${units[@]}"; do rm -f "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || rm -f "$SHIM_STATE/active/$u"; done ;;
   start|restart)
     # start-fail: every start fails; with unit names in it, only theirs.
     for u in "${units[@]}"; do
       if [ -f "$SHIM_STATE/start-fail" ] && { [ ! -s "$SHIM_STATE/start-fail" ] || grep -qx -- "$u" "$SHIM_STATE/start-fail"; }; then
         echo "Job for $u failed because the control process exited with error code." >&2; touch "$SHIM_STATE/failed/$u"; exit 1
+      fi
+      if [ "$u" = docker.service ] && ! docker_starts; then
+        echo "Job for docker.service failed because the control process exited with error code." >&2
+        rm -f "$SHIM_STATE/active/$u"; touch "$SHIM_STATE/failed/$u"; exit 1
       fi
       touch "$SHIM_STATE/active/$u"; rm -f "$SHIM_STATE/failed/$u"
     done ;;
@@ -400,7 +452,14 @@ mkdir -p "$SHIM_STATE/images"
 refs="postgres:16.15-trixie@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
 flyway/flyway:10.22.0@sha256:43592cc125eb0594d9b013e8dced2fa67d473c091abaa5dec03b22f49e682949"
 case "$1 ${2-}" in
-  "info "*) exit 0 ;;
+  "info "*)
+    # The daemon answers while docker.service runs; its runtimes are what
+    # it read from daemon.json at its last start (the systemctl shim).
+    [ -f "$SHIM_STATE/active/docker.service" ] || { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2; exit 1; }
+    case " $* " in
+      *Runtimes*) printf 'io.containerd.runc.v2 '; grep -q '"nvidia"' "$SHIM_STATE/docker-loaded" 2>/dev/null && printf 'nvidia '; echo 'runc ' ;;
+    esac
+    exit 0 ;;
   "version "*) echo 29.8.1 ;;
   "image inspect") [ -f "$SHIM_STATE/images/${3//[:\/@]/_}" ] || exit 1 ;;
   "build "*)
@@ -587,6 +646,41 @@ mkdir -p "$dest/bin" "$dest/lib/ollama"
 printf '#!/bin/sh\nexit 0\n' >"$dest/bin/ollama"; chmod +x "$dest/bin/ollama"
 SH
 
+  # The NVIDIA driver's nvidia-smi: the GPUs in nvidia-smi-gpus, else the
+  # driver's own failure. Always on PATH here, so the host's own (Git for
+  # Windows sees Windows' nvidia-smi.exe) never answers for a case.
+  cat >"$bin/nvidia-smi" <<'SH'
+#!/usr/bin/env bash
+echo "nvidia-smi $*" >>"$SHIM_STATE/calls.log"
+if [ -f "$SHIM_STATE/nvidia-smi-gpus" ]; then cat "$SHIM_STATE/nvidia-smi-gpus"; exit 0; fi
+echo "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. Make sure that the latest NVIDIA driver is installed and running."
+exit 9
+SH
+
+  # nvidia-ctk runtime configure --runtime=docker [--config=FILE]: the
+  # nvidia runtime into Docker's daemon.json (the harness root's when no
+  # --config is given), keeping what the file held; a file that names it
+  # already is left as it is.
+  cat >"$bin/nvidia-ctk" <<'SH'
+#!/usr/bin/env bash
+echo "nvidia-ctk $*" >>"$SHIM_STATE/calls.log"
+[ ! -f "$SHIM_STATE/nvidia-ctk-fail" ] || { echo "nvidia-ctk: fixture failure" >&2; exit 1; }
+cfg=$SHIM_ROOT/etc/docker/daemon.json
+for a in "$@"; do case $a in --config=*) cfg=${a#--config=} ;; esac; done
+mkdir -p "$(dirname "$cfg")"
+echo "INFO[0000] Loading config from $cfg"
+if [ -f "$cfg" ] && grep -q '"nvidia"' "$cfg"; then echo "INFO[0000] Wrote updated config to $cfg"; exit 0; fi
+orig=""
+[ ! -f "$cfg" ] || orig=$(tr -d '\n' <"$cfg")
+{
+  printf '{\n    "runtimes": {\n        "nvidia": {\n            "args": [],\n            "path": "nvidia-container-runtime"\n        }\n    }'
+  [ -z "$orig" ] || printf ',\n    "fixture-kept": %s' "$orig"
+  printf '\n}\n'
+} >"$cfg"
+echo "INFO[0000] Wrote updated config to $cfg"
+echo "INFO[0000] It is recommended that docker daemon be restarted."
+SH
+
   cat >"$bin/python3" <<'SH'
 #!/usr/bin/env bash
 echo "python3 $*" >>"$SHIM_STATE/calls.log"
@@ -736,6 +830,7 @@ new_case() {
   write_shims "$CASE/bin"
   : >"$STATE/calls.log"; : >"$STATE/dpkg"; : >"$STATE/ollama-models"; : >"$STATE/users"; : >"$STATE/mounts"
   echo 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 >"$STATE/docker-fpr"
+  echo C95B321B61E88C1809C4F759DDCAE044F796ECB0 >"$STATE/nvidia-fpr"
   printf '%s' "$WHISPER_CONTENT" >"$STATE/whisper-content"
   printf '%s' "$PIPER_CONTENT" >"$STATE/piper-content"
   sha_of_text "$PIPER_CONTENT" >"$STATE/piper-pin"
@@ -761,6 +856,18 @@ run_prov() {
 # No --timezone: on WSL the zone follows Windows (owner decision
 # 2026-10-11), and the option is ignored there with a warning.
 wsl_args=(--internet always)
+
+# gpu_wsl: Windows hands this distro an NVIDIA GPU (/dev/dxg and the
+# driver's libcuda.so.1, as on the dev box's RTX cards).
+gpu_wsl() {
+  mkdir -p "$ROOT/dev" "$ROOT/usr/lib/wsl/lib"
+  : >"$ROOT/dev/dxg"
+  : >"$ROOT/usr/lib/wsl/lib/libcuda.so.1"
+}
+# gpu_bare NAME: the NVIDIA driver's nvidia-smi lists one GPU.
+gpu_bare() { printf 'GPU 0: %s (UUID: GPU-5e1a0c1e-1111-4111-9111-111111111111)\n' "$1" >"$STATE/nvidia-smi-gpus"; }
+# The four packages at the manifest's pins, as apt is asked for them.
+NVIDIA_PKGS="nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1 libnvidia-container-tools=1.20.1-1 libnvidia-container1=1.20.1-1"
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
@@ -790,7 +897,7 @@ final_field() { grep '"final":true' "$CASE/progress.jsonl" | tail -n 1 | sed -n 
 progress_ok() {
   [ -s "$CASE/progress.jsonl" ] || { echo "      no progress lines"; return 1; }
   if [ -z "$JSON_PY" ]; then
-    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":21,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
+    grep -qv '^{"v":1,"step":"[a-z-]*","index":[0-9]*,"total":22,"state":"[a-z]*","percent":[0-9]*,"message":"' "$CASE/progress.jsonl" \
       && { echo "      a progress line does not match the protocol"; return 1; }
     return 0
   fi
@@ -803,7 +910,7 @@ for n, l in enumerate(lines, 1):
     o = json.loads(l)
     for k in ("v", "step", "index", "total", "state", "percent", "message"):
         assert k in o, "line %d lacks %s: %s" % (n, k, l)
-    assert o["v"] == 1 and o["total"] == 21, l
+    assert o["v"] == 1 and o["total"] == 22, l
     assert o["state"] in ("start", "progress", "done", "skip", "fail", "plan"), l
     assert 0 <= o["percent"] <= 100, l
     if o["state"] != "fail" and not o.get("final"):
@@ -919,7 +1026,9 @@ case_dry_run_changes_nothing() {
   check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
   check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M ea422f1e73652a95479954d8572d3c8c6022f628ce2d38a1a04aae1b7f2d5300"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
-  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 19
+  check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 20
+  check "the GPU step: a skip, asked of the helper beside the script" \
+    grep -q '"step":"gpu-runtime".*"state":"plan".*"message":"skip: no NVIDIA GPU visible (WSL: no /dev/dxg' "$CASE/progress.jsonl"
   check "the preflight runs for real" eq "$(state_of preflight)" done
   check "result dry_run" eq "$(final_field result)" '"dry_run"'
   check "progress format" progress_ok
@@ -998,6 +1107,14 @@ case_full_run_wsl() {
   check "compose plugin at the pin" called "docker-compose-plugin=5.5.1-1~ubuntu.26.04~resolute"
   check "not held (apt upgrade moves them, as on the Beelink)" not_called "apt-mark"
   check "user in the docker group" called "usermod -aG docker domovoi"
+  # No NVIDIA GPU in this distro: the GPU step is skipped, and nothing of
+  # NVIDIA's is fetched, installed or configured.
+  check "gpu-runtime skipped: no GPU" eq "$(state_of gpu-runtime)" skip
+  check "says why" said "[gpu-runtime] skipped: no NVIDIA GPU visible (WSL: no /dev/dxg"
+  check "no NVIDIA key fetched" not_called "nvidia.github.io"
+  check "no toolkit" not_called "nvidia-container-toolkit"
+  check "Docker not configured for it" not_called "nvidia-ctk"
+  check "Docker not restarted" not_called "systemctl restart docker"
   # venv: the three LINUX_HOST.md installs, in order
   check "build tools from the lock" called "-m pip --disable-pip-version-check --no-input install --require-hashes -r $ROOT/var/cache/domovoi-provision/build-tools."
   check "not the -c form pip 25.1 refuses" not_called "-c requirements-linux-py314.lock setuptools wheel"
@@ -2132,6 +2249,316 @@ case_vision_model_respects_the_household() {
   end_case
 }
 
+# ─── Docker's GPU runtime (wake-word training on the GPU, 2026-10-13) ────
+#
+# The spike's t7 distro: without the NVIDIA Container Toolkit, `docker run
+# --gpus all` fails and training falls back to the CPU. scripts/linux/
+# gpu-runtime.sh (which the update unit runs too) adds it where an NVIDIA
+# GPU is visible, and nowhere else.
+
+# A WSL distro that sees an NVIDIA GPU: NVIDIA's key checked like Docker's,
+# the deb822 flat-repository source, the four packages at the pins without
+# recommends after a simulation, the nvidia runtime in daemon.json, one
+# Docker restart. The next run skips the step and restarts nothing.
+case_gpu_runtime_on_wsl() {
+  new_case gpu_runtime_on_wsl
+  gpu_wsl
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "gpu-runtime done" eq "$(state_of gpu-runtime)" done
+  check "marker" marker gpu-runtime
+  check "after the docker step" before "usermod -aG docker domovoi" "curl https://nvidia.github.io/libnvidia-container/gpgkey"
+  check "before the venv" before "nvidia-ctk runtime configure" "python3 -m venv"
+  check "the key read through a throwaway keyring" called "--quiet --import $CASE/tmp/tmp."
+  check "the file NVIDIA serves" called "/nvidia-download.asc"
+  check "NVIDIA's key alone in the keyring" eq "$(grep -c '^KEY ' "$ROOT/etc/apt/keyrings/nvidia-container-toolkit.asc")" 1
+  check "the pinned key" has_line "$ROOT/etc/apt/keyrings/nvidia-container-toolkit.asc" "KEY C95B321B61E88C1809C4F759DDCAE044F796ECB0"
+  check "the deb822 source of a flat repository" eq "$(cat "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources")" \
+    "$(printf 'Types: deb\nURIs: https://nvidia.github.io/libnvidia-container/stable/deb/amd64\nSuites: /\nArchitectures: amd64\nSigned-By: /etc/apt/keyrings/nvidia-container-toolkit.asc')"
+  check "the key checked before apt reads the source" before "/nvidia-download.asc" "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -q update"
+  check "apt simulated the install first" before "install -s --no-install-recommends $NVIDIA_PKGS" "install -y --no-install-recommends $NVIDIA_PKGS"
+  check "the four packages at the pins, no recommends" called "-q install -y --no-install-recommends $NVIDIA_PKGS"
+  check "installed" grep -qx "libnvidia-container1=1.20.1-1" "$STATE/dpkg"
+  check "not held" not_called "apt-mark"
+  check "no driver" not_called "nvidia-driver"
+  check "Docker configured" called "nvidia-ctk runtime configure --runtime=docker --config=$ROOT/etc/docker/daemon.json"
+  check "daemon.json has the nvidia runtime" grep -q '"nvidia"' "$ROOT/etc/docker/daemon.json"
+  check "Docker restarted after it" before "nvidia-ctk runtime configure" "systemctl restart docker.service"
+  check "once" eq "$(grep -c 'systemctl restart docker.service' "$STATE/calls.log")" 1
+  check "and the daemon loaded the runtime" grep -q '"nvidia"' "$STATE/docker-loaded"
+  check "the step says what it did" grep -q '"step":"gpu-runtime".*"state":"done".*"message":"NVIDIA Container Toolkit 1.20.1-1 installed, Docker configured and restarted' "$CASE/progress.jsonl"
+  local sig; sig=$(tree_sig)
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run exit 0" eq "$RC" 0
+  check "second run: gpu-runtime skipped" eq "$(state_of gpu-runtime)" skip
+  check "second run: no download" not_called "curl https://"
+  check "second run: no apt" not_called "apt-get"
+  check "second run: Docker not configured again" not_called "nvidia-ctk"
+  check "second run: nothing restarted" not_called "systemctl restart"
+  check "second run: every file as it was" eq "$(tree_sig)" "$sig"
+  end_case
+}
+
+# /dev/dxg alone is any GPU Windows hands through (AMD, Intel): without the
+# NVIDIA driver's libcuda.so.1 there is nothing for the toolkit to do.
+case_gpu_runtime_needs_nvidias_libcuda_on_wsl() {
+  new_case gpu_runtime_needs_nvidias_libcuda_on_wsl
+  mkdir -p "$ROOT/dev"; : >"$ROOT/dev/dxg"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "gpu-runtime skipped" eq "$(state_of gpu-runtime)" skip
+  check "says why" said "no /usr/lib/wsl/lib/libcuda.so.1"
+  check "no NVIDIA key fetched" not_called "nvidia.github.io"
+  check "no toolkit" not_called "nvidia-container-toolkit"
+  check "Docker not configured for it" not_called "nvidia-ctk"
+  check "no daemon.json" absent "$ROOT/etc/docker/daemon.json"
+  check "WSL asks no nvidia-smi" not_called "nvidia-smi"
+  check "no marker" no_marker gpu-runtime
+  end_case
+}
+
+# Bare metal without the NVIDIA driver (the Beelink): nothing.
+case_gpu_runtime_skipped_on_bare_metal_without_a_driver() {
+  new_case gpu_runtime_skipped_on_bare_metal_without_a_driver --bare
+  run_prov --internet sometimes --skip-models
+  check "exit 0" eq "$RC" 0
+  check "gpu-runtime skipped" eq "$(state_of gpu-runtime)" skip
+  check "asked the driver" called "nvidia-smi -L"
+  check "says why" said "[gpu-runtime] skipped: no NVIDIA GPU visible (nvidia-smi -L failed: NVIDIA-SMI has failed"
+  check "no NVIDIA key fetched" not_called "nvidia.github.io"
+  check "no toolkit" not_called "nvidia-container-toolkit"
+  check "Docker not configured for it" not_called "nvidia-ctk"
+  check "Docker not restarted" not_called "systemctl restart docker"
+  end_case
+}
+
+# DOMOVOI_MANAGE_GPU_RUNTIME=0 in /etc/default/domovoi-update leaves
+# Docker's GPU runtime to the administrator, here as in the update unit.
+case_gpu_runtime_opt_out_is_honoured() {
+  new_case gpu_runtime_opt_out_is_honoured
+  gpu_wsl
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_GPU_RUNTIME=off\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "gpu-runtime skipped" eq "$(state_of gpu-runtime)" skip
+  check "says why" said "DOMOVOI_MANAGE_GPU_RUNTIME=off in /etc/default/domovoi-update: Docker's GPU runtime is left to the administrator"
+  check "no NVIDIA key fetched" not_called "nvidia.github.io"
+  check "Docker not configured for it" not_called "nvidia-ctk"
+  end_case
+}
+
+# Bare metal whose NVIDIA driver lists a GPU: the same install as on WSL.
+case_gpu_runtime_on_bare_metal() {
+  new_case gpu_runtime_on_bare_metal --bare
+  gpu_bare "NVIDIA GeForce RTX 3060"
+  run_prov --internet sometimes --skip-models
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "gpu-runtime done" eq "$(state_of gpu-runtime)" done
+  check "says which GPU" said "NVIDIA GPU visible (nvidia-smi: NVIDIA GeForce RTX 3060)"
+  check "the four packages at the pins, no recommends" called "-q install -y --no-install-recommends $NVIDIA_PKGS"
+  check "Docker configured" called "nvidia-ctk runtime configure --runtime=docker"
+  check "Docker restarted" called "systemctl restart docker.service"
+  check "no driver" not_called "nvidia-driver"
+  end_case
+}
+
+# Like Docker's (review finding 3): a key file with a second primary key
+# is refused, and so is a key with another fingerprint. Nothing installed.
+case_gpu_runtime_key_file_with_a_second_key_stops() {
+  new_case gpu_runtime_key_file_with_a_second_key_stops
+  gpu_wsl
+  echo 0123456789ABCDEF0123456789ABCDEF01234567 >"$STATE/nvidia-extra-key"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "progress format" progress_ok
+  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "final names the step" eq "$(final_field failed_step)" '"gpu-runtime"'
+  check "says why" said "holds 2 primary keys"
+  check "key not installed" absent "$ROOT/etc/apt/keyrings/nvidia-container-toolkit.asc"
+  check "no source" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
+  check "no toolkit" not_called "install -y --no-install-recommends nvidia"
+  check "Docker left alone" not_called "nvidia-ctk"
+  check "no marker" no_marker gpu-runtime
+  end_case
+}
+
+case_gpu_runtime_key_mismatch_stops() {
+  new_case gpu_runtime_key_mismatch_stops
+  gpu_wsl
+  echo 0000000000000000000000000000000000000000 >"$STATE/nvidia-fpr"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "says the fingerprint" said "the manifest pins C95B321B61E88C1809C4F759DDCAE044F796ECB0"
+  check "in the final line" grep -q 'the manifest pins C95B321B61E88C1809C4F759DDCAE044F796ECB0","final":true' "$CASE/progress.jsonl"
+  check "key not installed" absent "$ROOT/etc/apt/keyrings/nvidia-container-toolkit.asc"
+  check "no toolkit" not_called "install -y --no-install-recommends nvidia"
+  end_case
+}
+
+# Never a Linux NVIDIA driver inside WSL: an install that would bring one
+# (or its kernel modules, or its compute libraries) is refused after apt's
+# simulation, nothing installed.
+case_gpu_runtime_refuses_a_driver_on_wsl() {
+  new_case gpu_runtime_refuses_a_driver_on_wsl
+  gpu_wsl
+  printf '%s\n' "Inst nvidia-driver-580 (580.95.05-0ubuntu1 Ubuntu:26.04/resolute [amd64])" \
+    "Inst libnvidia-compute-580 (580.95.05-0ubuntu1 Ubuntu:26.04/resolute [amd64])" >"$STATE/apt-simulate-extra"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "simulated" called "install -s --no-install-recommends $NVIDIA_PKGS"
+  check "says what it refused" said "refused: installing the NVIDIA Container Toolkit would also install nvidia-driver-580 libnvidia-compute-580"
+  check "and whose driver it is" said "the driver is Windows' on WSL"
+  check "nothing installed" not_called "install -y --no-install-recommends nvidia"
+  check "no NVIDIA package" eq "$(grep -c nvidia "$STATE/dpkg")" 0
+  check "Docker left alone" not_called "nvidia-ctk"
+  check "not restarted" not_called "systemctl restart docker"
+  end_case
+}
+
+case_gpu_runtime_dry_run_plans_it() {
+  new_case gpu_runtime_dry_run_plans_it
+  gpu_wsl
+  local sig; sig=$(tree_sig)
+  run_prov --dry-run "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "every file as it was" eq "$(tree_sig)" "$sig"
+  check "planned to run" grep -q '"step":"gpu-runtime".*"state":"plan".*"would":"run"' "$CASE/progress.jsonl"
+  check "plans the key check" said "exactly one primary key, fingerprint C95B321B61E88C1809C4F759DDCAE044F796ECB0"
+  check "plans the pinned packages" said "nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1"
+  check "no download" not_called "nvidia.github.io"
+  check "no apt" not_called "apt-get"
+  check "Docker left alone" not_called "nvidia-ctk"
+  end_case
+}
+
+# Docker that will not start with the nvidia runtime configured gets its
+# daemon.json back as it was and is started again: never left down by this
+# step. A later run, once Docker takes it, configures and restarts it.
+case_gpu_runtime_puts_daemon_json_back_when_docker_will_not_start() {
+  new_case gpu_runtime_puts_daemon_json_back_when_docker_will_not_start
+  gpu_wsl
+  mkdir -p "$ROOT/etc/docker"
+  printf '{"log-driver": "local"}\n' >"$ROOT/etc/docker/daemon.json"
+  touch "$STATE/docker-rejects-nvidia"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "progress format" progress_ok
+  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "says so" said "Docker did not start with the nvidia runtime configured; /etc/docker/daemon.json is back as it was and Docker runs again"
+  check "daemon.json as it was" eq "$(cat "$ROOT/etc/docker/daemon.json")" '{"log-driver": "local"}'
+  check "its failed mark cleared" called "systemctl reset-failed docker.service docker.socket"
+  check "restarted again with it" eq "$(grep -c 'systemctl restart docker.service' "$STATE/calls.log")" 2
+  check "Docker runs" test -f "$STATE/active/docker.service"
+  check "on the file as it was" eq "$(cat "$STATE/docker-loaded")" '{"log-driver": "local"}'
+  check "no marker" no_marker gpu-runtime
+  rm -f "$STATE/docker-rejects-nvidia"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "next run exit 0" eq "$RC" 0
+  check "next run: gpu-runtime done" eq "$(state_of gpu-runtime)" done
+  check "next run: the toolkit stays installed" not_called "install -y --no-install-recommends nvidia"
+  check "next run: the household's setting kept" grep -q '"fixture-kept": {"log-driver": "local"}' "$ROOT/etc/docker/daemon.json"
+  check "next run: the file before it kept" eq "$(cat "$ROOT/var/lib/domovoi-gpu-runtime/daemon.json.before")" '{"log-driver": "local"}'
+  check "next run: Docker restarted once" eq "$(grep -c 'systemctl restart docker.service' "$STATE/calls.log")" 1
+  check "next run: the runtime loaded" grep -q '"nvidia"' "$STATE/docker-loaded"
+  end_case
+}
+
+# The helper's own interface, as the update unit and an administrator call
+# it: --detect, --check, --internet never, --dry-run, --no-restart,
+# --restart-flag, idempotence and usage errors.
+run_gpu() {
+  RC=0
+  : >"$STATE/calls.log"
+  env PATH="$CASE/bin:$PATH" DOMOVOI_PROVISION_ROOT="$ROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 TMPDIR="$CASE/tmp" \
+    bash "$REAL_REPO/scripts/linux/gpu-runtime.sh" "$@" >"$CASE/output.log" 2>&1 || RC=$?
+  LAST=$(tail -n 1 "$CASE/output.log")
+}
+case_gpu_runtime_helper_interface() {
+  new_case gpu_runtime_helper_interface
+  mkdir -p "$STATE/active"; touch "$STATE/active/docker.service"; : >"$STATE/docker-loaded"
+  run_gpu --detect
+  check "no GPU: --detect 1" eq "$RC" 1
+  check "no GPU: says why" eq "$LAST" "gpu-runtime: no NVIDIA GPU visible (WSL: no /dev/dxg, so Windows hands this distro no GPU)"
+  run_gpu --check
+  check "no GPU: --check 0" eq "$RC" 0
+  run_gpu
+  check "no GPU: a run, 0" eq "$RC" 0
+  check "no GPU: nothing to do" eq "$LAST" "gpu-runtime: no NVIDIA GPU visible (WSL: no /dev/dxg, so Windows hands this distro no GPU); nothing to do"
+  gpu_wsl
+  run_gpu --detect
+  check "GPU: --detect 0" eq "$RC" 0
+  check "GPU: says so" eq "$LAST" "gpu-runtime: NVIDIA GPU visible (WSL: /dev/dxg and /usr/lib/wsl/lib/libcuda.so.1, Windows' NVIDIA driver)"
+  run_gpu --check
+  check "not set up: --check 1" eq "$RC" 1
+  check "not set up: what is to do" eq "$LAST" "gpu-runtime: not in place: install $NVIDIA_PKGS; put the nvidia runtime in /etc/docker/daemon.json; restart Docker to load the nvidia runtime (WSL: yes; internet: unanswered)"
+  run_gpu --internet never
+  check "never: 0" eq "$RC" 0
+  check "never: not installed, and why" eq "${LAST%% (*}" "gpu-runtime: not installed: the NVIDIA Container Toolkit is a download and internet access is turned off, so nothing changed"
+  check "never: no download" not_called "curl"
+  check "never: no apt" not_called "apt-get"
+  run_gpu --dry-run
+  check "dry run: 0" eq "$RC" 0
+  check "dry run: says so" eq "${LAST%% (*}" "gpu-runtime: dry run, nothing changed"
+  check "dry run: plans the install" said "would apt-get install --no-install-recommends $NVIDIA_PKGS"
+  check "dry run: nothing written" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
+  check "dry run: no apt" not_called "apt-get"
+  # NVIDIA's own one-line install (another key file): a second source for
+  # the same repository would stop apt, so the install is refused.
+  mkdir -p "$ROOT/etc/apt/sources.list.d"
+  printf 'deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /\n' \
+    >"$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.list"
+  run_gpu --internet sometimes
+  check "another source for it: 1" eq "$RC" 1
+  check "another source for it: refused, naming it" eq "${LAST%%, not by Domovoi*}" \
+    "gpu-runtime: refused: NVIDIA's apt repository is already set up in /etc/apt/sources.list.d/nvidia-container-toolkit.list"
+  check "another source for it: nothing written" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
+  check "another source for it: no download" not_called "curl"
+  check "another source for it: no apt" not_called "apt-get"
+  rm -f "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.list"
+  run_gpu --internet sometimes --no-restart
+  check "--no-restart: 0" eq "$RC" 0
+  check "--no-restart: says a restart is needed" eq "$LAST" "gpu-runtime: NVIDIA Container Toolkit 1.20.1-1 installed, Docker configured; Docker not restarted (--no-restart): restart it to load the nvidia runtime (WSL: yes; internet: sometimes)"
+  check "--no-restart: not restarted" not_called "systemctl restart"
+  run_gpu --check
+  check "not loaded yet: --check 1" eq "$RC" 1
+  check "not loaded yet: what is to do" eq "$LAST" "gpu-runtime: not in place: restart Docker to load the nvidia runtime (WSL: yes; internet: unanswered)"
+  run_gpu --internet never --restart-flag "$CASE/restarted"
+  check "the restart, under never too: 0" eq "$RC" 0
+  check "the restart: says so" eq "$LAST" "gpu-runtime: Docker restarted to load the nvidia runtime (WSL: yes; internet: never)"
+  check "the restart: the flag" test -f "$CASE/restarted"
+  check "the restart: no download" not_called "curl"
+  check "the restart: no apt" not_called "apt-get"
+  run_gpu --check
+  check "set up: --check 0" eq "$RC" 0
+  run_gpu --restart-flag "$CASE/again"
+  check "set up: 0" eq "$RC" 0
+  check "set up: already in place" eq "$LAST" "gpu-runtime: already in place (NVIDIA Container Toolkit 1.20.1-1; Docker has the nvidia runtime; WSL: yes; internet: unanswered)"
+  check "set up: no flag" absent "$CASE/again"
+  check "set up: no download" not_called "curl"
+  check "set up: no apt" not_called "apt-get"
+  check "set up: Docker left alone" not_called "nvidia-ctk"
+  check "set up: nothing restarted" not_called "systemctl restart"
+  run_gpu --internet maybe
+  check "bad --internet: 2" eq "$RC" 2
+  run_gpu --wsl perhaps
+  check "bad --wsl: 2" eq "$RC" 2
+  run_gpu --detect --check
+  check "two modes: 2" eq "$RC" 2
+  run_gpu --bogus
+  check "unknown option: 2" eq "$RC" 2
+  run_gpu --help
+  check "--help: 0" eq "$RC" 0
+  check "--help: the options" said "--restart-flag FILE"
+  end_case
+}
+
 CASES=(
   case_help_and_usage_errors
   case_import_check_names_no_dropped_package
@@ -2190,6 +2617,17 @@ CASES=(
   case_os_jobs_never_leaves_the_box_degraded
   case_vision_model_pull_is_optional
   case_vision_model_respects_the_household
+  case_gpu_runtime_on_wsl
+  case_gpu_runtime_needs_nvidias_libcuda_on_wsl
+  case_gpu_runtime_skipped_on_bare_metal_without_a_driver
+  case_gpu_runtime_opt_out_is_honoured
+  case_gpu_runtime_on_bare_metal
+  case_gpu_runtime_key_file_with_a_second_key_stops
+  case_gpu_runtime_key_mismatch_stops
+  case_gpu_runtime_refuses_a_driver_on_wsl
+  case_gpu_runtime_dry_run_plans_it
+  case_gpu_runtime_puts_daemon_json_back_when_docker_will_not_start
+  case_gpu_runtime_helper_interface
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

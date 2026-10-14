@@ -31,6 +31,17 @@
 #                when it is not installed yet (not held: apt upgrade moves
 #                it later, as on the Beelink); the service user in the
 #                docker group
+#   gpu-runtime  only where an NVIDIA GPU is visible (WSL: /dev/dxg and
+#                /usr/lib/wsl/lib/libcuda.so.1; bare metal: the driver's
+#                nvidia-smi lists one): scripts/linux/gpu-runtime.sh adds
+#                NVIDIA's apt repository (its key checked like Docker's), the
+#                NVIDIA Container Toolkit at the manifest's versions (not
+#                held) and the nvidia runtime in Docker's daemon.json, then
+#                restarts Docker, so containers (the wake-word trainer) can
+#                use the GPU. Never a driver. The update unit runs the same
+#                helper, so a box installed before it gets it at its next
+#                update. DOMOVOI_MANAGE_GPU_RUNTIME=0 in
+#                /etc/default/domovoi-update skips it
 #   venv         the venv and the three hash-checked installs from
 #                requirements-linux-py314.lock (LINUX_HOST.md "Install")
 #   env          domovoi/.env: python -m domovoi.env_bootstrap [--internet],
@@ -93,7 +104,7 @@
 #
 # Machine-readable progress for the Windows installer's UI: every line on
 # stdout that starts with "@@DOMOVOI " is one JSON object:
-#   {"v":1,"step":"venv","index":8,"total":20,"state":"start","percent":24,
+#   {"v":1,"step":"venv","index":9,"total":22,"state":"start","percent":25,
 #    "message":"Installing Python packages"}
 # state is start, progress, done, skip or fail (plan in a dry run); the
 # percent never goes down; progress lines of a download add "bytes" and
@@ -121,12 +132,13 @@
 # Pins. Whatever the repository pins is read from the checkout at the commit
 # being installed, never copied: the lock, the compose images, the MPD
 # image's base, PIPER_PINS, the Ollama release in docs/LINUX_HOST.md. The
-# few with no home in the repo (docker-ce versions and key, the Whisper
-# revision and model.bin SHA-256, the tier models and their digests) are in
+# few with no home in the repo (docker-ce versions and key, the NVIDIA
+# Container Toolkit's versions and key, the Whisper revision and model.bin
+# SHA-256, the tier models and their digests) are in
 # scripts/linux/provision-manifest.conf, read from the same checkout.
 # Checked against a pin, and a mismatch stops the run: every Python package
-# (the lock's hashes), the Ollama tarball (SHA-256), Docker's apt key
-# (fingerprint; apt then checks the docker-ce packages against the index
+# (the lock's hashes), the Ollama tarball (SHA-256), Docker's apt key and
+# NVIDIA's (fingerprints; apt then checks the packages against the index
 # that key signs), the compose images and the MPD image's base (digests),
 # each Ollama model (digest),
 # Whisper's model.bin and the Piper voice (SHA-256). Not hashed by this
@@ -169,10 +181,10 @@ json_str() {
   printf '"%s"' "$s"
 }
 
-STEP_IDS=(preflight apt user wsl-config media checkout docker venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit finish)
+STEP_IDS=(preflight apt user wsl-config media checkout docker gpu-runtime venv env ollama models whisper piper images searxng os-jobs units timezone start update-unit finish)
 declare -A STEP_WEIGHT=(
-  [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6
-  [venv]=15 [env]=1 [ollama]=8 [models]=29 [whisper]=4 [piper]=1 [images]=6
+  [preflight]=1 [apt]=6 [user]=1 [wsl-config]=1 [media]=1 [checkout]=3 [docker]=6 [gpu-runtime]=1
+  [venv]=15 [env]=1 [ollama]=8 [models]=28 [whisper]=4 [piper]=1 [images]=6
   [searxng]=4 [os-jobs]=1 [units]=1 [timezone]=1 [start]=6 [update-unit]=2 [finish]=2
 )
 declare -A STEP_TITLE=(
@@ -183,6 +195,7 @@ declare -A STEP_TITLE=(
   [media]="Connecting the media folders"
   [checkout]="Getting the Domovoi code"
   [docker]="Installing Docker Engine"
+  [gpu-runtime]="Setting up the GPU for containers"
   [venv]="Installing Python packages"
   [env]="Writing the settings file"
   [ollama]="Installing Ollama"
@@ -387,7 +400,7 @@ ENV_STAMP=$STATE_DIR/env-stamp
 ENV_CREATING=$STATE_DIR/env-creating
 # The settings domovoi-update.service reads (docs/LINUX_HOST.md, Updates
 # from the dashboard): this script writes DOMOVOI_USE_LOCK there and reads
-# DOMOVOI_MANAGE_OS_JOBS.
+# DOMOVOI_MANAGE_OS_JOBS and DOMOVOI_MANAGE_GPU_RUNTIME.
 UPDATE_DEFAULTS=$ROOT/etc/default/domovoi-update
 CACHE_DIR=$ROOT/var/cache/domovoi-provision
 PROC=$ROOT/proc
@@ -830,6 +843,8 @@ declare -A M=()
 
 MANIFEST_KEYS=(manifest_version docker_key_url docker_key_fpr docker_repo_url docker_suite
   docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin
+  nvidia_key_url nvidia_key_fpr nvidia_repo_url
+  nvidia_container_toolkit nvidia_container_toolkit_base libnvidia_container_tools libnvidia_container1
   whisper_model whisper_repo whisper_revision whisper_model_bin_sha256 whisper_model_bin_bytes
   tier_standard_min_mem_mib
   tier_floor_tool_model tier_floor_tool_digest tier_floor_qa_model tier_floor_qa_digest
@@ -857,11 +872,14 @@ load_manifest() {
     [ -n "${M[$k]+x}" ] || die "$file: $k is missing"
   done
   [ "${M[manifest_version]}" = 1 ] || die "$file: manifest_version ${M[manifest_version]} is not one this script reads (1)"
-  [[ ${M[docker_key_fpr]} =~ ^[0-9A-F]{40}$ ]] || die "$file: docker_key_fpr is not a 40-hex-digit fingerprint"
-  for k in docker_key_url docker_repo_url; do
+  for k in docker_key_fpr nvidia_key_fpr; do
+    [[ ${M[$k]} =~ ^[0-9A-F]{40}$ ]] || die "$file: $k is not a 40-hex-digit fingerprint"
+  done
+  for k in docker_key_url docker_repo_url nvidia_key_url nvidia_repo_url; do
     [[ ${M[$k]} =~ ^https://[A-Za-z0-9./_-]+$ ]] || die "$file: $k is not an https URL"
   done
-  for k in docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin; do
+  for k in docker_ce docker_ce_cli containerd_io docker_buildx_plugin docker_compose_plugin \
+      nvidia_container_toolkit nvidia_container_toolkit_base libnvidia_container_tools libnvidia_container1; do
     [[ ${M[$k]} =~ ^([0-9]+:)?[0-9][A-Za-z0-9.+~-]*$ ]] || die "$file: $k is not a Debian version"
   done
   [[ ${M[whisper_revision]} =~ ^[0-9a-f]{40}$ ]] || die "$file: whisper_revision is not a commit SHA"
@@ -932,8 +950,8 @@ RERUN_REASON=""
 
 # Steps that read the checkout, and those that read the pin manifest: a
 # dry run before the clone plans them without their inputs.
-after_clone() { case " docker venv env ollama models whisper piper images searxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
-needs_manifest() { case " docker env models whisper " in *" $1 "*) return 0 ;; esac; return 1; }
+after_clone() { case " docker gpu-runtime venv env ollama models whisper piper images searxng os-jobs units start update-unit " in *" $1 "*) return 0 ;; esac; return 1; }
+needs_manifest() { case " docker gpu-runtime env models whisper " in *" $1 "*) return 0 ;; esac; return 1; }
 
 plan_details() {
   local id=$1 fn=${1//-/_}
@@ -1524,6 +1542,83 @@ do_docker() {
   fi
   as_svc docker info >/dev/null || die "$SVC_USER cannot use docker"
   STEP_DONE_MSG="Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo installed)"
+}
+
+# ─── gpu-runtime ─────────────────────────────────────────────────────────
+
+# Docker's way to an NVIDIA GPU (the NVIDIA Container Toolkit), by the
+# helper the update unit runs too: scripts/linux/gpu-runtime.sh says when a
+# GPU counts as visible, what it installs (never a driver: on WSL it is
+# Windows', on bare metal the administrator's) and how it restarts Docker.
+# Skipped where none is visible, so a CPU-only box (the Beelink) gets
+# nothing. Run from the checkout, as os-jobs.sh is, with the manifest the
+# checkout pins.
+#
+# The internet answer is not passed: like every other step here (Docker,
+# the models, the images), the install downloads what the box needs, under
+# never too; never only governs what the box does by itself afterwards, and
+# the update unit passes it.
+#
+# A Docker restart stops every container for a moment and, through
+# Requires=docker.service, restarts domovoi-db (and with it a running
+# domovoi-core) when they run: on a first install nothing runs yet; on a
+# re-run the start step then waits for the core's health as usual.
+gpu_runtime_script() { printf '%s' "$CHECKOUT/scripts/linux/gpu-runtime.sh"; }
+# The helper to ask: the checkout's, or in a dry run before the clone the
+# copy beside this script.
+gpu_runtime_helper() {
+  if [ -f "$(gpu_runtime_script)" ]; then gpu_runtime_script
+  elif dry && [ -f "$SCRIPT_DIR/gpu-runtime.sh" ]; then printf '%s' "$SCRIPT_DIR/gpu-runtime.sh"
+  else return 1
+  fi
+}
+gpu_runtime() {
+  local h
+  h=$(gpu_runtime_helper) || return 1
+  bash "$h" --wsl "$([ "$WSL" = 1 ] && echo yes || echo no)" "$@"
+}
+skip_gpu_runtime() {
+  local v out
+  v=$(update_default DOMOVOI_MANAGE_GPU_RUNTIME)
+  case ${v,,} in
+    0|false|no|off) echo "DOMOVOI_MANAGE_GPU_RUNTIME=$v in /etc/default/domovoi-update: Docker's GPU runtime is left to the administrator"; return 0 ;;
+  esac
+  if ! gpu_runtime_helper >/dev/null; then
+    # A dry run before the clone with no copy beside this script: planned.
+    if dry; then return 1; fi
+    echo "this checkout has no scripts/linux/gpu-runtime.sh"
+    return 0
+  fi
+  if out=$(gpu_runtime --detect 2>&1); then return 1; fi
+  printf '%s\n' "$out" | sed -n 's/^gpu-runtime: //p' | tail -n 1
+}
+inputs_gpu_runtime() {
+  local k
+  for k in nvidia_key_url nvidia_key_fpr nvidia_repo_url nvidia_container_toolkit nvidia_container_toolkit_base \
+      libnvidia_container_tools libnvidia_container1; do
+    echo "$k=${M[$k]}"
+  done
+  echo "wsl=$WSL"
+  file_sig "$(gpu_runtime_script)"
+}
+check_gpu_runtime() { gpu_runtime --check --manifest "$MANIFEST_FILE" >/dev/null 2>&1; }
+plan_gpu_runtime() {
+  echo "NVIDIA's key: exactly one primary key, fingerprint ${M[nvidia_key_fpr]}, exported alone to /etc/apt/keyrings/nvidia-container-toolkit.asc"
+  echo "/etc/apt/sources.list.d/nvidia-container-toolkit.sources: ${M[nvidia_repo_url]} /"
+  echo "apt-get install --no-install-recommends nvidia-container-toolkit=${M[nvidia_container_toolkit]} nvidia-container-toolkit-base=${M[nvidia_container_toolkit_base]} libnvidia-container-tools=${M[libnvidia_container_tools]} libnvidia-container1=${M[libnvidia_container1]}   (when not installed yet; not held; refused if apt would bring a driver)"
+  echo "nvidia-ctk runtime configure --runtime=docker, then restart Docker when that changed /etc/docker/daemon.json"
+}
+do_gpu_runtime() {
+  local out=$TMP_DIR/gpu-runtime.out rc summary
+  [ -f "$(gpu_runtime_script)" ] || die "the checkout has no scripts/linux/gpu-runtime.sh"
+  # Its lines go to the log as they come; its summary (the last line) is
+  # this step's message, or the reason it stopped.
+  { rc=0; gpu_runtime --manifest "$MANIFEST_FILE" || rc=$?; echo "$rc" >"$out.rc"; } 2>&1 | tee "$out"
+  rc=$(cat "$out.rc" 2>/dev/null || echo 1)
+  summary=$(sed -n 's/^gpu-runtime: //p' "$out" | tail -n 1)
+  [ "$rc" = 0 ] || die "scripts/linux/gpu-runtime.sh: ${summary:-stopped (exit $rc)}"
+  summary=${summary:-Docker can use the GPU}
+  STEP_DONE_MSG=${summary^}
 }
 
 # ─── venv ────────────────────────────────────────────────────────────────

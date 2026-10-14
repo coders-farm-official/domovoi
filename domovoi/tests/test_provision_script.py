@@ -17,6 +17,7 @@ step, so neither side can drift alone.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import subprocess
@@ -32,19 +33,20 @@ SCRIPT = REPO_ROOT / "scripts" / "linux" / "provision.sh"
 MANIFEST = REPO_ROOT / "scripts" / "linux" / "provision-manifest.conf"
 HARNESS = REPO_ROOT / "scripts" / "linux" / "tests" / "test-provision.sh"
 OS_JOBS = REPO_ROOT / "scripts" / "linux" / "os-jobs.sh"
+GPU_RUNTIME = REPO_ROOT / "scripts" / "linux" / "gpu-runtime.sh"
 APPLY_UPDATE = REPO_ROOT / "scripts" / "linux" / "apply-update.sh"
 LINUX_HOST = REPO_ROOT / "docs" / "LINUX_HOST.md"
 
 
 def test_files_are_lf_only():
     """A CRLF in a bash script is a syntax error on the Linux host."""
-    for path in (SCRIPT, MANIFEST, HARNESS, OS_JOBS):
+    for path in (SCRIPT, MANIFEST, HARNESS, OS_JOBS, GPU_RUNTIME):
         assert b"\r\n" not in path.read_bytes(), f"{path.name} has CRLF line endings"
 
 
 @requires_bash
 def test_scripts_parse():
-    for path in (SCRIPT, HARNESS, OS_JOBS):
+    for path in (SCRIPT, HARNESS, OS_JOBS, GPU_RUNTIME):
         proc = subprocess.run([BASH, "-n", str(path)], capture_output=True, text=True)
         assert proc.returncode == 0, f"{path.name}: {proc.stderr}"
 
@@ -90,6 +92,7 @@ def test_manifest_pins_are_well_formed():
     m = _manifest()
     assert m["manifest_version"] == "1"
     assert re.fullmatch(r"[0-9A-F]{40}", m["docker_key_fpr"])
+    assert re.fullmatch(r"[0-9A-F]{40}", m["nvidia_key_fpr"])
     assert re.fullmatch(r"[0-9a-f]{40}", m["whisper_revision"])
     for key, value in m.items():
         if key.endswith("_digest") or key.endswith("_sha256"):
@@ -255,6 +258,51 @@ def test_both_scripts_run_the_same_helper():
     provision.sh's os-jobs step and the update unit both run os-jobs.sh."""
     assert "scripts/linux/os-jobs.sh" in SCRIPT.read_text(encoding="utf-8")
     assert "OS_JOBS=$SCRIPT_DIR/os-jobs.sh" in APPLY_UPDATE.read_text(encoding="utf-8")
+
+
+def test_gpu_runtime_reads_the_manifests_nvidia_keys():
+    """scripts/linux/gpu-runtime.sh reads its own keys from the manifest
+    that provision.sh validates (and refuses unknown keys in): each is a key
+    provision.sh knows, and each package it installs has its pin."""
+    helper = GPU_RUNTIME.read_text(encoding="utf-8")
+    m = re.search(r"^MANIFEST_KEYS=\((.*?)\)$", helper, re.M | re.S)
+    assert m, "MANIFEST_KEYS not found in gpu-runtime.sh"
+    keys = set(m.group(1).split())
+    p = re.search(r"^MANIFEST_KEYS=\((.*?)\)$", SCRIPT.read_text(encoding="utf-8"), re.M | re.S)
+    assert keys <= set(p.group(1).split())
+    manifest = _manifest()
+    pkgs = re.search(r"^PKGS=\((.*?)\)$", helper, re.M).group(1).split()
+    assert pkgs == ["nvidia-container-toolkit", "nvidia-container-toolkit-base",
+                    "libnvidia-container-tools", "libnvidia-container1"]
+    for pkg in pkgs:
+        key = pkg.replace("-", "_")
+        assert key in keys, pkg
+        assert re.fullmatch(r"[0-9][A-Za-z0-9.+~-]*", manifest[key]), pkg
+
+
+def test_gpu_runtime_never_installs_a_driver():
+    """Never a Linux NVIDIA driver (inside WSL the driver is Windows'): the
+    packages the brief names are refused after apt's simulation, none of
+    the toolkit's own is, and nothing recommended comes along."""
+    helper = GPU_RUNTIME.read_text(encoding="utf-8")
+    m = re.search(r"^FORBIDDEN=\((.*?)\)$", helper, re.M | re.S)
+    assert m, "FORBIDDEN not found in gpu-runtime.sh"
+    globs = [g.strip("'") for g in m.group(1).split()]
+    for g in ("nvidia-driver*", "nvidia-dkms*", "nvidia-kernel*", "linux-modules-nvidia*",
+              "libnvidia-compute*", "nvidia-utils*", "nvidia-compute-utils*"):
+        assert g in globs, g
+    for pkg in ("nvidia-container-toolkit", "nvidia-container-toolkit-base",
+                "libnvidia-container-tools", "libnvidia-container1"):
+        assert not any(fnmatch.fnmatchcase(pkg, g) for g in globs), pkg
+    assert "install -y --no-install-recommends" in helper
+
+
+def test_both_scripts_run_the_same_gpu_helper():
+    """Docker's GPU runtime is set up wherever the box re-applies its
+    config: provision.sh's gpu-runtime step and the update unit both run
+    gpu-runtime.sh."""
+    assert "scripts/linux/gpu-runtime.sh" in SCRIPT.read_text(encoding="utf-8")
+    assert "GPU_RUNTIME=$SCRIPT_DIR/gpu-runtime.sh" in APPLY_UPDATE.read_text(encoding="utf-8")
 
 
 def test_restart_grant_is_the_docs_rule():
