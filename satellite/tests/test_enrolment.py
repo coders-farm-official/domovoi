@@ -103,12 +103,25 @@ def test_the_room_id_rule_is_the_core_s():
     assert m and m.group(1) == en.ROOM_ID_RE.pattern
 
 
+def test_the_home_names_are_the_core_s_lan_names():
+    """The same suffixes the core takes as LAN names in a Host header
+    (domovoi/transport_guard.py), less .localhost: a device must never
+    dial itself."""
+    import re
+
+    src = (ROOT / "domovoi" / "transport_guard.py").read_text(encoding="utf-8")
+    m = re.search(r"LOCAL_SUFFIXES = \((.+?)\)", src)
+    core = {s.strip().strip('"') for s in m.group(1).split(",") if s.strip()}
+    assert set(en.HOME_SUFFIXES) == core - {".localhost"}
+
+
 @pytest.mark.parametrize("host,home", [
     ("192.168.0.117", True), ("10.0.0.1", True), ("172.16.0.1", True), ("172.31.255.255", True),
     ("172.32.0.1", False), ("8.8.8.8", False), ("127.0.0.1", False), ("100.64.0.1", False),
     ("169.254.1.1", False), ("fd00::17", True), ("fe80::1", True), ("2001:db8::1", False),
     ("::1", False), ("domovoi.local", True), ("kitchen.home.arpa", True), ("local", False),
-    (".local", False), ("domovoi", False), ("domovoi.lan", False), ("example.com", False),
+    (".local", False), ("domovoi", False), ("domovoi.lan", True), ("core.internal", True),
+    ("example.com", False), ("domovoi.local.example.com", False), ("lan", False),
 ])
 def test_only_the_home_network_is_a_core(host, home):
     assert en.is_home_network_host(host) is home

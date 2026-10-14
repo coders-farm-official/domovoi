@@ -16,7 +16,7 @@
     "values": "percent-encoded UTF-8; may carry raw only A-Z a-z 0-9 - . _ ~ ! $ ' ( ) * + , ; : @ / ?; '+' is a plus sign, never a space; a % must start two hex digits (either case); the decoded bytes must be UTF-8",
     "max_payload_chars": 1024,
     "core": "http or https; a host name, IPv4 or bracketed IPv6 (no zone id); optional port 1-65535; nothing else (no user, path other than '/', query or fragment); scheme and host lower-cased, no trailing slash; ws_url is the same with ws/wss; at most 256 characters, no white space. Else bad_core",
-    "home_network": "a well-formed core must be on the home network, else not_home_network (https included): IPv4 in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16; IPv6 in fc00::/7 or fe80::/10; or a name ending in .local or .home.arpa with something before it. Loopback, 100.64.0.0/10, 169.254.0.0/16, public addresses and every other name are refused",
+    "home_network": "a well-formed core must be on the home network, else not_home_network (https included): IPv4 in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16; IPv6 in fc00::/7 or fe80::/10; or a name ending in .local, .home.arpa, .lan or .internal with something before it (the core's LAN names, domovoi/transport_guard.py, less .localhost). Loopback, 100.64.0.0/10, 169.254.0.0/16, public addresses and every other name are refused",
     "fp": "^SHA256:[A-Za-z0-9+/]{43}$ exactly (unpadded standard base64 of the key's SHA-256)",
     "room": "at most 64 code points (not UTF-16 units), no Unicode Cc/Cf characters, kept exactly as decoded (not trimmed)",
     "room_id": "the core's room-id rule ^[a-z][a-z0-9_]{0,31}$: NFKD, drop combining marks (Mn) and the apostrophes U+0027 and U+2019, lower-case A-Z, keep a-z and 0-9, every other run of characters becomes one '_', none at either end; an id starting with a digit gets 'room_' in front; empty or over 32 characters is bad_room",
@@ -140,6 +140,30 @@
       "expect": {
         "core": "http://[fe80::1c2:3ff:fe04:506]:6370",
         "ws_url": "ws://[fe80::1c2:3ff:fe04:506]:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Hall",
+        "room_id": "hall"
+      }
+    },
+    {
+      "name": "lan_name",
+      "about": "A router's .lan name.",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Fdomovoi.lan%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Hall",
+      "expect": {
+        "core": "http://domovoi.lan:6370",
+        "ws_url": "ws://domovoi.lan:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Hall",
+        "room_id": "hall"
+      }
+    },
+    {
+      "name": "internal_name",
+      "about": "An .internal name (reserved for private use).",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Fcore.internal%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Hall",
+      "expect": {
+        "core": "http://core.internal:6370",
+        "ws_url": "ws://core.internal:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Hall",
         "room_id": "hall"
@@ -457,7 +481,7 @@
       "name": "single_label_name",
       "payload": "domovoi-room:1?core=http%3A%2F%2Fdomovoi%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "not_home_network",
-      "about": "A bare name could resolve anywhere: .local or .home.arpa only."
+      "about": "A bare name could resolve anywhere: .local, .home.arpa, .lan or .internal only."
     },
     {
       "name": "loopback",
@@ -500,6 +524,12 @@
       "payload": "domovoi-room:1?core=http%3A%2F%2Flocal%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "not_home_network",
       "about": "\".local\" alone is not a name."
+    },
+    {
+      "name": "suffix_not_last",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Fdomovoi.local.example.com%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "A home suffix inside a public name is a public name."
     },
     {
       "name": "file_scheme",

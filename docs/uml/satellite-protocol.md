@@ -200,7 +200,8 @@ domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
 * `core`: the core's base URL as the device dials it, `http` or `https`
   only (e.g. `http://192.168.0.117:6370`), and on the home network: an
   RFC 1918 IPv4 address, an IPv6 unique-local or link-local one, or a name
-  ending in `.local` or `.home.arpa` — never loopback, a public address or
+  ending in `.local`, `.home.arpa`, `.lan` or `.internal` (the core's own
+  LAN names) — never loopback, a public address or
   a public name, https or not, so a code shown on some web page cannot send
   a room's microphone out of the house (`not_home_network`). The satellite
   socket is the same host and port with `ws`/`wss`.
@@ -225,7 +226,7 @@ dashboard, exactly like a Pi.
 The grammar, the reason codes a refusal carries (`not_enrolment`,
 `unsupported_version`, `malformed`, `missing_core`, `missing_fp`,
 `missing_room`, `bad_core`, `not_home_network`, `bad_fp`, `bad_room`) and
-80 worked cases
+83 worked cases
 (valid and invalid, with the room ids) are in
 [`spare-device-enrol-fixture.json`](spare-device-enrol-fixture.json). The
 Python parser (`satellite/tests/test_enrolment.py`) and the Android room

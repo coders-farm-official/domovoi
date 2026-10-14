@@ -75,11 +75,14 @@ ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 #: Put in front of an id that would start with a digit ("2nd Bedroom").
 ROOM_ID_DIGIT_PREFIX = "room_"
 #: The home network, for the core address (``is_home_network_host``):
-#: RFC 1918 IPv4, IPv6 unique-local and link-local, and the two names a
-#: home network answers for itself (mDNS ``.local``, RFC 8375 ``.home.arpa``).
+#: RFC 1918 IPv4, IPv6 unique-local and link-local, and the names only a
+#: local network answers for — the core's own list
+#: (domovoi/transport_guard.py LOCAL_SUFFIXES) without ``.localhost``:
+#: mDNS ``.local``, RFC 8375 ``.home.arpa``, the routers' ``.lan``, and
+#: ``.internal`` (reserved for private use).
 HOME_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 HOME_V6 = ("fc00::/7", "fe80::/10")
-HOME_SUFFIXES = (".local", ".home.arpa")
+HOME_SUFFIXES = (".local", ".home.arpa", ".lan", ".internal")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _HEX = "0123456789abcdefABCDEF"
 # RFC 3986 query characters a value may carry raw: unreserved, the
@@ -197,7 +200,8 @@ def check_room_name(name: str) -> str:
 def is_home_network_host(host: str) -> bool:
     """Whether ``host`` (lower-case, no brackets) is on the home network:
     an RFC 1918 IPv4 address, an IPv6 unique-local (fc00::/7) or link-local
-    (fe80::/10) address, or a name ending in ``.local`` or ``.home.arpa``.
+    (fe80::/10) address, or a name ending in ``.local``, ``.home.arpa``,
+    ``.lan`` or ``.internal``.
     Not loopback (a device would dial itself), not the carrier-grade NAT
     range, not a public address or a public name, even over https: a
     payload decides where a room's microphone streams to."""
@@ -274,7 +278,7 @@ def normalize_core(value: str) -> tuple[str, str]:
         raise EnrolmentError(
             "not_home_network",
             f"{host} is not on the home network (a private address, or a name "
-            "ending in .local or .home.arpa): a room must not stream its "
+            "ending in .local, .home.arpa, .lan or .internal): a room must not stream its "
             "microphone out of the house",
         )
     core = f"{scheme}://{shown}{port}"
