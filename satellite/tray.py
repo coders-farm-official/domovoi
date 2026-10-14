@@ -145,7 +145,7 @@ class MenuItem:
 _IDS = {
     "header": 1, "sep1": 2, "mute": 3, "volume_up": 4, "volume_down": 5, "identify": 6,
     "sep2": 7, "dashboard": 8, "logs": 9, "about": 10, "sep3": 11, "quit": 12, "stop": 13,
-    "sep4": 14,
+    "sep4": 14, "start": 15,
 }
 _PENDING_BASE = 100
 MAX_PENDING_ITEMS = 4
@@ -158,10 +158,12 @@ PENDING_LABELS = {
 }
 
 
-def menu(st: dict[str, Any] | None) -> list[MenuItem]:
+def menu(st: dict[str, Any] | None, *, can_start: bool = False) -> list[MenuItem]:
     """The tray menu for a status (assessment §4.1): who and where, mute,
     volume, which room, the waiting actions, the dashboard, the logs,
-    About, Quit tray and the separate, explicit Stop satellite."""
+    About, Quit tray and the separate, explicit Stop satellite.
+    ``can_start`` (Windows): while the engine isn't running, Stop
+    satellite becomes Start satellite."""
     up = st is not None
     muted = (st or {}).get("mic") == "muted"
     items = [
@@ -192,7 +194,9 @@ def menu(st: dict[str, Any] | None) -> list[MenuItem]:
         MenuItem(_IDS["about"], "About", action="about"),
         MenuItem(_IDS["sep4"], "", separator=True),
         MenuItem(_IDS["quit"], "Quit tray (the satellite keeps running)", action="quit"),
-        MenuItem(_IDS["stop"], "Stop satellite…", action="stop_ask", enabled=up),
+        (MenuItem(_IDS["start"], "Start satellite", action="start")
+         if can_start and not up else
+         MenuItem(_IDS["stop"], "Stop satellite…", action="stop_ask", enabled=up)),
     ]
     return items
 
@@ -392,10 +396,16 @@ class TrayActions:
     worker thread."""
 
     def __init__(self, client: Any, *, opener: Callable[[str], bool] = _open,
-                 run: Callable[..., Any] = subprocess.run) -> None:
+                 run: Callable[..., Any] = subprocess.run,
+                 stopper: Callable[[], Note] | None = None,
+                 starter: Callable[[], Note] | None = None) -> None:
         self.client = client
         self.opener = opener
         self.run = run
+        # How "stop" and "start" are done where systemctl isn't the answer
+        # (Windows: satellite/win_tray.py).
+        self.stopper = stopper
+        self.starter = starter
         self.last_status: dict[str, Any] | None = None
 
     def status(self) -> dict[str, Any] | None:
@@ -436,10 +446,14 @@ class TrayActions:
             elif action == "stop_ask":
                 return STOP_NOTE
             elif action == "stop":
+                if self.stopper is not None:
+                    return self.stopper()
                 self.run(["systemctl", "--user", "stop", SERVICE_UNIT],
                          capture_output=True, text=True, timeout=30)
                 return Note("stop", "Satellite stopped",
                             "Start it again with: systemctl --user start domovoi-satellite")
+            elif action == "start" and self.starter is not None:
+                return self.starter()
         except ConnectionError as e:
             return Note("error", APP_NAME, f"The satellite isn't answering ({e}).")
         return None
