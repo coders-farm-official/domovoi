@@ -275,17 +275,11 @@ const satHealthAgeTone = (sec) => sec == null ? 'idle' : sec < 150 ? 'ok' : sec 
 const satHealthTempTone = (c) => c == null ? 'idle' : c < 70 ? 'ok' : c < 80 ? 'warn' : 'err';
 const satHealthThrottle = (flags) => (flags || []).filter(f => !f.endsWith('_occurred'));
 const satHealthMb = (kb) => kb == null ? '—' : `${(kb / 1024).toFixed(0)} MB`;
-// A spare device's battery: `battery_percent` / `battery_charging` (S1,
-// what laptops and phones send), else S0's draft `battery` object. null on
-// a device without one (every Pi). onCharger: true / false / null.
+// A spare device's battery, `{percent, charging, on_power}` (laptops and
+// phones send the same object); null on a device without one (every Pi).
+// onCharger: true / false / null.
 const satBattery = (s) => {
-  if (!s) return null;
-  if (s.battery_percent != null || s.battery_charging != null) {
-    return { percent: s.battery_percent == null ? null : s.battery_percent,
-             onCharger: s.battery_charging == null ? null : !!s.battery_charging,
-             charging: s.battery_charging === true };
-  }
-  const b = s.battery;
+  const b = s && s.battery;
   if (!b) return null;
   const onCharger = b.charging ? true : b.on_power == null ? null : !!b.on_power;
   return { percent: b.percent == null ? null : b.percent, onCharger, charging: !!b.charging };
@@ -293,8 +287,9 @@ const satBattery = (s) => {
 const satBatteryView = (b) => {
   const pct = b.percent;
   const value = pct == null ? '—' : `${Math.round(pct)}%`;
+  const plugged = b.charging ? 'charging' : 'on the charger';
   const sub = b.onCharger === true
-    ? (pct != null && pct >= 98 ? 'on the charger · set a charge limit if it stays here for weeks' : 'on the charger')
+    ? (pct != null && pct >= 98 ? `${plugged} · set a charge limit if it stays here for weeks` : plugged)
     : b.onCharger === false ? 'on battery' : 'power unknown';
   const tone = pct == null ? 'idle'
     : b.onCharger === false ? (pct < 20 ? 'err' : 'warn')

@@ -168,10 +168,12 @@ _ON_CHARGER_STATUSES = ("Charging", "Full", "Not charging")
 
 def read_battery(root: str | os.PathLike[str] = "/sys/class/power_supply") -> dict[str, Any]:
     """A spare laptop's battery for the health sample, or ``{}`` when the
-    machine has none (every Pi): ``battery_percent`` (0-100, the mean when
-    there are two packs) and ``battery_charging`` — true while it is on the
-    charger, charging or held full or at a charge limit ("Not charging"
-    with the charger plugged in is what a set threshold looks like).
+    machine has none (every Pi): ``{"battery": {percent, charging,
+    on_power}}``, the one shape the core keeps and a phone in room mode
+    sends too. ``percent`` 0-100 (the mean when there are two packs);
+    ``charging`` while the level goes up; ``on_power`` while the charger
+    is plugged in ("Not charging" on mains is a battery held full or at a
+    charge limit). Either flag is None when the kernel can't say.
 
     System batteries only: a wireless mouse's or a phone's battery
     (``scope`` = Device) is not the laptop's."""
@@ -203,20 +205,18 @@ def read_battery(root: str | os.PathLike[str] = "/sys/class/power_supply") -> di
             statuses.append((_read_text(os.path.join(base, "status")) or "").strip())
     if not levels:
         return {}
-    if "Charging" in statuses:
-        charging: bool | None = True
-    elif "Discharging" in statuses:
-        charging = False
-    elif mains:
-        charging = any(mains)
-    elif statuses and all(st in _ON_CHARGER_STATUSES for st in statuses):
-        charging = True
+    known = [st for st in statuses if st in ("Charging", "Discharging", "Full", "Not charging")]
+    charging: bool | None = ("Charging" in known) if known else None
+    if mains:
+        on_power: bool | None = any(mains)
+    elif "Discharging" in known:
+        on_power = False
+    elif known and all(st in _ON_CHARGER_STATUSES for st in known):
+        on_power = True
     else:
-        charging = None
-    out: dict[str, Any] = {"battery_percent": round(sum(levels) / len(levels))}
-    if charging is not None:
-        out["battery_charging"] = charging
-    return out
+        on_power = None
+    return {"battery": {"percent": round(sum(levels) / len(levels)),
+                        "charging": charging, "on_power": on_power}}
 
 
 def count_fds(path: str | os.PathLike[str] = "/proc/self/fd") -> int | None:

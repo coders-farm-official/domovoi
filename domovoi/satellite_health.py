@@ -186,18 +186,6 @@ def _hostname(v: Any) -> str | None:
     return v if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", v) else None
 
 
-def _percent(v: Any) -> int | None:
-    """A whole percentage 0-100 (an integral float is taken; a bool, a
-    fraction, a string or anything out of range is not)."""
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, float) and v == v and v.is_integer():
-        v = int(v)
-    if isinstance(v, int) and 0 <= v <= 100:
-        return v
-    return None
-
-
 def _flags(v: Any) -> list[str]:
     if not isinstance(v, list):
         return []
@@ -220,16 +208,14 @@ SAMPLE_FIELDS: dict[str, Any] = {
     "send_q": _int, "wake_loop_age_s": _num, "idle": _bool,
     "ws": lambda v: _str(v, 8), "ws_down_for_s": _num, "reconnects": _int,
     "wifi": _wifi, "log_ring": _counts, "log_spool": _counts,
-    # Spare-device satellites (S0, 2026-10-12): "the mic is on but the OS
-    # hands it silence" (Android's mic privacy toggle records zeros), and
-    # S0's draft battery object, which no device sends (still kept if one
-    # does). No Pi sends either.
+    # Spare-device satellites (S0, 2026-10-12): a laptop's or a phone's
+    # battery — the one shape both send, `{percent, charging, on_power}`
+    # (S1 2026-10-13: a laptop from /sys/class/power_supply, a phone in room
+    # mode from Android's battery broadcast) — and "the mic is on but the OS
+    # hands it silence" (Android's mic privacy toggle records zeros). No Pi
+    # sends either; a flat `battery_percent` / `battery_charging` is not a
+    # second shape and is dropped like any unknown key.
     "battery": _battery, "mic_blocked": _bool,
-    # S1 (2026-10-13), the battery as every spare device sends it, laptop
-    # and phone alike: the level, and whether it is on the charger
-    # (charging, or held full or at a charge limit). Absent on a device
-    # with no battery, so a Pi's sample is unchanged.
-    "battery_percent": _percent, "battery_charging": _bool,
     # 2026-10-12: why the satellite needs a reboot (upgraded, and the
     # network settings root applies at boot are not in place yet); absent
     # or null when it does not.
@@ -416,10 +402,7 @@ def _spare_device_tail(s: dict[str, Any]) -> str:
     carries them (a Pi's line is unchanged)."""
     tail = ""
     battery = s.get("battery")
-    if s.get("battery_percent") is not None or s.get("battery_charging") is not None:
-        state = {True: "on the charger", False: "on battery"}.get(s.get("battery_charging"), "power unknown")
-        tail += f" battery={s.get('battery_percent')}% {state}"
-    elif isinstance(battery, dict):
+    if isinstance(battery, dict):
         state = "charging" if battery.get("charging") else (
             "on power" if battery.get("on_power") else "on battery")
         tail += f" battery={battery.get('percent')}% {state}"

@@ -55,7 +55,7 @@
     "volume": "the last known output volume 0-100, or null",
     "permissions": "automatic | ask",
     "pending": "[{id, kind, summary, received_at}] held for the person's OK (\"ask me\")",
-    "battery": "{percent, charging} on a device with a battery, else null",
+    "battery": "{percent, charging, on_power} on a device with a battery (the health sample's object), else null",
     "version": "the satellite code's version label (the hello's synced_sha), or null"
   },
   "connections": {
@@ -94,7 +94,7 @@
       "volume": 40,
       "permissions": "ask",
       "pending": [],
-      "battery": {"percent": 81, "charging": true},
+      "battery": {"percent": 81, "charging": true, "on_power": true},
       "version": "44f0fff"
     },
     "approval_code": "482913",

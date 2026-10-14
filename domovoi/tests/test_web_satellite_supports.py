@@ -121,7 +121,7 @@ def driven(tmp_path_factory) -> dict:
     assert node, "node is required to drive web/static JSX (see jsxcheck)"
     rows = _rows()
     scenarios = {name: _scenario(name.split("__")[0], row) for name, row in rows.items()}
-    # S1: the battery as laptops and phones send it, and S0's draft object.
+    # S1: the battery object laptops and phones send.
     pc = DEVICES["linux_pc"]["health"]["stored"]
     for name, battery in _BATTERIES.items():
         sample = {k: v for k, v in pc.items() if not k.startswith("battery")}
@@ -142,9 +142,10 @@ def driven(tmp_path_factory) -> dict:
 
 
 _BATTERIES = {
-    "battery__full_on_charger": {"battery_percent": 100, "battery_charging": True},
-    "battery__low_on_battery": {"battery_percent": 15, "battery_charging": False},
-    "battery__s0_draft_object": {"battery": {"percent": 70, "charging": False, "on_power": False}},
+    "battery__full_on_charger": {"battery": {"percent": 100, "charging": False, "on_power": True}},
+    "battery__low_on_battery": {"battery": {"percent": 15, "charging": False, "on_power": False}},
+    "battery__charging": {"battery": {"percent": 70, "charging": True, "on_power": True}},
+    "battery__flat_keys_are_not_a_shape": {"battery_percent": 50, "battery_charging": True},
     "battery__none": {},
 }
 
@@ -169,7 +170,7 @@ def test_a_linux_pc_shows_its_board_and_keeps_what_it_declared(driven):
     assert not _button(r, "Restart satellite")["disabled"]
     assert not _button(r, "Upgrade satellite")["disabled"]
     assert "battery" in r["overview"] and "81%" in r["overview"]
-    assert "on the charger" in r["overview"]
+    assert "charging" in r["overview"]
     assert "settings stay on the device" not in r["settings"]
 
 
@@ -180,9 +181,13 @@ def test_a_battery_held_full_on_the_charger_asks_for_a_charge_limit(driven):
     assert "15%" in low and "on battery" in low and "charge limit" not in low
 
 
-def test_s0_s_draft_battery_object_still_shows(driven):
-    r = driven["battery__s0_draft_object"]["overview"]
-    assert "70%" in r and "on battery" in r
+def test_a_charging_battery_says_charging(driven):
+    r = driven["battery__charging"]["overview"]
+    assert "70%" in r and "charging" in r
+
+
+def test_flat_battery_keys_show_nothing(driven):
+    assert "battery" not in driven["battery__flat_keys_are_not_a_shape"]["overview"]
 
 
 def test_a_spare_device_without_a_battery_shows_none(driven):

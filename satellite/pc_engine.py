@@ -289,10 +289,8 @@ class SpareDeviceEngine:
         if cache is None or now - cache[0] > 60.0:
             cache = (now, health.read_battery())
             self._battery_cache = cache
-        b = cache[1]
-        if "battery_percent" not in b:
-            return None
-        return {"percent": b["battery_percent"], "charging": b.get("battery_charging")}
+        b = cache[1].get("battery")
+        return dict(b) if isinstance(b, dict) else None
 
     def control_status(self) -> dict[str, Any]:
         from satellite import client, sound_sync  # noqa: F401  (client: constants)
@@ -434,7 +432,8 @@ def _status_text(st: dict[str, Any]) -> str:
     battery = st.get("battery")
     if battery:
         lines.append(f"battery  {battery.get('percent')}%"
-                     + (" on the charger" if battery.get("charging") else " on battery"))
+                     + (" charging" if battery.get("charging")
+                        else " on the charger" if battery.get("on_power") else " on battery"))
     for p in st.get("pending") or []:
         lines.append(f"waiting  [{p['id']}] {p['kind']}: {p['summary']}")
     if st.get("dashboard"):
