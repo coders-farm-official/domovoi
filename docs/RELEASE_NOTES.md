@@ -4,6 +4,41 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — A spare Windows laptop or PC can be a room
+
+Server, dashboard and satellite update; no migration. Pis and Linux laptops
+are unchanged.
+
+* **Settings → Satellites → add a spare device** now gives a **one-line
+  command for Windows PowerShell** too. Paste it on a Windows 10/11 PC
+  (64-bit), signed in as the person whose account it will run in, in a
+  normal (not administrator) window. It installs **for that account only,
+  with no administrator rights**, into `%LOCALAPPDATA%\Domovoi\Satellite`,
+  starts at sign-in and **stops at sign-out**. Guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
+* **Unsigned for now**: the satellite's code carries no signature (Python
+  itself is signed by its foundation). Antivirus may warn about a command
+  that downloads and starts programs; the card and the guide say so.
+* **The same trust model as Linux**: the bundle runs only if its SHA-256 is
+  the quoted one, the server proves its fingerprint before anything is
+  written, and the Python and every library are pinned by SHA-256 in
+  `satellite/windows-runtime.json`. The server can fetch them once (**get
+  the Windows files** on the card, ~96 MB from python.org and PyPI, each
+  file checked) and serve them to laptops at
+  `/v1/satellite-windows/files/…`; otherwise a laptop downloads the same
+  pinned files itself.
+* **Never on the PC that runs the server**: the installer refuses there.
+  "Use this PC as a room" will come with the server's own tray.
+* **A tray icon** (filled red while audio leaves for the server, mute, the
+  approval code, Allow / Not now for "ask me" with every change listed),
+  power questions (plugged-in sleep and lid, each default No, undone on
+  uninstall), and **Installed apps → Uninstall**.
+* A Windows satellite looks for a server that moved by its name and
+  address only, never by sweeping the network (new `[pc] server_search`:
+  `sweep`, `names`, `address`).
+* The satellite code channel carries `.ps1` files now (the installer); a
+  Pi downloads none of them.
+
 ## 2026-10-13 — A spare Linux laptop or mini PC can be a room
 
 Server, dashboard and satellite update; no migration. Pis are unchanged.

@@ -18,6 +18,11 @@ Read alongside: [Running the server on Linux](LINUX_HOST.md) (what runs
 inside the distro) · [Internet or not](INTERNET.md) (the question Setup
 asks) · [Security & privacy](SECURITY_PRIVACY.md)
 
+**A Windows laptop as a room** (a satellite, not the server) is a different
+thing: [Satellites on spare devices → Windows](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
+Its installer refuses to run on the PC where this server is installed;
+using the server PC as a room is planned for the server's own tray.
+
 ---
 
 ## Which PCs

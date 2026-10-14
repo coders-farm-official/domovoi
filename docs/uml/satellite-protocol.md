@@ -181,7 +181,7 @@ field, the settings sections hidden, the `pi_action`s kept, the dashboard
 actions offered). The core's tests (`domovoi/tests/test_satellite_supports.py`)
 and the Pi client's (`satellite/tests/test_protocol_fixtures.py`) read it,
 and the Android room mode's JVM tests are meant to, so the implementations
-can't drift apart. The `linux_pc` and `android_room` entries are drafts
+can't drift apart. The `linux_pc`, `windows_pc` and `android_room` entries are drafts
 for S1 and S3; change them with the code that sends them. Tokens and codes
 in it are placeholders.
 
@@ -248,8 +248,12 @@ tray shows it; the CLI (`python -m satellite.client --status`,
 * **Transport.** Linux: the Unix socket `~/.domovoi/control.sock`, made
   0600 inside the 0700 config dir; a peer whose uid (`SO_PEERCRED`) is
   neither the engine's nor root is closed at once. Off on the Pi profiles
-  (a Pi is exactly as before); on for `generic_pc`. A Windows satellite
-  brings a named pipe with the same framing.
+  (a Pi is exactly as before); on for `generic_pc`. Windows (`windows_pc`,
+  2026-10-13): the named pipe `\\.\pipe\domovoi-satellite-<account SID>`
+  with the same framing (`satellite/control_win.py`): a DACL granting that
+  account alone, `PIPE_REJECT_REMOTE_CLIENTS`, the name claimed with
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`, and each end refusing a peer process of
+  another account.
 * **Framing.** UTF-8 JSON, one object per line, at most 16 KiB. A request
   is `{"verb": …, "req": <optional id, echoed>, …arguments}` and gets
   exactly one response line, in order: `{"ok": true, …}` or `{"ok": false,
@@ -261,10 +265,13 @@ tray shows it; the CLI (`python -m satellite.client --status`,
   `identify` (play the chime), and for the "ask me" permission `approve` /
   `decline` a pending `update`, `restart`, `config` or `wake_word`.
 * **Engine seams** (`satellite/engine_platform.py`): the player argv
-  (`AudioOut`), the volume (`VolumeBackend`: amixer on a Pi, `wpctl` /
-  `pactl` on a desktop), the self-restart (`ServiceControl`: sudo'd
-  `systemctl` on a Pi, exit 75 on a laptop, which its unit restarts) and
-  the control transport. A Pi's are byte for byte what they were.
+  (`AudioOut`; on Windows `python -m satellite.win_player`, with the wake
+  acknowledgement played inside the engine), the volume (`VolumeBackend`:
+  amixer on a Pi, `wpctl` / `pactl` on a desktop, Core Audio on Windows),
+  the self-restart (`ServiceControl`: sudo'd `systemctl` on a Pi, exit 75
+  on a laptop, which its unit — or on Windows its supervisor,
+  `satellite/win_service.py` — restarts) and the control transport. A Pi's
+  are byte for byte what they were.
 
 The verbs, errors, status fields and worked exchanges are in
 [`satellite-control-fixture.json`](satellite-control-fixture.json), which

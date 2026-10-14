@@ -1,8 +1,8 @@
 # Satellites on spare devices
 
 A room doesn't need a Raspberry Pi. A spare **Linux laptop or mini PC** can
-be one today, an old **phone or tablet** through the Android app's room
-mode, and a **Windows** laptop later. Each speaks the same protocol to the
+be one, a **Windows laptop or PC** too, and an old **phone or tablet**
+through the Android app's room mode. Each speaks the same protocol to the
 Domovoi server as a Pi, joins through the same approval code, and becomes a
 room like any other: wake word, answers, music, intercom, timers.
 
@@ -30,8 +30,8 @@ doesn't wear out its battery.
 1. In the dashboard, as admin: **Settings → Satellites → add a spare
    device**. Type the room's name ("Kid's Room") and press **make the
    code**. The page shows the room id it will connect as
-   (`kids_room`), a **one-line install command** for Linux, and a **QR
-   code** for a phone. Both carry the same short *enrolment code*:
+   (`kids_room`), a **one-line install command** for Linux, another for
+   Windows, and a **QR code** for a phone. All three carry the same short *enrolment code*:
    `domovoi-room:1?core=…&fp=…&room=…` — your server's address, its
    fingerprint, and the room's name. **Nothing in it is a password.**
 2. On the device, run the command (or scan the code).
@@ -55,8 +55,10 @@ Tested on **Debian 12 and 13** and **Ubuntu 24.04**, with a desktop
 (GNOME, KDE, Xfce, …) or without one. Other Debian-family systems will
 probably work; others are not covered. x86-64 and 64-bit ARM.
 
-**An old Windows 10 laptop** that can't run Windows 11 makes a good room
-once it runs Linux: write the Debian or Ubuntu installer to a USB stick
+**An old Windows 10 laptop** can be a room as it is
+([Windows](#windows-laptops-and-pcs), below). One that can't run Windows 11
+and will only ever be a room makes a better one on Linux: write the Debian
+or Ubuntu installer to a USB stick
 (their download pages explain how), boot from it, and install. Create a
 user account just for the satellite while you're at it.
 
@@ -259,8 +261,204 @@ Domovoi app's **room mode**: scan the QR code from **add a spare device**.
 The steps and what the phone holds are written up with the app (this
 section is completed when room mode ships).
 
-## Windows laptops
+## Windows laptops and PCs
 
-Not yet. Most old Windows laptops make a better room on Linux (above). A
-Windows satellite will reuse the same engine and its local control channel
-(docs/uml/satellite-control-fixture.json).
+A Windows 10 or 11 laptop or PC (64-bit, Intel or AMD) can be a room for
+**the account that is signed in on it**: the satellite runs in that
+person's session, because that is where Windows lets a program use the
+microphone. Nothing is installed for other accounts, nothing needs an
+administrator, and **it stops when that account signs out** (it starts
+again at the next sign-in). A laptop that is only a room works best with
+an account of its own that signs in automatically.
+
+**Not on the PC that runs your Domovoi server.** The installer refuses
+there (it looks for the server's Windows service, its install record, its
+data folder, a server identity in your account, and a server answering on
+this PC). Using the server PC as a room will come with the server's own
+tray icon instead.
+
+**Unsigned, for now.** Coders Farm's signing is on hold, so the satellite's
+own code carries no signature. Python itself, which runs it, is signed by
+the Python Software Foundation. Expect Windows Security or another
+antivirus to look twice at a command that downloads and starts programs;
+the command shows you exactly what it checks before it runs anything
+(below). Install it only on a PC whose owner agrees.
+
+### 1. Make the command
+
+**Settings → Satellites → add a spare device**, the room's name, **make
+the code**. Under **windows laptop or pc** is a one-line command for
+Windows PowerShell; **copy the Windows command**.
+
+The first time, the card may say the server doesn't hold the Windows files
+yet (Python and its libraries, about 96 MB): press **get the Windows
+files** and the server downloads them from python.org and PyPI, each file
+checked against the SHA-256 pinned in the satellite code. If you don't, the
+laptop downloads the same pinned files from there itself. Under
+`INTERNET_ACCESS=never` the server can't fetch them; a laptop that can
+reach the internet still can.
+
+### 2. Run it
+
+On the laptop, signed in as the person whose account it will run in, open
+**Windows PowerShell** (or Terminal) — a normal window, **not "Run as
+administrator"**: the installer refuses an elevated window — paste the
+command and press Enter. It:
+
+1. downloads the satellite software from your server into a new folder in
+   `%TEMP%` and runs nothing unless it is **exactly** the bundle the
+   dashboard quoted (its SHA-256 is in the command);
+2. refuses if this PC runs the Domovoi server;
+3. gets the pinned Python and checks it, then makes your server **prove
+   the fingerprint in the code** before it writes anything — if it can't,
+   nothing is installed;
+4. asks **what the server may do on its own** ("automatic" or "ask me",
+   the same as on Linux, below);
+5. installs into `%LOCALAPPDATA%\Domovoi\Satellite`: Python, its libraries
+   (each by its SHA-256, nothing resolved on the laptop), the satellite,
+   the wake-word models (checked against their pins), and its settings in
+   `.domovoi\config.toml` with your server pinned;
+6. registers it **for this account only**: it starts at sign-in
+   (**Settings → Apps → Startup** lists it under Python's name and can
+   turn it off), it is in **Installed apps** as *Domovoi Satellite (room)*, and
+   **Domovoi Satellite** is in the Start menu (it starts the satellite and
+   its tray icon again after you stopped them);
+7. asks, one at a time, about **keeping it awake while plugged in**: never
+   sleep, and keep running with the lid closed. Each defaults to **No**,
+   only the plugged-in setting changes (on battery it still sleeps), and the
+   uninstaller puts back what was there. A standard account may not be
+   allowed to change them; the installer says so and carries on;
+8. starts it and waits for you to approve it, showing the **approval
+   code**.
+
+A few minutes, mostly downloads. It takes about 350 MB on disk.
+
+-ExecutionPolicy Bypass in the command applies to that one PowerShell
+process: the PC's script policy is never changed. A policy your
+organisation set through Group Policy still wins, and then the installer
+can't run.
+
+### 3. Approve it
+
+The code is in the PowerShell window, in a notification ("Kid's Room:
+waiting for approval, code 123456"), in the tray icon's tooltip and its
+menu. Type it into the dashboard's approval card; the notification then
+says **Approved**. It is never written to the satellite's log.
+
+### What warnings you may see
+
+| What | Why |
+|---|---|
+| Windows Security or another antivirus warns about, or blocks, PowerShell downloading and starting programs | The command does exactly that, and the satellite's code is unsigned. If it is blocked, the antivirus's history says what; allow it only if the command came from your own dashboard. |
+| The microphone icon in the taskbar stays on | The satellite listens for the wake word all the time; Windows shows that any program has the mic open. Hovering it names *Python*. The satellite's own tray icon says whether audio is leaving for the server (below). |
+| "Let desktop apps access your microphone" is off | Then Windows gives the satellite silence and the wake word never fires. Turn it on in **Settings → Privacy & security → Microphone**. |
+| A "Windows protected your PC" (SmartScreen) window | Not expected: nothing the command starts was downloaded through a browser. If one appears for *Domovoi Satellite* from the Start menu, it is the shortcut to Python's own `pythonw.exe`. |
+
+### The tray
+
+The same icon and menu as on Linux (see [The tray](#the-tray) above): a
+**filled red microphone while audio is leaving for your server**, an
+outline while it only listens for the wake word, struck through when
+muted, a speaker badge while it speaks or plays, amber while it waits for
+approval, grey when it is offline, refused, unpinned or not running (the
+tooltip says why). **Allow** on a waiting change first lists *everything*
+it changes and asks once more. **Stop satellite…** asks first; afterwards
+the menu offers **Start satellite**. **Quit tray** leaves the satellite
+running; **Domovoi Satellite** in the Start menu brings the tray back.
+
+Without the tray, from PowerShell:
+
+```
+& "$env:LOCALAPPDATA\Domovoi\Satellite\python\python.exe" -m satellite.client --status
+#   --mute, --unmute, --approval-code, --pending, --approve all, --decline all
+```
+
+### "Automatic" or "ask me" on Windows
+
+As on Linux (the table above). Either way the satellite runs as the
+signed-in account with that account's rights and nothing more: no
+administrator, no service, no scheduled task. With "automatic", your
+server's key can run code as that account — which is why a dedicated
+account is the better choice for a laptop that is only a room. Change it
+later in `%LOCALAPPDATA%\Domovoi\Satellite\.domovoi\config.toml`
+(`[pc] permissions`), then stop and start the satellite from the tray.
+
+### Sound on Windows
+
+It uses the microphone and speakers Windows has chosen (**Settings →
+System → Sound**), and "turn it up" moves Windows' own volume — the same
+slider the taskbar shows. To pin other devices, put a device number or
+part of a device's name (as `python.exe -m satellite.client
+--list-devices` prints it) in `[audio] input_device` / `output_device`
+and `[music] alsa_device`. Only plain names are accepted there.
+
+### Battery and power
+
+Windows has no general charge-limit setting: use the laptop maker's tool
+(often called *battery health*, *conservation* or *charge threshold*
+mode) to stop charging around 80 % for a laptop that lives on the charger.
+The dashboard shows the battery in the room's health block.
+
+### When it moves, and the network
+
+The satellite finds your server at the address in the code, and if that
+stops answering, by your server's name (`domovoi.local` and the names it
+announced). A Windows satellite never sweeps the home network looking for
+it — to security software that looks like a port scan. Set
+`[pc] server_search = "sweep"` to allow it, or `"address"` to use only
+the address.
+
+### Removing it
+
+**Settings → Apps → Installed apps → Domovoi Satellite (room) →
+Uninstall**, or from PowerShell:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Domovoi\Satellite\uninstall.ps1"           # keeps .domovoi\config.toml
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Domovoi\Satellite\uninstall.ps1" -Purge    # the settings too
+```
+
+It stops the satellite and its tray, removes the sign-in entry, the
+Installed apps entry and the Start-menu shortcut (each only if it points
+into its own folder), puts back the power settings it changed, and
+deletes the folder. Then **retire the room in the dashboard** once it
+shows offline, as on Linux.
+
+### What it installs, and their licences
+
+Everything comes from your server's cache or from upstream, each file
+checked against the SHA-256 in `satellite/windows-runtime.json`:
+
+| Component | Licence |
+|---|---|
+| CPython 3.14 (embeddable package, python.org) | PSF-2.0; it bundles OpenSSL (Apache-2.0), libffi (MIT), SQLite (public domain), zlib-ng (Zlib), bzip2, xz (0BSD), zstd (BSD-3-Clause), expat (MIT), mpdecimal (BSD-2-Clause), HACL* (MIT) |
+| numpy, scipy | BSD-3-Clause; their Windows wheels bundle OpenBLAS and LAPACK (BSD-3-Clause) and the GCC runtime (GPL-3.0-or-later **with the GCC Runtime Library Exception**, which permits exactly this use) — the same wheels every Pi gets |
+| scikit-learn, joblib, threadpoolctl, cloudpickle, idna, websockets, protobuf, pycparser | BSD-3-Clause |
+| onnxruntime, sounddevice (with PortAudio), miniaudio (with dr_mp3, public domain or MIT-0), webrtcvad-wheels, narwhals, charset-normalizer, urllib3, cffi (MIT-0) | MIT |
+| openwakeword, requests, flatbuffers | Apache-2.0 |
+| cryptography | Apache-2.0 or BSD-3-Clause |
+| packaging | Apache-2.0 or BSD-2-Clause |
+| colorama | BSD-3-Clause |
+| tqdm | MPL-2.0 and MIT (unmodified) |
+| certifi | MPL-2.0 (unmodified) |
+| pip (used to install the others) | MIT |
+
+Nothing GPL or LGPL is bundled: there is no mpg123 on Windows (MP3 is
+decoded by dr_mp3), and sounddevice's ASIO-enabled PortAudio builds
+(Steinberg's ASIO SDK) are deleted after install — they are never loaded
+anyway. The wake-word models are openWakeWord's (their licence is the
+same question as on every Pi; see the wake-word notes).
+
+### When it doesn't work (Windows)
+
+| What you see | Why, and what to do |
+|---|---|
+| "This is not the download the dashboard expected" | Domovoi was updated since the command was made (or the download was changed on the way). Make a new command. |
+| "this window runs as administrator" | Open a normal PowerShell window and paste it again. |
+| "never installed on the PC that runs the Domovoi server" | This PC runs the server. Use another PC. |
+| "did not prove it is the one in the code" | As on Linux: a different machine answers at that address. Compare the fingerprint with **Settings → About**. |
+| "running scripts is disabled on this system" | A Group Policy forbids scripts here; the installer can't run on this PC. |
+| Grey tray icon, "not running: no pinned server identity" | Re-run the install command from the dashboard. |
+| The wake word never fires | **Settings → Privacy & security → Microphone**: "Let desktop apps access your microphone" on; the right microphone chosen in **Settings → System → Sound**. |
+| It goes quiet while someone else uses the PC | It runs in its own account's session; while another account is signed in at the screen, Windows may give it no microphone (not yet checked on hardware). |
+| Anything else | `%LOCALAPPDATA%\Domovoi\Satellite\logs\satellite.log` (the tray's **Show logs folder**), and the live log in the dashboard's room drawer. |

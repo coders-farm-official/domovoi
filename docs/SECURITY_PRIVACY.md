@@ -1730,7 +1730,8 @@ no core keeps a key there.
 ## Spare-device satellites (laptops and phones)
 
 Since 2026-10-13 a spare Linux laptop or mini PC can be a room
-([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md)), and an Android
+([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md)), a Windows
+laptop or PC ([below](#windows-laptops-and-pcs)), and an Android
 phone through the app's room mode. Neither is a dedicated, root-managed Pi,
 so three things differ: how the device learns which server is yours, what
 it holds, and what that server may do to it.
@@ -1839,6 +1840,102 @@ listens locally for the wake word, struck through when muted. Mute closes
 the capture stream itself, so the desktop's own microphone indicator goes
 out too, and it is kept across restarts. A headless box has no visible
 indicator; the guide says so.
+
+### Windows laptops and PCs
+
+Since 2026-10-13 a Windows 10/11 PC can be a room too
+([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
+The enrolment code, the pin, the strict pairing, the room-only key and the
+"automatic" / "ask me" choice are the Linux laptop's, above. What Windows
+changes:
+
+**The trust chain, said honestly.** The one-line PowerShell command is as
+trustworthy as the dashboard page it was copied from, and that page is
+plain HTTP on the LAN: someone able to rewrite it in transit could hand you
+a different command (compare the fingerprint the installer prints with
+**Settings → About** on another device to rule that out). From the command
+on, every byte is checked before it is used: the bundle against the
+SHA-256 in the command; the embeddable Python and every wheel against the
+SHA-256 and size pinned in `satellite/windows-runtime.json` inside that
+bundle (whether they came from your server's cache or from python.org /
+PyPI, which the server's own fetch reaches only through its outbound gate);
+the server against the fingerprint, with the address-bound `/v1/health`
+challenge, **before anything is written**. pip installs the pinned wheels
+with `--require-hashes --no-index --no-deps` and a PATH holding only the
+new Python and System32, so nothing is resolved or built on the laptop.
+After install, as for every satellite, the room's audio and the WebSocket
+frames are unencrypted and unauthenticated on the LAN until TLS lands
+([backlog](#hardening-backlog--deferred-in-v1-on-purpose)); code, sound and
+wake-model lists are signed by the pinned key.
+
+**What it holds and where.** `%LOCALAPPDATA%\Domovoi\Satellite` (only that
+account, SYSTEM and Administrators can read it — the profile folder's own
+permissions): the embeddable Python, the satellite code, its config with
+the pin, its room's pairing token, logs (`logs\satellite.log`, rotated,
+never the approval code). The engine runs with that folder as its home,
+so nothing lands in the account's own `~\.domovoi` — where a Domovoi server
+on the same account would keep its identity and voices. It holds **no
+household token**: it reaches no dashboard route.
+
+**What it runs, and what it can't do.**
+
+* A background process of the signed-in account, started at sign-in by an
+  `HKCU\…\Run` value (listed and switchable in Settings → Apps → Startup),
+  ended by Windows at sign-out. **No service, no scheduled task, no
+  administrator**: the installer refuses an elevated PowerShell window, and
+  nothing it installs ever asks for elevation. Its rights are the
+  account's; "ask me" protects the computer from the server, not from
+  software that account already runs.
+* No root-equivalent helpers exist on Windows, and the POSIX paths a Pi
+  trusts would, on Windows, name files at the root of the system drive
+  that **any** account may create (`C:\etc\domovoi\…`,
+  `C:\usr\local\sbin\…`). So on Windows the satellite reads no
+  root-owned pin (its pin is its config's, in its own profile), never runs
+  the setup-status or reboot helper (that path would otherwise run another
+  account's program, and hand it the approval code), and never reads root's
+  network record. It declares no Wi-Fi, LED, mic-gain, clock, display or
+  plugin-payload ability, and applies no plugin payload.
+* It never sweeps the home network for a server that moved (security
+  software reads that as a port scan): its address, then your server's
+  announced names, each held to the pin.
+* Device names from config (`[audio] input_device` / `output_device`,
+  `[music] alsa_device`) are refused unless they are "default", a number,
+  or a plain name — a dashboard push of anything else is refused before it
+  is written, and nothing else ever reaches PortAudio or the player's
+  command line.
+
+**The control channel** is the named pipe
+`\\.\pipe\domovoi-satellite-<account SID>` with the Linux socket's verbs:
+its DACL grants that account alone (no Everyone, no Administrators;
+low-integrity and app-container processes of the same account can't write
+to it either), `PIPE_REJECT_REMOTE_CLIENTS` keeps it off the network, the
+engine claims the name with `FILE_FLAG_FIRST_PIPE_INSTANCE` and refuses to
+share it, the engine closes a client whose process is another account's,
+and the tray and CLI refuse a pipe served by another account's process —
+so another person signed in on the same PC can neither talk to it nor sit
+on its name and show the tray a "muted" that isn't true.
+
+**Stopping and uninstalling.** The tray's Stop and the uninstaller set a
+per-account named event that the supervisor and the engine both wait on.
+The uninstaller is a copy taken from the verified bundle at install time,
+outside the code tree a code update may rewrite; it runs nothing from the
+satellite's code, takes no path from any file the satellite can write (the
+folder is the one it sits in; the registry value names are fixed, and what
+they hold is only compared with that folder, never followed), restores
+only power values that parse as a plan id and numbers, and deletes folders
+with `rmdir /s`, which removes a link inside rather than following it.
+
+**Never on the server PC.** The installer refuses a PC with the Domovoi
+server's Windows service, its install record, its data folder, a server
+identity in the account's `~\.domovoi`, or a server answering on
+`127.0.0.1:6370`.
+
+**The microphone indicator.** Windows' own microphone icon is on whenever
+the satellite listens for the wake word (always); the satellite's tray icon
+is a filled red microphone while audio is leaving for the server, and Mute
+closes the capture stream itself (Windows' icon goes out too). The
+approval code is shown in the tray, its toast and the installer's window,
+never logged.
 
 ## Satellite pairing (WS auth)
 

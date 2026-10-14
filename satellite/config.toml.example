@@ -45,6 +45,13 @@
 #                         docs/SPARE_DEVICE_SATELLITES.md), which writes the
 #                         [pc] section below. Refuses to start without a
 #                         server_fingerprint.
+#
+#   windows_pc          - A spare Windows laptop or PC: Windows' default mic
+#                         and speakers, Core Audio volume, the same narrow
+#                         abilities and [pc] section as generic_pc.
+#                         Installed and enrolled by
+#                         satellite/scripts/install-windows.ps1 into
+#                         %LOCALAPPDATA%\Domovoi\Satellite.
 profile = "respeaker_2mic_hat"
 
 # generic_pc only: a USB speakerphone that cancels its own echo can say so
@@ -100,6 +107,13 @@ sat_type = "voice"
 # and plugins that need one on a satellite stay Pi-only. The server can
 # never change this setting.
 permissions = "automatic"
+
+# How a spare computer looks for its server when the enrolled address stops
+# answering: "sweep" (its name, the address, then every address on this
+# network - a Pi's order, and generic_pc's default), "names" (its name and
+# the address; windows_pc's default - to security software a sweep looks
+# like a port scan) or "address" (only the address).
+# server_search = "sweep"
 
 [control]
 # The local control socket (~/.domovoi/control.sock, yours only) the tray
@@ -260,7 +274,12 @@ sync_enabled = true
 # mixer above; every Pi profile's default), "wpctl" (PipeWire), "pactl"
 # (PulseAudio), "auto" (wpctl, then pactl, then amixer: generic_pc's
 # default — on a desktop the speakers are the sound server's default sink,
-# and amixer's card 0 is often HDMI) or "none".
+# and amixer's card 0 is often HDMI), "windows" (Core Audio's default
+# speakers: windows_pc's default) or "none".
+#
+# On windows_pc, input_device / output_device and [music] alsa_device take
+# "default", a device number or part of a device's name as --list-devices
+# prints it - nothing else is accepted.
 # volume_backend = "auto"
 
 [listen]
