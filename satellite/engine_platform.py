@@ -453,6 +453,50 @@ class Platform:
         self.control_socket = control_socket
 
 
+#: Microsoft's C++ runtime, which onnxruntime's Windows wheel (the wake word)
+#: needs and does not carry: the embeddable Python brings vcruntime140*.dll,
+#: Windows itself brings neither of these. 14.44 is the toolset onnxruntime
+#: 1.31 is built with, and Microsoft's rule is a runtime at least as new as
+#: the toolset (scripts/install-windows.ps1 checks the same before anything
+#: is downloaded; a test holds the two equal).
+VC_RUNTIME_DLLS = ("msvcp140.dll", "msvcp140_1.dll")
+VC_RUNTIME_MIN = (14, 44)
+VC_REDIST_URL = "https://aka.ms/vc14/vc_redist.x64.exe"
+
+
+def windows_runtime_problem(python_dir: Any, system_dir: Any,
+                            version_of: Callable[[str], Any] | None = None,
+                            minimum: tuple[int, int] = VC_RUNTIME_MIN) -> str | None:
+    """Why the wake word can't load on this PC, in words a person can act
+    on, or None. Each DLL is the one Windows would load: beside the
+    satellite's Python first (an app-local copy), else in System32."""
+    import os
+
+    if version_of is None:
+        from satellite import win32
+
+        version_of = win32.file_version
+    missing, old = [], []
+    for name in VC_RUNTIME_DLLS:
+        found = next((os.path.join(str(d), name) for d in (python_dir, system_dir)
+                      if os.path.isfile(os.path.join(str(d), name))), None)
+        if found is None:
+            missing.append(name)
+            continue
+        version = version_of(found)
+        if not version or tuple(version[:2]) < tuple(minimum):
+            have = ".".join(str(p) for p in version[:2]) if version else "unknown"
+            old.append(f"{name} {have}")
+    if not missing and not old:
+        return None
+    want = ".".join(str(p) for p in minimum)
+    what = (f"Microsoft's Visual C++ runtime is not on this PC ({', '.join(missing)} missing)" if missing
+            else f"Microsoft's Visual C++ runtime on this PC is older than {want} ({', '.join(old)})")
+    return (f"{what}, and the wake word can't load without it. Install \"Microsoft Visual C++ "
+            f"Redistributable (x64)\" from {VC_REDIST_URL} (it asks for an administrator once), "
+            "then start the satellite again.")
+
+
 PC_PROFILES = frozenset({"generic_pc", "windows_pc"})
 #: The spare-computer profile for Windows (satellite/devices.py).
 WINDOWS_PROFILE = "windows_pc"

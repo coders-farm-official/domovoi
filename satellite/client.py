@@ -8733,6 +8733,18 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         not_started.note(f"[device] profile = {cfg.device.name!r} does not run on Windows; use windows_pc")
         return engine_platform.EXIT_CONFIG
+    if sys.platform == "win32":
+        # The wake word's onnxruntime needs Microsoft's C++ runtime, which
+        # Windows does not always have: say so plainly (exit 78, the tray's
+        # notification) rather than a "DLL load failed" traceback later.
+        problem = engine_platform.windows_runtime_problem(
+            Path(sys.executable).resolve().parent,
+            Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
+        if problem:
+            log.error("not starting: %s", problem)
+            print(f"domovoi-satellite: not starting: {problem}", file=sys.stderr)
+            not_started.note(problem)
+            return engine_platform.EXIT_CONFIG
     if pc_engine.is_pc(cfg):
         pinned, detail = pc_engine.require_pin(cfg)
         shared = pc_engine.core_account(CONFIG_DIR)

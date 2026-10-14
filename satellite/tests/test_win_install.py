@@ -702,7 +702,8 @@ def test_a_lock_naming_a_python_from_elsewhere_is_refused_before_any_download(tm
     bundle = _bundle_copy(tmp_path, served, url=served.url + "/python.zip")
     payload = enrolment_payload_for("http://domovoi-test-nowhere.home.arpa:6370")
     r = _ps(["-File", str(bundle / "satellite" / "scripts" / "install-windows.ps1"), payload,
-             "-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, NOTHING)], timeout=60)
+             "-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, NOTHING),
+             "-TestVcRuntimeMinimum", "1.0"], timeout=60)
     assert r.returncode == 1 and "unexpected Python" in r.stderr, r.stdout + r.stderr
     assert served.requests == [] and not (bundle / "stage").exists()
 

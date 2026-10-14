@@ -116,6 +116,44 @@ def load_lock(bundle: Path) -> dict[str, Any]:
     return doc
 
 
+VC_RUNTIME_FILES = ("msvcp140.dll", "msvcp140_1.dll")
+
+
+def vc_runtime_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    """The lock's pinned Microsoft C++ runtime DLLs (``vc_runtime``), for an
+    install that places them beside its Python (``--local-vc-runtime``).
+    Empty until the owner decides to ship them; each must name one of the
+    two DLLs, a SHA-256, a size and an https source."""
+    entries = lock.get("vc_runtime") or []
+    if not isinstance(entries, list):
+        raise InstallError(f"{LOCK_NAME}: vc_runtime is not a list")
+    for e in entries:
+        ok = (isinstance(e, dict) and e.get("file") in VC_RUNTIME_FILES
+              and re.fullmatch(r"[0-9a-f]{64}", str(e.get("sha256")))
+              and isinstance(e.get("size"), int) and 0 < e["size"] < 10_000_000
+              and str(e.get("url", "")).startswith("https://"))
+        if not ok:
+            raise InstallError(f"{LOCK_NAME}: a vc_runtime entry is malformed: {e!r}"[:300])
+    return entries
+
+
+def place_vc_runtime(root: Path, lock: dict[str, Any], *, core: str | None,
+                     opener: Callable[..., Any] | None = None) -> None:
+    """Microsoft's two C++ runtime DLLs beside the satellite's python.exe
+    ("app-local" deployment, which Windows loads before System32's), each
+    held to its pin. Refused when this build pins none."""
+    entries = vc_runtime_entries(lock)
+    if {e["file"] for e in entries} != set(VC_RUNTIME_FILES):
+        raise InstallError("this build of the satellite carries no pinned Visual C++ runtime files yet, so "
+                           "-LocalVcRuntime can't be used: install \"Microsoft Visual C++ Redistributable "
+                           "(x64)\" from https://aka.ms/vc14/vc_redist.x64.exe instead", 6)
+    stage = root / "cache" / "vc-runtime"
+    for entry in entries:
+        fetch_pinned(entry, stage, core=core, opener=opener)
+        shutil.copyfile(stage / entry["file"], root / "python" / entry["file"])
+    say("  Microsoft's C++ runtime placed beside the satellite's Python (each checked against its pin)")
+
+
 def lock_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
     return [lock.get("python") or {}, lock.get("pip") or {}, *(lock.get("wheels") or [])]
 
@@ -605,6 +643,9 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     replace_dir(bundle / "satellite", root / "app" / "satellite")
     shutil.copyfile(bundle / "satellite" / "scripts" / "uninstall-windows.ps1", root / "uninstall.ps1")
 
+    if getattr(args, "local_vc_runtime", False):
+        place_vc_runtime(root, lock, core=e.core, opener=opener)
+
     say("Getting the satellite's libraries (about 95 MB, each checked against its pinned SHA-256)...")
     wheels_dir = root / "cache" / "wheels"
     sources: dict[str, int] = {}
@@ -686,6 +727,9 @@ def main(argv: list[str] | None = None) -> int:
     i.add_argument("--power", choices=("ask", "no", "yes"), default="ask")
     i.add_argument("--yes", action="store_true")
     i.add_argument("--no-start", action="store_true")
+    i.add_argument("--local-vc-runtime", action="store_true",
+                   help="put the lock's pinned Microsoft C++ runtime DLLs beside the Python (not yet "
+                        "available: the lock pins none)")
     i.add_argument("--wait", type=int, default=900)
     i.add_argument("--registry-file", default=None,
                    help="TESTS ONLY: write the Run/Uninstall values and the shortcut to this JSON file")

@@ -53,6 +53,13 @@ are unchanged.
 * A Windows satellite whose control pipe is already taken by another
   program stops and says why in the tray, rather than listening with a
   tray that can't see or mute it.
+* **Windows needs Microsoft's Visual C++ runtime 14.44 or newer** (the
+  wake word's onnxruntime does not bring it). The installer checks before
+  downloading anything and the satellite at every start; without it each
+  says so and links Microsoft's redistributable
+  (<https://aka.ms/vc14/vc_redist.x64.exe>, an administrator once). The
+  installer also says when Smart App Control is on or in evaluation: it
+  may block parts of the satellite that aren't signed yet.
 
 ## 2026-10-13 — A spare Linux laptop or mini PC can be a room
 

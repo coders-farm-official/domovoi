@@ -329,6 +329,27 @@ data folder, a server's own files in your account, and a server answering on
 this PC). Using the server PC as a room will come with the server's own
 tray icon instead.
 
+**Microsoft's Visual C++ runtime, 14.44 or newer.** The wake word's
+onnxruntime needs `msvcp140.dll` and `msvcp140_1.dll` and does not bring
+them; Windows doesn't always have them (other programs usually install
+them). The installer checks before it downloads anything, and the
+satellite at every start; without them each says so and points to
+**"Microsoft Visual C++ Redistributable (x64)"**
+(<https://aka.ms/vc14/vc_redist.x64.exe>, from Microsoft; it asks for an
+administrator once, and it is installed for the whole PC). Install it, then
+paste the command again.
+
+**Smart App Control** (Windows 11) checks every program file, DLLs
+included, and some of the satellite's libraries are not signed yet (its
+Python and onnxruntime are). The installer reads its state (never changes
+it) and says so when it is **on** or in **evaluation**. With it on, Windows
+may block part of the satellite, with no "run anyway": the satellite then
+doesn't start, or Windows says it "blocked part of this app". The only way
+round it is turning Smart App Control off (**Windows Security → App &
+browser control → Smart App Control settings**); read what Windows Security
+says first — on many Windows 11 builds it can only be turned back on by
+resetting Windows.
+
 **Unsigned, for now.** Coders Farm's signing is on hold, so the satellite's
 own code carries no signature. Python itself, which runs it, is signed by
 the Python Software Foundation. Expect Windows Security or another
@@ -526,6 +547,8 @@ same question as on every Pi; see the wake-word notes).
 | "never installed on the PC that runs the Domovoi server" | This PC runs the server. Use another PC. |
 | "did not prove it is the one in the code" | As on Linux: a different machine answers at that address. Compare the fingerprint with **Settings → About**. |
 | "running scripts is disabled on this system" | A Group Policy forbids scripts here; the installer can't run on this PC. |
+| "Microsoft's Visual C++ runtime is not on this PC" / "is older than 14.44" (the installer, or the tray) | Install **Microsoft Visual C++ Redistributable (x64)** from <https://aka.ms/vc14/vc_redist.x64.exe> (an administrator, once), then paste the command again, or **Start satellite** in the tray. |
+| "Windows blocked part of this app", or it never starts, with Smart App Control on | Smart App Control blocks a file of the satellite's that isn't signed yet (see above). |
 | Grey tray icon, "not running: no pinned server identity" | Re-run the install command from the dashboard. |
 | "Domovoi satellite didn't start" with a line from `config.toml` | A value there it won't run on (a device name that is not "default", a number or a plain name; a typo'd setting). Fix that line in `%LOCALAPPDATA%\Domovoi\Satellite\.domovoi\config.toml` (the old file is `config.toml.bak` after a dashboard edit), then **Start satellite** in the tray menu. |
 | The wake word never fires | **Settings → Privacy & security → Microphone**: "Let desktop apps access your microphone" on; the right microphone chosen in **Settings → System → Sound**. |

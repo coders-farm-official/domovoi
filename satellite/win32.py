@@ -664,6 +664,42 @@ def battery_from_status(ac_line: int, flag: int, percent: int) -> dict[str, Any]
     return {"battery": {"percent": int(percent), "charging": charging, "on_power": on_power}}
 
 
+class VS_FIXEDFILEINFO(ctypes.Structure):
+    _fields_ = [("dwSignature", wintypes.DWORD), ("dwStrucVersion", wintypes.DWORD),
+                ("dwFileVersionMS", wintypes.DWORD), ("dwFileVersionLS", wintypes.DWORD),
+                ("dwProductVersionMS", wintypes.DWORD), ("dwProductVersionLS", wintypes.DWORD),
+                ("dwFileFlagsMask", wintypes.DWORD), ("dwFileFlags", wintypes.DWORD),
+                ("dwFileOS", wintypes.DWORD), ("dwFileType", wintypes.DWORD),
+                ("dwFileSubtype", wintypes.DWORD), ("dwFileDateMS", wintypes.DWORD),
+                ("dwFileDateLS", wintypes.DWORD)]
+
+
+def file_version(path: str) -> tuple[int, int, int, int] | None:
+    """A program file's version (its VS_FIXEDFILEINFO), or None when it
+    has none or can't be read. Reads the file; loads nothing."""
+    _need_windows()
+    v = ctypes.WinDLL("version", use_last_error=True)
+    v.GetFileVersionInfoSizeW.argtypes = (wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD))
+    v.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    v.GetFileVersionInfoW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID)
+    v.GetFileVersionInfoW.restype = wintypes.BOOL
+    v.VerQueryValueW.argtypes = (wintypes.LPCVOID, wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID),
+                                 ctypes.POINTER(wintypes.UINT))
+    v.VerQueryValueW.restype = wintypes.BOOL
+    size = v.GetFileVersionInfoSizeW(str(path), None)
+    if not size:
+        return None
+    buf = ctypes.create_string_buffer(size)
+    if not v.GetFileVersionInfoW(str(path), 0, size, buf):
+        return None
+    ptr, n = wintypes.LPVOID(), wintypes.UINT()
+    if not v.VerQueryValueW(buf, "\\", ctypes.byref(ptr), ctypes.byref(n)) or n.value < ctypes.sizeof(VS_FIXEDFILEINFO):
+        return None
+    info = ctypes.cast(ptr, ctypes.POINTER(VS_FIXEDFILEINFO)).contents
+    ms, ls = info.dwFileVersionMS, info.dwFileVersionLS
+    return (ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
+
+
 def power_status() -> dict[str, Any]:
     """This PC's battery, from ``GetSystemPowerStatus`` (no privilege)."""
     if not IS_WINDOWS:

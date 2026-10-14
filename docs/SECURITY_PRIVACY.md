@@ -1987,6 +1987,13 @@ household token**: it reaches no dashboard route.
   prefix, `..`, or one that resolves outside the cache (a link or
   junction) is refused — the same rule on every board, and for the code
   and plugin channels too.
+* Microsoft's C++ runtime (`msvcp140.dll`, `msvcp140_1.dll`, 14.44+,
+  which onnxruntime needs) comes from Microsoft's own redistributable,
+  installed by the person; the installer and the engine check for it and
+  name where to get it. Placing Microsoft's two DLLs beside the
+  satellite's Python instead (`-LocalVcRuntime`, from pinned, hashed
+  copies) is prepared but off: the lock pins none until that is decided.
+  Smart App Control's state is read, never changed.
 * The health sample runs no Linux tool (`ip`, `vcgencmd`, `nmcli`) on
   Windows: Windows looks for a bare program name in the current folder
   and on PATH before System32. `powercfg` is called by its full path.
