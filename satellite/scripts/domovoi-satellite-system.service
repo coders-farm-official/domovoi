@@ -1,0 +1,43 @@
+# Domovoi room satellite on a headless spare computer (no desktop session):
+# a system unit running as its own account, @USER@, which owns nothing but
+# its home (@HOME@: the code, the venv and ~/.domovoi) and is in the audio
+# group for plain ALSA. Rendered and installed by
+# satellite/scripts/install-pc.sh into /etc/systemd/system/.
+#
+# No root helpers and no sudo rights: the account cannot gain privileges
+# (NoNewPrivileges) and sees the rest of the system read-only. The engine
+# restarts itself by exiting 75 (RestartForceExitStatus); exit 78, no
+# pinned server identity, leaves it stopped (RestartPreventExitStatus).
+
+[Unit]
+Description=Domovoi room satellite (this computer, headless)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+SupplementaryGroups=audio
+WorkingDirectory=@PREFIX@
+ExecStart=@PREFIX@/venv/bin/python -m satellite.client
+Environment=DOMOVOI_SERVICE_SCOPE=system
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+RestartForceExitStatus=75
+SuccessExitStatus=75
+RestartPreventExitStatus=78
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=@HOME@
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
