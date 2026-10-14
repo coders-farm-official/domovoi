@@ -26,7 +26,7 @@ from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from domovoi.config_env_writer import write_env_values
+from domovoi.config_env_writer import control_character, write_env_values
 
 log = logging.getLogger(__name__)
 
@@ -206,6 +206,13 @@ class PluginConfigRegistry:
                 if spec_by_name[name].kind == "secret" and value:
                     msg = msg.replace(str(value), "••••")
             raise ValueError(f"plugin {slug!r}: config rejected: {msg}") from None
+
+        # A .env value never holds a control character (the writer refuses
+        # it): refuse before anything is applied live.
+        for name in changes:
+            if control_character(getattr(new_instance, name)) is not None:
+                raise ValueError(f"plugin {slug!r}: {name} can't hold a newline or "
+                                 "another control character")
 
         # Apply live (mutate the existing instance so SDK references hold).
         for name in changes:

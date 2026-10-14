@@ -991,6 +991,14 @@ def coerce_and_validate(spec: FieldSpec, value: object) -> object:
             raise ValueError("expected a number")
     elif t in ("str", "choice"):
         coerced = str(value)
+        # A newline would end the .env line early: the text after it reads
+        # as a setting of its own to every line-based reader (review of
+        # 2026-10-13). No setting needs a control character.
+        from domovoi.config_env_writer import control_character
+
+        bad = control_character(coerced)
+        if bad is not None:
+            raise ValueError(f"can't hold a control character ({bad})")
     else:  # pragma: no cover — guarded by the registry's Literal type
         raise ValueError(f"unknown field type {t!r}")
 
