@@ -2209,7 +2209,7 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
       <li>A one-time download of about {req.download_gb || 22} GB (the trainer and its training data).</li>
       {mem.pc_need_gb ? (
         <li>Memory: a PC with {mem.pc_need_gb} GB or more (Windows gives Domovoi the PC’s memory
-          minus 8 GB, and training needs 24 GB of that){mem.pc ? ` · this PC has ${mem.pc}` : ''}.</li>
+          minus 8 GB, and training needs 24 GB of that){mem.total_gb != null ? ` · Domovoi has ${mem.total_gb} GB of it` : ''}.</li>
       ) : (
         <li>Memory: a 24 GB server{mem.total_gb != null ? ` · this one has ${mem.total_gb} GB` : ''}.</li>
       )}

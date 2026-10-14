@@ -148,6 +148,18 @@ async def test_disk_needed_drops_once_image_and_data_are_there(box):
 
 
 @pytest.mark.asyncio
+async def test_an_image_from_other_sources_counts_as_still_needed(box):
+    """A trainer built from an older checkout (or by hand) is rebuilt by
+    the job: the disk it needs counts the image (e2e 2026-10-14 showed 18
+    GB for a stale image)."""
+    box["state"]["image"] = (True, "b" * 40)
+    with egress.override_policy("always"):
+        req = await wts.requirements(force=True)
+    assert req["image"]["present"] is True and req["image"]["current"] is False
+    assert req["disk"]["need_gb"] == 31
+
+
+@pytest.mark.asyncio
 async def test_a_refused_job_never_starts_while_a_word_trains(box, monkeypatch):
     monkeypatch.setattr(wwt, "training_active", lambda: True)
     with egress.override_policy("always"), pytest.raises(wts.Refused, match="training right now"):
@@ -338,7 +350,8 @@ async def test_on_windows_a_32_gb_pc_is_enough(box):
     box["state"].update(wsl=True, mem_mib=_memory_cap_gb(32) * 1024 - 300)
     with egress.override_policy("always"):
         req = await wts.requirements(force=True)
-    assert req["refusals"] == [] and req["memory"]["pc"] == "about 32 GB"
+    assert req["refusals"] == [] and req["memory"]["total_gb"] == 23.7
+    assert "pc" not in req["memory"]          # no PC size guessed when nothing is refused
 
 
 @pytest.mark.asyncio

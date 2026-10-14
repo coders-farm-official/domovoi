@@ -452,7 +452,8 @@ async def requirements(force: bool = False) -> dict[str, Any]:
     physical = _physical_cores()
     ncpu = int(info.get("ncpu") or 0) or (os.cpu_count() or 0)
 
-    need_gb = (0.0 if present else IMAGE_GB) + (0.0 if data_ready else DATA_GB) + PER_WORD_GB
+    # An image built from other sources is rebuilt: count it as needed.
+    need_gb = (0.0 if image_current else IMAGE_GB) + (0.0 if data_ready else DATA_GB) + PER_WORD_GB
     refusals: list[str] = []
     notes: list[str] = []
 
@@ -530,7 +531,6 @@ async def requirements(force: bool = False) -> dict[str, Any]:
                  "confirm_gb": WSL_CONFIRM_GB if wsl else None},
         "memory": {"total_gb": None if mem_mib is None else round(mem_mib / 1024, 1),
                    "need_gb": 24,
-                   "pc": (pc_memory_gb(mem_mib)[1] if wsl and mem_mib else None),
                    "pc_need_gb": 32 if wsl else None},
         "wsl": wsl,
         "download_gb": DOWNLOAD_GB,
