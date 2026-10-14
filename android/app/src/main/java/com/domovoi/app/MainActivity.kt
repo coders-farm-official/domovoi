@@ -106,11 +106,13 @@ class MainActivity : ComponentActivity() {
         (application as DomovoiApplication).container.containerAlerts.onAppResumed()
     }
 
-    /** True (and on its way to the room screen) while room mode is on. */
+    /** True (and on its way to the room screen) while room mode is on.
+     *  The household task leaves Recents too: no screenshot of it stays
+     *  there while the phone is a room. */
     private fun toRoomIfLocked(): Boolean {
         if (!RoomStore.isActive(this)) return false
         startActivity(Intent(this, RoomModeActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        finish()
+        finishAndRemoveTask()
         return true
     }
 

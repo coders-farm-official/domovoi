@@ -444,9 +444,15 @@ Python. Package `roommode/` (not `satellite/`, which would sit beside
 Rules it keeps:
 
 - **Room key only.** No household token: room mode's client has no token
-  interceptor, and while room mode is on the app's client puts the token
-  on nothing (`AppContainer.kt`), the state socket is closed and
-  `MainActivity` sends everyone to the room screen.
+  interceptor and follows no redirect; while room mode is on the app's
+  client puts the token on nothing (`net/HouseholdLock.kt`, checked by
+  `DeviceAuthInterceptor` and `tokenForDownload`), the state socket is
+  closed, the timer sync and mirrored alarms are stopped, token-bearing
+  downloads are cancelled, and `MainActivity` sends everyone to the room
+  screen (and leaves Recents).
+- **Exit behind the unlock.** A phone holding a household token needs a
+  screen lock to be a room (`RoomLockRules.kt`); leaving offers keep or
+  forget.
 - **Old phones.** Works in the armeabi-v7a APK and from Android 8: it uses
   ONNX Runtime only, never LiteRT-LM or sherpa-onnx (the assistant's).
 - **One mic owner** (`audio/MicArbiter.kt`): room mode, the phone drop-in
@@ -457,11 +463,17 @@ Rules it keeps:
   `wake_models`, `sounds`, and `full_duplex` only where
   `AcousticEchoCanceler.isAvailable()`. Never `chat_mode`.
 
-Tests: `app/src/test/java/com/domovoi/app/roommode/` and
-`audio/MicOwnershipTest.kt` (JVM). `RoomProtocolTest` reads
+Tests: `app/src/test/java/com/domovoi/app/roommode/`,
+`audio/MicOwnershipTest.kt` and `net/HouseholdLockTest.kt` (JVM).
+`RoomGuardsTest` pins the guards in Android entry points by reading the
+compiled classes (mute, the sticky restart, the drop-in's echo canceller,
+the normal app's redirect, the lock rule); `RoomNetworkTest` that no
+redirect is followed; `RoomModelsTest` the freshness, pin and body checks.
+`RoomProtocolTest` reads
 `docs/uml/satellite-fixtures.json` (the core's and the Pi's tests read it
 too); `RoomEnrolmentTest` reads `docs/uml/spare-device-enrol-fixture.json`
-when it exists, else its own copy in test resources; `RoomIdentityTest`
+when it exists, else a verbatim copy of it in test resources (from
+wf/sat-pc, to drop at integration), and must match every case; `RoomIdentityTest`
 checks a health answer and an envelope the core's own code signed;
 `RoomRulesTest` checks the app's model pins against
 `domovoi/satellite_media/fetchers.py`. The wake-word parity test runs the

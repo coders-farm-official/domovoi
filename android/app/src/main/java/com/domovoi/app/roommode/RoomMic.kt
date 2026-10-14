@@ -16,8 +16,19 @@ import com.domovoi.app.assistant.AudioSource
  * Silence the OS hands over (Android 12+'s microphone privacy toggle, or a
  * phone call holding the mic) is all-zero samples: [blocked] turns true
  * after two seconds of them and false at the first real sample.
+ *
+ * Mute is enforced HERE, not by its callers: every [read] asks [muted]
+ * first and, when it is, closes the recorder and answers [MUTED] — so in
+ * every state (listening, the acknowledgement, a capture, the wait for a
+ * reply, a drop-in) the recorder is shut within one frame of Mute, and
+ * [open] refuses while muted. [onOpenChanged] hears every open and close,
+ * which is what the screen's mic chip shows (it never says "mic off" while
+ * a recorder is open).
  */
-class RoomMic {
+class RoomMic(
+    private val muted: () -> Boolean = { false },
+    private val onOpenChanged: (Boolean) -> Unit = {},
+) {
     private var source: AudioSource? = null
     private var aec: AcousticEchoCanceler? = null
     private var zeroFrames = 0
@@ -32,6 +43,7 @@ class RoomMic {
 
     fun open(call: Boolean) {
         close()
+        if (muted()) return
         val feed = RoomTestHooks.feed
         val mic = feed ?: AndroidMic(
             audioSource = if (call) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.VOICE_RECOGNITION,
@@ -44,10 +56,15 @@ class RoomMic {
         source = mic
         openAs = call
         zeroFrames = 0
+        onOpenChanged(true)
     }
 
     /** One frame into [buf]; the sample count, or negative on failure. */
     fun read(buf: ShortArray): Int {
+        if (muted()) {
+            close()
+            return MUTED
+        }
         val s = source ?: return -1
         var got = 0
         while (got < buf.size) {
@@ -75,14 +92,22 @@ class RoomMic {
     }
 
     fun close() {
+        val wasOpen = source != null
         runCatching { aec?.release() }
         aec = null
         runCatching { source?.stop() }
         source = null
         openAs = null
+        if (wasOpen) onOpenChanged(false)
     }
 
+    /** A recorder is open now. */
+    val isOpen: Boolean get() = source != null
+
     companion object {
+        /** What [read] answers while muted (the recorder is then closed). */
+        const val MUTED = -100
+
         /** Two seconds of 30 ms frames. */
         const val BLOCKED_AFTER_FRAMES = 2_000 / RoomProtocol.FRAME_MS
 

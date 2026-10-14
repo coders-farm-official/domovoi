@@ -24,7 +24,21 @@ import java.security.MessageDigest
  * under a licence the app may ship. Files live in the app's private
  * `files/room/models/`, written atomically, re-hashed before every load.
  */
-class RoomModels(private val dir: File, private val store: RoomStore) {
+class RoomModels(private val dir: File, private val book: ModelBook) {
+    /** What the room remembers about the lists and models it took
+     *  (RoomStore; an in-memory one in the tests). */
+    interface ModelBook {
+        /** The last list accepted under [record] (freshness). */
+        fun seen(record: String): RoomIdentity.Seen?
+
+        fun remember(record: String, accepted: RoomIdentity.Accepted)
+
+        /** The digest the signed list gave a trained model when it was taken. */
+        fun trainedSha(name: String): String?
+
+        fun setTrainedSha(name: String, sha: String)
+    }
+
     sealed class Outcome {
         /** Every file the room needs is here and checked. */
         data class Ready(val files: Files) : Outcome()
@@ -45,9 +59,17 @@ class RoomModels(private val dir: File, private val store: RoomStore) {
         if (!base.all { verifiedBase(it) }) return null
         val wakeFile = File(dir, wakeFileName(wakeWord))
         val stock = stockFile(wakeWord)
-        val wakeOk = if (stock != null) verifiedBase(wakeFile) else wakeFile.isFile && wakeFile.length() > 0
+        val wakeOk = if (stock != null) verifiedBase(wakeFile) else trainedModelIntact(wakeFile.name)
         if (!wakeOk) return null
         return Files(base[0], base[1], base[2], wakeFile, wakeWord)
+    }
+
+    /** A trained model is loaded only when it still hashes to what its
+     *  signed list said when it was taken (re-hashed at every load). */
+    fun trainedModelIntact(name: String): Boolean {
+        val file = File(dir, name)
+        val want = book.trainedSha(name) ?: return false
+        return file.isFile && sha256(file) == want
     }
 
     /**
@@ -76,6 +98,7 @@ class RoomModels(private val dir: File, private val store: RoomStore) {
                 }
                 val target = File(dir, name)
                 if (!(target.isFile && sha256(target) == sha)) download(http, "$coreUrl/v1/wake-models/$name", target, sha, null)
+                book.setTrainedSha(name, sha)
             }
             if (missing.isNotEmpty()) return Outcome.Missing(missing)
             local(wakeWord)?.let { Outcome.Ready(it) } ?: Outcome.Failed("the models did not check out after the download")
@@ -89,8 +112,8 @@ class RoomModels(private val dir: File, private val store: RoomStore) {
     private fun signedList(http: OkHttpClient, url: String, channel: String, fingerprint: String): Map<String, String> {
         val body = get(http, url).toString(Charsets.UTF_8)
         val accepted = RoomIdentity.verifyManifestEnvelope(Json.parseToJsonElement(body), channel, fingerprint)
-        RoomIdentity.checkFreshness(accepted, store.seen(channel))
-        store.remember(channel, accepted)
+        RoomIdentity.checkFreshness(accepted, book.seen(channel))
+        book.remember(channel, accepted)
         return accepted.manifest
     }
 

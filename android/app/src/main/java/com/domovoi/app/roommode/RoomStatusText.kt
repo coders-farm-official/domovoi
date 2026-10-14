@@ -43,7 +43,12 @@ object RoomStatusText {
                 "(the privacy toggle), or a call or another app has it."
         }
         return when (val l = s.link) {
-            is RoomEngine.Link.AwaitingApproval -> "Waiting for approval. On the dashboard, open Settings → Satellites and approve this room with the code below."
+            is RoomEngine.Link.AwaitingApproval -> if (l.removed) {
+                "This room was removed on the dashboard (or its pairing reset). Approve it again with the code below, " +
+                    "or hold Exit to leave room mode and forget this room."
+            } else {
+                "Waiting for approval. On the dashboard, open Settings → Satellites and approve this room with the code below."
+            }
             is RoomEngine.Link.Rejected -> l.reason
             is RoomEngine.Link.Conflict -> l.reason
             is RoomEngine.Link.Offline -> l.reason.replaceFirstChar { it.uppercase() }
@@ -72,6 +77,23 @@ object RoomStatusText {
             else -> label(ring)
         }
     }
+
+    /** A household phone without a screen lock (RoomLockRules). */
+    const val NEEDS_LOCK =
+        "Not listening: this phone is also paired with your household, so room mode needs a screen lock " +
+            "(leaving room mode takes the phone's unlock). Set a PIN, pattern or password and the room starts again."
+
+    const val SET_A_LOCK_TO_EXIT =
+        "This phone is also paired with your household. Leaving room mode takes the phone's unlock, so the " +
+            "household app stays out of reach of whoever is in the room: set a PIN, pattern or password, then hold Exit again."
+
+    const val CONFIRM_NO_LOCK =
+        "This phone has no screen lock, so anyone can do this. It holds no household pairing, so only the room " +
+            "is at stake. Set a screen lock to keep room mode locked."
+
+    const val KEEP_OR_FORGET =
+        "Keep this room to come back to it later, or forget it: its key is deleted from this phone, and the room " +
+            "stays on the dashboard until you remove it there."
 
     /** `hey_jarvis` → "Hey Jarvis". */
     fun spoken(wakeWord: String): String =

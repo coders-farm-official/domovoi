@@ -15,7 +15,7 @@ import kotlin.random.Random
  * default voice), every body checked against it, clips no longer listed
  * removed. On connect, and on `sounds_changed`.
  */
-class RoomSounds(private val dir: File, private val store: RoomStore) {
+class RoomSounds(private val dir: File, private val store: RoomModels.ModelBook) {
     /** Mirror the list. Returns how many clips were downloaded; throws
      *  [IOException] / [RoomIdentity.IdentityException] on failure (the
      *  cache is kept as it was). Blocking. */

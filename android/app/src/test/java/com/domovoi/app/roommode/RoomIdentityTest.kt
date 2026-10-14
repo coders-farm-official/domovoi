@@ -119,6 +119,8 @@ class RoomIdentityTest {
         assertEquals("domovoi.local:80", RoomIdentity.dialedAddress("http://Domovoi.LOCAL/"))
         assertEquals("[fd00::5]:6370", RoomIdentity.dialedAddress("ws://[fd00::5]:6370"))
         assertEquals("h:443", RoomIdentity.dialedAddress("https://h"))
+        // An IPv6 literal is not re-spelled (the reviewer's Python vector).
+        assertEquals("[fd00:0:0:0:0:0:0:5]:6370", RoomIdentity.dialedAddress("http://[FD00:0:0:0:0:0:0:5]:6370"))
     }
 
     @Test

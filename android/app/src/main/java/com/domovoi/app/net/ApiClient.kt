@@ -169,6 +169,7 @@ class ApiClient(
      * rather than queue a request that would carry the token and fail.
      */
     suspend fun tokenForDownload(url: HttpUrl): String? = withContext(Dispatchers.IO) {
+        if (HouseholdLock.roomModeActive) return@withContext null
         val raw = baseUrl
         val base = TokenScope.baseOf(raw) ?: return@withContext null
         if (!TokenScope.sameServer(base, url)) return@withContext null

@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.domovoi.app.data.KeystoreSealer
 import com.domovoi.app.data.TokenVault
+import com.domovoi.app.net.HouseholdLock
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -31,7 +32,7 @@ import java.util.Base64
  * Files: `shared_prefs/domovoi-room.xml` and `shared_prefs/domovoi-room-vault.xml`,
  * excluded from every backup and transfer like the rest of the app's data.
  */
-class RoomStore(context: Context) {
+class RoomStore(context: Context) : RoomModels.ModelBook {
     private val prefs: SharedPreferences = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
     private val vault = TokenVault(
         VaultFile(context.applicationContext.getSharedPreferences(VAULT_FILE, Context.MODE_PRIVATE)),
@@ -72,7 +73,8 @@ class RoomStore(context: Context) {
         val same = enrolment?.let { it.coreUrl == e.coreUrl && it.roomId == e.roomId && it.fingerprint == e.fingerprint } == true
         if (!same || pairingToken() == null) {
             if (!vault.write(mapOf(TOKEN_KEY to newToken()))) return false
-            prefs.edit().putString(K_CODE, newApprovalCode()).remove(K_SERIALS).remove(K_WAKE).remove(K_THRESHOLD).commit()
+            prefs.edit().putString(K_CODE, newApprovalCode()).remove(K_SERIALS).remove(K_WAKE).remove(K_THRESHOLD)
+                .remove(K_APPROVED).commit()
         }
         prefs.edit()
             .putString(K_CORE, e.coreUrl)
@@ -88,7 +90,18 @@ class RoomStore(context: Context) {
     fun pairingToken(): String? = vault.read()[TOKEN_KEY]?.takeIf { it.isNotBlank() }
 
     fun setActive(on: Boolean) {
+        // The household token goes on no request from this moment
+        // (net/HouseholdLock.kt), before anything else happens.
+        HouseholdLock.roomModeActive = on
         prefs.edit().putBoolean(K_ACTIVE, on).apply { if (!on) putBoolean(K_RUNNING, false) }.commit()
+    }
+
+    /** The core accepted this room at least once (a `ready`): a later
+     *  "waiting for approval" means it was removed on the dashboard. */
+    val approvedOnce: Boolean get() = prefs.getBoolean(K_APPROVED, false)
+
+    fun setApprovedOnce() {
+        if (!approvedOnce) prefs.edit().putBoolean(K_APPROVED, true).apply()
     }
 
     fun setRunning(on: Boolean) {
@@ -114,13 +127,19 @@ class RoomStore(context: Context) {
         }.apply()
     }
 
-    fun seen(record: String): RoomIdentity.Seen? {
+    override fun trainedSha(name: String): String? = prefs.getString(K_TRAINED + name, null)
+
+    override fun setTrainedSha(name: String, sha: String) {
+        prefs.edit().putString(K_TRAINED + name, sha).apply()
+    }
+
+    override fun seen(record: String): RoomIdentity.Seen? {
         val raw = serials()[record] ?: return null
         val serial = raw.substringBefore(':').toLongOrNull() ?: return null
         return RoomIdentity.Seen(serial, raw.substringAfter(':', "").ifEmpty { null })
     }
 
-    fun remember(record: String, accepted: RoomIdentity.Accepted) {
+    override fun remember(record: String, accepted: RoomIdentity.Accepted) {
         val next = serials() + (record to "${accepted.serial}:${accepted.digest}")
         prefs.edit().putString(K_SERIALS, Json.encodeToString(SERIALS, next)).apply()
     }
@@ -161,6 +180,8 @@ class RoomStore(context: Context) {
         private const val K_THRESHOLD = "wake_threshold"
         private const val K_MUTED = "muted"
         private const val K_SERIALS = "manifest_serials"
+        private const val K_APPROVED = "approved_once"
+        private const val K_TRAINED = "trained_sha:"
         private val SERIALS = MapSerializer(String.serializer(), String.serializer())
 
         /** 32 random bytes, URL-safe base64 (as `secrets.token_urlsafe(32)`). */

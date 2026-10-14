@@ -135,6 +135,27 @@ class TimerAlerts(
         }
     }
 
+    /**
+     * Room mode begins (roommode/): the household's timers stop reaching this
+     * phone. The background chain stops and every mirrored alarm is
+     * cancelled, so a household timer set before room mode does not ring on
+     * the room phone; the receivers also stand down while room mode is on
+     * (net/HouseholdLock.kt). [resumeAfterRoomMode] undoes it.
+     */
+    fun pauseForRoomMode() {
+        syncJob?.cancel()
+        scope.launch {
+            safely("room mode: background sync stop") { sync.stop() }
+            safely("room mode: timer mirror clear") { engine.clearMirror() }
+        }
+    }
+
+    /** Room mode ended: the chain and the mirror come back (the same sync a
+     *  start runs). */
+    fun resumeAfterRoomMode() {
+        scope.launch { safely("timer start sync") { sync.onStart() } }
+    }
+
     /** MainActivity.onResume: notifications may have been turned on or off
      *  in the system settings meanwhile. */
     fun onAppResumed() {

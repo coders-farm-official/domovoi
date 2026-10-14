@@ -19,7 +19,6 @@ import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
 import com.domovoi.app.player.ServerScope
-import com.domovoi.app.roommode.RoomStore
 import com.domovoi.app.voice.PhoneVoice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,15 +58,7 @@ class AppContainer(context: Context) {
         network = { network.fingerprint },
         log = { Log.i("IdentityGate", it) },
     )
-    /** The household token goes on no request while room mode is on
-     *  (roommode/RoomStore.kt): a room phone holds no household
-     *  credential in use, and the normal app is locked meanwhile. */
-    val api: ApiClient = ApiClient(
-        { prefs.serverUrl.value },
-        { if (RoomStore.isActive(context)) null else prefs.deviceToken.value },
-        identity,
-        { if (RoomStore.isActive(context)) null else prefs.tokenForServer(it) },
-    )
+    val api: ApiClient = ApiClient(prefs, identity)
     val bus = StateBus(api, prefs)
     val player = PlayerController(context, api, prefs)
 

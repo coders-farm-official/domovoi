@@ -26,16 +26,18 @@ object RoomSessionRules {
 
     const val REJECTED_TEXT =
         "Another device is this room on the server. On the dashboard, open the room under Settings → Satellites and " +
-            "reset its pairing, or exit and choose another room name."
+            "reset its pairing, or hold Exit to leave room mode and forget this room."
     const val CONFLICT_TEXT =
         "Another device is already waiting for approval as this room. Reject it on the dashboard, or wait three " +
             "minutes and this phone takes its place."
     const val THROTTLED_TEXT = "too many approval requests from this network; trying again shortly"
 
-    fun verdict(reason: String?, code: String?, current: String?): Verdict = when (reason) {
+    fun verdict(reason: String?, code: String?, current: String?, approvedBefore: Boolean = false): Verdict = when (reason) {
         "awaiting_approval" -> {
             val keep = code?.takeIf { c -> c.length in 4..8 && c.all { it in '0'..'9' } }
-            Verdict(RoomEngine.Link.AwaitingApproval(keep ?: current), "awaiting_approval", keep)
+            // Parked after the core had accepted this room: it was removed on
+            // the dashboard (or its pairing reset).
+            Verdict(RoomEngine.Link.AwaitingApproval(keep ?: current, removed = approvedBefore), "awaiting_approval", keep)
         }
         "pairing_rejected" -> Verdict(RoomEngine.Link.Rejected(REJECTED_TEXT), "pairing_rejected")
         "approval_conflict" -> Verdict(RoomEngine.Link.Conflict(CONFLICT_TEXT), "approval_conflict")

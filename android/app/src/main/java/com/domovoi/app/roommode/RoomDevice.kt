@@ -1,10 +1,12 @@
 package com.domovoi.app.roommode
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
+import com.domovoi.app.DomovoiApplication
 import java.io.File
 
 /** The phone facts a room's health sample carries; each null when the
@@ -46,6 +48,14 @@ object RoomDevice {
         val rssi = info.rssi.takeIf { it in -120..-1 }
         return Wifi(speed, rssi)
     }
+
+    /** A household token for any server is on this phone (the app's vault). */
+    fun holdsHouseholdToken(context: Context): Boolean =
+        (context.applicationContext as? DomovoiApplication)?.container?.prefs?.holdsHouseholdToken() ?: false
+
+    /** The phone has a PIN, pattern, password (or biometrics over one). */
+    fun deviceSecure(context: Context): Boolean =
+        context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure ?: false
 
     /** VmRSS of this process, in kB. */
     fun rssKb(): Long? = status("VmRSS:")?.split(Regex("\\s+"))?.firstOrNull()?.toLongOrNull()

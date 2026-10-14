@@ -351,6 +351,21 @@ class PlayerController(
         exoPlayer.moveMediaItem(from, to)
     }
 
+    /**
+     * Room mode begins (roommode/): this phone stops playing, and a room it
+     * was casting to plays on, neither stopped nor paused: the phone only
+     * stops watching it. The local queue is cleared.
+     */
+    fun detachForRoomMode() {
+        if (_target.value is PlayTarget.Room) {
+            remotePollJob?.cancel()
+            remotePollJob = null
+            _remote.value = null
+            _target.value = PlayTarget.Local
+        }
+        clearQueue()
+    }
+
     fun clearQueue() {
         flushSpokenPosition()
         queueServer = null

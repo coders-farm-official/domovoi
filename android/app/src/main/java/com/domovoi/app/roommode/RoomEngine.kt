@@ -23,7 +23,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -64,7 +63,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     sealed class Link {
         data class Offline(val reason: String) : Link()
         data object Connecting : Link()
-        data class AwaitingApproval(val code: String?) : Link()
+        /** Parked for approval; [removed] when the core had accepted this
+         *  room before (it was removed on the dashboard, or its pairing reset). */
+        data class AwaitingApproval(val code: String?, val removed: Boolean = false) : Link()
         data class Rejected(val reason: String) : Link()
         data class Conflict(val reason: String) : Link()
         data object Ready : Link()
@@ -77,6 +78,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         val phase: Phase = Phase.LISTENING,
         val muted: Boolean = false,
         val micLive: Boolean = false,
+        /** A recorder is open right now (what the mic chip follows). */
+        val micOpen: Boolean = false,
         val micBlocked: Boolean = false,
         val wakeReady: Boolean = false,
         /** Why the wake word is not ready (models missing on the server). */
@@ -300,7 +303,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         outcome = result
         closed = end
         val hello = RoomProtocol.hello(enrol.roomId, wakeWord, token, store.approvalCode, echoCanceller)
-        val request = Request.Builder().url(RoomProtocol.streamUrl(enrol.coreUrl, enrol.roomId)).build()
+        val request = RoomNetwork.streamRequest(RoomProtocol.streamUrl(enrol.coreUrl, enrol.roomId))
         val socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 webSocket.send(hello.toString())
@@ -364,6 +367,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     }
 
     private fun onReady(f: RoomProtocol.ServerFrame.Ready) {
+        store.setApprovedOnce()
         features = f.features
         ready = true
         readyAt = SystemClock.elapsedRealtime()
@@ -380,7 +384,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     }
 
     private fun onError(f: RoomProtocol.ServerFrame.Error) {
-        val v = RoomSessionRules.verdict(f.reason, f.code, store.approvalCode)
+        val v = RoomSessionRules.verdict(f.reason, f.code, store.approvalCode, store.approvedOnce)
         v.code?.let { store.setApprovalCode(it) }
         v.link?.let { link -> update { it.copy(link = link) } }
         if (v.outcome != null) {
@@ -461,7 +465,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     private fun onDropinStart(f: RoomProtocol.ServerFrame.DropinStart) {
         // Never open the mic-while-playing on a phone without an echo
         // canceller, whatever the core says (the Pi's defence in depth).
-        if (!echoCanceller || !f.fullDuplex) {
+        if (!acceptsDropin(echoCanceller, f.fullDuplex)) {
             send(RoomProtocol.DROPIN_END)
             return
         }
@@ -597,7 +601,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var captureMark = 0
 
     private fun listenLoop() {
-        val mic = RoomMic()
+        val mic = RoomMic(muted = { muted }, onOpenChanged = { open -> update { it.copy(micOpen = open) } })
         val frame = ShortArray(RoomProtocol.FRAME_SAMPLES)
         var ears: Ears? = null
         try {
@@ -630,6 +634,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                     }
                 }
                 val n = mic.read(frame)
+                if (n == RoomMic.MUTED) continue
                 if (n <= 0) {
                     mic.close()
                     Thread.sleep(500)
@@ -719,6 +724,12 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 RoomClips.chime()
             }
         }
+        if (muted) {
+            // Muted during the acknowledgement: no capture.
+            e.wake.reset()
+            setPhase(Phase.LISTENING)
+            return
+        }
         val ack = CaptureMachine.ackFields(greeting?.name, ackBeforeCapture = true)
         var trigger = firstTrigger
         var preSpeech: Int? = null
@@ -760,7 +771,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         repeat(ACK_TAIL_FRAMES) { mic.read(frame) }
     }
 
-    private enum class CaptureOutcome { SENT, ABANDONED, DROPPED }
+    private enum class CaptureOutcome { SENT, ABANDONED, DROPPED, CANCELLED }
 
     private fun capture(
         mic: RoomMic,
@@ -782,6 +793,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         responseEndSeen = false
         expectFollowup = false
         e.vad.reset()
+        if (muted) {
+            captureUtt = null
+            return CaptureOutcome.CANCELLED
+        }
         if (!send(RoomProtocol.utteranceStart(trigger, utt, 0, wakeMs))) {
             captureUtt = null
             return CaptureOutcome.DROPPED
@@ -794,11 +809,15 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                     m.endNow(ExitReason.SERVER)
                     break
                 }
-                if (muted) {
-                    m.endNow(ExitReason.SHUTDOWN)
-                    break
-                }
                 val n = mic.read(frame)
+                if (n == RoomMic.MUTED) {
+                    // Muted mid-command: the turn is CANCELLED, never sent
+                    // for transcription (no utterance_end). The core drops
+                    // the half-heard audio at the next utterance_start.
+                    Log.i(TAG, "muted mid-capture: turn cancelled")
+                    captureUtt = null
+                    return CaptureOutcome.CANCELLED
+                }
                 if (n <= 0) {
                     m.endNow(ExitReason.SHUTDOWN)
                     break
@@ -947,6 +966,10 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         /** Quieter than this is never speech, whatever the detector says. */
         const val SPEECH_FLOOR_DBFS = -55.0
         const val VAD_THRESHOLD = 0.5f
+
+        /** A drop-in is taken only on a phone with an echo canceller, and
+         *  only when the core says the call is full duplex. */
+        fun acceptsDropin(echoCanceller: Boolean, fullDuplex: Boolean): Boolean = echoCanceller && fullDuplex
 
         fun dbfs(frame: ShortArray, n: Int): Double {
             if (n <= 0) return -120.0

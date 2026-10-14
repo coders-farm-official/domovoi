@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.longOrNull
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -72,12 +71,27 @@ object RoomIdentity {
      * present (`dialed_address`).
      */
     fun dialedAddress(httpBase: String): String {
+        // Python's urlsplit, by hand: the host as written (lower-cased, an
+        // IPv6 literal NOT re-spelled), the port or the scheme's default.
         val text = httpBase.trim().let { if ("://" in it) it else "http://$it" }
-            .replaceFirst(Regex("^ws://", RegexOption.IGNORE_CASE), "http://")
-            .replaceFirst(Regex("^wss://", RegexOption.IGNORE_CASE), "https://")
-        val url = text.toHttpUrlOrNull() ?: throw IdentityException("$httpBase is not an address")
-        val host = if (url.host.contains(':')) "[${url.host}]" else url.host
-        return "$host:${url.port}"
+        val scheme = text.substringBefore("://").lowercase(java.util.Locale.ROOT)
+        val after = text.substringAfter("://")
+        val netloc = after.substring(0, after.indexOfFirst { it == '/' || it == '?' || it == '#' }.let { if (it < 0) after.length else it })
+            .substringAfterLast('@')
+        val host: String
+        val portText: String
+        if (netloc.startsWith("[")) {
+            val close = netloc.indexOf(']')
+            if (close < 0) throw IdentityException("$httpBase is not an address")
+            host = "[" + netloc.substring(1, close).lowercase(java.util.Locale.ROOT) + "]"
+            portText = netloc.substring(close + 1).removePrefix(":")
+        } else {
+            host = netloc.substringBefore(':').lowercase(java.util.Locale.ROOT)
+            portText = if (':' in netloc) netloc.substringAfter(':') else ""
+        }
+        if (host.isEmpty() || host == "[]") throw IdentityException("$httpBase is not an address")
+        val port = portText.toIntOrNull()?.takeIf { it in 0..65535 } ?: if (scheme == "https" || scheme == "wss") 443 else 80
+        return "$host:$port"
     }
 
     /** The health URL with both query values (`fetch_health`). */

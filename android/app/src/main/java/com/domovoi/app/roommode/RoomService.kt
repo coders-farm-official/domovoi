@@ -98,11 +98,20 @@ class RoomService : Service() {
             return START_NOT_STICKY
         }
         val store = RoomStore(this)
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        if (intent == null || !store.active || store.enrolment == null || !granted) {
-            // A sticky restart, or nothing to run: never take the mic from
-            // the background; ask for the tap instead.
-            if (store.active && store.running) RoomNotifications.showResume(this)
+        val decision = RoomLockRules.start(
+            stickyRestart = intent == null,
+            active = store.active,
+            enrolled = store.enrolment != null,
+            running = store.running,
+            micGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+            holdsHouseholdToken = RoomDevice.holdsHouseholdToken(this),
+            deviceSecure = RoomDevice.deviceSecure(this),
+        )
+        if (decision != RoomLockRules.Start.RUN) {
+            // A sticky restart, no mic permission, a household phone with no
+            // screen lock, or nothing to run: never take the mic from the
+            // background; the room screen (or a tap) takes it from here.
+            if (decision == RoomLockRules.Start.ASK_FOR_TAP) RoomNotifications.showResume(this)
             stopSelf()
             return START_NOT_STICKY
         }

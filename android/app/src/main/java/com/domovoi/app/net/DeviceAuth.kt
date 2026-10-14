@@ -97,6 +97,8 @@ class DeviceAuthInterceptor(
         val request = chain.request()
         // Whatever a caller set, the decision is made here.
         val bare = request.newBuilder().removeHeader(DEVICE_TOKEN_HEADER).build()
+        // Room mode: the household token goes nowhere (net/HouseholdLock.kt).
+        if (HouseholdLock.roomModeActive) return chain.proceed(bare)
         val raw = baseUrlProvider()
         val base = TokenScope.baseOf(raw)
         val wsUpgrade = request.tag(TokenScope.WsUpgrade::class.java) != null

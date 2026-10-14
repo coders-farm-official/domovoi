@@ -2,6 +2,8 @@ package com.domovoi.app.roommode
 
 import android.app.Activity
 import android.app.KeyguardManager
+import android.app.admin.DevicePolicyManager
+import android.provider.Settings
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -87,8 +89,17 @@ import kotlin.random.Random
  */
 class RoomModeActivity : ComponentActivity() {
     private val unlock = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        if (r.resultCode == Activity.RESULT_OK) leave()
+        if (r.resultCode == Activity.RESULT_OK) dialog = Dialog.KEEP_OR_FORGET
     }
+
+    /** What the screen is asking, if anything. */
+    private enum class Dialog { CONFIRM_NO_LOCK, SET_A_LOCK, KEEP_OR_FORGET }
+
+    private var dialog by mutableStateOf<Dialog?>(null)
+
+    /** A household phone without a screen lock: room mode is held (not
+     *  listening) until it has one (RoomLockRules). */
+    private var needsLock by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -104,7 +115,7 @@ class RoomModeActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         }
-        if (store.running) RoomMode.startService(this)
+        checkLockAndStart()
         setContent {
             DomovoiTheme(mode = ThemeMode.Dark) {
                 val engine by RoomMode.engine.collectAsState()
@@ -118,22 +129,40 @@ class RoomModeActivity : ComponentActivity() {
                     running = running && engine != null,
                     approvalCode = (status?.link as? RoomEngine.Link.AwaitingApproval)?.code,
                     wakeWord = store.wakeWord,
+                    needsLock = needsLock,
                     onMute = { engine?.setMuted(!(status?.muted ?: false)) },
                     onResume = {
-                        RoomMode.startService(this@RoomModeActivity)
+                        RoomStore(this@RoomModeActivity).setRunning(true)
+                        checkLockAndStart()
                         running = true
                     },
+                    onSetLock = { openLockSettings() },
                     onCheckNow = { engine?.retryNow() },
                     onExit = { askToLeave() },
                 )
-                if (noLockDialog) {
-                    AlertDialog(
-                        onDismissRequest = { noLockDialog = false },
+                when (dialog) {
+                    Dialog.CONFIRM_NO_LOCK -> AlertDialog(
+                        onDismissRequest = { dialog = null },
                         title = { Text("Exit room mode?") },
-                        text = { Text("This phone has no screen lock, so anyone can do this. Set a screen lock to keep room mode locked.") },
-                        confirmButton = { TextButton(onClick = { noLockDialog = false; leave() }) { Text("Exit") } },
-                        dismissButton = { TextButton(onClick = { noLockDialog = false }) { Text("Stay a room") } },
+                        text = { Text(RoomStatusText.CONFIRM_NO_LOCK) },
+                        confirmButton = { TextButton(onClick = { dialog = Dialog.KEEP_OR_FORGET }) { Text("Exit") } },
+                        dismissButton = { TextButton(onClick = { dialog = null }) { Text("Stay a room") } },
                     )
+                    Dialog.SET_A_LOCK -> AlertDialog(
+                        onDismissRequest = { dialog = null },
+                        title = { Text("Set a screen lock first") },
+                        text = { Text(RoomStatusText.SET_A_LOCK_TO_EXIT) },
+                        confirmButton = { TextButton(onClick = { dialog = null; openLockSettings() }) { Text("Screen lock settings") } },
+                        dismissButton = { TextButton(onClick = { dialog = null }) { Text("Not now") } },
+                    )
+                    Dialog.KEEP_OR_FORGET -> AlertDialog(
+                        onDismissRequest = { dialog = null },
+                        title = { Text("Leave room mode") },
+                        text = { Text(RoomStatusText.KEEP_OR_FORGET) },
+                        confirmButton = { TextButton(onClick = { dialog = null; leave(forget = false) }) { Text("Keep this room") } },
+                        dismissButton = { TextButton(onClick = { dialog = null; leave(forget = true) }) { Text("Forget this room") } },
+                    )
+                    null -> Unit
                 }
             }
         }
@@ -146,33 +175,49 @@ class RoomModeActivity : ComponentActivity() {
             finish()
             return
         }
+        // Re-checked at every return: the lock may have been set, or removed.
+        checkLockAndStart()
+    }
+
+    /** Start (or keep) the room's service, unless a household phone has no
+     *  screen lock: then stop listening and ask for one. */
+    private fun checkLockAndStart() {
+        val store = RoomStore(this)
+        needsLock = !RoomLockRules.mayRun(RoomDevice.holdsHouseholdToken(this), RoomDevice.deviceSecure(this))
+        if (needsLock) {
+            if (RoomMode.engine.value != null) stopService(Intent(this, RoomService::class.java))
+            return
+        }
         if (store.running && RoomMode.engine.value == null) RoomMode.startService(this)
     }
 
-    private var noLockDialog by mutableStateOf(false)
-
-    private fun askToLeave() {
-        val km = getSystemService(KeyguardManager::class.java)
-        if (km != null && km.isDeviceSecure) {
-            @Suppress("DEPRECATION")
-            val intent = km.createConfirmDeviceCredentialIntent("Exit room mode", "Unlock to turn this room back into your phone.")
-            if (intent != null) {
-                unlock.launch(intent)
-                return
-            }
-        }
-        // No screen lock: nothing to check. Ask, and say why.
-        noLockDialog = true
+    private fun openLockSettings() {
+        runCatching { startActivity(Intent(DevicePolicyManager.ACTION_SET_NEW_PASSWORD)) }
+            .onFailure { runCatching { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } }
     }
 
-    private fun leave() {
-        RoomMode.exit(this)
+    private fun askToLeave() {
+        when (RoomLockRules.exit(RoomDevice.holdsHouseholdToken(this), RoomDevice.deviceSecure(this))) {
+            RoomLockRules.Exit.DEVICE_CREDENTIAL -> {
+                val km = getSystemService(KeyguardManager::class.java)
+                @Suppress("DEPRECATION")
+                val intent = km?.createConfirmDeviceCredentialIntent("Exit room mode", "Unlock to turn this room back into your phone.")
+                if (intent != null) unlock.launch(intent) else dialog = Dialog.SET_A_LOCK
+            }
+            RoomLockRules.Exit.CONFIRM_NO_LOCK -> dialog = Dialog.CONFIRM_NO_LOCK
+            RoomLockRules.Exit.SET_A_LOCK_FIRST -> dialog = Dialog.SET_A_LOCK
+        }
+    }
+
+    private fun leave(forget: Boolean) {
+        if (forget) RoomMode.forget(this) else RoomMode.exit(this)
         // The household side comes back (it never started if the app was
         // started in room mode).
         (application as? DomovoiApplication)?.container?.let { c ->
             c.api.clearPairingRequired()
             c.bus.start()
             c.alerts.start()
+            c.alerts.resumeAfterRoomMode()
             c.containerAlerts.start()
         }
         startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK))
@@ -193,8 +238,10 @@ fun RoomDisplay(
     running: Boolean,
     approvalCode: String?,
     wakeWord: String,
+    needsLock: Boolean,
     onMute: () -> Unit,
     onResume: () -> Unit,
+    onSetLock: () -> Unit,
     onCheckNow: () -> Unit,
     onExit: () -> Unit,
 ) {
@@ -232,7 +279,7 @@ fun RoomDisplay(
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("domovoi room", color = Text2, fontSize = 13.sp)
-                MicChip(live = status?.micLive == true && running, muted = status?.muted == true || !running, red = red)
+                MicChip(open = status?.micOpen == true && running, live = status?.micLive == true, muted = status?.muted == true, red = red)
             }
             Spacer(Modifier.height(gap))
             Text(label, color = Text1, fontSize = if (compact) 30.sp else 40.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
@@ -255,7 +302,7 @@ fun RoomDisplay(
                 Text(RoomStatusText.label(ring), color = if (ring == RoomStatusText.Ring.MIC_BLOCKED) red else Text1, fontSize = 22.sp)
             }
             Spacer(Modifier.height(gap * 2 / 3))
-            RoomStatusText.detail(status, running, wakeWord)?.let {
+            (if (needsLock) RoomStatusText.NEEDS_LOCK else RoomStatusText.detail(status, running, wakeWord))?.let {
                 Text(it, color = Text2, fontSize = if (compact) 14.sp else 16.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
             }
             if (approvalCode != null && running) {
@@ -264,7 +311,9 @@ fun RoomDisplay(
                 BigButton("check now", Dim, Text1, compact, onCheckNow)
             }
             Spacer(Modifier.height(gap))
-            if (running) {
+            if (needsLock) {
+                BigButton("set a screen lock", amber, Color.Black, compact, onSetLock)
+            } else if (running) {
                 val isMuted = status?.muted == true
                 BigButton(if (isMuted) "unmute" else "mute", if (isMuted) amber else Dim, if (isMuted) Color.Black else Text1, compact, onMute)
             } else {
@@ -284,23 +333,27 @@ fun RoomDisplay(
 }
 
 @Composable
-private fun MicChip(live: Boolean, muted: Boolean, red: Color) {
+private fun MicChip(open: Boolean, live: Boolean, muted: Boolean, red: Color) {
+    // Follows the recorder itself: "mic off" only once no recorder is open,
+    // whatever the Mute button says; "mic live" while what it hears goes to
+    // the server.
+    val off = !open
     val color = when {
-        muted -> Dim
+        off -> Dim
         live -> red
         else -> Text2
     }
     Row(
         Modifier.clip(RoundedCornerShape(50)).border(1.dp, color, RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 6.dp)
-            .semantics { contentDescription = if (muted) "microphone off" else if (live) "microphone live" else "microphone listening for the wake word" },
+            .semantics { contentDescription = if (off) "microphone off" else if (live) "microphone live" else "microphone listening for the wake word" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(if (live && !muted) red else color))
+        Box(Modifier.size(10.dp).clip(CircleShape).background(if (live && !off) red else color))
         Spacer(Modifier.width(8.dp))
         Text(
-            if (muted) "mic off" else if (live) "mic live" else "mic",
+            if (off) "mic off" else if (live) "mic live" else "mic",
             color = color, fontSize = 13.sp,
-            textDecoration = if (muted) TextDecoration.LineThrough else null,
+            textDecoration = if (off && muted) TextDecoration.LineThrough else null,
         )
     }
 }
