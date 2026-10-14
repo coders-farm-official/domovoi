@@ -96,14 +96,14 @@ def hello_fields(cfg: Any) -> dict[str, Any]:
 
 
 def filter_config_changes(changes: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """``(kept, refused)``: the protected keys are dropped."""
-    kept: dict[str, Any] = {}
-    refused: list[str] = []
-    for key, value in changes.items():
-        if key in PROTECTED_KEYS or key.startswith(PROTECTED_SECTIONS):
-            refused.append(key)
-        else:
-            kept[key] = value
+    """``(kept, refused)`` for a spare computer: satellite/remote_config.py's
+    screen, which holds every board to the dashboard's own settings and a
+    laptop also off the sections it never declared. The protected keys
+    above are never among what it keeps."""
+    from satellite import remote_config
+
+    kept, refused = remote_config.screen(changes, pc=True)
+    assert not any(k in PROTECTED_KEYS or k.startswith(PROTECTED_SECTIONS) for k in kept)
     return kept, refused
 
 
@@ -123,6 +123,23 @@ def require_pin(cfg: Any) -> tuple[bool, str]:
         "set [satellite] server_fingerprint to the SHA256:… shown under "
         "Settings → About."
     )
+
+
+#: Files only a Domovoi *server* keeps in ~/.domovoi: its private key, its
+#: household device token, its setup code.
+CORE_MARKERS = ("server-identity.json", "device-token.txt", "setup-code.txt")
+
+
+def core_account(config_dir: Path) -> str | None:
+    """Why ``config_dir`` belongs to a Domovoi server, or None. A spare
+    computer's satellite must not share one: the two keep different things
+    under the same names (``sounds/``, ``wake_models/``), and the server's
+    private key sits there (security review of wf/sat-pc, S2)."""
+    for name in CORE_MARKERS:
+        if (Path(config_dir) / name).exists():
+            return (f"{Path(config_dir) / name} belongs to a Domovoi server: install the "
+                    "satellite under another account (a server and a satellite can't share ~/.domovoi)")
+    return None
 
 
 def read_muted() -> bool:
@@ -156,6 +173,20 @@ def show_code_on_tty(code: str | None, room: str, *, stream=None) -> bool:
         return True
     except (OSError, ValueError, AttributeError):
         return False
+
+
+def home_network_url(url: str) -> bool:
+    """Whether a ws/http URL's host is on the home network
+    (satellite/enrolment.py's rule, the one the enrolment code obeys)."""
+    import urllib.parse
+
+    from satellite import enrolment
+
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return bool(host) and enrolment.is_home_network_host(host)
 
 
 def dashboard_url(ws_url: str) -> str | None:
@@ -224,13 +255,18 @@ class SpareDeviceEngine:
 
     # ── "ask me" ───────────────────────────────────────────────────────
 
-    def _held(self, kind: str, summary: str, run: Callable[[], None]) -> bool:
+    def _held(self, kind: str, summary: str, run: Callable[[], None], *,
+              details: list[str] | tuple[str, ...] = ()) -> bool:
         """With the "ask me" permission, keep ``run`` for the person's OK
         and return True (the caller does nothing more). Otherwise False:
-        the caller runs it now, as a Pi would."""
+        the caller runs it now, as a Pi would. Something that can't be
+        shown whole is refused (and True: nothing runs)."""
         if not is_pc(self.cfg) or getattr(self.cfg, "permissions", "automatic") != "ask":
             return False
-        self._pending_actions().offer(kind, summary, run)
+        try:
+            self._pending_actions().offer(kind, summary, run, details=details)
+        except ValueError as e:
+            log.warning("ask me: refusing a %s the person could not be shown in full (%s)", kind, e)
         return True
 
     # ── mute ───────────────────────────────────────────────────────────

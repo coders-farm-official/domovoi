@@ -59,10 +59,12 @@ from satellite import (
     log_spool,
     net_settings,
     pc_engine,
+    remote_config,
     sound_sync,
     wake_model_sync,
     wifi_profiles,
 )
+from satellite import alsa_names
 from satellite._resample import StreamingResampler
 from satellite.devices import DeviceProfile
 from satellite.leds import LEDConfig, LEDController
@@ -693,6 +695,22 @@ class Config:
             )
         control_enabled = d.get("control", {}).get("enabled")
         fd_override = d.get("device", {}).get("full_duplex")
+        # Device names that reach aplay -D / mpg123 -a / amixer: an ALSA
+        # name can be a pipe to a shell command (file:"|cmd"), so only plain
+        # hardware-facing names are taken (satellite/alsa_names.py).
+        music_device = str(music.get("alsa_device", profile.music_alsa_device))
+        if not alsa_names.safe_pcm(music_device):
+            raise ValueError(
+                f"[music] alsa_device {music_device!r} is not a plain ALSA device name "
+                "(e.g. default, hw:1,0, plughw:CARD=Array,DEV=0)"
+            )
+        mixer_card = str(audio.get("output_mixer_card", profile.output_mixer_card))
+        if not alsa_names.safe_card(mixer_card):
+            raise ValueError(f"[audio] output_mixer_card {mixer_card!r} is not a card index or name")
+        mixer_control = (str(audio["output_mixer_control"]) if audio.get("output_mixer_control")
+                         else profile.output_mixer_control)
+        if mixer_control is not None and not alsa_names.safe_control(mixer_control):
+            raise ValueError(f"[audio] output_mixer_control {mixer_control!r} is not a mixer control name")
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -737,7 +755,7 @@ class Config:
             # key is read but ignored — silently dropped on next config
             # rewrite.
             noise_gate_noisy_capture_dbfs=float(gate.get("noisy_capture_dbfs", -10.0)),
-            music_alsa_device=str(music.get("alsa_device", profile.music_alsa_device)),
+            music_alsa_device=music_device,
             # Boot-time mic-gain auto-tune. Walks ALSA's PGA Capture
             # Volume up or down so ambient lands in a dBFS window the
             # noise-gate auto-tune (which runs immediately after) can
@@ -801,12 +819,8 @@ class Config:
             # Hardware output-volume mixer (driven by the server's
             # volume commands). Card + control default per device profile;
             # override in [audio] for a non-standard board.
-            output_mixer_card=str(audio.get("output_mixer_card", profile.output_mixer_card)),
-            output_mixer_control=(
-                str(audio["output_mixer_control"])
-                if audio.get("output_mixer_control")
-                else profile.output_mixer_control
-            ),
+            output_mixer_card=mixer_card,
+            output_mixer_control=mixer_control,
             # How often the wake greeting (ack_mode "greeting") is one of the
             # funny lines. [greeting] enabled is read above, only to derive
             # ack_mode for a config that predates it; [greeting] reply_wait,
@@ -3949,6 +3963,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # the approval refusal reaching the microphone.
             if not self._voice_input_started or getattr(self, "_voice_gate_closed", False):
                 return
+            # Muted from the device (a spare computer): closed on purpose,
+            # and a mute that landed after the check decided must win.
+            if getattr(self, "_muted", False):
+                return
             self._stop_mic()
             try:
                 self._start_mic()
@@ -4168,23 +4186,23 @@ class Satellite(pc_engine.SpareDeviceEngine):
         this satellite doesn't have) is refused here, with nothing written,
         rather than written and then crash-looping the service. Anything
         wrong past that, the .bak is the SSH-side manual escape."""
-        if pc_engine.is_pc(getattr(self, "cfg", None)):
-            changes, refused = pc_engine.filter_config_changes(changes)
-            if refused:
-                log.warning(
-                    "set_config: refusing %s — a spare computer's pinned server, "
-                    "its permission and its profile are its owner's to change",
-                    ", ".join(sorted(refused)),
-                )
-            if not changes:
-                return
+        # Only the settings the dashboard edits, as exact keys, with plain
+        # values (satellite/remote_config.py) — on every board: never the
+        # pin, the server address, the room, the profile or a program path.
+        changes, refused = remote_config.screen(
+            changes, pc=pc_engine.is_pc(getattr(self, "cfg", None)))
+        if refused:
+            log.warning("set_config: refusing %s (not a setting the dashboard may change here)",
+                        ", ".join(sorted(refused)))
+        if not changes:
+            return
         try:
             original = CONFIG_PATH.read_text(encoding="utf-8")
         except OSError as e:
             log.warning("set_config: can't read %s: %s", CONFIG_PATH, e)
             return
-        merged = config_writer.apply_changes(original, changes)
         try:
+            merged = config_writer.apply_changes(original, changes)
             Config.from_toml(tomllib.loads(merged))
         except Exception as e:
             log.error(
@@ -6737,9 +6755,20 @@ class Satellite(pc_engine.SpareDeviceEngine):
             # (preserving comments), validate, back up, and restart to apply.
             # Run on a worker thread — it ends in a service restart.
             changes = payload.get("changes")
+            if isinstance(changes, dict) and changes:
+                changes, refused = remote_config.screen(changes, pc=pc_engine.is_pc(self.cfg))
+                if refused:
+                    log.warning("set_config: refusing %s (not a setting the dashboard may "
+                                "change here)", ", ".join(sorted(refused)))
+                if not changes:
+                    return
+            # "Ask me": held with every change spelled out, so the person
+            # reads all of them before allowing any (remote_config caps
+            # how many and how long, so the list is always shown whole).
             if isinstance(changes, dict) and changes and self._held(
-                "config", "settings from the dashboard: " + ", ".join(sorted(map(str, changes))),
+                "config", f"{len(changes)} setting(s) from the dashboard",
                 lambda c=dict(changes): self._apply_config_changes(c),
+                details=remote_config.describe(changes),
             ):
                 return
             if isinstance(changes, dict) and changes:
@@ -8407,6 +8436,12 @@ def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) 
     from satellite import config_writer, server_identity
 
     previous = (cfg.domovoi_url or "").strip()
+    if found.url != previous and pc_engine.is_pc(cfg) and not pc_engine.home_network_url(found.url):
+        # A spare computer's server moves only within the home network,
+        # like the enrolment code that named it: the pin proves who
+        # answers, this keeps where its microphone may stream.
+        log.warning("not moving to %s (found by %s): not on the home network", found.url, found.via)
+        return
     cfg.domovoi_url = found.url
     if found.url == previous:
         return
@@ -8543,7 +8578,9 @@ def main(argv: list[str] | None = None) -> int:
     # it for this exit code (RestartPreventExitStatus).
     if pc_engine.is_pc(cfg):
         pinned, detail = pc_engine.require_pin(cfg)
-        if not pinned:
+        shared = pc_engine.core_account(CONFIG_DIR)
+        if not pinned or shared:
+            detail = shared or detail
             log.error("not starting: %s", detail)
             print(f"domovoi-satellite: {detail}", file=sys.stderr)
             return engine_platform.EXIT_UNPINNED

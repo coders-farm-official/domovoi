@@ -34,7 +34,7 @@ import subprocess
 import threading
 from typing import Any, Callable, Protocol
 
-from satellite import _volume
+from satellite import _volume, alsa_names
 
 log = logging.getLogger("satellite.platform")
 
@@ -65,21 +65,34 @@ class AudioOut(Protocol):
     def wav_argv(self, device: str, path: str) -> list[str]: ...
 
 
+def _pcm(device: str) -> str:
+    """``device``, or ``default`` when it is not a plain device name: an
+    ALSA name can open a pipe to a shell command (satellite/alsa_names.py).
+    The config loader refuses such a name already; this is the last door."""
+    if alsa_names.safe_pcm(device):
+        return device
+    log.error("refusing ALSA device %r (not a plain device name); playing on 'default'", device)
+    return "default"
+
+
 class AlsaAudioOut:
     """mpg123 and aplay on an ALSA device. On a desktop the ALSA ``default``
-    device is the sound server's, which is where a laptop's speakers are."""
+    device is the sound server's, which is where a laptop's speakers are.
+    Every device name passes :func:`_pcm` first."""
 
     def stream_argv(self, device: str, url: str) -> list[str]:
+        device = _pcm(device)
         # -b 1024 / --devbuffer 1.0: see Satellite._spawn_music.
         return ["mpg123", "-q", "-b", "1024", "--devbuffer", "1.0",
                 "-o", "alsa", "-a", device, url]
 
     def mp3_argv(self, device: str, path: str, gain: float) -> list[str]:
+        device = _pcm(device)
         return ["mpg123", "-q", *_volume.mpg123_scale_args(gain),
                 "-o", "alsa", "-a", device, path]
 
     def wav_argv(self, device: str, path: str) -> list[str]:
-        return ["aplay", "-q", "-D", device, path]
+        return ["aplay", "-q", "-D", _pcm(device), path]
 
 
 # ─── volume ───────────────────────────────────────────────────────────────
@@ -136,17 +149,18 @@ class AmixerVolume:
         self.quiet = quiet
 
     def available(self) -> bool:
-        return bool(self.control)
+        return bool(self.control) and alsa_names.safe_card(self.card) and \
+            alsa_names.safe_control(self.control)
 
     def get(self) -> int | None:
-        if not self.control:
+        if not self.available():
             return None
         r = _run(self._run, _volume.get_command(self.card, self.control),
                  f"amixer get {self.control!r} on card {self.card}", quiet=self.quiet)
         return _volume.parse_volume_percent(r.stdout) if r else None
 
     def set(self, level: int) -> bool:
-        if not self.control:
+        if not self.available():
             return False
         return _run(self._run, _volume.set_command(self.card, self.control, level),
                     f"amixer set {self.control!r} on card {self.card}") is not None

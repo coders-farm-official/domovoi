@@ -358,9 +358,9 @@ def test_the_core_may_not_change_a_laptop_s_trust_settings(monkeypatch):
 
 def test_nothing_but_protected_keys_changes_nothing():
     kept, refused = pc_engine.filter_config_changes({"pc.permissions": "automatic"})
-    assert kept == {} and refused == ["pc.permissions"]
+    assert kept == {} and refused == ["'pc.permissions'"]
     kept, refused = pc_engine.filter_config_changes({"device.full_duplex": True, "wake.threshold": 0.6})
-    assert kept == {"wake.threshold": 0.6} and refused == ["device.full_duplex"]
+    assert kept == {"wake.threshold": 0.6} and refused == ["'device.full_duplex'"]
 
 
 def test_a_laptop_never_syncs_its_clock_through_a_root_helper(monkeypatch):
@@ -539,3 +539,71 @@ def test_a_pi_keeps_spidev_and_the_pin():
     reqs = _requirements_for("aarch64")
     assert "spidev>=3.6" in reqs and "onnxruntime==1.20.0" in reqs
     assert sum(r.startswith("onnxruntime") for r in reqs) == 1
+
+
+# ─── review fix round (2026-10-13) ────────────────────────────────────────
+
+class _ReopenStream:
+    def stop(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def test_R3_the_self_check_s_reopen_never_opens_a_muted_microphone():
+    sat = pc_sat()
+    sat._voice_input_started = True
+    sat._voice_gate_closed = False
+    sat._input_stream = None
+    sat._muted = True                       # the person muted it
+    opened = []
+    sat._stop_mic = lambda: None
+    sat._start_mic = lambda: opened.append(1) or setattr(sat, "_input_stream", _ReopenStream())
+    sat._health_reopen_mic("mic silent 30 s", time.monotonic())
+    assert opened == [] and sat._input_stream is None
+    assert sat.control_status()["mic"] == "muted"
+
+
+def test_an_older_core_s_upgrade_frame_still_applies_no_payload_on_a_laptop(monkeypatch):
+    """Without "plugin_payloads": false in the frame (a core from before
+    S0), a laptop still applies none: it is the laptop's rule, not only the
+    frame's (review mutant M4)."""
+    sat = pc_sat()
+    from satellite import code_sync, plugin_sync
+
+    monkeypatch.setattr(code_sync, "backup_tree", lambda *a: None)
+    monkeypatch.setattr(code_sync, "sync_code", lambda *a, **k: {"manifest": {}, "downloaded": 0, "pruned": []})
+    monkeypatch.setattr(client.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+    monkeypatch.setattr(plugin_sync, "sync_plugin_payloads", lambda *a, **k: pytest.fail("no payloads"))
+    monkeypatch.setattr(plugin_sync, "request_root_apply", lambda *a, **k: pytest.fail("never root"))
+    sat._restart_service = lambda: True
+    sat._apply_upgrade({"expected_sha": "9c1d2aa"})
+
+
+def test_a_pi_still_applies_payloads_when_the_frame_does_not_say_otherwise(monkeypatch):
+    sat = client.Satellite(client.Config.from_toml({"device": {"profile": "xvf3800_usb"}}))
+    from satellite import code_sync, plugin_sync
+
+    monkeypatch.setattr(code_sync, "backup_tree", lambda *a: None)
+    monkeypatch.setattr(code_sync, "sync_code", lambda *a, **k: {"manifest": {}, "downloaded": 0, "pruned": []})
+    monkeypatch.setattr(client.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+    synced = []
+    monkeypatch.setattr(plugin_sync, "sync_plugin_payloads",
+                        lambda *a, **k: synced.append(1) or {"root_work": [], "meta": {}})
+    sat._restart_service = lambda: True
+    sat._apply_upgrade({"expected_sha": "9c1d2aa"})
+    assert synced == [1]
+
+
+def test_a_laptop_refuses_to_run_on_a_server_s_account(tmp_path, capsys):
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(f'[device]\nprofile = "generic_pc"\n[satellite]\nroom_id = "study"\n'
+                        f'domovoi_url = "ws://127.0.0.1:6370"\nserver_fingerprint = "{FP}"\n', encoding="utf-8")
+    client.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (client.CONFIG_DIR / "device-token.txt").write_text("brick-bank\n")
+    assert client.main(["--config", str(cfg_path)]) == engine_platform.EXIT_UNPINNED
+    assert "belongs to a Domovoi server" in capsys.readouterr().err
+    assert pc_engine.core_account(client.CONFIG_DIR)

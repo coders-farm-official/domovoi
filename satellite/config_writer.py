@@ -18,6 +18,11 @@ from __future__ import annotations
 import re
 
 _SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
+#: A key this module edits: ``section.key``, lower-case ASCII, nothing
+#: around it. Anything else is refused: a key with a space in it matched
+#: the line of a different key (``"satellite.server_fingerprint "`` rewrote
+#: the pin), which is how a set_config frame re-pinned a satellite.
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,40}\.[a-z][a-z0-9_]{0,40}$")
 
 
 def _key_line_re(key: str) -> re.Pattern[str]:
@@ -32,6 +37,8 @@ def _format_value(value: object) -> str:
     if isinstance(value, (int, float)):
         return repr(value)
     s = str(value)
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in s):
+        raise ValueError("a config value may not carry control characters")
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
@@ -42,9 +49,9 @@ def apply_changes(toml_text: str, changes: dict[str, object]) -> str:
     section is appended at the end. Everything else is preserved verbatim."""
     by_section: dict[str, dict[str, object]] = {}
     for dotted, val in changes.items():
+        if not isinstance(dotted, str) or not _KEY_RE.fullmatch(dotted):
+            raise ValueError(f"not a section.key this file can be edited by: {dotted!r}")
         section, _, key = dotted.partition(".")
-        if not section or not key:
-            continue
         by_section.setdefault(section, {})[key] = val
 
     # Split into a leading preamble block (name=None) + one block per
