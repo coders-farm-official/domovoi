@@ -7,7 +7,6 @@ Unset keeps today's behaviour. DB-free: the queue and session are fakes.
 
 from __future__ import annotations
 
-import subprocess
 from contextlib import asynccontextmanager
 
 import pytest
@@ -53,15 +52,16 @@ def queue(monkeypatch, tmp_path):
     monkeypatch.setattr(wwt, "session_scope", scope)
     monkeypatch.setattr(repositories, "WakeWordsRepository", FakeQueue)
     monkeypatch.setattr(settings, "wake_word_train_command", "train {clips_dir} {phrase} {out}")
+    monkeypatch.setattr(settings, "wake_word_trainer_enabled", True)
     monkeypatch.setattr(settings, "wake_clips_dir", str(tmp_path / "clips"))
     monkeypatch.setattr(settings, "wake_models_dir", str(tmp_path / "models"))
     runs: list[list[str]] = []
 
     def fake_run(argv, **kw):
         runs.append(list(argv))
-        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
+        return wwt.TrainRun(1, "boom")
 
-    monkeypatch.setattr(wwt.subprocess, "run", fake_run)
+    monkeypatch.setattr(wwt, "run_train_command", fake_run)
     return runs
 
 

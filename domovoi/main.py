@@ -235,6 +235,16 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
+    # Switching wake-word training on in Settings → Configuration starts its
+    # worker now (it isn't started at boot while the setting is off); off
+    # is read by the worker's own tick.
+    def _start_wake_trainer() -> None:
+        if settings.wake_word_trainer_enabled:
+            from domovoi.plugins_runtime.workers import WORKERS as _W
+
+            _W.start_worker("core", "wake_word_trainer")
+
+    reapply.on_reapply("wake_word_trainer_enabled", _start_wake_trainer)
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
     # (domovoi/searxng_service.py). At boot only the stop under never runs
@@ -807,6 +817,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # step: a step that overruns is cancelled and left behind, so no
         # plugin or worker can hold the stop open (domovoi/lifecycle.py).
         signal_shutdown("lifespan teardown")  # no-op after a signal
+        from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
+
         teardown_started = asyncio.get_running_loop().time()
         await lifecycle.run_teardown(
             [
@@ -818,6 +830,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                  _STOP_WORKERS_SEC + 1.0),
                 ("core workers", lambda: WORKERS.stop_owner("core", timeout=_STOP_WORKERS_SEC),
                  _STOP_WORKERS_SEC + 1.0),
+                # A "Turn on wake-word training" job still building or
+                # downloading: stop its docker child and container.
+                ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -2585,6 +2600,55 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         return await asyncio.to_thread(_run)
     except _we.WakeEvalUnavailable as e:
         raise HTTPException(status_code=501, detail=str(e)) from e
+
+
+# ─── Wake-word training: Settings → Wake Words → "Turn on" ────────────────
+
+
+@app.get(
+    "/v1/admin/wake/trainer",
+    # An admin READ: the dashboard cookie may render it. It names the
+    # server's free disk, memory and GPUs, nothing more.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_trainer_status() -> dict[str, Any]:
+    """Whether wake-word training is on, the setup job's progress or the
+    error it stopped on, and what training needs against what this server
+    has (disk, download, memory, Docker, GPU or CPU and the minutes per
+    word), with the reasons it would refuse (domovoi/wake_trainer_setup.py)."""
+    from domovoi import wake_trainer_setup
+
+    return await wake_trainer_setup.status()
+
+
+class _AdminWakeTrainerEnableBody(BaseModel):
+    # A CPU-only server (or one whose GPU Docker can't reach) trains for
+    # over an hour a word and slows the voice pipeline meanwhile: the admin
+    # says yes to that separately.
+    cpu_ok: bool = False
+
+
+@app.post(
+    "/v1/admin/wake/trainer/enable",
+    # Security tier, like a config write: it builds and runs a Docker image
+    # as the service user and writes WAKE_WORD_TRAIN_COMMAND into .env.
+    # Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_wake_trainer_enable(body: _AdminWakeTrainerEnableBody) -> dict[str, Any]:
+    """Turn wake-word training on: build the trainer image, check the GPU,
+    download the training data, then switch the two settings on and start
+    the worker, as one background job; returns at once with the status
+    (the page polls ``GET /v1/admin/wake/trainer``). 409 with the reason
+    when it can't start (internet turned off, too little disk or memory, no
+    Docker, a CPU-only server without ``cpu_ok``, a job or a training
+    already running)."""
+    from domovoi import wake_trainer_setup
+
+    try:
+        return await wake_trainer_setup.start(cpu_ok=body.cpu_ok)
+    except wake_trainer_setup.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @app.get(

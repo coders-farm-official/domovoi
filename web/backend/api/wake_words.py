@@ -45,7 +45,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from domovoi.admin_auth import require_admin_mutation, require_device_read
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_admin_security,
+    require_device_read,
+)
 from domovoi import wake_clip_quality as wq
 from domovoi.canned_sounds import voice_slug
 from domovoi.config import settings
@@ -55,6 +60,7 @@ from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
     bridge_response,
+    get_admin,
     post_admin,
 )
 
@@ -270,6 +276,39 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
         "status": "recording", "source_room_id": payload.source_room_id,
         "clip_count": 0, "error": None,
     })
+
+
+# ─── Training on/off: "Turn on wake-word training" ─────────────────────────
+# The core owns it (it builds and runs a Docker image as the service user
+# and writes two settings; domovoi/wake_trainer_setup.py), so these proxy
+# /v1/admin/wake/trainer* with the caller's credentials. Declared before
+# the /{wake_word_id} routes.
+
+
+class TrainerEnableBody(BaseModel):
+    # Yes to training on the CPU (over an hour a word; voice slower meanwhile).
+    cpu_ok: bool = False
+
+
+@router.get("/trainer", dependencies=[Depends(require_admin_read)])
+async def trainer_status(request: Request):
+    """Whether training is on, the setup job's progress or its error, and
+    what training needs against what the server has, with any refusal."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/trainer", timeout=30.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/trainer/enable", dependencies=[Depends(require_admin_security)])
+async def trainer_enable(body: TrainerEnableBody, request: Request):
+    """Start "Turn on wake-word training" on the core: 200 with the status
+    (the job runs in the background), 409 with the reason it can't."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/trainer/enable", {"cpu_ok": body.cpu_ok},
+        timeout=60.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
 
 
 @router.post("/{wake_word_id}/record/start", dependencies=[Depends(require_admin_mutation)])

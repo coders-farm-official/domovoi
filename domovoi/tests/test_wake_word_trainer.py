@@ -3,8 +3,9 @@
 The trainer drains the ``training`` queue head of ``wake_words`` and shells
 out to an operator-configured external Linux command. It NEVER trains
 in-process (openWakeWord automatic training is Linux-only; Domovoi is
-Windows). These tests never actually train: ``subprocess.run`` is
-monkeypatched, so we exercise the four decision branches of ``tick()``:
+Windows). These tests never actually train: the worker's runner
+(``run_train_command``) is monkeypatched, so we
+exercise the decision branches of ``tick()``:
 
   * no training row → no-op (returns 0)
   * training row + EMPTY ``wake_word_train_command`` → mark_failed with
@@ -12,7 +13,11 @@ monkeypatched, so we exercise the four decision branches of ``tick()``:
   * training row + a command that "succeeds" (rc=0) AND a planted
     ``<slug>.onnx`` → mark_ready(slug)
   * training row + a command that "fails" (rc!=0) → mark_failed with the
-    stderr tail
+    output tail
+  * training row + a command that runs past the time limit → mark_failed
+    naming the limit
+The runner itself (stopping the command, the wrapper's --stop) is tested
+in test_wake_trainer_stop.py.
 
 The worker's lifecycle (start/stop/_run) follows the core worker template and
 not re-tested here; ``tick`` is the unit under test.
@@ -20,7 +25,6 @@ not re-tested here; ``tick`` is the unit under test.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -28,7 +32,13 @@ import pytest
 from domovoi.db.repositories import WakeWordsRepository
 from domovoi.tests.conftest import requires_db
 from domovoi.workers import wake_word_trainer as wwt
-from domovoi.workers.wake_word_trainer import WakeWordTrainer
+from domovoi.workers.wake_word_trainer import TrainRun, WakeWordTrainer
+
+
+@pytest.fixture(autouse=True)
+def _trainer_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The tick trains nothing while training is switched off.
+    monkeypatch.setattr(wwt.settings, "wake_word_trainer_enabled", True)
 
 
 async def _seed_training_row(slug: str = "hey_domovoi") -> int:
@@ -64,10 +74,10 @@ async def test_tick_no_training_row_is_noop(monkeypatch: pytest.MonkeyPatch) -> 
     async with engine.begin() as conn:
         await conn.execute(sql_text("DELETE FROM wake_words"))
 
-    def _boom(*a, **k):  # subprocess must not be reached with an empty queue
-        raise AssertionError("subprocess.run must not run when the queue is empty")
+    def _boom(*a, **k):  # the command must not run with an empty queue
+        raise AssertionError("the train command must not run when the queue is empty")
 
-    monkeypatch.setattr(wwt.subprocess, "run", _boom)
+    monkeypatch.setattr(wwt, "run_train_command", _boom)
     assert await WakeWordTrainer().tick() == 0
 
 
@@ -80,9 +90,9 @@ async def test_tick_empty_command_marks_failed_with_runbook(
     monkeypatch.setattr(wwt.settings, "wake_word_train_command", "")
 
     def _boom(*a, **k):
-        raise AssertionError("subprocess.run must not run with no command configured")
+        raise AssertionError("the train command must not run with no command configured")
 
-    monkeypatch.setattr(wwt.subprocess, "run", _boom)
+    monkeypatch.setattr(wwt, "run_train_command", _boom)
 
     assert await WakeWordTrainer().tick() == 1
     row = await _get(wid)
@@ -118,9 +128,9 @@ async def test_tick_success_marks_ready_when_model_produced(
         out = Path(models_dir) / "hey_domovoi.onnx"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"onnx-bytes")
-        return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+        return TrainRun(0, "ok")
 
-    monkeypatch.setattr(wwt.subprocess, "run", _fake_run)
+    monkeypatch.setattr(wwt, "run_train_command", _fake_run)
 
     assert await WakeWordTrainer().tick() == 1
 
@@ -150,9 +160,9 @@ async def test_tick_success_rc_but_no_model_marks_failed(
     monkeypatch.setattr(wwt.settings, "wake_word_train_command", "noop {out}")
 
     def _fake_run(argv, *a, **k):
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        return TrainRun(0, "")
 
-    monkeypatch.setattr(wwt.subprocess, "run", _fake_run)
+    monkeypatch.setattr(wwt, "run_train_command", _fake_run)
 
     assert await WakeWordTrainer().tick() == 1
     row = await _get(wid)
@@ -171,9 +181,9 @@ async def test_tick_nonzero_rc_marks_failed_with_stderr_tail(
     monkeypatch.setattr(wwt.settings, "wake_word_train_command", "boom {out}")
 
     def _fake_run(argv, *a, **k):
-        return subprocess.CompletedProcess(argv, 2, stdout="", stderr="CUDA: out of memory")
+        return TrainRun(2, "CUDA: out of memory")
 
-    monkeypatch.setattr(wwt.subprocess, "run", _fake_run)
+    monkeypatch.setattr(wwt, "run_train_command", _fake_run)
 
     assert await WakeWordTrainer().tick() == 1
     row = await _get(wid)
@@ -194,12 +204,21 @@ async def test_tick_timeout_marks_failed(
     monkeypatch.setattr(wwt.settings, "wake_clips_dir", str(tmp_path / "wake_clips"))
     monkeypatch.setattr(wwt.settings, "wake_word_train_command", "hang {out}")
 
-    def _fake_run(argv, *a, **k):
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=wwt._TRAIN_TIMEOUT_SEC)
+    monkeypatch.setattr(wwt.settings, "wake_word_train_timeout_sec", 1234)
+    seen: dict = {}
 
-    monkeypatch.setattr(wwt.subprocess, "run", _fake_run)
+    def _fake_run(argv, *a, **k):
+        seen.update(k)
+        return TrainRun(None, "", timed_out=True)
+
+    monkeypatch.setattr(wwt, "run_train_command", _fake_run)
 
     assert await WakeWordTrainer().tick() == 1
     row = await _get(wid)
     assert row["status"] == "failed"
-    assert "timed out" in row["error"]
+    assert "timed out after 1234s" in row["error"]
+    assert "Training time limit" in row["error"]
+    # The setting is the limit, and the wrapper's own deadline sits a
+    # minute under it.
+    assert seen["timeout"] == 1234
+    assert seen["env"]["WAKE_TRAINER_DEADLINE_SEC"] == str(1234 - 60)
