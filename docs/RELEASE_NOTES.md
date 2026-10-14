@@ -4,6 +4,40 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-14 — Play music in another room by voice
+
+Server only (the app's manual gains the examples in its next build).
+
+* **Name a room and the music plays there**: "play some music in the
+  garage", "play Weezer in the office", "put on some jazz in the dining
+  room", "in the garage, play jazz", and "stop / pause / skip / turn it up
+  in the garage", "what's playing in the garage". The room you asked
+  answers ("Playing Weezer in the garage, shuffled."); the room you named
+  plays. Before, "play some music in the garage" searched the library for
+  "some music in the garage" and played it in the room that asked. The
+  language model's music tool takes a room too, for other phrasings.
+* **Rooms are matched by their id and their label** in Settings →
+  Satellites ("the kids room", "Kamron's office"), room-mode phones and
+  laptop satellites included, never by a near miss. "In here" is the room
+  you're in. A room the house doesn't have is answered with the ones it
+  has. "Everywhere": stop and pause act on every room that is playing; a
+  play is one room at a time.
+* **A song is still a song**: "play in the garage" plays the song "In the
+  Garage". When a request reads both ways ("play dancing in the garage"
+  with a song "Dancing in the Garage" and an artist "Dancing"), Domovoi
+  asks; a yes plays the song where you are, a no plays the other in the
+  garage.
+* **What it won't do**: start music in a room whose speaker is offline (it
+  says so); play from `/v1/intent`, which has no satellite to reach; let a
+  satellite that connected without a pairing token start, stop or change
+  the volume in another room (it may pause, resume, skip or ask what's
+  playing there while that room is playing, as a guest may). A room whose
+  music player isn't running is started on request, under its own room
+  id. Radio stations and podcasts still play only where they're asked.
+* **A pause before the room name** ("stop the music … in the garage")
+  still acts in the room that asked, as it did before: say it in one go,
+  or put the room first.
+
 ## 2026-10-13 — Android: talk to Domovoi on the phone
 
 New Android build only; nothing changes on the server.

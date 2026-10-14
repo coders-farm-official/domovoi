@@ -182,8 +182,12 @@ def test_they_come_first_with_an_open_slot() -> None:
     # the artist forms: after those two, before "play X by Y" splits them
     patterns = [p.pattern for p in paths]
     assert patterns.index(_LYRIC_PLAY_BY_RE) == 2 and patterns.index(_LYRIC_PLAY_ARTISTS_RE) == 3
-    assert patterns.index(_PLAY_ARTIST_RE) == 4
-    assert all(p.early_commit is None for p in paths[2:4])
+    # then the commands that end with a place (music_rooms.py: a lyric is
+    # read whole, "… in the garage" included), then "play X by Y"
+    assert [p.method.__name__ for p in paths[4:7]] == [
+        "_room_play_from_match", "_room_control_from_match", "_room_first_from_match"]
+    assert patterns.index(_PLAY_ARTIST_RE) == 7
+    assert all(p.early_commit is None for p in paths[2:7])
 
 
 def test_an_explicit_request_is_read_with_and_without_the_artist() -> None:
