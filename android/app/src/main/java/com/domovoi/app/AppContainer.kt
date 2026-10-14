@@ -117,7 +117,13 @@ class AppContainer(context: Context) {
      *  download job does, through [modelDownloader]. It and the benchmark
      *  each free the other's copy of the model before loading their own. */
     private val assistantLazy: Lazy<AssistantController> = lazy {
-        AssistantController.forApp(context, beforeLoad = { if (benchLazy.isInitialized()) assistantBench.releaseModel() })
+        AssistantController.forApp(
+            context,
+            beforeLoad = { if (benchLazy.isInitialized()) assistantBench.releaseModel() },
+            // The phone's own voice for spoken replies (Settings -> Voice),
+            // opened without asking any server.
+            phoneVoice = { phoneVoice.openOnPhone() },
+        )
     }
     val assistant: AssistantController by assistantLazy
 

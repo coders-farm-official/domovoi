@@ -13,6 +13,7 @@ import com.domovoi.app.assistant.PhoneMemory
 import com.domovoi.app.assistant.Speaker
 import com.domovoi.app.assistant.StoredConversation
 import com.domovoi.app.assistant.StoredMessage
+import com.domovoi.app.assistant.VoicePhase
 import com.domovoi.app.testing.HeadlessUi
 import com.domovoi.app.testing.NodeTree
 import com.domovoi.app.testing.button
@@ -47,6 +48,8 @@ class AssistantScreenTest {
         deleteModel = { calls += "delete-model" },
         setBackend = { calls += "backend:$it" },
         retryLoad = { calls += "retry" },
+        talk = { calls += "talk" },
+        downloadVoice = { calls += "download-voice" },
         send = { calls += "send:$it" },
         stop = { calls += "stop" },
         newConversation = { calls += "new" },
@@ -60,11 +63,15 @@ class AssistantScreenTest {
         conversation: StoredConversation = StoredConversation(id = "c-1-a"),
         replying: Boolean = false,
         thinking: Boolean = false,
+        voiceSetup: ModelSetup = ModelSetup.Installed,
+        voicePhase: VoicePhase = VoicePhase.Idle,
+        heardSpeech: Boolean = false,
     ): AssistantUi {
         val memory = PhoneMemory((memoryGib * gib).toLong(), lowRamDevice = false)
         return AssistantUi(
             memory = memory, tier = DeviceTiers.of(memory), setup = setup, totalBytes = total, freeBytes = free,
             engine = engine, conversation = conversation, replying = replying, thinking = thinking,
+            voiceSetup = voiceSetup, voicePhase = voicePhase, heardSpeech = heardSpeech,
         )
     }
 
@@ -99,25 +106,25 @@ class AssistantScreenTest {
     }
 
     @Test fun setupShowsTheCostFirstAndStartsTheDownload() {
-        val shown = show(ui()) { textButton("download (2.41 GB)").click() }
+        val shown = show(ui()) { textButton("download (2.45 GB)").click() }
         assertTrue(shown.toString(), "Set up the assistant on this phone" in shown)
         assertTrue(shown.any { it.contains("Gemma 4 E2B") })
         assertTrue(shown.any { it == "language model · 2.41 GB · Apache-2.0" })
-        assertTrue(shown.any { it.startsWith("Needs 2.61 GB of free space; this phone has 50.00 GB free.") })
+        assertTrue(shown.any { it.startsWith("Needs 2.65 GB of free space; this phone has 50.00 GB free.") })
         assertTrue("Off: the download waits for Wi-Fi." in shown)
         assertTrue("on this phone" in shown)
         assertEquals(listOf("download"), calls)
     }
 
     @Test fun aPausedDownloadResumesOrIsThrownAway() {
-        val shown = show(ui(setup = ModelSetup.Missing(1L * gib))) { textButton("resume (1.41 GB left)").click() }
+        val shown = show(ui(setup = ModelSetup.Missing(1L * gib))) { textButton("resume (1.45 GB left)").click() }
         assertTrue(shown.toString(), "delete the partial download" in shown)
         assertEquals(listOf("download"), calls)
     }
 
     @Test fun aFailedDownloadSaysWhyAndOffersItAgain() {
         val shown = show(ui(setup = ModelSetup.Missing(0, "Gemma: gemma-4-E2B-it.litertlm failed its checksum"))) {
-            textButton("try again (2.41 GB)").click()
+            textButton("try again (2.45 GB)").click()
         }
         assertTrue(shown.any { it.startsWith("The last download failed:") && it.contains("checksum") })
         assertEquals(listOf("download"), calls)
@@ -125,7 +132,7 @@ class AssistantScreenTest {
 
     @Test fun notEnoughRoomMeansNoDownloadButton() {
         val shown = show(ui(free = 1L * gib))
-        assertTrue(shown.toString(), shown.any { it.startsWith("Not enough free space: the download needs 2.61 GB") })
+        assertTrue(shown.toString(), shown.any { it.startsWith("Not enough free space: the download needs 2.65 GB") })
         assertFalse(shown.any { it.startsWith("download (") })
     }
 
@@ -134,16 +141,18 @@ class AssistantScreenTest {
             textButton("pause").click()
             textButton("cancel").click()   // asks first: nothing is cancelled yet
         }
-        assertTrue(shown.toString(), "1.00 GB of 2.41 GB · 41%" in shown)
+        assertTrue(shown.toString(), "1.00 GB of 2.45 GB · 40%" in shown)
         assertTrue("waiting for Wi-Fi" in shown)
         assertEquals(listOf("pause"), calls)
     }
 
     @Test fun anEmptyChatSaysWhereTheAnswersComeFrom() {
-        var sendEnabled: Boolean? = null
+        var sendShown: Boolean? = null
         var newEnabled: Boolean? = null
         val shown = show(ui(setup = ModelSetup.Installed)) {
-            sendEnabled = button("send").enabled
+            // Nothing typed: the mic in the send button's place.
+            button("talk").click()
+            sendShown = buttons().any { it.label == "send" }
             newEnabled = button("new conversation").enabled
             button("conversations")
             button("model settings")
@@ -151,7 +160,8 @@ class AssistantScreenTest {
         assertTrue(shown.toString(), "Ask Domovoi anything" in shown)
         assertTrue(shown.any { it.contains("model running on this phone") && it.contains("Chat, which talks to your Domovoi server, is separate") })
         assertTrue("on this phone" in shown)
-        assertEquals(false, sendEnabled)   // nothing typed yet
+        assertEquals(false, sendShown)   // nothing typed yet
+        assertEquals(listOf("talk"), calls)
         assertEquals(false, newEnabled)    // nothing to start over from
     }
 
@@ -182,6 +192,62 @@ class AssistantScreenTest {
         assertTrue(shown.toString(), "loading the model on the cpu" in shown)
     }
 
+    // ── Voice ───────────────────────────────────────────────────────────
+
+    @Test fun listeningShowsItAndTheButtonStopsIt() {
+        val shown = show(ui(setup = ModelSetup.Installed, voicePhase = VoicePhase.Listening)) { button("stop").click() }
+        assertTrue(shown.toString(), "listening" in shown && "ask your question" in shown)
+        assertEquals(listOf("talk"), calls)   // the session decides: nothing heard yet, so it stops
+    }
+
+    @Test fun onceItHearsYouTheButtonSendsWhatYouSaid() {
+        val shown = show(ui(setup = ModelSetup.Installed, voicePhase = VoicePhase.Listening, heardSpeech = true)) {
+            button("done speaking").click()
+        }
+        assertTrue(shown.toString(), "hearing you" in shown)
+        assertEquals(listOf("talk"), calls)
+    }
+
+    @Test fun speakingShowsItAndTheButtonSilencesIt() {
+        val conversation = StoredConversation(
+            id = "c-1-a",
+            messages = listOf(StoredMessage(Speaker.USER, "hi", spoken = true), StoredMessage(Speaker.DOMOVOI, "Hello.")),
+        )
+        val shown = show(ui(setup = ModelSetup.Installed, voicePhase = VoicePhase.Speaking, conversation = conversation, replying = true)) {
+            button("stop").click()
+        }
+        assertTrue(shown.toString(), "speaking" in shown && "tap stop to silence it" in shown)
+        assertEquals(listOf("talk"), calls)
+    }
+
+    @Test fun withoutTheSpeechFilesTheMicOffersThemInsteadOfListening() {
+        show(ui(setup = ModelSetup.Installed, voiceSetup = ModelSetup.Missing(0))) { button("talk").click() }
+        assertTrue("no turn starts", calls.isEmpty())
+    }
+
+    @Test fun theModelPanelSaysWhatListensAndSpeaks() {
+        val ready = ui(setup = ModelSetup.Installed).copy(voiceName = "Kristin")
+        assertTrue(speechSummary(ready).contains("Listens with Moonshine"))
+        assertTrue(speechSummary(ready).contains("Speaks with Kristin, the voice picked in Settings → Voice."))
+        val fallback = ready.copy(voiceName = "this phone's own text-to-speech voice")
+        assertTrue(speechSummary(fallback).contains("Domovoi's own voice is downloaded in Settings → Voice"))
+        val missing = ui(setup = ModelSetup.Installed, voiceSetup = ModelSetup.Missing(0))
+        assertTrue(speechSummary(missing).startsWith("Talking needs the speech files (43.9 MB)"))
+        assertEquals("listening" to "ask your question", voiceLine(VoicePhase.Listening, false))
+        assertEquals("speaking" to "tap stop to silence it", voiceLine(VoicePhase.Speaking, false))
+    }
+
+    @Test fun aSpokenTurnsDetailsAreTheVoiceNumbers() {
+        val m = StoredMessage(Speaker.DOMOVOI, "hi", voiceMs = 1210, silenceWaitMs = 500, sttMs = 60, firstTextMs = 450,
+            tokensPerS = 30.0, backend = "cpu")
+        assertEquals(
+            "1.21 s from end of speech to first word (+0.5 s silence wait) · heard in 60 ms · 0.45 s to first words · " +
+                "30.0 tokens/s · cpu",
+            replyDetails(m),
+        )
+        assertEquals("silenced 12 ms after stop", replyDetails(StoredMessage(Speaker.DOMOVOI, "x", stopMs = 12)))
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────
 
     @Test fun aReplysDetailsAreItsNumbers() {
@@ -203,7 +269,7 @@ class AssistantScreenTest {
         assertEquals(0.5f, fraction(50, 100))
         assertEquals(0f, fraction(5, 0))
         assertEquals(1f, fraction(200, 100))
-        assertEquals("download (2.41 GB)", downloadLabel(ModelSetup.Missing(0), total))
+        assertEquals("download (2.45 GB)", downloadLabel(ModelSetup.Missing(0), total))
         assertTrue(unsupportedText(4, lowRam = true).contains("Android marks this phone as a low-memory device"))
         assertEquals(DeviceTier.Standard, ui().tier)
     }

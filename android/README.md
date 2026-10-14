@@ -250,10 +250,9 @@ one credential the app has. The rules, all unit-tested under
 
 Domovoi can answer **on the phone itself**, with no server and, once its
 model is downloaded, no internet: a language model (Gemma 4 E2B, run by
-LiteRT-LM) on the phone's CPU. Text chat in this build; push-to-talk voice
-comes next. The model sees the system prompt and the conversation and
-nothing else: no files, media, contacts, location or any other app data,
-and no tools.
+LiteRT-LM) on the phone's CPU, by text or by push-to-talk voice. The
+model sees the system prompt and the conversation and nothing else: no
+files, media, contacts, location or any other app data, and no tools.
 
 **Where it is.** The **Assistant** tab of local mode (beside Music, Videos
 and Files), so it works with no server at all and in airplane mode. With a
@@ -276,12 +275,16 @@ assistant" and no controls.
 **The model download** (`assistant/ModelCatalog.kt`, `ModelDownloadWork.kt`,
 `ModelDownloader.kt`), the assistant's only network use:
 
-- One file, `gemma-4-E2B-it.litertlm`, 2,588,147,712 bytes (2.41 GiB),
-  Apache-2.0, from the upstream Hugging Face repo pinned to one commit
-  (`resolve/<commit>/`, never `main`), with its SHA-256 compiled in. The
-  setup screen shows the size, the free space it needs (the file plus
-  200 MB) and the licence before anything downloads; with too little room
-  it says how much to free and offers no download button.
+- Three models, 2.45 GiB in all, each file from its upstream Hugging Face
+  repo pinned to one commit (`resolve/<commit>/`, never `main`) with its
+  SHA-256 compiled in: the language model (`gemma-4-E2B-it.litertlm`,
+  2,588,147,712 bytes, Apache-2.0) and what it listens with, Moonshine tiny
+  (speech to text, 42.2 MiB, MIT) and Silero VAD (end of speech, 1.7 MiB,
+  MIT). The setup screen lists each with its size and licence, and the
+  free space needed (the files plus 200 MB), before anything downloads;
+  with too little room it says how much to free and offers no download
+  button. A phone set up for text before voice arrived has the language
+  model only: the mic offers the speech files (43.9 MiB) on its first tap.
 - A WorkManager foreground job (`assistant-models`, a progress
   notification) that carries on when the app leaves the screen and after
   a restart. **Wi-Fi only by default**; an "allow mobile data" switch lets
@@ -307,6 +310,40 @@ load, about 1.5 GB more memory, and not every phone's driver works; a
 failed GPU load offers the CPU). A long conversation is given to the model
 from its newest turns, as much as fits the model's context.
 
+**Voice** (push to talk; `assistant/VoiceSession.kt`). Tap the mic (the
+composer's button while nothing is typed): the microphone opens only now,
+the voice detector (Silero) hears where the question ends (half a second of
+silence), Moonshine turns it into text on the phone, and the transcript
+becomes the question, marked "spoken". The reply streams as a typed one does
+and is read aloud sentence by sentence, the first while the model is still
+writing the rest (`SentenceSplitter` strips Markdown first), in the phone's
+own voice: Domovoi's Piper voice picked in Settings → Voice once it is
+downloaded (the chat mic's replies use the same pick; Kristin unless
+another is chosen), Android's own text-to-speech voice until then. The one
+button follows the turn: while it listens and has heard you it sends what
+you said (or just stop talking); otherwise it stops everything at once,
+the voice silenced and the model stopped, what was written kept.
+
+- **Replies to typed questions stay silent** unless "read typed replies
+  aloud too" is on in the model settings (plan decision 7).
+- **Audio is never written anywhere**: it is heard in memory and dropped;
+  only the transcript is kept, as the question.
+- **One mic owner at a time** (`audio/MicArbiter.kt`): the assistant asks
+  before it opens the mic and says who has it when it is refused; the mic
+  closes at the end of speech, on stop, or when the assistant leaves the
+  screen. The microphone permission is asked on the first tap.
+- **Audio focus**: the phone's own music pauses while the mic listens and
+  ducks under the reply.
+- The long-press on a spoken turn's reply shows the voice numbers: end of
+  speech to the first spoken word (the plan's target is 3 s or less; the
+  detector's half-second silence wait is shown beside it), and how long
+  speech to text took. The model settings show the last stop's tap to
+  silence.
+- **Debug builds only** (`app/src/debug`): a test can queue WAV files in the
+  app's private `files/debug-mic-feed/` (reachable only with `run-as`) and
+  the next voice turn hears the first of them instead of the microphone, at
+  the microphone's own pace. The release build has no such feed.
+
 **Conversations** stay on the phone: one JSON file per conversation in
 `filesDir/assistant/` (app-private, outside backups and device-to-device
 transfer), never sent to a server. The history lists them; each can be
@@ -328,11 +365,12 @@ About lists them with their notices; nothing GPL):
 | LiteRT-LM 0.18.0 (the engine) | Apache-2.0 | in the 64-bit APKs |
 | Gemma 4 E2B, instruction-tuned (`.litertlm`) | Apache-2.0 | downloaded by the assistant |
 | AndroidX WorkManager 2.11.2 (the download job) | Apache-2.0 | in every APK |
-| sherpa-onnx 1.13.8, built without text to speech (speech recognition, voice detection); compiled in: Eigen (MPL-2.0, unmodified), nlohmann/json (MIT), kaldi-decoder, kaldi-native-fbank, kaldifst, OpenFst, simple-sentencepiece (Apache-2.0), KISS FFT (BSD-3-Clause) | Apache-2.0 | in every APK; used by the benchmark (and voice, next) |
+| sherpa-onnx 1.13.8, built without text to speech (speech recognition, voice detection); compiled in: Eigen (MPL-2.0, unmodified), nlohmann/json (MIT), kaldi-decoder, kaldi-native-fbank, kaldifst, OpenFst, simple-sentencepiece (Apache-2.0), KISS FFT (BSD-3-Clause) | Apache-2.0 | in every APK; the assistant's listening and the benchmark |
 | ONNX Runtime 1.28.0 | MIT | in every APK |
-| Moonshine tiny / base, English (speech to text) | MIT | downloaded by the benchmark |
-| Silero VAD v4 (voice detection) | MIT | downloaded by the benchmark |
-| Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice |
+| Moonshine tiny, English (speech to text) | MIT | downloaded by the assistant |
+| Moonshine base, English (speech to text, larger) | MIT | downloaded by the benchmark |
+| Silero VAD v4 (voice detection) | MIT | downloaded by the assistant |
+| Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice; speak the assistant's replies |
 
 ## Settings: device-local only
 

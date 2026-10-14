@@ -32,6 +32,18 @@ data class StoredMessage(
     val tokensPerS: Double? = null,
     /** Where the model ran: "cpu" or "gpu". */
     val backend: String? = null,
+    /** A question asked by voice (its text is the transcript; the audio
+     *  itself is never kept). */
+    val spoken: Boolean = false,
+    /** A spoken turn's reply: the end of speech to its first spoken word, ms
+     *  (the voice detector's own silence wait not included). */
+    val voiceMs: Long? = null,
+    /** ...the silence the detector waited for before deciding, ms. */
+    val silenceWaitMs: Long? = null,
+    /** ...speech to text, ms. */
+    val sttMs: Long? = null,
+    /** A reply stopped while it was spoken: the tap to the voice silenced, ms. */
+    val stopMs: Long? = null,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }
