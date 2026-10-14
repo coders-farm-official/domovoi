@@ -607,6 +607,10 @@ class Config:
     # [device] full_duplex on generic_pc: a USB speakerphone that cancels
     # its own echo. None = the profile's (no).
     full_duplex_override: bool | None = None
+    # Stored settings a Pi could not use and replaced with its profile's
+    # default at load (see _refuse_or_ignore): said in the hello and in every
+    # health sample, so the dashboard shows it. Empty on a healthy config.
+    settings_ignored: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -681,36 +685,61 @@ class Config:
                 f"Valid values: {', '.join(ACK_MODES)}."
             )
         speech_pause_ms = _speech_pause_ms(listen.get("speech_pause_ms"))
+        # Settings this branch checks at load (2026-10-13). A spare computer
+        # refuses a bad one and does not start: it has a terminal and a
+        # person at it, and a silent default could undo what they chose. A
+        # Pi has neither (no SSH): it logs loudly, uses its profile's
+        # default for that key, and says so in its hello and health, rather
+        # than never starting until its card is reflashed.
+        ignored: list[str] = []
+        on_pc = profile.name in engine_platform.PC_PROFILES
+
+        def _refuse_or_ignore(ok: bool, value: Any, default: Any, problem: str, note: str) -> Any:
+            if ok:
+                return value
+            if on_pc:
+                raise ValueError(problem)
+            log.error("config: %s; using the %s profile's default %r instead", problem, profile.name, default)
+            ignored.append(note)
+            return default
+
         pc = d.get("pc", {})
         permissions = str(pc.get("permissions", "automatic"))
-        if permissions not in ("automatic", "ask"):
-            raise ValueError(
-                f"unknown [pc] permissions {permissions!r}. Valid values: automatic, ask."
-            )
+        permissions = _refuse_or_ignore(
+            permissions in ("automatic", "ask"), permissions, "automatic",
+            f"unknown [pc] permissions {permissions!r}. Valid values: automatic, ask.",
+            "[pc] permissions setting ignored: not automatic or ask")
         volume_backend = str(audio.get("volume_backend", "") or "")
-        if volume_backend and volume_backend not in engine_platform.VOLUME_BACKENDS:
-            raise ValueError(
-                f"unknown [audio] volume_backend {volume_backend!r}. Valid values: "
-                f"{', '.join(engine_platform.VOLUME_BACKENDS)}."
-            )
+        volume_backend = _refuse_or_ignore(
+            not volume_backend or volume_backend in engine_platform.VOLUME_BACKENDS, volume_backend, "",
+            f"unknown [audio] volume_backend {volume_backend!r}. Valid values: "
+            f"{', '.join(engine_platform.VOLUME_BACKENDS)}.",
+            "volume backend setting ignored: not a known backend")
         control_enabled = d.get("control", {}).get("enabled")
         fd_override = d.get("device", {}).get("full_duplex")
         # Device names that reach aplay -D / mpg123 -a / amixer: an ALSA
         # name can be a pipe to a shell command (file:"|cmd"), so only plain
-        # hardware-facing names are taken (satellite/alsa_names.py).
+        # hardware-facing names are taken (satellite/alsa_names.py). The
+        # players check again at the moment of use, and set_config refuses
+        # such a name before it is ever written.
         music_device = str(music.get("alsa_device", profile.music_alsa_device))
-        if not alsa_names.safe_pcm(music_device):
-            raise ValueError(
-                f"[music] alsa_device {music_device!r} is not a plain ALSA device name "
-                "(e.g. default, hw:1,0, plughw:CARD=Array,DEV=0)"
-            )
+        music_device = _refuse_or_ignore(
+            alsa_names.safe_pcm(music_device), music_device, profile.music_alsa_device,
+            f"[music] alsa_device {music_device!r} is not a plain ALSA device name "
+            "(e.g. default, hw:1,0, plughw:CARD=Array,DEV=0)",
+            "music device setting ignored: not a plain ALSA name")
         mixer_card = str(audio.get("output_mixer_card", profile.output_mixer_card))
-        if not alsa_names.safe_card(mixer_card):
-            raise ValueError(f"[audio] output_mixer_card {mixer_card!r} is not a card index or name")
+        mixer_card = _refuse_or_ignore(
+            alsa_names.safe_card(mixer_card), mixer_card, str(profile.output_mixer_card),
+            f"[audio] output_mixer_card {mixer_card!r} is not a card index or name",
+            "output mixer card setting ignored: not a card index or name")
         mixer_control = (str(audio["output_mixer_control"]) if audio.get("output_mixer_control")
                          else profile.output_mixer_control)
-        if mixer_control is not None and not alsa_names.safe_control(mixer_control):
-            raise ValueError(f"[audio] output_mixer_control {mixer_control!r} is not a mixer control name")
+        mixer_control = _refuse_or_ignore(
+            mixer_control is None or alsa_names.safe_control(mixer_control), mixer_control,
+            profile.output_mixer_control,
+            f"[audio] output_mixer_control {mixer_control!r} is not a mixer control name",
+            "output mixer control setting ignored: not a mixer control name")
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -867,6 +896,7 @@ class Config:
             health_heartbeat_stale_sec=float(healthc.get("heartbeat_stale_sec", 60.0)),
             room_name=str(sat.get("room_name", "") or ""),
             permissions=permissions,
+            settings_ignored=tuple(ignored),
             volume_backend=volume_backend,
             control_enabled=control_enabled if isinstance(control_enabled, bool) else None,
             full_duplex_override=fd_override if isinstance(fd_override, bool) else None,
@@ -3604,6 +3634,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         down_for = None if since is None else round(now - since, 1)
         send_q = self.send_q
         return {
+            # Stored settings this Pi replaced with its profile's default at
+            # load; absent when there are none.
+            **({"settings_ignored": list(self.cfg.settings_ignored)}
+               if getattr(self.cfg, "settings_ignored", ()) else {}),
             "mic_expected": self._health_mic_expected(),
             "mic_fps": fps,
             "mic_q": self.raw_q.qsize(),
@@ -4203,12 +4237,19 @@ class Satellite(pc_engine.SpareDeviceEngine):
             return
         try:
             merged = config_writer.apply_changes(original, changes)
-            Config.from_toml(tomllib.loads(merged))
+            loaded = Config.from_toml(tomllib.loads(merged))
         except Exception as e:
             log.error(
                 "set_config: merged config doesn't load (%s); aborting, "
                 "nothing written", e,
             )
+            return
+        # A Pi loads a stored value it can't use on its profile's default
+        # (and says so); a change must not be the one that makes it do that.
+        newly = set(loaded.settings_ignored) - set(getattr(getattr(self, "cfg", None), "settings_ignored", ()) or ())
+        if newly:
+            log.error("set_config: the change would be ignored at load (%s); aborting, nothing written",
+                      "; ".join(sorted(newly)))
             return
         backup = CONFIG_PATH.with_name(CONFIG_PATH.name + ".bak")
         try:
@@ -7076,6 +7117,10 @@ class Satellite(pc_engine.SpareDeviceEngine):
         # A Pi sends neither key: that is what keeps it exactly as before.
         if pc_engine.is_pc(self.cfg):
             hello.update(pc_engine.hello_fields(self.cfg))
+        # A stored setting a Pi could not use (it runs on its profile's
+        # default instead): the dashboard's row says so from the hello on.
+        if getattr(self.cfg, "settings_ignored", ()):
+            hello["settings_ignored"] = list(self.cfg.settings_ignored)
         return hello
 
     async def _run_session(self) -> None:

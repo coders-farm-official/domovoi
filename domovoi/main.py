@@ -1612,6 +1612,13 @@ async def admin_snapshot() -> dict[str, Any]:
             for room, sess in app.state.active_sessions.items()
             if (board := getattr(sess, "board", None))
         },
+        # Stored settings a connected satellite could not use and replaced
+        # with its profile's default (from its hello); absent when none.
+        "satellite_settings_ignored": {
+            room: notes
+            for room, sess in app.state.active_sessions.items()
+            if (notes := getattr(sess, "settings_ignored", None))
+        },
         # Per-room screen/kiosk state ({on, kiosk_alive, brightness,
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.

@@ -70,6 +70,23 @@ def canonical(key: Any) -> bool:
     return isinstance(key, str) and bool(KEY_RE.fullmatch(key))
 
 
+def _device_names_ok(key: str, value: Any) -> bool:
+    """The names that reach aplay -D / mpg123 -a / amixer must be plain
+    ALSA names (satellite/alsa_names.py). Refused here, at the frame: a Pi
+    that finds such a name already stored starts on its profile's default
+    instead (client.Config.from_toml), so the load no longer refuses it."""
+    from satellite import alsa_names
+
+    if key == "music.alsa_device":
+        return alsa_names.safe_pcm(value)
+    if key == "audio.output_mixer_card":
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 64 \
+            or alsa_names.safe_card(value)
+    if key == "audio.output_mixer_control":
+        return value in ("", None) or alsa_names.safe_control(value)
+    return True
+
+
 def _scalar(value: Any) -> bool:
     if isinstance(value, bool) or value is None:
         return value is not None
@@ -95,6 +112,7 @@ def screen(changes: Any, *, pc: bool) -> tuple[dict[str, Any], list[str]]:
             and key in SETTABLE
             and not (pc and key.startswith(PC_EXCLUDED_SECTIONS))
             and _scalar(value)
+            and _device_names_ok(key, value)
         )
         if ok:
             accepted[key] = value

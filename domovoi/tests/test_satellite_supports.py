@@ -633,6 +633,43 @@ async def test_the_snapshot_lists_supports_and_board_only_for_devices_that_sent_
     }
 
 
+async def test_a_pi_s_ignored_settings_reach_the_snapshot_and_the_row(core, paired, inventory, monkeypatch):
+    """2026-10-13: a Pi that replaced a stored setting with its profile's
+    default says so in its hello; the dashboard's row shows it."""
+    from domovoi import main as core_main
+    from web.backend.api import satellites as web_sats
+
+    async def sha():
+        return "abc1234"
+
+    async def no_np(*a, **kw):
+        return None
+
+    monkeypatch.setattr(core_main.git_version, "cached_current_sha", sha)
+    monkeypatch.setattr(web_sats, "_now_playing_for", no_np)
+    note = "music device setting ignored: not a plain ALSA name"
+    hello = dict(DEVICES["pi_xvf3800"]["hello"], settings_ignored=[note, 7, "x" * 500, "bad\nline"])
+    ws = FakeWS(state=core.app.state)
+    session = StreamSession(ws, hello["room_id"])  # type: ignore[arg-type]
+    await session._on_control(hello)
+    core.app.state.active_sessions[session.room_id] = session
+    await _connect(core, "pi_2mic_hat")
+    async with core.client as c:
+        snap = (await c.get("/v1/admin/snapshot")).json()
+    assert snap["satellite_settings_ignored"] == {hello["room_id"]: [note, "x" * 160]}
+    row = {"room_id": hello["room_id"], "control_port": 6650, "http_port": 8050, "last_connected_at": None}
+    sat = await web_sats._satellite_for(row, {**snap, "active_rooms": [hello["room_id"]]}, {}, {}, {})
+    assert sat.settings_ignored == [note, "x" * 160]
+    offline = await web_sats._satellite_for(row, {**snap, "active_rooms": []}, {}, {}, {})
+    assert offline.settings_ignored is None
+
+
+def test_the_health_sample_keeps_ignored_settings_as_short_strings():
+    kept = sh.validate_sample({"rss_kb": 1, "settings_ignored": ["music device setting ignored", 3, "", "y" * 300]})
+    assert kept["settings_ignored"] == ["music device setting ignored", "y" * 160]
+    assert sh.validate_sample({"rss_kb": 1, "settings_ignored": "not a list"})["settings_ignored"] is None
+
+
 # ─── the dashboard's row ──────────────────────────────────────────────────
 
 

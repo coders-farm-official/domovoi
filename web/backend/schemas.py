@@ -535,6 +535,10 @@ class Satellite(BaseModel):
     # before) and for an offline room.
     board: str | None = None
     supports: list[str] | None = None
+    # Stored settings the CONNECTED satellite could not use and replaced with
+    # its profile's default at load (2026-10-13), e.g. "music device setting
+    # ignored: not a plain ALSA name". Null when none, or offline.
+    settings_ignored: list[str] | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────

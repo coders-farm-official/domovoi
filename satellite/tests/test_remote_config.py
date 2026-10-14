@@ -127,9 +127,60 @@ def test_R2_a_pipe_device_is_refused_by_set_config(make):
     assert client.CONFIG_PATH.read_text(encoding="utf-8") == before
 
 
-def test_R2_a_config_carrying_one_does_not_load():
+def test_R2_a_laptop_config_carrying_one_does_not_load():
+    """A spare computer has a terminal and a person at it: it refuses."""
     with pytest.raises(ValueError, match="alsa_device"):
-        client.Config.from_toml({"music": {"alsa_device": PIPE}})
+        client.Config.from_toml({"device": {"profile": "generic_pc"}, "music": {"alsa_device": PIPE}})
+    for audio in ({"output_mixer_card": "0;reboot"}, {"output_mixer_control": "PCM`id`"},
+                  {"volume_backend": "bogus"}):
+        with pytest.raises(ValueError):
+            client.Config.from_toml({"device": {"profile": "generic_pc"}, "audio": audio})
+    with pytest.raises(ValueError, match="permissions"):
+        client.Config.from_toml({"device": {"profile": "generic_pc"}, "pc": {"permissions": "sometimes"}})
+
+
+BAD_STORED = {
+    "music": {"alsa_device": PIPE},
+    "audio": {"output_mixer_card": "0;reboot", "output_mixer_control": "PCM`id`", "volume_backend": "bogus"},
+    "pc": {"permissions": "sometimes"},
+}
+
+
+@pytest.mark.parametrize("profile", ["xvf3800_usb", "respeaker_2mic_hat", "radxa_zero3w_video"])
+def test_a_pi_with_a_bad_stored_value_starts_on_its_profile_s_default_and_says_so(profile, caplog):
+    """A Pi has no SSH: a config that does not load leaves it dead until its
+    card is reflashed. It logs loudly, runs on the profile's default for
+    each such key, and says so in its hello and every health sample."""
+    from satellite import devices
+
+    prof = devices.resolve(profile)
+    with caplog.at_level("ERROR", logger="satellite"):
+        cfg = client.Config.from_toml({"device": {"profile": profile}, **BAD_STORED})
+    assert cfg.music_alsa_device == prof.music_alsa_device
+    assert cfg.output_mixer_card == str(prof.output_mixer_card)
+    assert cfg.output_mixer_control == prof.output_mixer_control
+    assert cfg.volume_backend == "" and cfg.permissions == "automatic"
+    assert cfg.settings_ignored == (
+        "[pc] permissions setting ignored: not automatic or ask",
+        "volume backend setting ignored: not a known backend",
+        "music device setting ignored: not a plain ALSA name",
+        "output mixer card setting ignored: not a card index or name",
+        "output mixer control setting ignored: not a mixer control name",
+    )
+    assert caplog.text.count("using the " + profile + " profile's default") == 5
+    sat = client.Satellite(cfg)
+    assert sat._hello_frame()["settings_ignored"] == list(cfg.settings_ignored)
+    assert sat._health_process_facts(time.monotonic())["settings_ignored"] == list(cfg.settings_ignored)
+    # Still refused at the moment of use, whatever the config held.
+    out = engine_platform.AlsaAudioOut()
+    assert PIPE not in out.wav_argv(PIPE, "/tmp/x.wav") and "default" in out.wav_argv(PIPE, "/tmp/x.wav")
+
+
+def test_a_healthy_pi_says_nothing_new():
+    sat = client.Satellite(client.Config.from_toml({"device": {"profile": "xvf3800_usb"}}))
+    assert sat.cfg.settings_ignored == ()
+    assert "settings_ignored" not in sat._hello_frame()
+    assert "settings_ignored" not in sat._health_process_facts(time.monotonic())
 
 
 def test_R2_the_player_never_passes_one_on():
@@ -164,7 +215,13 @@ def test_mixer_card_and_control_are_checked_too():
     assert alsa_names.safe_control("Master") and alsa_names.safe_control("Speaker,0")
     assert not alsa_names.safe_control("PCM\n") and not alsa_names.safe_control('a"b')
     with pytest.raises(ValueError):
-        client.Config.from_toml({"audio": {"output_mixer_card": "0 -D file"}})
+        client.Config.from_toml({"device": {"profile": "generic_pc"}, "audio": {"output_mixer_card": "0 -D file"}})
+    for key, bad in (("audio.output_mixer_card", "0 -D file"), ("audio.output_mixer_control", 'a"b'),
+                     ("music.alsa_device", "pipe:x")):
+        for pc in (True, False):
+            assert remote_config.screen({key: bad}, pc=pc)[0] == {}, (key, pc)
+    assert remote_config.screen({"audio.output_mixer_card": 1}, pc=False)[0] == {"audio.output_mixer_card": 1}
+    assert remote_config.screen({"audio.output_mixer_control": "PCM"}, pc=False)[0] == {"audio.output_mixer_control": "PCM"}
 
 
 @pytest.mark.parametrize("profile", ["respeaker_2mic_hat", "xvf3800_usb", "radxa_zero3w_video", "generic_pc"])
@@ -201,10 +258,9 @@ def test_R2b_a_frame_of_only_refused_keys_holds_nothing(monkeypatch):
     sat = pc_sat(pc={"permissions": "ask"})
     sat._handle_text_frame({"type": "set_config", "changes": {"music.alsa_device": PIPE,
                                                                 "satellite.server_fingerprint": EVIL}})
-    # The pipe device is a settable key with a value the loader refuses:
-    # held (shown in full), and refused again when allowed.
-    pending = sat.control_status()["pending"]
-    assert [p["details"] for p in pending] == [[f"music.alsa_device = {PIPE!r}"]]
+    # The pipe device is a settable key with a value the frame may not
+    # carry: refused at the screen, so nothing is even held for an OK.
+    assert sat.control_status()["pending"] == []
     before = installed_config("ask")
     sat._restart_service = lambda: pytest.fail("nothing applied")
     sat._apply_config_changes({"music.alsa_device": PIPE})

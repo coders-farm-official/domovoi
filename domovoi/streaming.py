@@ -2943,6 +2943,13 @@ class StreamSession:
             self.abilities = satellite_abilities.from_hello(ctrl, room_id=self.room_id)
             raw_board = ctrl.get("board")
             self.board = satellite_abilities.clean_board(raw_board)
+            # Stored settings the satellite could not use (it runs on its
+            # profile's default for them): shown on the dashboard's row.
+            from domovoi.satellite_health import clean_notes
+            self.settings_ignored = clean_notes(ctrl.get("settings_ignored"))
+            if self.settings_ignored:
+                log.warning("hello: room=%s ignored settings: %s", self.room_id,
+                            "; ".join(self.settings_ignored))
             if raw_board is not None and self.board is None:
                 log.warning(
                     "hello: room=%s sent a board that is not a short slug — ignored",

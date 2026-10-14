@@ -60,8 +60,12 @@ Server, dashboard and satellite update; no migration. Pis are unchanged.
   address or the device section. An audio device name, from the server or
   in `config.toml`, must be a plain ALSA device (`hw:1,0`,
   `plughw:CARD=Device`, `default`, …): one that makes ALSA run a command
-  is refused, and a satellite whose config names one says so and doesn't
-  start. A satellite's sound sync now prunes only the clips it put there.
+  is refused, and so is the player's use of one. A **Pi** whose stored
+  config already names one (no SSH to fix it) starts on its board's
+  default for that setting and says so: **"a setting ignored"** on its
+  dashboard card and in its health block. A spare computer refuses to
+  start instead and says why (it has a terminal). A satellite's sound sync
+  now prunes only the clips it put there.
 
 ## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
 
