@@ -7473,7 +7473,7 @@
           "wake-words"
         ],
         "summary": "Create Wake Word",
-        "description": "Register a new wake word in the ``recording`` status. The slug is\nderived from the name (``voice_slug``) and is the load-bearing runtime\nidentifier; a name OR slug collision raises ``IntegrityError`` \u2192 409.",
+        "description": "Register a new wake word in the ``recording`` status. The slug is\nderived from the name (``wake_slug``: ``voice_slug``, never a Windows\ndevice name, which no satellite would sync) and is the load-bearing\nruntime identifier; a name OR slug collision raises ``IntegrityError`` \u2192\n409.",
         "operationId": "create_wake_word_api_wake_words_post",
         "requestBody": {
           "content": {
@@ -18542,6 +18542,20 @@
                 "type": "null"
               }
             ]
+          },
+          "settings_ignored": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings Ignored"
           }
         },
         "type": "object",
