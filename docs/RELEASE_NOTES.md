@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — Android: talk to Domovoi on the phone
+
+New Android build only; nothing changes on the server.
+
+* **The Assistant tab listens**: tap the mic, ask, and Domovoi answers on
+  the phone, in text and aloud, with no server and no internet (airplane
+  mode included). It stops listening when you stop talking; one tap stops
+  it talking. Replies to typed questions stay silent unless "read typed
+  replies aloud too" is on in its model settings.
+* **It speaks with the phone's voice from Settings → Voice** (Kristin
+  unless you picked another, once downloaded there), else the phone's own
+  text-to-speech voice.
+* **First-time setup now downloads 2.45 GB**: the language model plus the
+  speech files (44 MB: Moonshine speech to text and Silero end of speech,
+  both MIT). A phone set up for text only gets the speech files offered on
+  its first tap of the mic.
+* **The microphone opens only on that tap**, one app feature at a time,
+  and the audio is never kept: only the words, as the question.
+
 ## 2026-10-13 — Android: Domovoi on the phone (text chat, no server needed)
 
 New Android build only; nothing changes on the server.
