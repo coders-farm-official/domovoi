@@ -1526,3 +1526,26 @@ def test_the_wheel_fetch_asks_for_the_board_s_branch_whatever_the_host(tmp_path,
     assert "onnxruntime==1.20.0" in first
     assert not any(a.startswith("onnxruntime>=") for a in first)
     assert not any("platform_machine" in a for a in first)
+
+
+def test_every_marker_in_the_satellite_requirements_is_read_without_packaging():
+    """N2 (review of wf/sat-pc): the core evaluated these with packaging,
+    which it does not declare; the stdlib reader must agree with it on
+    every marker the file has, for every board."""
+    from packaging.markers import Marker
+
+    lines = (_REPO / "satellite" / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    markers = [ln.split(";", 1)[1].strip() for ln in lines if ";" in ln and not ln.lstrip().startswith("#")]
+    assert markers
+    for machine in ("aarch64", "armv7l", "x86_64", "i686"):
+        env = fetchers._target_environment((f"manylinux_2_28_{machine}",), "3.13")
+        for marker in markers:
+            assert fetchers.marker_holds(marker, env) == Marker(marker).evaluate(dict(env)), (marker, machine)
+
+
+def test_a_marker_the_reader_does_not_know_is_refused_not_guessed():
+    env = fetchers._target_environment(("manylinux_2_28_x86_64",), "3.12")
+    for marker in ('python_version >= "3.12"', '(platform_machine == "x86_64")', "platform_machine == 'x86_64'",
+                   'implementation_name == "cpython"'):
+        with pytest.raises(ValueError):
+            fetchers.marker_holds(marker, env)
