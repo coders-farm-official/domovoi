@@ -532,12 +532,19 @@ def cli(args: Any) -> int:
 
 def wait_for_approval(path: Path, *, timeout: float, out=None, poll: float = 1.0,
                       clock: Callable[[], float] = time.monotonic,
-                      sleep: Callable[[float], None] = time.sleep) -> str:
+                      sleep: Callable[[float], None] = time.sleep, show_code: bool = True) -> str:
     """The installer's last step: watch the engine until it is connected,
-    printing the approval code (to the installer's terminal, never a log)
-    while it waits. Returns the final connection state, or "timeout" /
-    "no_engine"."""
+    printing the approval code while it waits — only when ``out`` is a
+    terminal: an installer piped into a file or a CI log says where to find
+    the code instead (the code never goes to a log). ``show_code`` False
+    says the same even on a terminal (the installer passes it when its own
+    output is not one: sudo can hand the waiter a pty of its own). Returns
+    the final connection state, or "timeout" / "no_engine"."""
     out = out if out is not None else sys.stdout
+    try:
+        on_terminal = bool(show_code) and bool(out.isatty())
+    except (OSError, ValueError, AttributeError):
+        on_terminal = False
     client_ = control.ControlClient(path, timeout=5.0)
     deadline = clock() + timeout
     shown: str | None = None
@@ -553,7 +560,14 @@ def wait_for_approval(path: Path, *, timeout: float, out=None, poll: float = 1.0
             out.write(f"Approved: this device is now the {st['room'].get('name') or st['room'].get('id')}.\n")
             out.flush()
             return state
-        if state == "awaiting_approval":
+        if state == "awaiting_approval" and not on_terminal:
+            if last_state != state:
+                out.write(
+                    "\nWaiting for approval. The code is not printed here (this is not a\n"
+                    "terminal); it is in the tray, or run: python -m satellite.client --approval-code\n"
+                )
+                out.flush()
+        elif state == "awaiting_approval":
             try:
                 code = client_.call("code").get("code")
             except ConnectionError:

@@ -189,15 +189,101 @@ def test_a_tampered_download_is_refused_and_not_placed(tmp_path, pinned):
     assert not (tmp_path / name).exists()
 
 
-# ─── the record ───────────────────────────────────────────────────────────
+# ─── --purge: the satellite's files, never a server's ─────────────────────
 
-def test_the_record_keeps_what_the_installer_changed(tmp_path):
-    pc_install.note_state(tmp_path, mode="desktop", linger_enabled_by_installer=True)
-    pc_install.note_state(tmp_path, masked_targets=["sleep.target"])
-    assert pc_install.read_state(tmp_path) == {
-        "mode": "desktop", "linger_enabled_by_installer": True, "masked_targets": ["sleep.target"]}
-    assert pc_install._main(["state", "--config-dir", str(tmp_path), "--set", 'charge_rule="/x"']) == 0
-    assert pc_install.read_state(tmp_path)["charge_rule"] == "/x"
+def _satellite_files(d: Path) -> None:
+    d.mkdir(parents=True, exist_ok=True)
+    for name in ("config.toml", "approved", "server-fingerprint.json", "muted", "install-pc.json"):
+        (d / name).write_text("x", encoding="utf-8")
+    (d / "config.toml.bak-20261013").write_text("x", encoding="utf-8")
+    (d / "previous-enrolment-new").mkdir()
+    (d / "previous-enrolment-new" / "approved").write_text("x", encoding="utf-8")
+    (d / "sounds" / "greetings").mkdir(parents=True)
+    (d / "sounds" / "greetings" / "hello.mp3").write_bytes(b"ours")
+    (d / "sounds" / "network_issues.mp3").write_bytes(b"ours")
+    (d / "sounds" / pc_install.SOUNDS_RECORD).write_text(
+        json.dumps(["greetings/hello.mp3", "network_issues.mp3"]), encoding="utf-8")
+    (d / "wake_models").mkdir()
+    (d / "wake_models" / "hey_room.onnx").write_bytes(b"ours")
+
+
+def test_purge_removes_the_satellite_s_files(tmp_path):
+    d = tmp_path / ".domovoi"
+    _satellite_files(d)
+    (d / "notes.txt").write_text("the owner's", encoding="utf-8")
+    gone = pc_install.purge(d)
+    assert {"config.toml", "approved", "install-pc.json", "config.toml.bak-20261013",
+            "previous-enrolment-new", "sounds", "wake_models"} <= set(gone)
+    assert sorted(p.name for p in d.iterdir()) == ["notes.txt"]
+
+
+def test_purge_leaves_a_server_s_files_in_a_shared_directory_alone(tmp_path):
+    """S2 (review): ~/.domovoi on a core's account holds its key, its
+    voices (sounds/voices/...) and its wake models."""
+    d = tmp_path / ".domovoi"
+    _satellite_files(d)
+    (d / "server-identity.json").write_text("{key}", encoding="utf-8")
+    (d / "device-token.txt").write_text("t", encoding="utf-8")
+    voices = d / "sounds" / "voices" / "amy"
+    voices.mkdir(parents=True)
+    (voices / "hello.mp3").write_bytes(b"the server's")
+    (d / "sounds" / "network_issues_v2.mp3").write_bytes(b"the server's")
+    gone = pc_install.purge(d)
+    assert "sounds/greetings/hello.mp3" in gone and "sounds/network_issues.mp3" in gone
+    assert (d / "server-identity.json").read_text(encoding="utf-8") == "{key}"
+    assert (d / "device-token.txt").exists()
+    assert (voices / "hello.mp3").read_bytes() == b"the server's"
+    assert (d / "sounds" / "network_issues_v2.mp3").exists()
+    assert (d / "wake_models" / "hey_room.onnx").exists()
+    assert not (d / "config.toml").exists() and not (d / "sounds" / "greetings").exists()
+
+
+def test_purge_without_a_sounds_record_keeps_a_server_s_folders_whole(tmp_path):
+    """Before the record existed, nothing says which clips are the
+    satellite's: with a server in the same directory, its folders stay."""
+    d = tmp_path / ".domovoi"
+    _satellite_files(d)
+    (d / "sounds" / pc_install.SOUNDS_RECORD).unlink()
+    (d / "setup-code.txt").write_text("123", encoding="utf-8")
+    pc_install.purge(d)
+    assert (d / "sounds" / "greetings" / "hello.mp3").exists() and (d / "wake_models" / "hey_room.onnx").exists()
+    assert not (d / "config.toml").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks: the Linux container runs this")
+def test_purge_removes_links_and_never_follows_one(tmp_path):
+    d = tmp_path / ".domovoi"
+    _satellite_files(d)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "keep.mp3").write_bytes(b"keep")
+    (outside / "config.toml").write_text("keep", encoding="utf-8")
+    (d / "config.toml").unlink()
+    (d / "config.toml").symlink_to(outside / "config.toml")
+    (d / "sounds" / "linked").symlink_to(outside, target_is_directory=True)
+    (d / "sounds" / pc_install.SOUNDS_RECORD).write_text(
+        json.dumps(["linked/keep.mp3", "../elsewhere/keep.mp3", "network_issues.mp3"]), encoding="utf-8")
+    pc_install.purge(d)
+    assert not (d / "config.toml").is_symlink()
+    assert (outside / "keep.mp3").read_bytes() == b"keep"
+    assert (outside / "config.toml").read_text(encoding="utf-8") == "keep"
+
+
+def test_purge_shares_its_names_with_the_engine_and_the_sound_sync():
+    from satellite import pc_engine, sound_sync
+
+    assert pc_install.CORE_MARKERS == pc_engine.CORE_MARKERS
+    assert pc_install.SOUNDS_RECORD == sound_sync.RECORD_NAME
+    assert pc_install._main(["purge", "--config-dir", str(ROOT / "no-such-dir")]) == 0
+
+
+def test_the_satellite_keeps_no_record_root_reads():
+    """B3 (review): the uninstaller ran as root on paths from
+    ~/.domovoi/install-pc.json, a file the satellite's account writes. The
+    record is root's now, written and read by the script alone."""
+    with pytest.raises(SystemExit):
+        pc_install._main(["state", "--config-dir", "x", "--set", 'charge_rule="/etc/x"'])
+    assert not hasattr(pc_install, "note_state")
 
 
 # ─── the script ───────────────────────────────────────────────────────────
@@ -240,3 +326,159 @@ def test_the_units_take_no_privilege_and_restart_on_75_not_78():
         assert "sudo" not in text.split("[Unit]", 1)[1]
     system = (ROOT / "satellite" / "scripts" / "domovoi-satellite-system.service").read_text(encoding="utf-8")
     assert "ProtectSystem=strict" in system and "User=@USER@" in system
+
+
+# ─── what root may touch on uninstall (review B3) ─────────────────────────
+
+def _function(name: str) -> str:
+    text = SCRIPT.read_text(encoding="utf-8")
+    m = re.search(rf"^{name}\(\) \{{.*?^\}}$", text, re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+def test_uninstall_reads_root_s_record_and_acts_on_fixed_paths_only():
+    text = SCRIPT.read_text(encoding="utf-8")
+    body = _function("uninstall")
+    # Nothing under the satellite's home is read as a list of things to do.
+    assert "install-pc.json" not in body and "$CONFIG_DIR/install" not in body
+    assert "RECORD=$RECORD_DIR/install.json" in text and "RECORD_DIR=/var/lib/domovoi-satellite" in text
+    # Root removes only fixed paths, and nothing recursively.
+    for line in body.splitlines():
+        if "$SUDO rm" in line:
+            target = line.split("$SUDO rm", 1)[1]
+            assert "-r" not in target.split()[0], line
+            assert any(v in target for v in ('"$LOGIND_DROPIN"', '"$CHARGE_RULE"', '"/etc/systemd/system/$UNIT"', '"$RECORD_DIR"', '"$ROOT_LIB"',
+                                             '"$RECORD"', '"$UNINSTALLER"')), line
+    # Units: the fixed sleep targets, whatever the record lists.
+    assert 'case " $SLEEP_TARGETS " in' in body
+    # The account's files go as the account.
+    assert 'as_sat rm -rf "$PREFIX"' in body
+    assert "userdel -r" in body
+
+
+def test_record_get_trusts_only_a_root_owned_record():
+    body = _function("record_get")
+    assert '[ ! -L "$RECORD" ]' in body and 'stat -c %u "$RECORD"' in body and 'stat -c %u "$RECORD_DIR"' in body
+
+
+def test_the_uninstall_lines_name_root_s_copy():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "UNINSTALLER=$ROOT_LIB/install-pc.sh" in text and "ROOT_LIB=/usr/local/lib/domovoi-satellite" in text
+    assert 'say "  uninstall: bash $UNINSTALLER --uninstall"' in text
+    assert 'say "  uninstall: sudo bash $UNINSTALLER --uninstall"' in text
+    assert "$PREFIX/satellite/scripts/install-pc.sh" not in text
+    assert '$SUDO install -o root -g root -m 0755 "$HERE/install-pc.sh" "$UNINSTALLER"' in text
+    guide = (ROOT / "docs" / "SPARE_DEVICE_SATELLITES.md").read_text(encoding="utf-8")
+    assert "/usr/local/lib/domovoi-satellite/install-pc.sh --uninstall" in guide
+    assert "satellite/scripts/install-pc.sh --uninstall" not in guide
+
+
+def test_root_never_works_inside_the_satellite_s_home():
+    """Install as well as uninstall: root creates no directory in, and
+    changes no owner under, a home the account controls."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert '$SUDO install -d -o "$SAT_ACCOUNT"' not in text
+    assert 'as_sat mkdir -p "$PREFIX"' in text
+    assert "$SUDO chown" not in text and "$SUDO rm -rf" not in text
+
+
+# ─── as_sat (review S3: root + headless) ──────────────────────────────────
+
+@pytest.mark.skipif(_bash() is None, reason="needs bash")
+@pytest.mark.parametrize("sudo,expect", [
+    ("", "runuser -u domovoi-sat -- env -i HOME=/var/lib/domovoi-sat LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin id -un"),
+    ("sudo", "sudo -u domovoi-sat -H -- id -un"),
+])
+def test_as_sat_runs_as_the_account_from_root_and_from_a_sudoer(sudo, expect):
+    script = (_function("as_sat") + "\n"
+              + 'runuser() { echo runuser "$@"; }\nsudo() { echo sudo "$@"; }\n'
+              + f'MODE=headless SUDO="{sudo}" SAT_ACCOUNT=domovoi-sat HOME_DIR=/var/lib/domovoi-sat\n'
+              + "as_sat id -un; echo rc=$?\n")
+    r = subprocess.run([_bash(), "-c", script], capture_output=True, text=True)
+    assert r.stdout.splitlines() == [expect, "rc=0"], (r.stdout, r.stderr)
+
+
+# ─── the installer proves the core before anything (review S4, M8) ────────
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") is None, reason="runs the script on Linux")
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="the installer needs Python 3.11")
+def test_a_core_that_does_not_prove_its_fingerprint_stops_the_install_before_any_write(tmp_path):
+    payload = enrolment.build("http://no-such-core.home.arpa:6370", FP, "Kid's Room")
+    home = tmp_path / "laptop"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "DOMOVOI_TEST_SYSTEMD_RUNTIME": str(tmp_path / "no-systemd")}
+    env.pop("DISPLAY", None)
+    env.pop("WAYLAND_DISPLAY", None)
+    mode = "headless" if os.geteuid() == 0 else "desktop"
+    r = subprocess.run(["bash", str(SCRIPT), "--yes", "--permissions", "automatic", "--mode", mode,
+                        "--skip-apt", "--wait", "0", payload],
+                       capture_output=True, text=True, env=env, timeout=120, stdin=subprocess.DEVNULL)
+    assert r.returncode == 3, (r.returncode, r.stdout[-800:], r.stderr[-800:])
+    assert "did not prove" in r.stderr and "nothing was installed" in r.stderr
+    assert list(home.iterdir()) == []
+    if os.geteuid() == 0:
+        assert not Path("/usr/local/lib/domovoi-satellite").exists()
+
+
+# ─── the Python packages: hash-pinned (review S1) ─────────────────────────
+
+LOCKS = ROOT / "satellite" / "locks"
+
+
+def _lock_pins(path: Path) -> dict[str, str]:
+    pins, current = {}, None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^([A-Za-z0-9_.-]+)==([^ \\]+) \\$", line)
+        if m:
+            current = m.group(1).lower().replace("_", "-")
+            pins[current] = m.group(2)
+            continue
+        if line.startswith("    --hash=sha256:"):
+            assert current, line
+            assert re.fullmatch(r"    --hash=sha256:[0-9a-f]{64}( \\)?", line), line
+    return pins
+
+
+def test_every_supported_python_has_a_hash_pinned_list():
+    names = sorted(p.name for p in LOCKS.glob("pc-*.txt"))
+    for tag in ("cp311", "cp312", "cp313", "cp314"):
+        assert f"pc-{tag}-x86_64.txt" in names
+    for p in LOCKS.glob("pc-*.txt"):
+        text = p.read_text(encoding="utf-8")
+        blocks = re.split(r"\n(?=[A-Za-z0-9_.-]+==)", text)
+        for block in blocks[1:]:
+            assert "--hash=sha256:" in block, (p.name, block[:80])
+        pins = _lock_pins(p)
+        assert pins["openwakeword"] == "0.6.0" and "spidev" not in pins and "tflite-runtime" not in pins
+
+
+def test_the_lists_hold_what_the_requirements_ask_for():
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    reqs = []
+    for f in ("requirements.txt", "requirements-pc.txt"):
+        for line in (ROOT / "satellite" / f).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                reqs.append(Requirement(line))
+    for p in LOCKS.glob("pc-*.txt"):
+        machine = p.stem.split("-", 2)[2]
+        pins = _lock_pins(p)
+        for req in reqs:
+            if req.marker and not req.marker.evaluate({"platform_machine": machine}):
+                continue
+            name = req.name.lower().replace("_", "-")
+            if name == "spidev":
+                continue
+            assert name in pins, (p.name, name)
+            assert req.specifier.contains(Version(pins[name]), prereleases=True), (p.name, name, pins[name])
+
+
+def test_the_installer_installs_only_from_the_list_with_hashes():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "--require-hashes --only-binary=:all: --no-deps -r \"$PREFIX/$LOCK_REL\"" in text
+    assert 'LOCK_REL=satellite/locks/pc-$PYTAG-$(uname -m).txt' in text
+    pip_lines = [ln for ln in text.splitlines() if "pip\" install" in ln or "/pip install" in ln]
+    assert len(pip_lines) == 1, pip_lines

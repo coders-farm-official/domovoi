@@ -503,13 +503,43 @@ def test_the_installer_waits_and_prints_the_code_once(fake_client):
             raise nxt
         return nxt
     fake_client.call = call
-    out = io.StringIO()
+    out = Terminal()
     clock = iter(range(1000))
     got = pc_engine.wait_for_approval(Path("x"), timeout=100, out=out, poll=0,
                                       clock=lambda: next(clock), sleep=lambda s: None)
     assert got == "connected"
     text = out.getvalue()
     assert text.count("482913") == 1 and "now the Study" in text
+
+
+class Terminal(io.StringIO):
+    def isatty(self):
+        return True
+
+
+def test_the_installer_prints_no_code_into_a_pipe_or_a_log(fake_client):
+    """N2 (review): `install-pc.sh ... | tee install.log` must not write
+    the approval code into the file."""
+    states = iter([
+        {"ok": True, "connection": "awaiting_approval"},
+        {"ok": True, "connection": "awaiting_approval"},
+        {"ok": True, "connection": "connected", "room": {"id": "study", "name": "Study"}},
+    ])
+    asked = []
+
+    def call(self, verb, **args):
+        asked.append(verb)
+        if verb == "code":
+            return {"ok": True, "waiting": True, "code": "482913"}
+        return next(states)
+    fake_client.call = call
+    out = io.StringIO()
+    clock = iter(range(1000))
+    got = pc_engine.wait_for_approval(Path("x"), timeout=100, out=out, poll=0,
+                                      clock=lambda: next(clock), sleep=lambda s: None)
+    assert got == "connected"
+    assert "482913" not in out.getvalue() and "code" not in asked
+    assert out.getvalue().count("--approval-code") == 1
 
 
 # ─── the requirements install on an x86-64 laptop ─────────────────────────

@@ -75,6 +75,12 @@ it is exactly what the dashboard expected** (the SHA-256 in the command).
 Make a fresh command after you update Domovoi: the old one refuses the new
 download, which is the point.
 
+The command is only as trustworthy as the dashboard page you copied it
+from, and that page is plain HTTP on your network: someone who can rewrite
+it on the way could give you a different command. When the installer says
+"…proved it is SHA256:…", check that fingerprint against **Settings →
+About** on another device (your phone) before you type your password.
+
 ### 2. Run it
 
 On the laptop, **signed in as the account the satellite should use** (not
@@ -85,19 +91,27 @@ you agree to). In order, it:
 1. checks the server named in the code is the one with that fingerprint —
    if not, it stops and changes nothing;
 2. asks **what the server may do on its own** (below);
-3. installs the few packages it needs (`python3-venv`, `libportaudio2`,
+3. puts its uninstaller in `/usr/local/lib/domovoi-satellite` (root's own
+   copy, which the satellite can't change);
+4. installs the few packages it needs (`python3-venv`, `libportaudio2`,
    `mpg123`, `alsa-utils`; with a desktop `python3-tk` and
    `pulseaudio-utils`);
-4. sets up the satellite in `~/.local/share/domovoi-satellite` (its own
-   Python environment, the wake-word models, each checked against its
-   pinned fingerprint), and its settings in `~/.domovoi/config.toml`;
-5. starts it as a service of your account that also runs at boot before
+5. sets up the satellite in `~/.local/share/domovoi-satellite` (its own
+   Python environment, from a list in which every package file is pinned
+   by its SHA-256, and the wake-word models, each checked the same way),
+   and its settings in `~/.domovoi/config.toml`;
+6. starts it as a service of your account that also runs at boot before
    anyone signs in (`systemd --user` with *linger*), puts the tray icon in
    your desktop's autostart and **Domovoi Satellite** in the app menu;
-6. asks, one at a time, about **keeping it awake**: ignore the lid
+7. asks, one at a time, about **keeping it awake**: ignore the lid
    switch, never sleep, stop charging at 80 %. Each defaults to **No**;
    say yes to what this computer needs;
-7. waits for you to approve it, showing the **approval code**.
+8. waits for you to approve it, showing the **approval code**.
+
+It refuses an account that already runs a Domovoi server (one whose
+`~/.domovoi` holds the server's key): use another account, or headless
+mode. Python 3.11 to 3.14 on x86-64 (and 3.11 to 3.13 on 64-bit ARM) have a
+pinned list; on anything else it stops before installing and says so.
 
 About ten minutes on a fresh install, mostly downloads.
 
@@ -128,12 +142,18 @@ Pi-only for now.)
 | A wake word pushed to the room | applied, restart | wait for **Allow** |
 | What it runs as | your account, with no way to gain privileges (`NoNewPrivileges`) | the same |
 
-**Automatic** is like a Pi: hands off. Because updates then run as the
-account the satellite uses, use a **dedicated account** for it — then the
-satellite can reach nothing of yours. **Ask me** suits a computer someone
-also uses: nothing new runs until they say so. Change it later in
-`~/.domovoi/config.toml` (`[pc] permissions = "automatic"` or `"ask"`) and
-restart the satellite; the server can never change it for you.
+**Automatic** is like a Pi: hands off. Updates then run as the account
+the satellite uses, and the installer needed that account to use `sudo` —
+so code your server sends could reach root the next time that account uses
+sudo. Use a **dedicated account** for it, and take its sudo away once the
+install is done (`sudo deluser <account> sudo`; give it back to uninstall),
+or use the **headless** mode below, whose account has neither sudo nor a
+login. **Ask me** suits a computer someone also uses: nothing new runs
+until they say so. Change it later in `~/.domovoi/config.toml` (`[pc]
+permissions = "automatic"` or `"ask"`) and restart the satellite; the
+server can never change it for you, nor the pinned server, its address or
+the device's profile, and a setting it sends that names an audio device
+must be a plain one (`hw:1,0`, `default`, …).
 
 ### The tray
 
@@ -228,13 +248,22 @@ wait until an admin clears it.
 ### Removing it
 
 ```
-bash ~/.local/share/domovoi-satellite/satellite/scripts/install-pc.sh --uninstall          # keeps ~/.domovoi/config.toml
-bash ~/.local/share/domovoi-satellite/satellite/scripts/install-pc.sh --uninstall --purge  # the settings too
-# headless:  sudo bash /var/lib/domovoi-sat/app/satellite/scripts/install-pc.sh --uninstall --purge --mode headless
+bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall          # keeps ~/.domovoi/config.toml
+bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall --purge  # the settings too
+# headless:  sudo bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall --purge
 ```
 
+Run the copy in `/usr/local/lib/domovoi-satellite`, which belongs to root:
+never the `install-pc.sh` inside the satellite's own folder, which the
+satellite's account (and your server's updates) can change. A desktop
+install is removed as its own account (it asks for your password), a
+headless one with `sudo`.
+
 It undoes what the installer changed (the service, linger if it turned it
-on, the tray, the power settings it made) and nothing else. Then **retire
+on, the tray, the power settings it made, all from root's own record) and
+nothing else; `--purge` removes the satellite's own files from
+`~/.domovoi`, never a Domovoi server's, and on a headless box the
+`domovoi-sat` account. Then **retire
 the room in the dashboard** once it shows offline (Settings → Satellites →
 the room → **Retire room**): that frees the name and removes the room's
 music player, which the container guard would otherwise keep expecting.
