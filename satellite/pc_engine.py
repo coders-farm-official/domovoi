@@ -202,7 +202,14 @@ class SpareDeviceEngine:
         if not is_pc(self.cfg):
             return
         reason = reason[:200] if reason else None
-        if (getattr(self, "_conn_state", None), getattr(self, "_conn_reason", None)) == (state, reason):
+        current = getattr(self, "_conn_state", None)
+        # Parked devices redial every few seconds; each attempt is not news.
+        # The person is reading the code off the tray: it stays amber (and
+        # the code stays shown) until the core accepts, refuses, or can't
+        # be reached.
+        if state == "connecting" and current == "awaiting_approval":
+            return
+        if (current, getattr(self, "_conn_reason", None)) == (state, reason):
             return
         self._conn_state, self._conn_reason = state, reason
         self._control_notify()
@@ -340,7 +347,8 @@ class SpareDeviceEngine:
     def control_approval_code(self) -> tuple[bool, str | None]:
         from satellite import client
 
-        waiting = getattr(self, "_conn_state", None) == "awaiting_approval"
+        waiting = bool(getattr(self, "_approval_pending", False)) or (
+            getattr(self, "_conn_state", None) == "awaiting_approval")
         code = getattr(self, "_approval_code", None) or client._effective_approval_code()
         return waiting, code
 

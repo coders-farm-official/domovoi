@@ -180,6 +180,22 @@ def test_awaiting_approval_shows_the_code_and_logs_it_masked(monkeypatch, caplog
     assert "482913" not in caplog.text, "the log keeps the code masked"
 
 
+def test_a_parked_laptop_stays_parked_and_keeps_its_code_through_its_retries(monkeypatch):
+    """A parked device redials every few seconds; the tray must not flicker
+    and --approval-code must not miss the code between two attempts."""
+    sat = pc_sat()
+    monkeypatch.setattr(client, "_setup_status", lambda *a: None)
+    monkeypatch.setattr(pc_engine, "show_code_on_tty", lambda *a, **k: None)
+    sat._handle_text_frame({"type": "error", "reason": "awaiting_approval", "code": "482913"})
+    sat._set_conn("connecting")          # the next attempt
+    assert sat.control_status()["connection"] == "awaiting_approval"
+    sat._conn_state = "connecting"       # even if something else said so
+    assert sat.control_approval_code() == (True, "482913")
+    sat._set_conn("offline", "connection refused")
+    assert sat.control_status()["connection"] == "offline"
+    assert sat.control_approval_code()[0] is True, "still waiting: the code is still the code"
+
+
 def test_a_refused_laptop_says_so_in_its_status(monkeypatch):
     sat = pc_sat()
     sat._handle_text_frame({"type": "error", "reason": "pairing_rejected",

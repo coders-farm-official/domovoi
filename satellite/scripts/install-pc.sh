@@ -402,7 +402,7 @@ if ! have_systemd; then
   say "  cd $PREFIX && $VENV/bin/python -m satellite.client"
 elif [ "$MODE" = desktop ]; then
   mkdir -p "$HOME_DIR/.config/systemd/user"
-  render "$PREFIX/satellite/scripts/domovoi-satellite-user.service" >"$HOME_DIR/.config/systemd/user/$UNIT"
+  render "$SRC/satellite/scripts/domovoi-satellite-user.service" >"$HOME_DIR/.config/systemd/user/$UNIT"
   need_sudo
   if [ "$(loginctl show-user "$RUN_AS" -p Linger --value 2>/dev/null || echo no)" != yes ]; then
     $SUDO loginctl enable-linger "$RUN_AS"
@@ -458,7 +458,7 @@ EOF
     (cd "$PREFIX" && setsid "$VENV/bin/python" -m satellite.tray >/dev/null 2>&1 </dev/null &) || true
   fi
 else
-  render "$PREFIX/satellite/scripts/domovoi-satellite-system.service" | $SUDO tee "/etc/systemd/system/$UNIT" >/dev/null
+  render "$SRC/satellite/scripts/domovoi-satellite-system.service" | $SUDO tee "/etc/systemd/system/$UNIT" >/dev/null
   $SUDO systemctl daemon-reload
   $SUDO systemctl enable "$UNIT" >/dev/null
   if [ "$NO_START" = 0 ]; then $SUDO systemctl restart "$UNIT"; STARTED=1; fi
@@ -527,7 +527,11 @@ else
   say "  status:    sudo -u $SAT_ACCOUNT sh -c 'cd $PREFIX && $VENV/bin/python -m satellite.client --status'"
   say "  log:       journalctl -u domovoi-satellite -e"
 fi
-say "  uninstall: bash $PREFIX/satellite/scripts/install-pc.sh --uninstall"
+if [ "$MODE" = desktop ]; then
+  say "  uninstall: bash $PREFIX/satellite/scripts/install-pc.sh --uninstall"
+else
+  say "  uninstall: sudo bash $PREFIX/satellite/scripts/install-pc.sh --uninstall --mode headless"
+fi
 if [ "$STARTED" = 1 ] && [ "$WAIT_SEC" -gt 0 ]; then
   say ""
   say "Now approve it: in the dashboard, Settings -> Satellites, type the code shown below."

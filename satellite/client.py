@@ -6828,6 +6828,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                     # No root helper to say it: the terminal (only a real
                     # one, never the journal), the tray and the CLI show it.
                     self._approval_code = code
+                    self._approval_pending = True
                     self._set_conn("awaiting_approval")
                     pc_engine.show_code_on_tty(code, self.cfg.room_name or self.cfg.room_id)
                 log.info(
@@ -6836,6 +6837,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
                 )
                 return
             if payload.get("reason") in pc_engine.REFUSALS:
+                self._approval_pending = False
                 self._set_conn("refused", str(payload.get("message") or payload.get("reason")))
             self._leds.set_state("error")
             log.error("server error: %s", payload.get("message"))
@@ -7174,6 +7176,7 @@ class Satellite(pc_engine.SpareDeviceEngine):
         """
         _remember_approved()
         self._approval_code = None
+        self._approval_pending = False
         self._set_conn("connected")
         # Before the opener, because this is the frame that says the core
         # accepts this device: if an earlier `awaiting_approval` tore
