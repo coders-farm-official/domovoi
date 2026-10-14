@@ -103,7 +103,9 @@ def filter_config_changes(changes: dict[str, Any]) -> tuple[dict[str, Any], list
     from satellite import remote_config
 
     kept, refused = remote_config.screen(changes, pc=True)
-    assert not any(k in PROTECTED_KEYS or k.startswith(PROTECTED_SECTIONS) for k in kept)
+    for key in [k for k in kept if k in PROTECTED_KEYS or k.startswith(PROTECTED_SECTIONS)]:
+        del kept[key]          # never reached: the screen keeps none of these
+        refused.append(repr(key)[:80])
     return kept, refused
 
 
