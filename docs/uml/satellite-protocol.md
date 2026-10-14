@@ -198,15 +198,21 @@ domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
 ```
 
 * `core`: the core's base URL as the device dials it, `http` or `https`
-  only (e.g. `http://192.168.0.117:6370`); the satellite socket is the same
-  host and port with `ws`/`wss`.
+  only (e.g. `http://192.168.0.117:6370`), and on the home network: an
+  RFC 1918 IPv4 address, an IPv6 unique-local or link-local one, or a name
+  ending in `.local` or `.home.arpa` — never loopback, a public address or
+  a public name, https or not, so a code shown on some web page cannot send
+  a room's microphone out of the house (`not_home_network`). The satellite
+  socket is the same host and port with `ws`/`wss`.
 * `fp`: the core's Ed25519 fingerprint as `satellite/server_identity.py`
   writes it (`SHA256:` and 43 characters of unpadded base64).
 * `room`: the room name as typed (at most 64 code points). The device
-  connects as the room id derived from it (`satellite/enrolment.py`
+  connects as the room id derived from it, which always meets the core's
+  own rule `^[a-z][a-z0-9_]{0,31}$` (`satellite/enrolment.py`
   `room_id_for`: NFKD, combining marks and apostrophes dropped, ASCII
-  lower-case, every other run of characters one `-`, at most 32), so
-  "Kid's Room & Den" is `kids-room-den`.
+  lower-case, every other run of characters one `_`, `room_` in front of a
+  leading digit), so "Kid's Room & Den" is `kids_room_den` and "2nd
+  Bedroom" `room_2nd_bedroom`.
 
 Every value is percent-encoded UTF-8, and a `+` is a plus sign, never a
 space (this is a URI, not a form). Unknown keys are ignored; a key given
@@ -218,7 +224,8 @@ dashboard, exactly like a Pi.
 
 The grammar, the reason codes a refusal carries (`not_enrolment`,
 `unsupported_version`, `malformed`, `missing_core`, `missing_fp`,
-`missing_room`, `bad_core`, `bad_fp`, `bad_room`) and 65 worked cases
+`missing_room`, `bad_core`, `not_home_network`, `bad_fp`, `bad_room`) and
+80 worked cases
 (valid and invalid, with the room ids) are in
 [`spare-device-enrol-fixture.json`](spare-device-enrol-fixture.json). The
 Python parser (`satellite/tests/test_enrolment.py`) and the Android room

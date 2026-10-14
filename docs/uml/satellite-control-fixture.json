@@ -79,7 +79,7 @@
     "status": {
       "protocol": 1,
       "board": "linux_pc",
-      "room": {"id": "kids-room", "name": "Kid's Room"},
+      "room": {"id": "kids_room", "name": "Kid's Room"},
       "server": {
         "url": "ws://192.168.0.117:6370",
         "host": "192.168.0.117",
@@ -174,7 +174,7 @@
     {
       "name": "identify",
       "request": {"verb": "identify"},
-      "response": {"ok": true, "verb": "identify", "room": {"id": "kids-room", "name": "Kid's Room"}}
+      "response": {"ok": true, "verb": "identify", "room": {"id": "kids_room", "name": "Kid's Room"}}
     },
     {
       "name": "approve_pending_update",

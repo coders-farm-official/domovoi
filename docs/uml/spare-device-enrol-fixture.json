@@ -15,11 +15,13 @@
     "keys": "^[a-z][a-z0-9_]{0,31}$; core, fp and room are required; unknown keys are ignored; a key given twice is malformed",
     "values": "percent-encoded UTF-8; may carry raw only A-Z a-z 0-9 - . _ ~ ! $ ' ( ) * + , ; : @ / ?; '+' is a plus sign, never a space; a % must start two hex digits (either case); the decoded bytes must be UTF-8",
     "max_payload_chars": 1024,
-    "core": "http or https; a host name, IPv4 or bracketed IPv6 (no zone id); optional port 1-65535; nothing else (no user, path other than '/', query or fragment); scheme and host lower-cased, no trailing slash; ws_url is the same with ws/wss; at most 256 characters, no white space",
+    "core": "http or https; a host name, IPv4 or bracketed IPv6 (no zone id); optional port 1-65535; nothing else (no user, path other than '/', query or fragment); scheme and host lower-cased, no trailing slash; ws_url is the same with ws/wss; at most 256 characters, no white space. Else bad_core",
+    "home_network": "a well-formed core must be on the home network, else not_home_network (https included): IPv4 in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16; IPv6 in fc00::/7 or fe80::/10; or a name ending in .local or .home.arpa with something before it. Loopback, 100.64.0.0/10, 169.254.0.0/16, public addresses and every other name are refused",
     "fp": "^SHA256:[A-Za-z0-9+/]{43}$ exactly (unpadded standard base64 of the key's SHA-256)",
     "room": "at most 64 code points (not UTF-16 units), no Unicode Cc/Cf characters, kept exactly as decoded (not trimmed)",
-    "room_id": "NFKD, drop combining marks (Mn) and the apostrophes U+0027 and U+2019, lower-case A-Z, keep a-z and 0-9, every other run of characters becomes one '-', none at either end; 1-32 characters or bad_room",
-    "reason_order": "the first that applies: not_enrolment (no 'domovoi-room:' prefix); malformed when over max_payload_chars; the version (malformed or unsupported_version); the fields left to right (malformed); then missing_core, missing_fp, missing_room; then bad_core, bad_fp, bad_room",
+    "room_id": "the core's room-id rule ^[a-z][a-z0-9_]{0,31}$: NFKD, drop combining marks (Mn) and the apostrophes U+0027 and U+2019, lower-case A-Z, keep a-z and 0-9, every other run of characters becomes one '_', none at either end; an id starting with a digit gets 'room_' in front; empty or over 32 characters is bad_room",
+    "plus": "'+' is a plus sign, never a space: this is RFC 3986, not HTML form decoding (java.net.URLDecoder is the wrong tool); the fingerprint is base64 and carries '+', which the builder writes as %2B and a person may type raw",
+    "reason_order": "the first that applies: not_enrolment (no 'domovoi-room:' prefix); malformed when over max_payload_chars; the version (malformed or unsupported_version); the fields left to right (malformed); then missing_core, missing_fp, missing_room; then bad_core, not_home_network, bad_fp, bad_room",
     "build": "the builder trims the typed address, fingerprint and room name, then percent-encodes every UTF-8 byte except A-Z a-z 0-9 - . _ ~ with upper-case hex, in the order core, fp, room"
   },
   "reasons": [
@@ -30,6 +32,7 @@
     "missing_fp",
     "missing_room",
     "bad_core",
+    "not_home_network",
     "bad_fp",
     "bad_room"
   ],
@@ -55,7 +58,7 @@
         "ws_url": "ws://192.168.0.117:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kid's Room & Den",
-        "room_id": "kids-room-den"
+        "room_id": "kids_room_den"
       }
     },
     {
@@ -67,7 +70,7 @@
         "ws_url": "ws://192.168.0.117:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Küche 2",
-        "room_id": "kuche-2"
+        "room_id": "kuche_2"
       }
     },
     {
@@ -79,7 +82,7 @@
         "ws_url": "ws://192.168.0.117:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Grandma’s Study",
-        "room_id": "grandmas-study"
+        "room_id": "grandmas_study"
       }
     },
     {
@@ -96,14 +99,14 @@
     },
     {
       "name": "room_leading_digit",
-      "about": "A room id may start with a digit.",
+      "about": "A room id must start with a letter: room_ goes in front.",
       "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3AxFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc&room=2nd%20Bedroom",
       "expect": {
         "core": "http://192.168.0.117:6370",
         "ws_url": "ws://192.168.0.117:6370",
         "fp": "SHA256:xFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc",
         "room": "2nd Bedroom",
-        "room_id": "2nd-bedroom"
+        "room_id": "room_2nd_bedroom"
       }
     },
     {
@@ -120,11 +123,47 @@
     },
     {
       "name": "ipv6_host",
-      "about": "An IPv6 literal keeps its brackets in core and ws_url.",
+      "about": "An IPv6 literal (unique-local) keeps its brackets in core and ws_url.",
       "payload": "domovoi-room:1?core=http%3A%2F%2F%5Bfd00%3A%3A17%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Hall",
       "expect": {
         "core": "http://[fd00::17]:6370",
         "ws_url": "ws://[fd00::17]:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Hall",
+        "room_id": "hall"
+      }
+    },
+    {
+      "name": "ipv6_link_local",
+      "about": "IPv6 link-local is the home network too (no zone id).",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F%5Bfe80%3A%3A1c2%3A3ff%3Afe04%3A506%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Hall",
+      "expect": {
+        "core": "http://[fe80::1c2:3ff:fe04:506]:6370",
+        "ws_url": "ws://[fe80::1c2:3ff:fe04:506]:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Hall",
+        "room_id": "hall"
+      }
+    },
+    {
+      "name": "ten_net",
+      "about": "10.0.0.0/8 is the home network.",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F10.20.30.40%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Hall",
+      "expect": {
+        "core": "http://10.20.30.40:6370",
+        "ws_url": "ws://10.20.30.40:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Hall",
+        "room_id": "hall"
+      }
+    },
+    {
+      "name": "one_seventy_two",
+      "about": "172.16.0.0/12 is the home network.",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F172.31.255.1%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Hall",
+      "expect": {
+        "core": "http://172.31.255.1:6370",
+        "ws_url": "ws://172.31.255.1:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Hall",
         "room_id": "hall"
@@ -247,7 +286,7 @@
         "ws_url": "ws://192.168.0.117:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "A+B+C",
-        "room_id": "a-b-c"
+        "room_id": "a_b_c"
       }
     },
     {
@@ -397,6 +436,72 @@
       "reason": "bad_core"
     },
     {
+      "name": "public_ipv4",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F8.8.8.8%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "Off the home network: a public address."
+    },
+    {
+      "name": "public_ipv4_https",
+      "payload": "domovoi-room:1?core=https%3A%2F%2F203.0.113.7%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "https does not make an outside address a home one."
+    },
+    {
+      "name": "public_name",
+      "payload": "domovoi-room:1?core=https%3A%2F%2Fdomovoi.example.com%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "A public name, even over https."
+    },
+    {
+      "name": "single_label_name",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Fdomovoi%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "A bare name could resolve anywhere: .local or .home.arpa only."
+    },
+    {
+      "name": "loopback",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F127.0.0.1%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "The device would dial itself."
+    },
+    {
+      "name": "localhost",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Flocalhost%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "The device would dial itself."
+    },
+    {
+      "name": "cgnat",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F100.64.1.1%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "Carrier-grade NAT (100.64.0.0/10) is not the home network."
+    },
+    {
+      "name": "ipv4_link_local",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F169.254.10.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "IPv4 link-local is not where a core lives."
+    },
+    {
+      "name": "public_ipv6",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F%5B2001%3Adb8%3A%3A1%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "A global IPv6 address."
+    },
+    {
+      "name": "ipv4_mapped_ipv6",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F%5B%3A%3Affff%3A192.168.0.1%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "An IPv4-mapped IPv6 address is not unique-local."
+    },
+    {
+      "name": "bare_suffix",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Flocal%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network",
+      "about": "\".local\" alone is not a name."
+    },
+    {
       "name": "file_scheme",
       "payload": "domovoi-room:1?core=file%3A%2F%2F%2Fetc%2Fpasswd&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
@@ -486,6 +591,12 @@
       "name": "room_id_too_long",
       "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=The%20Very%20Long%20Upstairs%20Guest%20Bedroom%20Corner",
       "reason": "bad_room"
+    },
+    {
+      "name": "room_id_too_long_with_prefix",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=1234567890abcdefghij1234567890",
+      "reason": "bad_room",
+      "about": "28 digits and letters is fine, until room_ goes in front."
     },
     {
       "name": "room_name_too_long",

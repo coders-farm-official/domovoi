@@ -62,15 +62,15 @@ def test_the_fixture_covers_what_the_brief_names():
 
 @pytest.mark.parametrize("name", [
     "Kitchen", "Kid's Room & Den", "Küche 2", "Grandma’s Study", "Den \U0001F3AE",
-    "A+B=C?", "50% off / #1", "  Office  ", "Ｏｆｆｉｃｅ", "Living-Room_2",
+    "A+B=C?", "50% off / #1", "  Office  ", "Ｏｆｆｉｃｅ", "Living-Room_2", "2nd Bedroom", "42",
 ])
 def test_whatever_the_builder_writes_parses_back(name):
     fp = FIXTURE["build"][0]["fp"]
     parsed = en.parse(en.build("http://192.168.0.117:6370", fp, name))
     assert parsed.room == name.strip()
     assert parsed.room_id == en.room_id_for(name)
-    assert all(ch in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in parsed.room_id)
-    assert not parsed.room_id.startswith("-") and not parsed.room_id.endswith("-")
+    assert en.ROOM_ID_RE.match(parsed.room_id), "the core's own room-id rule"
+    assert not parsed.room_id.endswith("_")
 
 
 def test_the_builder_refuses_what_the_parser_would():
@@ -90,6 +90,28 @@ def test_a_room_id_never_looks_like_a_path_or_an_option():
     for name in ("../etc", "-rf", "a/b", "--help", "x\\y"):
         rid = en.room_id_for(name)
         assert "/" not in rid and "\\" not in rid and not rid.startswith("-")
+        assert en.ROOM_ID_RE.match(rid)
+
+
+def test_the_room_id_rule_is_the_core_s():
+    """domovoi/main.py's _ROOM_ID_RE is the source of truth: USB adoption,
+    the preseed route and the dashboard's adopt form all hold ids to it."""
+    import re
+
+    main_src = (ROOT / "domovoi" / "main.py").read_text(encoding="utf-8")
+    m = re.search(r'_ROOM_ID_RE = re\.compile\(r"(.+?)"\)', main_src)
+    assert m and m.group(1) == en.ROOM_ID_RE.pattern
+
+
+@pytest.mark.parametrize("host,home", [
+    ("192.168.0.117", True), ("10.0.0.1", True), ("172.16.0.1", True), ("172.31.255.255", True),
+    ("172.32.0.1", False), ("8.8.8.8", False), ("127.0.0.1", False), ("100.64.0.1", False),
+    ("169.254.1.1", False), ("fd00::17", True), ("fe80::1", True), ("2001:db8::1", False),
+    ("::1", False), ("domovoi.local", True), ("kitchen.home.arpa", True), ("local", False),
+    (".local", False), ("domovoi", False), ("domovoi.lan", False), ("example.com", False),
+])
+def test_only_the_home_network_is_a_core(host, home):
+    assert en.is_home_network_host(host) is home
 
 
 # ─── verify: the installer's check before it writes anything ──────────────

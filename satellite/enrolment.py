@@ -8,8 +8,10 @@ code for a phone. Both carry the same **enrolment payload**, a URI:
     domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
 
 * ``core`` — the core's base URL as the device should dial it, ``http`` or
-  ``https`` only, e.g. ``http://192.168.0.117:6370``. The satellite socket
-  is the same host and port with ``ws``/``wss``.
+  ``https`` only, e.g. ``http://192.168.0.117:6370``, on the home network
+  (:func:`is_home_network_host`): a code someone was shown on a web page
+  must not be able to send a room's microphone out of the house. The
+  satellite socket is the same host and port with ``ws``/``wss``.
 * ``fp`` — the core's Ed25519 fingerprint exactly as
   :func:`satellite.server_identity.fingerprint_for` writes it
   (``SHA256:`` + 43 characters of unpadded standard base64).
@@ -61,11 +63,23 @@ REASONS = (
     "missing_fp",
     "missing_room",
     "bad_core",             # not http(s), userinfo, a path/query/fragment, no host, bad port
+    "not_home_network",     # a well-formed address outside the home network
     "bad_fp",               # not SHA256: + 43 base64 characters
     "bad_room",             # empty, too long, or no letter/digit to make a room id from
 )
 
 _FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+#: The core's own room-id rule (domovoi/main.py ``_ROOM_ID_RE``, the USB
+#: adoption form's): every id this module makes matches it.
+ROOM_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+#: Put in front of an id that would start with a digit ("2nd Bedroom").
+ROOM_ID_DIGIT_PREFIX = "room_"
+#: The home network, for the core address (``is_home_network_host``):
+#: RFC 1918 IPv4, IPv6 unique-local and link-local, and the two names a
+#: home network answers for itself (mDNS ``.local``, RFC 8375 ``.home.arpa``).
+HOME_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+HOME_V6 = ("fc00::/7", "fe80::/10")
+HOME_SUFFIXES = (".local", ".home.arpa")
 _KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 _HEX = "0123456789abcdefABCDEF"
 # RFC 3986 query characters a value may carry raw: unreserved, the
@@ -81,7 +95,7 @@ _UNRESERVED = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 )
 # Dropped from a room name before the id is made, so "Kid's Room" is
-# kids-room rather than kid-s-room (the portal's slug drops them too).
+# kids_room rather than kid_s_room (the portal's slug drops them too).
 _APOSTROPHES = frozenset("'’")
 
 
@@ -113,16 +127,19 @@ class Enrolment:
 # ─── the room id ──────────────────────────────────────────────────────────
 
 def room_id_for(name: str) -> str:
-    """The room id a device enrolled as ``name`` connects as.
+    """The room id a device enrolled as ``name`` connects as — always one
+    the core's own rule accepts (:data:`ROOM_ID_RE`, ``^[a-z][a-z0-9_]{0,31}$``).
 
     Decompose (NFKD) and drop combining marks, so "Küche" is ``kuche`` and
     "Café" ``cafe``; drop apostrophes (' and ’); lower-case A-Z; keep a-z
-    and 0-9; every other run of characters becomes one ``-``, with none at
-    either end. At most 32 characters. Raises ``bad_room`` when nothing is
-    left — a name with no Latin letter or digit (a Cyrillic-only name, for
-    now) needs one added. ASCII rules on purpose: the Kotlin side must
-    reach the same id byte for byte, and Unicode case mapping differs
-    between runtimes; NFKD and the combining-mark category (Mn) do not."""
+    and 0-9; every other run of characters becomes one ``_``, with none at
+    either end; an id that would start with a digit gets ``room_`` in
+    front ("2nd Bedroom" is ``room_2nd_bedroom``). At most 32 characters.
+    Raises ``bad_room`` when nothing is left — a name with no Latin letter
+    or digit (a Cyrillic-only name, for now) needs one added — or when it
+    is too long. ASCII rules on purpose: the Kotlin side must reach the
+    same id byte for byte, and Unicode case mapping differs between
+    runtimes; NFKD and the combining-mark category (Mn) do not."""
     out: list[str] = []
     gap = False
     for ch in unicodedata.normalize("NFKD", name):
@@ -132,12 +149,14 @@ def room_id_for(name: str) -> str:
             ch = chr(ord(ch) + 32)
         if "a" <= ch <= "z" or "0" <= ch <= "9":
             if gap and out:
-                out.append("-")
+                out.append("_")
             gap = False
             out.append(ch)
         else:
             gap = True
     room_id = "".join(out)
+    if room_id and room_id[0].isdigit():
+        room_id = ROOM_ID_DIGIT_PREFIX + room_id
     if not room_id:
         raise EnrolmentError(
             "bad_room",
@@ -150,6 +169,7 @@ def room_id_for(name: str) -> str:
             f"the room id {room_id!r} is longer than {MAX_ROOM_ID_LEN} "
             "characters — pick a shorter name",
         )
+    assert ROOM_ID_RE.match(room_id), room_id
     return room_id
 
 
@@ -174,13 +194,31 @@ def check_room_name(name: str) -> str:
 
 # ─── the core URL ─────────────────────────────────────────────────────────
 
+def is_home_network_host(host: str) -> bool:
+    """Whether ``host`` (lower-case, no brackets) is on the home network:
+    an RFC 1918 IPv4 address, an IPv6 unique-local (fc00::/7) or link-local
+    (fe80::/10) address, or a name ending in ``.local`` or ``.home.arpa``.
+    Not loopback (a device would dial itself), not the carrier-grade NAT
+    range, not a public address or a public name, even over https: a
+    payload decides where a room's microphone streams to."""
+    import ipaddress
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return any(host.endswith(s) and len(host) > len(s) for s in HOME_SUFFIXES)
+    nets = HOME_V4 if ip.version == 4 else HOME_V6
+    return any(ip in ipaddress.ip_network(n) for n in nets)
+
+
 def normalize_core(value: str) -> tuple[str, str]:
     """``(core, ws_url)`` for a core base URL, or raise ``bad_core``.
 
     http or https; a host (an IPv6 literal in brackets, no zone id); an
     optional port 1-65535; no user, no path beyond "/", no query, no
     fragment. Scheme and host come back lower-case, without a trailing
-    slash. Not trimmed: white space anywhere is refused."""
+    slash. Not trimmed: white space anywhere is refused. A well-formed
+    address off the home network is ``not_home_network``."""
     text = value
     if not text or len(text) > MAX_CORE_LEN:
         raise EnrolmentError("bad_core", "the core address is empty or too long")
@@ -232,6 +270,13 @@ def normalize_core(value: str) -> tuple[str, str]:
         if not 1 <= number <= 65535:
             raise EnrolmentError("bad_core", "the core address's port is out of range")
         port = f":{number}"
+    if not is_home_network_host(host):
+        raise EnrolmentError(
+            "not_home_network",
+            f"{host} is not on the home network (a private address, or a name "
+            "ending in .local or .home.arpa): a room must not stream its "
+            "microphone out of the house",
+        )
     core = f"{scheme}://{shown}{port}"
     ws_url = f"{'wss' if scheme == 'https' else 'ws'}://{shown}{port}"
     return core, ws_url
