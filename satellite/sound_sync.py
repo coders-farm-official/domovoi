@@ -177,13 +177,60 @@ def sync(
     return downloaded
 
 
+#: What this satellite wrote into the cache, so the prune removes only that.
+#: ``~/.domovoi/sounds`` is also where a Domovoi *server* keeps its voices
+#: (``voices/<voice>/…``) — on a box that runs both, a prune of every MP3
+#: not in this satellite's list deleted the server's (security review of
+#: wf/sat-pc, R4). A spare computer also refuses to run on a server's
+#: account at all; this keeps the prune honest everywhere.
+RECORD_NAME = ".satellite-synced.json"
+
+
+def _record_path(cache_dir: Path) -> Path:
+    return cache_dir / RECORD_NAME
+
+
+def _read_record(cache_dir: Path) -> set[str] | None:
+    import json
+
+    try:
+        doc = json.loads(_record_path(cache_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return {r for r in doc if isinstance(r, str) and _safe_rel(r)} if isinstance(doc, list) else None
+
+
+def _legacy_shape(rel: str) -> bool:
+    """Before the record existed: only the shapes the satellite's own
+    manifest uses (a top-level clip, or greetings/<clip>), never a server's
+    ``voices/…`` or ``setup/…`` tree."""
+    parts = rel.split("/")
+    return len(parts) == 1 or (len(parts) == 2 and parts[0] == "greetings")
+
+
 def _prune(cache_dir: Path, keep: set[str]) -> None:
     """Delete cached MP3s not in the manifest (e.g. greetings removed in the
-    web UI), so the Pi never plays a stale clip."""
+    web UI), so the Pi never plays a stale clip — only ones this satellite
+    put there (the record of its last sync; without one, only its own
+    manifest's shapes) — then record what it keeps."""
+    import json
+
+    previous = _read_record(cache_dir)
     for p in cache_dir.rglob("*.mp3"):
+        if p.is_symlink():
+            continue
         rel = p.relative_to(cache_dir).as_posix()
-        if rel not in keep:
+        if rel in keep:
+            continue
+        ours = rel in previous if previous is not None else _legacy_shape(rel)
+        if ours:
             try:
                 p.unlink()
             except OSError:
                 pass
+    try:
+        tmp = _record_path(cache_dir).with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(keep)), encoding="utf-8")
+        tmp.replace(_record_path(cache_dir))
+    except OSError:
+        pass
