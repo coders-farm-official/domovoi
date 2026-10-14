@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -72,16 +73,22 @@ def _account_exists(name: str) -> bool:
         return False
 
 
+FAKE_SYSTEMCTL = Path("/usr/bin/systemctl")
+FAKE_MARK = "# domovoi sandbox fake"
+
+
 def _clean() -> None:
-    for name in (SAT, "kid"):
+    for name in (SAT, "kid", "admin"):
         if _account_exists(name):
             subprocess.run(["userdel", "-r", name], capture_output=True)
     for p in (UNINSTALLER.parent, RECORD.parent, SAT_HOME):
         shutil.rmtree(p, ignore_errors=True)
     for p in (DROPIN, Path("/etc/root-canary"), Path("/etc/sudoers.d/90-keep-me"), Path("/tmp/ran-as-root"),
-              Path("/tmp/systemctl.log"), Path("/usr/local/sbin/systemctl"), Path("/etc/pip.conf"),
-              Path("/etc/sudoers.d/kid"), *[Path("/tmp") / n for n in TICKET_PROBES]):
+              Path("/tmp/systemctl.log"), Path("/etc/pip.conf"),
+              Path("/etc/sudoers.d/kid"), Path("/etc/sudoers.d/admin"), *[Path("/tmp") / n for n in TICKET_PROBES]):
         p.unlink(missing_ok=True)
+    if FAKE_SYSTEMCTL.exists() and FAKE_MARK in FAKE_SYSTEMCTL.read_text(encoding="utf-8", errors="replace"):
+        FAKE_SYSTEMCTL.unlink()
     # sudo's tickets, every account's: a test's terminal never lends one to the next.
     for ts in (Path("/run/sudo/ts"), Path("/var/run/sudo/ts"), Path("/var/lib/sudo/ts")):
         shutil.rmtree(ts, ignore_errors=True)
@@ -96,11 +103,11 @@ def sandbox():
     # pip, if it is reached, fails at once instead of looking for the internet.
     Path("/etc/pip.conf").write_text("[global]\nindex-url = http://127.0.0.1:9/simple\nretries = 0\ntimeout = 2\n",
                                      encoding="utf-8")
-    # Root's systemctl, as far as these tests go: a log of what it was asked.
-    fake = Path("/usr/local/sbin/systemctl")
-    fake.parent.mkdir(parents=True, exist_ok=True)
-    fake.write_text('#!/bin/sh\necho "$*" >>/tmp/systemctl.log\n', encoding="utf-8")
-    fake.chmod(0o755)
+    # Root's systemctl, as far as these tests go: a log of what it was asked
+    # (only where the image has none: no systemd runs in here).
+    if not FAKE_SYSTEMCTL.exists():
+        FAKE_SYSTEMCTL.write_text(f'#!/bin/sh\n{FAKE_MARK}\necho "$*" >>/tmp/systemctl.log\n', encoding="utf-8")
+        FAKE_SYSTEMCTL.chmod(0o755)
     # A copy of the tree every account can read (root's home is 0700).
     tree = Path(tempfile.mkdtemp(dir="/tmp"))
     os.chmod(tree, 0o755)
@@ -151,7 +158,9 @@ def core():
 
 
 #: Files the poisoned account code and the checks write: who they ran as.
-TICKET_PROBES = ("account-code-ran-as", "pth-ran-as", "after-install", "after-uninstall", "ticket-control")
+TICKET_PROBES = ("account-code-ran-as", "pth-ran-as", "after-install", "after-uninstall", "ticket-control",
+                 "r-path-python3", "r-path-sudo", "r-path-setsid", "r-path-mktemp", "r-path-cp", "r-fn-id", "r-fn-printf",
+                 "r-usersite", "r-bash-env", "r-poll")
 
 ENV = {"DOMOVOI_TEST_SYSTEMD_RUNTIME": "/nonexistent", "PATH": "/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"}
 FLAGS = "--yes --permissions automatic --skip-apt --power no --wait 0"
@@ -281,23 +290,28 @@ def _kid_with_a_sudo_password() -> None:
     rule.chmod(0o440)
 
 
-def _as_kid_on_a_terminal(cmd: str, *, timeout: float = 240) -> subprocess.CompletedProcess:
-    """``cmd`` as kid on a terminal of its own (script(1)), typing kid's
-    password each time sudo asks for it (and only then, like a person): a
-    sudo ticket for that terminal is live from the first answer on, as on
-    a real desktop."""
+def _on_a_terminal(user: str, password: str, cmd: str, *, timeout: float = 240,
+                   login: bool = False) -> subprocess.CompletedProcess:
+    """``cmd`` as ``user`` on a terminal of its own (script(1)), typing the
+    password each time sudo asks for it (and only then, like a person); with
+    ``login``, in a login shell (its ~/.profile read, as when someone signs
+    in)."""
     import select
     import time as _time
 
-    inner = "cd /home/kid && " + cmd
+    home = pwd.getpwnam(user).pw_dir
+    inner = f"cd {home} && " + cmd
+    if login:
+        inner = "bash -lc " + shlex.quote(inner)
     proc = subprocess.Popen(
-        ["runuser", "-u", "kid", "--", "script", "-qec", inner, "/dev/null"],
+        ["runuser", "-u", user, "--", "script", "-qec", inner, "/dev/null"],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd="/",
-        env={**os.environ, **ENV, "HOME": str(KID_HOME)},
+        env={**os.environ, **ENV, "HOME": home, "USER": user, "LOGNAME": user},
     )
     end = _time.monotonic() + timeout
     out = b""
     answered = 0
+    prompt = f"password for {user}".encode()
     while _time.monotonic() < end:
         ready, _, _ = select.select([proc.stdout], [], [], 0.5)
         if ready:
@@ -305,10 +319,10 @@ def _as_kid_on_a_terminal(cmd: str, *, timeout: float = 240) -> subprocess.Compl
             if not chunk:
                 break
             out += chunk
-        asked = out.count(b"password for kid")
+        asked = out.count(prompt)
         if asked > answered:
             _time.sleep(0.3)
-            proc.stdin.write(b"pw\n")
+            proc.stdin.write(password.encode() + b"\n")
             proc.stdin.flush()
             answered = asked
     if proc.poll() is None and _time.monotonic() >= end:
@@ -316,6 +330,10 @@ def _as_kid_on_a_terminal(cmd: str, *, timeout: float = 240) -> subprocess.Compl
     rc = proc.wait(timeout=30)
     text = out.decode("utf-8", "replace").replace("\r", "")
     return subprocess.CompletedProcess(proc.args, rc, text + f"\n[sudo asked {answered} time(s)]", "")
+
+
+def _as_kid_on_a_terminal(cmd: str, *, timeout: float = 240, login: bool = False) -> subprocess.CompletedProcess:
+    return _on_a_terminal("kid", "pw", cmd, timeout=timeout, login=login)
 
 
 def _probe(name: str) -> str:
@@ -353,26 +371,144 @@ def _kid_s_poisoned_install(sandbox: Path) -> None:
     sh(f"chown -R kid:kid {KID_HOME}")
 
 
-@needs_sudo
-def test_round2_a_desktop_uninstall_purge_runs_none_of_the_account_s_code(sandbox):
-    """The reviewer's proof: root's copy used sudo (linger), then ran the
-    account's own pc_install.py for --purge in the same terminal, and that
-    code got uid=0 from the cached ticket. Now nothing of the account's
-    runs at all, and sudo forgets the password at the end."""
-    _kid_with_a_sudo_password()
-    _kid_s_poisoned_install(sandbox)
+def _admin_with_a_sudo_password() -> None:
+    sh("useradd -m -s /bin/bash admin && echo 'admin:apw' | chpasswd")
+    rule = Path("/etc/sudoers.d/admin")
+    rule.write_text("admin ALL=(ALL) ALL\n", encoding="utf-8")
+    rule.chmod(0o440)
+
+
+def _root_s_copy_and_a_desktop_record(sandbox: Path) -> None:
     script = sandbox / "satellite" / "scripts"
     sh(f"install -d -o root -g root -m 0755 {UNINSTALLER.parent} {RECORD.parent} "
        f"&& install -m 0755 {script}/install-pc.sh {UNINSTALLER} "
        f"&& install -m 0644 {script}/purge-satellite-files.py {UNINSTALLER.parent}/purge-satellite-files.py")
     RECORD.write_text(json.dumps({"mode": "desktop", "account": "kid", "linger_enabled_by_installer": True,
                                   "logind_dropin": True}), encoding="utf-8")
-    r = _as_kid_on_a_terminal(f"bash {UNINSTALLER} --uninstall --purge; sudo -n id > /tmp/after-uninstall 2>&1")
-    assert "Done." in r.stdout, r.stdout[-1500:]
-    assert _probe("account-code-ran-as") == "" and _probe("pth-ran-as") == "", "the account's code ran"
-    assert "uid=0" not in _probe("after-uninstall"), "the terminal kept a sudo ticket"
+
+
+def _every_round3_poison() -> None:
+    """The reviewer's round-3 variants, all at once, in kid's account: a
+    python3, sudo and setsid in ~/.local/bin (on PATH through Debian's stock
+    ~/.profile), an exported shell function, a .pth and usercustomize in
+    kid's user site, and BASH_ENV pointing at a sudo-ticket poller."""
+    bin_ = KID_HOME / ".local" / "bin"
+    bin_.mkdir(parents=True, exist_ok=True)
+    for tool in ("python3", "sudo", "setsid", "mktemp", "cp"):
+        (bin_ / tool).write_text(f"#!/bin/sh\n/usr/bin/sudo -n id > /tmp/r-path-{tool} 2>&1\n"
+                                 f"exec /usr/bin/{tool} \"$@\"\n", encoding="utf-8")
+        (bin_ / tool).chmod(0o755)
+    profile = KID_HOME / ".profile"
+    text = profile.read_text(encoding="utf-8") if profile.exists() else ""
+    if ".local/bin" not in text:      # Debian's stock ~/.profile has this already
+        text += '\nif [ -d "$HOME/.local/bin" ] ; then PATH="$HOME/.local/bin:$PATH"; fi\n'
+    # Exported functions: one named like a tool, one named like a builtin
+    # the scripts use (a function shadows a builtin, so only `unset -f`
+    # stops this one).
+    text += ('\nid() { /usr/bin/sudo -n /usr/bin/id > /tmp/r-fn-id 2>&1; command id "$@"; }\nexport -f id\n'
+             'printf() { /usr/bin/sudo -n /usr/bin/id > /tmp/r-fn-printf 2>&1; builtin printf "$@"; }\n'
+             'export -f printf\n'
+             'export BASH_ENV=$HOME/.evilenv\n')
+    profile.write_text(text, encoding="utf-8")
+    (KID_HOME / ".evilenv").write_text(
+        "( for i in $(seq 1 100); do /usr/bin/sudo -n id > /tmp/r-bash-env 2>/dev/null && break; sleep 0.1; done ) &\n",
+        encoding="utf-8")
+    site = subprocess.run(["runuser", "-u", "kid", "--", "/usr/bin/python3", "-c",
+                           "import site; print(site.getusersitepackages())"],
+                          capture_output=True, text=True, env={**os.environ, "HOME": str(KID_HOME)}).stdout.strip()
+    Path(site).mkdir(parents=True, exist_ok=True)
+    line = 'import subprocess; subprocess.run("/usr/bin/sudo -n id > /tmp/r-usersite 2>&1", shell=True)\n'
+    (Path(site) / "zz.pth").write_text(line, encoding="utf-8")
+    (Path(site) / "usercustomize.py").write_text(line, encoding="utf-8")
+    sh(f"chown -R kid:kid {KID_HOME}")
+
+
+def _no_probe_got_root() -> None:
+    for name in TICKET_PROBES:
+        assert "uid=0" not in _probe(name), (name, _probe(name))
+
+
+@needs_sudo
+def test_round3_the_account_s_own_uninstall_runs_nothing_from_its_path_functions_or_site(sandbox):
+    """The usual way: kid removes its own satellite, typing kid's password.
+    With round 2's poisoned code tree and venv and round 3's stand-ins
+    (python3, sudo, setsid, mktemp, cp in ~/.local/bin on the stock
+    ~/.profile PATH, an exported function, a .pth and usercustomize in the
+    user site), none of them runs and nothing gets root; sudo forgets the
+    password at the end. (BASH_ENV is the account's own shell: no script
+    can stop it, and the guide says what that trade is.)"""
+    _kid_with_a_sudo_password()
+    _kid_s_poisoned_install(sandbox)
+    _every_round3_poison()
+    profile = KID_HOME / ".profile"
+    profile.write_text(profile.read_text(encoding="utf-8").replace("export BASH_ENV=$HOME/.evilenv\n", ""),
+                       encoding="utf-8")
+    (KID_HOME / "notes.txt").write_text("kid's own\n", encoding="utf-8")
+    _root_s_copy_and_a_desktop_record(sandbox)
+    r = _as_kid_on_a_terminal(f"bash {UNINSTALLER} --uninstall --purge; /usr/bin/sudo -n id > /tmp/after-uninstall 2>&1",
+                              login=True)
+    assert "Done." in r.stdout and "[sudo asked 1 time(s)]" in r.stdout, r.stdout[-2000:]
+    for name in ("account-code-ran-as", "pth-ran-as", "r-path-python3", "r-path-sudo", "r-path-setsid",
+                 "r-path-mktemp", "r-path-cp", "r-fn-id", "r-fn-printf", "r-usersite"):
+        assert _probe(name) == "", (name, "kid's code ran", _probe(name))
+    _no_probe_got_root()
     assert not (KID_HOME / ".domovoi" / "config.toml").exists() and not KID_PREFIX.exists()
+    assert (KID_HOME / "notes.txt").read_text(encoding="utf-8") == "kid's own\n"
     assert not RECORD.exists() and not UNINSTALLER.parent.exists()
+
+
+@needs_sudo
+def test_round3_an_administrator_removes_a_dedicated_account_s_satellite(sandbox):
+    """The option for a dedicated account: root's part from an
+    administrator's account with --account. With every round-3 poison in
+    kid's account (BASH_ENV included) and a process of kid's polling for a
+    sudo ticket throughout, nothing of kid's runs and nothing gets root;
+    the satellite's files go, kid's own stay."""
+    _kid_with_a_sudo_password()
+    _admin_with_a_sudo_password()
+    _kid_s_poisoned_install(sandbox)
+    _every_round3_poison()
+    (KID_HOME / "notes.txt").write_text("kid's own\n", encoding="utf-8")
+    _root_s_copy_and_a_desktop_record(sandbox)
+    poller = subprocess.Popen(
+        ["runuser", "-u", "kid", "--", "setsid", "bash", "-c",
+         "for i in $(seq 1 300); do /usr/bin/sudo -n id > /tmp/r-poll 2>/dev/null && break; sleep 0.1; done"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd="/")
+    try:
+        r = _on_a_terminal("admin", "apw", f"sudo bash {UNINSTALLER} --uninstall --purge --account kid",
+                           login=True)
+    finally:
+        poller.kill()
+    assert "Done." in r.stdout and "[sudo asked 1 time(s)]" in r.stdout, r.stdout[-2000:]
+    _no_probe_got_root()
+    for name in ("account-code-ran-as", "pth-ran-as", "r-path-python3", "r-path-sudo", "r-path-setsid",
+                 "r-fn-id", "r-fn-printf", "r-usersite", "r-bash-env"):
+        assert _probe(name) == "", (name, "kid's code ran")
+    assert not (KID_HOME / ".domovoi" / "config.toml").exists() and not KID_PREFIX.exists()
+    assert (KID_HOME / "notes.txt").read_text(encoding="utf-8") == "kid's own\n"
+    assert not RECORD.exists() and not UNINSTALLER.parent.exists()
+    assert _account_exists("kid")
+
+
+@needs_sudo
+def test_round3_the_installer_runs_nothing_from_the_account_s_path_or_functions(sandbox, core):
+    """A first install in an account whose ~/.profile puts ~/.local/bin on
+    PATH and exports a function: the installer's PATH is fixed, the
+    functions dropped, and sudo and python3 are named in full, so none of
+    the account's stand-ins runs (BASH_ENV is the one no script can stop:
+    it is left out here, and is why root's later part runs elsewhere)."""
+    _kid_with_a_sudo_password()
+    KID_HOME.mkdir(parents=True, exist_ok=True)
+    _every_round3_poison()
+    profile = KID_HOME / ".profile"
+    profile.write_text(profile.read_text(encoding="utf-8").replace("export BASH_ENV=$HOME/.evilenv\n", ""),
+                       encoding="utf-8")
+    r = _as_kid_on_a_terminal(f"bash {sandbox}/satellite/scripts/install-pc.sh {FLAGS} --mode desktop '{core}'",
+                              login=True)
+    assert f"proved it is {FP}" in r.stdout and "Setting up Python" in r.stdout, r.stdout[-2000:]
+    for name in ("r-path-python3", "r-path-sudo", "r-path-setsid", "r-path-mktemp", "r-path-cp", "r-fn-id", "r-fn-printf"):
+        assert _probe(name) == "", (name, _probe(name))
+    _no_probe_got_root()
 
 
 @needs_sudo

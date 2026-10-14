@@ -310,8 +310,8 @@ def test_no_satellite_code_runs_at_uninstall():
     body = _function("uninstall") + _function("purge_satellite_files")
     assert "$PREFIX" not in body.replace('rm -rf "$PREFIX"', "")
     assert "$VENV" not in body and "PYTHONPATH" not in body and "pc_install" not in body
-    assert 'python3 -I "$PURGER" "$CONFIG_DIR"' in body
-    assert '$SUDO install -o root -g root -m 0644 "$HERE/purge-satellite-files.py" "$PURGER"' in SCRIPT.read_text(encoding="utf-8")
+    assert 'as_sat $PY -I "$PURGER" "$CONFIG_DIR"' in body and "PY=/usr/bin/python3" in SCRIPT.read_text(encoding="utf-8")
+    assert '$SUDO /usr/bin/install -o root -g root -m 0644 "$HERE/purge-satellite-files.py" "$PURGER"' in SCRIPT.read_text(encoding="utf-8")
     with pytest.raises(SystemExit):
         pc_install._main(["purge", "--config-dir", "x"])
 
@@ -383,16 +383,18 @@ def test_uninstall_reads_root_s_record_and_acts_on_fixed_paths_only():
     assert "install-pc.json" not in body and "$CONFIG_DIR/install" not in body
     assert "RECORD=$RECORD_DIR/install.json" in text and "RECORD_DIR=/var/lib/domovoi-satellite" in text
     # Root removes only fixed paths, and nothing recursively.
-    for line in body.splitlines():
-        if "$SUDO rm" in line:
-            target = line.split("$SUDO rm", 1)[1]
+    removals = [line for line in body.splitlines() if "$SUDO /usr/bin/rm" in line]
+    assert len(removals) >= 6, removals
+    for line in removals:
+        if "$SUDO /usr/bin/rm" in line:
+            target = line.split("$SUDO /usr/bin/rm", 1)[1]
             assert "-r" not in target.split()[0], line
             assert any(v in target for v in ('"$LOGIND_DROPIN"', '"$CHARGE_RULE"', '"/etc/systemd/system/$UNIT"', '"$RECORD_DIR"', '"$ROOT_LIB"',
                                              '"$RECORD"', '"$UNINSTALLER"', '"$PURGER"')), line
     # Units: the fixed sleep targets, whatever the record lists.
     assert 'case " $SLEEP_TARGETS " in' in body
     # The account's files go as the account.
-    assert 'as_sat rm -rf "$PREFIX"' in body
+    assert 'as_sat /usr/bin/rm -rf "$PREFIX"' in body
     assert "userdel -r" in body
 
 
@@ -407,9 +409,10 @@ def test_the_uninstall_lines_name_root_s_copy():
     assert 'say "  uninstall: bash $UNINSTALLER --uninstall"' in text
     assert 'say "  uninstall: sudo bash $UNINSTALLER --uninstall"' in text
     assert "$PREFIX/satellite/scripts/install-pc.sh" not in text
-    assert '$SUDO install -o root -g root -m 0755 "$HERE/install-pc.sh" "$UNINSTALLER"' in text
+    assert '$SUDO /usr/bin/install -o root -g root -m 0755 "$HERE/install-pc.sh" "$UNINSTALLER"' in text
     guide = (ROOT / "docs" / "SPARE_DEVICE_SATELLITES.md").read_text(encoding="utf-8")
-    assert "/usr/local/lib/domovoi-satellite/install-pc.sh --uninstall" in guide
+    assert "\nbash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall" in guide
+    assert "sudo bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall --purge --account" in guide
     assert "satellite/scripts/install-pc.sh --uninstall" not in guide
 
 
@@ -417,31 +420,63 @@ def test_root_never_works_inside_the_satellite_s_home():
     """Install as well as uninstall: root creates no directory in, and
     changes no owner under, a home the account controls."""
     text = SCRIPT.read_text(encoding="utf-8")
-    assert '$SUDO install -d -o "$SAT_ACCOUNT"' not in text
-    assert 'as_sat mkdir -p "$PREFIX"' in text
-    assert "$SUDO chown" not in text and "$SUDO rm -rf" not in text
+    assert '$SUDO /usr/bin/install -d -o "$SAT_ACCOUNT"' not in text and '$SUDO install' not in text
+    assert 'as_sat /usr/bin/mkdir -p "$PREFIX"' in text
+    assert "chown" not in text.replace("# ", "") and "$SUDO /usr/bin/rm -rf" not in text
 
 
 # ─── as_sat (review S3: root + headless) ──────────────────────────────────
 
 @pytest.mark.skipif(_bash() is None, reason="needs bash")
-@pytest.mark.parametrize("mode,sudo,expect", [
-    ("headless", "", "runuser -u domovoi-sat -- setsid -w env -i HOME=/var/lib/domovoi-sat LANG=C.UTF-8 "
-                     "PATH=/usr/local/bin:/usr/bin:/bin id -un"),
-    ("headless", "sudo", "sudo -u domovoi-sat -H -- setsid -w id -un"),
-    ("desktop", "sudo", "setsid -w id -un"),
+@pytest.mark.parametrize("uid,user,run_as,home,sudo,expect", [
+    # root (a headless install, or any uninstall): runuser, a clean environment
+    (0, "root", "domovoi-sat", "/var/lib/domovoi-sat", "",
+     "runuser -u domovoi-sat -- /usr/bin/setsid -w /usr/bin/env -i HOME=/var/lib/domovoi-sat LANG=C.UTF-8 "
+     "PATH=/usr/bin:/bin id -un"),
+    (0, "root", "kid", "/home/kid", "",
+     "runuser -u kid -- /usr/bin/setsid -w /usr/bin/env -i HOME=/home/kid LANG=C.UTF-8 PATH=/usr/bin:/bin id -un"),
+    # a sudoer installing a headless box
+    (1000, "admin", "domovoi-sat", "/var/lib/domovoi-sat", "sudo",
+     "sudo -u domovoi-sat -H -- /usr/bin/setsid -w id -un"),
+    # a desktop install, in the account itself
+    (1000, "kid", "kid", "/home/kid", "sudo", "setsid -w id -un"),
 ])
-def test_as_sat_runs_as_the_account_in_a_session_of_its_own(mode, sudo, expect):
-    """S3 (root + headless), and round 2: the satellite's code never gets
-    this terminal (setsid, stdin from /dev/null), so it can neither borrow
-    a sudo ticket from it nor type into it."""
-    script = (_function("as_sat") + "\n"
-              + 'runuser() { echo runuser "$@"; }\nsudo() { echo sudo "$@"; }\nsetsid() { echo setsid "$@"; }\n'
-              + f'MODE={mode} SUDO="{sudo}" SAT_ACCOUNT=domovoi-sat HOME_DIR=/var/lib/domovoi-sat\n'
+def test_as_sat_runs_as_the_account_in_a_session_of_its_own(uid, user, run_as, home, sudo, expect):
+    """S3 (root + headless), and rounds 2 and 3: the satellite's code never
+    gets this terminal (setsid, stdin from /dev/null), so it can neither
+    borrow a sudo ticket from it nor type into it; from root it gets a clean
+    environment; every tool by its full path."""
+    script = ("/usr/bin/id() { case $1 in -u) echo " + str(uid) + ";; -un) echo " + user + ";; esac; }\n"
+              + "/usr/sbin/runuser() { echo runuser \"$@\"; }\nsudo() { echo sudo \"$@\"; }\n"
+              + "/usr/bin/setsid() { echo setsid \"$@\"; }\n"
+              + _function("as_sat") + "\n"
+              + f'RUN_AS={run_as} SUDO="{sudo}" HOME_DIR={home}\n'
               + "as_sat id -un; echo rc=$?\n")
     r = subprocess.run([_bash(), "-c", script], capture_output=True, text=True)
     assert r.stdout.splitlines() == [expect, "rc=0"], (r.stdout, r.stderr)
     assert "</dev/null" in _function("as_sat").replace(" </dev/null", "</dev/null")
+
+
+def test_a_fixed_path_and_no_caller_functions_before_anything_runs():
+    """Round 3: a python3 in ~/.local/bin (on PATH via Debian's stock
+    ~/.profile) ran with a live sudo ticket. PATH is fixed, the caller's
+    functions and shell hooks dropped, before the first command; and every
+    tool is named by its full path besides."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    head = text[:text.index("# ─── arguments")]
+    for needle in ("PATH=/usr/sbin:/usr/bin:/sbin:/bin\nexport PATH\n", "unset BASH_ENV ENV CDPATH GLOBIGNORE",
+                   'for _f in $(compgen -A function); do unset -f "$_f"; done', "PY=/usr/bin/python3"):
+        assert needle in head, needle
+    assert head.index("set -euo pipefail") < head.index("PATH=/usr/sbin")
+    assert "SUDO=/usr/bin/sudo" in text
+    code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    tools = ("sudo|python3|setsid|runuser|install|apt-get|env|useradd|usermod|userdel|stat|chmod|mkdir|tee|"
+             "systemctl|loginctl|rm|rmdir|cp|cat|cut|date|dirname|basename|dpkg-query|getent|grep|id|ls|mktemp|"
+             "sed|tr|awk|sleep|pkill|find|uname|sh|test")
+    bare = re.compile(r"(^|[;&|({]|\$\(|\bthen|\bdo|\bas_sat|\$SUDO|\|\||&&)\s*(" + tools + r")\s")
+    offenders = [ln for ln in code if bare.search(ln.split(' say "')[0].split(' die "')[0])
+                 and not ln.lstrip().startswith(("say ", "die "))]
+    assert offenders == [], offenders
 
 
 def test_a_desktop_install_is_done_with_sudo_before_the_satellite_s_code_runs():
@@ -456,7 +491,7 @@ def test_a_desktop_install_is_done_with_sudo_before_the_satellite_s_code_runs():
     # After that point a desktop install uses no sudo (the headless unit's are in its own branch).
     for line in desktop_after[:desktop_after.index('elif [ "$MODE" = desktop ]; then')].splitlines():
         assert "$SUDO" not in line, line
-    assert 'as_sat rm -rf "$VENV"\nas_sat python3 -I -m venv "$VENV"' in text
+    assert 'as_sat /usr/bin/rm -rf "$VENV"\nas_sat $PY -I -m venv "$VENV"' in text
     assert '[ -x "$VENV/bin/python" ] ||' not in text
 
 
@@ -540,6 +575,6 @@ def test_the_lists_hold_what_the_requirements_ask_for():
 def test_the_installer_installs_only_from_the_list_with_hashes():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "--require-hashes --only-binary=:all: --no-deps -r \"$PREFIX/$LOCK_REL\"" in text
-    assert 'LOCK_REL=satellite/locks/pc-$PYTAG-$(uname -m).txt' in text
+    assert "LOCK_REL=satellite/locks/pc-$PYTAG-$(/usr/bin/uname -m).txt" in text
     pip_lines = [ln for ln in text.splitlines() if "pip\" install" in ln or "/pip install" in ln]
     assert len(pip_lines) == 1, pip_lines
