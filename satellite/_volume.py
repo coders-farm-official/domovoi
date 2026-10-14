@@ -39,6 +39,58 @@ def parse_volume_percent(amixer_output: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# ─── desktop sound servers (spare-device satellites, 2026-10-13) ──────────
+#
+# On a laptop the ALSA `default` device goes to PipeWire or PulseAudio in
+# the user's session, and amixer's card 0 is often the HDMI output rather
+# than the speakers. There the volume is the sound server's default sink:
+# `wpctl` (PipeWire's WirePlumber) or `pactl` (PulseAudio, and PipeWire's
+# pulse layer). Same pure split as above: argv builders and parsers here,
+# the subprocess in satellite/engine_platform.py.
+
+WPCTL_SINK = "@DEFAULT_AUDIO_SINK@"
+PACTL_SINK = "@DEFAULT_SINK@"
+# `wpctl get-volume` prints "Volume: 0.40" (and " [MUTED]" when muted).
+_WPCTL_RE = re.compile(r"Volume:\s*([0-9]+(?:\.[0-9]+)?)")
+# `pactl get-sink-volume` prints per channel "front-left: 26214 /  40% / …".
+_PACTL_RE = re.compile(r"/\s*(\d{1,3})%")
+
+
+def wpctl_get_command() -> list[str]:
+    return ["wpctl", "get-volume", WPCTL_SINK]
+
+
+def wpctl_set_commands(level: int) -> list[list[str]]:
+    """Set the default sink to ``level``% and unmute it (two calls)."""
+    return [
+        ["wpctl", "set-volume", WPCTL_SINK, f"{clamp(level) / 100:.2f}"],
+        ["wpctl", "set-mute", WPCTL_SINK, "0"],
+    ]
+
+
+def parse_wpctl_volume(output: str) -> int | None:
+    m = _WPCTL_RE.search(output)
+    if not m:
+        return None
+    return clamp(round(float(m.group(1)) * 100))
+
+
+def pactl_get_command() -> list[str]:
+    return ["pactl", "get-sink-volume", PACTL_SINK]
+
+
+def pactl_set_commands(level: int) -> list[list[str]]:
+    return [
+        ["pactl", "set-sink-volume", PACTL_SINK, f"{clamp(level)}%"],
+        ["pactl", "set-sink-mute", PACTL_SINK, "0"],
+    ]
+
+
+def parse_pactl_volume(output: str) -> int | None:
+    m = _PACTL_RE.search(output)
+    return clamp(int(m.group(1))) if m else None
+
+
 # mpg123's default scale factor is 32768 (unity); larger values amplify the
 # decoded PCM (hard-clipping peaks). See mpg123(1) --scale.
 _MPG123_UNITY_SCALE = 32768

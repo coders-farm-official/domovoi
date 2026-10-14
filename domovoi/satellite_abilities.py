@@ -17,7 +17,7 @@ the rest, so a hello may now say which:
   once per connection), never an error, so a newer device can list an
   ability an older core doesn't know.
 * ``board`` (optional): a short slug naming the hardware kind, e.g.
-  ``"linux_pc"`` or ``"android_room"`` (:data:`SPARE_BOARDS`). Persisted to
+  ``"linux_pc"``, ``"windows_pc"`` or ``"android_room"`` (:data:`SPARE_BOARDS`). Persisted to
   ``satellites.board`` on approval and on every accepted hello that carries
   it; a hello without it never clears a stored board.
 
@@ -95,6 +95,7 @@ ASSUMED_WITHOUT_SUPPORTS: frozenset[str] = frozenset(ABILITIES) - NEGOTIATED
 #: dashboard shows no board badge for it, as before.
 SPARE_BOARDS: dict[str, str] = {
     "linux_pc": "Linux PC",
+    "windows_pc": "Windows PC",
     "android_room": "Android room",
 }
 

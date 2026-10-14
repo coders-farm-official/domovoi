@@ -1727,6 +1727,359 @@ nothing recorded is unaffected.
 from the card, keeps its name: it is a different directory, root-owned, and
 no core keeps a key there.
 
+## Spare-device satellites (laptops and phones)
+
+Since 2026-10-13 a spare Linux laptop or mini PC can be a room
+([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md)), a Windows
+laptop or PC ([below](#windows-laptops-and-pcs)), and an Android
+phone through the app's room mode. Neither is a dedicated, root-managed Pi,
+so three things differ: how the device learns which server is yours, what
+it holds, and what that server may do to it.
+
+### The enrolment code, and the install command on a LAN without TLS
+
+The admin's **Settings → Satellites → add a spare device** (admin tier,
+`POST /api/satellites/enrolment`) makes one enrolment payload,
+`domovoi-room:1?core=<address>&fp=<fingerprint>&room=<name>`
+([uml/satellite-protocol.md](uml/satellite-protocol.md#enrolling-a-spare-device-domovoi-room1)),
+shown inside a one-line Linux command and as a QR code. The trust model:
+
+1. **The command pins the download — and is only as trustworthy as the
+   page it came from.** It quotes the SHA-256 of the exact satellite bundle
+   the core serves (`/v1/satellite-code/bundle.tar.gz`, built
+   deterministically) and runs nothing unless `sha256sum -c` matches, so a
+   host that answers the *download* in the core's place, or changes it on
+   the way, is refused. But the command, digest included, arrives on the
+   dashboard page, which is **plain HTTP**: whoever can rewrite that page
+   in transit can hand you a different command, digest and fingerprint
+   altogether (see "What this does not cover" below).
+2. **The device pins the server before it writes anything.** The verified
+   installer makes the address in the code sign a fresh nonce and the
+   address it dialed (the same `/v1/health` challenge every satellite runs),
+   checks the key against the fingerprint in the code, and only then writes
+   the pin into its config. Then a spare computer **refuses to start
+   without one** (exit 78; its unit does not retry) and never falls back to
+   trusting the first server that answers. What the pin covers, exactly:
+   the challenge runs over HTTP **before** each websocket connection, and
+   code updates, wake-model and sound lists must carry the pinned key's
+   signature. The websocket frames themselves (commands, settings, audio)
+   are **not** authenticated: a host on the path after the challenge can
+   still inject or read them, as with a Pi, until the LAN gets TLS. That is
+   why what a frame may do is limited on the device itself (below).
+3. **The code is not a credential.** It carries an address, a public
+   fingerprint and a room name. Joining still needs a person to type the
+   device's six-digit approval code into the dashboard (strict pairing), as
+   for a Pi.
+
+The address must be on the home network — an RFC 1918 IPv4 address, IPv6
+unique-local or link-local, or a name ending in `.local`, `.home.arpa`,
+`.lan` or `.internal` — or the device refuses the code
+(`not_home_network`), https or not: a code shown on some web page cannot
+point a room's microphone at a server outside the house.
+
+**What this does not cover, plainly.** The dashboard page itself is plain
+HTTP on the LAN (TLS is on the [backlog](#hardening-backlog--deferred-in-v1-on-purpose)):
+someone able to rewrite that page in transit could hand you a different
+command, exactly as they could read the admin password typed into it, and
+running that command is running their code: what it prints afterwards
+proves nothing. So check **the command itself, before running it**: the
+address it downloads from is your Domovoi server's, and the `fp=` in the
+enrolment code is the fingerprint under **Settings → About**, looked at on
+another device. The satellite's audio and its websocket frames are
+unencrypted and unauthenticated on the LAN, as a Pi's are.
+
+**The whole chain an install trusts:** the dashboard page (plain HTTP,
+above); your Domovoi server, which built the bundle and holds the key the
+device pins; the computer's own apt sources, for the system packages; and
+PyPI, for the satellite's Python packages — which the installer takes only
+from the hash-pinned list for that Python in the bundle
+(`satellite/locks/`, `pip --require-hashes --only-binary=:all:`), so PyPI
+supplies the files but cannot choose them. The wake-word models are held
+to pinned SHA-256s the same way.
+
+### What a spare computer holds, and what the server may do to it
+
+* **Its own room's key only.** A laptop holds its pairing token
+  (`~/.domovoi/pairing_token`, 0600) and the pinned fingerprint — never the
+  household device token, so it can reach no file, chat, people or music
+  route of the dashboard. **Retire room** (or **Reset pairing**) in the
+  dashboard revokes it. A phone in room mode holds the same: its room's key
+  and the pin.
+* **No root helpers, ever.** The installer never installs
+  `domovoi-apply-payload`, `domovoi-sync-time`, `domovoi-reboot`, a sudoers
+  line or `wpa_cli`. The hello declares only what such a device can do, so
+  the server never sends — and the dashboard never offers — Wi-Fi, LED,
+  mic-gain, clock, display or root plugin-payload actions
+  ([Declared abilities](uml/satellite-protocol.md#declared-abilities-supports-and-board));
+  plugins that install something as root on a satellite stay Pi-only. A
+  code update to a laptop carries `"plugin_payloads": false` and the laptop
+  applies none in any case.
+* **Unprivileged services.** Desktop: a `systemd --user` unit of the
+  account the installer ran as, with linger (it starts at boot), so it runs
+  where that account's sound server is. Headless: a system unit as its own
+  nologin account `domovoi-sat`, which owns only `/var/lib/domovoi-sat`,
+  with the rest of the system read-only (`ProtectSystem=strict`,
+  `ProtectHome`). Both are `NoNewPrivileges`; a restart is the engine
+  exiting 75 for its unit to start it again, so the satellite itself never
+  uses sudo. The installer does, for apt, linger, the headless account and
+  the power settings the person agrees to (each asked first), and keeps
+  root's own record of what it changed in
+  `/var/lib/domovoi-satellite/install.json` and root's own copy of itself
+  in `/usr/local/lib/domovoi-satellite/install-pc.sh`. `--uninstall` is
+  run from that copy and acts only on paths written into the script (the
+  unit, the lid-switch drop-in, the charge-limit rule, the four sleep
+  targets); it never runs code, or reads a list of paths, from anything
+  the satellite's account can write — not the satellite's code tree, not
+  its venv, not its PATH. A desktop install is removed by its own account
+  (its part first, with no sudo used yet: the user unit, the tray, the
+  files; then root's part; it ends with `sudo -k`), or, for a dedicated
+  account, as root from an administrator's account
+  (`sudo bash … --uninstall --account NAME`): root then stops the
+  account's user unit through that account's systemd
+  (`systemctl --user -M NAME@`) and removes its files as the account
+  (`runuser`, a clean environment). Either way `--purge` is root's copy of
+  `satellite/scripts/purge-satellite-files.py` under `/usr/bin/python3
+  -I`, run as the account, and removes only the satellite's files from
+  `~/.domovoi`. On a
+  headless box the account's own files are removed as that account, and
+  `--purge` ends with `userdel -r`. The **installer** does run the
+  satellite's code, as the satellite's account and only after every sudo
+  step: on a desktop it then makes sudo forget the password (`sudo -k`)
+  first, builds a fresh venv (an old one is removed unrun), and runs that
+  code in a session with no terminal (`setsid`), so nothing it starts can
+  use a sudo ticket of yours. Both fix `PATH` to the system's directories,
+  drop the caller's exported shell functions, `BASH_ENV`, `ENV`, `CDPATH`,
+  `GLOBIGNORE` and `PYTHON*` settings before anything runs, and name
+  every tool by its full path (`/usr/bin/sudo`, `/usr/bin/python3`, …).
+  What an account's own shell does before a script starts (its rc files,
+  `BASH_ENV`, a process waiting for the next sudo) no script can undo:
+  for an everyday account that is the trade above; a dedicated account is
+  uninstalled from an administrator's account instead.
+  The installer refuses an account whose `~/.domovoi` belongs to a Domovoi
+  server.
+* **The person chooses what the server may do on its own**
+  (`[pc] permissions`):
+
+  | | "automatic" | "ask" |
+  |---|---|---|
+  | signed code updates, restarts, settings and wake-word pushes | run on arrival, like a Pi | held until the person allows each (tray, or `--approve`) |
+  | runs as | the satellite's account, no way to gain privileges | the same |
+
+  With "automatic", your server's key can run code as that account — the
+  same trust a Pi gives it. **On a desktop that account is a person's, and
+  the installer needed it to be a sudoer**: code running as an account that
+  can use sudo can reach root (it can wait for the next time sudo is used,
+  or for a cached sudo ticket). So "nothing runs as root" describes the
+  satellite, not what code as that account could do. Use a **dedicated
+  account without sudo** for a desktop satellite where you can (give it
+  sudo for the install, take it away afterwards with `sudo deluser
+  <account> sudo`; it never needs sudo again, and nobody should type an
+  administrator's password into it), or the headless mode, whose
+  `domovoi-sat` account has no sudo and no login. **The trade, plainly:**
+  a satellite in someone's everyday account (the simple, usual choice) has
+  that account's rights, so code the server sends could do whatever that
+  person's programs can, using sudo the next time they type their password
+  there included; that is the trust any installed program gets, and the
+  installer does not ask for more. A dedicated account keeps it apart, and
+  is uninstalled from an administrator's account (`--account`, below). Whatever the permission, the device itself refuses what a
+  frame must not do (security review of wf/sat-pc, B1/B2): a `set_config`
+  may carry only the settings the dashboard's own form has, as exact
+  `section.key` names (a key with a space, a capital or an extra dot is
+  refused, not tidied up), never the pin, the server address, the
+  permission or the `[device]` section, on any board; and an audio device
+  name is accepted only if it is a plain ALSA device (`hw:1,0`,
+  `plughw:CARD=Device`, `default`, …), never a `file`, `pipe` or other
+  plugin that makes ALSA run a command. "Ask me" shows every change it
+  holds in full, or refuses it.
+
+### The local control socket
+
+The engine and its tray talk over `~/.domovoi/control.sock`, created 0600
+in a 0700 directory; a connecting process whose uid (`SO_PEERCRED`) is
+neither the engine's nor root, or can't be read, is closed at once. Nothing on it reaches the
+network. Anything already running as that account can mute, unmute, set
+the volume, read the approval code and **allow a held update** — "ask me"
+protects the computer from the server, not from software its own account
+already runs. The approval code is never written to the journal: the
+engine and the installer print it only to a real terminal (an install
+piped into `tee` gets a pointer instead), and otherwise it is in the tray,
+`--approval-code`, and `~/.domovoi/approval_code` (0600).
+
+### The microphone indicator
+
+A laptop has no LED ring, so the tray's icon is the indicator: a **filled
+red microphone whenever audio is leaving for the server** (a command, an
+intercom call, a chat, a wake-word recording), an outline while it only
+listens locally for the wake word, struck through when muted. Mute closes
+the capture stream itself, so the desktop's own microphone indicator goes
+out too, and it is kept across restarts. A headless box has no visible
+indicator; the guide says so.
+
+### Windows laptops and PCs
+
+Since 2026-10-13 a Windows 10/11 PC can be a room too
+([SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
+The enrolment code, the pin, the strict pairing, the room-only key and the
+"automatic" / "ask me" choice are the Linux laptop's, above. What Windows
+changes:
+
+**The trust chain, said honestly.** The one-line PowerShell command is as
+trustworthy as the dashboard page it was copied from, and that page is
+plain HTTP on the LAN: someone able to rewrite it in transit could hand you
+a different command (compare the fingerprint the installer prints with
+**Settings → About** on another device to rule that out). From the command
+on, every byte is checked before it is used: the bundle against the
+SHA-256 in the command; the embeddable Python and every wheel against the
+SHA-256 and size pinned in `satellite/windows-runtime.json` inside that
+bundle (whether they came from your server's cache or from python.org /
+PyPI, which the server's own fetch reaches only through its outbound gate);
+the server against the fingerprint, with the address-bound `/v1/health`
+challenge, **before anything is written**. pip installs the pinned wheels
+with `--require-hashes --no-index --no-deps` and a PATH holding only the
+new Python and System32, so nothing is resolved or built on the laptop.
+The installed Python sees only its own library, its own `site-packages`
+and the satellite: no `import site`, so the account's user site-packages
+(`%APPDATA%\Python\…`, its `.pth` files, `usercustomize`) never loads
+into a satellite process.
+After install, as for every satellite, the room's audio and the WebSocket
+frames are unencrypted and unauthenticated on the LAN until TLS lands
+([backlog](#hardening-backlog--deferred-in-v1-on-purpose)); code, sound and
+wake-model lists are signed by the pinned key.
+
+**What it holds and where.** `%LOCALAPPDATA%\Domovoi\Satellite`, or another
+empty folder inside the account's own folder (`-InstallRoot`; one outside
+it, or reached through a link or junction, is refused). The installer
+sets that folder's permissions itself — the account, SYSTEM and
+Administrators, inherited by everything inside, nothing inherited from
+above — and refuses a folder another account owns. In it: the embeddable
+Python, the satellite code, its config with
+the pin, its room's pairing token, logs (`logs\satellite.log`, rotated,
+never the approval code). The engine runs with that folder as its home,
+so nothing lands in the account's own `~\.domovoi` — where a Domovoi server
+on the same account would keep its identity and voices. It holds **no
+household token**: it reaches no dashboard route.
+
+**What it runs, and what it can't do.**
+
+* A background process of the signed-in account, started at sign-in by an
+  `HKCU\…\Run` value (listed and switchable in Settings → Apps → Startup),
+  ended by Windows at sign-out. **No service, no scheduled task, no
+  administrator**: the installer refuses an elevated PowerShell window, and
+  nothing it installs ever asks for elevation. Its rights are the
+  account's; "ask me" protects the computer from the server, not from
+  software that account already runs.
+* No root-equivalent helpers exist on Windows, and the POSIX paths a Pi
+  trusts would, on Windows, name files at the root of the system drive
+  that **any** account may create (`C:\etc\domovoi\…`,
+  `C:\usr\local\sbin\…`). So on Windows the satellite reads no
+  root-owned pin (its pin is its config's, in its own profile), never runs
+  the setup-status or reboot helper (that path would otherwise run another
+  account's program, and hand it the approval code), and never reads root's
+  network record. It declares no Wi-Fi, LED, mic-gain, clock, display or
+  plugin-payload ability, and applies no plugin payload.
+* It never sweeps the home network for a server that moved (security
+  software reads that as a port scan): its address, then your server's
+  announced names, each held to the pin.
+* The sound and wake-word lists (signed by the pinned key, synced on
+  connect without "ask me", like a Pi's) can write only inside their own
+  cache folders, and only their own types (`.mp3`/`.wav`; `.onnx`/
+  `.onnx.json`): a path with a drive, colon, backslash, UNC or device
+  prefix, `..`, or one that resolves outside the cache (a link or
+  junction) is refused — the same rule on every board, and for the code
+  and plugin channels too.
+* Microsoft's C++ runtime (`msvcp140.dll`, `msvcp140_1.dll`, 14.44+,
+  which onnxruntime needs and doesn't carry) is shipped beside the
+  satellite's Python: Microsoft's unmodified, Microsoft-signed files from
+  the `msvc-runtime` wheel on PyPI, the wheel and each DLL pinned by
+  SHA-256 (the lock tool checks the signature and version before pinning).
+  **These copies are updated with Domovoi's lock, not by Windows Update**:
+  a fix Microsoft ships for them reaches a satellite when the lock moves.
+  The engine checks at start and, if they are gone, says how to put them
+  back. Smart App Control's state is read, never changed.
+* The health sample runs no Linux tool (`ip`, `vcgencmd`, `nmcli`) on
+  Windows: Windows looks for a bare program name in the current folder
+  and on PATH before System32. `powercfg` is called by its full path.
+* `set_config` from the core takes only the dashboard's own settings, by
+  exact key (`satellite/remote_config.py`, the same rule as Linux): never
+  the pin, the server address, `pc.*` (the permission, `server_search`) or
+  `device.*`. "Ask me" shows every change, each in full, before Allow.
+* Device names from config (`[audio] input_device` / `output_device`,
+  `[music] alsa_device`) must be "default", a number, or a plain name
+  (letters, digits, spaces and `()._,:+[]-`): the core's settings check
+  holds a `windows_pc` satellite's device names to that rule instead of
+  the ALSA one (`satellite_config_schema.spec_for_board`), so the dashboard
+  shows a refusal rather than "sent"; the satellite refuses anything else
+  at the frame (`remote_config.screen(..., windows=True)`) and again
+  before it is written; a bad name already in the file stops the
+  satellite at start (exit 78: its supervisor leaves it stopped and the
+  tray shows the reason), as on a Linux laptop — only a Pi falls back to a
+  default; and the player checks the name again before it is used. Nothing
+  else ever reaches PortAudio or the player's command line.
+
+**The control channel** is the named pipe
+`\\.\pipe\domovoi-satellite-<account SID>` with the Linux socket's verbs:
+its DACL grants that account alone (no Everyone, no Administrators;
+low-integrity and app-container processes of the same account can't write
+to it either), `PIPE_REJECT_REMOTE_CLIENTS` keeps it off the network, the
+engine claims the name with `FILE_FLAG_FIRST_PIPE_INSTANCE` and, when
+something else already holds it (another account signed in first, or a
+low-integrity process of this one — pipe names are machine-wide and a
+sandbox can create one), does not run at all: it exits 78 before the
+microphone opens, and the tray says why. Each end checks the other's
+process: this account, at medium integrity or above — and the tray and
+CLI also require the server to be the install's own Python — so neither
+another person on the same PC nor a sandboxed program of this one can
+talk to it, or sit on its name and show the tray a "muted" that isn't
+true. The tray and the
+CLI open the pipe at identification level (`SECURITY_SQOS_PRESENT |
+SECURITY_IDENTIFICATION`): whoever serves it can learn who connected, never
+act as them.
+
+**Test hooks.** `DOMOVOI_DEBUG_MIC_DIR` / `DOMOVOI_DEBUG_AUDIO_SINK` (a
+microphone fed from WAV files, speakers that write WAV files; what the
+end-to-end tests use instead of a person's real devices) reach the engine
+only when its supervisor is started with `--test-audio-hooks`, which
+nothing in an install does, and the engine logs a warning whenever one is
+in use. The installer's own test seams (`-TestCorePcSignals <file>`,
+`-TestRegistryFile`, `-TestAsAdministrator`) are parameters given on its
+command line, which the dashboard's command never passes; no environment
+variable steers it. A running satellite is stopped for a reinstall only
+after the server has proven its fingerprint.
+
+**Stopping and uninstalling.** The tray's Stop and the uninstaller set a
+per-account named event that the supervisor and the engine both wait on.
+The uninstaller is a copy taken from the verified bundle at install time,
+outside the code tree a code update may rewrite; it runs nothing from the
+satellite's code, takes no path from any file the satellite can write (the
+folder is the one it sits in; the registry value names are fixed, and what
+they hold is only compared with that folder, never followed), restores
+only power values that parse as a plan id and numbers, and deletes folders
+with `rmdir /s`, which removes a link inside rather than following it. It
+removes only what an install puts there, by name; `-Purge` removes only the
+satellite's own files in `.domovoi` (the list Linux's purge uses), and its
+sound and wake-word folders only when no Domovoi server's files are there.
+The installer refuses a folder that isn't empty or an earlier install, and
+an account (or install folder) holding a Domovoi server's files — the
+engine refuses to start beside them too.
+
+**Never on the server PC.** The installer refuses a PC with the Domovoi
+server's Windows service, its install record, its data folder, a server
+identity in the account's `~\.domovoi`, or a server answering on
+`127.0.0.1:6370`.
+
+**Quoting.** The dashboard's command and the Start-menu shortcut quote
+every value as a PowerShell string with every character PowerShell reads
+as a single quote doubled — the ASCII one and the typographic ones
+(U+2018–U+201B), which a phone types in a room name and an account's
+folder may contain.
+
+**The microphone indicator.** Windows' own microphone icon is on whenever
+the satellite listens for the wake word (always); the satellite's tray icon
+is a filled red microphone while audio is leaving for the server, and Mute
+closes the capture stream itself (Windows' icon goes out too). The
+approval code is shown in the tray, its toast and the installer's window,
+never logged.
+
 ## Satellite pairing (WS auth)
 
 The satellite WebSocket (`/v1/stream/{room_id}`) authenticates each device

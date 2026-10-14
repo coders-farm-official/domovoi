@@ -1278,9 +1278,11 @@ async def sounds_file(path: str, voice: str | None = None) -> FileResponse:
 # (*.bak), and any .env secret from ever leaving the host.
 SATELLITE_CODE_DIR = Path(settings.repo_dir) / "satellite"
 # Kept in sync with satellite_media/payload.py::_CODE_EXT_ALLOW — see the
-# note there on why ".example" matters.
+# note there on why ".example" matters. ".ps1" (2026-10-13) carries the
+# Windows satellite's installer in the bundle a Windows laptop downloads;
+# inert on a Pi, and a satellite's own code sync does not take it.
 _SAT_CODE_EXT_ALLOW = frozenset(
-    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json", ".example"}
+    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".ps1", ".json", ".example"}
 )
 
 
@@ -1343,6 +1345,51 @@ async def satellite_code_manifest_signed() -> dict[str, Any]:
     return identity.signed_manifest(server_identity.CODE_CHANNEL, manifest)
 
 
+@app.get("/v1/satellite-code/bundle.tar.gz")
+async def satellite_code_bundle() -> FastAPIResponse:
+    """The satellite tree as one deterministic ``.tar.gz`` — what a spare
+    computer's install command downloads (Settings → Satellites → Add a
+    spare device). The same files as the manifest above, under
+    ``satellite/``. The command runs it only after matching its SHA-256
+    against the digest the dashboard quoted
+    (``/v1/satellite-code/bundle.sha256``), so this is safe to serve as
+    openly as the rest of the channel. 423 while the container guard's
+    freeze is on. Declared before the catch-all so the literal wins."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle
+
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return FastAPIResponse(
+        content=bundle.data,
+        media_type="application/gzip",
+        headers={
+            "Content-Disposition": 'attachment; filename="domovoi-satellite.tar.gz"',
+            "X-Content-SHA256": bundle.sha256,
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/v1/satellite-code/bundle.sha256")
+async def satellite_code_bundle_digest() -> dict[str, Any]:
+    """The bundle's SHA-256 and size: what the dashboard writes into the
+    install command it shows. Public, like the bundle itself."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle
+
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return {
+        "sha256": bundle.sha256,
+        "size": len(bundle.data),
+        "files": bundle.files,
+        "path": "/v1/satellite-code/bundle.tar.gz",
+    }
+
+
 @app.get("/v1/satellite-code/{path:path}")
 async def satellite_code_file(path: str) -> FileResponse:
     """Serve one allowlisted file from satellite/. Guarded against
@@ -1359,6 +1406,59 @@ async def satellite_code_file(path: str) -> FileResponse:
     except ValueError:
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(target, media_type="application/octet-stream")
+
+
+# ─── The Windows satellite's runtime (spare devices, 2026-10-13) ──────────
+# The embeddable Python and the win_amd64 wheels a Windows laptop's install
+# command needs, pinned file by file in satellite/windows-runtime.json and
+# fetched into this server's cache only when an admin asks
+# (domovoi/satellite_windows.py). Served openly on the LAN, like the code
+# bundle: public files the installer checks byte for byte against the lock
+# it got from the bundle whose digest the dashboard quoted.
+
+
+def _windows_lock() -> dict[str, Any]:
+    from domovoi import satellite_windows
+
+    try:
+        return satellite_windows.load_lock(SATELLITE_CODE_DIR / satellite_windows.LOCK_NAME)
+    except satellite_windows.LockError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.get("/v1/satellite-windows/files/{name}")
+async def satellite_windows_file(name: str) -> FileResponse:
+    """One file of the Windows runtime, if the lock lists it and the cached
+    bytes are the pinned ones; 404 otherwise (the installer then fetches
+    the same pinned file upstream). 423 while the container guard's freeze
+    is on."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_windows
+
+    lock = _windows_lock()
+    path = await asyncio.to_thread(satellite_windows.cached_file, lock, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not cached on this server")
+    return FileResponse(path, media_type="application/octet-stream")
+
+
+@app.get("/v1/admin/satellite-windows", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_windows() -> dict[str, Any]:
+    """Whether this server holds every Windows runtime file, and the fetch's state."""
+    from domovoi import satellite_windows
+
+    return await asyncio.to_thread(satellite_windows.status, _windows_lock())
+
+
+@app.post("/v1/admin/satellite-windows/fetch", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_windows_fetch() -> dict[str, Any]:
+    """Start fetching the Windows runtime (python.org and PyPI, ~95 MB,
+    every file held to its pin). Answers at once; poll the status."""
+    from domovoi import satellite_windows
+
+    lock = _windows_lock()
+    started = satellite_windows.start_fetch(lock)
+    return {"started": started, **(await asyncio.to_thread(satellite_windows.status, lock))}
 
 
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
@@ -1574,6 +1674,13 @@ async def admin_snapshot() -> dict[str, Any]:
             room: board
             for room, sess in app.state.active_sessions.items()
             if (board := getattr(sess, "board", None))
+        },
+        # Stored settings a connected satellite could not use and replaced
+        # with its profile's default (from its hello); absent when none.
+        "satellite_settings_ignored": {
+            room: notes
+            for room, sess in app.state.active_sessions.items()
+            if (notes := getattr(sess, "settings_ignored", None))
         },
         # Per-room screen/kiosk state ({on, kiosk_alive, brightness,
         # idle_mode}) video satellites report via display_status — drives
@@ -2713,6 +2820,7 @@ async def admin_update_satellite_config(
     from domovoi.satellite_config_schema import (
         FIELD_BY_NAME,
         coerce_and_validate,
+        spec_for_board,
     )
 
     target = app.state.active_sessions.get(room_id)
@@ -2741,7 +2849,9 @@ async def admin_update_satellite_config(
             rejected[name] = "this satellite doesn't have this setting yet — upgrade it first"
             continue
         try:
-            accepted[name] = coerce_and_validate(spec, raw)
+            # By the satellite's own rule for its board: a Windows PC's
+            # device names are Windows ones, not ALSA ones.
+            accepted[name] = coerce_and_validate(spec_for_board(spec, getattr(target, "board", None)), raw)
         except ValueError as e:
             rejected[name] = str(e)
 

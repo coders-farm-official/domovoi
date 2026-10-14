@@ -678,7 +678,7 @@ const fmtDur = (sec) => {
  * exactly as before. Shared here because the Satellites tab and the Wake
  * words tab both ask. */
 const satCan = (s, ability) => !s || !Array.isArray(s.supports) || s.supports.includes(ability);
-const SAT_BOARD_LABELS = { linux_pc: 'Linux PC', android_room: 'Android room' };
+const SAT_BOARD_LABELS = { linux_pc: 'Linux PC', windows_pc: 'Windows PC', android_room: 'Android room' };
 /* The board badge: the spare-device kinds by name, any other board only
  * when the device declared a list. A Pi (adopted board, no list) gets
  * none, as before. */

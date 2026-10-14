@@ -1,0 +1,32 @@
+# Domovoi room satellite on a spare computer with a desktop: a systemd
+# --user unit, so the engine runs in the person's session where PipeWire or
+# PulseAudio (the speakers and the mic) live. `loginctl enable-linger`
+# starts it at boot without anyone signing in. Rendered and installed by
+# satellite/scripts/install-pc.sh into ~/.config/systemd/user/; @PREFIX@ is
+# ~/.local/share/domovoi-satellite.
+#
+# No privilege at all: no sudo, no root helpers (NoNewPrivileges). The
+# engine restarts itself by exiting 75 (after a settings change or an
+# update), which RestartForceExitStatus brings back; it exits 78 when it has
+# no pinned server identity, which RestartPreventExitStatus leaves stopped.
+
+[Unit]
+Description=Domovoi room satellite (this computer)
+After=pipewire.service pipewire-pulse.service wireplumber.service pulseaudio.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=@PREFIX@
+ExecStart=@PREFIX@/venv/bin/python -m satellite.client
+Environment=DOMOVOI_SERVICE_SCOPE=user
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+RestartForceExitStatus=75
+SuccessExitStatus=75
+RestartPreventExitStatus=78
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

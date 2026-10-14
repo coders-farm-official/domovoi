@@ -127,6 +127,11 @@ const SatCard = ({ s, onOpen, tick }) => {
         {s.sat_type === 'video' && online && s.display && s.display.kiosk_alive === false && (
           <Pill tone="warn">kiosk dead</Pill>
         )}
+        {online && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 && (
+          <Pill tone="warn" title={s.settings_ignored.join('\n') + '\n(it uses its board\u2019s default instead)'}>
+            {s.settings_ignored.length === 1 ? 'a setting ignored' : `${s.settings_ignored.length} settings ignored`}
+          </Pill>
+        )}
         <Pill tone={online ? 'live' : 'idle'} live={online}>
           {online ? 'online' : s.status === 'waiting' ? 'waiting' : 'offline'}
         </Pill>
@@ -275,6 +280,27 @@ const satHealthAgeTone = (sec) => sec == null ? 'idle' : sec < 150 ? 'ok' : sec 
 const satHealthTempTone = (c) => c == null ? 'idle' : c < 70 ? 'ok' : c < 80 ? 'warn' : 'err';
 const satHealthThrottle = (flags) => (flags || []).filter(f => !f.endsWith('_occurred'));
 const satHealthMb = (kb) => kb == null ? '—' : `${(kb / 1024).toFixed(0)} MB`;
+// A spare device's battery, `{percent, charging, on_power}` (laptops and
+// phones send the same object); null on a device without one (every Pi).
+// onCharger: true / false / null.
+const satBattery = (s) => {
+  const b = s && s.battery;
+  if (!b) return null;
+  const onCharger = b.charging ? true : b.on_power == null ? null : !!b.on_power;
+  return { percent: b.percent == null ? null : b.percent, onCharger, charging: !!b.charging };
+};
+const satBatteryView = (b) => {
+  const pct = b.percent;
+  const value = pct == null ? '—' : `${Math.round(pct)}%`;
+  const plugged = b.charging ? 'charging' : 'on the charger';
+  const sub = b.onCharger === true
+    ? (pct != null && pct >= 98 ? `${plugged} · set a charge limit if it stays here for weeks` : plugged)
+    : b.onCharger === false ? 'on battery' : 'power unknown';
+  const tone = pct == null ? 'idle'
+    : b.onCharger === false ? (pct < 20 ? 'err' : 'warn')
+    : (b.onCharger === true && pct >= 98) ? 'warn' : 'ok';
+  return { value, sub, tone };
+};
 const satHealthUptime = (sec) => {
   if (sec == null) return '—';
   const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
@@ -392,6 +418,8 @@ const SatHealthCard = ({ room, online }) => {
         {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
         {s && s.reboot_needed &&
           <Pill tone="warn" title={s.reboot_needed}>reboot needed</Pill>}
+        {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 &&
+          <Pill tone="warn" title={s.settings_ignored.join('\n')}>settings ignored</Pill>}
         {s && s.wifi && s.wifi.mode === 'ap' &&
           <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the satellite is bringing the house network back">setup hotspot on</Pill>}
         {s && s.mic_blocked === true &&
@@ -401,6 +429,11 @@ const SatHealthCard = ({ room, online }) => {
           <Pill tone="warn" title={s.throttled_flags.join(', ')}>throttled earlier this boot</Pill>}
         {hist && <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>{hist.samples} samples in 24 h</span>}
       </div>
+      {s && Array.isArray(s.settings_ignored) && s.settings_ignored.length > 0 && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {s.settings_ignored.join('; ')}. It uses its board’s default instead; a new value from the Settings tab replaces the stored one.
+        </div>
+      )}
       {s && s.reboot_needed && (
         <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
           {s.net_step && s.net_step.state === 'failed'
@@ -442,11 +475,10 @@ const SatHealthCard = ({ room, online }) => {
           <SatHealthStat label="handles" value={s.fds == null ? '—' : `${s.fds} fds`}
                          sub={`${s.threads == null ? '—' : s.threads} threads · ${s.mem_avail_kb == null ? '—' : satHealthMb(s.mem_avail_kb)} free`}
                          tone={s.fds == null ? 'idle' : s.fds > 400 ? 'warn' : 'ok'}/>
-          {s.battery && (
-            <SatHealthStat label="battery" value={s.battery.percent == null ? '—' : `${s.battery.percent.toFixed(0)}%`}
-                           sub={s.battery.charging ? 'charging' : s.battery.on_power ? 'on power' : s.battery.on_power === false ? 'on battery' : 'power unknown'}
-                           tone={s.battery.percent == null ? 'idle' : (s.battery.on_power === false && s.battery.percent < 20) ? 'err' : s.battery.on_power === false ? 'warn' : 'ok'}/>
-          )}
+          {satBattery(s) && (() => {
+            const v = satBatteryView(satBattery(s));
+            return <SatHealthStat label="battery" value={v.value} sub={v.sub} tone={v.tone}/>;
+          })()}
         </div>
       )}
       {s && (s.net_step || s.hostname) && <SatNetStep step={s.net_step} hostname={s.hostname}/>}
@@ -2264,6 +2296,272 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
   );
 };
 
+/* ---- Add a spare device (S1, 2026-10-13) ------------------------------
+ * A Linux laptop, a mini PC or a phone becomes a room. The admin names the
+ * room; the server answers with one enrolment payload
+ * (`domovoi-room:1?core=…&fp=…&room=…`, docs/uml/satellite-protocol.md)
+ * shown two ways: inside a one-line install command for Linux, and as a
+ * QR code for a phone's room mode. The payload carries no secret: the new
+ * device still shows up above, waiting for its approval code. Admin only
+ * (the route is too). The QR library loads only when a code is drawn. */
+const _spareQrScript = { p: null };
+const spareLoadQr = () => {
+  if (window.qrcode) return Promise.resolve(window.qrcode);
+  if (!_spareQrScript.p) {
+    _spareQrScript.p = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = '/vendor/qrcode/qrcode.js';
+      el.onload = () => (window.qrcode ? resolve(window.qrcode) : reject(new Error('no qrcode')));
+      el.onerror = () => { _spareQrScript.p = null; reject(new Error('the QR library did not load')); };
+      document.head.appendChild(el);
+    });
+  }
+  return _spareQrScript.p;
+};
+
+// The QR's modules, drawn as SVG squares (no innerHTML).
+const SpareQr = ({ text }) => {
+  const [matrix, setMatrix] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    setMatrix(null); setErr(null);
+    spareLoadQr().then((qrcode) => {
+      const qr = qrcode(0, 'M');
+      qr.addData(text);
+      qr.make();
+      const n = qr.getModuleCount();
+      const dark = [];
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) dark.push([r, c]);
+      if (alive) setMatrix({ n, dark });
+    }).catch((e) => { if (alive) setErr(e.message || String(e)); });
+    return () => { alive = false; };
+  }, [text]);
+  if (err) return <div style={{ fontSize: 12, color: 'var(--err)' }}>couldn’t draw the QR code: {err}</div>;
+  if (!matrix) return <div style={{ fontSize: 12, color: 'var(--fg-faint)' }}>drawing the QR code…</div>;
+  const q = 4;   // the quiet zone, in modules
+  const size = matrix.n + 2 * q;
+  return (
+    <svg className="spare-qr" role="img" aria-label="QR code of the enrolment payload"
+         viewBox={`0 0 ${size} ${size}`} width="216" height="216" shapeRendering="crispEdges"
+         style={{ background: '#fff', borderRadius: 'var(--r-sm)', flex: 'none' }}>
+      <rect width={size} height={size} fill="#fff"/>
+      {matrix.dark.map(([r, c]) => <rect key={`${r}-${c}`} x={c + q} y={r + q} width="1" height="1" fill="#000"/>)}
+    </svg>
+  );
+};
+
+/* The Windows laptop's command (2026-10-13). The same trust model as the
+ * Linux one: the bundle's SHA-256 is checked before anything runs, the
+ * server proves its fingerprint before anything is written. It installs for
+ * the signed-in account only, with no administrator rights; the Python and
+ * libraries it needs come from this server's cache when an admin has
+ * fetched them (here), else straight from python.org and PyPI — the same
+ * pinned files either way. Unsigned for now: said plainly. */
+const spareMb = (b) => b == null ? '—' : `${Math.round(b / 1e6)} MB`;
+const SpareWindows = ({ res, fire }) => {
+  const [rt, setRt] = React.useState(res.windows_runtime || null);
+  const [fetching, setFetching] = React.useState(false);
+  React.useEffect(() => { setRt(res.windows_runtime || null); }, [res]);
+  React.useEffect(() => {
+    if (!rt || !rt.fetch || !rt.fetch.running) return undefined;
+    const t = setInterval(async () => {
+      try { setRt(await apiGet('/api/satellites/windows-runtime')); } catch (e) { /* keep the last */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [rt && rt.fetch && rt.fetch.running]);
+  const getFiles = async () => {
+    setFetching(true);
+    try {
+      setRt(await apiPost('/api/satellites/windows-runtime/fetch', {}));
+    } catch (e) {
+      fire(apiErrorText(e, 0));
+    } finally {
+      setFetching(false);
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(res.command_windows);
+      fire('Windows install command copied');
+    } catch (e) {
+      fire('select the command and copy it by hand (the browser refused the clipboard)');
+    }
+  };
+  const running = !!(rt && rt.fetch && rt.fetch.running);
+  return (
+    <div className="spare-windows" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="label">windows laptop or pc (windows 10 or 11, 64-bit)</div>
+      <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+        On the PC, signed in as the person whose account it will run in (a normal window, not
+        "Run as administrator"), open Windows PowerShell or Terminal and paste this. It installs
+        for that account only, needs no administrator rights, and listens while that account is
+        signed in. Not on the PC that runs this Domovoi server: it refuses there.
+      </div>
+      <pre className="mono spare-command spare-command-windows" tabIndex={0}
+           style={{ margin: 0, padding: 10, fontSize: 11.5, lineHeight: 1.45,
+                    whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
+                    background: 'var(--bg-sunken, var(--bg))', border: '1px solid var(--border)',
+                    borderRadius: 'var(--r-sm)', maxHeight: 160, overflow: 'auto' }}>{res.command_windows}</pre>
+      <div><Button icon="copy" onClick={copy}>copy the Windows command</Button></div>
+      <div role="note" className="spare-windows-unsigned"
+           style={{ fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+        Not signed yet: the satellite's own code carries no Coders Farm signature (Python itself is
+        signed by the Python Software Foundation). Windows Security or another antivirus may warn
+        about a command that downloads and starts programs; Windows shows its microphone-in-use
+        icon the whole time the satellite listens for the wake word.
+      </div>
+      {rt && (
+        <div className="spare-windows-runtime" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+          {rt.ready
+            ? <>This server holds the Windows files (Python {rt.python} and its libraries,
+                {' '}{spareMb(rt.bytes_total)}): the PC gets them from here.</>
+            : <>This server doesn't hold the Windows files yet (Python {rt.python} and its libraries,
+                {' '}{spareMb(rt.bytes_total)}{rt.bytes_cached ? `, ${spareMb(rt.bytes_cached)} so far` : ''}).
+                Get them now, or the PC downloads the same pinned files from python.org and PyPI
+                itself.{' '}
+                {rt.fetch && rt.fetch.ok === false && rt.fetch.message
+                  ? <span style={{ color: 'var(--err)' }}>Last try: {rt.fetch.message}</span> : null}</>}
+          {!rt.ready && (
+            <div style={{ marginTop: 6 }}>
+              <Button icon="download" disabled={running || fetching} onClick={getFiles}>
+                {running ? 'getting the Windows files…' : 'get the Windows files'}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const SpareDeviceCard = ({ fire }) => {
+  const admin = useAdminSignedIn();
+  const [open, setOpen] = React.useState(false);
+  const [room, setRoom] = React.useState('');
+  const [core, setCore] = React.useState('');
+  const [editCore, setEditCore] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [res, setRes] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  if (!admin) return null;
+
+  const make = async () => {
+    if (!room.trim() || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const body = { room: room.trim() };
+      if (editCore && core.trim()) body.core = core.trim();
+      const r = await apiPost('/api/satellites/enrolment', body);
+      setRes(r);
+      if (!editCore) setCore(r.core);
+    } catch (e) {
+      setRes(null);
+      setErr(apiErrorText(e, 0));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(res.command);
+      fire('install command copied');
+    } catch (e) {
+      fire('select the command and copy it by hand (the browser refused the clipboard)');
+    }
+  };
+
+  return (
+    <div className="spare-device-card"
+         style={{ background: 'var(--card)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
+      <button onClick={() => setOpen(o => !o)}
+              style={{ font: 'inherit', width: '100%', textAlign: 'left', cursor: 'pointer',
+                       background: 'none', border: 'none', padding: '14px 16px',
+                       display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg)' }}>
+        <Icon name="laptop" size={16}/>
+        <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>add a spare device</span>
+        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+          a Linux or Windows laptop or PC, or a phone
+        </span>
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
+      </button>
+      {open && (
+        <div style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+            Name the room the device will be. It joins like a Pi: it waits above for its
+            approval code, and nothing in this command or code is a password.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}
+                   onKeyDown={e => { if (e.key === 'Enter') make(); }}
+                   placeholder="room name, e.g. Kid's Room" aria-label="room name"
+                   style={{ ...smInput, minWidth: 220 }}/>
+            <Button variant="primary" icon="qr-code" disabled={!room.trim() || busy} onClick={make}>
+              {busy ? 'making…' : 'make the code'}
+            </Button>
+            <label style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={editCore} onChange={e => setEditCore(e.target.checked)}/>
+              a different server address
+            </label>
+            {editCore && (
+              <input value={core} onChange={e => setCore(e.target.value)} className="mono"
+                     placeholder="http://192.168.0.117:6370" aria-label="server address"
+                     style={{ ...smInput, minWidth: 220 }}/>
+            )}
+          </div>
+          {err && (
+            <div role="alert" style={{ fontSize: 12, color: 'var(--err)' }}>
+              {err}{/home network/.test(err) && !editCore
+                ? ' — tick “a different server address” and give its address on your network.' : ''}
+            </div>
+          )}
+          {res && (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+                It connects as <span className="mono">{res.room_id}</span> to{' '}
+                <span className="mono">{res.core}</span>.
+              </div>
+              {res.conflict && <div role="alert" style={{ fontSize: 12, color: 'var(--warn)' }}>{res.conflict}</div>}
+              <div className="spare-device-body" style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="label">linux laptop or mini pc (debian or ubuntu)</div>
+                  <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                    On the device, signed in as the account it will run as, open a terminal and
+                    paste this. It installs the satellite and shows the approval code.
+                  </div>
+                  <pre className="mono spare-command" tabIndex={0}
+                       style={{ margin: 0, padding: 10, fontSize: 11.5, lineHeight: 1.45,
+                                whiteSpace: 'pre-wrap', wordBreak: 'break-all', userSelect: 'all',
+                                background: 'var(--bg-sunken, var(--bg))', border: '1px solid var(--border)',
+                                borderRadius: 'var(--r-sm)', maxHeight: 160, overflow: 'auto' }}>{res.command}</pre>
+                  <div><Button icon="copy" onClick={copy}>copy the command</Button></div>
+                  <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+                    It runs the download only if it is exactly the bundle this server serves now
+                    (SHA-256 <span className="mono">{res.bundle_sha256.slice(0, 16)}…</span>), then checks
+                    the server is the one with fingerprint{' '}
+                    <span className="mono" style={{ wordBreak: 'break-all' }}>{res.fingerprint}</span>{' '}
+                    (Settings → About shows it) before it writes anything. Make a new command after
+                    updating Domovoi.
+                  </div>
+                </div>
+                <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="label">phone or tablet</div>
+                  <SpareQr text={res.payload}/>
+                  <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', maxWidth: 216, lineHeight: 1.5 }}>
+                    In the Domovoi app: Settings → Satellites → Use this device as a room, then scan.
+                  </div>
+                </div>
+              </div>
+              {res.command_windows && <SpareWindows res={res} fire={fire}/>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* The satellites view. `embedded` is how Settings → Satellites shows it
  * (SatellitesPanel): under the Settings header, with the roster's counts
  * as its first line. Without it, the same view as a page of its own, which
@@ -2412,6 +2710,8 @@ const SatellitesPage = ({ embedded = false } = {}) => {
       <Broadcast onlineCount={onlineCount} fire={fire}/>
 
       <PrepareMediaCard fire={fire}/>
+
+      <SpareDeviceCard fire={fire}/>
 
       <SatDrawer s={open} sats={sats} onClose={() => setOpenRoom(null)} fire={fire} refresh={refresh}/>
       {adoptTarget && (

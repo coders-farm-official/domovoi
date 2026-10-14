@@ -42,7 +42,7 @@ from typing import Any
 
 import requests
 
-from satellite.sound_sync import _safe_rel, _sha256
+from satellite.sound_sync import _safe_rel, _sha256, safe_dest
 
 log = logging.getLogger("satellite.plugin_sync")
 
@@ -167,10 +167,10 @@ def sync_plugin_payloads(
         _save_envelope(payloads_root, envelope)
     downloaded = 0
     for rel, sha in files.items():
-        if not _safe_rel(rel) or "/" not in rel:
+        dest = safe_dest(payloads_root, rel) if "/" in rel else None
+        if dest is None:
             log.warning("plugin sync: skipping unsafe manifest path %r", rel)
             continue
-        dest = payloads_root / rel
         if dest.is_file() and _sha256(dest) == sha:
             continue
         body = requests.get(f"{base}/v1/satellite-plugins/{rel}", timeout=timeout)
@@ -189,9 +189,9 @@ def sync_plugin_payloads(
     prev: dict[str, str] = _read_json(MANIFEST_SIDECAR).get("files") or {}
     pruned = 0
     for rel in prev:
-        if rel in files or not _safe_rel(rel):
+        stale = None if rel in files else safe_dest(payloads_root, rel)
+        if stale is None:
             continue
-        stale = payloads_root / rel
         try:
             if stale.is_file():
                 stale.unlink()

@@ -211,6 +211,18 @@ class NetworkGuard:
 
 
 @pytest.fixture(autouse=True)
+def this_pcs_cpp_runtime_is_not_the_test_s(monkeypatch):
+    """A Windows engine refuses to start without Microsoft's C++ runtime
+    (engine_platform.windows_runtime_problem). Whether this machine has a
+    new enough one is not what the engine's other tests are about: there it
+    reads as present. satellite/tests/test_vc_runtime.py holds the real
+    check (it keeps its own reference to the function)."""
+    from satellite import engine_platform
+
+    monkeypatch.setattr(engine_platform, "windows_runtime_problem", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def no_server_name_lookups(monkeypatch):
     """Server discovery tries the core's NAME first (``domovoi.local``,
     satellite/discovery.py). Resolved for real, that is a multicast query

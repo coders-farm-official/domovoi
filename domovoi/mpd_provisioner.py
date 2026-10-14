@@ -514,6 +514,15 @@ async def remove_room(room_id: str) -> dict[str, bool]:
                 text("DELETE FROM mpd_rooms WHERE room_id = :r"), {"r": room_id}
             )
             removed_row = bool(result.rowcount)
+        # And this process's own memory of it. Left behind, the next connect
+        # of a room with the same id took the cached ports, started a
+        # container and wrote no mpd_rooms row - so the next retire found no
+        # row, left that container running, and the ports looked free to
+        # the allocator (2026-10-13, found by the Windows satellite's e2e).
+        from domovoi.clients import mpd as mpd_module
+
+        mpd_module._room_ports.pop(room_id, None)
+        mpd_module._clients.pop(room_id, None)
     log.info(
         "mpd: retired room=%s (container=%s row=%s)",
         room_id, removed_container, removed_row,

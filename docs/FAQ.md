@@ -109,6 +109,41 @@ A room *is* a satellite. To add one:
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by that `room_id`.
 
+## Can an old laptop or phone be a room?
+
+Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) or a
+**Windows 10/11 laptop or PC** can be a room: in the dashboard, as admin,
+**Settings → Satellites → add a spare device**, name the room, and run the
+one-line command it shows on that computer (one for Linux, one for Windows
+PowerShell). It installs the satellite, makes sure it's talking to *your*
+server, and shows an approval code to type into the dashboard. A tray
+icon shows when its microphone is live and mutes it. An old **Android
+phone or tablet** joins through the app's room mode by scanning the QR code
+on the same card. Either is a real room: wake word, music, timers,
+announcements, and guests can control its music while it plays. What they
+don't do is the Pi-only part (LED ring, Wi-Fi self-healing, plugins that
+install something as root). Setup, power and battery advice:
+[Satellites on spare devices](SPARE_DEVICE_SATELLITES.md).
+
+## Why does Windows or my antivirus warn about the Windows satellite?
+
+The satellite's own code isn't signed yet (Coders Farm's signing is on
+hold), and its install command downloads and starts programs — exactly what
+antivirus software watches for. Python, which runs it, is signed by the
+Python Software Foundation, and the command runs nothing unless every file
+matches the SHA-256 your own dashboard quoted. Windows' microphone icon
+also stays on while it listens for the wake word: that is Windows telling
+you the truth. Details:
+[Windows laptops and PCs](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
+
+## Can the PC that runs Domovoi also be a room?
+
+Not with the spare-device installer: it refuses on the server PC. The
+server runs whether or not anyone is signed in, a room needs a signed-in
+account for the microphone, and two programs would compete for the sound
+devices. "Use this PC as a room" is planned as part of the server's own
+tray icon on Windows.
+
 ## Can another device on my network pretend to be one of my rooms?
 
 Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired room is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).

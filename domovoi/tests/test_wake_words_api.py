@@ -93,6 +93,28 @@ def test_create_persists_and_returns_full_row() -> None:
 
 
 @requires_db
+@pytest.mark.parametrize("name,slug", [("Con", "con_word"), ("NUL", "nul_word"), ("com1", "com1_word"),
+                                       ("Aux!", "aux_word"), ("Console", "console"), ("Hey Con", "hey_con")])
+def test_a_wake_word_named_like_a_windows_device_gets_a_slug_every_satellite_takes(name, slug) -> None:
+    """Satellites refuse a synced file named con/aux/nul/com1... on every
+    board (Windows opens a device for it); the core never creates one."""
+    from satellite import sound_sync
+
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
+        r = _create(client, name=name, phrase="hey there")
+        assert r.status_code == 201, r.text
+        assert r.json()["slug"] == slug
+    assert sound_sync._safe_rel(f"{slug}.onnx") and sound_sync._safe_rel(f"{slug}.onnx.json")
+
+
+def test_the_core_knows_the_satellite_s_device_names() -> None:
+    from domovoi import canned_sounds
+    from satellite import sound_sync
+
+    assert canned_sounds.WINDOWS_DEVICE_NAMES == sound_sync._DEVICE_NAMES
+
+
+@requires_db
 def test_create_defaults_threshold_to_half() -> None:
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         r = _create(client, name="Computer", phrase="computer")

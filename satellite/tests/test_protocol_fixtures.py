@@ -63,8 +63,8 @@ def _handled_frame_types() -> set[str]:
     return types
 
 
-def test_the_fixtures_describe_the_four_devices():
-    assert set(FIXTURES["devices"]) == {*PI_DEVICES, "linux_pc", "android_room"}
+def test_the_fixtures_describe_the_five_devices():
+    assert set(FIXTURES["devices"]) == {*PI_DEVICES, "linux_pc", "windows_pc", "android_room"}
     assert FIXTURES["protocol_version"] == "0.1"
     for name, device in FIXTURES["devices"].items():
         assert device["hello"]["type"] == "hello", name

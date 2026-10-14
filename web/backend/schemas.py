@@ -560,6 +560,10 @@ class Satellite(BaseModel):
     # ``running`` the dashboard and the app keep the room's Upgrade button
     # locked, across a reload, and the server refuses a second one (409).
     upgrade: SatelliteUpgrade | None = None
+    # Stored settings the CONNECTED satellite could not use and replaced with
+    # its profile's default at load (2026-10-13), e.g. "music device setting
+    # ignored: not a plain ALSA name". Null when none, or offline.
+    settings_ignored: list[str] | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────
@@ -755,6 +759,17 @@ class PendingSatellite(BaseModel):
     # UI then offers re-provision instead of a fresh adopt.
     already_adopted_as: str | None = None
     parse_error: str | None = None
+
+
+class SpareDeviceEnrolRequest(BaseModel):
+    """Settings → Satellites → Add a spare device: the room the laptop or
+    phone will be, and optionally the core address it should dial when the
+    one this server finds for itself is not the one the LAN reaches (a
+    second network card). The answer is the enrolment payload, the Linux
+    install command and what the QR code carries."""
+
+    room: str = Field(..., min_length=1, max_length=64)
+    core: str | None = Field(default=None, max_length=256)
 
 
 class SatelliteApproveRequest(BaseModel):

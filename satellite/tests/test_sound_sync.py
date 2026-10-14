@@ -207,3 +207,39 @@ def test_an_unpinned_device_syncs_clips_as_it_always_did(tmp_path, monkeypatch, 
         assert sound_sync.sync("http://server:6370", tmp_path / "cache") == 1
     assert "taken on trust" in caplog.text
     assert not any(u.endswith("manifest.sig") for u, _p in seen)
+
+
+# ─── the prune touches only what this satellite put there (review R4) ─────
+
+def test_R4_the_prune_never_deletes_a_servers_voice_store(tmp_path):
+    from satellite import sound_sync
+
+    store = tmp_path / ".domovoi" / "sounds"
+    core_clip = store / "voices" / "ryan" / "greetings" / "g1.mp3"
+    core_clip.parent.mkdir(parents=True)
+    core_clip.write_bytes(b"core")
+    core_setup = store / "setup" / "digit_1.mp3"
+    core_setup.parent.mkdir(parents=True)
+    core_setup.write_bytes(b"core")
+    mine = store / "greetings" / "g1.mp3"
+    mine.parent.mkdir(parents=True)
+    mine.write_bytes(b"sat")
+    stale = store / "greetings" / "old.mp3"
+    stale.write_bytes(b"sat")
+    sound_sync._prune(store, {"greetings/g1.mp3"})
+    assert mine.exists() and core_clip.exists() and core_setup.exists()
+    assert not stale.exists(), "its own stale greeting still goes"
+
+
+def test_once_recorded_only_recorded_clips_are_pruned(tmp_path):
+    from satellite import sound_sync
+
+    store = tmp_path / "sounds"
+    (store / "greetings").mkdir(parents=True)
+    for name in ("a.mp3", "b.mp3"):
+        (store / "greetings" / name).write_bytes(b"x")
+    sound_sync._prune(store, {"greetings/a.mp3", "greetings/b.mp3"})
+    (store / "network_issues.mp3").write_bytes(b"someone else's")
+    sound_sync._prune(store, {"greetings/a.mp3"})
+    assert not (store / "greetings" / "b.mp3").exists()
+    assert (store / "network_issues.mp3").exists(), "not in the record: not ours to delete"

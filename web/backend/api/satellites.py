@@ -82,6 +82,7 @@ from web.backend.schemas import (
     Satellite,
     SatelliteApproveRequest,
     SatelliteDisplay,
+    SpareDeviceEnrolRequest,
     SatellitePairing,
     SatelliteUpgrade,
     Session,
@@ -300,6 +301,182 @@ async def list_approvals(request: Request):
             headers=auth_forward_headers(request),
         )
     )
+
+
+# ─── spare devices: the enrolment payload and the install command ─────────
+#
+# Settings → Satellites → "Add a spare device" (S1, 2026-10-13). One payload,
+# `domovoi-room:1?core=…&fp=…&room=…` (satellite/enrolment.py), shown two
+# ways: inside a one-line Linux install command, and as a QR code for a
+# phone's room mode. It carries no secret — the device still has to be
+# approved with its code below — so what this route hands out is an
+# address, a public fingerprint and the digest of public code.
+
+
+def _advertised_core_http() -> str:
+    """The core's base URL as other devices on the LAN dial it: the same
+    address USB adoption writes into a Pi (SATELLITE_ADOPTION_ADVERTISE_URL,
+    `auto` by default), as http(s)."""
+    ws = satellite_adoption.advertised_domovoi_url()
+    scheme, sep, rest = ws.partition("://")
+    return ("https" if scheme == "wss" else "http") + sep + rest
+
+
+def install_command(core: str, bundle_sha256: str, payload: str) -> str:
+    """The one line the dashboard shows for a Linux laptop. It downloads the
+    satellite bundle from the core, runs it only if its SHA-256 is the one
+    quoted here, and hands the payload to satellite/scripts/install-pc.sh,
+    which makes the core prove its fingerprint before writing anything.
+    wget first (on every Debian and Ubuntu desktop), curl if it is not."""
+    import shlex
+
+    url = f"{core.rstrip('/')}/v1/satellite-code/bundle.tar.gz"
+    q = shlex.quote
+    return (
+        'd=$(mktemp -d) && { wget -qO "$d/s.tgz" ' + q(url)
+        + ' || curl -fsSLo "$d/s.tgz" ' + q(url) + '; }'
+        + ' && echo ' + q(f"{bundle_sha256}  ") + '"$d/s.tgz" | sha256sum -c --quiet -'
+        + ' && tar -xzf "$d/s.tgz" -C "$d"'
+        + ' && bash "$d/satellite/scripts/install-pc.sh" ' + q(payload)
+    )
+
+
+#: Every character Windows PowerShell takes for a single quote: the ASCII
+#: one and the typographic ones (U+2018 to U+201B, which a phone's keyboard
+#: types in a room name). Security review of wf/sat-windows: doubling only
+#: the ASCII one let a typographic apostrophe end the string.
+_PS_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def _ps_quote(value: str) -> str:
+    """A PowerShell single-quoted string literal: every character PowerShell
+    reads as a single quote is doubled (one of a pair is a literal), so no
+    value can end the string early."""
+    return "'" + "".join(c + c if c in _PS_SINGLE_QUOTES else c for c in value) + "'"
+
+
+def install_command_windows(core: str, bundle_sha256: str, payload: str) -> str:
+    """The one line the dashboard shows for a Windows laptop, to paste into
+    Windows PowerShell or Terminal. The same trust model as the Linux one:
+    it downloads the satellite bundle from the core into a new temp folder,
+    stops before running anything unless the bundle's SHA-256 is the one
+    quoted here, unpacks it with Windows' own tar.exe, and runs
+    satellite/scripts/install-windows.ps1 with the payload — which refuses
+    a PC that runs the Domovoi server, makes the core prove its
+    fingerprint before writing anything, and installs per-user with no
+    administrator rights. ``-ExecutionPolicy Bypass`` applies to that one
+    PowerShell process only (a command typed at the prompt is not subject
+    to the policy at all); it never changes the machine's setting, and a
+    policy set by Group Policy still wins."""
+    url = f"{core.rstrip('/')}/v1/satellite-code/bundle.tar.gz"
+    q = _ps_quote
+    return (
+        r"& { $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; "
+        r"$d=Join-Path $env:TEMP ('domovoi-'+[guid]::NewGuid().ToString('N')); "
+        r"$null=New-Item -ItemType Directory -Path $d; "
+        + f"Invoke-WebRequest -UseBasicParsing -Uri {q(url)} " + r'-OutFile "$d\s.tgz"; '
+        + r'if ((Get-FileHash -Algorithm SHA256 -LiteralPath "$d\s.tgz").Hash -ne ' + q(bundle_sha256) + ") "
+        + r"{ throw 'This is not the download the dashboard expected (Domovoi was updated, or it was "
+        r"changed on the way). Nothing was run: make a new command in the dashboard.' }; "
+        r'& "$env:SystemRoot\System32\tar.exe" -xzf "$d\s.tgz" -C $d; '
+        r'& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile '
+        r'-ExecutionPolicy Bypass -File "$d\satellite\scripts\install-windows.ps1" '
+        + q(payload) + " }"
+    )
+
+
+async def _windows_runtime(request: Request) -> dict[str, Any] | None:
+    """Whether the core holds the Windows satellite's Python and wheels
+    (domovoi/satellite_windows.py), or None from a core that doesn't say."""
+    status, doc = await get_admin("/v1/admin/satellite-windows", headers=auth_forward_headers(request))
+    return doc if status == 200 and isinstance(doc, dict) else None
+
+
+async def _room_in_use(room_id: str) -> str | None:
+    """Why a new device can't simply take this room, or None."""
+    rooms = {r["room_id"] for r in await _list_rooms()}
+    pairings = await _list_pairings()
+    if room_id in pairings:
+        return (f"{room_id} is already paired with a device: the new one will be refused "
+                "until that room is removed (or its pairing reset) — or pick another name")
+    if room_id in rooms:
+        return (f"{room_id} already exists: remove it first if this device replaces "
+                "the one that was there, or pick another name")
+    return None
+
+
+@router.post(
+    "/enrolment",
+    # An admin's: this is how a device is invited into the house (it is
+    # still approved separately, with its code). Nothing is written, but it
+    # is an admin action and a POST, so it takes the admin write gate.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request):
+    """The enrolment payload for a spare device, the install command for a
+    Linux laptop, and the parts the page shows beside them (the room id the
+    device will connect as, the fingerprint to compare with Settings →
+    About, a warning when the room is taken). 422 for a room name or an
+    address the payload can't carry — one off the home network included,
+    so a loopback address found on a box with no LAN is said, not handed
+    out (``{reason, message}``); 503
+    when the Domovoi server is not answering or has no identity; 423 while
+    the container guard holds the satellite channel."""
+    from satellite import enrolment
+
+    status, health = await get_admin("/v1/health", headers=auth_forward_headers(request))
+    identity = health.get("identity") if status == 200 and isinstance(health, dict) else None
+    fingerprint = identity.get("fingerprint") if isinstance(identity, dict) else None
+    if not fingerprint:
+        raise HTTPException(status_code=503, detail="the Domovoi server is not answering with its identity")
+    status, digest = await get_admin("/v1/satellite-code/bundle.sha256",
+                                     headers=auth_forward_headers(request))
+    if status != 200 or not isinstance(digest, dict) or not digest.get("sha256"):
+        return bridge_response(status if status != 200 else 503, digest)
+    core = (body.core or "").strip() or _advertised_core_http()
+    try:
+        payload = enrolment.build(core, fingerprint, body.room)
+        parsed = enrolment.parse(payload)
+    except enrolment.EnrolmentError as e:
+        raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
+    return {
+        "payload": payload,
+        "room": parsed.room,
+        "room_id": parsed.room_id,
+        "core": parsed.core,
+        "fingerprint": parsed.fp,
+        "bundle_sha256": digest["sha256"],
+        "bundle_size": digest.get("size"),
+        "command": install_command(parsed.core, digest["sha256"], payload),
+        "command_windows": install_command_windows(parsed.core, digest["sha256"], payload),
+        "windows_runtime": await _windows_runtime(request),
+        "conflict": await _room_in_use(parsed.room_id),
+    }
+
+
+@router.get(
+    "/windows-runtime",
+    # What this server holds for Windows laptops; an admin's business, like
+    # the card that shows it.
+    dependencies=[Depends(require_admin_read)],
+)
+async def windows_runtime_status(request: Request):
+    """Whether the core holds every file of the Windows satellite's runtime
+    (``ready``, ``missing``, ``bytes_total``, ``bytes_cached``, ``fetch``)."""
+    status, doc = await get_admin("/v1/admin/satellite-windows", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post(
+    "/windows-runtime/fetch",
+    # The server downloads ~95 MB from python.org and PyPI on an admin's
+    # word, every file held to its pin; refused when internet access is off.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def windows_runtime_fetch(request: Request):
+    """Start fetching the Windows satellite's runtime onto the core."""
+    status, doc = await post_admin("/v1/admin/satellite-windows/fetch", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
 
 
 @router.post(
@@ -1353,6 +1530,8 @@ async def _satellite_for(
             upgrade = SatelliteUpgrade(**upgrade_dict)
         except (TypeError, ValueError):
             upgrade = None
+    ignored = (snapshot.get("satellite_settings_ignored") or {}).get(room_id) if online else None
+    ignored = [str(x)[:160] for x in ignored][:8] if isinstance(ignored, list) and ignored else None
     display_dict = (snapshot.get("satellite_display") or {}).get(room_id)
     display = (
         SatelliteDisplay(
@@ -1398,6 +1577,7 @@ async def _satellite_for(
         board=board,
         supports=[str(x) for x in supports] if supports is not None else None,
         upgrade=upgrade,
+        settings_ignored=ignored,
     )
 
 

@@ -337,6 +337,26 @@ class LEDController:
         self._stop = threading.Event()
         self._driver: _Driver = _NoOpDriver()
         self._thread: threading.Thread | None = None
+        self._listeners: list = []
+
+    @property
+    def state(self) -> str:
+        """The state last set (kept with or without LEDs to show it)."""
+        with self._lock:
+            return self._state
+
+    def add_listener(self, callback) -> None:
+        """Call ``callback()`` after every state change, on the caller's
+        thread, outside the lock. A spare laptop has no ring: its tray's
+        mic-live indicator follows the same states through this."""
+        self._listeners.append(callback)
+
+    def _fire(self) -> None:
+        for callback in list(getattr(self, "_listeners", ())):
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 — a listener must not break the caller
+                log.debug("[leds] listener failed", exc_info=True)
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -366,6 +386,7 @@ class LEDController:
             log.debug("[leds] %s -> %s", self._state, state)
             self._state = state
             self._changed.set()
+        self._fire()
 
     def resync(self) -> None:
         """Re-render the current state even though it has not changed.
@@ -397,6 +418,7 @@ class LEDController:
             log.debug("[leds] %s -> %s (unless=%s)", self._state, new, unless)
             self._state = new
             self._changed.set()
+        self._fire()
 
     def set_state_if(self, expected: str, new: str) -> None:
         """Transition to ``new`` only while the current state is ``expected``.
@@ -411,6 +433,7 @@ class LEDController:
             log.debug("[leds] %s -> %s (if=%s)", self._state, new, expected)
             self._state = new
             self._changed.set()
+        self._fire()
 
     def _current_state(self) -> str:
         with self._lock:

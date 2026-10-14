@@ -192,6 +192,16 @@ def _flags(v: Any) -> list[str]:
     return [s[:40] for s in v if isinstance(s, str)][:16]
 
 
+def clean_notes(v: Any) -> list[str] | None:
+    """A satellite's short notes (``settings_ignored``): up to 8 printable
+    strings of up to 160 characters; anything else is dropped. None when
+    nothing is left."""
+    if not isinstance(v, list):
+        return None
+    out = [s[:160] for s in v if isinstance(s, str) and s and s.isprintable()][:8]
+    return out or None
+
+
 #: Every key a `health` sample may carry, with its coercer. Unknown keys
 #: are dropped: the shape is the core's to define, not the sender's.
 SAMPLE_FIELDS: dict[str, Any] = {
@@ -209,8 +219,12 @@ SAMPLE_FIELDS: dict[str, Any] = {
     "ws": lambda v: _str(v, 8), "ws_down_for_s": _num, "reconnects": _int,
     "wifi": _wifi, "log_ring": _counts, "log_spool": _counts,
     # Spare-device satellites (S0, 2026-10-12): a laptop's or a phone's
-    # battery, and "the mic is on but the OS hands it silence" (Android's
-    # mic privacy toggle records zeros). No Pi sends either.
+    # battery — the one shape both send, `{percent, charging, on_power}`
+    # (S1 2026-10-13: a laptop from /sys/class/power_supply, a phone in room
+    # mode from Android's battery broadcast) — and "the mic is on but the OS
+    # hands it silence" (Android's mic privacy toggle records zeros). No Pi
+    # sends either; a flat `battery_percent` / `battery_charging` is not a
+    # second shape and is dropped like any unknown key.
     "battery": _battery, "mic_blocked": _bool,
     # 2026-10-12: why the satellite needs a reboot (upgraded, and the
     # network settings root applies at boot are not in place yet); absent
@@ -221,6 +235,10 @@ SAMPLE_FIELDS: dict[str, Any] = {
     # Only kept when sent: an older satellite's record reads as before.
     "net_step": _net_step,
     "hostname": _hostname,
+    # 2026-10-13: stored settings a Pi could not use and replaced with its
+    # profile's default at load (an ALSA device name that is not a plain
+    # one, say), e.g. "music device setting ignored: not a plain ALSA name".
+    "settings_ignored": clean_notes,
 }
 
 

@@ -41,6 +41,8 @@ def test_the_satellite_modules_point_inside_the_tmp_home(satellite_paths_in_tmp)
         server_identity.PENDING_SERVER_SIDECAR,
         server_identity.ROOT_PIN,
     ):
+        if path is None:        # Windows: no root-owned pin at all
+            continue
         assert path.is_relative_to(home), f"{path} escaped the tmp home"
 
 

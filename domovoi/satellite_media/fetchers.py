@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -127,14 +128,67 @@ def split_unfetchable(reqs: list[str]) -> tuple[list[str], list[str]]:
     return keep, skip
 
 
-def satellite_requirements(repo_root: Path) -> list[str]:
+def _target_environment(platforms: tuple[str, ...], python_version: str) -> dict[str, str]:
+    """The marker environment of the board the wheels are for: its machine
+    (from the wheel platform tag, ``manylinux_2_28_aarch64`` -> aarch64) and
+    its Python, never the server's own."""
+    machine = ""
+    for tag in platforms:
+        for arch in ("aarch64", "armv7l", "armv6l", "x86_64", "i686"):
+            if tag.endswith("_" + arch) or tag == arch:
+                machine = arch
+                break
+        if machine:
+            break
+    return {"platform_machine": machine, "python_version": python_version,
+            "sys_platform": "linux", "platform_system": "Linux", "os_name": "posix"}
+
+
+def satellite_requirements(repo_root: Path, target: dict[str, str] | None = None) -> list[str]:
+    """The requirement lines of satellite/requirements.txt. With ``target``
+    (a marker environment, :func:`_target_environment`) each line's marker
+    is evaluated for THAT board and stripped: ``pip download --platform``
+    evaluates markers against the host it runs on, so an x86-64 server
+    would otherwise fetch the x86 branch of a requirement for a Pi."""
     reqs = repo_root / "satellite" / "requirements.txt"
     out: list[str] = []
     for line in reqs.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if line and not line.startswith("#"):
-            out.append(line)
+        if not line or line.startswith("#"):
+            continue
+        if target is not None and ";" in line:
+            spec, marker = (part.strip() for part in line.split(";", 1))
+            if not marker_holds(marker, target):
+                continue
+            line = spec
+        out.append(line)
     return out
+
+
+_MARKER_TERM = re.compile(r'^\s*([a-z_]+)\s*(==|!=)\s*"([^"]*)"\s*$')
+
+
+def marker_holds(marker: str, env: dict[str, str]) -> bool:
+    """A requirement marker, evaluated for ``env``: the subset
+    satellite/requirements.txt uses (``name == "v"`` / ``name != "v"``
+    terms joined by ``and``/``or``, ``and`` binding tighter; no brackets),
+    with the standard library only. Anything else raises ValueError rather
+    than being guessed at; a test reads every marker in the file through
+    this. (packaging's Marker did this before, but packaging is not a
+    declared dependency of the core.)"""
+    if "(" in marker or ")" in marker or "'" in marker:
+        raise ValueError(f"unsupported requirement marker: {marker!r}")
+    alternatives = []
+    for alternative in re.split(r"\s+or\s+", marker.strip()):
+        terms = []
+        for term in re.split(r"\s+and\s+", alternative):
+            m = _MARKER_TERM.match(term)
+            if not m or m.group(1) not in env:
+                raise ValueError(f"unsupported requirement marker: {marker!r}")
+            name, op, value = m.groups()
+            terms.append((env[name] == value) == (op == "=="))
+        alternatives.append(all(terms))
+    return any(alternatives)
 
 
 def fetch_wheels(
@@ -157,7 +211,9 @@ def fetch_wheels(
     ]
     for p in platforms:
         base_cmd += ["--platform", p]
-    reqs, skipped = split_unfetchable(satellite_requirements(repo_root))
+    reqs, skipped = split_unfetchable(
+        satellite_requirements(repo_root, _target_environment(platforms, python_version))
+    )
     # openwakeword installs --no-deps on the Pi (PROVISIONING §6); pip +
     # setuptools + wheel ride along so stage-1 can bootstrap the venv with
     # --no-index (no ensurepip needed).

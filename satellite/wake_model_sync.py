@@ -35,7 +35,9 @@ from pathlib import Path
 
 import requests
 
-from satellite.sound_sync import _safe_rel, _sha256, fetch_manifest, http_base_from_ws  # noqa: F401
+from satellite.sound_sync import (  # noqa: F401
+    WAKE_MODEL_TYPES, _safe_rel, _sha256, fetch_manifest, http_base_from_ws, safe_dest,
+)
 
 log = logging.getLogger("satellite.wake_model_sync")
 
@@ -73,10 +75,11 @@ def sync(
     cache_dir.mkdir(parents=True, exist_ok=True)
     downloaded = 0
     for rel, sha in manifest.items():
-        if not _safe_rel(rel):
-            log.warning("wake-model sync: skipping unsafe manifest path %r", rel)
+        dest = safe_dest(cache_dir, rel, WAKE_MODEL_TYPES)
+        if dest is None:
+            log.warning("wake-model sync: skipping unsafe manifest path %r (not a .onnx or .onnx.json "
+                        "inside the cache)", rel)
             continue
-        dest = cache_dir / rel
         if dest.is_file() and _sha256(dest) == sha:
             continue
         data = requests.get(f"{base}/v1/wake-models/{rel}", timeout=timeout)

@@ -4463,6 +4463,86 @@
         }
       }
     },
+    "/api/satellites/enrolment": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Spare Device Enrolment",
+        "description": "The enrolment payload for a spare device, the install command for a\nLinux laptop, and the parts the page shows beside them (the room id the\ndevice will connect as, the fingerprint to compare with Settings \u2192\nAbout, a warning when the room is taken). 422 for a room name or an\naddress the payload can't carry \u2014 one off the home network included,\nso a loopback address found on a box with no LAN is said, not handed\nout (``{reason, message}``); 503\nwhen the Domovoi server is not answering or has no identity; 423 while\nthe container guard holds the satellite channel.",
+        "operationId": "spare_device_enrolment_api_satellites_enrolment_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpareDeviceEnrolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-runtime": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Runtime Status",
+        "description": "Whether the core holds every file of the Windows satellite's runtime\n(``ready``, ``missing``, ``bytes_total``, ``bytes_cached``, ``fetch``).",
+        "operationId": "windows_runtime_status_api_satellites_windows_runtime_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-runtime/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Runtime Fetch",
+        "description": "Start fetching the Windows satellite's runtime onto the core.",
+        "operationId": "windows_runtime_fetch_api_satellites_windows_runtime_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/approvals/{room_id}/approve": {
       "post": {
         "tags": [
@@ -18737,6 +18817,34 @@
           "rows"
         ],
         "title": "SheetWriteRequest"
+      },
+      "SpareDeviceEnrolRequest": {
+        "properties": {
+          "room": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Room"
+          },
+          "core": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room"
+        ],
+        "title": "SpareDeviceEnrolRequest",
+        "description": "Settings \u2192 Satellites \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
       "SubscribeRequest": {
         "properties": {

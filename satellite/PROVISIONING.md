@@ -1,5 +1,13 @@
 # Pi Satellite Provisioning Checklist
 
+> **A spare Linux laptop or mini PC, not a Pi?** Don't use this checklist:
+> its sudoers lines and root helpers (`domovoi-apply-payload`,
+> `domovoi-sync-time`, `domovoi-reboot`, `wpa_cli`) are for a dedicated Pi
+> and would hand the server root on someone's computer. Use the dashboard's
+> **Settings → Satellites → add a spare device**, which gives a one-line
+> install command for `satellite/scripts/install-pc.sh` (the `generic_pc`
+> profile, no root helpers): [docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md).
+
 > **Shipped units use the Wi-Fi setup portal.** A card prepared with
 > `setup_transport = "portal"` never touches this checklist and never
 > touches the server: power the device on, join its `Domovoi-Setup-<id>`
