@@ -49,6 +49,11 @@ EXIT_RESTART = 75
 #: (EX_CONFIG); its units carry ``RestartPreventExitStatus=78`` so it stays
 #: down, saying why, instead of looping.
 EXIT_UNPINNED = 78
+#: The same code for a Windows satellite whose config.toml holds a value it
+#: won't run on (a device name that is not "default", a number or a plain
+#: name, say): its supervisor leaves it stopped and the tray says why,
+#: rather than restarting it every minute into the same refusal.
+EXIT_CONFIG = 78
 
 #: ``[audio] volume_backend`` values ("windows": Core Audio, windows_pc's).
 VOLUME_BACKENDS = ("amixer", "wpctl", "pactl", "auto", "windows", "none")

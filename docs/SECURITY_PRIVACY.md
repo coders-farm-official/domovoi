@@ -1941,11 +1941,19 @@ household token**: it reaches no dashboard route.
 * It never sweeps the home network for a server that moved (security
   software reads that as a port scan): its address, then your server's
   announced names, each held to the pin.
+* `set_config` from the core takes only the dashboard's own settings, by
+  exact key (`satellite/remote_config.py`, the same rule as Linux): never
+  the pin, the server address, `pc.*` (the permission, `server_search`) or
+  `device.*`. "Ask me" shows every change, each in full, before Allow.
 * Device names from config (`[audio] input_device` / `output_device`,
-  `[music] alsa_device`) are refused unless they are "default", a number,
-  or a plain name — a dashboard push of anything else is refused before it
-  is written, and nothing else ever reaches PortAudio or the player's
-  command line.
+  `[music] alsa_device`) must be "default", a number, or a plain name
+  (letters, digits, spaces and `()._,:+[]-`): a dashboard push of anything
+  else is refused at the frame (`remote_config.screen(..., windows=True)`)
+  and again before it is written; a bad name already in the file stops the
+  satellite at start (exit 78: its supervisor leaves it stopped and the
+  tray shows the reason), as on a Linux laptop — only a Pi falls back to a
+  default; and the player checks the name again before it is used. Nothing
+  else ever reaches PortAudio or the player's command line.
 
 **The control channel** is the named pipe
 `\\.\pipe\domovoi-satellite-<account SID>` with the Linux socket's verbs:
@@ -1976,7 +1984,13 @@ satellite's code, takes no path from any file the satellite can write (the
 folder is the one it sits in; the registry value names are fixed, and what
 they hold is only compared with that folder, never followed), restores
 only power values that parse as a plan id and numbers, and deletes folders
-with `rmdir /s`, which removes a link inside rather than following it.
+with `rmdir /s`, which removes a link inside rather than following it. It
+removes only what an install puts there, by name; `-Purge` removes only the
+satellite's own files in `.domovoi` (the list Linux's purge uses), and its
+sound and wake-word folders only when no Domovoi server's files are there.
+The installer refuses a folder that isn't empty or an earlier install, and
+an account (or install folder) holding a Domovoi server's files — the
+engine refuses to start beside them too.
 
 **Never on the server PC.** The installer refuses a PC with the Domovoi
 server's Windows service, its install record, its data folder, a server

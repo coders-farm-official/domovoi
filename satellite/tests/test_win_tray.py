@@ -133,6 +133,50 @@ def test_not_running_is_grey_with_the_supervisor_s_reason_and_start_offered(icon
 
 
 @windows_only
+def test_a_refusal_to_start_is_a_toast_once_with_the_engine_s_words(icon, tmp_path):
+    import json
+
+    (tmp_path / "logs").mkdir()
+    doc = {"state": "stopped", "at": 1000.0, "exit_code": 78, "refused": True,
+           "reason": "not starting: [music] alsa_device 'x & y' is not a Windows audio device: use "
+                     "\"default\", a device number, or a name from --list-devices (in C:\\S\\config.toml)"}
+    path = tmp_path / "logs" / "supervisor-status.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    for _ in range(3):                          # the watcher delivers None every few seconds
+        icon.deliver(None)
+        icon.apply_status()
+    refused = [b for b in icon.balloons if b.key == "refused"]
+    assert len(refused) == 1, "once per refusal, not every poll"
+    note = refused[0]
+    assert note.summary == "Domovoi satellite didn't start" and len(note.summary) <= win_tray.INFO_TITLE_MAX
+    assert "alsa_device 'x & y' is not a Windows audio device" in note.body
+    assert note.body.endswith("Start satellite in this menu.") and len(note.body) <= win_tray.INFO_MAX
+    assert "Not running: not starting" in icon.tip()
+    # Clicking it opens the menu, where Start satellite is.
+    shown = []
+    icon.show_menu = lambda: shown.append(True)
+    icon._balloon_clicked()
+    assert shown and "Start satellite" in _labels(icon)
+    # A new refusal (a later start) is said again; a plain stop is not.
+    path.write_text(json.dumps({**doc, "at": 2000.0}), encoding="utf-8")
+    icon.deliver(None)
+    icon.apply_status()
+    assert len([b for b in icon.balloons if b.key == "refused"]) == 2
+    path.write_text(json.dumps({"state": "stopped", "at": 3000.0, "exit_code": 0, "reason": "stopped"}),
+                    encoding="utf-8")
+    icon.deliver(None)
+    icon.apply_status()
+    assert len([b for b in icon.balloons if b.key == "refused"]) == 2
+
+
+@windows_only
+def test_a_long_reason_is_cut_with_an_ellipsis_in_the_toast_only():
+    note = win_tray.refusal_note("x" * 400)
+    assert len(note.body) <= win_tray.INFO_MAX and "\u2026 Fix that" in note.body
+    assert win_tray.refusal_note("short reason").body.startswith("short reason. Fix that")
+
+
+@windows_only
 def test_every_state_has_an_icon(icon):
     for state in tray.ICON_STATES:
         assert icon.icon(state)
@@ -140,13 +184,17 @@ def test_every_state_has_an_icon(icon):
 
 @windows_only
 def test_allow_shows_every_key_in_full_and_asks_first(icon):
-    summary = "settings from the dashboard: " + ", ".join(FULL_KEYS)
-    icon.deliver(status(pending=[{"id": "abc", "kind": "config", "summary": summary, "keys": FULL_KEYS}]))
+    summary = f"{len(FULL_KEYS)} setting(s) from the dashboard"
+    details = [f"{k} = {i}" for i, k in enumerate(FULL_KEYS)]
+    icon.deliver(status(pending=[{"id": "abc", "kind": "config", "summary": summary, "details": details}]))
     icon.apply_status()
     title, text = icon.confirm_text("approve:abc")
-    for key in FULL_KEYS:
-        assert key in text
+    for line in details:
+        assert line in text
     assert summary in text
+    toast = icon.balloons[-1]
+    assert toast.key == "pending:abc" and "Allow" in toast.body and FULL_KEYS[0] not in toast.body, \
+        "the toast never shows a cut-down list"
     icon._do("approve:abc")
     assert icon.asked and icon.actions.client.calls == [], "declined at the question: nothing approved"
     icon.ask = lambda title, text: True

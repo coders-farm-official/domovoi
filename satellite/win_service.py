@@ -20,8 +20,10 @@ What it does, like the Linux unit (satellite/scripts/domovoi-satellite-user.serv
   old copies) — the engine never writes the approval code there;
 * starts the engine again when it asks (exit 75, after a settings change or
   an update), and after a crash with a growing pause (5 s up to a minute);
-  leaves it stopped when it exits 78 (no pinned server identity) or 0 (a
-  stop someone asked for);
+  leaves it stopped when it exits 78 (it refused to start: no pinned server
+  identity, or a config.toml value it won't run on — its own
+  ``domovoi-satellite: …`` line is kept as the reason the tray shows) or 0
+  (a stop someone asked for);
 * stops, engine first, when the tray's "Stop satellite…" or the uninstaller
   sets the user's stop event (satellite/win32.py ``STOP_EVENT``); the
   engine watches the same event and shuts down cleanly, and is ended after
@@ -47,6 +49,12 @@ from satellite import win32
 
 EXIT_RESTART = 75
 EXIT_UNPINNED = 78
+#: 78 is also the engine's refusal of its config (engine_platform.EXIT_CONFIG).
+EXIT_CONFIG = EXIT_UNPINNED
+#: The prefix of the line the engine prints when it refuses to start; the
+#: last one is the reason in supervisor-status.json (at most REASON_MAX).
+REFUSAL_PREFIX = b"domovoi-satellite: "
+REASON_MAX = 400
 #: Pauses before restarting an engine that crashed, in order; the last
 #: repeats. Reset once an engine has run for :data:`HEALTHY_AFTER_SEC`.
 CRASH_BACKOFF_SEC = (5.0, 10.0, 30.0, 60.0)
@@ -169,6 +177,9 @@ class Supervisor:
         self.proc: Any = None
         self.starts = 0
         self.test_hooks = test_hooks
+        #: The engine's last "domovoi-satellite: …" line this run (why it
+        #: refused to start, when it did).
+        self.said: str | None = None
 
     def _spawn(self) -> Any:
         return subprocess.Popen(
@@ -185,6 +196,8 @@ class Supervisor:
                 return
             for line in iter(out.readline, b""):
                 self.engine_log.write(line if line.endswith(b"\n") else line + b"\r\n")
+                if line.startswith(REFUSAL_PREFIX):
+                    self.said = refusal_text(line)
         t = threading.Thread(target=copy, name="engine-log", daemon=True)
         t.start()
         return t
@@ -204,6 +217,7 @@ class Supervisor:
         is given :data:`STOP_GRACE_SEC` to honour). ``(exit code, seconds
         it ran)``."""
         self.starts += 1
+        self.said = None
         began = self.clock()
         proc = self.spawn()
         self.proc = proc
@@ -231,9 +245,12 @@ class Supervisor:
             what = decide(code, stop_asked=self.stop.is_set())
             self.log.line(f"engine exited {code} after {ran:.0f} s: {what}")
             if what == "stop":
-                reason = ("no pinned server identity: enrol it again from the dashboard"
-                          if code == EXIT_UNPINNED else "stopped")
-                self.write_status("stopped", exit_code=code, reason=reason)
+                if code == EXIT_CONFIG and not self.stop.is_set():
+                    # It refused to start: its own words, for the tray.
+                    reason = self.said or "no pinned server identity: enrol it again from the dashboard"
+                    self.write_status("stopped", exit_code=code, reason=reason, refused=True)
+                else:
+                    self.write_status("stopped", exit_code=code, reason="stopped")
                 return 0 if code in (0, EXIT_UNPINNED) else code
             if what == "restart":
                 crashes = 0
@@ -246,6 +263,14 @@ class Supervisor:
                 break
         self.write_status("stopped", reason="stopped")
         return 0
+
+
+def refusal_text(line: bytes) -> str:
+    """The engine's refusal line as a reason: printable, at most
+    :data:`REASON_MAX` characters, without the prefix."""
+    text = line[len(REFUSAL_PREFIX):].decode("utf-8", errors="replace").strip()
+    text = "".join(c if c.isprintable() else " " for c in text)
+    return text[:REASON_MAX]
 
 
 def start_tray(root: Path) -> None:

@@ -188,18 +188,50 @@ def install_root() -> Path:
     return Path(sys.executable).resolve().parent.parent
 
 
-def supervisor_reason(root: Path) -> str | None:
-    """Why the supervisor stopped the satellite, when it says."""
+def _supervisor_status(root: Path) -> dict[str, Any] | None:
     import json
 
     try:
         doc = json.loads((root / "logs" / "supervisor-status.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if not isinstance(doc, dict) or doc.get("state") == "running":
+    return doc if isinstance(doc, dict) else None
+
+
+def supervisor_reason(root: Path) -> str | None:
+    """Why the supervisor stopped the satellite, when it says."""
+    doc = _supervisor_status(root)
+    if doc is None or doc.get("state") == "running":
         return None
     reason = doc.get("reason")
     return str(reason)[:120] if reason else None
+
+
+def supervisor_refusal(root: Path) -> tuple[str, float] | None:
+    """``(why, when)`` the engine refused to start — a config.toml value it
+    won't run on, or no pinned server — in its own words, as the supervisor
+    kept them (satellite/win_service.py). None otherwise."""
+    doc = _supervisor_status(root)
+    if doc is None or doc.get("state") != "stopped" or doc.get("refused") is not True:
+        return None
+    reason = doc.get("reason")
+    if not isinstance(reason, str) or not reason:
+        return None
+    at = doc.get("at")
+    return reason, float(at) if isinstance(at, (int, float)) else 0.0
+
+
+REFUSED_TITLE = "Domovoi satellite didn't start"
+REFUSED_AFTER = " Fix that, then choose Start satellite in this menu."
+
+
+def refusal_note(reason: str) -> tray.Note:
+    """The toast for a refusal: the engine's reason, then what to do."""
+    room = INFO_MAX - len(REFUSED_AFTER)
+    why = reason if len(reason) <= room else reason[:room - 1].rstrip() + "…"
+    if not why.endswith((".", "…")):
+        why += "."
+    return tray.Note("refused", REFUSED_TITLE, why + REFUSED_AFTER, persistent=True)
 
 
 def _open(target: str) -> bool:
@@ -229,6 +261,7 @@ class WinTray:
         self.planner = tray.NotePlanner()
         self.state = "offline"
         self.last_note: tray.Note | None = None
+        self.refusal_shown: tuple[str, float] | None = None
         self._icons: dict[str, int] = {}
         self._incoming: tuple[dict[str, Any] | None, str | None] | None = None
         self._notes: list[tray.Note] = []
@@ -368,8 +401,25 @@ class WinTray:
         self.state = tray.icon_state(self.status)
         self._update_icon()
         for note in self.planner.plan(self.status, self.code):
+            if note.key.startswith("pending:"):
+                # A toast has room for a few words, not a list of changes:
+                # it says what is waiting and where the whole list is, so
+                # nothing is ever shown cut short.
+                note = tray.Note(note.key, note.summary,
+                                 "Open the tray menu and choose Allow to read every change "
+                                 "before it is applied, or Not now.",
+                                 actions=note.actions, persistent=note.persistent)
             self.last_note = note
             self.show_balloon(note)
+        if self.status is None:
+            # The engine is down: if it refused to start, say why once (per
+            # refusal), not only in the tooltip.
+            refusal = supervisor_refusal(self.root)
+            if refusal is not None and refusal != self.refusal_shown:
+                self.refusal_shown = refusal
+                note = refusal_note(refusal[0])
+                self.last_note = note
+                self.show_balloon(note)
 
     # ── the menu ───────────────────────────────────────────────────────
 
@@ -424,9 +474,11 @@ class WinTray:
             return None
         what = tray.PENDING_LABELS.get(pending.get("kind"), "this change")
         lines = [f"The Domovoi server asks to apply {what}:", "", str(pending.get("summary") or "")]
-        keys = pending.get("keys")
-        if isinstance(keys, list) and keys:
-            lines += ["", "Every setting it changes:"] + [f"  • {k}" for k in keys]
+        details = pending.get("details")
+        if isinstance(details, list) and details:
+            # Every change, each in full: the engine offers nothing it can't
+            # show whole (satellite/control.py PendingActions).
+            lines += ["", "Every change it makes:"] + [f"  • {d}" for d in details]
         lines += ["", "Allow it now? (It may restart the satellite.)"]
         return f"{APP_NAME} · {tray.room_name(self.status)}", "\n".join(lines)
 
@@ -468,7 +520,7 @@ class WinTray:
         note = self.last_note
         if note is None:
             return
-        if note.key.startswith("pending:"):
+        if note.key.startswith("pending:") or note.key == "refused":
             self.show_menu()
         elif any(a == "dashboard" for a, _ in note.actions):
             self.run_action("dashboard")

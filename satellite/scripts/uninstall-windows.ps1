@@ -20,8 +20,9 @@ value it finds there is only compared, never followed.
      and the Start-menu shortcut - each only if it points into this folder.
   3. Puts back the plugged-in power settings the installer changed, from
      the values it recorded (numbers and a plan id, checked as such).
-  4. Deletes the folder, keeping .domovoi\config.toml unless -Purge.
-     Folders are removed with rmdir, which never follows a link out.
+  4. Deletes what an install of this puts in the folder, by name, keeping
+     its settings (.domovoi) unless -Purge; -Purge removes only the
+     satellite's own files there. A link is removed, never followed.
 
 Then retire the room in the dashboard (Settings > Satellites > the room >
 Retire room) once it shows offline.
@@ -148,30 +149,65 @@ if (Test-Path -LiteralPath $stateFile) {
     }
 }
 
-# 4. The files. rmdir /s removes a link inside, never what it points to.
+# 4. The files: only what an install of this puts there, by name. rmdir /s
+# removes a link inside a folder, never what it points to.
 function Remove-Tree([string]$Path) {
-    if (Test-Path -LiteralPath $Path -PathType Container) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        # A link: the link goes, what it points to stays.
+        if ($item.PSIsContainer) { [IO.Directory]::Delete($item.FullName) } else { $item.Delete() }
+    } elseif ($item.PSIsContainer) {
         & "$env:SystemRoot\System32\cmd.exe" /d /c rmdir /s /q "$Path" 2>$null
-    } elseif (Test-Path -LiteralPath $Path) {
+    } else {
         Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     }
 }
+foreach ($name in 'python', 'app', 'logs', 'cache', 'uninstall.ps1', 'install-windows.json') {
+    Remove-Tree (Join-Path $Root $name)
+}
+$cfg = Join-Path $Root '.domovoi'
 if ($Purge) {
-    Remove-Tree $Root
-    Say '  the satellite''s settings and records are gone'
-} else {
-    foreach ($item in @(Get-ChildItem -LiteralPath $Root -Force)) {
-        if ($item.Name -eq '.domovoi') { continue }
-        Remove-Tree $item.FullName
-    }
-    $cfg = Join-Path $Root '.domovoi'
-    if (Test-Path -LiteralPath $cfg) {
-        foreach ($item in @(Get-ChildItem -LiteralPath $cfg -Force)) {
-            if ($item.Name -like 'config.toml*' -and -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+    # The satellite's own files (satellite\pc_install.py SATELLITE_FILES,
+    # held equal by a test) and nothing else; its sound and wake-word
+    # folders only when no Domovoi server keeps files here.
+    $files = @('config.toml', 'config.toml.bak', 'approved', 'approval_code', 'pairing_token',
+               'pending-server.json', 'server-fingerprint.json', 'server.url', 'server-names.json',
+               'synced_sha', 'synced_manifest.json', 'upgrade_pending.json', 'satellite_backup.tar',
+               'log-spool.txt', 'last-health.json', 'self-restarts.json', 'muted', 'voice', 'wake',
+               'wake_threshold', 'manifest-serials.json', 'net-settings.logged',
+               'plugin_payload_state.json', 'plugin_payload_manifest.json', 'pending_payload.json',
+               'provisioning_state.json', 'image_sat_type', 'image_device_profile', 'ap.json',
+               'setup_gadget.img', 'control.sock', 'install-pc.json', 'plugin_payloads')
+    foreach ($name in $files) { Remove-Tree (Join-Path $cfg $name) }
+    foreach ($pattern in 'config.toml.bak-*', 'previous-enrolment-*') {
+        foreach ($item in @(Get-ChildItem -LiteralPath $cfg -Filter $pattern -Force -ErrorAction SilentlyContinue)) {
             Remove-Tree $item.FullName
         }
     }
-    Say "  kept $cfg\config.toml (-Purge removes it)"
+    $server = @('server-identity.json', 'device-token.txt', 'setup-code.txt' |
+                Where-Object { Test-Path -LiteralPath (Join-Path $cfg $_) })
+    if ($server.Count -eq 0) {
+        Remove-Tree (Join-Path $cfg 'sounds')
+        Remove-Tree (Join-Path $cfg 'wake_models')
+    } else {
+        Say "  left $cfg\sounds and wake_models alone: a Domovoi server's files are there too"
+    }
+    # Empty folders go; anything left in them is not this install's.
+    if ((Test-Path -LiteralPath $cfg) -and -not @(Get-ChildItem -LiteralPath $cfg -Force)) {
+        [IO.Directory]::Delete($cfg)
+    }
+    if (-not (Test-Path -LiteralPath $cfg)) {
+        Remove-Tree (Join-Path $Root '.domovoi-satellite-root')
+    }
+    if (-not @(Get-ChildItem -LiteralPath $Root -Force)) {
+        [IO.Directory]::Delete($Root)
+        Say '  the satellite''s settings and records are gone'
+    } else {
+        Say "  left in ${Root}: what this install did not put there"
+    }
+} else {
+    Say "  kept its settings in $cfg (-Purge removes them)"
 }
 
 Say 'Done. In the dashboard, retire the room once it shows offline'

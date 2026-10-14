@@ -238,7 +238,9 @@ def test_windows_pc_runs_on_windows_and_nothing_else_does(tmp_path, capsys):
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(f'[device]\nprofile = "{other}"\n[satellite]\nroom_id = "den"\n'
                         f'domovoi_url = "ws://127.0.0.1:6370"\nserver_fingerprint = "{FP}"\n', encoding="utf-8")
-    assert client.main(["--config", str(cfg_path)]) == 2
+    # Windows: exit 78, which its supervisor leaves stopped and the tray
+    # explains; elsewhere the unit's 2, as before.
+    assert client.main(["--config", str(cfg_path)]) == (ep.EXIT_CONFIG if WINDOWS else 2)
     assert "does not run on" in capsys.readouterr().err
 
 
@@ -554,3 +556,78 @@ def test_a_refused_stream_says_so_in_the_words_the_retry_logic_reads(capsys, mon
     err = capsys.readouterr().err
     assert client._music_exit_is_retryable(1, err), err
     assert win_player.main(["stream", "file:///C:/Windows/win.ini"]) == 1
+
+
+# ─── after wf/sat-pc's review round (eb866ce): refuse at load, remote_config ──
+
+def _bad_device_config(tmp_path: Path) -> Path:
+    path = tmp_path / "config.toml"
+    path.write_text('[device]\nprofile = "windows_pc"\n[satellite]\nroom_id = "den"\n'
+                    f'server_fingerprint = "{FP}"\n[music]\nalsa_device = "file:\\"|calc\\""\n',
+                    encoding="utf-8")
+    return path
+
+
+def test_a_windows_satellite_refuses_a_bad_stored_device_name_like_a_laptop(tmp_path):
+    """eb866ce: a Pi starts on its board's default and says so; a spare
+    computer, Windows included, refuses: a person is at the keyboard."""
+    with pytest.raises(ValueError, match=r"\[music\] alsa_device .* is not a Windows audio device"):
+        client.Config.load(_bad_device_config(tmp_path))
+    assert win_cfg().settings_ignored == ()
+
+
+@pytest.mark.skipif(not WINDOWS, reason="the Windows engine's refusal")
+def test_the_refusal_is_one_clear_line_and_exit_78(tmp_path, capsys):
+    path = _bad_device_config(tmp_path)
+    assert client.main(["--config", str(path)]) == ep.EXIT_CONFIG == 78
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and err[0].startswith("domovoi-satellite: not starting: [music] alsa_device")
+    assert "--list-devices" in err[0] and str(path) in err[0]
+    # A file that isn't TOML at all is refused the same way.
+    path.write_text("[satellite\n", encoding="utf-8")
+    assert client.main(["--config", str(path)]) == 78
+    assert capsys.readouterr().err.startswith("domovoi-satellite: not starting: ")
+
+
+@pytest.mark.parametrize("key", ["pc.server_search", "pc.permissions", "device.profile",
+                                 "satellite.server_fingerprint", "satellite.domovoi_url",
+                                 "satellite.server_fingerprint ", "wifi.enabled", "leds.enabled"])
+def test_the_core_can_not_set_what_a_windows_pc_keeps_to_itself(key):
+    from satellite import remote_config
+
+    kept, refused = remote_config.screen({key: "x"}, pc=True, windows=True)
+    assert kept == {} and refused
+
+
+@pytest.mark.parametrize("key", ["audio.input_device", "audio.output_device", "music.alsa_device"])
+def test_a_device_name_the_dashboard_sends_is_held_to_the_windows_rule(key):
+    from satellite import remote_config
+
+    good = "Speakers (Realtek(R) Audio)"
+    assert remote_config.screen({key: good}, pc=True, windows=True)[0] == {key: good}
+    assert remote_config.screen({key: 3}, pc=True, windows=True)[0] == {key: 3}
+    for bad in ('file:"|calc"', "x & calc.exe", "-x", "a;b", "x" * 81):
+        assert remote_config.screen({key: bad}, pc=True, windows=True)[0] == {}, bad
+    # The ALSA rule still holds everywhere else.
+    assert remote_config.screen({"music.alsa_device": good}, pc=True)[0] == {}
+
+
+def test_set_config_writes_nothing_a_windows_satellite_would_refuse(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    original = ('[device]\nprofile = "windows_pc"\n[satellite]\nroom_id = "den"\n'
+                f'server_fingerprint = "{FP}"\n')
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(client, "CONFIG_PATH", path)
+    sat = client.Satellite(win_cfg())
+    restarts = []
+    monkeypatch.setattr(sat, "_restart_service", lambda: restarts.append(1) or True)
+    # Each refused at the frame (the Windows rule)...
+    sat._apply_config_changes({"music.alsa_device": "x & calc.exe", "audio.output_device": "-x"})
+    # ...and one the frame lets through but the loader would refuse.
+    sat._apply_config_changes({"wake.ack_mode": "bogus"})
+    assert path.read_text(encoding="utf-8") == original and not restarts
+    assert not (tmp_path / "config.toml.bak").exists()
+    # A good one is written (the check is not refusing everything).
+    sat._apply_config_changes({"music.alsa_device": "Speakers (Realtek(R) Audio)"})
+    assert 'alsa_device = "Speakers (Realtek(R) Audio)"' in path.read_text(encoding="utf-8")
+    assert restarts == [1]

@@ -38,6 +38,14 @@ are unchanged.
   `sweep`, `names`, `address`).
 * The satellite code channel carries `.ps1` files now (the installer); a
   Pi downloads none of them.
+* A Windows satellite **refuses to start** on a `config.toml` value it
+  won't use (a device name that is not "default", a number or a plain
+  name; an unknown setting), like a Linux laptop: the tray shows *Domovoi
+  satellite didn't start* and the line to fix, and it stays stopped until
+  **Start satellite**. It sends no `settings_ignored` (that is a Pi's).
+* Fixed: retiring a room and then adding a room with the same name in the
+  same server session left the new room's music player without its record,
+  so the next retire left its container behind.
 
 ## 2026-10-13 — A spare Linux laptop or mini PC can be a room
 

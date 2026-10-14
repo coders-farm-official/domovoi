@@ -434,6 +434,21 @@ def ask_choice(prompt: str, interactive: bool) -> bool:
 
 # ─── install ──────────────────────────────────────────────────────────────
 
+def check_install_root(root: Path) -> None:
+    """Refuse a folder that already holds something other than an earlier
+    install of this, and one where a Domovoi server keeps its files."""
+    from satellite import pc_engine
+
+    shared = pc_engine.core_account(root / ".domovoi")
+    if shared:
+        raise InstallError(shared, 2)
+    if root.is_symlink():
+        raise InstallError(f"{root} is a link; not installing through it", 2)
+    if root.is_dir() and any(root.iterdir()) and not (root / ROOT_MARKER).is_file():
+        raise InstallError(f"{root} is not empty and is not an earlier Domovoi Satellite install; "
+                           "choose an empty folder (-InstallRoot)", 2)
+
+
 def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.run,
             opener: Callable[..., Any] | None = None) -> int:
     bundle, staged, root = Path(args.bundle), Path(args.staged_python), Path(args.root)
@@ -479,7 +494,10 @@ def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.ru
     lock = load_lock(bundle)
     say(f"Installing for {os.environ.get('USERNAME', 'this account')} into {root} (updates: {permissions})")
 
-    # 4. Files.
+    # 4. Files — only into an empty folder or an earlier install of this
+    # (the uninstaller removes what it recognises, nothing else), and never
+    # beside a Domovoi server's own files (security review of wf/sat-pc, S2).
+    check_install_root(root)
     root.mkdir(parents=True, exist_ok=True)
     (root / ROOT_MARKER).write_text("Domovoi Satellite install folder\n", encoding="utf-8")
     replace_dir(staged, root / "python")

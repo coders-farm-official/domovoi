@@ -8676,7 +8676,18 @@ def main(argv: list[str] | None = None) -> int:
     if not _ensure_config(args.config):
         return 2
 
-    cfg = Config.load(args.config)
+    try:
+        cfg = Config.load(args.config)
+    except ValueError as e:
+        if sys.platform != "win32":
+            raise
+        # A Windows satellite is a spare computer with a person at it: like
+        # a laptop it refuses a setting it won't use rather than quietly
+        # running on a default (eb866ce), and says what to fix in one line
+        # its supervisor keeps for the tray (exit 78: left stopped, no
+        # restart loop). A TOML syntax error is a ValueError too.
+        print(f"domovoi-satellite: not starting: {e} (in {args.config})", file=sys.stderr)
+        return engine_platform.EXIT_CONFIG
     if args.input_device is not None:
         cfg.input_device = args.input_device
     if args.output_device is not None:
@@ -8695,7 +8706,7 @@ def main(argv: list[str] | None = None) -> int:
         log.error("not starting: [device] profile %r does not run on %s", cfg.device.name, sys.platform)
         print(f"domovoi-satellite: [device] profile = {cfg.device.name!r} does not run on "
               f"{sys.platform}; use {want}", file=sys.stderr)
-        return 2
+        return engine_platform.EXIT_CONFIG if sys.platform == "win32" else 2
     if pc_engine.is_pc(cfg):
         pinned, detail = pc_engine.require_pin(cfg)
         shared = pc_engine.core_account(CONFIG_DIR)

@@ -276,7 +276,7 @@ def test_the_scripts_parse(name):
     assert r.stdout.strip() == "0", r.stdout + r.stderr
 
 
-NOTHING = json.dumps({"service": "", "registry": "", "programdata": "", "identity": "", "probe": ""})
+NOTHING = json.dumps({"service": "", "registry": "", "programdata": "", "profile": "", "probe": ""})
 
 
 @windows_only
@@ -295,14 +295,16 @@ def test_a_pc_that_runs_the_domovoi_server_is_refused_before_anything(tmp_path):
 
 
 @windows_only
-def test_an_identity_in_this_account_counts_as_a_server(tmp_path):
-    ident = tmp_path / "server-identity.json"
-    ident.write_text("{}")
+@pytest.mark.parametrize("marker", ["server-identity.json", "device-token.txt", "setup-code.txt"])
+def test_a_server_s_files_in_this_account_count_as_a_server(tmp_path, marker):
+    profile = tmp_path / ".domovoi"
+    profile.mkdir()
+    (profile / marker).write_text("{}")
     signals = json.loads(NOTHING)
-    signals["identity"] = str(ident)
+    signals["profile"] = str(profile)
     r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), "domovoi-room:1?core=x", "-InstallRoot",
              str(tmp_path / "S")], env={"DOMOVOI_TEST_COREPC_SIGNALS": json.dumps(signals)})
-    assert r.returncode == 5 and "identity" in r.stderr
+    assert r.returncode == 5 and marker in r.stderr
 
 
 @windows_only
@@ -355,8 +357,62 @@ def test_uninstall_removes_only_what_is_its_own(tmp_path, purge):
     if purge:
         assert not root.exists()
     else:
-        assert sorted(p.name for p in root.iterdir()) == [".domovoi"]
-        assert sorted(p.name for p in (root / ".domovoi").iterdir()) == ["config.toml"]
+        assert sorted(p.name for p in root.iterdir()) == [".domovoi", ".domovoi-satellite-root"]
+        assert sorted(p.name for p in (root / ".domovoi").iterdir()) == ["config.toml", "pairing_token"]
+
+
+@windows_only
+def test_purge_removes_only_the_satellite_s_own_files(tmp_path):
+    root = tmp_path / "Satellite"
+    _fake_install(root, tmp_path / "victim")
+    (root / "notes.txt").write_text("someone's")
+    (root / ".domovoi" / "server-identity.json").write_text("{}")      # a server's
+    (root / ".domovoi" / "sounds" / "voices").mkdir(parents=True)
+    (root / ".domovoi" / "sounds" / "voices" / "amy.mp3").write_bytes(b"x")
+    (root / ".domovoi" / "config.toml.bak-20261013-120000").write_text("old")
+    r = _ps(["-File", str(root / "uninstall.ps1"), "-Quiet", "-Purge", "-TestRegistryFile", str(tmp_path / "r.json")])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(p.name for p in root.iterdir()) == [".domovoi", ".domovoi-satellite-root", "notes.txt"]
+    left = sorted(p.name for p in (root / ".domovoi").iterdir())
+    assert left == ["server-identity.json", "sounds"], left
+    assert (root / ".domovoi" / "sounds" / "voices" / "amy.mp3").exists()
+
+
+def test_the_uninstaller_s_list_covers_every_satellite_file():
+    import re as _re
+
+    from satellite import pc_install
+
+    text = (SCRIPTS / "uninstall-windows.ps1").read_text(encoding="ascii")
+    block = text[text.index("$files = @("):text.index(")", text.index("$files = @("))]
+    names = set(_re.findall(r"'([^']+)'", block))
+    assert set(pc_install.SATELLITE_FILES) | set(pc_install.SATELLITE_DIRS) <= names
+    assert {"config.toml.bak", "server-names.json"} <= names
+    for marker in pc_install.CORE_MARKERS:
+        assert f"'{marker}'" in text, "the uninstaller knows a server's files"
+
+
+def test_the_install_folder_is_empty_or_an_earlier_install(tmp_path):
+    wi.check_install_root(tmp_path / "new")
+    (tmp_path / "new").mkdir()
+    wi.check_install_root(tmp_path / "new")
+    earlier = tmp_path / "earlier"
+    earlier.mkdir()
+    (earlier / wi.ROOT_MARKER).write_text("x")
+    (earlier / "python").mkdir()
+    wi.check_install_root(earlier)
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    (docs / "taxes.pdf").write_text("x")
+    with pytest.raises(wi.InstallError) as e:
+        wi.check_install_root(docs)
+    assert e.value.code == 2
+    server = tmp_path / "server"
+    (server / ".domovoi").mkdir(parents=True)
+    (server / wi.ROOT_MARKER).write_text("x")
+    (server / ".domovoi" / "device-token.txt").write_text("t")
+    with pytest.raises(wi.InstallError, match="belongs to a Domovoi server"):
+        wi.check_install_root(server)
 
 
 @windows_only

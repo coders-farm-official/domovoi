@@ -127,6 +127,50 @@ def test_unpinned_stays_stopped_and_says_why(tmp_path):
     assert status["state"] == "stopped" and "pinned" in status["reason"]
 
 
+class LinesProc(FakeProc):
+    """An engine that prints lines (as a pipe of bytes) and exits."""
+
+    def __init__(self, code, lines):
+        super().__init__(code, polls=0)
+        import io
+
+        self.stdout = io.BytesIO(b"".join(lines))
+
+
+@pytest.mark.parametrize("lines,code,refused,want", [
+    # A config.toml value it won't run on: its own words.
+    ([b"2026-10-13 INFO starting\r\n",
+      b"domovoi-satellite: not starting: [music] alsa_device 'x & y' is not a Windows audio device: "
+      b"use \"default\", a device number, or a name from --list-devices (in C:\\S\\.domovoi\\config.toml)\r\n"],
+     78, True, "not starting: [music] alsa_device 'x & y' is not a Windows audio device"),
+    # No pin: the engine's line too.
+    ([b"domovoi-satellite: this satellite has no pinned Domovoi server identity\r\n"], 78, True,
+     "this satellite has no pinned Domovoi server identity"),
+    # 78 with nothing said: the old wording.
+    ([b"noise\r\n"], 78, True, "no pinned server identity: enrol it again from the dashboard"),
+    # A stop someone asked for is not a refusal.
+    ([b"domovoi-satellite: bye\r\n"], 0, None, "stopped"),
+])
+def test_a_refusal_is_kept_in_the_engine_s_own_words_for_the_tray(tmp_path, lines, code, refused, want):
+    import json
+
+    proc = LinesProc(code, lines)
+    sup = ws.Supervisor(tmp_path, stop=FakeStop(), log=ws.RotatingLog(tmp_path / "logs" / "s.log"),
+                        engine_log=ws.RotatingLog(tmp_path / "logs" / "e.log"), spawn=lambda: proc)
+    assert sup.run() == 0
+    status = json.loads((tmp_path / "logs" / "supervisor-status.json").read_text(encoding="utf-8"))
+    assert status["state"] == "stopped" and status["reason"].startswith(want), status
+    assert status.get("refused") is refused
+    assert status["exit_code"] == code
+    assert b"alsa_device" in (tmp_path / "logs" / "e.log").read_bytes() or "alsa" not in want
+
+
+def test_the_kept_reason_is_printable_and_bounded():
+    text = ws.refusal_text(b"domovoi-satellite: a\x1b[31mb\x07 " + b"x" * 1000 + b"\r\n")
+    assert text.startswith("a [31mb ") and text.isprintable() and len(text) == ws.REASON_MAX
+    assert ws.refusal_text("domovoi-satellite: caf\u00e9\n".encode()) == "caf\u00e9"
+
+
 def test_a_stop_asked_for_ends_the_engine_and_the_supervisor(tmp_path, monkeypatch):
     monkeypatch.setattr(ws, "STOP_GRACE_SEC", 0.0)
     stop = FakeStop(after_waits=1)

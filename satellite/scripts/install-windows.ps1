@@ -13,7 +13,7 @@ Windows, which has already checked this bundle's SHA-256 before running it:
 
 In order:
   1. Refuses a PC that runs the Domovoi server (its Windows service or
-     install record, its data folder, a server identity in this account, or
+     install record, its data folder, a server's files in this account, or
      a server answering on this PC): "use this PC as a room" will come with
      the server's own tray instead.
   2. Gets the embeddable Python that satellite\windows-runtime.json (in this
@@ -98,7 +98,8 @@ function Get-CorePcReason {
         service     = 'DomovoiHost'
         registry    = 'HKLM:\SOFTWARE\Domovoi'
         programdata = (Join-Path $env:ProgramData 'Domovoi')
-        identity    = (Join-Path $env:USERPROFILE '.domovoi\server-identity.json')
+        # The folder a Domovoi server keeps its files in, in this account.
+        profile     = (Join-Path $env:USERPROFILE '.domovoi')
         probe       = 'http://127.0.0.1:6370/v1/health'
     }
     if ($env:DOMOVOI_TEST_COREPC_SIGNALS) {
@@ -115,8 +116,14 @@ function Get-CorePcReason {
     if ($s.programdata -and (Test-Path -LiteralPath $s.programdata)) {
         return "the Domovoi server's data folder is on this PC ($($s.programdata))"
     }
-    if ($s.identity -and (Test-Path -LiteralPath $s.identity)) {
-        return "a Domovoi server keeps its identity in this account ($($s.identity))"
+    if ($s.profile) {
+        # What only a server keeps there (satellite\pc_engine.py CORE_MARKERS).
+        foreach ($marker in 'server-identity.json', 'device-token.txt', 'setup-code.txt') {
+            $f = Join-Path $s.profile $marker
+            if (Test-Path -LiteralPath $f) {
+                return "a Domovoi server keeps its files in this account ($f)"
+            }
+        }
     }
     if ($s.probe) {
         try {

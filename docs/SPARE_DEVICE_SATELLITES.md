@@ -302,7 +302,7 @@ an account of its own that signs in automatically.
 
 **Not on the PC that runs your Domovoi server.** The installer refuses
 there (it looks for the server's Windows service, its install record, its
-data folder, a server identity in your account, and a server answering on
+data folder, a server's own files in your account, and a server answering on
 this PC). Using the server PC as a room will come with the server's own
 tray icon instead.
 
@@ -419,7 +419,13 @@ System → Sound**), and "turn it up" moves Windows' own volume — the same
 slider the taskbar shows. To pin other devices, put a device number or
 part of a device's name (as `python.exe -m satellite.client
 --list-devices` prints it) in `[audio] input_device` / `output_device`
-and `[music] alsa_device`. Only plain names are accepted there.
+and `[music] alsa_device`. Only plain names are accepted there (letters,
+digits, spaces and `()._,:+[]-`): the dashboard's Settings tab can't send
+anything else, and a satellite whose `config.toml` holds anything else —
+or any value it doesn't know — **doesn't start**, like a Linux laptop: the
+tray says *Domovoi satellite didn't start* with the line to fix. Fix it,
+then choose **Start satellite** in the tray menu. (Only a Pi, which has no
+keyboard, starts on its board's default instead and says so.)
 
 ### Battery and power
 
@@ -443,15 +449,20 @@ the address.
 Uninstall**, or from PowerShell:
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Domovoi\Satellite\uninstall.ps1"           # keeps .domovoi\config.toml
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Domovoi\Satellite\uninstall.ps1"           # keeps its settings (.domovoi)
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:LOCALAPPDATA\Domovoi\Satellite\uninstall.ps1" -Purge    # the settings too
 ```
 
 It stops the satellite and its tray, removes the sign-in entry, the
 Installed apps entry and the Start-menu shortcut (each only if it points
 into its own folder), puts back the power settings it changed, and
-deletes the folder. Then **retire the room in the dashboard** once it
-shows offline, as on Linux.
+deletes what it installed — by name, nothing it doesn't recognise. Its
+settings (`.domovoi`, with the room's pairing key) stay unless `-Purge`,
+which removes only the satellite's own files there. Then **retire the room
+in the dashboard** once it shows offline, as on Linux.
+
+The installer goes only into an empty folder or an earlier install of
+itself, and refuses an account where a Domovoi server keeps its files.
 
 ### What it installs, and their licences
 
@@ -488,6 +499,7 @@ same question as on every Pi; see the wake-word notes).
 | "did not prove it is the one in the code" | As on Linux: a different machine answers at that address. Compare the fingerprint with **Settings → About**. |
 | "running scripts is disabled on this system" | A Group Policy forbids scripts here; the installer can't run on this PC. |
 | Grey tray icon, "not running: no pinned server identity" | Re-run the install command from the dashboard. |
+| "Domovoi satellite didn't start" with a line from `config.toml` | A value there it won't run on (a device name that is not "default", a number or a plain name; a typo'd setting). Fix that line in `%LOCALAPPDATA%\Domovoi\Satellite\.domovoi\config.toml` (the old file is `config.toml.bak` after a dashboard edit), then **Start satellite** in the tray menu. |
 | The wake word never fires | **Settings → Privacy & security → Microphone**: "Let desktop apps access your microphone" on; the right microphone chosen in **Settings → System → Sound**. |
 | It goes quiet while someone else uses the PC | It runs in its own account's session; while another account is signed in at the screen, Windows may give it no microphone (not yet checked on hardware). |
 | Anything else | `%LOCALAPPDATA%\Domovoi\Satellite\logs\satellite.log` (the tray's **Show logs folder**), and the live log in the dashboard's room drawer. |
