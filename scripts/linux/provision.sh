@@ -1563,6 +1563,14 @@ do_docker() {
 # Requires=docker.service, restarts domovoi-db (and with it a running
 # domovoi-core) when they run: on a first install nothing runs yet; on a
 # re-run the start step then waits for the core's health as usual.
+#
+# A helper that fails or refuses (a key that isn't the pinned one, apt
+# that would bring a driver, Docker that won't start with the runtime) is a
+# warning, not the end of the install: wake-word training is optional and
+# then runs on the CPU, nothing was installed or daemon.json is back as it
+# was, and the step runs again on the next provision run (its check fails
+# while the runtime is missing) and at every update or Restart
+# (apply-update.sh).
 gpu_runtime_script() { printf '%s' "$CHECKOUT/scripts/linux/gpu-runtime.sh"; }
 # The helper to ask: the checkout's, or in a dry run before the clone the
 # copy beside this script.
@@ -1616,7 +1624,11 @@ do_gpu_runtime() {
   { rc=0; gpu_runtime --manifest "$MANIFEST_FILE" || rc=$?; echo "$rc" >"$out.rc"; } 2>&1 | tee "$out"
   rc=$(cat "$out.rc" 2>/dev/null || echo 1)
   summary=$(sed -n 's/^gpu-runtime: //p' "$out" | tail -n 1)
-  [ "$rc" = 0 ] || die "scripts/linux/gpu-runtime.sh: ${summary:-stopped (exit $rc)}"
+  if [ "$rc" != 0 ]; then
+    warn "Docker's GPU runtime is not set up (scripts/linux/gpu-runtime.sh: ${summary:-stopped, exit $rc}); wake-word training uses the CPU until a run of this script or an update sets it up"
+    STEP_DONE_MSG="GPU for containers not set up: ${summary:-the helper stopped (exit $rc)}"
+    return 0
+  fi
   summary=${summary:-Docker can use the GPU}
   STEP_DONE_MSG=${summary^}
 }

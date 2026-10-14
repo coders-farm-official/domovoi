@@ -253,3 +253,21 @@ async def test_delete_guards_default(repo):
     assert removed["name"] == "OtherWord"
     assert removed["slug"] == "other_word"
     assert await repo.get(other_id) is None
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_a_failed_word_trains_again_on_the_clips_it_has(repo):
+    """2026-10-13: a training that timed out, was stopped or ran out of
+    memory is queued again from 'failed' without recording anew; 'ready'
+    still is not."""
+    wid = await repo.create(name="Retry", slug="retry", phrase="hey retry")
+    for _ in range(3):
+        await repo.bump_clip_count(wid)
+    assert await repo.mark_training(wid, 3) is True
+    await repo.mark_failed(wid, "train command timed out after 3600s")
+    assert await repo.mark_training(wid, 3) is True
+    row = await repo.get(wid)
+    assert row["status"] == "training" and row["error"] is None
+    await repo.mark_ready(wid, "retry")
+    assert await repo.mark_training(wid, 3) is False

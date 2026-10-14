@@ -2368,33 +2368,40 @@ case_gpu_runtime_on_bare_metal() {
 
 # Like Docker's (review finding 3): a key file with a second primary key
 # is refused, and so is a key with another fingerprint. Nothing installed.
-case_gpu_runtime_key_file_with_a_second_key_stops() {
-  new_case gpu_runtime_key_file_with_a_second_key_stops
+case_gpu_runtime_key_file_with_a_second_key_only_warns() {
+  new_case gpu_runtime_key_file_with_a_second_key_only_warns
   gpu_wsl
   echo 0123456789ABCDEF0123456789ABCDEF01234567 >"$STATE/nvidia-extra-key"
   run_prov "${wsl_args[@]}" --skip-models
-  check "exit 1" eq "$RC" 1
+  # A warning, not the end of the install: training is optional.
+  check "exit 0" eq "$RC" 0
   check "progress format" progress_ok
-  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
-  check "final names the step" eq "$(final_field failed_step)" '"gpu-runtime"'
+  check "final ok" eq "$(final_field result)" '"ok"'
+  check "gpu-runtime done, not set up" eq "$(state_of gpu-runtime)" done
+  check "the step says so" grep -q '"step":"gpu-runtime".*"state":"done".*GPU for containers not set up' "$CASE/progress.jsonl"
+  check "a warning counted" test "$(final_field warnings)" -ge 1
   check "says why" said "holds 2 primary keys"
   check "key not installed" absent "$ROOT/etc/apt/keyrings/nvidia-container-toolkit.asc"
   check "no source" absent "$ROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
   check "no toolkit" not_called "install -y --no-install-recommends nvidia"
   check "Docker left alone" not_called "nvidia-ctk"
-  check "no marker" no_marker gpu-runtime
+  # The next run tries again (its check fails while the runtime is missing).
+  rm -f "$STATE/nvidia-extra-key"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "next run exit 0" eq "$RC" 0
+  check "next run sets it up" called "install -y --no-install-recommends $NVIDIA_PKGS"
   end_case
 }
 
-case_gpu_runtime_key_mismatch_stops() {
-  new_case gpu_runtime_key_mismatch_stops
+case_gpu_runtime_key_mismatch_only_warns() {
+  new_case gpu_runtime_key_mismatch_only_warns
   gpu_wsl
   echo 0000000000000000000000000000000000000000 >"$STATE/nvidia-fpr"
   run_prov "${wsl_args[@]}" --skip-models
-  check "exit 1" eq "$RC" 1
-  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "exit 0" eq "$RC" 0
+  check "gpu-runtime done, not set up" eq "$(state_of gpu-runtime)" done
   check "says the fingerprint" said "the manifest pins C95B321B61E88C1809C4F759DDCAE044F796ECB0"
-  check "in the final line" grep -q 'the manifest pins C95B321B61E88C1809C4F759DDCAE044F796ECB0","final":true' "$CASE/progress.jsonl"
+  check "in the step's message" grep -q '"step":"gpu-runtime".*not set up.*the manifest pins C95B321B61E88C1809C4F759DDCAE044F796ECB0' "$CASE/progress.jsonl"
   check "key not installed" absent "$ROOT/etc/apt/keyrings/nvidia-container-toolkit.asc"
   check "no toolkit" not_called "install -y --no-install-recommends nvidia"
   end_case
@@ -2409,8 +2416,8 @@ case_gpu_runtime_refuses_a_driver_on_wsl() {
   printf '%s\n' "Inst nvidia-driver-580 (580.95.05-0ubuntu1 Ubuntu:26.04/resolute [amd64])" \
     "Inst libnvidia-compute-580 (580.95.05-0ubuntu1 Ubuntu:26.04/resolute [amd64])" >"$STATE/apt-simulate-extra"
   run_prov "${wsl_args[@]}" --skip-models
-  check "exit 1" eq "$RC" 1
-  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "exit 0" eq "$RC" 0
+  check "gpu-runtime done, not set up" eq "$(state_of gpu-runtime)" done
   check "simulated" called "install -s --no-install-recommends $NVIDIA_PKGS"
   check "says what it refused" said "refused: installing the NVIDIA Container Toolkit would also install nvidia-driver-580 libnvidia-compute-580"
   check "and whose driver it is" said "the driver is Windows' on WSL"
@@ -2448,16 +2455,15 @@ case_gpu_runtime_puts_daemon_json_back_when_docker_will_not_start() {
   printf '{"log-driver": "local"}\n' >"$ROOT/etc/docker/daemon.json"
   touch "$STATE/docker-rejects-nvidia"
   run_prov "${wsl_args[@]}" --skip-models
-  check "exit 1" eq "$RC" 1
+  check "exit 0" eq "$RC" 0
   check "progress format" progress_ok
-  check "gpu-runtime failed" eq "$(state_of gpu-runtime)" fail
+  check "gpu-runtime done, not set up" eq "$(state_of gpu-runtime)" done
   check "says so" said "Docker did not start with the nvidia runtime configured; /etc/docker/daemon.json is back as it was and Docker runs again"
   check "daemon.json as it was" eq "$(cat "$ROOT/etc/docker/daemon.json")" '{"log-driver": "local"}'
   check "its failed mark cleared" called "systemctl reset-failed docker.service docker.socket"
   check "restarted again with it" eq "$(grep -c 'systemctl restart docker.service' "$STATE/calls.log")" 2
   check "Docker runs" test -f "$STATE/active/docker.service"
   check "on the file as it was" eq "$(cat "$STATE/docker-loaded")" '{"log-driver": "local"}'
-  check "no marker" no_marker gpu-runtime
   rm -f "$STATE/docker-rejects-nvidia"
   run_prov "${wsl_args[@]}" --skip-models
   check "next run exit 0" eq "$RC" 0
@@ -2622,8 +2628,8 @@ CASES=(
   case_gpu_runtime_skipped_on_bare_metal_without_a_driver
   case_gpu_runtime_opt_out_is_honoured
   case_gpu_runtime_on_bare_metal
-  case_gpu_runtime_key_file_with_a_second_key_stops
-  case_gpu_runtime_key_mismatch_stops
+  case_gpu_runtime_key_file_with_a_second_key_only_warns
+  case_gpu_runtime_key_mismatch_only_warns
   case_gpu_runtime_refuses_a_driver_on_wsl
   case_gpu_runtime_dry_run_plans_it
   case_gpu_runtime_puts_daemon_json_back_when_docker_will_not_start

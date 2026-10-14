@@ -1904,7 +1904,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   const chosen = rooms.find((r) => r.room_id === roomFor);
   const canRecordHere = satCan(chosen, 'wake_clips');
   const canPushHere = satCan(chosen, 'wake_models');
-  const canTrain = w.status === 'recording' && w.clip_count >= minClips;
+  // A failed word trains again on the clips it has (no re-recording).
+  const canTrain = (w.status === 'recording' || w.status === 'failed') && w.clip_count >= minClips;
   const canPush = w.status === 'ready';
   const capturing = (recActive || capLive) && w.status === 'recording';
   const startRec = () => { setRecActive(true); onRecordStart(w, roomFor); };
@@ -2165,7 +2166,7 @@ const WakeTrainerCard = ({ status, error, refresh, fire }) => {
       <li>Disk: about {disk.total_first_gb || 32} GB the first time (the trainer and its
         training data; about half a gigabyte more for each wake word)
         {disk.free_gb != null ? ` · ${disk.free_gb} GB free here` : ''}.</li>
-      <li>A one-time download of about {req.download_gb || 6} GB.</li>
+      <li>A one-time download of about {req.download_gb || 22} GB (the trainer and its training data).</li>
       <li>Memory: a 24 GB server{mem.total_gb != null ? ` · this one has ${mem.total_gb} GB` : ''}.</li>
       <li>Time: {trainerEstimateText(est)}.</li>
       <li>{gpu

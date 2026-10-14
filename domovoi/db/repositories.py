@@ -2007,16 +2007,19 @@ class WakeWordsRepository:
         return row.first() is not None
 
     async def mark_training(self, wake_word_id: int, min_clips: int) -> bool:
-        """Promote a ``recording`` row to ``training`` — only if it still
-        holds enough captured clips (``clip_count >= min_clips``). Returns
-        False if the row is missing, already past ``recording``, or has too
-        few clips, so the caller can surface a 409."""
+        """Promote a ``recording`` row, or a ``failed`` one (training it
+        again on the clips it has: a timeout, a stop, an out-of-memory), to
+        ``training`` — only if it still holds enough captured clips
+        (``clip_count >= min_clips``). Returns False if the row is missing,
+        training or ready, or has too few clips, so the caller can surface a
+        409."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
                 SET status = 'training', error = NULL, updated_at = NOW()
-                WHERE id = :id AND status = 'recording' AND clip_count >= :min
+                WHERE id = :id AND status IN ('recording', 'failed')
+                  AND clip_count >= :min
                 RETURNING id
                 """
             ),

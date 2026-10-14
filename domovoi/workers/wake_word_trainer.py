@@ -72,7 +72,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from domovoi import egress, wake_clip_quality
+from domovoi import egress, lifecycle, wake_clip_quality
 from domovoi.config import settings
 from domovoi.db.session import session_scope
 from domovoi.models import WAKE_PHRASE_PATTERN
@@ -383,6 +383,24 @@ def _log_dir() -> Path:
     return Path(settings.wake_models_dir).parent / "wake_trainer" / "logs"
 
 
+# Exit codes of a command that was stopped from outside (SIGHUP, SIGINT,
+# SIGTERM, as the wrapper reports them, or as Python's subprocess does).
+_STOPPED_CODES = frozenset({129, 130, 143, -1, -2, -15})
+
+
+def error_tail(output: str, limit: int = 1000) -> str:
+    """What a failed run's row says: the wrapper's and the entrypoint's own
+    lines and any error line, else the last plain lines. The generator's
+    DEBUG chatter and progress bars are left in the log file."""
+    lines = [ln.strip() for ln in (output or "").splitlines()]
+    lines = [ln for ln in lines if ln and not ln.startswith(("DEBUG:", "INFO:"))
+             and "it/s]" not in ln and "s/it]" not in ln]
+    own = [ln for ln in lines if ln.startswith(("[wake-trainer]", "[entrypoint]"))
+           or "FATAL" in ln or "Error" in ln or "error:" in ln]
+    picked = own[-6:] if own else lines[-8:]
+    return "\n".join(picked)[-limit:]
+
+
 class WakeWordTrainer(Worker):
     """Background task that trains queued custom wake words.
 
@@ -441,7 +459,9 @@ class WakeWordTrainer(Worker):
 
     async def _train_one(self) -> int:
         """Train (or fail) the oldest queued wake word. Returns 1 if a row was
-        processed, 0 if the queue was empty."""
+        processed, 0 if the queue was empty (or the core is stopping)."""
+        if lifecycle.shutting_down():
+            return 0
         async with session_scope() as s:
             from domovoi.db.repositories import WakeWordsRepository
 
@@ -560,6 +580,20 @@ class WakeWordTrainer(Worker):
         finally:
             _ACTIVE.clear()
 
+        if result.cancelled or result.returncode in _STOPPED_CODES:
+            # systemd's SIGTERM reaches the wrapper too (one control group),
+            # and it removes its container and exits a moment before the
+            # worker's own cancel: a shutdown, not a failure. The word stays
+            # queued and trains again after the restart.
+            for _ in range(30):
+                if lifecycle.shutting_down():
+                    break
+                await asyncio.sleep(0.1)
+            if lifecycle.shutting_down():
+                log.warning("wake-word trainer: slug=%s stopped because Domovoi is "
+                            "shutting down; it trains again after the restart", slug)
+                return 0
+
         if result.timed_out:
             await self._mark_failed(
                 wake_word_id,
@@ -579,7 +613,7 @@ class WakeWordTrainer(Worker):
             # Surface the tail of the output so the dashboard shows
             # something diagnosable without exposing the full multi-MB log
             # (that one is in ~/.domovoi/wake_trainer/logs/<slug>.log).
-            tail = (result.output or "").strip()[-1000:]
+            tail = error_tail(result.output)
             detail = (
                 f"train command exited {result.returncode}"
                 + (f": {tail}" if tail else "")

@@ -320,6 +320,26 @@ def reset_for_real_clips(model_dir: Path, wavs: list[Path]) -> bool:
     return dropped
 
 
+def drop_real_copies(model_dir: Path) -> int:
+    """Remove this run's copies of the household's recorded clips from the
+    cache volume (they are recordings of somebody's voice; the server keeps
+    the originals under ~/.domovoi/wake_clips and the next run copies them
+    again). The features computed from them stay, which is what a retrain
+    with the same clips reuses. Runs at the end of every run, failed or not."""
+    pos_dir = model_dir / "positive_train"
+    n = 0
+    if pos_dir.is_dir():
+        for f in pos_dir.glob("real_*.wav"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
+    if n:
+        log(f"removed {n} copies of the recorded clips from the cache volume")
+    return n
+
+
 def mark_features_current(model_dir: Path, wavs: list[Path]) -> None:
     """Record which real clip set the features on disk were computed from."""
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -520,17 +540,20 @@ def main() -> int:
 
     cfg = render_config(slug, phrase, device, work)
 
-    # 1) synthetic positives (piper-sample-generator, internal). Resumable.
-    run_stage(cfg, "--generate_clips", device)
-    # 2) inject real clips into <slug>/positive_train BEFORE augment.
-    inject_real_clips(work, slug)
-    # 3) augment (varies acoustics, resamples to 16 kHz training set).
-    run_stage(cfg, "--augment_clips", device)
-    mark_features_current(work / slug, real_wavs())
-    # 4) train + ONNX export.
-    run_stage(cfg, "--train_model", device)
-    # 5) place <slug>.onnx where the host worker will find it.
-    export_model(work, slug)
+    try:
+        # 1) synthetic positives (piper-sample-generator, internal). Resumable.
+        run_stage(cfg, "--generate_clips", device)
+        # 2) inject real clips into <slug>/positive_train BEFORE augment.
+        inject_real_clips(work, slug)
+        # 3) augment (varies acoustics, resamples to 16 kHz training set).
+        run_stage(cfg, "--augment_clips", device)
+        mark_features_current(work / slug, real_wavs())
+        # 4) train + ONNX export.
+        run_stage(cfg, "--train_model", device)
+        # 5) place <slug>.onnx where the host worker will find it.
+        export_model(work, slug)
+    finally:
+        drop_real_copies(work / slug)
 
     log(f"DONE: /data/models/{slug}.onnx ready.")
     return 0

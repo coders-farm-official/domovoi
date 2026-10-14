@@ -237,3 +237,51 @@ async def test_a_timeout_names_the_setting(queue, monkeypatch):
     (wid, error), = FakeQueue.failed
     assert wid == 7
     assert "timed out after 3600s" in error and "Training time limit" in error
+
+
+# ─── found in the end-to-end run (2026-10-13, domovoi-t8) ─────────────────
+
+@pytest.mark.asyncio
+async def test_a_core_restart_mid_training_leaves_the_word_queued(queue, monkeypatch):
+    """systemctl restart domovoi-core: systemd's SIGTERM reaches the wrapper
+    too, which removes its container and exits 143 a moment before the
+    worker is cancelled. That is a shutdown, not a failure."""
+    _capture(monkeypatch, result=wwt.TrainRun(143, "[wake-trainer] told to stop (signal 15)"))
+    calls = {"n": 0}
+
+    def stopping():
+        calls["n"] += 1
+        return calls["n"] > 1      # false at the tick's start, true after the run
+
+    monkeypatch.setattr(wwt.lifecycle, "shutting_down", stopping)
+    with egress.override_policy("always"):
+        assert await wwt.WakeWordTrainer().tick() == 0
+    assert FakeQueue.failed == [] and FakeQueue.ready == []
+
+
+@pytest.mark.asyncio
+async def test_a_stop_that_isnt_a_shutdown_is_a_failure_with_the_wrappers_words(queue, monkeypatch):
+    monkeypatch.setattr(wwt.lifecycle, "shutting_down", lambda: False)
+    monkeypatch.setattr(wwt.asyncio, "sleep", _no_sleep)
+    out = "\n".join(["DEBUG:generate_samples:Batch 580/714 complete"] * 50
+                    + ["[wake-trainer] told to stop (signal 15); removing the training container",
+                       "[wake-trainer] removed 1 training container(s) (stopped)"])
+    _capture(monkeypatch, result=wwt.TrainRun(143, out))
+    with egress.override_policy("always"):
+        await wwt.WakeWordTrainer().tick()
+    (_, error), = FakeQueue.failed
+    assert error.startswith("train command exited 143: [wake-trainer] told to stop")
+    assert "DEBUG" not in error
+
+
+async def _no_sleep(_s):
+    return None
+
+
+def test_the_error_tail_prefers_the_trainers_own_lines():
+    out = "\n".join(["Training:  40%|████  | 400/1000 [00:03<00:04, 140.00it/s]",
+                     "DEBUG:x:y",
+                     "[entrypoint] FATAL: feature dataset download failed: 403",
+                     "plain"])
+    assert wwt.error_tail(out) == "[entrypoint] FATAL: feature dataset download failed: 403"
+    assert wwt.error_tail("a\nb\nc") == "a\nb\nc"

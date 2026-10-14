@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 DOCKER_DIR = Path(__file__).resolve().parents[2] / "scripts" / "wake_word" / "docker"
 
 
@@ -121,3 +123,37 @@ def test_main_records_the_clip_set_only_after_augmentation(monkeypatch, tmp_path
     assert ep.main() == 0
     assert calls == ["--generate_clips", "inject", "--augment_clips", "mark",
                      "--train_model", "export"]
+
+
+def test_no_copy_of_the_recordings_stays_in_the_cache(monkeypatch, tmp_path):
+    """The copies of the household's clips go at the end of every run, failed
+    or not; the synthetic clips and the computed features stay."""
+    monkeypatch.setenv("WAKE_SLUG", "hey_domovoi")
+    monkeypatch.setenv("WAKE_PHRASE", "hey domovoi")
+    monkeypatch.setattr(ep, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(ep, "CLIPS_IN", tmp_path / "no-clips")
+    monkeypatch.setattr(ep, "detect_device", lambda: "cpu")
+    monkeypatch.setattr(ep, "lower_priority", lambda: None)
+    for name in ("ensure_dataset", "ensure_rirs", "ensure_background"):
+        monkeypatch.setattr(ep, name, lambda: None)
+    monkeypatch.setattr(ep, "render_config", lambda *a: tmp_path / "cfg.yaml")
+    pos = tmp_path / "cache" / "runs" / "hey_domovoi" / "hey_domovoi" / "positive_train"
+
+    def inject(work, slug):
+        pos.mkdir(parents=True, exist_ok=True)
+        (pos / "real_0000_000.wav").write_bytes(b"voice")
+        (pos / "clip_1.wav").write_bytes(b"synthetic")
+        return 1
+
+    monkeypatch.setattr(ep, "inject_real_clips", inject)
+    monkeypatch.setattr(ep, "mark_features_current", lambda *a: None)
+
+    def fail_training(cfg, flag, dev):
+        if flag == "--train_model":
+            raise SystemExit(1)
+
+    monkeypatch.setattr(ep, "run_stage", fail_training)
+    with pytest.raises(SystemExit):
+        ep.main()
+    assert not list(pos.glob("real_*.wav"))
+    assert (pos / "clip_1.wav").is_file()

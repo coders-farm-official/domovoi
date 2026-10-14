@@ -69,7 +69,10 @@ IMAGE_GB = 12.4            # the trainer image on disk
 DATA_GB = 17.9             # the three datasets in the cache volume
 PER_WORD_GB = 0.5          # one word's synthetic clips and features
 HEADROOM_GB = 5.0          # what must still be free afterwards
-DOWNLOAD_GB = 6            # the one-time download (image base + data), rounded
+# The one-time download, measured in the 2026-10-13 end-to-end run: the
+# 3.2 GB base image, the packages and models the build fetches, and the
+# 17.9 GB of training data (about 22.5 GB came in over the network).
+DOWNLOAD_GB = 22
 GPU_MIN_PER_WORD = 20      # RTX 4070 Ti SUPER, warm cache
 GPU_FIRST_MIN = 26         # the first word, with the download
 CPU_MIN_PER_WORD_8 = 75    # 8 cores, warm cache
@@ -381,10 +384,19 @@ def enabled() -> bool:
 
 async def requirements(force: bool = False) -> dict[str, Any]:
     """What training needs and what this server has, and the refusals.
-    Cached for a few seconds: the page polls while a job runs."""
+    Cached for a few seconds, and for as long as a setup job or a training
+    runs: the page polls every 2 s then, and while 18 GB were landing in
+    the cache volume a read of these (docker info, image inspect,
+    nvidia-smi) took over 30 s twice in the 2026-10-13 end-to-end run, so
+    the dashboard's read timed out; nothing here changes meanwhile that
+    the page needs."""
     global _REQ_CACHE
+    from domovoi.workers import wake_word_trainer as wwt
+
     now = time.monotonic()
-    if not force and _REQ_CACHE is not None and now - _REQ_CACHE[0] < _REQ_TTL_SEC:
+    if not force and _REQ_CACHE is not None and (
+        now - _REQ_CACHE[0] < _REQ_TTL_SEC or job_running() or wwt.training_active()
+    ):
         return _REQ_CACHE[1]
     info = await asyncio.to_thread(_docker_info)
     gpus = await _host_gpus()

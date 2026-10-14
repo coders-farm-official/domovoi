@@ -367,7 +367,7 @@ async def train_wake_word(wake_word_id: int) -> WakeWord:
                 status_code=409,
                 detail=(
                     f"wake word {wake_word_id} can't be trained — it must be in "
-                    f"'recording' with at least {min_clips} clips"
+                    f"'recording' or 'failed' with at least {min_clips} clips"
                 ),
             )
         row = await repo.get(wake_word_id)
