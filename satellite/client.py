@@ -4874,10 +4874,11 @@ class Satellite(pc_engine.SpareDeviceEngine):
         satellite no longer runs (and the next prune baseline is the real prior
         manifest, not the failed one). Best-effort; every step is guarded."""
         for rel in added_files or []:
-            if not code_sync._safe_rel(rel) or Path(rel).suffix not in CODE_EXT_ALLOW:
+            added = code_sync.safe_dest(SATELLITE_ROOT, rel)
+            if added is None or Path(rel).suffix not in CODE_EXT_ALLOW:
                 continue
             try:
-                (SATELLITE_ROOT / rel).unlink(missing_ok=True)
+                added.unlink(missing_ok=True)
             except OSError:
                 pass
         try:

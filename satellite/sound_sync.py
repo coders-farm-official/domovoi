@@ -42,13 +42,59 @@ def _sha256(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
+#: Characters a manifest path never holds, on any board: a backslash (a
+#: Windows separator), a colon (a drive letter, ``C:/…``, or an NTFS stream,
+#: ``x.mp3:evil``) and the rest Windows refuses in a name. A list is checked
+#: by the same rule on a Pi and on Windows, so a signed list that would only
+#: be dangerous on one of them is refused on both.
+_UNSAFE_CHARS = frozenset('\\:*?"<>|')
+#: Windows device names: ``CON``, ``NUL.mp3``, ``COM1`` open a device, not a file.
+_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+                           *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))})
+#: What each file channel may write (the core serves nothing else on them).
+SOUND_TYPES = (".mp3", ".wav")
+WAKE_MODEL_TYPES = (".onnx", ".onnx.json")
+
+
 def _safe_rel(rel: str) -> bool:
-    """Reject manifest paths that would escape the cache dir — absolute,
-    parent-refs, or empty. Manifest paths are posix, so check the string
-    directly rather than via os-dependent Path semantics."""
-    if not rel or rel.startswith("/") or "\\" in rel:
+    """Whether a manifest path is a plain relative path inside the cache,
+    on every board: not empty, not absolute (``/x``, ``//server/share``,
+    ``C:/x``), no ``..`` or ``.`` part, no backslash, colon, control
+    character or other character Windows refuses, no part ending in a dot
+    or a space (Windows drops them, so ``x.mp3.`` would be ``x.mp3``), and
+    no Windows device name. Manifest paths are POSIX, so the string is
+    checked directly rather than through OS-dependent Path semantics.
+    Security review of wf/sat-windows (2026-10-13): the old check only knew
+    POSIX, so a signed list naming ``C:/Users/<you>/…/Startup/x.cmd`` was
+    written there on Windows. :func:`safe_dest` also resolves the result
+    and keeps it inside the cache."""
+    if not isinstance(rel, str) or not rel or len(rel) > 400 or rel.startswith("/"):
         return False
-    return all(part and part != ".." for part in rel.split("/"))
+    if any(c in _UNSAFE_CHARS or ord(c) < 0x20 or ord(c) == 0x7F for c in rel):
+        return False
+    for part in rel.split("/"):
+        if part in ("", ".", "..") or part.endswith((".", " ")) or part.startswith(" "):
+            return False
+        if part.split(".", 1)[0].upper() in _DEVICE_NAMES:
+            return False
+    return True
+
+
+def safe_dest(cache_dir: Path, rel: str, types: tuple[str, ...] | None = None) -> Path | None:
+    """Where a manifest entry may be written: ``cache_dir / rel`` when the
+    path is safe (:func:`_safe_rel`), of one of ``types`` (lower-case
+    suffixes; None: any), and still inside ``cache_dir`` once both are
+    resolved (a link or junction inside the cache can't lead out of it).
+    None otherwise."""
+    if not _safe_rel(rel):
+        return None
+    if types is not None and not rel.lower().endswith(types):
+        return None
+    root = cache_dir.resolve()
+    dest = (root / rel).resolve()
+    if dest == root or not dest.is_relative_to(root):
+        return None
+    return dest
 
 
 # Said once per process, not on every connect: an unpinned device syncs
@@ -154,10 +200,10 @@ def sync(
     cache_dir.mkdir(parents=True, exist_ok=True)
     downloaded = 0
     for rel, sha in manifest.items():
-        if not _safe_rel(rel):
-            log.warning("sound sync: skipping unsafe manifest path %r", rel)
+        dest = safe_dest(cache_dir, rel, SOUND_TYPES)
+        if dest is None:
+            log.warning("sound sync: skipping unsafe manifest path %r (not a sound file inside the cache)", rel)
             continue
-        dest = cache_dir / rel
         if dest.is_file() and _sha256(dest) == sha:
             continue
         data = requests.get(f"{base}/v1/sounds/{rel}", params=params, timeout=timeout)
@@ -216,10 +262,15 @@ def _prune(cache_dir: Path, keep: set[str]) -> None:
     import json
 
     previous = _read_record(cache_dir)
+    root = cache_dir.resolve()
     for p in cache_dir.rglob("*.mp3"):
         if p.is_symlink():
             continue
         rel = p.relative_to(cache_dir).as_posix()
+        # Only a file really inside the cache (a junction is not a symlink
+        # to Path, and rglob walks into one).
+        if safe_dest(cache_dir, rel, SOUND_TYPES) is None or not p.resolve().is_relative_to(root):
+            continue
         if rel in keep:
             continue
         ours = rel in previous if previous is not None else _legacy_shape(rel)
