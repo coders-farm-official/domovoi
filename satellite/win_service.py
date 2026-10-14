@@ -57,9 +57,10 @@ LOG_BACKUPS = 3
 LOG_NAME = "satellite.log"
 SUPERVISOR_LOG = "supervisor.log"
 STATUS_NAME = "supervisor-status.json"
-#: Test-only variables passed through to the engine when the supervisor was
-#: started with them (satellite/debug_audio.py); nothing sets them in an
-#: install.
+#: Test-only variables (satellite/debug_audio.py) passed to the engine only
+#: when the supervisor is started with --test-audio-hooks, which nothing in
+#: an install does: a variable left in the account's environment can never
+#: swap a satellite's microphone for files on its own.
 PASS_THROUGH = ("DOMOVOI_DEBUG_MIC_DIR", "DOMOVOI_DEBUG_AUDIO_SINK")
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
@@ -75,13 +76,13 @@ def interpreter(root: Path, *, windowed: bool) -> str:
     return str(root / "python" / ("pythonw.exe" if windowed else "python.exe"))
 
 
-def engine_env(root: Path, base: dict[str, str] | None = None) -> dict[str, str]:
+def engine_env(root: Path, base: dict[str, str] | None = None, *, test_hooks: bool = False) -> dict[str, str]:
     """The engine's environment: the install folder as its home (Python's
     ``Path.home()`` on Windows is USERPROFILE), the log folder for the
     tray's "Show logs folder", unbuffered UTF-8 output."""
     env = dict(os.environ if base is None else base)
     for key in list(env):
-        if key.startswith("DOMOVOI_DEBUG_") and key not in PASS_THROUGH:
+        if key.startswith("DOMOVOI_DEBUG_") and not (test_hooks and key in PASS_THROUGH):
             env.pop(key)
     env.update({
         "USERPROFILE": str(root),
@@ -158,7 +159,7 @@ class Supervisor:
 
     def __init__(self, root: Path, *, stop: Any, log: RotatingLog, engine_log: RotatingLog,
                  spawn: Callable[..., Any] | None = None,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic, test_hooks: bool = False) -> None:
         self.root = Path(root)
         self.stop = stop                  # .is_set() / .wait(timeout)
         self.log = log
@@ -167,11 +168,12 @@ class Supervisor:
         self.clock = clock
         self.proc: Any = None
         self.starts = 0
+        self.test_hooks = test_hooks
 
     def _spawn(self) -> Any:
         return subprocess.Popen(
             [interpreter(self.root, windowed=False), "-m", "satellite.client"],
-            cwd=str(self.root / "app"), env=engine_env(self.root),
+            cwd=str(self.root / "app"), env=engine_env(self.root, test_hooks=self.test_hooks),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             creationflags=CREATE_NO_WINDOW,
         )
@@ -262,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pythonw -m satellite.win_service")
     parser.add_argument("--root", type=Path, default=None, help="the install folder (default: this Python's)")
     parser.add_argument("--no-tray", action="store_true", help="don't start the tray")
+    parser.add_argument("--test-audio-hooks", action="store_true",
+                        help="TESTS ONLY: pass DOMOVOI_DEBUG_MIC_DIR / _AUDIO_SINK on to the engine")
     args = parser.parse_args(argv)
     root = (args.root or default_root()).resolve()
     if not args.no_tray:
@@ -275,7 +279,10 @@ def main(argv: list[str] | None = None) -> int:
     engine_log = RotatingLog(root / "logs" / LOG_NAME)
     log.line(f"started for {root}")
     try:
-        return Supervisor(root, stop=stop, log=log, engine_log=engine_log).run()
+        if args.test_audio_hooks:
+            log.line("TEST AUDIO HOOKS passed to the engine (--test-audio-hooks)")
+        return Supervisor(root, stop=stop, log=log, engine_log=engine_log,
+                          test_hooks=args.test_audio_hooks).run()
     finally:
         log.line("supervisor exits")
         log.close()

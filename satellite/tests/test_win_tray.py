@@ -208,3 +208,14 @@ def test_the_tray_is_one_per_user(monkeypatch):
         assert win_tray.main([]) == 0, "a second tray leaves at once"
     finally:
         first.close()
+
+
+@windows_only
+def test_the_tray_opens_only_a_web_address_or_a_folder(monkeypatch, tmp_path):
+    opened = []
+    monkeypatch.setattr(win_tray.os, "startfile", opened.append)
+    assert win_tray._open("http://192.168.0.117:6369") is True
+    assert win_tray._open(str(tmp_path)) is True
+    for bad in (r"C:\Windows\System32\calc.exe", "file:///C:/x", "", "ms-settings:privacy"):
+        assert win_tray._open(bad) is False
+    assert opened == ["http://192.168.0.117:6369", str(tmp_path)]

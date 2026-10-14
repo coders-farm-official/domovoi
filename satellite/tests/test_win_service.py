@@ -33,9 +33,13 @@ def test_the_engine_lives_in_the_install_folder_not_the_person_s_profile(tmp_pat
     assert "HOMEDRIVE" not in env and "HOMEPATH" not in env
     assert env["DOMOVOI_SERVICE_SCOPE"] == "windows" and env["DOMOVOI_LOG_DIR"] == str(tmp_path / "logs")
     assert env["PYTHONUNBUFFERED"] == "1" and env["PYTHONIOENCODING"] == "utf-8"
-    # Only the two test hooks pass through, and only if they were set.
-    assert env["DOMOVOI_DEBUG_MIC_DIR"] == "m" and "DOMOVOI_DEBUG_SOMETHING" not in env
-    assert "DOMOVOI_DEBUG_AUDIO_SINK" not in ws.engine_env(tmp_path, {"PATH": "x"})
+    # A test hook left in the account's environment never reaches the engine
+    # of an ordinary start...
+    assert not [k for k in env if k.startswith("DOMOVOI_DEBUG_")]
+    # ...only the two hooks, and only with --test-audio-hooks.
+    hooked = ws.engine_env(tmp_path, base, test_hooks=True)
+    assert hooked["DOMOVOI_DEBUG_MIC_DIR"] == "m" and "DOMOVOI_DEBUG_SOMETHING" not in hooked
+    assert "DOMOVOI_DEBUG_AUDIO_SINK" not in ws.engine_env(tmp_path, {"PATH": "x"}, test_hooks=True)
 
 
 def test_the_log_rotates_and_keeps_three(tmp_path):

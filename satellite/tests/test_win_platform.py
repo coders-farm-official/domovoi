@@ -37,6 +37,9 @@ FIXTURES = json.loads((ROOT / "docs" / "uml" / "satellite-fixtures.json").read_t
 FP = "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"
 WINDOWS = sys.platform == "win32"
 windows_only = pytest.mark.skipif(not WINDOWS, reason="calls Windows itself")
+# The player's MP3 decoder is a Windows-only requirement (requirements-windows.txt).
+needs_miniaudio = pytest.mark.skipif(__import__("importlib.util").util.find_spec("miniaudio") is None,
+                                     reason="miniaudio: the Windows satellite's MP3 decoder")
 
 
 def win_cfg(**sections) -> "client.Config":
@@ -477,6 +480,7 @@ def test_the_player_plays_a_wav_and_a_stopped_ack_stops_at_once(tmp_path, monkey
         win_player.InProcessPlay("wav", str(long)).wait(0.05)
 
 
+@needs_miniaudio
 def test_a_broken_file_is_a_reason_not_a_crash(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(debug_audio.SINK_ENV, "null")
     bad = tmp_path / "x.mp3"
@@ -500,6 +504,7 @@ def mp3(tmp_path_factory) -> Path:
     return out
 
 
+@needs_miniaudio
 def test_the_player_decodes_an_mp3_with_gain(mp3, tmp_path, monkeypatch):
     monkeypatch.setenv(debug_audio.SINK_ENV, f"wav:{tmp_path}")
     pcm, rate, channels = win_player.decode_mp3(str(mp3), 0.5)
@@ -522,6 +527,7 @@ class _OneFile(http.server.BaseHTTPRequestHandler):
         pass
 
 
+@needs_miniaudio
 def test_the_player_streams_http_mp3_like_mpg123(mp3, tmp_path, monkeypatch):
     monkeypatch.setenv(debug_audio.SINK_ENV, f"wav:{tmp_path}")
     _OneFile.body = mp3.read_bytes()
@@ -538,6 +544,7 @@ def test_the_player_streams_http_mp3_like_mpg123(mp3, tmp_path, monkeypatch):
         assert w.getnchannels() == 2 and w.getnframes() > 44100
 
 
+@needs_miniaudio
 def test_a_refused_stream_says_so_in_the_words_the_retry_logic_reads(capsys, monkeypatch):
     monkeypatch.setenv(debug_audio.SINK_ENV, "null")
     with __import__("socket").socket() as s:

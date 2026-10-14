@@ -203,7 +203,11 @@ def supervisor_reason(root: Path) -> str | None:
 
 
 def _open(target: str) -> bool:
+    """The dashboard (an http(s) URL) or the logs folder (an existing
+    folder) the engine named, and nothing else."""
     if not target:
+        return False
+    if not (target.lower().startswith(("http://", "https://")) or Path(target).is_dir()):
         return False
     try:
         os.startfile(target)  # noqa: S606 — a folder or the dashboard URL the engine named

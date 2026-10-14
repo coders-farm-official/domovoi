@@ -46,6 +46,11 @@ Handler = Callable[[asyncio.StreamReader, asyncio.StreamWriter], Any]
 GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 OPEN_EXISTING = 3
+#: The client tells the pipe's server who it is but never lends it its
+#: rights: a server that is not the engine (someone sitting on the name)
+#: can't impersonate the tray's or the CLI's user.
+SECURITY_SQOS_PRESENT = 0x00100000
+SECURITY_IDENTIFICATION = 0x00010000
 #: How long a client waits for a free pipe instance (the engine always
 #: keeps one listening; this covers the gap between two accepts).
 CONNECT_WAIT_SEC = 2.0
@@ -197,7 +202,8 @@ class PipeStream:
             try:
                 self._h = _winapi.CreateFile(
                     name, GENERIC_READ | GENERIC_WRITE, 0, _winapi.NULL, OPEN_EXISTING,
-                    win32.FILE_FLAG_OVERLAPPED, _winapi.NULL,
+                    win32.FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                    _winapi.NULL,
                 )
                 break
             except OSError as e:
