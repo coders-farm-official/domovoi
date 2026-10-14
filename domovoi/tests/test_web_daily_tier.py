@@ -39,6 +39,7 @@ from domovoi.tests.auth_testkit import (
     _db,  # noqa: F401 — fixture
     bearer,
     claim_admin,
+    claim_admin_with_cookie,
     db_device_token,
     install_fake_db,
     web_app,
@@ -486,7 +487,7 @@ DB_ADMIN_ROUTE = ("POST", "/api/satellites/kitchen/restart", None)
 @pytest.mark.asyncio
 async def test_the_real_household_token_works_and_nothing_else_does(_db) -> None:
     async with web_client() as setup:
-        admin = await claim_admin(setup)
+        admin, admin_cookie = await claim_admin_with_cookie(setup)
     token = await db_device_token()
     assert token, "setup should have minted a household token"
 
@@ -496,7 +497,7 @@ async def test_the_real_household_token_works_and_nothing_else_does(_db) -> None
     async with _client({HEADER: "0" * 64}) as stale:
         r = await stale.request(method, path, json=body)
         assert r.status_code == 401, r.text
-    async with _client(cookies={COOKIE: admin}) as cookie_only:
+    async with _client(cookies={COOKIE: admin_cookie}) as cookie_only:
         r = await cookie_only.request(method, path, json=body)
         assert r.status_code == 403, r.text
     async with _client({HEADER: token}) as paired:

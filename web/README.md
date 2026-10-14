@@ -73,9 +73,13 @@ web/
   LAN. Admin actions — plugin management, config, satellite pushes —
   need an admin session: `POST /api/auth/login` returns a Bearer token
   (argon2id password, sha256-stored sessions). Mutations accept ONLY
-  `Authorization: Bearer`; the SameSite=Strict cookie exists solely so
-  GET page loads render authenticated state. The dashboard pops its
-  login modal automatically on any 401/403.
+  `Authorization: Bearer`; the SameSite=Strict cookie (a secret of its
+  own, never the token) lets GET page loads render authenticated state,
+  and for `ADMIN_RELOAD_WINDOW_MIN`
+  (default 60) minutes after the password sign-in lets the same page
+  take its own Bearer back after a reload (`POST /api/auth/resume`,
+  same origin only). The dashboard pops its login modal automatically
+  on any 401/403 it can't answer that way.
 * **Zero-build frontend.** Babel-standalone compiles JSX in the
   browser; all vendor assets are local (`static/vendor/`). Top-level
   scope is shared across `<script type="text/babel">` tags — reach

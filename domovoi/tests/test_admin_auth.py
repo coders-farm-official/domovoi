@@ -197,7 +197,12 @@ async def test_reset_admin_clears_credential_and_sessions() -> None:
         # Old token dead, tier unclaimed again (plugin mgmt fails closed
         # with 501 pre-setup, so probe via the web status endpoint).
         r = await client.get("/api/auth/status", headers=_bearer(token))
-        assert r.json() == {"setup_complete": False, "authenticated": False}
+        body = r.json()
+        assert (body["setup_complete"], body["authenticated"]) == (False, False)
+        # …and the cookie the setup set resumes nothing (2026-10-14).
+        assert body["resume_in_sec"] is None
+        r = await client.post("/api/auth/resume", headers={"Origin": "http://test"})
+        assert r.status_code == 401
 
 
 # ─── The setup code stays out of the logs (owner decision, 2026-10-11) ─────
@@ -455,8 +460,11 @@ async def test_login_success_sets_strict_cookie_and_live_token() -> None:
 async def test_cookie_only_mutation_403s_but_cookie_get_renders() -> None:
     async with _web() as client:
         token = await _claim_admin(client)
+        # The browser cookie the setup set: its own secret, not the Bearer.
+        cookie = client.cookies.get(COOKIE)
+    assert cookie and cookie != token
     core_app.state.config_apply_lock = asyncio.Lock()
-    cookie_only = {"cookies": {COOKIE: token}}
+    cookie_only = {"cookies": {COOKIE: cookie}}
     async with AsyncClient(
         transport=ASGITransport(app=core_app), base_url="http://test", **cookie_only
     ) as core:

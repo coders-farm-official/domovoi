@@ -4,6 +4,47 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-14 — A reload no longer signs the admin out
+
+Server update (core, dashboard and a database migration, V028); the
+update applies the migration.
+
+* **Reloading the dashboard keeps you signed in for an hour.** For 60
+  minutes after you enter the admin password in a browser, a reload, or
+  a new tab in that browser, is fully signed in: no password prompt, and
+  saving settings, restarting, plugins and the rest all work as before
+  the reload. The hour counts from when you signed in, not from when you
+  last did something. After it, a reload is **view only** as before, and
+  the first change asks for the password.
+* **Only that browser, only that sign-in.** Another phone or computer
+  still needs the password, and **sign out** ends it at once (so do
+  revoking the session and changing the password from another device).
+  On a computer other people use, sign out when you're done.
+* **The Admin card says until when** ("keeps you signed in until 14:32"),
+  once, with no countdown; the sidebar says **Admin** rather than
+  **Admin (view only)** while it lasts.
+* **Settings → Configuration → Security → Stay signed in after a reload**
+  sets the minutes (0 to 1440); **0** is the old behaviour, where every
+  reload is view only.
+* **Sign in once after updating.** The dashboard's sign-in cookie is now a
+  secret of its own rather than the admin token itself (a browser sends a
+  cookie to every port of the server, so other services there used to see
+  the token). A browser signed in before the update therefore shows
+  **signed out** after its next reload; sign in once and it is back, with
+  the hour. A tab you haven't reloaded stays signed in.
+* **The household token and the command recordings need the sign-in in
+  the tab.** A tab reloaded more than the hour after you signed in (view
+  only) no longer shows them; it says "sign in again" there instead. Inside
+  the hour a reload is signed in and shows them as before.
+* **A sign-out that didn't reach the server says so** ("Not signed out —
+  the Domovoi server did not answer … try again") instead of showing
+  signed out while the server still had you signed in.
+* **API:** `POST /api/auth/resume` (new), and `GET /api/auth/status`,
+  `POST /api/auth/login` and `/setup` now also answer
+  `reload_window_min`, `resume_until` and `resume_in_sec`
+  ([API_REFERENCE.md](API_REFERENCE.md) §3.1,
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#staying-signed-in-across-a-reload)).
+
 ## 2026-10-13 — Wake-word training: turn it on in Settings, train on the GPU
 
 Server and dashboard update; no migration. A Linux server or the Windows

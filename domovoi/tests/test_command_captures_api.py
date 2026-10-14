@@ -41,6 +41,7 @@ from domovoi.tests.auth_testkit import (
     _db,  # noqa: F401 — fixture
     bearer,
     claim_admin,
+    claim_admin_with_cookie,
     core_client,
     db_device_token,
     install_fake_db,
@@ -152,13 +153,12 @@ async def test_the_household_token_is_not_enough(name, claimed, mark_reached) ->
 
 @pytest.mark.parametrize("name", _IDS)
 @pytest.mark.asyncio
-async def test_the_cookie_renders_reads_and_never_writes(name, claimed, mark_reached) -> None:
+async def test_the_cookie_alone_neither_reads_nor_writes(name, claimed, mark_reached) -> None:
+    """Security tier, both halves Bearer-only since 2026-10-14: the
+    dashboard cookie reaches every port of the host, so it reads no
+    recording either."""
     async with _client(cookies={COOKIE: ADMIN_TOKEN}) as c:
-        if name in READS:
-            with pytest.raises(Reached):
-                await _send(c, name)
-        else:
-            assert (await _send(c, name)).status_code == 403
+        assert (await _send(c, name)).status_code == 403
 
 
 @pytest.mark.parametrize("name", _IDS)
@@ -311,7 +311,7 @@ async def _satellite(c: AsyncClient, room: str) -> dict:
 @pytest.mark.asyncio
 async def test_the_whole_life_of_a_room_s_recordings(rooms, fake_turn) -> None:
     async with web_client() as setup:
-        admin = await claim_admin(setup)
+        admin, admin_cookie = await claim_admin_with_cookie(setup)
     device = await db_device_token()
     admin_h = {**XRW, **bearer(admin)}
 
@@ -347,7 +347,10 @@ async def test_the_whole_life_of_a_room_s_recordings(rooms, fake_turn) -> None:
     # Reading back: the device tier never, the admin always.
     async with _client({HEADER: device}) as phone:
         assert (await phone.get("/api/captures")).status_code == 401
-    async with _client(cookies={COOKIE: admin}) as browser:
+    async with _client(cookies={COOKIE: admin_cookie}) as browser:
+        # The cookie alone reads nothing here (security tier, Bearer-only)…
+        assert (await browser.get("/api/captures")).status_code == 403
+    async with _client(bearer(admin)) as browser:
         listing = (await browser.get("/api/captures")).json()
     assert [c["id"] for c in listing["captures"]] == [kept["id"]]
     assert listing["retention_days"] == 14 and listing["problem"] is None

@@ -629,7 +629,10 @@ const VideoControls = ({ s, fire }) => {
 const SatCaptureControl = ({ s, fire, refresh }) => {
   const admin = useAdminSignedIn();
   const [busy, setBusy] = React.useState(false);
-  const path = admin ? `/api/captures?room_id=${encodeURIComponent(s.room_id)}` : null;
+  // The kept-count read is Bearer-only (the cookie alone is refused since
+  // 2026-10-14): asked only with the admin sign-in in this tab.
+  const live = adminReloadState().live;
+  const path = live ? `/api/captures?room_id=${encodeURIComponent(s.room_id)}` : null;
   const { data, refresh: refreshKept } = useApiObject(path, { quiet: true });
   // What the last toggle here set, shown until the roster (a slower read:
   // it asks every room's player) catches up — so the block never says

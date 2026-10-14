@@ -97,12 +97,20 @@ def install_fake_db(
     async def validate_token(_s, token):
         return token in state.sessions
 
+    # The browser cookie is its own secret since V028; in this fake a
+    # session's string doubles as its cookie, so a test that hands the
+    # client `cookies={COOKIE: <session>}` still means "that browser's
+    # cookie session".
+    async def validate_cookie(_s, cookie):
+        return cookie in state.sessions
+
     async def validate_device_token(_s, candidate):
         return bool(candidate) and candidate == state.device_token
 
     monkeypatch.setattr(admin_auth, "session_scope", fake_scope)
     monkeypatch.setattr(admin_auth, "has_admin_auth", has_admin_auth)
     monkeypatch.setattr(admin_auth, "validate_token", validate_token)
+    monkeypatch.setattr(admin_auth, "validate_cookie", validate_cookie)
     monkeypatch.setattr(admin_auth, "validate_device_token", validate_device_token)
     return state
 
@@ -196,6 +204,28 @@ async def claim_admin(client: AsyncClient, password: str = STRONG_PW) -> str:
     r = await client.post("/api/auth/setup", json={"setup_code": code, "password": password})
     assert r.status_code == 200, r.text
     return r.json()["token"]
+
+
+def session_cookie(response) -> str:
+    """The browser cookie a login / setup answer set: its own secret since
+    V028, NOT the Bearer the body carries."""
+    for header in response.headers.get_list("set-cookie"):
+        name, _, rest = header.partition("=")
+        if name.strip() == COOKIE:
+            return rest.split(";", 1)[0]
+    raise AssertionError(f"no {COOKIE} cookie in {response.headers!r}")
+
+
+async def claim_admin_with_cookie(
+    client: AsyncClient, password: str = STRONG_PW
+) -> tuple[str, str]:
+    """:func:`claim_admin`, also returning the browser cookie it set:
+    ``(token, cookie)``."""
+    code = admin_auth.generate_setup_code()
+    admin_auth.write_setup_code(code)
+    r = await client.post("/api/auth/setup", json={"setup_code": code, "password": password})
+    assert r.status_code == 200, r.text
+    return r.json()["token"], session_cookie(r)
 
 
 async def db_device_token() -> str | None:

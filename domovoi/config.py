@@ -64,6 +64,12 @@ HOME_PROBLEMS_VISIBILITY_ALIASES = {
 # something in .env meant to change it, and the likely change is quieter.
 HOME_PROBLEMS_VISIBILITY_UNKNOWN = "summary"
 
+# `admin_reload_window_min`: the default (the owner's 60 minutes) and the
+# cap, which domovoi/admin_auth.py also applies to the value the web reads
+# off the core's snapshot.
+ADMIN_RELOAD_WINDOW_DEFAULT_MIN = 60
+ADMIN_RELOAD_WINDOW_MAX_MIN = 1440
+
 _log = logging.getLogger(__name__)
 
 
@@ -414,6 +420,51 @@ class Settings(BaseSettings):
     # core's snapshot. Editable live in Settings -> Configuration
     # (Security).
     guest_queue_editing: bool = True
+
+    # How long, in minutes after the admin password was entered in a
+    # browser, a reload of the dashboard (or a new tab in that browser)
+    # stays signed in as the admin — owner decision 2026-10-14. Counted
+    # from the sign-in itself, not from the last use. Within it the page
+    # takes its sign-in back from the HttpOnly session cookie that browser
+    # holds (POST /api/auth/resume) with no password prompt; after it, a
+    # reload is view only and "sign in again" asks for the password, as it
+    # always did. 0 = every reload is view only (the behaviour before this
+    # setting). 0..1440 (a day); anything else in .env reads as 0, closed,
+    # and the log says so. Read by the web process, live, through the
+    # core's snapshot. Editable in Settings -> Configuration (Security).
+    admin_reload_window_min: int = ADMIN_RELOAD_WINDOW_DEFAULT_MIN
+
+    @field_validator("admin_reload_window_min", mode="before")
+    @classmethod
+    def _admin_reload_window_known(cls, value: object) -> int:
+        """Never fatal (a typo in .env must not take the voice service
+        down), and never WIDER than asked: a value that is not a whole
+        number of minutes reads as 0 (resume off); one past the cap reads
+        as the cap."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return ADMIN_RELOAD_WINDOW_DEFAULT_MIN
+        if isinstance(value, bool):
+            minutes = None
+        elif isinstance(value, int):
+            minutes = value
+        else:
+            try:
+                minutes = int(str(value).strip())
+            except ValueError:
+                minutes = None
+        if minutes is None:
+            _log.warning("ADMIN_RELOAD_WINDOW_MIN=%r is not a whole number of minutes; "
+                         "using 0 (a reload is view only)", value)
+            return 0
+        if minutes < 0:
+            _log.warning("ADMIN_RELOAD_WINDOW_MIN=%r is negative; using 0 (a reload is view only)",
+                         value)
+            return 0
+        if minutes > ADMIN_RELOAD_WINDOW_MAX_MIN:
+            _log.warning("ADMIN_RELOAD_WINDOW_MIN=%r is past the %d-minute cap; using %d",
+                         value, ADMIN_RELOAD_WINDOW_MAX_MIN, ADMIN_RELOAD_WINDOW_MAX_MIN)
+            return ADMIN_RELOAD_WINDOW_MAX_MIN
+        return minutes
 
     # ─── WebSocket keep-alives ─────────────────────────────────────────
     # Without periodic pings, a Pi's WS can go silently dead under flaky

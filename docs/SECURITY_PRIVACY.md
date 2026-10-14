@@ -1138,10 +1138,10 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite code push** (makes a Pi download and run fresh code) | Core: `POST /v1/admin/satellite/upgrade`. Dashboard: `POST /api/satellites/{room_id}/upgrade`. | **Fails closed** — 501 until setup. |
 | **Satellite pairing reset / preseed / delete** (lets the next device re-pair as a room; mints a room's token; frees a room name) | Core: `DELETE /v1/admin/satellites/{room_id}/pairing`, `POST .../pairing/preseed`, `DELETE /v1/admin/satellites/{room_id}`. Dashboard: `POST /api/satellites/{room_id}/pairing/reset`, `POST /api/satellites/pending/{id}/adopt`, `DELETE /api/satellites/{room_id}`. | **Fails closed** — 501 until setup. |
 | **Satellite media preparation** (builds the code and the first-boot scripts a Pi will run as root) | Dashboard: the whole `/api/satellites/media/*` router. Reads (`/status`, `/targets`, `/jobs`, `/jobs/{id}/download`, `/jobs/{id}/credentials`) take an admin **read** — the artifact is the code a satellite will run, `/jobs` lists the ids that name it, and `/targets` enumerates the drives plugged into this server. Writes (`/prepare`, `/cancel`, `/cache/refresh`) stay Bearer-only. | Pre-setup grace. The **downloadable zip carries no plaintext passwords**: `userconf.txt` holds the console password's hash, and the setup-AP key and console login are shown once in the dashboard from process memory. A card written directly to a **drive** still carries `domovoi/ap.json` and `domovoi/console.json` — stage 1 reads the first to raise its setup network, and anyone holding the card can read either anyway. |
-| **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer or cookie), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Setting and rotating are Bearer-only; the cookie renders the read and nothing else. |
+| **Device token** (the household credential) | Core: `GET /v1/admin/device-token` (Bearer-only since 2026-10-14), `POST /v1/admin/device-token` (set a chosen one), `POST /v1/admin/device-token/rotate`. Dashboard: the same three at `/api/auth/device-token[/rotate]`. | **Fails closed** — 501 until setup (and the token is rotated when setup completes). Reading, setting and rotating are all Bearer-only: the dashboard cookie alone reads nothing here (it reaches every port of the host — see [Staying signed in across a reload](#staying-signed-in-across-a-reload)). |
 | **Satellite approval and rejection** (binds a parked device to a room for good, or drops its request) | Core: `POST /v1/admin/satellites/approvals/{room_id}/approve`, `/reject`. Dashboard: `POST /api/satellites/approvals/{room_id}/approve`, `/reject`. The list of parked requests is an admin **read** (Bearer or cookie). | **Fails closed** — 501 until setup (2026-10-08, REV-32). With strict pairing the default, a satellite that connects to an unclaimed core parks; before this, any LAN host could park a device of its own there and approve it with no credential, and that pairing outlived the setup. Finish first-run setup, then approve. |
 | **Chat-tool resync** (regenerates and uploads tool source to the chat agent) | `POST /v1/admin/chat/resync` | Pre-setup grace. |
-| **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Writes are Bearer-only; the cookie renders the list and the audio. The household token never reads these, unlike the rest of the household's speech. |
+| **Command recordings for tuning** (audio of what was said in a room an admin opted in; see [below](#command-recordings-for-tuning-opt-in-per-room)) | Dashboard: `PUT` / `DELETE /api/captures/rooms/{room_id}` (turn a room on; turn it off, which deletes everything it kept), `PATCH` / `DELETE /api/captures/clips/{room_id}/{capture_id}` (label, delete one), and the reads `GET /api/captures` and `GET /api/captures/clips/{room_id}/{capture_id}/audio`. | **Fails closed** — 501 until setup, reads included. Reads and writes are Bearer-only (the dashboard cookie alone reads nothing here since 2026-10-14). The household token never reads these, unlike the rest of the household's speech. |
 | **Shared screens** (marks a device, such as the kitchen tablet, as one the whole household uses) | Dashboard: `PATCH /api/devices/{device_id}/shared-screen`; the flag reads back on `GET /api/devices` and on the device's own `POST /api/devices/register`. | Pre-setup grace. Admin tier, not the device tier the device's own rename takes, so the tablet's own household token cannot switch it back to personal. **Presentational, not a boundary, and a thin one.** The dashboard leaves personal content off a shared screen: calendar titles and locations, a reminder's text on Home and in the timer alert cards, the problem detail on Home, and People, Chat, Files and News on every launcher. But the tablet is paired, so it can read everything Home hides that way — the calendar and the rooms are household reads (since 2026-10-08) it holds the credential for — and the rest is an **open read** that anyone on the network can fetch with no credential at all (`/api/health`, `/api/plugins`). A reminder's words are the exception since 2026-09-30: every open timer read masks them for a caller without a household credential (rule M1, [Timers and reminders](#timers-and-reminders-house-wide)) — but the shared screen IS paired, so it receives them (and the `/ws/state` push carries them) and hides them only on screen. The pages dropped from the launchers still open by URL, and the tablet is paired, so it can read every device-tier page too (chat threads, files). Home also never masks a browser that can't register: an unpaired browser, **including a private window on the tablet itself**, gets the full Home. And the flag hangs off a **self-asserted device id** that the browser keeps in its own storage (`domovoi-client-id`). Clearing the tablet's site data, or registering under a new id, gives an unmarked device until an admin marks it again. A device that already holds the flag learns a change within about two minutes. The Android app applies the same masking to its own Home and launchers, from the same register answer, with the same limits: its device id lives in the app's own storage, an app that can't register (unpaired, on a claimed box) is never masked, and a web backend too old to send the flag is taken as "not shared". Enforcement would take a restricted display pairing of its own, which this is not. |
 | **Guest bans** (takes a playing room's queue and transport away from a guest, every room — 2026-10-10) | Dashboard: `POST /api/music/guest-bans`, `DELETE /api/music/guest-bans/{id}`; reads via `GET /api/music/guest-bans` and `GET /api/music/guests` (the guests seen in the last week). | Pre-setup grace (there are no guests before setup). Gated so a ban can't be lifted by the guest it bans — not because a ban is a security boundary (it isn't; see [Guests on a playing room](#guests-on-a-playing-room)). |
 | **Room-queue device blocks** (takes queue editing away from a named device) | Dashboard: `POST /api/music/queue-blocks`, `DELETE /api/music/queue-blocks/{id}`; reads via `GET /api/music/queue-blocks` and `GET /api/devices`. | Pre-setup grace. Gated so a block can't be lifted from the device it was applied to — not because the block itself is a security boundary (it isn't; see the daily tier above). |
@@ -1154,7 +1154,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
 | **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |
-| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password` | n/a — these only exist once setup is done. |
+| **Auth/session management** | `POST /api/auth/logout`, `DELETE /api/auth/sessions/{token_hash}`, `POST /api/auth/password`; `POST /api/auth/resume` (the session cookie, same origin, inside the reload window — [Staying signed in across a reload](#staying-signed-in-across-a-reload)) | n/a — these only exist once setup is done. |
 
 The `admin` in a `/v1/admin/...` path means "used by the dashboard," not
 "requires the admin password" — but none of those routes is open any more.
@@ -1236,13 +1236,123 @@ reason, so a new route cannot quietly ship open.
   core trusts `X-Forwarded-For` only from loopback, where the web process
   runs.
 - **CSRF stance:** login also sets a `SameSite=Strict`, `HttpOnly` cookie —
-  but the cookie can only *render* authenticated GET state. **Every
-  mutation requires the `Authorization: Bearer` header** (the dashboard
-  holds the token in JS memory). A cross-site POST carries nothing that
-  authorizes it.
+  a random secret of its own, never the Bearer (see *What a service on the
+  same box can do with the cookie*, below) — but the cookie by itself can
+  only *render* authenticated GET state.
+  **Every mutation requires the `Authorization: Bearer` header** (the
+  dashboard holds the token in JS memory). A cross-site POST carries
+  nothing that authorizes it. The one thing the cookie does beyond
+  rendering is let the dashboard's own page take its Bearer back after a
+  reload, inside the reload window — next.
 - **Forgot the password?** `python -m domovoi.main --reset-admin` on the
   server clears the credential and every session and prints a fresh setup
   code. Requires being at the machine — same proof-of-possession logic.
+
+### Staying signed in across a reload
+
+Owner decision, 2026-10-14: "If someone logs in with admin, from that
+device, that exact session, they should be good for within 60 mins of
+signing in. Refreshing should not lose admin on the same machine, same
+session."
+
+**What a reload can do now.** For **60 minutes** after you enter the admin
+password in a browser, reloading the dashboard, or opening it in another
+tab of that same browser, is fully signed in: no password prompt, and
+every admin action works, the security tier included, exactly as before
+the reload. The minutes count from the password sign-in (or a password
+change made from that session), never from use, so a busy session does
+not stretch them. After that, a reload is **view only** as it always was:
+pages render, and the first change asks for the password. A tab that was
+never reloaded keeps its sign-in as before. The Settings → Configuration
+Admin card says until when a reload keeps you signed in. The length is
+Settings → Configuration → Security → **Stay signed in after a reload**
+(`ADMIN_RELOAD_WINDOW_MIN`, minutes, 0–1440, default 60, applies at once);
+**0** turns it off and every reload is view only again.
+
+**How.** The server stamps each session with the moment it last proved
+the password (`admin_sessions.signed_in_at`, V028). The cookie the sign-in
+set is a 256-bit secret of its own; the session row keeps only its
+sha256, beside the session's Bearer *wrapped* under it (XOR with an
+HMAC-SHA256 of the cookie), so the database alone never yields the Bearer.
+A reloaded page asks `POST /api/auth/resume`, which unwraps that
+session's **own** Bearer and hands it back — nothing new is minted — only
+when all of these hold:
+
+* the request carries the session cookie, and that session is live: not
+  signed out, revoked, expired or past the 90-day cap;
+* `now − signed_in_at` is inside the window (and `signed_in_at` is not in
+  the future: a database clock stepped back after a sign-in does not
+  stretch the window);
+* it carries `X-Requested-With`;
+* it is **same-origin**: `Origin` is exactly the scheme, host and port the
+  request was sent to (its `Host`); a request with no `Origin` must carry
+  `Sec-Fetch-Site: same-origin`, and one with neither is refused.
+
+The page puts the token back into memory and nowhere else — never
+`localStorage` or `sessionStorage` — and the cookie stays `HttpOnly;
+SameSite=Strict`. A refusal changes nothing about the session.
+
+**Why this is not a CSRF hole.** A page on another site cannot use it:
+`SameSite=Strict` keeps the browser from attaching the cookie to its
+request at all, and `X-Requested-With` forces a CORS preflight that this
+server only answers for its own port. The same-origin rule closes the
+case those two leave open: a page on the same *host* but another port — a
+different service on the box, or a second Domovoi dashboard reached
+through the server switcher — is the same *site*, so the browser does
+attach the cookie, and the CORS allowance for the server switcher would
+let that page read the answer. It is refused before the cookie is looked
+at. And a page that could make the request without reading the answer
+would gain nothing: the token travels in the response body, and the
+request itself changes nothing.
+
+**What ends it, at once:** signing out in any tab of that browser (it
+revokes the session and drops the cookie), revoking the session, changing
+the password from another session (every other session is revoked),
+`--reset-admin`, setting the window to 0. **Another device never inherits
+it:** it holds its own cookie, or none, and a fresh sign-in on another
+device does not extend this browser's window. Sessions that existed
+before the upgrade carry no `signed_in_at` and no cookie of their own:
+their old cookie (which was the Bearer) stops working at all after the
+upgrade, so that browser reads as signed out once and its owner signs in
+again; a tab still holding the Bearer in memory keeps working. The
+dashboard reads the window live from the core; while the core is down or
+restarting it uses the smaller of the last value it saw and the one it
+started with (0, no resume, if it has seen none), so an admin who turned
+it off is not turned back on by a restart.
+
+**What a service on the same box can do with the cookie.** A browser
+sends a cookie to every *port* of the host that set it, so every other
+service on the Domovoi server — a plugin's container, a room's MPD
+stream, anything else the household runs there — receives the dashboard
+cookie with each request the browser makes to it. Until 2026-10-14 that
+cookie *was* the admin Bearer: such a service held a full admin token for
+up to 90 days. Now it holds the cookie only. With it, a service that
+chooses to misuse it can still read what an admin's view-only page
+reads — the admin-read tier: settings with their secrets masked,
+satellite logs, the session list — and each such read slides the
+session's expiry, up to its 90-day cap. It can **not** read the
+security tier: the household token and the command recordings answer
+the Bearer only, so a view-only tab says "sign in again" there. And —
+**inside the reload window only** — it can call `POST /api/auth/resume`
+itself, forging the `Origin` and `X-Requested-With` headers a browser
+would not let a page forge, and get that session's Bearer. Outside the
+window the cookie is never a Bearer. Setting the window to 0 removes
+that path entirely; not running services you don't trust on the Domovoi
+server removes the rest. An expired session's cookie, or one past the
+90-day cap, renders nothing at all.
+
+**What it costs, said plainly.** Inside the window, anyone at the unlocked
+computer — the next person at a shared family PC — gets the admin tier by
+reloading the page, exactly as they would have by using the tab before
+the reload. Sign out when you are done on a shared computer (that ends it
+immediately), or set the window to 0. And a script running inside the
+dashboard's own origin (an injected script, if one ever got in) can now
+take the token from a reloaded tab within the window, where before it
+could read it only from a tab that had signed in; this does not widen
+what such a script could do to a signed-in tab. Behind a reverse proxy
+that shows the browser a different scheme or port than the dashboard
+sees, the same-origin rule refuses the resume and a reload is view only,
+as before (uvicorn believes `X-Forwarded-Proto` from loopback only).
 
 ## Plugin trust model — read this before installing anything
 
@@ -1441,7 +1551,7 @@ is `domovoi/command_captures.py`, `web/backend/api/captures.py` and V016.
 | **What is never kept** | Wake-word **training clips** (their own pipeline, never routed). **Chat-mode** turns (open conversation, not commands; the design never ends those early). **Barge-ins** (the capture opens while the satellite is still talking, so it carries the reply's own audio). **Push-to-talk** (a button ends it, not silence). Any command captured **during a drop-in call**, judged over the whole capture: a call live when it opened, one that started while it was open, or one hung up before it closed (the speaker was playing the other room, whose people never opted in). A blank capture, a self-echo, a turn that was only the wake greeting coming back through the mic, or a turn whose speech-to-text is down. |
 | **Where** | `COMMAND_CAPTURES_DIR`, default `~/.domovoi/captures/<room>/` on the Domovoi server; files `0600` in `0700` directories on Linux. **No web file route serves it**: the only reader is the admin API below. The core refuses to write at all (and the dashboard refuses to turn a room on) when the directory is inside, or around, a media library, the sounds / wake-model / wake-clip channels, the plugin directory, the repo, the home or config directory itself, and when the setting is not an absolute path (the core writes and the dashboard deletes, each from its own working directory). The Files surface refuses any path into `~/.domovoi` except its media subdirectories, even through a library rooted above it, and any path into `COMMAND_CAPTURES_DIR` wherever it points (a removable drive or a plugin's library root included); a folder listing, a folder zip and an import copy leave both out of what they walk. |
 | **How long** | 14 days (`COMMAND_CAPTURE_RETENTION_DAYS` may shorten it, never lengthen it), swept hourly by the core's `command_capture_pruner` and, at most as often, on the write path too (so a core running without workers still forgets); recordings past it are hidden from the list and refused by the audio route immediately. Disk cap `COMMAND_CAPTURE_MAX_MB` (500 MB) for all rooms together, oldest first, enforced on every write. |
-| **Who can read it** | An admin: `GET /api/captures` (list, with transcripts) and `GET /api/captures/clips/{room}/{id}/audio`, Bearer or the dashboard cookie, **501 before setup**. Not the household token and not `?device_token=` — the rest of the household's speech is readable by any paired device; this is not. Settings → *Recordings* plays, labels ("cut off too early" / "fine" / "waited too long") and deletes them. |
+| **Who can read it** | An admin: `GET /api/captures` (list, with transcripts) and `GET /api/captures/clips/{room}/{id}/audio`, with the admin Bearer only (not the dashboard cookie alone), **501 before setup**. Not the household token and not `?device_token=` — the rest of the household's speech is readable by any paired device; this is not. Settings → *Recordings* plays, labels ("cut off too early" / "fine" / "waited too long") and deletes them. |
 | **Who can see that it is on** | Everyone. The open satellites list carries `capture_commands` / `capture_since` (true exactly when the core would keep that room's commands: opted in and an admin credential exists, so a room `--reset-admin` paused reads as off), and the dashboard marks the room *recording commands for tuning* on its satellite card, in its drawer and on Home's room row. |
 | **How it goes away** | Turning a room off deletes its row and then every recording it kept, in the same request (the core re-checks the opt-in after each write, and the pruner sweeps any room with files but no row, so a write that raced the opt-out does not survive it). Retiring a room does the same. An admin can delete one at a time. Deletion only ever touches capture-shaped names. Moving `COMMAND_CAPTURES_DIR` leaves the old directory to the operator. |
 | **What it sends anywhere** | Nothing. The files stay on the Domovoi server; the log line for a kept recording carries the room, the id, the length and the end reason, never the words. |
