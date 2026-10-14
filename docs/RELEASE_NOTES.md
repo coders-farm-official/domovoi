@@ -19,7 +19,8 @@ Server, dashboard and satellite update; no migration. Pis are unchanged.
   server prove its fingerprint before it writes anything; the device is
   pinned to that server from then on and won't run unpinned. The command
   itself is only as trustworthy as the dashboard page it is shown on, which
-  is plain HTTP on the LAN: check the fingerprint it prints against
+  is plain HTTP on the LAN: before running it, check that it downloads from
+  your server's address and that its `fp=` is the fingerprint under
   **Settings → About** on another device. Make a fresh command after
   updating Domovoi (an old one refuses the new download). The server
   address in a code must be on the home network.
@@ -30,8 +31,17 @@ Server, dashboard and satellite update; no migration. Pis are unchanged.
   `/usr/local/lib/domovoi-satellite/install-pc.sh --uninstall`: it acts only
   on the paths written into it and on root's own record of what it
   changed, never on anything the satellite's account can write.
-  `--purge` removes the satellite's files, and the installer refuses an
-  account that already runs a Domovoi server.
+  `--purge` removes the satellite's files (root's copy of its purger, under
+  the system's Python: never the satellite's own code), and the installer
+  refuses an account that already runs a Domovoi server. On a desktop every
+  sudo step comes first; sudo then forgets the password before the
+  satellite's code runs, in a fresh venv and a session with no terminal.
+* **A spare computer whose settings don't load stays stopped** (exit 78)
+  instead of restarting every few seconds, and its tray and
+  `python -m satellite.client --status` say why.
+* **The dashboard refuses a satellite setting the satellite would refuse**
+  (an ALSA device name that is not a plain one, text over 120 characters
+  or with a line break), with the reason, instead of "sent".
 * **The laptop asks you** whether the server may update and restart it on
   its own ("automatic", like a Pi) or must wait for your OK in the tray
   ("ask me"). Either way it gets **no root helpers**: no Wi-Fi re-joins, no

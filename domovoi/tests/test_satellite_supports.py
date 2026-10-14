@@ -574,6 +574,30 @@ async def test_settings_endpoints_hide_and_refuse_what_the_device_left_out(core,
     assert pc_ws.sent == [{"type": "set_config", "changes": {"wake.threshold": 0.6}}]
 
 
+async def test_the_settings_endpoint_refuses_what_the_satellite_would_refuse(core, paired, inventory):
+    """Round 2: a value the satellite refuses (an ALSA name that runs a
+    command, a string over 120 characters, a line break) is refused here
+    with the reason, instead of "sent" and then silently dropped."""
+    pi, pi_ws = await _connect(core, "pi_xvf3800")
+    async with core.client as c:
+        r = await c.post(f"/v1/admin/satellite/{pi.room_id}/config", json={"changes": {
+            "music.alsa_device": 'file:"|id",raw',
+            "audio.output_mixer_card": "0;reboot",
+            "audio.output_mixer_control": 'PCM"',
+            "audio.input_device": "x" * 121,
+            "audio.output_device": "Array\nmore",
+            "wake.threshold": 0.6,
+        }}, headers=ADMIN)
+    body = r.json()
+    assert body["sent"] == ["wake.threshold"], body
+    assert "plain ALSA device name" in body["rejected"]["music.alsa_device"]
+    assert "card number or name" in body["rejected"]["audio.output_mixer_card"]
+    assert "mixer control name" in body["rejected"]["audio.output_mixer_control"]
+    assert "120 characters" in body["rejected"]["audio.input_device"]
+    assert "control characters" in body["rejected"]["audio.output_device"]
+    assert pi_ws.sent == [{"type": "set_config", "changes": {"wake.threshold": 0.6}}]
+
+
 async def test_logs_endpoint_skips_the_live_pull_for_a_device_without_logs(core, paired, inventory):
     phone, ws = await _connect(core, "android_room")
     async with core.client as c:

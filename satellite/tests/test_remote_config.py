@@ -301,3 +301,15 @@ def test_discovery_never_moves_a_laptop_off_the_home_network(tmp_path):
     home = SimpleNamespace(url="ws://192.168.0.200:6370", via="sweep", detail="")
     client._adopt_located(sat.cfg, cfg_path, home, False)
     assert sat.cfg.domovoi_url == "ws://192.168.0.200:6370"
+
+
+@pytest.mark.parametrize("value", [[0.5], {"x": 1}, float("nan"), float("inf"), None, 10**13,
+                                   "x" * 121, "PCM\nx", "a\tb", "del\x7f", b"bytes", (1, 2)],
+                         ids=["list", "dict", "nan", "inf", "none", "huge-int", "long", "newline",
+                              "tab", "del", "bytes", "tuple"])
+def test_the_screen_takes_plain_scalars_only(value):
+    """Review round 2 (a surviving mutant): the value check is the
+    screen's own, not only the writer's behind it."""
+    for pc in (True, False):
+        assert remote_config.screen({"audio.input_device": value}, pc=pc) == ({}, ["'audio.input_device'"])
+    assert remote_config.screen({"audio.input_device": "x" * 120}, pc=False)[0] == {"audio.input_device": "x" * 120}

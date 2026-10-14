@@ -712,3 +712,35 @@ def test_the_http_base_of_a_core_address():
     assert discovery.http_base_of("ws://192.168.0.5:6370") == "http://192.168.0.5:6370"
     assert discovery.http_base_of("wss://domovoi.local") == "https://domovoi.local:6370"
     assert discovery.host_port_of("ws://10.0.0.2") == ("10.0.0.2", 6370)
+
+
+
+# ─── a spare computer moves only within the home network (review round 2) ─
+
+def test_a_laptop_never_follows_its_server_off_the_home_network(tmp_path, monkeypatch):
+    """Even when the address answers with the pinned key (the server, or a
+    relay of it, on a public address): a laptop's microphone streams only
+    within the house, like the enrolment code that named the server."""
+    from types import SimpleNamespace
+
+    from satellite.tests._client_import import import_client
+
+    client = import_client()
+    cfg = client.Config.from_toml({
+        "device": {"profile": "generic_pc"},
+        "satellite": {"room_id": "study", "domovoi_url": "ws://192.168.0.117:6370",
+                      "server_fingerprint": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"},
+    })
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[satellite]\ndomovoi_url = "ws://192.168.0.117:6370"\n', encoding="utf-8")
+    for url in ("ws://203.0.113.9:6370", "ws://8.8.8.8:6370", "ws://core.example.com:6370", "ws://127.0.0.1:6370"):
+        client._adopt_located(cfg, cfg_path, SimpleNamespace(url=url, via="sweep", detail=""), False)
+        assert cfg.domovoi_url == "ws://192.168.0.117:6370", url
+        assert "192.168.0.117" in cfg_path.read_text(encoding="utf-8")
+    client._adopt_located(cfg, cfg_path, SimpleNamespace(url="ws://domovoi.local:6370", via="name", detail=""), False)
+    assert cfg.domovoi_url == "ws://domovoi.local:6370" and "domovoi.local" in cfg_path.read_text(encoding="utf-8")
+    # A Pi follows its pinned server wherever it proves itself, as before.
+    pi = client.Config.from_toml({"device": {"profile": "xvf3800_usb"},
+                                  "satellite": {"domovoi_url": "ws://192.168.0.117:6370"}})
+    client._adopt_located(pi, cfg_path, SimpleNamespace(url="ws://203.0.113.9:6370", via="sweep", detail=""), False)
+    assert pi.domovoi_url == "ws://203.0.113.9:6370"

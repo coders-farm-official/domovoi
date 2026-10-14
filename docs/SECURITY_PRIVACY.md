@@ -1780,11 +1780,12 @@ point a room's microphone at a server outside the house.
 HTTP on the LAN (TLS is on the [backlog](#hardening-backlog--deferred-in-v1-on-purpose)):
 someone able to rewrite that page in transit could hand you a different
 command, exactly as they could read the admin password typed into it, and
-running that command is running their code. To rule that out, compare the
-fingerprint the command prints ("…proved it is SHA256:…") with **Settings
-→ About** on another device — before you type your sudo password, if you
-can. The satellite's audio and its websocket frames are unencrypted and
-unauthenticated on the LAN, as a Pi's are.
+running that command is running their code: what it prints afterwards
+proves nothing. So check **the command itself, before running it**: the
+address it downloads from is your Domovoi server's, and the `fp=` in the
+enrolment code is the fingerprint under **Settings → About**, looked at on
+another device. The satellite's audio and its websocket frames are
+unencrypted and unauthenticated on the LAN, as a Pi's are.
 
 **The whole chain an install trusts:** the dashboard page (plain HTTP,
 above); your Domovoi server, which built the bundle and holds the key the
@@ -1827,11 +1828,19 @@ to pinned SHA-256s the same way.
   run from that copy and acts only on paths written into the script (the
   unit, the lid-switch drop-in, the charge-limit rule, the four sleep
   targets); it never runs code, or reads a list of paths, from anything
-  the satellite's account can write. On a headless box the account's own
-  files are removed as that account, and `--purge` ends with `userdel -r`.
-  A desktop's `--purge` removes only the satellite's files from
-  `~/.domovoi`, and the installer refuses an account whose `~/.domovoi`
-  belongs to a Domovoi server.
+  the satellite's account can write — not the satellite's code tree, not
+  its venv. A desktop's `--purge` is root's copy of
+  `satellite/scripts/purge-satellite-files.py` under the system's
+  `python3 -I`, and removes only the satellite's files from `~/.domovoi`;
+  on a headless box the account's own files are removed as that account,
+  and `--purge` ends with `userdel -r`. The **installer** does run the
+  satellite's code, as the satellite's account and only after every sudo
+  step: on a desktop it then makes sudo forget the password (`sudo -k`)
+  first, builds a fresh venv (an old one is removed unrun), and runs that
+  code in a session with no terminal (`setsid`), so nothing it starts can
+  use a sudo ticket of yours; the uninstaller ends with `sudo -k` too. The
+  installer refuses an account whose `~/.domovoi` belongs to a Domovoi
+  server.
 * **The person chooses what the server may do on its own**
   (`[pc] permissions`):
 

@@ -77,9 +77,12 @@ download, which is the point.
 
 The command is only as trustworthy as the dashboard page you copied it
 from, and that page is plain HTTP on your network: someone who can rewrite
-it on the way could give you a different command. When the installer says
-"…proved it is SHA256:…", check that fingerprint against **Settings →
-About** on another device (your phone) before you type your password.
+it on the way could give you a different command, and once that runs it is
+their code, whatever it prints. So **check the command before you run
+it**: the address it downloads from is your Domovoi server's (the one you
+open the dashboard at), and the `fp=` in the code at its end is the
+fingerprint under **Settings → About**, looked at on another device (your
+phone).
 
 ### 2. Run it
 
@@ -278,6 +281,7 @@ music player, which the container guard would otherwise keep expecting.
 | Tray grey: "refused … paired to another device" | That room already has a satellite. Pick another name, or retire the old room in the dashboard first (or **Reset pairing** in its drawer if this device replaces it). |
 | Tray grey: "failed the identity check" | The server at the saved address isn't yours any more (moved, or something else answers there). It never connects to it. Re-run the install command made by your dashboard. |
 | It doesn't start: "no pinned Domovoi server identity" | A spare computer never trusts the first server that answers. Re-run the install command from the dashboard. |
+| It doesn't start: "its settings … don't load" (the tray, or `--status`) | A value in `~/.domovoi/config.toml` it refuses, named in the message (an audio device name that is not a plain ALSA one, say). Fix it, then `systemctl --user start domovoi-satellite`: it stays stopped until then rather than retrying every few seconds. |
 | No sound at the sign-in screen | See *Sound* above (automatic sign-in for its account). |
 | Anything else | `journalctl --user -u domovoi-satellite -e` (headless: `sudo journalctl -u domovoi-satellite -e`), and the live log in the dashboard's room drawer. |
 

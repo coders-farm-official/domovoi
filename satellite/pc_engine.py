@@ -528,7 +528,13 @@ def cli(args: Any) -> int:
             print(f"{verb}d: {d['kind']}: {d['summary']}")
         return 0
     except ConnectionError as e:
-        print(f"{e}. Is the satellite running? (systemctl --user status domovoi-satellite)", file=sys.stderr)
+        from satellite import not_started
+
+        why = not_started.read()
+        if why:
+            print(f"The satellite is not running: {why}", file=sys.stderr)
+        else:
+            print(f"{e}. Is the satellite running? (systemctl --user status domovoi-satellite)", file=sys.stderr)
         return 3
 
 
