@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from satellite import control, devices, engine_platform, pc_engine
+from satellite import not_started
 from satellite.tests._client_import import import_client
 
 client = import_client()
@@ -630,7 +631,20 @@ def test_a_pi_still_applies_payloads_when_the_frame_does_not_say_otherwise(monke
     assert synced == [1]
 
 
-def test_a_laptop_refuses_to_run_on_a_server_s_account(tmp_path, capsys):
+class _Started(Exception):
+    """The engine got past its start-up refusals (it must not, here)."""
+
+
+def _no_engine_past_the_checks(monkeypatch):
+    """A refusal that is removed must fail the test at once, not leave it
+    running a satellite (review round 2: this test hung under that mutant)."""
+    def started(*a, **kw):
+        raise _Started()
+    monkeypatch.setattr(client, "_resolve_server_url", started)
+
+
+def test_a_laptop_refuses_to_run_on_a_server_s_account(tmp_path, capsys, monkeypatch):
+    _no_engine_past_the_checks(monkeypatch)
     cfg_path = tmp_path / "config.toml"
     profile = "windows_pc" if sys.platform == "win32" else "generic_pc"
     cfg_path.write_text(f'[device]\nprofile = "{profile}"\n[satellite]\nroom_id = "study"\n'
@@ -640,3 +654,48 @@ def test_a_laptop_refuses_to_run_on_a_server_s_account(tmp_path, capsys):
     assert client.main(["--config", str(cfg_path)]) == engine_platform.EXIT_UNPINNED
     assert "belongs to a Domovoi server" in capsys.readouterr().err
     assert pc_engine.core_account(client.CONFIG_DIR)
+    assert "belongs to a Domovoi server" in (not_started.read() or "")
+
+
+@pytest.mark.parametrize("body", [
+    '[music]\nalsa_device = "file:\\"|id\\",raw"\n',
+    '[pc]\npermissions = "sometimes"\n',
+    '[audio]\noutput_mixer_card = "0;reboot"\n',
+    '[satellite\nbroken toml\n',
+], ids=["pipe-device", "permissions", "mixer-card", "toml"])
+def test_a_laptop_whose_settings_do_not_load_stays_stopped_and_says_why(tmp_path, capsys, monkeypatch, body):
+    """Round 2: exit 78 (its unit does not restart it every 5 s), and the
+    tray and the CLI say why rather than only "isn't running"."""
+    from satellite import tray
+
+    _no_engine_past_the_checks(monkeypatch)
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(f'[device]\nprofile = "generic_pc"\n{body}', encoding="utf-8")
+    assert client.main(["--config", str(cfg_path)]) == engine_platform.EXIT_UNPINNED == 78
+    assert "not starting" in capsys.readouterr().err
+    why = not_started.read()
+    assert why and "don't load" in why
+    assert why in tray.connection_text(None)
+    assert client.main(["--status"]) == 3
+    assert f"The satellite is not running: {why}" in capsys.readouterr().err
+
+
+def test_a_start_that_passes_the_checks_clears_the_reason(tmp_path, monkeypatch):
+    _no_engine_past_the_checks(monkeypatch)
+    not_started.note("an old reason")
+    cfg_path = tmp_path / "config.toml"
+    profile = "windows_pc" if sys.platform == "win32" else "generic_pc"
+    cfg_path.write_text(f'[device]\nprofile = "{profile}"\n[satellite]\nroom_id = "study"\n'
+                        f'domovoi_url = "ws://192.168.0.117:6370"\nserver_fingerprint = "{FP}"\n', encoding="utf-8")
+    with pytest.raises(_Started):
+        client.main(["--config", str(cfg_path)])
+    assert not_started.read() is None
+
+
+def test_a_pi_whose_config_does_not_load_still_raises_as_before(tmp_path, monkeypatch):
+    _no_engine_past_the_checks(monkeypatch)
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[device]\nprofile = "xvf3800_usb"\n[satellite]\nsat_type = "vido"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="sat_type"):
+        client.main(["--config", str(cfg_path)])
+    assert not_started.read() is None

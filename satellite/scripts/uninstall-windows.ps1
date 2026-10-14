@@ -186,7 +186,8 @@ if ($Purge) {
                'wake_threshold', 'manifest-serials.json', 'net-settings.logged',
                'plugin_payload_state.json', 'plugin_payload_manifest.json', 'pending_payload.json',
                'provisioning_state.json', 'image_sat_type', 'image_device_profile', 'ap.json',
-               'setup_gadget.img', 'control.sock', 'install-pc.json', 'plugin_payloads')
+               'setup_gadget.img', 'control.sock', 'install-pc.json', 'not-started.txt',
+               'plugin_payloads')
     foreach ($name in $files) { Remove-Tree (Join-Path $cfg $name) }
     foreach ($pattern in 'config.toml.bak-*', 'previous-enrolment-*') {
         foreach ($item in @(Get-ChildItem -LiteralPath $cfg -Filter $pattern -Force -ErrorAction SilentlyContinue)) {

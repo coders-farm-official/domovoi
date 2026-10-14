@@ -2765,6 +2765,7 @@ async def admin_update_satellite_config(
     from domovoi.satellite_config_schema import (
         FIELD_BY_NAME,
         coerce_and_validate,
+        spec_for_board,
     )
 
     target = app.state.active_sessions.get(room_id)
@@ -2793,7 +2794,9 @@ async def admin_update_satellite_config(
             rejected[name] = "this satellite doesn't have this setting yet — upgrade it first"
             continue
         try:
-            accepted[name] = coerce_and_validate(spec, raw)
+            # By the satellite's own rule for its board: a Windows PC's
+            # device names are Windows ones, not ALSA ones.
+            accepted[name] = coerce_and_validate(spec_for_board(spec, getattr(target, "board", None)), raw)
         except ValueError as e:
             rejected[name] = str(e)
 

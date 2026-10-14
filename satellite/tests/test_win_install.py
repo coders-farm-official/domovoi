@@ -395,16 +395,19 @@ def test_purge_removes_only_the_satellite_s_own_files(tmp_path):
 
 
 def test_the_uninstaller_s_list_covers_every_satellite_file():
+    """The list Linux's purge uses (satellite/scripts/purge-satellite-files.py,
+    which root runs from its own copy), and a server's markers."""
     import re as _re
+    import runpy
 
-    from satellite import pc_install
-
+    purge = runpy.run_path(str(SCRIPTS / "purge-satellite-files.py"), run_name="purge_list")
     text = (SCRIPTS / "uninstall-windows.ps1").read_text(encoding="ascii")
     block = text[text.index("$files = @("):text.index(")", text.index("$files = @("))]
     names = set(_re.findall(r"'([^']+)'", block))
-    assert set(pc_install.SATELLITE_FILES) | set(pc_install.SATELLITE_DIRS) <= names
+    assert set(purge["SATELLITE_FILES"]) | set(purge["SATELLITE_DIRS"]) <= names, \
+        set(purge["SATELLITE_FILES"]) - names
     assert {"config.toml.bak", "server-names.json"} <= names
-    for marker in pc_install.CORE_MARKERS:
+    for marker in purge["CORE_MARKERS"]:
         assert f"'{marker}'" in text, "the uninstaller knows a server's files"
 
 

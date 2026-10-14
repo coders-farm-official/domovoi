@@ -579,14 +579,35 @@ def test_a_windows_satellite_refuses_a_bad_stored_device_name_like_a_laptop(tmp_
 @pytest.mark.skipif(not WINDOWS, reason="the Windows engine's refusal")
 def test_the_refusal_is_one_clear_line_and_exit_78(tmp_path, capsys):
     path = _bad_device_config(tmp_path)
+    from satellite import not_started, tray
+
     assert client.main(["--config", str(path)]) == ep.EXIT_CONFIG == 78
     err = capsys.readouterr().err.strip().splitlines()
-    assert len(err) == 1 and err[0].startswith("domovoi-satellite: not starting: [music] alsa_device")
-    assert "--list-devices" in err[0] and str(path) in err[0]
+    assert len(err) == 1 and err[0].startswith(f"domovoi-satellite: not starting: its settings in {path} don't load: "
+                                               "[music] alsa_device")
+    assert "--list-devices" in err[0]
+    # The tray and the CLI say it too (not-started.txt, beside the install's
+    # own settings - never the person's ~\.domovoi).
+    why = not_started.read()
+    assert why and "is not a Windows audio device" in why and why in tray.connection_text(None)
     # A file that isn't TOML at all is refused the same way.
-    path.write_text("[satellite\n", encoding="utf-8")
+    path.write_text('[device]\nprofile = "windows_pc"\n[satellite\n', encoding="utf-8")
     assert client.main(["--config", str(path)]) == 78
     assert capsys.readouterr().err.startswith("domovoi-satellite: not starting: ")
+
+
+def test_the_not_started_note_lives_beside_the_install_s_own_settings(tmp_path, monkeypatch):
+    """The tray and the CLI run as the person (their ~ is their profile,
+    where a server would keep its files); the note is the install's."""
+    from satellite import not_started
+
+    install = tmp_path / "Satellite"
+    (install / "python").mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable", str(install / "python" / "pythonw.exe"))
+    assert not_started._default_path() == Path.home() / ".domovoi" / "not-started.txt", "not an install"
+    (install / ".domovoi-satellite-root").write_text("x")
+    want = install.resolve() / ".domovoi" / "not-started.txt"
+    assert not_started._default_path() == (want if WINDOWS else Path.home() / ".domovoi" / "not-started.txt")
 
 
 @pytest.mark.parametrize("key", ["pc.server_search", "pc.permissions", "device.profile",

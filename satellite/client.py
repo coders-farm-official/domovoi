@@ -65,7 +65,7 @@ from satellite import (
     wake_model_sync,
     wifi_profiles,
 )
-from satellite import alsa_names
+from satellite import alsa_names, not_started
 from satellite._resample import StreamingResampler
 from satellite.devices import DeviceProfile
 from satellite.leds import LEDConfig, LEDController
@@ -8542,6 +8542,21 @@ def _locate_server(cfg: "Config") -> "tuple[Any, bool, str | None]":
     return found, is_auto, last_known
 
 
+def _names_a_pc_profile(config_path: Path) -> bool:
+    """Whether the config file names a spare-computer profile, even when it
+    does not load (a TOML error included)."""
+    try:
+        text = Path(config_path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        profile = str(tomllib.loads(text).get("device", {}).get("profile", ""))
+        return profile in engine_platform.PC_PROFILES
+    except (ValueError, AttributeError):
+        return any(re.search(rf"(?m)^\s*profile\s*=\s*[\"']{re.escape(name)}[\"']", text)
+                   for name in engine_platform.PC_PROFILES)
+
+
 def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) -> None:
     """Use what :func:`_locate_server` found, and persist it: config.toml for
     a device that already has a real address there (it was approved, or
@@ -8684,15 +8699,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         cfg = Config.load(args.config)
     except ValueError as e:
-        if sys.platform != "win32":
+        # A spare computer whose settings don't load stays stopped (exit 78:
+        # its unit does not restart it every few seconds, a Windows one's
+        # supervisor leaves it stopped and keeps this line for the tray's
+        # notification) and says why to its tray and CLI. A Pi raises as it
+        # always did; a Pi has no load-time refusal of its own settings left
+        # that it can't fall back from.
+        if not _names_a_pc_profile(args.config):
             raise
-        # A Windows satellite is a spare computer with a person at it: like
-        # a laptop it refuses a setting it won't use rather than quietly
-        # running on a default (eb866ce), and says what to fix in one line
-        # its supervisor keeps for the tray (exit 78: left stopped, no
-        # restart loop). A TOML syntax error is a ValueError too.
-        print(f"domovoi-satellite: not starting: {e} (in {args.config})", file=sys.stderr)
-        return engine_platform.EXIT_CONFIG
+        reason = f"its settings in {args.config} don't load: {e}"
+        print(f"domovoi-satellite: not starting: {reason}", file=sys.stderr)
+        not_started.note(reason)
+        return engine_platform.EXIT_UNPINNED
     if args.input_device is not None:
         cfg.input_device = args.input_device
     if args.output_device is not None:
@@ -8711,7 +8729,10 @@ def main(argv: list[str] | None = None) -> int:
         log.error("not starting: [device] profile %r does not run on %s", cfg.device.name, sys.platform)
         print(f"domovoi-satellite: [device] profile = {cfg.device.name!r} does not run on "
               f"{sys.platform}; use {want}", file=sys.stderr)
-        return engine_platform.EXIT_CONFIG if sys.platform == "win32" else 2
+        if sys.platform != "win32":
+            return 2
+        not_started.note(f"[device] profile = {cfg.device.name!r} does not run on Windows; use windows_pc")
+        return engine_platform.EXIT_CONFIG
     if pc_engine.is_pc(cfg):
         pinned, detail = pc_engine.require_pin(cfg)
         shared = pc_engine.core_account(CONFIG_DIR)
@@ -8719,7 +8740,9 @@ def main(argv: list[str] | None = None) -> int:
             detail = shared or detail
             log.error("not starting: %s", detail)
             print(f"domovoi-satellite: {detail}", file=sys.stderr)
+            not_started.note(detail)
             return engine_platform.EXIT_UNPINNED
+        not_started.note(None)
         log.info("spare computer (%s): pinned to %s; updates %s",
                  cfg.device.name, detail, cfg.permissions)
     # Mirror everything into the in-memory ring the dashboard reads. On the

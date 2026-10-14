@@ -499,10 +499,13 @@ class SpareDeviceEngine:
                 # squatter, is worse than one that stops and says why. Exit
                 # 78 before the microphone opens; the supervisor keeps this
                 # line as the reason the tray shows.
+                from satellite import not_started
+
                 log.error("control channel not started (%s); not running without it", e)
-                print("domovoi-satellite: not starting: another process holds this satellite's control "
-                      "pipe, so its tray could not see or mute it. Sign out and in again (or restart the "
-                      "PC), then choose Start satellite.", file=sys.stderr, flush=True)
+                why = ("another process holds this satellite's control pipe, so its tray could not see "
+                       "or mute it. Sign out and in again (or restart the PC), then choose Start satellite.")
+                print(f"domovoi-satellite: not starting: {why}", file=sys.stderr, flush=True)
+                not_started.note(why)
                 self._request_exit(engine_platform.EXIT_CONFIG)
                 return
             log.warning("control channel not started (%s): the tray and the CLI can't reach this engine", e)
@@ -616,9 +619,15 @@ def cli(args: Any) -> int:
             print(f"{verb}d: {d['kind']}: {d['summary']}")
         return 0
     except ConnectionError as e:
-        hint = ("start it from the Start menu: Domovoi Satellite" if sys.platform == "win32"
-                else "systemctl --user status domovoi-satellite")
-        print(f"{e}. Is the satellite running? ({hint})", file=sys.stderr)
+        from satellite import not_started
+
+        why = not_started.read()
+        if why:
+            print(f"The satellite is not running: {why}", file=sys.stderr)
+        else:
+            hint = ("start it from the Start menu: Domovoi Satellite" if sys.platform == "win32"
+                    else "systemctl --user status domovoi-satellite")
+            print(f"{e}. Is the satellite running? ({hint})", file=sys.stderr)
         return 3
 
 

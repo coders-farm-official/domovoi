@@ -92,7 +92,10 @@ def server_host(st: dict[str, Any] | None) -> str:
 
 def connection_text(st: dict[str, Any] | None) -> str:
     if not st:
-        return "the satellite isn't running"
+        from satellite import not_started
+
+        why = not_started.read()
+        return "the satellite isn't running" + (f": {why}" if why else "")
     conn = st.get("connection")
     reason = st.get("reason")
     if conn == "connected":

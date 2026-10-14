@@ -190,6 +190,23 @@ def test_a_tampered_download_is_refused_and_not_placed(tmp_path, pinned):
 
 
 # ─── --purge: the satellite's files, never a server's ─────────────────────
+#
+# satellite/scripts/purge-satellite-files.py: root's copy of it runs with
+# the system's python3 -I at uninstall, never the satellite's own code
+# (review round 2: that code could use the terminal's sudo ticket).
+
+def _load_purger():
+    import importlib.util
+
+    path = ROOT / "satellite" / "scripts" / "purge-satellite-files.py"
+    spec = importlib.util.spec_from_file_location("purge_satellite_files", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+purger = _load_purger()
+
 
 def _satellite_files(d: Path) -> None:
     d.mkdir(parents=True, exist_ok=True)
@@ -201,7 +218,7 @@ def _satellite_files(d: Path) -> None:
     (d / "sounds" / "greetings").mkdir(parents=True)
     (d / "sounds" / "greetings" / "hello.mp3").write_bytes(b"ours")
     (d / "sounds" / "network_issues.mp3").write_bytes(b"ours")
-    (d / "sounds" / pc_install.SOUNDS_RECORD).write_text(
+    (d / "sounds" / purger.SOUNDS_RECORD).write_text(
         json.dumps(["greetings/hello.mp3", "network_issues.mp3"]), encoding="utf-8")
     (d / "wake_models").mkdir()
     (d / "wake_models" / "hey_room.onnx").write_bytes(b"ours")
@@ -211,7 +228,7 @@ def test_purge_removes_the_satellite_s_files(tmp_path):
     d = tmp_path / ".domovoi"
     _satellite_files(d)
     (d / "notes.txt").write_text("the owner's", encoding="utf-8")
-    gone = pc_install.purge(d)
+    gone = purger.purge(d)
     assert {"config.toml", "approved", "install-pc.json", "config.toml.bak-20261013",
             "previous-enrolment-new", "sounds", "wake_models"} <= set(gone)
     assert sorted(p.name for p in d.iterdir()) == ["notes.txt"]
@@ -228,7 +245,7 @@ def test_purge_leaves_a_server_s_files_in_a_shared_directory_alone(tmp_path):
     voices.mkdir(parents=True)
     (voices / "hello.mp3").write_bytes(b"the server's")
     (d / "sounds" / "network_issues_v2.mp3").write_bytes(b"the server's")
-    gone = pc_install.purge(d)
+    gone = purger.purge(d)
     assert "sounds/greetings/hello.mp3" in gone and "sounds/network_issues.mp3" in gone
     assert (d / "server-identity.json").read_text(encoding="utf-8") == "{key}"
     assert (d / "device-token.txt").exists()
@@ -243,9 +260,9 @@ def test_purge_without_a_sounds_record_keeps_a_server_s_folders_whole(tmp_path):
     satellite's: with a server in the same directory, its folders stay."""
     d = tmp_path / ".domovoi"
     _satellite_files(d)
-    (d / "sounds" / pc_install.SOUNDS_RECORD).unlink()
+    (d / "sounds" / purger.SOUNDS_RECORD).unlink()
     (d / "setup-code.txt").write_text("123", encoding="utf-8")
-    pc_install.purge(d)
+    purger.purge(d)
     assert (d / "sounds" / "greetings" / "hello.mp3").exists() and (d / "wake_models" / "hey_room.onnx").exists()
     assert not (d / "config.toml").exists()
 
@@ -261,20 +278,42 @@ def test_purge_removes_links_and_never_follows_one(tmp_path):
     (d / "config.toml").unlink()
     (d / "config.toml").symlink_to(outside / "config.toml")
     (d / "sounds" / "linked").symlink_to(outside, target_is_directory=True)
-    (d / "sounds" / pc_install.SOUNDS_RECORD).write_text(
+    (d / "sounds" / purger.SOUNDS_RECORD).write_text(
         json.dumps(["linked/keep.mp3", "../elsewhere/keep.mp3", "network_issues.mp3"]), encoding="utf-8")
-    pc_install.purge(d)
+    purger.purge(d)
     assert not (d / "config.toml").is_symlink()
     assert (outside / "keep.mp3").read_bytes() == b"keep"
     assert (outside / "config.toml").read_text(encoding="utf-8") == "keep"
 
 
-def test_purge_shares_its_names_with_the_engine_and_the_sound_sync():
+def test_purge_shares_its_names_with_the_engine_the_sound_sync_and_the_script():
     from satellite import pc_engine, sound_sync
 
-    assert pc_install.CORE_MARKERS == pc_engine.CORE_MARKERS
-    assert pc_install.SOUNDS_RECORD == sound_sync.RECORD_NAME
-    assert pc_install._main(["purge", "--config-dir", str(ROOT / "no-such-dir")]) == 0
+    assert purger.CORE_MARKERS == pc_engine.CORE_MARKERS
+    assert f'CORE_MARKERS="{" ".join(purger.CORE_MARKERS)}"' in SCRIPT.read_text(encoding="utf-8")
+    assert purger.SOUNDS_RECORD == sound_sync.RECORD_NAME
+    assert purger.main([str(ROOT / "no-such-dir")]) == 0
+
+
+def test_the_purger_needs_nothing_but_the_standard_library():
+    """It runs as `python3 -I` from root's copy: no satellite import."""
+    text = (ROOT / "satellite" / "scripts" / "purge-satellite-files.py").read_text(encoding="utf-8")
+    imports = [ln for ln in text.splitlines() if ln.startswith(("import ", "from "))]
+    assert all(ln.split()[1].split(".")[0] in ("__future__", "json", "os", "shutil", "sys", "pathlib")
+               for ln in imports), imports
+
+
+def test_no_satellite_code_runs_at_uninstall():
+    """The uninstaller never runs the satellite's own code or venv (the
+    account can change them, and a sudo ticket may be live): its purge is
+    root's copy of the purger, under the system's python3 -I."""
+    body = _function("uninstall") + _function("purge_satellite_files")
+    assert "$PREFIX" not in body.replace('rm -rf "$PREFIX"', "")
+    assert "$VENV" not in body and "PYTHONPATH" not in body and "pc_install" not in body
+    assert 'python3 -I "$PURGER" "$CONFIG_DIR"' in body
+    assert '$SUDO install -o root -g root -m 0644 "$HERE/purge-satellite-files.py" "$PURGER"' in SCRIPT.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit):
+        pc_install._main(["purge", "--config-dir", "x"])
 
 
 def test_the_satellite_keeps_no_record_root_reads():
@@ -349,7 +388,7 @@ def test_uninstall_reads_root_s_record_and_acts_on_fixed_paths_only():
             target = line.split("$SUDO rm", 1)[1]
             assert "-r" not in target.split()[0], line
             assert any(v in target for v in ('"$LOGIND_DROPIN"', '"$CHARGE_RULE"', '"/etc/systemd/system/$UNIT"', '"$RECORD_DIR"', '"$ROOT_LIB"',
-                                             '"$RECORD"', '"$UNINSTALLER"')), line
+                                             '"$RECORD"', '"$UNINSTALLER"', '"$PURGER"')), line
     # Units: the fixed sleep targets, whatever the record lists.
     assert 'case " $SLEEP_TARGETS " in' in body
     # The account's files go as the account.
@@ -386,17 +425,39 @@ def test_root_never_works_inside_the_satellite_s_home():
 # ─── as_sat (review S3: root + headless) ──────────────────────────────────
 
 @pytest.mark.skipif(_bash() is None, reason="needs bash")
-@pytest.mark.parametrize("sudo,expect", [
-    ("", "runuser -u domovoi-sat -- env -i HOME=/var/lib/domovoi-sat LANG=C.UTF-8 PATH=/usr/local/bin:/usr/bin:/bin id -un"),
-    ("sudo", "sudo -u domovoi-sat -H -- id -un"),
+@pytest.mark.parametrize("mode,sudo,expect", [
+    ("headless", "", "runuser -u domovoi-sat -- setsid -w env -i HOME=/var/lib/domovoi-sat LANG=C.UTF-8 "
+                     "PATH=/usr/local/bin:/usr/bin:/bin id -un"),
+    ("headless", "sudo", "sudo -u domovoi-sat -H -- setsid -w id -un"),
+    ("desktop", "sudo", "setsid -w id -un"),
 ])
-def test_as_sat_runs_as_the_account_from_root_and_from_a_sudoer(sudo, expect):
+def test_as_sat_runs_as_the_account_in_a_session_of_its_own(mode, sudo, expect):
+    """S3 (root + headless), and round 2: the satellite's code never gets
+    this terminal (setsid, stdin from /dev/null), so it can neither borrow
+    a sudo ticket from it nor type into it."""
     script = (_function("as_sat") + "\n"
-              + 'runuser() { echo runuser "$@"; }\nsudo() { echo sudo "$@"; }\n'
-              + f'MODE=headless SUDO="{sudo}" SAT_ACCOUNT=domovoi-sat HOME_DIR=/var/lib/domovoi-sat\n'
+              + 'runuser() { echo runuser "$@"; }\nsudo() { echo sudo "$@"; }\nsetsid() { echo setsid "$@"; }\n'
+              + f'MODE={mode} SUDO="{sudo}" SAT_ACCOUNT=domovoi-sat HOME_DIR=/var/lib/domovoi-sat\n'
               + "as_sat id -un; echo rc=$?\n")
     r = subprocess.run([_bash(), "-c", script], capture_output=True, text=True)
     assert r.stdout.splitlines() == [expect, "rc=0"], (r.stdout, r.stderr)
+    assert "</dev/null" in _function("as_sat").replace(" </dev/null", "</dev/null")
+
+
+def test_a_desktop_install_is_done_with_sudo_before_the_satellite_s_code_runs():
+    """Round 2: every sudo step, then `sudo -k`, then the account's code
+    (in a fresh venv: an old one is never run)."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    tail = text[text.index("# ─── 3. root's copy of the uninstaller"):]
+    forget = tail.index("  forget_sudo\n")
+    first_account_code = tail.index("as_sat ", tail.index("# ─── 7."))
+    assert forget < first_account_code
+    desktop_after = tail[forget:]
+    # After that point a desktop install uses no sudo (the headless unit's are in its own branch).
+    for line in desktop_after[:desktop_after.index('elif [ "$MODE" = desktop ]; then')].splitlines():
+        assert "$SUDO" not in line, line
+    assert 'as_sat rm -rf "$VENV"\nas_sat python3 -I -m venv "$VENV"' in text
+    assert '[ -x "$VENV/bin/python" ] ||' not in text
 
 
 # ─── the installer proves the core before anything (review S4, M8) ────────
