@@ -57,9 +57,13 @@ STATE_FILE = "install-pc.json"
 
 # ─── config ───────────────────────────────────────────────────────────────
 
-def config_changes(e: enrolment.Enrolment, permissions: str) -> dict[str, Any]:
+def config_changes(e: enrolment.Enrolment, permissions: str, *,
+                   profile: str = "generic_pc") -> dict[str, Any]:
+    """``profile``: generic_pc (Linux) or windows_pc (satellite/win_install.py)."""
+    if profile not in ("generic_pc", "windows_pc"):
+        raise ValueError(f"not a spare-computer profile: {profile!r}")
     return {
-        "device.profile": "generic_pc",
+        "device.profile": profile,
         "satellite.room_id": e.room_id,
         "satellite.room_name": e.room,
         "satellite.domovoi_url": e.ws_url,
@@ -73,7 +77,7 @@ def config_changes(e: enrolment.Enrolment, permissions: str) -> dict[str, Any]:
 
 
 def write_config(config_path: Path, example: Path, e: enrolment.Enrolment, permissions: str,
-                 *, now: Callable[[], float] = time.time) -> dict[str, Any]:
+                 *, now: Callable[[], float] = time.time, profile: str = "generic_pc") -> dict[str, Any]:
     """Write the enrolled config. Returns what happened, for the script."""
     if permissions not in ("automatic", "ask"):
         raise ValueError(f"permissions must be automatic or ask, not {permissions!r}")
@@ -104,7 +108,7 @@ def write_config(config_path: Path, example: Path, e: enrolment.Enrolment, permi
     else:
         base = example.read_text(encoding="utf-8")
         report["reset_approval"] = _reset_approval(config_dir, "new")
-    merged = config_writer.apply_changes(base, config_changes(e, permissions))
+    merged = config_writer.apply_changes(base, config_changes(e, permissions, profile=profile))
     tmp = config_path.with_name(config_path.name + ".tmp")
     tmp.write_text(merged, encoding="utf-8", newline="\n")
     os.replace(tmp, config_path)

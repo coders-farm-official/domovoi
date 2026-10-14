@@ -1,0 +1,576 @@
+"""The Windows satellite's installer, after the bootstrap: everything with a
+rule in it, in Python where it is tested.
+
+Spare-device satellites on Windows (2026-10-13). The dashboard's one-line
+PowerShell command checks the satellite bundle's SHA-256 and runs
+``satellite/scripts/install-windows.ps1``, which refuses a PC that runs the
+Domovoi server, fetches the embeddable Python the lock pins
+(``satellite/windows-runtime.json``, inside that same bundle), checks it,
+and runs this module with it:
+
+    python -m satellite.win_install install --payload 'domovoi-room:1?…' \
+        --bundle <dir holding satellite\\> --staged-python <dir> --root <install folder>
+
+In order, and nothing written before step 2 has passed:
+
+1. read the enrolment payload (``satellite/enrolment.py``: the core on the
+   home network, its fingerprint, the room);
+2. make the core prove it holds that fingerprint — the address-bound
+   ``/v1/health`` challenge every satellite runs — or stop (exit 3);
+3. ask what the server may do on its own: "automatic" or "ask me";
+4. install, per user, into ``%LOCALAPPDATA%\\Domovoi\\Satellite``: the
+   Python (``python\\``), every wheel the lock names — from the core's cache,
+   or from python.org / PyPI when the core hasn't fetched them, each held to
+   its SHA-256 and size either way — installed by pip with
+   ``--require-hashes --no-index --no-deps``; the satellite code
+   (``app\\satellite``); the wake-word models (checked against their pins);
+   the config with the pinned core (``.domovoi\\config.toml``); the
+   uninstaller (``uninstall.ps1``, a copy taken now from the verified
+   bundle, outside the tree code updates rewrite);
+5. register it for this user only: a value under ``HKCU\\…\\Run`` (starts it
+   at sign-in; Settings > Apps > Startup can turn it off), an entry in
+   Installed apps (``HKCU\\…\\Uninstall``), and "Domovoi Satellite" in the
+   Start menu — no administrator rights, nothing for other accounts;
+6. ask, one at a time, before any power change (``powercfg``, plugged in
+   only), each defaulting to No, and record what was there before;
+7. start it, and wait for the approval code to be typed into the
+   dashboard, showing the code here (never in a log).
+
+Exit status: 0 done; 2 a usage error or a refused payload; 3 the core did
+not prove its identity; 4 not approved before ``--wait`` ran out (it keeps
+waiting in the background); 1 anything else. Stdlib only: it runs on the
+embeddable Python before any wheel is installed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any, Callable
+
+from satellite import enrolment
+
+APP_KEY = "DomovoiSatellite"
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall" + "\\" + APP_KEY
+SHORTCUT_NAME = "Domovoi Satellite.lnk"
+STATE_FILE = "install-windows.json"
+ROOT_MARKER = ".domovoi-satellite-root"
+LOCK_NAME = "windows-runtime.json"
+PUBLISHER = "Coders Farm"
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_NO_WINDOW = 0x08000000
+#: The plugged-in power settings the installer may change, by powercfg alias.
+POWER_SETTINGS = {
+    "standby": ("SUB_SLEEP", "STANDBYIDLE", "Never sleep while plugged in (the screen can still turn off)?"),
+    "hibernate": ("SUB_SLEEP", "HIBERNATEIDLE", None),     # goes with "standby"
+    "lid": ("SUB_BUTTONS", "LIDACTION", "Keep running with the lid closed while plugged in?"),
+}
+_GUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_HEX_RE = re.compile(r"0x([0-9a-fA-F]{1,8})")
+
+
+class InstallError(Exception):
+    def __init__(self, message: str, code: int = 1) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def say(line: str = "") -> None:
+    print(line, flush=True)
+
+
+# ─── the lock and pinned downloads ────────────────────────────────────────
+
+def load_lock(bundle: Path) -> dict[str, Any]:
+    """The lock from the bundle, shape-checked like the core checks it."""
+    path = bundle / "satellite" / LOCK_NAME
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise InstallError(f"the bundle's {LOCK_NAME} is unreadable: {e}") from e
+    if not isinstance(doc, dict) or doc.get("lock_version") != 1:
+        raise InstallError(f"{LOCK_NAME} is not version 1")
+    for entry in lock_entries(doc):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,200}\.(whl|zip)", str(entry.get("file"))):
+            raise InstallError(f"bad file name in {LOCK_NAME}: {entry.get('file')!r}")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(entry.get("sha256"))):
+            raise InstallError(f"{entry.get('file')}: bad sha256 in {LOCK_NAME}")
+        if not str(entry.get("url", "")).startswith(("https://www.python.org/ftp/python/",
+                                                      "https://files.pythonhosted.org/packages/")):
+            raise InstallError(f"{entry.get('file')}: not a python.org or PyPI URL")
+    return doc
+
+
+def lock_entries(lock: dict[str, Any]) -> list[dict[str, Any]]:
+    return [lock.get("python") or {}, lock.get("pip") or {}, *(lock.get("wheels") or [])]
+
+
+def sha256_file(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download(url: str, dest: Path, size: int, opener: Callable[..., Any], timeout: float) -> None:
+    part = dest.with_name(dest.name + ".part")
+    written = 0
+    try:
+        with opener(url, timeout=timeout) as r, open(part, "wb") as f:
+            if getattr(r, "status", 200) != 200:
+                raise OSError(f"HTTP {getattr(r, 'status', '?')}")
+            while chunk := r.read(1 << 20):
+                written += len(chunk)
+                if written > size:
+                    raise OSError(f"larger than the pinned {size} bytes")
+                f.write(chunk)
+        os.replace(part, dest)
+    finally:
+        part.unlink(missing_ok=True)
+
+
+def fetch_pinned(entry: dict[str, Any], dest_dir: Path, *, core: str | None,
+                 opener: Callable[..., Any] | None = None, timeout: float = 600.0,
+                 log: Callable[[str], None] = say) -> str:
+    """Put the lock entry's file in ``dest_dir``: the copy there if it
+    already matches, else the core's cached copy, else upstream's — each
+    kept only when its size and SHA-256 are the lock's. Returns where it
+    came from ("present", "core", "upstream"); raises InstallError."""
+    opener = opener or urllib.request.urlopen
+    name, sha, size = entry["file"], entry["sha256"], int(entry["size"])
+    dest = dest_dir / name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size == size and sha256_file(dest) == sha:
+        return "present"
+    sources = []
+    if core:
+        sources.append(("core", f"{core.rstrip('/')}/v1/satellite-windows/files/{name}"))
+    sources.append(("upstream", entry["url"]))
+    problems = []
+    for where, url in sources:
+        try:
+            _download(url, dest, size, opener, timeout)
+        except (OSError, urllib.error.URLError, ValueError) as e:
+            problems.append(f"{where}: {e}")
+            continue
+        if dest.stat().st_size == size and sha256_file(dest) == sha:
+            return where
+        dest.unlink(missing_ok=True)
+        problems.append(f"{where}: not the pinned file")
+    raise InstallError(f"could not get {name} ({'; '.join(problems)})")
+
+
+# ─── the install folder ───────────────────────────────────────────────────
+
+def pth_name(python_dir: Path) -> str:
+    found = sorted(python_dir.glob("python3*._pth"))
+    if not found:
+        raise InstallError(f"no ._pth file in {python_dir}: not an embeddable Python")
+    return found[0].name
+
+
+def write_pth(python_dir: Path, extra: list[str], *, site: bool) -> None:
+    """The embeddable Python's path file: its own zip, its folder, ``extra``
+    (relative to the Python folder), and ``import site`` for site-packages."""
+    zipname = pth_name(python_dir).replace("._pth", ".zip")
+    lines = [zipname, ".", *extra] + (["import site"] if site else [])
+    (python_dir / pth_name(python_dir)).write_bytes(("\r\n".join(lines) + "\r\n").encode("ascii"))
+
+
+def replace_dir(src: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+
+def site_packages(root: Path) -> Path:
+    return root / "python" / "Lib" / "site-packages"
+
+
+def pip_install(root: Path, wheels_dir: Path, lock: dict[str, Any],
+                run: Callable[..., Any] = subprocess.run) -> None:
+    """Every wheel in the lock, by its hash, from ``wheels_dir`` only."""
+    reqs = wheels_dir / "requirements-locked.txt"
+    lines = [f"{w['name']}=={w['version']} --hash=sha256:{w['sha256']}" for w in lock["wheels"]]
+    reqs.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    pip_wheel = wheels_dir / lock["pip"]["file"]
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); "
+            "from pip._internal.cli.main import main; sys.exit(main(sys.argv[2:]))")
+    argv = [str(root / "python" / "python.exe"), "-c", code, str(pip_wheel), "install",
+            "--no-index", "--find-links", str(wheels_dir), "--require-hashes", "--no-deps",
+            "--only-binary=:all:", "--disable-pip-version-check", "--no-warn-script-location",
+            "--no-cache-dir", "--quiet", "-r", str(reqs)]
+    # Nothing from this person's PATH (a compiler, a toolchain, another
+    # Python) takes part: pip installs pinned wheels and runs nothing else.
+    env = {k: v for k, v in os.environ.items() if k.upper() not in ("PATH", "PYTHONPATH", "PIP_CONFIG_FILE")}
+    env["PATH"] = os.pathsep.join([str(root / "python"),
+                                   str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")])
+    env["PIP_CONFIG_FILE"] = os.devnull
+    r = run(argv, capture_output=True, text=True, timeout=1800, creationflags=CREATE_NO_WINDOW, env=env)
+    if r.returncode != 0:
+        raise InstallError(f"pip could not install the satellite's libraries: {(r.stderr or r.stdout)[-800:]}")
+    for rel in lock.get("remove_after_install") or []:
+        target = site_packages(root) / rel
+        if ".." not in Path(rel).parts:
+            target.unlink(missing_ok=True)
+
+
+# ─── registry, Start menu ─────────────────────────────────────────────────
+
+class Registry:
+    """The few HKCU values the installer writes. ``stub`` (tests): a JSON
+    file stands in for the registry and the Start-menu shortcut, so a test
+    on a real account writes nothing there."""
+
+    def __init__(self, stub: Path | None = None) -> None:
+        self.stub = stub
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            return json.loads(self.stub.read_text(encoding="utf-8-sig")) if self.stub else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, doc: dict[str, Any]) -> None:
+        assert self.stub is not None
+        self.stub.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+    def set_run(self, command: str) -> None:
+        if self.stub:
+            doc = self._load()
+            doc.setdefault("run", {})[APP_KEY] = command
+            return self._save(doc)
+        import winreg
+
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            winreg.SetValueEx(k, APP_KEY, 0, winreg.REG_SZ, command)
+
+    def set_uninstall(self, values: dict[str, Any]) -> None:
+        if self.stub:
+            doc = self._load()
+            doc.setdefault("uninstall", {})[APP_KEY] = values
+            return self._save(doc)
+        import winreg
+
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            for name, value in values.items():
+                kind = winreg.REG_DWORD if isinstance(value, int) else winreg.REG_SZ
+                winreg.SetValueEx(k, name, 0, kind, value)
+
+    def set_shortcut(self, lnk: Path, target: str, args: str, workdir: str, icon: str) -> None:
+        if self.stub:
+            doc = self._load()
+            doc["shortcut"] = {"path": str(lnk), "target": target, "args": args, "workdir": workdir}
+            return self._save(doc)
+        q = lambda s: "'" + str(s).replace("'", "''") + "'"  # noqa: E731
+        script = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut({q(lnk)}); "
+                  f"$s.TargetPath={q(target)}; $s.Arguments={q(args)}; $s.WorkingDirectory={q(workdir)}; "
+                  f"$s.IconLocation={q(icon)}; $s.Description='Domovoi room satellite'; $s.Save()")
+        lnk.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([powershell(), "-NoProfile", "-NonInteractive", "-Command", script],
+                       capture_output=True, text=True, timeout=60, check=True, creationflags=CREATE_NO_WINDOW)
+
+
+def powershell() -> str:
+    return str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0"
+               / "powershell.exe")
+
+
+def start_menu_dir() -> Path:
+    return Path(os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))) / \
+        "Microsoft" / "Windows" / "Start Menu" / "Programs"
+
+
+def folder_size_kb(root: Path) -> int:
+    total = 0
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(dirpath, f))
+            except OSError:
+                pass
+    return total // 1024
+
+
+def register(root: Path, room: str, version: str, reg: Registry) -> None:
+    pythonw = root / "python" / "pythonw.exe"
+    command = f'"{pythonw}" -m satellite.win_service'
+    reg.set_run(command)
+    uninstall = (f'"{powershell()}" -NoProfile -ExecutionPolicy Bypass -File "{root / "uninstall.ps1"}"')
+    reg.set_uninstall({
+        "DisplayName": f"Domovoi Satellite ({room})"[:120],
+        "DisplayVersion": version,
+        "Publisher": PUBLISHER,
+        "InstallLocation": str(root),
+        "DisplayIcon": str(pythonw),
+        "UninstallString": uninstall,
+        "QuietUninstallString": uninstall + " -Quiet",
+        "NoModify": 1,
+        "NoRepair": 1,
+        "EstimatedSize": folder_size_kb(root),
+    })
+    reg.set_shortcut(start_menu_dir() / SHORTCUT_NAME, str(pythonw), "-m satellite.win_service",
+                     str(root / "app"), str(pythonw))
+
+
+# ─── power (asked, plugged in only, default No) ───────────────────────────
+
+def _powercfg(run: Callable[..., Any], *args: str) -> str:
+    r = run(["powercfg", *args], capture_output=True, text=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+    if r.returncode != 0:
+        raise OSError((r.stderr or r.stdout or "powercfg failed").strip()[:200])
+    return r.stdout or ""
+
+
+def active_scheme(run: Callable[..., Any]) -> str:
+    m = re.search(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+                  _powercfg(run, "/getactivescheme"))
+    if not m:
+        raise OSError("powercfg did not name the active power plan")
+    return m.group(1).lower()
+
+
+def current_ac(run: Callable[..., Any], scheme: str, sub: str, setting: str) -> int:
+    """The plugged-in value: of the two current values powercfg prints (AC
+    then DC, in hex, whatever the display language), the first."""
+    values = _HEX_RE.findall(_powercfg(run, "/query", scheme, sub, setting))
+    if len(values) < 2:
+        raise OSError(f"powercfg did not show {setting}")
+    return int(values[-2], 16)
+
+
+def change_power(answer: Callable[[str], bool], run: Callable[..., Any] = subprocess.run) -> dict[str, Any]:
+    """Ask about each change, make the ones agreed to, and return what was
+    there before (for the uninstaller), ``{}`` when nothing changed."""
+    wanted = [k for k in ("standby", "lid") if answer(POWER_SETTINGS[k][2])]
+    if not wanted:
+        return {}
+    try:
+        scheme = active_scheme(run)
+    except OSError as e:
+        say(f"  power settings left alone: {e}")
+        return {}
+    changed: dict[str, Any] = {"scheme": scheme}
+    keys = ["standby", "hibernate"] if "standby" in wanted else []
+    keys += ["lid"] if "lid" in wanted else []
+    for key in keys:
+        sub, setting, _q = POWER_SETTINGS[key]
+        try:
+            before = current_ac(run, scheme, sub, setting)
+            _powercfg(run, "/setacvalueindex", scheme, sub, setting, "0")
+        except OSError as e:
+            say(f"  could not change {setting} ({e}); a standard account may not be allowed to")
+            continue
+        changed[key] = before
+    try:
+        _powercfg(run, "/setactive", scheme)
+    except OSError:
+        pass
+    return changed if len(changed) > 1 else {}
+
+
+# ─── the state record, start, wait ────────────────────────────────────────
+
+def write_state(root: Path, **values: Any) -> None:
+    path = root / STATE_FILE
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = {}
+    doc.update(values)
+    path.write_text(json.dumps(doc, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def start(root: Path) -> None:
+    subprocess.Popen(
+        [str(root / "python" / "pythonw.exe"), "-m", "satellite.win_service"],
+        cwd=str(root / "app"), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, close_fds=True,
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+    )
+
+
+def ask_choice(prompt: str, interactive: bool) -> bool:
+    if not interactive:
+        return False
+    try:
+        return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+# ─── install ──────────────────────────────────────────────────────────────
+
+def install(args: argparse.Namespace, *, run: Callable[..., Any] = subprocess.run,
+            opener: Callable[..., Any] | None = None) -> int:
+    bundle, staged, root = Path(args.bundle), Path(args.staged_python), Path(args.root)
+    interactive = sys.stdin.isatty() and not args.yes
+
+    # 1-2. The payload, and the core proves who it is. Nothing written yet.
+    try:
+        e = enrolment.parse(args.payload)
+    except enrolment.EnrolmentError as err:
+        raise InstallError(f"that is not a usable enrolment code: {err}", 2) from err
+    say("Checking the Domovoi server named in the code...")
+    from satellite import server_identity
+
+    try:
+        proven = enrolment.verify(e, opener=opener)
+    except server_identity.IdentityError as err:
+        raise InstallError(f"the server at that address did not prove it is the one in the code, "
+                           f"so nothing was installed: {err}", 3) from err
+    say(f"  {e.core} proved it is {proven}")
+    say(f"  this PC will be the room \"{e.room}\" ({e.room_id})")
+
+    # 3. What the server may do on its own.
+    permissions = args.permissions
+    if not permissions:
+        if interactive:
+            say("")
+            say("May the Domovoi server update and restart this satellite on its own?")
+            say("  1) automatic - it installs signed satellite updates, applies settings from the")
+            say("                 dashboard and restarts the satellite when it needs to, like a Pi")
+            say("  2) ask me    - each of those waits for your OK in the tray (or the command line)")
+            say("Either way it never needs administrator rights. Change it later in")
+            say(f"{root / '.domovoi' / 'config.toml'} ([pc] permissions).")
+            try:
+                choice = input("Choose 1 or 2 [2]: ").strip()
+            except EOFError:
+                choice = "2"
+            permissions = "automatic" if choice in ("1", "automatic") else "ask"
+        elif args.yes:
+            raise InstallError("--yes needs --permissions automatic or --permissions ask", 2)
+        else:
+            permissions = "ask"
+
+    lock = load_lock(bundle)
+    say(f"Installing for {os.environ.get('USERNAME', 'this account')} into {root} (updates: {permissions})")
+
+    # 4. Files.
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ROOT_MARKER).write_text("Domovoi Satellite install folder\n", encoding="utf-8")
+    replace_dir(staged, root / "python")
+    write_pth(root / "python", ["..\\app"], site=True)
+    (root / "app").mkdir(exist_ok=True)
+    replace_dir(bundle / "satellite", root / "app" / "satellite")
+    shutil.copyfile(bundle / "satellite" / "scripts" / "uninstall-windows.ps1", root / "uninstall.ps1")
+
+    say("Getting the satellite's libraries (about 95 MB, each checked against its pinned SHA-256)...")
+    wheels_dir = root / "cache" / "wheels"
+    sources: dict[str, int] = {}
+    for entry in [lock["pip"], *lock["wheels"]]:
+        where = fetch_pinned(entry, wheels_dir, core=e.core, opener=opener)
+        sources[where] = sources.get(where, 0) + 1
+    say("  " + ", ".join(f"{n} from {w}" for w, n in sorted(sources.items())))
+    pip_install(root, wheels_dir, lock, run=run)
+    shutil.rmtree(root / "cache", ignore_errors=True)
+
+    say("Fetching the wake-word models (checked against their pinned SHA-256)...")
+    from satellite import pc_install
+
+    models = site_packages(root) / "openwakeword" / "resources" / "models"
+    try:
+        pc_install.fetch_models(models, core=e.core, fp=e.fp, opener=opener,
+                                log=lambda line: say(line))
+    except OSError as err:
+        raise InstallError(f"the wake-word models could not be fetched: {err}") from err
+
+    report = pc_install.write_config(root / ".domovoi" / "config.toml",
+                                     root / "app" / "satellite" / "config.toml.example",
+                                     e, permissions, profile="windows_pc")
+    if report.get("backup"):
+        say(f"  your previous config is kept as {report['backup']}")
+    say(f"  wrote {root / '.domovoi' / 'config.toml'} (pinned to {e.fp})")
+    write_state(root, installed_at=int(time.time()), room_id=e.room_id, permissions=permissions,
+                python=lock["python"]["version"])
+
+    # 5. This user's sign-in, Installed apps, Start menu.
+    reg = Registry(Path(args.registry_file) if args.registry_file else None)
+    register(root, e.room, lock["python"]["version"], reg)
+    say("  it starts when you sign in (Settings > Apps > Startup lists it), and is in "
+        "Installed apps and the Start menu as Domovoi Satellite")
+
+    # 6. Power: asked, plugged in only, default No.
+    if args.power == "no":
+        answer = lambda _q: False  # noqa: E731
+    elif args.power == "yes":
+        answer = lambda _q: True  # noqa: E731
+    else:
+        answer = lambda q: ask_choice(q, interactive)  # noqa: E731
+    power = change_power(answer, run=run)
+    if power:
+        write_state(root, power=power)
+
+    say("")
+    say(f"Installed. This PC is the room \"{e.room}\" ({e.room_id}). It runs while you are signed in.")
+    py = root / "python" / "python.exe"
+    say(f"  status:    \"{py}\" -m satellite.client --status")
+    say(f"  log:       {root / 'logs' / 'satellite.log'}")
+    say("  uninstall: Settings > Apps > Installed apps > Domovoi Satellite")
+    if args.no_start:
+        return 0
+    start(root)
+    if args.wait <= 0:
+        return 0
+    say("")
+    say("Now approve it: in the dashboard, Settings -> Satellites, type the code shown below.")
+    from satellite import control, pc_engine
+
+    final = pc_engine.wait_for_approval(control.default_address(root / ".domovoi"), timeout=args.wait)
+    if final == "connected":
+        return 0
+    say("Not approved yet. It keeps waiting in the background; the code is also in the tray,")
+    say(f"or: \"{py}\" -m satellite.client --approval-code")
+    return 4
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m satellite.win_install")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    i = sub.add_parser("install")
+    i.add_argument("--payload", required=True)
+    i.add_argument("--bundle", required=True, help="the folder holding the verified bundle's satellite\\")
+    i.add_argument("--staged-python", required=True, help="the checked embeddable Python, unpacked")
+    i.add_argument("--root", required=True, help="the install folder")
+    i.add_argument("--permissions", choices=("automatic", "ask"), default=None)
+    i.add_argument("--power", choices=("ask", "no", "yes"), default="ask")
+    i.add_argument("--yes", action="store_true")
+    i.add_argument("--no-start", action="store_true")
+    i.add_argument("--wait", type=int, default=900)
+    i.add_argument("--registry-file", default=None,
+                   help="TESTS ONLY: write the Run/Uninstall values and the shortcut to this JSON file")
+    args = parser.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    # Whatever a satellite module resolves as ~ is the install folder, never
+    # this person's own profile (a Domovoi server keeps its data there).
+    os.environ["USERPROFILE"] = str(Path(args.root))
+    try:
+        return install(args)
+    except InstallError as e:
+        print(f"install: {e}", file=sys.stderr, flush=True)
+        return e.code
+    except KeyboardInterrupt:
+        print("install: stopped", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
