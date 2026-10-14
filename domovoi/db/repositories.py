@@ -2007,20 +2007,41 @@ class WakeWordsRepository:
         return row.first() is not None
 
     async def mark_training(self, wake_word_id: int, min_clips: int) -> bool:
-        """Promote a ``recording`` row to ``training`` — only if it still
-        holds enough captured clips (``clip_count >= min_clips``). Returns
-        False if the row is missing, already past ``recording``, or has too
-        few clips, so the caller can surface a 409."""
+        """Promote a ``recording`` row, or a ``failed`` one (training it
+        again on the clips it has: a timeout, a stop, an out-of-memory), to
+        ``training`` — only if it still holds enough captured clips
+        (``clip_count >= min_clips``). Returns False if the row is missing,
+        training or ready, or has too few clips, so the caller can surface a
+        409."""
         row = await self.s.execute(
             text(
                 """
                 UPDATE wake_words
                 SET status = 'training', error = NULL, updated_at = NOW()
-                WHERE id = :id AND status = 'recording' AND clip_count >= :min
+                WHERE id = :id AND status IN ('recording', 'failed')
+                  AND clip_count >= :min
                 RETURNING id
                 """
             ),
             {"id": wake_word_id, "min": min_clips},
+        )
+        return row.first() is not None
+
+    async def mark_stopped(self, wake_word_id: int) -> bool:
+        """Put a ``training`` word back to ``recording`` (the dashboard's
+        Stop): its clips stay, it is not queued again, and its row says it
+        was stopped. False when it wasn't training."""
+        row = await self.s.execute(
+            text(
+                """
+                UPDATE wake_words
+                SET status = 'recording', error = 'Training stopped from the dashboard.',
+                    updated_at = NOW()
+                WHERE id = :id AND status = 'training'
+                RETURNING id
+                """
+            ),
+            {"id": wake_word_id},
         )
         return row.first() is not None
 

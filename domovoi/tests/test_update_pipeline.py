@@ -485,6 +485,25 @@ def test_a_failed_os_jobs_step_reaches_the_version_card(stub_version_probes):
     assert steps == [{"name": "os-jobs", "status": "ok", "duration_sec": 0.3}]
 
 
+@pytest.mark.parametrize(("name", "warn"), [
+    # scripts/linux/gpu-runtime.sh's own summary line.
+    ("gpu-runtime", "Docker's GPU runtime: failed: NVIDIA's apt key from "
+                    "https://nvidia.github.io/libnvidia-container/gpgkey: 2 primary keys"),
+    # A sentence of apply-update.sh's (docker build's output stays in the journal).
+    ("wake-trainer", "the rebuild of domovoi-wake-trainer:latest failed (exit 1): docker "
+                     "build's output is in the update's journal (journalctl -u "
+                     "domovoi-update); the next update or Restart tries again"),
+])
+def test_the_gpu_runtime_and_trainer_warnings_reach_the_version_card(stub_version_probes, name, warn):
+    """2026-10-13: Docker's GPU runtime and the wake-word trainer image are
+    soft steps of an update; a `warn` is all that says the GPU or the
+    trainer was not set up, so its detail (the script's own words) is kept."""
+    _write_result(_ok_run_with([{"name": name, "status": "warn", "duration_sec": 2.0,
+                                 "detail": warn}]))
+    steps = asyncio.run(git_version.version_state())["last_update"]["steps"]
+    assert steps == [{"name": name, "status": "warn", "duration_sec": 2.0, "detail": warn[:300]}]
+
+
 @pytest.mark.parametrize("step", [
     # Raw output tails stay on the box, whatever the status.
     {"name": "searxng", "status": "warn", "duration_sec": 1.0,

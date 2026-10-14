@@ -718,13 +718,16 @@ class Settings(BaseSettings):
     # subdir per <slug>. The trainer reads <wake_clips_dir>/<slug>/ as its
     # positive set. Also server-private.
     wake_clips_dir: str = str(Path.home() / ".domovoi" / "wake_clips")
-    # Wake-word TRAINER hardware/toolchain gate. Off by default. openWakeWord
-    # automatic training does NOT run on native Windows (piper-sample-
-    # generator is Linux-only) and Domovoi is Windows, so the trainer never
-    # trains in-process — it shells out to wake_word_train_command below.
-    # When false the trainer worker is not even started; a wake word queued
-    # for training just sits in 'training' until enabled. Mirrors the
-    # radio_sdr_enabled "off until the toolchain is present" pattern.
+    # Wake-word TRAINER gate. Off by default: training needs a ~12 GB Docker
+    # image and ~18 GB of training data, so nobody pays for it unless they
+    # ask. Settings → Wake Words → "Turn on wake-word training" builds the
+    # image, downloads the data and then switches this and
+    # wake_word_train_command on (domovoi/wake_trainer_setup.py). openWakeWord
+    # training is Linux-only (piper-sample-generator), so the trainer never
+    # trains in-process: it shells out to the command, which runs a Linux
+    # container (scripts/wake_word/train_wake_word.py). When false the worker
+    # trains nothing; a wake word queued for training sits in 'training'
+    # until this is on.
     wake_word_trainer_enabled: bool = False
     # Trainer outer-loop cadence (seconds). Training itself is a long shell-
     # out, so polling the queue head infrequently is fine.
@@ -750,8 +753,39 @@ class Settings(BaseSettings):
     # success the trainer expects <wake_models_dir>/<slug>.onnx to exist.
     # EMPTY (the default) disables training even when the trainer is enabled:
     # a queued row is marked failed with a runbook pointer. See
-    # scripts/wake_word/README.md for the operator-supplied command.
+    # scripts/wake_word/README.md for the operator-supplied command. The
+    # dashboard's "Turn on wake-word training" writes the repo's own wrapper
+    # here. Deliberately NOT editable in Settings → Configuration: whatever
+    # it names runs as the service user (domovoi/config_schema.py).
     wake_word_train_command: str = ""
+    # How long one training run may take, in seconds, before the worker
+    # stops it (the container with it) and marks the word failed. 0 = sized
+    # to this server: 3600 when training runs on a GPU (about 20 min a word,
+    # 26 the first time), on the CPU at least 7200 and more on few cores
+    # (about 75 min a word on 8 cores). domovoi/wake_trainer_setup.py,
+    # auto_timeout_sec.
+    wake_word_train_timeout_sec: int = 0
+    # The trainer's knobs, handed to scripts/wake_word/train_wake_word.py as
+    # the WAKE_TRAINER_* environment of its process (the same names, so a
+    # .env line or the unit's Environment= reaches the wrapper). 0 / "" =
+    # the wrapper's or image's default.
+    # The image the dashboard builds and every training runs.
+    wake_trainer_image: str = "domovoi-wake-trainer:latest"
+    # The Docker volume holding the downloaded training data (~18 GB).
+    wake_trainer_cache_volume: str = "domovoi_oww_cache"
+    # Synthetic positive clips (image default 5000; 20000+ cuts near-miss
+    # false wakes, about 15 more minutes of GPU), validation clips (1000)
+    # and training steps (50000).
+    wake_trainer_n_samples: int = 0
+    wake_trainer_n_samples_val: int = 0
+    wake_trainer_steps: int = 0
+    # The share of positives that are copies of the recorded clips (0.2).
+    wake_trainer_real_target_fraction: float = 0.0
+    # CPUs the training container may use (0 = all but a quarter of the
+    # Docker host's, at least two left for the core, Whisper and Ollama),
+    # and its memory cap in GB (it peaked at 9.3 GB of its own memory).
+    wake_trainer_cpus: float = 0.0
+    wake_trainer_memory_gb: int = 12
 
     # ─── Command recordings for tuning (opt-in per room) ───────────────
     # Nothing is recorded unless an admin turns it on for a room (V016's

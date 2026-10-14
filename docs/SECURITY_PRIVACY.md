@@ -517,10 +517,13 @@ rule this enforces.
 
 ### The wake-word phrase never reaches a shell
 
-Automatic wake-word training shells out to a command the operator writes
-(`WAKE_WORD_TRAIN_COMMAND` — on Windows typically a `wsl …` or
-`docker run …` wrapper), with the phrase substituted in. Two rules keep
-the phrase an argument and nothing more:
+Automatic wake-word training runs a command, `WAKE_WORD_TRAIN_COMMAND`,
+with the phrase substituted in. Settings → Wake Words → **Turn on
+wake-word training** writes it, and always writes the repo's own wrapper
+(`scripts/wake_word/train_wake_word.py`, run by the server's Python),
+which starts the training container with `docker run` and hands it the
+phrase as one `-e WAKE_PHRASE=<phrase>` argument. Two rules keep the
+phrase an argument and nothing more, whatever the command is:
 
 * the template is split into tokens FIRST and each value is substituted
   inside a single token, so **a substituted value is always exactly one
@@ -533,7 +536,106 @@ the phrase an argument and nothing more:
   row before it runs, for rows that predate the bound.
 
 Training stays off by default: it needs both `WAKE_WORD_TRAINER_ENABLED`
-and a non-empty `WAKE_WORD_TRAIN_COMMAND`.
+and a non-empty `WAKE_WORD_TRAIN_COMMAND`, and the card sets both only after
+an admin's yes, on the security tier
+([What the admin password actually gates](#what-the-admin-password-actually-gates)).
+
+**The command, the image and the docker binary are not dashboard
+settings.** `WAKE_WORD_TRAIN_COMMAND`, `WAKE_TRAINER_IMAGE`,
+`WAKE_TRAINER_CACHE_VOLUME` and `WAKE_TRAINER_DOCKER` name what the core
+runs as its service user (a program, a Docker image and the volume it
+mounts, the docker binary), so they are left out of the editable-settings
+registry: no HTTP request, not even an authenticated admin's, can set them,
+because that would be code execution. They live in `domovoi/.env` or the
+process environment, written by whoever owns the machine; the card writes
+only the command, and only the repo's own wrapper. The trainer's numbers
+(samples, steps, CPUs, memory, the time limit) are ordinary admin settings
+in Settings → Configuration → Wake words.
+
+### Wake-word training: the GPU runtime, the trainer image and what it downloads
+
+**The NVIDIA Container Toolkit**, on a Linux server or the Windows install's
+distro, only where an NVIDIA GPU is visible (in WSL `/dev/dxg` and
+`/usr/lib/wsl/lib/libcuda.so.1`; on bare metal the driver's `nvidia-smi`
+listing a GPU). `scripts/linux/gpu-runtime.sh`, run as root by
+`provision.sh` and by the update unit, adds a second third-party apt
+repository beside Docker's,
+`https://nvidia.github.io/libnvidia-container/stable/deb/amd64`. Its key is
+checked the way Docker's is: the downloaded key file must hold exactly one
+primary key, with the fingerprint pinned in
+`scripts/linux/provision-manifest.conf`
+(`C95B321B61E88C1809C4F759DDCAE044F796ECB0`), and that key alone is
+exported to `/etc/apt/keyrings/nvidia-container-toolkit.asc`, named by that
+source only (`Signed-By`). apt then checks the four packages
+(`nvidia-container-toolkit`, `-base`, `libnvidia-container-tools`,
+`libnvidia-container1`) against the index it signs. They go in at the
+manifest's versions (1.20.1-1) and are not held, like docker-ce: `apt
+upgrade` moves them later. That is trust in NVIDIA's repository on the same
+terms as Docker's: what it serves under those names, signed by that key, is
+installed as root. A simulated install that would also bring a driver,
+kernel or compute package refuses the run before anything is installed. It
+then adds the `nvidia` runtime to `/etc/docker/daemon.json` and restarts
+Docker. The toolkit is Apache-2.0, an operating-system package, not bundled
+with Domovoi. A try that failed or refused is recorded in
+`/var/lib/domovoi-gpu-runtime/last-failure` (root's, world-readable: the
+pins it was for, when, and the summary line) and not repeated for a day,
+so a box where it can't be set up doesn't run `apt-get update` or restart
+Docker at every Restart; new pins, provision.sh, or the dashboard's
+**Turn on** / **Check the GPU and trainer again** (a flag file the
+service user leaves in `~/.domovoi/wake_trainer/`, which root only tests
+for and the service user removes) try at once. A box with no NVIDIA GPU gets none of it;
+`DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update` leaves it to
+the administrator ([LINUX_HOST.md, Wake-word training](LINUX_HOST.md#wake-word-training)).
+
+**The trainer image**, built by the core as its service user when an admin
+turns training on, and rebuilt by the update unit when
+`scripts/wake_word/docker` changes (only on a box that built it). Its build
+fetches:
+
+| What | From | Checked |
+|---|---|---|
+| Base image `pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime` | Docker Hub | By digest (`sha256:0a3b9fed…`, the full value in the Dockerfile). |
+| openWakeWord and piper-sample-generator (the `dscripka` repositories) | GitHub, `git clone` | Checked out at pinned commits (`368c037`, `f1988a4`). |
+| Every Python package the pip installs bring in | PyPI | Versions held by `constraints.txt` (`PIP_CONSTRAINT`); versions, not hashes. |
+| `en-us-libritts-high.pt` (the synthetic voice); `melspectrogram.onnx` and `embedding_model.onnx` (the feature models every trained word depends on) | GitHub release assets | SHA-256. openWakeWord's own download brings its other bundled models along with the two feature models; those are not checked, and training doesn't use them. |
+| `espeak-ng`, `ffmpeg`, `build-essential`, `git`, `wget` and their dependencies | The base image's Ubuntu archive | Not pinned: apt's signature check against the archive only. |
+
+espeak-ng (GPL) is inside this image only, as a separate program the
+synthetic voice generator runs; nothing of it is bundled with Domovoi.
+
+**The training data**, downloaded into the Docker volume `domovoi_oww_cache`
+by the image's `--warm` run when an admin turns training on (and by a
+training that finds it missing). It is read as data (feature arrays and
+audio), and pinned in `scripts/wake_word/docker/entrypoint.py`:
+
+| What | From | Checked |
+|---|---|---|
+| `davidscripka/openwakeword_features` (17.5 GB: the negative features and the validation set) | Hugging Face | Downloaded at a pinned dataset commit (`985bf1b`); both `.npy` files checked against their SHA-256 (their LFS ids at that commit) before the first training uses them, and a cache filled before the pins is checked once. A mismatch refuses the run. |
+| `davidscripka/MIT_environmental_impulse_responses` (270 short WAVs) | Hugging Face, streamed through `datasets` | At a pinned dataset commit (`b824a1e`). The WAVs are not hashed one by one: the commit is what holds them. |
+| `fma_sample.zip`, `fsd50k_sample.zip` (background clips) | Backblaze B2, `f002.backblazeb2.com/file/openwakeword-resources/` | SHA-256 of each zip, checked before it is unpacked; a mismatch refuses the run. |
+
+What can't be pinned: the Ubuntu packages in the image (the table above),
+the `datasets` library's own resolution of the impulse-response files
+inside the pinned commit, and anything Hugging Face or B2 do to serve a
+commit or a URL (the hashes catch a changed file, not an unavailable one).
+
+These downloads are made from inside containers (the build, the warm
+container, a training container), so they don't pass through the core's
+outbound-URL check. The core gates them instead: nothing is fetched until an
+admin turns training on, and under the internet answer **No** (`never`) the
+card refuses to turn it on, every training is refused before its command
+runs, and the update unit neither rebuilds the image nor installs the
+toolkit. Answering **No** while something is already downloading stops it:
+a "Turn on" job's build or data download (the download container is
+removed), and a rebuild the update unit left running in the background
+(the core stops that unit's `docker build`), at once and again when the
+core starts. The training container runs on Docker's default network, so it
+could reach the internet while it trains; nothing in it needs to once the
+data is cached. What the household recorded only goes into it read-only and
+into the cache volume ([Data at rest](#data-at-rest)); nothing uploads it.
+A model trained this way is for the household only: its training data's
+licences don't allow sharing it
+([`scripts/wake_word/README.md`, section 5](../scripts/wake_word/README.md#5-licence-a-model-trained-here-is-for-this-household)).
 
 ### How much a request may weigh
 
@@ -1016,6 +1118,10 @@ said plainly:
   same pins, and runs openWakeWord's own download only for a card that
   carries no models (prepared with offline off), deleting anything that
   download brings that the pins don't vouch for.
+- **The wake-word trainer image and the NVIDIA Container Toolkit** have
+  pins of their own and gaps of their own (PyPI by version only, Ubuntu's
+  packages and the training data unpinned):
+  [Wake-word training: the GPU runtime, the trainer image and what it downloads](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads).
 
 ## What the admin password actually gates
 
@@ -1042,7 +1148,8 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Documents: deleting one, or zipping a selection** (not saving one) | Dashboard: `POST /api/documents/delete` and `POST /api/documents/download-zip`. Everything else on that surface is **device tier**: the reads (`GET /api/documents`, `/text`, `/sheet`, `/raw`, `/export/*`, `/drawings/read`) AND the saves (`POST /api/documents/create`, `/upload`, `PUT /api/documents/text/{path}`, `PUT /api/documents/sheet/{path}`, `POST /api/documents/drawings/write`), and the same saves through `/api/files` when the target library is `core:documents`. | Pre-setup grace. Saving is a household action — a phone or a tablet writes a shopping list without the admin password (2026-09-24). Deleting is not, and neither is `/download-zip`: it is the one request that turns "can read the library" into "holds a copy of the library". |
 | **File deletion and whole-directory downloads** (the verbs that destroy something, or hand back a tree in one request) | Dashboard: `POST /api/files/delete`, and `GET /api/files/download` when the path is a **directory** (the server-built zip). Browsing, downloading a single file, uploading, moving and importing under `/api/files`, and the `/api/images` / `/api/videos` serves, are **device tier**: a paired phone shouldn't need the admin password to drop a file into the music folder. | Pre-setup grace. |
 | **Files device blocks** (takes uploading / moving / importing away from a named device; it can still browse and download) | Dashboard: `POST /api/files/device-blocks`, `DELETE /api/files/device-blocks/{id}`; reads via `GET /api/files/device-blocks`. The block also covers `/api/documents` saves — the same folder through the other door. The caller is identified from the request, not only from the body: body `device_id`, `X-Device-Id`, `?device_id=`, or the `domovoi-device-id` cookie the server sets on `POST /api/devices/register`. A browser is therefore covered without any client change; the Android app keeps no cookie jar and stays unidentified there until it sends the header. | Pre-setup grace. Same reasoning as the queue blocks: gated so it can't be lifted from the blocked device, household policy rather than a security boundary. |
-| **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
+| **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` (but for the training switch, the next row) and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
+| **Wake-word training on and off** (on: builds and runs a Docker image as the service user, downloads the training data, and writes `WAKE_WORD_TRAIN_COMMAND` into `.env`; off: writes the two settings off and removes the image, its build cache and the cache volume) | Core: `POST /v1/admin/wake/trainer/enable` and `POST /v1/admin/wake/trainer/disable`, Bearer-only. Their status, `GET /v1/admin/wake/trainer`, and what turning off would free, `GET /v1/admin/wake/trainer/footprint`, are admin **reads** (Bearer or cookie): they name the server's free disk, memory, Docker, GPUs and Docker's sizes, nothing more. Dashboard: `POST /api/wake-words/trainer/enable`, `POST /api/wake-words/trainer/disable`, `GET /api/wake-words/trainer` and `GET /api/wake-words/trainer/footprint`, at the same tiers, forwarding the caller's credentials. Stopping a training (`POST /v1/admin/wake/train/stop`, `POST /api/wake-words/{id}/train/stop`) and removing a deleted word's training files (`POST /v1/admin/wake/forget`) are the admin tier, like Train. | **Fails closed** — 501 until setup (the reads keep the pre-setup grace). |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
 | **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
@@ -1302,11 +1409,12 @@ All of it on hardware you own. Locations, verified against the code:
 |---|---|
 | **Postgres** (`domovoi` DB, in Docker, published on `127.0.0.1:6432` only — unreachable from the LAN; password generated per install by `python -m domovoi.env_bootstrap`, rotation in [LINUX_HOST.md](LINUX_HOST.md#two-more-linux-notes)) | Every routed voice turn: one `intents_log` row and one `conversation_log` row — i.e. **transcripts of what your household says to Domovoi** live here; the dashboard reads them back to a paired device only (the household token or an admin session — see the device tier above). A spoken turn's `intents_log` row also carries its stage timings (`timings`: milliseconds and the Whisper settings, no text), which the latency summary (a paired device's read) reads. Also: media play history (default 90-day retention), news items (default 90-day retention), plugin registry, admin credential hash + session token hashes, per-plugin schemas, and `command_capture_rooms` (which rooms an admin opted in to command recording, and since when — no audio). |
 | **Postgres: timer history** (V018 `timer_fires`, `timer_fire_deliveries`, `timer_own_only_rooms`) | Every timer and reminder that went off: when it was set, due and fired, the room it was set in, its label and message, the line the origin room spoke (`base_text`) and, per room, whether and when it was announced there and the exact line spoken (`spoken_text`). Kept `timer_fire_retention_days` (default 7), pruned hourly by the core. No web route or push serializes `base_text` or `spoken_text`; the same words are spoken, and logged, on every satellite that announces them (the Pi rows below). Plus which rooms have "Only reminders for this device" on, and since when. See [Timers and reminders](#timers-and-reminders-house-wide). |
-| **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word; played back to paired devices only), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models), and `captures/` (**recordings of commands spoken in a room an admin opted in**, with their transcripts; at most 14 days, admin-only — see the next section). |
+| **`~/.domovoi/` on the server** | `setup-code.txt` (only until setup completes; mode 0600), `device-token.txt` (the household device token; mode 0600), `logs/`, `plugins/<slug>.env` (**plugin config including secrets, in plain text** — protect this directory with filesystem permissions), `wake_clips/` (**recordings of your voice** made when you train a custom wake word; played back to paired devices only), `wake_models/` (trained `.onnx` models), `piper_voices/` (downloaded TTS models), `wake_trainer/` (`setup.json`, the wake-word training setup's progress and last error; `logs/<slug>.log`, the whole output of each wake word's last training, no audio), and `captures/` (**recordings of commands spoken in a room an admin opted in**, with their transcripts; at most 14 days, admin-only — see the next section). |
+| **Docker volume `domovoi_oww_cache` on the server** (only once wake-word training is on) | The trainer's downloaded training data (about 18 GB) and, per wake word, `runs/<slug>/`: the synthetic clips generated for it and the features computed from them and from its recorded clips. The copies of the recorded clips a run makes there (`positive_train/real_*.wav`) are removed at the end of every run: finished, failed, stopped from the dashboard, timed out, or stopped by a core shutdown (the container runs under `--init`, so its entrypoint gets the stop signal and removes them before it exits; the wrapper stops it with `docker stop` and a 10 s grace before `docker rm -f`). A run killed outright (SIGKILL, out of memory, the box losing power) can't clean up after itself, so the wrapper's stop path, every run's start, and the trainer worker's first pass after the core starts each scrub any `real_*.wav` left in the volume. The originals stay in `~/.domovoi/wake_clips/`. Deleting a wake word in the dashboard removes its folder in the volume too (a training of it is stopped first), and the worker's first pass after a start removes the folder of any word that no longer exists (a delete made while the core was down). **Settings → Wake Words → Turn off and free the space** removes the whole volume, the trainer image and Docker's build cache for it, after showing their size; trained models and recordings stay. By hand: `docker volume rm domovoi_oww_cache` (the next training downloads the data again). The trainer image itself (12.4 GB) holds no household data. |
 | **Postgres: rolled-back databases** (Linux update unit only) | When a rollback restores the pre-update dump, the database it replaced is renamed `domovoi_failed_<UTC time>` (and `domovoi_test_failed_<UTC time>`) and kept for inspection: a full copy of everything the row above lists. Only the newest one of each is kept (`DOMOVOI_UPDATE_KEEP_FAILED_DBS`, default 1); older ones are dropped at the next restore. Same credential as the live database. |
 | **`/var/lib/domovoi-update/` on the server** (Linux update unit only) | `backups/pre-<sha>-<UTC time>.dump` and `.test.dump`: a `pg_dump` of `domovoi` and `domovoi_test` taken before every full update, so **everything the database holds** — transcripts, voice embeddings, the admin password hash, session token hashes and the household device token, in plain text inside the dump. Directory 0700 and files 0600, root only; the newest 5 of each are kept (`DOMOVOI_UPDATE_KEEP_BACKUPS`). Also `last-result.json` (the last run's steps, with the tail of each failed command's output; mode 0640, readable by root and the service user's group, which is how the core reads it), `pip-freeze-pre.txt` (package versions) and the applied / bad commit SHAs. |
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
-| **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |
+| **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. No value written there may hold a newline or another control character (the configuration page refuses it, and the writer refuses it for every key): the core reads a quoted newline as part of the value, but a line-based reader would see a second setting, which a value could smuggle past the core. The update unit (root) reads it through the checkout's own reader, as the core does. |
 | **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
 | **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered; a spare laptop or phone may add its battery level and charging state and whether its mic is blocked), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
 | **`~/.domovoi/satellite-logs/` on the server** (`satellite_logs_dir`, 2026-10-09) | The log lines each satellite pushes (`log_push`): what it spooled while it was disconnected and the last 30 s of its ring every 30 s, one file per room (`<room>.log`, 1 MB plus one `.log.1` rotation; a room id that is not plain letters, digits, `.`, `_`, `-` — or a Windows device name — gets a hash of the full id in its file name, so the name never leaves the directory and two rooms never share a file), each line prefixed with the server's receive time, and written only from the room's own token-authenticated session. **The same content as the Pi's ring** — a `heard: <transcript>` line for every utterance and the text of every reply and announcement — so it is served only through the admin-read logs route, like the live ring, and nothing else reads the directory. Delete a room's file to forget it. |
@@ -1422,12 +1530,14 @@ outbound traffic, each with its own off switch:
 | **LRCLIB synced lyrics** — for library songs with no timed lyrics of their own (no `.lrc` next to them, none in their tags), the song's **title, artist credit and primary performer, album and length in seconds** go to lrclib.net, which answers with its lyrics, timed when it has them (`domovoi/workers/lyrics_fetch.py`, `domovoi/clients/lrclib.py`; [Lyrics](#lyrics-household-tier-only) above) | **Only if you opt in** — on when the internet answer is **Yes** or **Sometimes**, off for **No** and while unanswered. Then about one request a second (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down), only while the connectivity probe reports online; a song LRCLIB didn't have is asked about again after 4, 8 and then 16 weeks | Set `lyrics_lrclib_enabled` off (Settings → Configuration → Library → "Synced lyrics from LRCLIB") to keep it off anyway; switching it off stops the lookup before its next request. Lyrics in `.lrc` files and in the songs' own tags never need it. |
 | **Satellite setup AP** — a portal-onboarded satellite hosts a WPA2 network with a per-device key until it is provisioned | Only while unprovisioned; it drops the moment credentials are accepted | The key is printed on the device. Plain HTTP over WPA2 is deliberate: a self-signed certificate would train customers through a security warning while typing their Wi-Fi password. The house PSK goes phone→device and never transits the server. The portal's server-address field takes a `ws://`/`wss://` address on an RFC 1918 range or a `.local` name only (the satellite hands its pairing token to whatever it dials), its form body is capped at 8 KB and refused with a 413 before it is read, and the confirmation page shows the resolved address. The network name is checked on both join paths (1-32 bytes, no control characters, no quote or brace) before it touches a root-owned configuration; the wpa_supplicant fallback (used only where NetworkManager is absent) writes `ssid=` as hex and `psk=` as the derived key, and never the passphrase. |
 | **Satellite approval** — a portal-onboarded satellite waits for a human before it is paired | Every first connection from a device presenting a setup code | Type the satellite's six-digit code into the approval card. The dashboard never shows you the code — it is on the device, which is what ties the request on screen to the unit in the room. The server compares it and allows five attempts per room per five minutes. A device that brings a code must bring six digits (or the four that satellites set up before 2026-09-22 were given and still say), or nothing is parked (a request no code could ever approve would only take the name away from the real device). The first device to park holds that room name for three minutes, or until someone approves or rejects it; a different device asking for the same name inside that window is refused as a conflict (`approval_conflict`), and after it the newcomer's request **replaces** the parked one — its token and its own code together, so the code the operator hears from the device in the room is still the only one that approves anything. Being first with an unapprovable request therefore delays onboarding by minutes; it no longer blocks it until someone presses Reject (CORE-22). This is what replaces trust-on-first-use for that path; `SATELLITE_PAIRING_STRICT` still governs tokenless connects. |
-| **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed. |
+| **Version check / pull** — `git fetch`/`pull` against the GitHub repo | Only when an admin clicks check/update in the dashboard | Don't click it. Nothing runs automatically. Under `never` both buttons are greyed and the core answers with the turned-off reason without running git. The follow-up **restart** is admin-gated and can only work if you granted the sudoers line in [LINUX_HOST.md](LINUX_HOST.md). A plain restart bounces systemd units and reaches no network. With the update unit installed it also re-syncs Python dependencies from PyPI (and the PyTorch CPU index) when the pull changed them, and rebuilds the MPD image (Debian's package mirrors) when that changed; it rebuilds the wake-word trainer image when that changed (on a box that built one) and, on an NVIDIA box, installs the NVIDIA Container Toolkit while it is missing (rows below). |
 | **Media acquisition** — provider plugins fetching from external sources; add-by-URL fetches the URL you gave | When you ask for something the library doesn't have, or add by URL | Don't install provider plugins / uninstall them; add-by-URL is governed by the outbound-fetch tier above. |
 | **Radio streams** — fetched by the room's music player (MPD container) or the dashboard's relay | While you're listening to an internet station (bundled radio plugin, or a plugin that plays a URL through `sdk.playback`). MPD also resumes whatever it had queued after its container restarts | Don't play internet radio; FM/SDR paths in the same plugin are local RF. Under `never` no internet URL is handed to MPD, a room playing one is stopped and internet entries are removed from every queue (at the switch and at every core start), and an open relay is cut off. |
 | **Radio detectors and lookups** — ICY "now playing" polls of favorited internet stations, short clips of them to Shazam, station-directory searches (radio-browser.info), an FM favorite's call sign to find its simulcast, the FCC import | While favorited internet stations exist (detectors), and when you search, favorite FM or import | `RADIO_SAMPLER_ENABLED=false` / `RADIO_ICY_POLLER_ENABLED=false` in `~/.domovoi/plugins/radio.env`. Offline the sampler samples only house-network streams, against your own library. |
 | **Video-satellite kiosk browser** — Chromium's own background traffic | Never: the kiosk is launched with `--disable-background-networking`, `--disable-component-update`, `--no-pings` and `--disable-domain-reliability` | Nothing to do. The page itself talks only to the Domovoi server. |
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
+| **Wake-word training** — the trainer image's build (Docker Hub's base image, two GitHub repositories, PyPI packages, GitHub release assets, Ubuntu's package archive) and its training data (Hugging Face `davidscripka/openwakeword_features` and `MIT_environmental_impulse_responses`, openWakeWord's background-clip zips on Backblaze B2): about 22 GB, once | Only after an admin turns training on in Settings → Wake Words: the build and the data download then, a rebuild by the Linux update unit when `scripts/wake_word/docker` changes, and a training that finds its data missing. All of it from inside containers, outside the core's outbound-URL check ([details](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) | Don't turn it on. Under `never` the card refuses, every training is refused before it starts, and the update unit doesn't rebuild; answering `never` stops a setup job's build or download and the update unit's rebuild that are already running. |
+| **NVIDIA Container Toolkit** — NVIDIA's apt repository (`nvidia.github.io`) | Only on a Linux server (or the Windows install's distro) where an NVIDIA GPU is visible: at install, and at an update or Restart while it is missing; `apt upgrade` afterwards, like any package | `DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`. Under `never` the update unit downloads nothing (the install itself still does, as for every package it installs). |
 | **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), and **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub) | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
@@ -1464,7 +1574,9 @@ network:
 - the paths that never went through that check: SearXNG searches (the
   container is local, the engines it asks are not),
   Piper and Whisper downloads (`HF_HUB_OFFLINE=1` is set for the core),
-  the fast-lane model, the wake-word trainer's data, the library enricher
+  the fast-lane model, wake-word training (turning it on, which builds
+  the trainer image and downloads its data, and every training), the
+  library enricher
   (AcoustID, Shazam, MusicBrainz), the MusicBrainz name lookup, the
   LRCLIB lyrics lookup, Apple's iTunes search, the radio plugin's
   directory, simulcast and FCC lookups and its Shazam step,
@@ -1473,7 +1585,9 @@ network:
   refresh, Ollama model pulls from a public registry, building the
   music container image, and (Linux update unit) an update that would
   re-sync Python dependencies or rebuild that image, which is refused
-  before anything is touched;
+  before anything is touched, and the unit's rebuild of the wake-word
+  trainer image and install of the NVIDIA Container Toolkit, which it
+  skips;
 - internet streams in the rooms' music players: MPD fetches a queued URL
   itself, so none is queued (`sdk.playback.play_url` refuses it), and
   existing ones are stopped and removed from every queue when the answer

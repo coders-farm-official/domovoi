@@ -236,6 +236,16 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
+    # Switching wake-word training on in Settings → Configuration starts its
+    # worker now (it isn't started at boot while the setting is off); off
+    # is read by the worker's own tick.
+    def _start_wake_trainer() -> None:
+        if settings.wake_word_trainer_enabled:
+            from domovoi.plugins_runtime.workers import WORKERS as _W
+
+            _W.start_worker("core", "wake_word_trainer")
+
+    reapply.on_reapply("wake_word_trainer_enabled", _start_wake_trainer)
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
     # (domovoi/searxng_service.py). At boot only the stop under never runs
@@ -244,6 +254,14 @@ def _register_core_reapply_hooks() -> None:
 
     reapply.on_reapply(
         "internet_access", searxng_service.schedule_reconcile, key="searxng"
+    )
+    # ...and stops the trainer's downloads: a "Turn on wake-word training"
+    # job (its build, the 18 GB download) and the update's image rebuild
+    # (domovoi/wake_trainer_setup.py, on_internet_answer).
+    from domovoi import wake_trainer_setup
+
+    reapply.on_reapply(
+        "internet_access", wake_trainer_setup.on_internet_answer, key="wake_trainer"
     )
     # Saving never also stops a room that is playing an internet station
     # and takes internet streams out of every room's queue: MPD fetches
@@ -478,6 +496,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import searxng_service
 
         searxng_service.schedule_boot_stop()
+        # Under never, an image rebuild the update unit left running stops.
+        from domovoi import wake_trainer_setup
+
+        wake_trainer_setup.on_internet_answer()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")
@@ -813,6 +835,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # step: a step that overruns is cancelled and left behind, so no
         # plugin or worker can hold the stop open (domovoi/lifecycle.py).
         signal_shutdown("lifespan teardown")  # no-op after a signal
+        from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
+
         teardown_started = asyncio.get_running_loop().time()
         await lifecycle.run_teardown(
             [
@@ -824,6 +848,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                  _STOP_WORKERS_SEC + 1.0),
                 ("core workers", lambda: WORKERS.stop_owner("core", timeout=_STOP_WORKERS_SEC),
                  _STOP_WORKERS_SEC + 1.0),
+                # A "Turn on wake-word training" job still building or
+                # downloading: stop its docker child and container.
+                ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -2773,6 +2800,151 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         return await asyncio.to_thread(_run)
     except _we.WakeEvalUnavailable as e:
         raise HTTPException(status_code=501, detail=str(e)) from e
+
+
+# ─── Wake-word training: Settings → Wake Words → "Turn on" ────────────────
+
+
+@app.get(
+    "/v1/admin/wake/trainer",
+    # An admin READ: the dashboard cookie may render it. It names the
+    # server's free disk, memory and GPUs, nothing more.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_trainer_status() -> dict[str, Any]:
+    """Whether wake-word training is on, the setup job's progress or the
+    error it stopped on, and what training needs against what this server
+    has (disk, download, memory, Docker, GPU or CPU and the minutes per
+    word), with the reasons it would refuse (domovoi/wake_trainer_setup.py)."""
+    from domovoi import wake_trainer_setup
+
+    return await wake_trainer_setup.status()
+
+
+class _AdminWakeTrainerEnableBody(BaseModel):
+    # A CPU-only server (or one whose GPU Docker can't reach) trains for
+    # over an hour a word and slows the voice pipeline meanwhile: the admin
+    # says yes to that separately.
+    cpu_ok: bool = False
+    # The Windows install can't see C:'s free space: the admin confirms it.
+    disk_ok: bool = False
+
+
+@app.post(
+    "/v1/admin/wake/trainer/enable",
+    # Security tier, like a config write: it builds and runs a Docker image
+    # as the service user and writes WAKE_WORD_TRAIN_COMMAND into .env.
+    # Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_wake_trainer_enable(body: _AdminWakeTrainerEnableBody) -> dict[str, Any]:
+    """Turn wake-word training on: build the trainer image, check the GPU,
+    download the training data, then switch the two settings on and start
+    the worker, as one background job; returns at once with the status
+    (the page polls ``GET /v1/admin/wake/trainer``). 409 with the reason
+    when it can't start (internet turned off, too little disk or memory, no
+    Docker, a CPU-only server without ``cpu_ok``, a job or a training
+    already running)."""
+    from domovoi import wake_trainer_setup
+
+    try:
+        return await wake_trainer_setup.start(cpu_ok=body.cpu_ok, disk_ok=body.disk_ok)
+    except wake_trainer_setup.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/admin/wake/trainer/footprint",
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_trainer_footprint() -> dict[str, Any]:
+    """What "Turn off and free the space" would remove, as Docker sizes it:
+    the trainer image and the cache volume (bytes; null where Docker can't
+    say)."""
+    from domovoi import wake_trainer_setup
+
+    return await asyncio.to_thread(wake_trainer_setup.footprint)
+
+
+@app.post(
+    "/v1/admin/wake/trainer/disable",
+    # Security tier, like turning it on: it changes two settings and
+    # removes Docker images and volumes.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_wake_trainer_disable() -> dict[str, Any]:
+    """Turn wake-word training off and free the space: the two settings
+    off, the trainer image, its build cache and the cache volume (training
+    data, every word's training files) removed. Trained models and recorded
+    clips stay; queued words go back to "recording". 409 while a setup job
+    or a training runs."""
+    from domovoi import wake_trainer_setup
+
+    try:
+        return await wake_trainer_setup.turn_off()
+    except wake_trainer_setup.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+class _AdminWakeWordIdBody(BaseModel):
+    wake_word_id: int = Field(..., ge=1)
+
+
+@app.post(
+    "/v1/admin/wake/train/stop",
+    # Admin tier, like recording and pushing.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_wake_train_stop(body: _AdminWakeWordIdBody) -> dict[str, Any]:
+    """Stop a word's training: the running one (its container goes, and
+    the copies of the recordings with it) or a queued one. Either way the
+    word goes back to "recording" with its clips, not queued again. 404 no
+    such word, 409 when it isn't training."""
+    from domovoi.db.repositories import WakeWordsRepository
+    from domovoi.workers import wake_word_trainer as wwt
+
+    async with session_scope() as s:
+        row = await WakeWordsRepository(s).get(body.wake_word_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"wake word {body.wake_word_id} not found")
+    if row["status"] != "training":
+        raise HTTPException(status_code=409,
+                            detail=f"wake word {body.wake_word_id} is not training")
+    if wwt.request_stop(body.wake_word_id):
+        return {"stopping": True, "wake_word_id": body.wake_word_id}
+    async with session_scope() as s:
+        stopped = await WakeWordsRepository(s).mark_stopped(body.wake_word_id)
+        await s.execute(text("SELECT pg_notify('wake_words_changed', :p)"),
+                        {"p": str(body.wake_word_id)})
+    return {"stopping": False, "stopped": stopped, "wake_word_id": body.wake_word_id}
+
+
+class _AdminWakeForgetBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=80, pattern=r"^[a-z0-9_]+$")
+
+
+@app.post(
+    "/v1/admin/wake/forget",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_wake_forget(body: _AdminWakeForgetBody) -> dict[str, Any]:
+    """A deleted wake word's training files (synthetic clips, features, any
+    copies of its recordings) leave the trainer's cache volume; a training
+    of it is stopped first. The dashboard calls this after a delete; the
+    worker's first sweep after a start removes whatever a missed call
+    left. Runs in the background."""
+    from domovoi.workers import wake_word_trainer as wwt
+
+    task = asyncio.get_running_loop().create_task(
+        asyncio.to_thread(wwt.forget_word, body.slug),
+        name=f"wake-forget-{body.slug}",
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"scheduled": True, "slug": body.slug}
+
+
+_BACKGROUND_TASKS: set = set()
 
 
 @app.get(

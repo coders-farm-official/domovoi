@@ -37,7 +37,21 @@
 #     `docker compose` / `docker inspect` / `docker stop` model the search
 #     helper (SearXNG): compose can be told to fail or to hang, inspect
 #     reports searxng-running; a systemd-run shim (write_systemd_run) logs
-#     the detached start.
+#     the detached start;
+#   * Docker's GPU runtime (scripts/linux/gpu-runtime.sh, run against the
+#     case's helper root): nvidia-smi fails unless nvidia-smi-gpus lists
+#     one, gpu_box gives the root a WSL NVIDIA GPU and puts apt-get,
+#     dpkg-query, gpg and nvidia-ctk shims on PATH, curl serves NVIDIA's
+#     key, `systemctl restart docker.service` loads the root's daemon.json
+#     (or fails with the nvidia runtime in it, docker-rejects-nvidia),
+#     `docker info` lists the runtimes it loaded, and apt-get fails while
+#     apt-fail exists;
+#   * the wake-word trainer image: `docker image inspect` knows only the
+#     image named in trainer-image, labelled with trainer-label, and the
+#     trainer's `docker build` relabels it;
+#   * the venv's `python -m domovoi.config_env_writer --get KEY` reads the
+#     case's domovoi/.env the way python-dotenv does (the core's reader),
+#     or is missing (config-env-writer-missing, an older checkout).
 #
 # Usage: bash scripts/linux/tests/test-apply-update.sh [--case NAME|GLOB]... [--list]
 # (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
@@ -122,6 +136,18 @@ fi
 if [ -f "$SHIM_STATE/fail-systemctl" ] && grep -qxF -- "$*" "$SHIM_STATE/fail-systemctl"; then
   echo "systemctl: forced failure for: $*" >&2; exit 1
 fi
+if [ "${1-}" = restart ] && [ "${2-}" = docker.service ]; then
+  # dockerd reads the helper root's daemon.json at its start (docker-loaded
+  # keeps what it read, which `docker info` lists); with
+  # docker-rejects-nvidia it won't start with the nvidia runtime in it.
+  cfg=$SHIM_OSROOT/etc/docker/daemon.json
+  if [ -f "$SHIM_STATE/docker-rejects-nvidia" ] && grep -q '"nvidia"' "$cfg" 2>/dev/null; then
+    : >"$SHIM_STATE/stopped-docker.service"
+    echo "Job for docker.service failed because the control process exited with error code." >&2; exit 1
+  fi
+  rm -f "$SHIM_STATE/stopped-docker.service"
+  if [ -f "$cfg" ]; then cp "$cfg" "$SHIM_STATE/docker-loaded"; else : >"$SHIM_STATE/docker-loaded"; fi
+fi
 if [ "${1-}" = restart ] && [ "${2-}" = domovoi-db.service ]; then
   # Flyway: apply whatever the checkout ships, never un-apply.
   files=$(ls "$SHIM_REPO"/domovoi/db/migrations/V*.sql 2>/dev/null | wc -l | tr -d ' ')
@@ -191,6 +217,40 @@ case "${1-}" in
     ;;
   build)
     if [ -f "$SHIM_STATE/fail-docker-build" ]; then echo "build failed" >&2; exit 1; fi
+    # The wake-word trainer's build (--label org.domovoi.wake-trainer.src=TREE
+    # -t NAME DIR) leaves an image with that label.
+    lbl="" tag=""
+    while [ $# -gt 0 ]; do
+      case $1 in --label) lbl=$2; shift 2 ;; -t) tag=$2; shift 2 ;; *) shift ;; esac
+    done
+    case $lbl in
+      org.domovoi.wake-trainer.src=*)
+        echo "$tag" >"$SHIM_STATE/trainer-image"
+        printf '%s' "${lbl#*=}" >"$SHIM_STATE/trainer-label" ;;
+    esac
+    exit 0
+    ;;
+  image)
+    # image inspect [-f FORMAT] NAME: only the trainer image exists, named
+    # in trainer-image, with the label in trainer-label (none: no file).
+    name=${!#}
+    if [ "${2-}" != inspect ] || [ ! -f "$SHIM_STATE/trainer-image" ] || [ "$name" != "$(cat "$SHIM_STATE/trainer-image")" ]; then
+      echo "Error response from daemon: No such image: $name" >&2; exit 1
+    fi
+    case " $* " in
+      *Labels*) cat "$SHIM_STATE/trainer-label" 2>/dev/null; echo ;;
+    esac
+    exit 0
+    ;;
+  info)
+    # Down after a restart that failed; the runtimes are what dockerd read
+    # at its last start (the systemctl shim).
+    if [ -f "$SHIM_STATE/stopped-docker.service" ]; then
+      echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock" >&2; exit 1
+    fi
+    case " $* " in
+      *Runtimes*) printf 'io.containerd.runc.v2 '; grep -q '"nvidia"' "$SHIM_STATE/docker-loaded" 2>/dev/null && printf 'nvidia '; echo 'runc ' ;;
+    esac
     exit 0
     ;;
   ps)
@@ -328,6 +388,15 @@ SH
 #!/usr/bin/env bash
 url=${!#}
 echo "curl $url" >>"$SHIM_STATE/calls.log"
+# NVIDIA's apt key (-o FILE): the fingerprint in nvidia-fpr, plus a
+# second key when nvidia-extra-key is set.
+if [ "$url" = https://nvidia.github.io/libnvidia-container/gpgkey ]; then
+  out="" prev=""
+  for a in "$@"; do [ "$prev" != -o ] || out=$a; prev=$a; done
+  printf 'KEY %s\n' "$(cat "$SHIM_STATE/nvidia-fpr")" >"$out"
+  [ ! -f "$SHIM_STATE/nvidia-extra-key" ] || printf 'KEY %s\n' "$(cat "$SHIM_STATE/nvidia-extra-key")" >>"$out"
+  exit 0
+fi
 if [ -f "$SHIM_STATE/curl-fail-always" ]; then exit 7; fi
 if [ -f "$SHIM_STATE/curl-fail-when-head" ]; then
   head=$("$SHIM_REAL_GIT" -C "$SHIM_REPO" rev-parse HEAD)
@@ -342,7 +411,137 @@ echo "git $*" >>"$SHIM_STATE/calls.log"
 exec "$SHIM_REAL_GIT" "$@"
 SH
 
+  # The NVIDIA driver's nvidia-smi (scripts/linux/gpu-runtime.sh asks it on
+  # bare metal): the GPUs in nvidia-smi-gpus, else the driver's failure.
+  # Always on PATH, so the host's own (Git for Windows sees Windows'
+  # nvidia-smi.exe) never answers for a case.
+  cat >"$bin/nvidia-smi" <<'SH'
+#!/usr/bin/env bash
+echo "nvidia-smi $*" >>"$SHIM_STATE/calls.log"
+if [ -f "$SHIM_STATE/nvidia-smi-gpus" ]; then cat "$SHIM_STATE/nvidia-smi-gpus"; exit 0; fi
+echo "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver."
+exit 9
+SH
+
   chmod +x "$bin"/*
+}
+
+# What gpu-runtime.sh installs and configures with, for the GPU cases (an
+# extra PATH directory): apt-get (install -s prints a simulation's "Inst"
+# lines; an install records pkg=ver in dpkg), dpkg-query (answers from
+# dpkg), gpg (a key file is "KEY <fingerprint>" lines; as in
+# test-provision.sh), gpgconf and nvidia-ctk (the nvidia runtime into the
+# helper root's daemon.json).
+write_gpu_shims() {
+  local bin=$1
+  mkdir -p "$bin"
+  cat >"$bin/apt-get" <<'SH'
+#!/usr/bin/env bash
+echo "apt-get $*" >>"$SHIM_STATE/calls.log"
+[ ! -f "$SHIM_STATE/apt-fail" ] || { echo "E: fixture failure" >&2; exit 100; }
+sim=0 install=0
+for a in "$@"; do case $a in -s|--simulate) sim=1 ;; esac; done
+for a in "$@"; do
+  case $a in
+    install) install=1 ;;
+    -*) ;;
+    *) [ "$install" = 1 ] || continue
+       p=${a%%=*}; v=1; [[ $a == *=* ]] && v=${a#*=}
+       if [ "$sim" = 1 ]; then echo "Inst $p ($v fixture [amd64])"; continue; fi
+       grep -v "^$p=" "$SHIM_STATE/dpkg" >"$SHIM_STATE/dpkg.new" 2>/dev/null; echo "$p=$v" >>"$SHIM_STATE/dpkg.new"
+       mv "$SHIM_STATE/dpkg.new" "$SHIM_STATE/dpkg" ;;
+  esac
+done
+exit 0
+SH
+  cat >"$bin/dpkg-query" <<'SH'
+#!/usr/bin/env bash
+fmt=""; pkgs=()
+while [ $# -gt 0 ]; do
+  case $1 in -W) shift ;; -f) fmt=$2; shift 2 ;; -f=*) fmt=${1#-f=}; shift ;; *) pkgs+=("$1"); shift ;; esac
+done
+rc=0
+for p in "${pkgs[@]}"; do
+  line=$(grep "^$p=" "$SHIM_STATE/dpkg" 2>/dev/null | tail -n 1)
+  if [ -z "$line" ]; then echo "dpkg-query: no packages found matching $p" >&2; rc=1; continue; fi
+  case $fmt in
+    *Status*) echo "$p install ok installed" ;;
+    *Version*) echo "$line" ;;
+  esac
+done
+exit $rc
+SH
+  cat >"$bin/gpg" <<'SH'
+#!/usr/bin/env bash
+echo "gpg $*" >>"$SHIM_STATE/calls.log"
+mode="" arg=""
+for a in "$@"; do
+  case $a in --import) mode=import ;; --list-keys) mode=list ;; --export) mode=export ;; -*) ;; *) arg=$a ;; esac
+done
+case $mode in
+  import) grep -q '^KEY ' "$arg" || { echo "gpg: no valid OpenPGP data found." >&2; exit 2; }
+          cat "$arg" >>"$GNUPGHOME/pubring.harness" ;;
+  list) [ ! -f "$GNUPGHOME/pubring.harness" ] || while read -r tag fpr; do
+          [ "$tag" = KEY ] || continue
+          echo "pub:-:4096:1:${fpr:24}:1487788586:::-:::scESA::::::23::0:"
+          echo "fpr:::::::::$fpr:"
+        done <"$GNUPGHOME/pubring.harness" ;;
+  export) if grep -qx "KEY $arg" "$GNUPGHOME/pubring.harness" 2>/dev/null; then
+            printf -- '-----BEGIN PGP PUBLIC KEY BLOCK-----\nKEY %s\n-----END PGP PUBLIC KEY BLOCK-----\n' "$arg"
+          fi ;;
+esac
+exit 0
+SH
+  cat >"$bin/gpgconf" <<'SH'
+#!/usr/bin/env bash
+echo "gpgconf $*" >>"$SHIM_STATE/calls.log"
+SH
+  cat >"$bin/nvidia-ctk" <<'SH'
+#!/usr/bin/env bash
+echo "nvidia-ctk $*" >>"$SHIM_STATE/calls.log"
+cfg=$SHIM_OSROOT/etc/docker/daemon.json
+for a in "$@"; do case $a in --config=*) cfg=${a#--config=} ;; esac; done
+mkdir -p "$(dirname "$cfg")"
+if [ -f "$cfg" ] && grep -q '"nvidia"' "$cfg"; then exit 0; fi
+printf '{\n    "runtimes": {\n        "nvidia": {\n            "args": [],\n            "path": "nvidia-container-runtime"\n        }\n    }\n}\n' >"$cfg"
+SH
+  chmod +x "$bin"/*
+}
+
+# gpu_box: the helper's root is a WSL distro under systemd that sees an
+# NVIDIA GPU (/dev/dxg and Windows' libcuda.so.1), Docker running without
+# the nvidia runtime; NVIDIA's key served at the manifest's fingerprint.
+# The GPU tools go in $CASE/gpubin (run_update's extra PATH directory).
+gpu_box() {
+  mkdir -p "$OSROOT/proc/1" "$OSROOT/proc/sys/kernel" "$OSROOT/dev" "$OSROOT/usr/lib/wsl/lib"
+  echo systemd >"$OSROOT/proc/1/comm"
+  echo 6.6.87.2-microsoft-standard-WSL2 >"$OSROOT/proc/sys/kernel/osrelease"
+  : >"$OSROOT/dev/dxg"
+  : >"$OSROOT/usr/lib/wsl/lib/libcuda.so.1"
+  write_gpu_shims "$CASE/gpubin"
+  echo C95B321B61E88C1809C4F759DDCAE044F796ECB0 >"$STATE/nvidia-fpr"
+  : >"$STATE/dpkg"
+  : >"$STATE/docker-loaded"
+}
+# toolkit_installed: the four packages already there (an earlier run).
+toolkit_installed() {
+  printf '%s\n' nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1 \
+    libnvidia-container-tools=1.20.1-1 libnvidia-container1=1.20.1-1 >"$STATE/dpkg"
+}
+NVIDIA_PKGS="nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1 libnvidia-container-tools=1.20.1-1 libnvidia-container1=1.20.1-1"
+# The helper's record of its last failure, under the case's helper root.
+GPU_FAILURE=var/lib/domovoi-gpu-runtime/last-failure
+APT_UPDATE="apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -q update"
+# write_getent BIN: `getent passwd tester` says the service user's home is
+# $CASE/home (the dashboard's GPU retry flag is under it).
+write_getent() {
+  mkdir -p "$1"
+  cat >"$1/getent" <<SH
+#!/usr/bin/env bash
+[ "\${1-}" = passwd ] && [ "\${2-}" = tester ] || exit 2
+echo "tester:x:1000:1000::$CASE/home:/bin/bash"
+SH
+  chmod +x "$1/getent"
 }
 
 write_root_shims() {  # pretend to be root: id says 0, runuser logs and runs
@@ -394,6 +593,59 @@ if [ "${1-}" = -m ] && [ "${2-}" = domovoi.egress ]; then
   if [ -f "$SHIM_STATE/egress-missing" ]; then echo "No module named domovoi.egress" >&2; exit 1; fi
   cat "$SHIM_STATE/internet-policy" 2>/dev/null
   echo
+  exit 0
+fi
+# `python -m domovoi.config_env_writer --get KEY`: KEY's value in the
+# checkout's domovoi/.env the python-dotenv way (a quoted value may span
+# lines, its quotes and escapes undone; a bare one ends at " #"; a key
+# matches whatever its case; the last one wins), nothing when unset. A
+# checkout from before the reader while config-env-writer-missing exists.
+if [ "${1-}" = -m ] && [ "${2-}" = domovoi.config_env_writer ]; then
+  if [ -f "$SHIM_STATE/config-env-writer-missing" ]; then echo "No module named domovoi.config_env_writer" >&2; exit 1; fi
+  [ "${3-}" = --get ] && [ -n "${4-}" ] || { echo "usage: python -m domovoi.config_env_writer --get KEY" >&2; exit 2; }
+  [ -f "$SHIM_REPO/domovoi/.env" ] || exit 0
+  awk -v want="$4" -v sq="'" '
+    { s = s $0 "\n" }
+    END {
+      want = toupper(want); n = length(s); i = 1; found = 0
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == " " || c == "\t" || c == "\r" || c == "\n") { i++; continue }
+        if (c == "#") { while (i <= n && substr(s, i, 1) != "\n") i++; continue }
+        st = i
+        while (i <= n && (c = substr(s, i, 1)) != "=" && c != "\n") i++
+        key = substr(s, st, i - st)
+        sub(/^export[ \t]+/, "", key); sub(/[ \t]+$/, "", key)
+        if (c != "=") continue
+        i++
+        while (i <= n && ((c = substr(s, i, 1)) == " " || c == "\t")) i++
+        q = substr(s, i, 1); v = ""
+        if (q == "\"" || q == sq) {
+          i++
+          while (i <= n) {
+            c = substr(s, i, 1)
+            if (c == "\\" && i < n) {
+              d = substr(s, i + 1, 1)
+              if (q == "\"" && d == "n") v = v "\n"
+              else if (q == "\"" && d == "t") v = v "\t"
+              else if (d == q || d == "\\") v = v d
+              else v = v c d
+              i += 2; continue
+            }
+            if (c == q) { i++; break }
+            v = v c; i++
+          }
+          while (i <= n && substr(s, i, 1) != "\n") i++
+        } else {
+          st = i
+          while (i <= n && substr(s, i, 1) != "\n") i++
+          v = substr(s, st, i - st)
+          sub(/\r$/, "", v); sub(/[ \t]+#.*$/, "", v); sub(/[ \t]+$/, "", v)
+        }
+        if (toupper(key) == want) { val = v; found = 1 }
+      }
+      if (found) print val
+    }' "$SHIM_REPO/domovoi/.env"
   exit 0
 fi
 # `python -m domovoi.env_bootstrap --repair`: what env-repair-output says
@@ -464,7 +716,7 @@ new_case() {
   SHA_A=$(commit_all A)
   RESULT=""
 
-  export SHIM_STATE=$STATE SHIM_REPO=$REPO
+  export SHIM_STATE=$STATE SHIM_REPO=$REPO SHIM_OSROOT=$OSROOT
 }
 
 # run_update [extra PATH dir]: run the script against the current case.
@@ -475,7 +727,7 @@ new_case() {
 # the upstream pins.
 run_update() {
   local extra_bin=${1-}
-  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=() osjobs_env=()
+  local path=$CASE/bin:$PATH venv_env=(DOMOVOI_VENV="$CASE/venv") manage_env=() pin_env=() lock_env=() osjobs_env=() gpu_env=()
   local run=(bash "$SCRIPT")
   if [ -n "$extra_bin" ]; then path=$extra_bin:$path; fi
   if [ "${NO_VENV_ENV:-0}" = 1 ]; then venv_env=(); fi
@@ -484,11 +736,15 @@ run_update() {
   if [ -n "${UPSTREAM_BRANCH:-}" ]; then pin_env+=(DOMOVOI_UPSTREAM_BRANCH="$UPSTREAM_BRANCH"); fi
   if [ -n "${USE_LOCK:-}" ]; then lock_env=(DOMOVOI_USE_LOCK="$USE_LOCK"); fi
   if [ -n "${MANAGE_OS_JOBS:-}" ]; then osjobs_env=(DOMOVOI_MANAGE_OS_JOBS="$MANAGE_OS_JOBS"); fi
+  if [ -n "${MANAGE_GPU_RUNTIME:-}" ]; then gpu_env+=(DOMOVOI_MANAGE_GPU_RUNTIME="$MANAGE_GPU_RUNTIME"); fi
+  if [ -n "${MANAGE_WAKE_TRAINER:-}" ]; then gpu_env+=(DOMOVOI_MANAGE_WAKE_TRAINER="$MANAGE_WAKE_TRAINER"); fi
+  if [ -n "${WAKE_TRAINER_IMAGE:-}" ]; then gpu_env+=(DOMOVOI_WAKE_TRAINER_IMAGE="$WAKE_TRAINER_IMAGE"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
   env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
-    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS PATH="$path" \
+    -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
+    -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -496,6 +752,7 @@ run_update() {
     ${pin_env[@]+"${pin_env[@]}"} \
     ${lock_env[@]+"${lock_env[@]}"} \
     ${osjobs_env[@]+"${osjobs_env[@]}"} \
+    ${gpu_env[@]+"${gpu_env[@]}"} \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
@@ -507,6 +764,8 @@ run_update() {
     DOMOVOI_UPDATE_KEEP_BACKUPS="${KEEP_BACKUPS:-5}" \
     DOMOVOI_UPDATE_SEARXNG_DETACH="${SEARXNG_DETACH:-0}" \
     DOMOVOI_UPDATE_SEARXNG_TIMEOUT="${SEARXNG_TIMEOUT:-300}" \
+    DOMOVOI_UPDATE_TRAINER_DETACH="${TRAINER_DETACH:-0}" \
+    DOMOVOI_UPDATE_TRAINER_TIMEOUT="${TRAINER_TIMEOUT:-1800}" \
     "${run[@]}" >"$CASE/output.log" 2>&1 || RC=$?
   RESULT=$UPD/last-result.json
 }
@@ -2705,6 +2964,493 @@ case_upstream_pin_that_matches_goes_on() {
   end_case
 }
 
+# ─── Docker's GPU runtime (scripts/linux/gpu-runtime.sh, 2026-10-13) ─────
+#
+# A box installed before the helper existed gets the NVIDIA Container
+# Toolkit at its next update or Restart, where an NVIDIA GPU is visible:
+# while core and web are stopped, before domovoi-db's restart (a Docker
+# restart bounces Postgres). Never fatal, never rolled back; a step only
+# when something changed or the helper failed.
+
+case_gpu_runtime_installed_while_the_services_are_stopped() {
+  new_case gpu_runtime_installed_while_the_services_are_stopped
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  gpu_box
+  echo always >"$STATE/internet-policy"
+  run_update "$CASE/gpubin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "an ok gpu-runtime step" step_is gpu-runtime ok
+  check "it says what it did" grep -qF '"detail": "NVIDIA Container Toolkit 1.20.1-1 installed, Docker configured and restarted (WSL: yes; internet: always)"' "$RESULT"
+  check "between the stop and domovoi-db's restart" eq "$(step_names)" "signature preflight backup stop-services gpu-runtime migrate start-services health plugins searxng"
+  check "installed with core and web stopped" before "systemctl stop domovoi-web.service domovoi-core.service" "install -y --no-install-recommends $NVIDIA_PKGS"
+  check "NVIDIA's key checked first" before "curl https://nvidia.github.io/libnvidia-container/gpgkey" "install -s"
+  check "simulated before the install" before "install -s --no-install-recommends $NVIDIA_PKGS" "install -y --no-install-recommends $NVIDIA_PKGS"
+  check "the keyring" grep -qx "KEY C95B321B61E88C1809C4F759DDCAE044F796ECB0" "$OSROOT/etc/apt/keyrings/nvidia-container-toolkit.asc"
+  check "the source" grep -qx "Suites: /" "$OSROOT/etc/apt/sources.list.d/nvidia-container-toolkit.sources"
+  check "Docker configured" called "nvidia-ctk runtime configure --runtime=docker --config=$OSROOT/etc/docker/daemon.json"
+  check "Docker restarted before domovoi-db" before "systemctl restart docker.service" "systemctl restart domovoi-db.service"
+  check "and before core and web start" before "systemctl restart docker.service" "systemctl start domovoi-core.service"
+  check "the daemon runs the nvidia runtime" grep -q '"nvidia"' "$STATE/docker-loaded"
+  check "no error" eq "$(field error)" null
+  check "no rollback" not_called "reset --keep"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  # The next Restart: set up already, so nothing is done or recorded.
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "restart: status ok" eq "$(field status)" '"ok"'
+  check "restart: no gpu-runtime step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "restart: the journal says so" grep -qF "gpu-runtime: already in place (NVIDIA Container Toolkit 1.20.1-1" "$CASE/output.log"
+  check "restart: no download" not_called "curl https://nvidia"
+  check "restart: no apt" not_called "apt-get"
+  check "restart: Docker left alone" not_called "systemctl restart docker.service"
+  check "restart: domovoi-db left alone" not_called "systemctl restart domovoi-db.service"
+  end_case
+}
+
+# Under never nothing is downloaded: the toolkit stays uninstalled and the
+# result gains no step.
+case_gpu_runtime_under_never_downloads_nothing() {
+  new_case gpu_runtime_under_never_downloads_nothing
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  gpu_box
+  echo never >"$STATE/internet-policy"
+  run_update "$CASE/gpubin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "no gpu-runtime step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "the journal says why" grep -qF "gpu-runtime: not installed: the NVIDIA Container Toolkit is a download and internet access is turned off" "$CASE/output.log"
+  check "no download" not_called "curl https://nvidia"
+  check "no apt" not_called "apt-get"
+  check "Docker left alone" not_called "nvidia-ctk"
+  check "not restarted" not_called "systemctl restart docker.service"
+  check "domovoi-db left alone" not_called "systemctl restart domovoi-db.service"
+  end_case
+}
+
+# The toolkit is there (an earlier run) but Docker lacks the runtime: on a
+# plain Restart it is configured with nothing downloaded (under never
+# too), Docker restarts, and so does domovoi-db before core and web start.
+case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database() {
+  new_case gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  gpu_box
+  toolkit_installed
+  echo never >"$STATE/internet-policy"
+  run_update "$CASE/gpubin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode restart" eq "$(field mode)" '"restart"'
+  check "an ok gpu-runtime step" step_is gpu-runtime ok
+  check "it says what it did" grep -qF '"detail": "Docker configured and restarted (WSL: yes; internet: never)"' "$RESULT"
+  check "domovoi-db restarted after it" eq "$(step_names)" "signature stop-services gpu-runtime migrate start-services health searxng"
+  check "and says why" grep -qF '"detail": "Docker was restarted for its GPU runtime"' "$RESULT"
+  check "Docker before domovoi-db" before "systemctl restart docker.service" "systemctl restart domovoi-db.service"
+  check "domovoi-db before core and web" before "systemctl restart domovoi-db.service" "systemctl start domovoi-core.service domovoi-web.service"
+  check "no download" not_called "curl https://nvidia"
+  check "no apt" not_called "apt-get"
+  check "the daemon runs the nvidia runtime" grep -q '"nvidia"' "$STATE/docker-loaded"
+  end_case
+}
+
+# A helper that fails (here NVIDIA's key is not the pinned one) is a warn
+# step with its own summary: the update stands, nothing rolls back.
+case_gpu_runtime_failure_is_a_warning() {
+  new_case gpu_runtime_failure_is_a_warning
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  gpu_box
+  echo 0000000000000000000000000000000000000000 >"$STATE/nvidia-fpr"
+  echo sometimes >"$STATE/internet-policy"
+  run_update "$CASE/gpubin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "a warn step" step_is gpu-runtime warn
+  check "its detail is the helper's summary" grep -qF "\"detail\": \"Docker's GPU runtime: failed: NVIDIA's apt key from https://nvidia.github.io/libnvidia-container/gpgkey: its key has fingerprint '0000000000000000000000000000000000000000', the manifest pins C95B321B61E88C1809C4F759DDCAE044F796ECB0\"" "$RESULT"
+  check "no error on the run" eq "$(field error)" null
+  check "no rollback" not_called "reset --keep"
+  check "the update went on" called "systemctl restart domovoi-db.service"
+  check "nothing installed" not_called "install -y"
+  check "Docker left alone" not_called "systemctl restart docker.service"
+  check "no key installed" test ! -e "$OSROOT/etc/apt/keyrings/nvidia-container-toolkit.asc"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Docker won't start with the runtime configured: the helper puts
+# daemon.json back (none there before: removed) and starts Docker again, a
+# warn step says so, domovoi-db restarts (Docker did), and core and web
+# come back as on any Restart.
+case_gpu_runtime_docker_that_will_not_start_leaves_the_restart_ok() {
+  new_case gpu_runtime_docker_that_will_not_start_leaves_the_restart_ok
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  gpu_box
+  toolkit_installed
+  : >"$STATE/docker-rejects-nvidia"
+  echo always >"$STATE/internet-policy"
+  run_update "$CASE/gpubin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is gpu-runtime warn
+  check "it says Docker runs again" grep -qF "Docker's GPU runtime: failed: Docker did not start with the nvidia runtime configured; /etc/docker/daemon.json is back as it was and Docker runs again" "$RESULT"
+  check "daemon.json gone again (there was none)" test ! -e "$OSROOT/etc/docker/daemon.json"
+  check "Docker restarted twice" eq "$(grep -c 'systemctl restart docker.service' "$STATE/calls.log")" 2
+  check "Docker up" test ! -e "$STATE/stopped-docker.service"
+  check "domovoi-db restarted after it" called "systemctl restart domovoi-db.service"
+  check "core and web started" called "systemctl start domovoi-core.service domovoi-web.service"
+  check "healthy" step_is health ok
+  check "the failure recorded" grep -qF "reason=failed: Docker did not start with the nvidia runtime configured" "$OSROOT/$GPU_FAILURE"
+  # The next Restart does not bounce Docker (twice) all over again.
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "next Restart: status ok" eq "$(field status)" '"ok"'
+  check "next Restart: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "next Restart: not retried" grep -qF "gpu-runtime: not retried: the last try failed at " "$CASE/output.log"
+  check "next Restart: Docker left alone" not_called "systemctl restart docker.service"
+  check "next Restart: not configured again" not_called "nvidia-ctk"
+  check "next Restart: domovoi-db left alone" not_called "systemctl restart domovoi-db.service"
+  end_case
+}
+
+# A failure is recorded and held off for a day (the helper's last-failure):
+# the next Restart runs no apt-get at all and adds no step; a day later, or
+# with other pins, it is tried again.
+case_gpu_runtime_a_failure_is_not_retried_at_every_restart() {
+  new_case gpu_runtime_a_failure_is_not_retried_at_every_restart
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  gpu_box
+  : >"$STATE/apt-fail"
+  echo always >"$STATE/internet-policy"
+  local rec=$OSROOT/$GPU_FAILURE rec_before aged
+  run_update "$CASE/gpubin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is gpu-runtime warn
+  check "apt-get update failed" grep -qF "\"detail\": \"Docker's GPU runtime: failed: apt-get update failed\"" "$RESULT"
+  check "recorded: why" grep -qx "reason=failed: apt-get update failed" "$rec"
+  check "recorded: the pins' hash" grep -qE '^pins=[0-9a-f]{64}$' "$rec"
+  check "recorded: when" grep -qE '^at=[0-9]+$' "$rec"
+  check "the journal says so" grep -qF "recorded in /$GPU_FAILURE" "$CASE/output.log"
+  rec_before=$(cat "$rec")
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "next Restart: exit 0" eq "$RC" 0
+  check "next Restart: status ok" eq "$(field status)" '"ok"'
+  check "next Restart: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "next Restart: says when and why" grep -qF "gpu-runtime: not retried: the last try failed at " "$CASE/output.log"
+  check "next Restart: and when it tries again" grep -qF "(apt-get update failed); it is tried again at the first update or Restart after " "$CASE/output.log"
+  check "next Restart: or from the dashboard" grep -qF "or on Check the GPU and trainer again" "$CASE/output.log"
+  check "next Restart: no apt-get at all" not_called "apt-get"
+  check "next Restart: no download" not_called "curl https://nvidia"
+  check "next Restart: Docker left alone" not_called "nvidia-ctk"
+  check "next Restart: the record as it was" eq "$(cat "$rec")" "$rec_before"
+  # A day and a second later: tried again, and recorded again.
+  aged=$(( $(date +%s) - 86401 ))
+  sed -i "s/^at=.*/at=$aged/" "$rec"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "a day later: tried again" called "$APT_UPDATE"
+  check "a day later: a warn step" step_is gpu-runtime warn
+  check "a day later: recorded anew" test "$(sed -n 's/^at=//p' "$rec")" -gt "$aged"
+  # Other pins (a version, the key or the repository changed): at once.
+  sed -i 's/^pins=.*/pins=0000000000000000000000000000000000000000000000000000000000000000/' "$rec"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "other pins: tried at once" called "$APT_UPDATE"
+  check "other pins: a warn step" step_is gpu-runtime warn
+  check "other pins: recorded for these pins" eq "$(sed -n 's/^pins=//p' "$rec")" "$(printf '%s\n' "$rec_before" | sed -n 's/^pins=//p')"
+  end_case
+}
+
+# The dashboard's "Check the GPU and trainer again" leaves gpu-runtime-retry
+# in the core's wake_trainer dir: the next run passes --force, whatever the
+# result, and removes the flag as the service user. A run that sets the
+# runtime up removes the record.
+case_gpu_runtime_retry_flag_forces_a_try_and_success_clears_the_record() {
+  new_case gpu_runtime_retry_flag_forces_a_try_and_success_clears_the_record
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  gpu_box
+  write_root_shims "$CASE/gpubin"
+  write_getent "$CASE/gpubin"
+  echo always >"$STATE/internet-policy"
+  local rec=$OSROOT/$GPU_FAILURE flag=$CASE/home/.domovoi/wake_trainer/gpu-runtime-retry
+  mkdir -p "$(dirname "$flag")"
+  : >"$STATE/apt-fail"
+  run_update "$CASE/gpubin"
+  check "failed: a warn step" step_is gpu-runtime warn
+  check "failed: recorded" test -f "$rec"
+  # apt works again, but the record holds the next Restart off ...
+  rm -f "$STATE/apt-fail"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "held off: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "held off: no apt-get" not_called "apt-get"
+  # ... until the dashboard asks; that try fails again here: the flag goes
+  # all the same, and the record is renewed.
+  local recent=$(( $(date +%s) - 100 ))
+  : >"$STATE/apt-fail"
+  : >"$flag"
+  sed -i "s/^at=.*/at=$recent/" "$rec"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "asked, failing: said so" grep -qF "the dashboard asked to check the GPU again ($flag)" "$CASE/output.log"
+  check "asked, failing: tried at once" called "$APT_UPDATE"
+  check "asked, failing: a warn step" step_is gpu-runtime warn
+  check "asked, failing: the flag removed as the service user" called "runuser -u tester -- rm -f -- $flag"
+  check "asked, failing: after the helper ran" before "$APT_UPDATE" "rm -f -- $flag"
+  check "asked, failing: the flag gone" test ! -e "$flag"
+  check "asked, failing: recorded anew" test "$(sed -n 's/^at=//p' "$rec")" -gt "$recent"
+  # Asked again with apt working: set up, the record removed, the flag too.
+  rm -f "$STATE/apt-fail"
+  : >"$flag"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "asked: status ok" eq "$(field status)" '"ok"'
+  check "asked: installed" called "install -y --no-install-recommends $NVIDIA_PKGS"
+  check "asked: an ok step" step_is gpu-runtime ok
+  check "asked: the record removed" test ! -e "$rec"
+  check "asked: the journal says so" grep -qF "removed /$GPU_FAILURE: the last failure is past" "$CASE/output.log"
+  check "asked: the flag gone" test ! -e "$flag"
+  # A flag where WAKE_MODELS_DIR puts the core's state (read from .env the
+  # core's way), on a box set up already: removed, nothing else done.
+  mkdir -p "$CASE/models/wake_trainer"
+  printf 'WAKE_MODELS_DIR="%s/models/wake_models"\n' "$CASE" >"$REPO/domovoi/.env"
+  : >"$CASE/models/wake_trainer/gpu-runtime-retry"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "set up: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "set up: already in place" grep -qF "gpu-runtime: already in place" "$CASE/output.log"
+  check "set up: the .env's flag read" grep -qF "the dashboard asked to check the GPU again ($CASE/models/wake_trainer/gpu-runtime-retry)" "$CASE/output.log"
+  check "set up: and removed" test ! -e "$CASE/models/wake_trainer/gpu-runtime-retry"
+  check "set up: no apt-get" not_called "apt-get"
+  end_case
+}
+
+# No NVIDIA GPU (a WSL distro with another GPU's /dev/dxg; bare metal
+# without the driver), or the administrator's opt-out: nothing, no step.
+case_gpu_runtime_nothing_without_an_nvidia_gpu_or_when_opted_out() {
+  new_case gpu_runtime_nothing_without_an_nvidia_gpu_or_when_opted_out
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  gpu_box
+  rm -f "$OSROOT/usr/lib/wsl/lib/libcuda.so.1"
+  echo always >"$STATE/internet-policy"
+  run_update "$CASE/gpubin"
+  check "WSL, no libcuda: status ok" eq "$(field status)" '"ok"'
+  check "WSL, no libcuda: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "WSL, no libcuda: said why" grep -qF "gpu-runtime: no NVIDIA GPU visible (WSL: /dev/dxg but no /usr/lib/wsl/lib/libcuda.so.1" "$CASE/output.log"
+  check "WSL, no libcuda: Docker left alone" not_called "nvidia-ctk"
+  echo 6.8.0-45-generic >"$OSROOT/proc/sys/kernel/osrelease"
+  : >"$STATE/calls.log"
+  run_update "$CASE/gpubin"
+  check "bare metal, no driver: status ok" eq "$(field status)" '"ok"'
+  check "bare metal, no driver: asked the driver" called "nvidia-smi -L"
+  check "bare metal, no driver: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "bare metal, no driver: Docker left alone" not_called "nvidia-ctk"
+  echo 6.6.87.2-microsoft-standard-WSL2 >"$OSROOT/proc/sys/kernel/osrelease"
+  : >"$OSROOT/usr/lib/wsl/lib/libcuda.so.1"
+  : >"$STATE/calls.log"
+  MANAGE_GPU_RUNTIME=off run_update "$CASE/gpubin"
+  check "opted out: status ok" eq "$(field status)" '"ok"'
+  check "opted out: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "opted out: said so" grep -qF "Docker's GPU runtime left alone (DOMOVOI_MANAGE_GPU_RUNTIME=off)" "$CASE/output.log"
+  check "opted out: not even asked" not_called "nvidia-smi"
+  check "opted out: nothing installed" not_called "apt-get"
+  end_case
+}
+
+# ─── The wake-word trainer image follows scripts/wake_word/docker ────────
+#
+# Rebuilt after a healthy start only where it exists (training switched
+# on) and its org.domovoi.wake-trainer.src label is not the checkout's tree
+# id of that directory; as the service user; detached under systemd; never
+# under never. A step only when it built, started a build, or could not.
+
+# trainer_dir: the checkout gets scripts/wake_word/docker in a commit of
+# its own, already applied (a plain restart follows); TREE is the git tree
+# id of that directory.
+trainer_dir() {
+  mkdir -p "$REPO/scripts/wake_word/docker"
+  printf 'FROM python:3.11-slim\n' >"$REPO/scripts/wake_word/docker/Dockerfile"
+  local sha; sha=$(commit_all "trainer")
+  mkdir -p "$UPD" && echo "$sha" >"$UPD/applied_sha"
+  TREE=$(g rev-parse HEAD:scripts/wake_word/docker)
+}
+
+case_wake_trainer_without_an_image_does_nothing() {
+  new_case wake_trainer_without_an_image_does_nothing
+  trainer_dir
+  echo always >"$STATE/internet-policy"
+  MANAGE_WAKE_TRAINER=0 run_update
+  check "opted out: status ok" eq "$(field status)" '"ok"'
+  check "opted out: not even looked for" not_called "docker image inspect"
+  check "opted out: said so" grep -qF "the wake-word trainer image left alone (DOMOVOI_MANAGE_WAKE_TRAINER=0)" "$CASE/output.log"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "looked for the image" called "docker image inspect domovoi-wake-trainer:latest"
+  check "no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "no build" not_called "docker build"
+  check "said why" grep -qF "no domovoi-wake-trainer:latest image: wake-word training is not switched on here" "$CASE/output.log"
+  end_case
+}
+
+case_wake_trainer_out_of_date_is_rebuilt_as_the_service_user() {
+  new_case wake_trainer_out_of_date_is_rebuilt_as_the_service_user
+  trainer_dir
+  echo domovoi-wake-trainer:latest >"$STATE/trainer-image"
+  printf 'an-older-tree' >"$STATE/trainer-label"
+  echo always >"$STATE/internet-policy"
+  write_root_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "an ok step, after the search helper's" eq "$(step_names)" "signature stop-services start-services health searxng wake-trainer"
+  check "it says so" grep -qF "\"detail\": \"domovoi-wake-trainer:latest rebuilt from this checkout's scripts/wake_word/docker\"" "$RESULT"
+  check "built as the service user, labelled with the tree" called "runuser -u tester -- docker build --label org.domovoi.wake-trainer.src=$TREE -t domovoi-wake-trainer:latest $REPO/scripts/wake_word/docker"
+  check "after the healthy start" before "curl http://127.0.0.1:6369/api/health" "docker build"
+  check "the image now has the tree's label" eq "$(cat "$STATE/trainer-label")" "$TREE"
+  : >"$STATE/calls.log"
+  run_update "$CASE/rootbin"
+  check "again: status ok" eq "$(field status)" '"ok"'
+  check "again: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "again: no build" not_called "docker build"
+  check "again: said why" grep -qF "domovoi-wake-trainer:latest is built from this checkout's scripts/wake_word/docker" "$CASE/output.log"
+  end_case
+}
+
+case_wake_trainer_rebuild_detached_under_systemd() {
+  new_case wake_trainer_rebuild_detached_under_systemd
+  trainer_dir
+  echo domovoi-wake-trainer:latest >"$STATE/trainer-image"
+  echo sometimes >"$STATE/internet-policy"
+  write_systemd_run "$CASE/sdbin"
+  TRAINER_DETACH=1 run_update "$CASE/sdbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "handed to a transient unit, as the service user" called "systemd-run --no-block --collect --quiet --unit=domovoi-wake-trainer-build --uid=tester"
+  check "building the tree, from the checkout" called "-p WorkingDirectory=$REPO docker build --label org.domovoi.wake-trainer.src=$TREE -t domovoi-wake-trainer:latest $REPO/scripts/wake_word/docker"
+  check "the update did not build it itself" eq "$(grep -c '^docker build' "$STATE/calls.log")" 0
+  check "an ok step" step_is wake-trainer ok
+  check "says it runs in the background" grep -qF "rebuilding domovoi-wake-trainer:latest in the background (domovoi-wake-trainer-build" "$RESULT"
+  end_case
+}
+
+case_wake_trainer_not_rebuilt_under_never() {
+  new_case wake_trainer_not_rebuilt_under_never
+  trainer_dir
+  echo domovoi-wake-trainer:latest >"$STATE/trainer-image"
+  printf 'an-older-tree' >"$STATE/trainer-label"
+  echo never >"$STATE/internet-policy"
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is wake-trainer warn
+  check "it says why" grep -qF "domovoi-wake-trainer:latest is out of date (scripts/wake_word/docker changed) and was not rebuilt: the build downloads, and internet access is turned off" "$RESULT"
+  check "no build" not_called "docker build"
+  end_case
+}
+
+# The name: DOMOVOI_WAKE_TRAINER_IMAGE, else WAKE_TRAINER_IMAGE in .env. One
+# built here without the label (by hand, before there was one) is rebuilt;
+# a registry's image (a name whose first part is a host) is pulled, never
+# built here; a name docker would not take is a warning.
+case_wake_trainer_image_names_and_registry_images() {
+  new_case wake_trainer_image_names_and_registry_images
+  trainer_dir
+  printf 'WAKE_TRAINER_IMAGE=my-trainer:2
+' >"$REPO/domovoi/.env"
+  echo my-trainer:2 >"$STATE/trainer-image"
+  echo always >"$STATE/internet-policy"
+  run_update
+  check "the .env's name: status ok" eq "$(field status)" '"ok"'
+  check "the .env's name: looked up" called "docker image inspect my-trainer:2"
+  check "no label: rebuilt" called "docker build --label org.domovoi.wake-trainer.src=$TREE -t my-trainer:2 $REPO/scripts/wake_word/docker"
+  check "no label: an ok step" step_is wake-trainer ok
+  : >"$STATE/calls.log"
+  WAKE_TRAINER_IMAGE=ghcr.io/example/trainer:7 run_update
+  check "a registry's image: status ok" eq "$(field status)" '"ok"'
+  check "a registry's image: not even looked up" not_called "docker image inspect"
+  check "a registry's image: not built" not_called "docker build"
+  check "a registry's image: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "a registry's image: said why" grep -qF "ghcr.io/example/trainer:7 is a registry's image: not rebuilt here" "$CASE/output.log"
+  : >"$STATE/calls.log"
+  WAKE_TRAINER_IMAGE=other-trainer:1 run_update
+  check "the environment's name wins over the .env's" called "docker image inspect other-trainer:1"
+  check "no such image: nothing built" not_called "docker build"
+  : >"$STATE/calls.log"
+  WAKE_TRAINER_IMAGE='Not An Image' run_update
+  check "a bad name: status ok" eq "$(field status)" '"ok"'
+  check "a bad name: a warn step" step_is wake-trainer warn
+  check "a bad name: not looked up" not_called "docker image inspect"
+  end_case
+}
+
+# domovoi/.env is read the way the core reads it (python-dotenv, through
+# the checkout's python -m domovoi.config_env_writer --get, as the service
+# user). Review of 2026-10-13: a Configuration value with a newline was
+# written as one double-quoted value, and the line-based reader took its
+# second line for WAKE_TRAINER_IMAGE=domovoi-mpd:latest, the name root's
+# update then rebuilt and tagged. Every caller (MPD_IMAGE_TAG,
+# MPD_CONTAINER_PREFIX, WAKE_TRAINER_IMAGE, UPDATE_STATE_DIR) reads the
+# core's value; only a checkout without that reader is read line by line,
+# and the journal says so.
+case_dotenv_is_read_the_way_the_core_reads_it() {
+  new_case dotenv_is_read_the_way_the_core_reads_it
+  trainer_dir
+  local prev; prev=$(cat "$UPD/applied_sha")
+  printf 'FROM debian:trixie-slim\n' >"$REPO/domovoi/Dockerfile.mpd"
+  commit_all "B: mpd" >/dev/null
+  # The previous SHA comes from the core's pull record, in the
+  # UPDATE_STATE_DIR the .env names (no DOMOVOI_CORE_STATE_DIR below).
+  rm -f "$UPD/applied_sha"
+  mkdir -p "$CASE/core-state-env"
+  echo "$prev" >"$CASE/core-state-env/prev_sha"
+  {
+    printf '# the household'"'"'s settings\n'
+    printf 'UPDATE_STATE_DIR="%s/core-state-env"   # the core'"'"'s pull record\n' "$CASE"
+    printf 'MPD_IMAGE_TAG='"'"'my-mpd:1'"'"'\n'
+    printf 'mpd_image_tag="my-mpd:5"   # the last one wins\n'
+    printf 'MPD_CONTAINER_PREFIX=domovoi-mpd-k # rooms whose name starts so\n'
+    printf 'BOT_NAME="Domo\nWAKE_TRAINER_IMAGE=domovoi-mpd:latest"\n'
+  } >"$REPO/domovoi/.env"
+  # Were the second line of BOT_NAME read as a setting, this image would be
+  # rebuilt as the trainer.
+  echo domovoi-mpd:latest >"$STATE/trainer-image"
+  printf 'an-older-tree' >"$STATE/trainer-label"
+  echo always >"$STATE/internet-policy"
+  write_root_shims "$CASE/rootbin"
+  CORE_STATE="" run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "UPDATE_STATE_DIR: up to its comment, the pull record found" eq "$(field prev_source)" '"pull"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "read as the service user, by the checkout's reader" called "runuser -u tester -- $CASE/venv/bin/python -m domovoi.config_env_writer --get WAKE_TRAINER_IMAGE"
+  check "the trainer's default name" called "docker image inspect domovoi-wake-trainer:latest"
+  check "the music player image never looked up as the trainer" not_called "docker image inspect domovoi-mpd:latest"
+  check "never built under the trainer's label" not_called "--label org.domovoi.wake-trainer.src"
+  check "no wake-trainer step" eq "$(step_names | grep -c wake-trainer)" 0
+  check "MPD_IMAGE_TAG: quoted, the last one" called "docker build -t my-mpd:5 -f $REPO/domovoi/Dockerfile.mpd $REPO/domovoi"
+  check "MPD_CONTAINER_PREFIX: up to its comment" called "docker rm -f domovoi-mpd-kitchen"
+  check "and only those rooms" not_called "docker rm -f domovoi-mpd-office"
+  check "nothing read line by line" not_said "read line by line"
+  # A checkout from before the reader: line by line, as before, and said.
+  : >"$STATE/config-env-writer-missing"
+  printf 'WAKE_TRAINER_IMAGE=my-trainer:2\n' >"$REPO/domovoi/.env"
+  echo my-trainer:2 >"$STATE/trainer-image"
+  : >"$STATE/calls.log"
+  run_update "$CASE/rootbin"
+  check "older checkout: status ok" eq "$(field status)" '"ok"'
+  check "older checkout: said so" grep -qF "domovoi/.env: WAKE_TRAINER_IMAGE read line by line: this checkout's python -m domovoi.config_env_writer --get could not read it" "$CASE/output.log"
+  check "older checkout: the line's name" called "docker image inspect my-trainer:2"
+  check "older checkout: rebuilt" step_is wake-trainer ok
+  end_case
+}
+
 CASES=(
   case_noop_restart
   case_noop_without_any_history
@@ -2801,6 +3547,20 @@ CASES=(
   case_upstream_pin_mismatch_is_refused
   case_upstream_branch_pin_mismatch_is_refused
   case_upstream_pin_that_matches_goes_on
+  case_gpu_runtime_installed_while_the_services_are_stopped
+  case_gpu_runtime_under_never_downloads_nothing
+  case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database
+  case_gpu_runtime_failure_is_a_warning
+  case_gpu_runtime_docker_that_will_not_start_leaves_the_restart_ok
+  case_gpu_runtime_nothing_without_an_nvidia_gpu_or_when_opted_out
+  case_gpu_runtime_a_failure_is_not_retried_at_every_restart
+  case_gpu_runtime_retry_flag_forces_a_try_and_success_clears_the_record
+  case_wake_trainer_without_an_image_does_nothing
+  case_wake_trainer_out_of_date_is_rebuilt_as_the_service_user
+  case_wake_trainer_rebuild_detached_under_systemd
+  case_wake_trainer_not_rebuilt_under_never
+  case_wake_trainer_image_names_and_registry_images
+  case_dotenv_is_read_the_way_the_core_reads_it
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

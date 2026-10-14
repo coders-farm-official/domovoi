@@ -139,6 +139,18 @@ def test_secret_value_never_echoes_in_errors(
     assert "hunter2-secret" not in str(exc.value)
 
 
+def test_a_value_with_a_newline_is_refused_before_it_applies(
+    registry: PluginConfigRegistry, tmp_path: Path
+) -> None:
+    # A .env value with a newline reads as a second setting to a line-based
+    # reader (review of 2026-10-13); the secret's text never echoes either.
+    with pytest.raises(ValueError, match="control character") as exc:
+        registry.write_values(SLUG, {"api_token": "hunter2\nCFGTEST_STATION_LIMIT=999"})
+    assert "hunter2" not in str(exc.value)
+    assert registry.get(SLUG).api_token == ""            # nothing applied live
+    assert not (tmp_path / f"{SLUG}.env").exists()       # nor written
+
+
 def test_on_reapply_requires_declared_field(
     registry: PluginConfigRegistry,
 ) -> None:

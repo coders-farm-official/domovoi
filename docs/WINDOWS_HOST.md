@@ -30,10 +30,10 @@ using the server PC as a room is planned for the server's own tray.
 | | Supported | Notes |
 |---|---|---|
 | Windows | 11 22H2 or later (build 22621+), Home or Pro, x64 | Not Windows 10, not Arm64: mirrored networking and the Hyper-V firewall need 22H2. |
-| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory). |
+| Memory | 16 GB or more | Below 24 GB the distro is capped at 10 GB and gets the smaller models. From about 32 GB it gets the standard models (as on a Linux box with that much memory), and can train wake words ([Training wake words](#training-wake-words)). |
 | Processor | Firmware virtualization on (Intel VT-x / AMD-V) | AVX2 is checked and only warned about. |
-| Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. |
-| GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Whisper always runs on the CPU. |
+| Disk | 40 GB free on the system drive | An SSD is strongly recommended; Setup warns on a spinning disk. Wake-word training, if you turn it on, takes about 32 GB more. |
+| GPU | Optional | Ollama uses an NVIDIA GPU that WSL passes through; without one it runs on the CPU. Wake-word training uses it too, through the NVIDIA Container Toolkit Setup adds to the distro. Whisper always runs on the CPU. |
 | Internet | Needed during setup (about 10.5-13.5 GB, most of it the AI models) | Afterwards Domovoi works with or without it, as you answer in Setup. |
 | Docker Desktop, Ollama for Windows, your own WSL distros | Fine alongside | Setup checks the ports Domovoi needs, not which programs you run. A program holding one of them gets a pop-up naming it, with Retry and Cancel. |
 | Smart App Control | Must be off | It blocks unsigned programs, and this build is unsigned. See [Unsigned](#unsigned). |
@@ -260,6 +260,73 @@ later, every satellite goes offline. Setup's last page shows the PC's
 address and MAC address: in your router's settings, add a **DHCP
 reservation** for that MAC address, so the PC always gets the same
 address. Do the same on a Linux server; it is not specific to Windows.
+
+## Training wake words
+
+**Settings > Wake Words** trains a wake word of your own ("Hey Domovoi")
+on this PC, inside the distro, once an admin turns training on there. The
+steps, what it costs and the licence of what it makes are in
+[`scripts/wake_word/README.md`](../scripts/wake_word/README.md). What this
+PC needs for it:
+
+- **Docker's way to the GPU.** WSL hands the distro the PC's NVIDIA cards
+  (`/dev/dxg`, and Windows' driver in `/usr/lib/wsl/lib`), but Docker
+  Engine in the distro can't use them without the NVIDIA Container
+  Toolkit. `scripts/linux/gpu-runtime.sh` adds it, only when the distro
+  sees an NVIDIA card: NVIDIA's apt repository with its key checked
+  against a pinned fingerprint, the toolkit at pinned versions, the
+  `nvidia` runtime in Docker's configuration, and a Docker restart
+  (Postgres and the rooms' players stop for a moment and come back by
+  themselves). It never installs a Linux NVIDIA driver: the driver is
+  Windows'. Setup installs Domovoi at the commit the installer is pinned
+  to, and until the installer is re-pinned to a commit that has this
+  helper, a **new install** doesn't get the toolkit during Setup: like an
+  **existing install**, it gets it at its first update from the dashboard
+  (**Pull the latest**, then **Restart to apply changes**). Once the
+  installer is re-pinned past it, Setup installs it (`provision.sh`'s
+  `gpu-runtime` step). After that every **Restart Domovoi** checks it is
+  still in place. A try that failed is not repeated at every Restart: the
+  next one is a day later, or at the next Restart after you press **Turn
+  on wake-word training** or **Check the GPU and trainer again**. With the
+  internet answer **No**, the update downloads nothing, so the toolkit
+  isn't installed then. More:
+  [LINUX_HOST.md, Wake-word training](LINUX_HOST.md#wake-word-training).
+- **Memory.** Training needs the distro to see 24 GB, the line where it
+  gets the standard models. The distro gets the PC's memory minus 8 GB,
+  so that means a PC with about 32 GB or more; below that the card says
+  training can't be turned on here, in the PC's terms ("this PC has about
+  24 GB").
+- **Disk and download.** About 22 GB downloaded, once, and about 32 GB
+  more disk the first time (the trainer and its training data), then
+  about 0.5 GB per wake word, in the distro's disk
+  (`C:\ProgramData\Domovoi\distro\ext4.vhdx`), which grows on the system
+  drive. Domovoi can't see how much of C: is free (the distro's own disk
+  is a 1 TB virtual one, whatever C: holds), so the card shows no number
+  here: it asks you to confirm that C: has at least 40 GB free before it
+  turns training on. Look in File Explorer, **This PC**.
+- **Time.** About 20 minutes a wake word on the GPU (26 the first time;
+  measured on an RTX 4070 Ti SUPER). Generating the synthetic speech fills
+  a 16 GB card, so the trainer takes the least busy card, away from the one
+  holding the chat model.
+
+Then, as the admin: **Settings > Wake Words > Turn on wake-word training**,
+confirm, and wait (about 13 minutes on a fast line: the trainer's build,
+then the training data download; you can leave the page). Create a wake word, record at
+least 15 clips on a satellite (hundreds for an XVF3800), press **Train**,
+and **Push to** a room when it is ready. "Hello Domo", "Hey Domovoi" and
+"Domovoi" are three wake words, three models; a satellite listens for one
+at a time.
+
+On a PC with an NVIDIA card, update first: until the toolkit is there the
+card says Docker can't use the card yet, and offers only the processor.
+With the toolkit in place after the update, **Check the GPU and trainer
+again** (or **Try again**) finds the GPU. Once training is set up for the
+GPU, a **Train** while Docker can't reach it (the toolkit lost, the card
+gone) fails saying so instead of running for over an hour on the
+processor. Without an NVIDIA card, training
+runs on the processor: about 75 minutes a word on 8 cores, and voice
+answers more slowly while it runs. The card says so and asks before
+turning training on and again before each **Train**.
 
 ## The trust boundary on a shared PC
 

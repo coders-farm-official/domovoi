@@ -1838,7 +1838,8 @@ const WakeClipGrid = ({ wid, canScore, fire }) => {
 };
 
 const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onRecordStop, onTrain,
-                   onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false }) => {
+                   onRename, onThreshold, onSetDefault, onPush, onDelete, internetOff = false,
+                   trainerOn = true, onTrainStop }) => {
   const [editing, setEditing] = React.useState(false);
   const [name, setName] = React.useState(w.name);
   const [room, setRoom] = React.useState('');
@@ -1903,7 +1904,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   const chosen = rooms.find((r) => r.room_id === roomFor);
   const canRecordHere = satCan(chosen, 'wake_clips');
   const canPushHere = satCan(chosen, 'wake_models');
-  const canTrain = w.status === 'recording' && w.clip_count >= minClips;
+  // A failed word trains again on the clips it has (no re-recording).
+  const canTrain = (w.status === 'recording' || w.status === 'failed') && w.clip_count >= minClips;
   const canPush = w.status === 'ready';
   const capturing = (recActive || capLive) && w.status === 'recording';
   const startRec = () => { setRecActive(true); onRecordStart(w, roomFor); };
@@ -1978,11 +1980,22 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 onClick={startRec}>Record</Button>
         <Button variant="ghost" icon="square" disabled={!haveRooms}
                 onClick={stopRec}>Stop</Button>
-        {/* Training downloads its data the first time: greyed under "No". */}
-        <Button variant="primary" icon="cpu" disabled={!canTrain || internetOff}
-                title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
+        {/* Training downloads its data the first time: greyed under "No".
+            Until training is turned on (the card above) a Train would only
+            queue the word, so the button says why it waits. */}
+        <Button variant="primary" icon="cpu" disabled={!canTrain || internetOff || !trainerOn}
+                title={internetOff ? NEEDS_INTERNET_TEXT
+                  : !trainerOn ? 'turn on wake-word training first (above)' : undefined}
                 onClick={() => onTrain(w)}>Train</Button>
         {internetOff && <NeedsInternetNote compact/>}
+        {w.status === 'training' && onTrainStop && (
+          <Button variant="secondary" icon="square" onClick={() => onTrainStop(w)}
+                  title="stop this training; the word keeps its clips and isn't queued again">
+            Stop training</Button>
+        )}
+        {!internetOff && !trainerOn && canTrain && (
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>turn on training above first</span>
+        )}
         <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush || !canPushHere}
                 title={canPushHere ? undefined : "this room's device doesn't take wake-word models"}
                 onClick={() => onPush(w, roomFor)}>Push to room</Button>
@@ -2027,6 +2040,316 @@ const AddWakeWord = ({ onAdd }) => {
   );
 };
 
+/* ---- Turning training on (GET/POST /api/wake-words/trainer) ----------
+ * Training needs a ~12 GB Docker image and ~18 GB of training data, so it
+ * is off until an admin turns it on here. The card says what it needs and
+ * what this server has, refuses with the reason instead of offering a
+ * button that can't work (internet off, disk, memory, Docker), asks a
+ * second yes on a CPU-only server (over an hour a word, voice slower
+ * meanwhile), then shows the setup job's progress, or the error it
+ * stopped on, which stays until the next try. The core does the work
+ * (domovoi/wake_trainer_setup.py). */
+
+const _TRAINER_STAGES = [
+  ['image', 'Build the trainer'],
+  ['gpu', 'Check the GPU'],
+  ['data', 'Download the training data'],
+  ['settings', 'Switch training on'],
+];
+
+const trainerEstimateText = (est) => {
+  if (!est) return '';
+  if (est.device === 'gpu') {
+    const names = (est.gpu_names || []).join(', ');
+    return `about ${est.minutes_per_word} minutes a wake word on the GPU${names ? ` (${names})` : ''}, `
+      + `${est.first_minutes} the first time`;
+  }
+  return `about ${est.minutes_per_word} minutes a wake word on the CPU`
+    + (est.cpus ? ` (${est.cpus} CPUs; ${est.measured})` : '');
+};
+
+const TrainerConfirmDialog = ({ title, busy, confirmLabel, onCancel, onConfirm, children,
+                                confirmDisabled = false, icon = 'cpu' }) => (
+  <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.45)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+       onClick={busy ? undefined : onCancel}>
+    <div role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}
+         style={{ width: 'min(500px, 100%)', background: 'var(--card)',
+                  border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+                  boxShadow: 'var(--shadow-md), var(--inner-highlight)', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px',
+                    borderBottom: '1px solid var(--border-soft)' }}>
+        <Icon name={icon} size={16}/>
+        <strong style={{ fontSize: 14 }}>{title}</strong>
+      </div>
+      <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8,
+                    fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+        {children}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 16px',
+                    borderTop: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+        <Button icon="x" disabled={busy} onClick={onCancel}>Cancel</Button>
+        <Button variant="primary" icon="check" disabled={busy || confirmDisabled} onClick={onConfirm}>
+          {busy ? 'Working…' : confirmLabel}
+        </Button>
+      </div>
+    </div>
+  </div>
+);
+
+const TrainerProgress = ({ job }) => {
+  const at = _TRAINER_STAGES.findIndex(([id]) => id === job.stage);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ height: 8, borderRadius: 4, background: 'var(--border-soft)', overflow: 'hidden' }}>
+        <div style={{ width: `${Math.max(2, job.percent || 0)}%`, height: '100%',
+                      background: 'var(--brand)', transition: 'width .4s ease' }}/>
+      </div>
+      <div style={{ fontSize: 13 }}>{job.message || 'Working…'} <span className="mono"
+        style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{job.percent || 0}%</span></div>
+      <ol style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--fg-muted)' }}>
+        {_TRAINER_STAGES.map(([id, label], i) => (
+          <li key={id} style={{ color: i < at ? 'var(--ok)' : i === at ? 'var(--fg)' : undefined,
+                                fontWeight: i === at ? 600 : 400 }}>
+            {label}{i < at ? ' ✓' : ''}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+};
+
+const WakeTrainerCard = ({ status, error, refresh, fire }) => {
+  const admin = useAdminSignedIn();
+  const [asking, setAsking] = React.useState(null);   // null | { cpu: bool }
+  const [busy, setBusy] = React.useState(false);
+  // The Windows install can't see C:'s free space: the admin ticks this.
+  const [diskOk, setDiskOk] = React.useState(false);
+  // "Turn off and free the space": what it removes, read when asked.
+  const [offAsk, setOffAsk] = React.useState(null);   // null | { loading } | footprint
+  const job = (status && status.job) || {};
+  const running = job.state === 'running';
+
+  // Poll while the job works; the page's other data doesn't move with it.
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(() => refresh(), 2000);
+    return () => clearInterval(t);
+  }, [running, refresh]);
+
+  if (!status) {
+    if (error && (error.status === 401 || error.status === 403)) {
+      return (
+        <Card title="Wake-word training" sub="An admin can turn training on here.">
+          <div style={{ padding: '4px 14px 12px', fontSize: 13, color: 'var(--fg-muted)' }}>
+            Sign in as the admin to see what training needs on this server.
+          </div>
+        </Card>
+      );
+    }
+    return null;
+  }
+  const req = status.requirements || {};
+  const est = req.estimate || {};
+  const gpu = est.device === 'gpu';
+  const refusals = req.refusals || [];
+  const notes = req.notes || [];
+  const disk = req.disk || {};
+  const mem = req.memory || {};
+
+  const start = async (cpuOk) => {
+    setBusy(true);
+    try {
+      await apiPost('/api/wake-words/trainer/enable', { cpu_ok: !!cpuOk, disk_ok: diskOk });
+      setAsking(null);
+      fire('setting up wake-word training…');
+    } catch (e) {
+      fire(`couldn’t start: ${apiErrorText(e, 0)}`);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
+  const gb = (b) => (b == null ? 'size unknown' : `${(b / 1e9).toFixed(1)} GB`);
+  const turnOff = async () => {
+    setBusy(true);
+    try {
+      const r = await apiPost('/api/wake-words/trainer/disable', {});
+      const errs = (r && r.errors) || [];
+      fire(errs.length ? `turned off; not everything was removed: ${errs.join('; ')}`
+                       : 'wake-word training turned off; the space is free');
+      setOffAsk(null);
+    } catch (e) {
+      fire(`couldn’t turn it off: ${apiErrorText(e, 0)}`);
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+  const askTurnOff = async () => {
+    setOffAsk({ loading: true });
+    try { setOffAsk(await apiGet('/api/wake-words/trainer/footprint')); }
+    catch (e) { setOffAsk(null); fire(`couldn’t size it: ${apiErrorText(e, 0)}`); }
+  };
+
+  // On the Windows install the free space of C: can't be seen from inside
+  // Domovoi: no number, a tick instead (owner rule: no misleading numbers).
+  const needs = (
+    <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {disk.confirm_gb ? (
+        <li>Disk: about {disk.total_first_gb || 32} GB of the Windows drive (C:) the first time,
+          and about half a gigabyte more for each wake word. Domovoi can’t see how much is
+          free on C:.</li>
+      ) : (
+        <li>Disk: about {disk.total_first_gb || 32} GB the first time (the trainer and its
+          training data; about half a gigabyte more for each wake word)
+          {disk.free_gb != null ? ` · ${disk.free_gb} GB free here` : ''}.</li>
+      )}
+      <li>A one-time download of about {req.download_gb || 22} GB (the trainer and its training data).</li>
+      {mem.pc_need_gb ? (
+        <li>Memory: a PC with {mem.pc_need_gb} GB or more (Windows gives Domovoi the PC’s memory
+          minus 8 GB, and training needs 24 GB of that){mem.total_gb != null ? ` · Domovoi has ${mem.total_gb} GB of it` : ''}.</li>
+      ) : (
+        <li>Memory: a 24 GB server{mem.total_gb != null ? ` · this one has ${mem.total_gb} GB` : ''}.</li>
+      )}
+      <li>Time: {trainerEstimateText(est)}.</li>
+      <li>{gpu
+        ? 'While a word trains it uses the GPU (the least busy card) and some CPU; voice keeps working.'
+        : 'While a word trains it uses most of the CPU, so voice answers more slowly until it finishes.'}</li>
+    </ul>
+  );
+
+  let body;
+  let sub;
+  if (running) {
+    sub = 'Setting training up. You can leave this page; it carries on.';
+    body = <TrainerProgress job={job}/>;
+  } else if (status.enabled) {
+    sub = gpu ? `On · trains on the GPU${status.gpu_name ? ` (${status.gpu_name})` : ''}`
+              : 'On · trains on the CPU';
+    const estText = trainerEstimateText(est);
+    body = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+        <div>{estText ? `${estText[0].toUpperCase()}${estText.slice(1)}. ` : ''}
+          A training stops after {Math.round((status.timeout_sec || 0) / 60)} minutes
+          {status.timeout_auto ? ' (sized to this server)' : ''}.</div>
+        {!gpu && <div style={{ color: 'var(--warn)' }}>Voice answers more slowly while a word trains.</div>}
+        {notes.map((n) => <div key={n} style={{ color: 'var(--fg-muted)' }}>{n}</div>)}
+        {admin && !status.training_active && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Button variant="ghost" icon="refresh-cw" disabled={busy}
+                    onClick={() => setAsking({ cpu: !gpu, again: true })}>
+              Check the GPU and trainer again
+            </Button>
+            <Button variant="ghost" icon="trash-2" disabled={busy} onClick={askTurnOff}>
+              Turn off and free the space
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  } else {
+    sub = 'Off. Training a wake word happens on this server, in a container; turn it on once.';
+    body = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
+        <div style={{ color: 'var(--fg-muted)' }}>What it needs:</div>
+        {needs}
+        {notes.map((n) => <div key={n} style={{ color: 'var(--fg-muted)' }}>{n}</div>)}
+        {refusals.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, color: 'var(--err)' }}>
+            <strong>Training can’t be turned on here:</strong>
+            {refusals.map((r) => <div key={r}>{r}</div>)}
+          </div>
+        ) : admin ? (
+          <div>
+            <Button variant="primary" icon="power" disabled={busy}
+                    onClick={() => setAsking({ cpu: !gpu })}>Turn on wake-word training</Button>
+          </div>
+        ) : (
+          <div style={{ color: 'var(--fg-muted)' }}>Sign in as the admin to turn it on.</div>
+        )}
+      </div>
+    );
+  }
+
+  const failed = job.state === 'failed' && job.error;
+  return (
+    <Card title="Wake-word training" sub={sub}>
+      <div style={{ padding: '4px 14px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {body}
+        {failed && !running && (
+          <div style={{ border: '1px solid var(--err)', borderRadius: 8, padding: '8px 12px',
+                        display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+            <div style={{ color: 'var(--err)' }}>{job.error}</div>
+            {(job.log_tail || []).length > 0 && (
+              <details>
+                <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--fg-muted)' }}>
+                  what it printed last</summary>
+                <pre className="mono" style={{ fontSize: 11, whiteSpace: 'pre-wrap', margin: '6px 0 0',
+                                              maxHeight: 220, overflow: 'auto' }}>
+                  {(job.log_tail || []).join('\n')}</pre>
+              </details>
+            )}
+            {admin && refusals.length === 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Button icon="rotate-ccw" disabled={busy}
+                        onClick={() => setAsking({ cpu: !gpu })}>Try again</Button>
+                {job.needs_cpu_confirm && (
+                  <Button variant="secondary" icon="cpu" disabled={busy}
+                          onClick={() => setAsking({ cpu: true })}>Use the CPU</Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      {offAsk && (
+        <TrainerConfirmDialog title="Turn off wake-word training and free the space?" icon="trash-2"
+          busy={busy || !!offAsk.loading} confirmLabel="Turn off and remove"
+          onCancel={() => setOffAsk(null)} onConfirm={turnOff}>
+          {offAsk.loading ? <div>Asking Docker how much space it takes…</div> : (
+            <React.Fragment>
+              <div>This turns training off and removes:</div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                <li>the trainer image ({gb(offAsk.image_bytes)}) and Docker’s build cache for it;</li>
+                <li>its training data and every wake word’s training files ({gb(offAsk.volume_bytes)}).</li>
+              </ul>
+              <div>Trained wake words and their recordings stay. Turning training on again
+                downloads about {req.download_gb || 22} GB.</div>
+            </React.Fragment>
+          )}
+        </TrainerConfirmDialog>
+      )}
+      {asking && (
+        <TrainerConfirmDialog
+          title={asking.cpu ? 'Train wake words on the CPU?' : 'Turn on wake-word training?'}
+          busy={busy} confirmLabel={asking.cpu ? 'Use the CPU' : 'Turn it on'}
+          confirmDisabled={!!disk.confirm_gb && !diskOk}
+          onCancel={() => setAsking(null)} onConfirm={() => start(asking.cpu)}>
+          <div>This builds the trainer and downloads its training data now (several minutes),
+            then training is on for every wake word.</div>
+          {needs}
+          {asking.cpu && (
+            <div style={{ color: 'var(--warn)' }}>
+              No GPU here that training can use, so each wake word takes about{' '}
+              {est.minutes_per_word || 75} minutes on the CPU, and voice answers more slowly
+              while it runs.
+            </div>
+          )}
+          {disk.confirm_gb ? (
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', color: 'var(--fg)' }}>
+              <input type="checkbox" checked={diskOk} onChange={(e) => setDiskOk(e.target.checked)}/>
+              <span>The Windows drive (C:) has at least {disk.confirm_gb} GB free. (Domovoi can’t
+                check this itself: look in File Explorer, This PC.)</span>
+            </label>
+          ) : null}
+        </TrainerConfirmDialog>
+      )}
+    </Card>
+  );
+};
+
 const WakeWordsPanel = () => {
   // Live clip-count/status updates ride the net-new `wake_words.changed`
   // channel (the streaming clip-write, the trainer, and these CRUD routes all
@@ -2045,6 +2368,13 @@ const WakeWordsPanel = () => {
   // Training downloads its data the first time: greyed under "No".
   const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
+  // Is training on, and on what (the card above the list; the Train
+  // buttons ask before a CPU training).
+  const { data: trainer, error: trainerError, refresh: refreshTrainer } = useApiObject(
+    '/api/wake-words/trainer', { quiet: true, refetchOnAuth: true });
+  const trainerOn = !!(trainer && trainer.enabled);
+  const trainerEst = trainer && trainer.requirements && trainer.requirements.estimate;
+  const cpuTrainer = trainerOn && trainerEst && trainerEst.device === 'cpu';
 
   // A spare device that declared neither clip recording nor wake models
   // (S0, satCan) has nothing here; a Pi always qualifies.
@@ -2073,8 +2403,16 @@ const WakeWordsPanel = () => {
     return guard(() => apiPost(`/api/wake-words/${w.id}/record/stop`, { room_id: room }),
       'recording stopped');
   };
-  const train = (w) =>
+  const startTraining = (w) =>
     guard(() => apiPost(`/api/wake-words/${w.id}/train`, {}), `training “${w.name}”…`);
+  // A CPU training takes over an hour and slows voice: ask first.
+  const [cpuAskFor, setCpuAskFor] = React.useState(null);
+  const train = (w) => {
+    if (cpuTrainer) { setCpuAskFor(w); return undefined; }
+    return startTraining(w);
+  };
+  const trainStop = (w) =>
+    guard(() => apiPost(`/api/wake-words/${w.id}/train/stop`, {}), `stopping “${w.name}”…`);
   const rename = (w, name) =>
     guard(() => apiPatch(`/api/wake-words/${w.id}`, { name }), 'wake word renamed');
   const threshold = (w, value) =>
@@ -2097,6 +2435,8 @@ const WakeWordsPanel = () => {
 
   return (
     <React.Fragment>
+      <WakeTrainerCard status={trainer} error={trainerError} refresh={refreshTrainer} fire={fire}/>
+
       <Card title="Create a wake word"
             sub="Name it, then record positive clips on a satellite and train an openWakeWord model.">
         <AddWakeWord onAdd={add}/>
@@ -2105,8 +2445,9 @@ const WakeWordsPanel = () => {
       <div style={{ padding: '0 2px 10px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
         ⚠ Record clips on the <strong>same mic board</strong> the satellite uses at runtime — the
         XVF3800's on-chip beamforming/AGC reshapes the signal, so a model trained from HAT-recorded
-        clips can detect poorly on an XVF array. Training runs on Domovoi and is Linux-only / off by
-        default (see <code>scripts/wake_word/README.md</code>).
+        clips can detect poorly on an XVF array. Training runs on this server once it is turned on
+        above. A model trained here is for this household only: its training data's licences
+        don't allow sharing it (see <code>scripts/wake_word/README.md</code>).
       </div>
 
       {loading ? null : items.length === 0 ? (
@@ -2118,11 +2459,20 @@ const WakeWordsPanel = () => {
             <WakeRow key={w.id} w={w} rooms={rooms} minClips={minClips} fire={fire}
                      onRecordStart={recordStart} onRecordStop={recordStop} onTrain={train}
                      onRename={rename} onThreshold={threshold} onSetDefault={setDefault}
-                     onPush={push} onDelete={remove} internetOff={internetOff}/>
+                     onPush={push} onDelete={remove} internetOff={internetOff}
+                     trainerOn={trainerOn || !trainer} onTrainStop={trainStop}/>
           ))}
         </Card>
       )}
       {del.node}
+      {cpuAskFor && (
+        <TrainerConfirmDialog title={`Train “${cpuAskFor.name}” on the CPU?`} busy={false}
+                              confirmLabel="Train" onCancel={() => setCpuAskFor(null)}
+                              onConfirm={() => { const w = cpuAskFor; setCpuAskFor(null); startTraining(w); }}>
+          <div>This server trains on the CPU: about {trainerEst.minutes_per_word} minutes,
+            and voice answers more slowly until it finishes.</div>
+        </TrainerConfirmDialog>
+      )}
       {node}
     </React.Fragment>
   );

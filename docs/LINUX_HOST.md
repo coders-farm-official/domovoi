@@ -23,7 +23,7 @@ the ledger flips:
 | | On Windows | On Linux |
 |---|---|---|
 | **CUDA DLL preloading** | `domovoi/bootstrap.py` preloads cuBLAS/cuDNN by hand because the Windows loader ignores `add_dll_directory()` for dependent DLLs. The plugin loader asserts it ran. | The whole module is `if sys.platform != "win32": return ()`. Dead code. It's the single biggest piece of Windows-specific engineering in the repo, and you skip it. |
-| **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so `wake_word_train_command` has to shell out to WSL2, Docker, or Colab. | Native. Point the setting at the pipeline directly — no bridge. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md). |
+| **Wake-word training** | openWakeWord's training pipeline (piper-sample-generator) is Linux-only, so it runs in a Linux container under Docker Desktop. | On the server itself, in a container on its own Docker Engine, switched on from the dashboard (Settings → Wake Words); an NVIDIA GPU gets its container runtime from the install and the update unit. See [Wake-word training](#wake-word-training). |
 | **External binaries** (`ffmpeg`, `fpcalc`/Chromaprint, `mpg123`) | Download, unzip, put on PATH by hand. | `apt install`. |
 | **`resemblyzer` install** | Needs `pip install --no-deps resemblyzer` because its `webrtcvad` pin has no Windows wheels and would need MSVC to build. | `webrtcvad` builds from source with `gcc` + `python3-dev`, so try the plain install first. |
 | **Docker** | Docker Desktop — a whole application, its own RAM overhead, its own licensing question. | Native Docker Engine. The core drives containers through the `docker` CLI (`mpd_provisioner.py`), so nothing else changes. |
@@ -270,10 +270,11 @@ Settings → Models. What it checks:
   lock's hashes), the Ollama release pinned under [By hand](#by-hand)
   below (SHA-256), Docker's apt key (the fingerprint in
   `scripts/linux/provision-manifest.conf`; that key alone is installed,
-  and apt checks the docker-ce packages against the index it signs), the
-  compose images and the room image's base (digests), each Ollama model
-  (the manifest's digests), Whisper's `model.bin` and the Piper voice
-  (SHA-256).
+  and apt checks the docker-ce packages against the index it signs),
+  NVIDIA's apt key on a box with an NVIDIA GPU (checked the same way, for
+  the NVIDIA Container Toolkit), the compose images and the room image's
+  base (digests), each Ollama model (the manifest's digests), Whisper's
+  `model.bin` and the Piper voice (SHA-256).
 - **Not hashed:** Ubuntu's own packages (apt checks them against Ubuntu's
   signed archive, at whatever version it serves that day), what
   `domovoi/Dockerfile.mpd` installs with apt inside the room image, and
@@ -282,7 +283,8 @@ Settings → Models. What it checks:
   Face revision.
 - **Later:** docker-ce goes in at the manifest's versions on a box that
   has none yet and is not held, so `apt upgrade` moves it like any other
-  package. The box's updates install from the lock too: the script puts
+  package; so does the NVIDIA Container Toolkit. The box's updates install
+  from the lock too: the script puts
   `DOMOVOI_USE_LOCK=1` in `/etc/default/domovoi-update` (unless that file
   already sets it), so an update that changes the dependencies re-syncs
   the venv hash-checked, the way it was installed
@@ -298,6 +300,10 @@ What else it settles, beyond the manual steps:
   for the Vision row in Settings → Models afterwards.
   The script's last progress line lists what Ollama found (`"gpu"`, empty
   on a CPU-only box), and its log says it in words.
+  Where an NVIDIA GPU is visible, the `gpu-runtime` step gives Docker its
+  way to it, the NVIDIA Container Toolkit, for the wake-word trainer's
+  container ([Wake-word training](#wake-word-training)); a box without one
+  skips the step.
 - **Time zone.** On bare metal, `--timezone` sets it (`timedatectl`, and
   `/etc/timezone`, which the core reads first). In WSL the distro's zone is
   Windows': WSL rewrites `/etc/localtime` and `/etc/timezone` from it at
@@ -817,7 +823,7 @@ own in `/etc/systemd/system` under one of those names is never replaced
 
 When it takes effect: at once when `provision.sh` runs, and otherwise at
 the **next healthy restart or update the update unit runs**
-([Updates from the dashboard](#updates-from-the-dashboard), step 11):
+([Updates from the dashboard](#updates-from-the-dashboard), step 12):
 **Restart Domovoi** after you change the answer in Settings → Internet.
 Saving the answer alone doesn't change them: the core runs as the service
 user, which can't change systemd units. Without the update unit, run it
@@ -884,6 +890,106 @@ anyone searches ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-leaves-your-netw
 
 ---
 
+## Wake-word training
+
+Training a wake word of your own runs on the server, in a container on its
+Docker Engine, once an admin turns it on: **Settings → Wake Words → Turn on
+wake-word training**. That builds the trainer image (12.4 GB), downloads its
+training data (17.9 GB, into the Docker volume `domovoi_oww_cache`) and
+switches training on, with no shell and no restart: about 22 GB downloaded,
+once, and about 13 minutes on a fast line. Plan for about 32 GB of
+disk the first time, then about 0.5 GB per wake word, where Docker keeps its
+data (`/var/lib/docker`). The card refuses, saying why, on a box with less
+than 24 GB of memory (the standard model tier's line), less free disk than
+that plus 5 GB, no running Docker, or the internet answer **No**. How to
+train a word, the settings and the licence of what it makes:
+[`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
+
+**On a box with an NVIDIA GPU,** Docker needs the NVIDIA Container Toolkit to
+hand the GPU to a container. [`scripts/linux/gpu-runtime.sh`](../scripts/linux/gpu-runtime.sh)
+sets it up, only where an NVIDIA GPU is visible: in WSL, `/dev/dxg` and
+`/usr/lib/wsl/lib/libcuda.so.1` (Windows' driver); on bare metal, the NVIDIA
+driver's `nvidia-smi -L` listing a GPU. Installing the driver stays yours:
+the script never installs one, and stops before installing anything if apt
+would bring a driver, kernel or compute package along. It:
+
+- adds NVIDIA's apt repository,
+  `https://nvidia.github.io/libnvidia-container/stable/deb/amd64`
+  (`/etc/apt/sources.list.d/nvidia-container-toolkit.sources`), with its key
+  checked the way Docker's is: the downloaded key file must hold exactly one
+  primary key, with the fingerprint `provision-manifest.conf` pins
+  (`C95B321B61E88C1809C4F759DDCAE044F796ECB0`), and only that key is
+  exported to `/etc/apt/keyrings/nvidia-container-toolkit.asc`;
+- installs `nvidia-container-toolkit`, `nvidia-container-toolkit-base`,
+  `libnvidia-container-tools` and `libnvidia-container1`, those not
+  installed yet, at the manifest's versions (1.20.1-1), not held: like
+  docker-ce, `apt upgrade` moves them later;
+- runs `nvidia-ctk runtime configure --runtime=docker` (the
+  `/etc/docker/daemon.json` it found is kept in
+  `/var/lib/domovoi-gpu-runtime/daemon.json.before`) and restarts Docker
+  when that changed the file. If Docker doesn't answer within 60 s, the file
+  goes back as it was and Docker is restarted again.
+
+A box already set up is left alone. `provision.sh` runs it as its
+`gpu-runtime` step, right after Docker; a helper that fails or refuses
+there (a key that isn't the pinned one, apt that would bring a driver,
+Docker that won't start with the runtime) is a warning, not the end of the
+install: training then runs on the CPU, and the next run or update tries
+again. The update unit runs it on every
+update and every Restart, while core and web are stopped, so a box installed
+before it existed gets it at its next one ([Updates from the
+dashboard](#updates-from-the-dashboard), step 7); there it never fails the
+run, and under **No** it downloads nothing. A try that failed or refused is
+recorded (`/var/lib/domovoi-gpu-runtime/last-failure`: the pins, when, why)
+and the update unit doesn't repeat it for a day, so a box where it can't be
+set up doesn't run `apt-get update` and restart Docker at every Restart. It
+tries at once when the pins change, when `provision.sh` runs (it passes
+`--force`), and at the next update or Restart after an admin presses **Turn
+on wake-word training** or **Check the GPU and trainer again** on a box
+whose card Docker can't use (the core leaves
+`~/.domovoi/wake_trainer/gpu-runtime-retry`). A Docker restart stops every
+container for a moment: Postgres and the rooms' players come back by
+themselves (`restart: unless-stopped`), and the update unit restarts
+`domovoi-db` after it. To keep the toolkit in your own hands, put
+`DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`; both
+scripts leave it alone then. By hand: `sudo bash
+/opt/domovoi/scripts/linux/gpu-runtime.sh` (`--check` and `--dry-run`
+change nothing, `--detect` only says whether a GPU is visible). A word then
+trains in about 20 minutes (26 the first time), on the least busy card, so
+generating the synthetic speech stays off the card holding the chat model.
+Once training is set up for the GPU, a training whose GPU Docker can't reach
+(the toolkit removed, the card gone) fails saying so (the wrapper's exit 75)
+instead of running for over an hour on the CPU under a limit sized for the
+GPU: Restart, then **Check the GPU and trainer again**, or turn training on
+again with the CPU.
+
+**On a CPU-only box** (no NVIDIA GPU) training works, slower: about 75
+minutes a word on 8 cores at the defaults (measured; the card scales that
+to the box's cores), and the voice pipeline answers more slowly while a word
+trains. The dashboard says so, and asks before turning training on and again
+before each **Train**. The container is capped so voice keeps working: all
+but a quarter of the CPUs (at least two left), a low CPU weight
+(`--cpu-shares 128`), 12 GB of memory with no swap, and a lowered priority
+inside; the time limit sizes itself to the box (twice the estimate, at
+least two hours).
+
+**After an update** that changes `scripts/wake_word/docker`, the update unit
+rebuilds the trainer image (step 13), only on a box that built it. Answering
+**No** in Settings → Internet while that rebuild, or a "Turn on" job's build
+or download, is running stops it (the core stops the rebuild unit's `docker
+build`, and the job's container), and the core checks again when it starts.
+
+**Stopping and turning off.** A word that is training has a **Stop
+training** button: its container is stopped (it removes its copies of the
+recordings first) and the word goes back to *recording* with its clips. **Turn
+off and free the space** shows what the trainer image and the cache volume
+take, then switches training off and removes both, with Docker's build cache;
+trained models and recordings stay. By hand, the same:
+`docker image rm domovoi-wake-trainer:latest`, `docker volume rm
+domovoi_oww_cache`, `docker builder prune`.
+
+---
+
 ## Updates from the dashboard
 
 The version panel's **Pull the latest** fetches, verifies the fetched tip's
@@ -914,7 +1020,10 @@ does this:
    sync, no MPD rebuild, and `domovoi-db` is left alone, unless Postgres
    doesn't answer or its Flyway history is missing a migration the checkout
    ships: then `domovoi-db` is restarted first (compose up plus Flyway),
-   as every plain restart did before 2026-10-05.
+   as every plain restart did before 2026-10-05. While core and web are
+   stopped, Docker's GPU runtime is checked as in step 7 (and when that
+   restarted Docker, `domovoi-db` is restarted too); a healthy plain
+   restart ends with steps 11-13.
    If something did, it's the full update below, whichever button started
    it: code pulled since the panel last read the version, or code loaded
    outside the unit (pulled, then `domovoi-core` restarted by hand, so the
@@ -961,13 +1070,27 @@ does this:
    `domovoi-mpd:latest` exactly as the core does, and remove the room
    containers. The core recreates each one at startup from its `mpd_rooms`
    row, with the same data volume, so playlists and queues survive.
-7. `systemctl restart domovoi-db`: compose up plus Flyway.
-8. Start core and web. Both must answer `/v1/health` (core, :6370) and
+7. Docker's GPU runtime, where an NVIDIA GPU is visible
+   (`scripts/linux/gpu-runtime.sh`, [Wake-word training](#wake-word-training)):
+   the NVIDIA Container Toolkit installed when it is missing, and the
+   `nvidia` runtime put in `/etc/docker/daemon.json`, restarting Docker
+   when that changed. It runs here, with core and web stopped, because a
+   Docker restart bounces Postgres and the rooms' players; step 8 restarts
+   `domovoi-db` after it. It can't fail the update and is never rolled
+   back: a `gpu-runtime` step is recorded only when it changed something
+   (`ok`) or failed (`warn`, with the helper's reason). No GPU, or nothing
+   to do: nothing is recorded. Under `never` nothing is downloaded. A failed
+   try is not repeated for a day ("not retried", nothing recorded), unless
+   the pins changed or the dashboard left its retry flag
+   (`~/.domovoi/wake_trainer/gpu-runtime-retry`, removed once read).
+   `DOMOVOI_MANAGE_GPU_RUNTIME=0` skips it.
+8. `systemctl restart domovoi-db`: compose up plus Flyway.
+9. Start core and web. Both must answer `/v1/health` (core, :6370) and
    `/api/health` (web, :6369) within 120 s.
    On a healthy plain restart (step 1), the search-helper step below runs
    too; a plain restart that fails its health check is recorded as
    `failed` and changes nothing else (there is nothing to roll back).
-9. Every plugin that loaded before the update must still load: none that
+10. Every plugin that loaded before the update must still load: none that
    was enabled and not at `load_error` may be at `load_error` now. The core
    never lets a failing plugin take it down, so its health check stays
    green through one, and without this step a plugin the new code breaks
@@ -977,7 +1100,7 @@ does this:
    plugin's load before it first answers `/v1/health`. A plugin that was
    already failing, or that you switched off, doesn't count, and neither
    does one that is new in the update.
-10. Keep the search helper (SearXNG) in step with the internet answer,
+11. Keep the search helper (SearXNG) in step with the internet answer,
    read the way the core reads it (`python -m domovoi.egress
    --print-policy`, as the service user): `always` or `sometimes` →
    `docker compose up -d --no-deps searxng` (the first time, that downloads
@@ -992,7 +1115,7 @@ does this:
    fail the update: a failure is recorded as a `warn` step with its
    output, and the result stays `ok`. `DOMOVOI_MANAGE_SEARXNG=0` in
    `/etc/default/domovoi-update` skips it.
-11. Keep Ubuntu's own background jobs in step with the same answer
+12. Keep Ubuntu's own background jobs in step with the same answer
    (`scripts/linux/os-jobs.sh`, [Internet or not](#internet-or-not)):
    `never` masks the updaters, news and crash-report timers, `always` or
    `sometimes` unmasks what an earlier `never` masked, and in the Windows
@@ -1003,6 +1126,23 @@ does this:
    in the journal and in `last-result.json`) or failed (`warn`; Settings
    → Version shows the reason under the last update, such as "could not
    mask apt-daily.timer"). `DOMOVOI_MANAGE_OS_JOBS=0` skips it.
+13. Rebuild the wake-word trainer image when it is out of date. Only where
+   it exists (a household turned training on; the name is
+   `DOMOVOI_WAKE_TRAINER_IMAGE`, else `WAKE_TRAINER_IMAGE` in
+   `domovoi/.env`, else `domovoi-wake-trainer:latest`) and when its
+   `org.domovoi.wake-trainer.src` label isn't the git tree id of the
+   checkout's `scripts/wake_word/docker` (the core labels it the same way
+   when it builds it). `docker build` of that folder, as the service user:
+   under systemd in a transient unit (`domovoi-wake-trainer-build`, see
+   `journalctl -u domovoi-wake-trainer-build`) the update doesn't wait for,
+   since a build takes 3 to 8 minutes; without systemd in the foreground,
+   bounded by `DOMOVOI_UPDATE_TRAINER_TIMEOUT` (1800 s). Under `never`
+   nothing is built and a `warn` step says the image is out of date. An
+   image from a registry (a name whose first part is a host, such as
+   `ghcr.io/...`) is left alone. It can't fail the update; a `wake-trainer`
+   step is recorded only when it built, started a build or could not. A
+   healthy plain restart ends with it too. `DOMOVOI_MANAGE_WAKE_TRAINER=0`
+   skips it.
 
 Under `INTERNET_ACCESS=never` (read once, before anything is touched) an
 update that would download is refused with status `aborted`, nothing
@@ -1013,15 +1153,18 @@ there is pinned by digest, so `domovoi-db` would pull the new one).
 An `mpd.conf`-only change keeps the image and just recreates the rooms.
 To take such an update, follow
 [INTERNET.md → Updating a box answered No](INTERNET.md#updating-a-box-answered-no).
+Steps 7 and 13 never refuse an update: under `never` they download nothing
+and say so.
 
-If any of 4-9 fails, it rolls back: `git reset --keep` to the previous SHA
-(never `--hard`), the venv re-synced and every package put back at its
-exact pre-update version, the old MPD image rebuilt, and, if
+If any of 4-10 fails (step 7 never does), it rolls back:
+`git reset --keep` to the previous SHA (never `--hard`), the venv
+re-synced and every package put back at its exact pre-update version,
+the old MPD image rebuilt, and, if
 `flyway_schema_history` or any plugin's migration ledger
 (`plugin_<slug>.schema_history`) grew, the pre-update dump restored.
 Plugin migrations count because Flyway never sees them: the core applies a
 plugin's pending migrations when it starts, so a pull that adds one to a
-bundled plugin changes the database in step 8, not step 7. Rolling the code
+bundled plugin changes the database in step 9, not step 8. Rolling the code
 back without them would leave that plugin's schema ahead of its code, and a
 corrected release of the same migration would then be refused as an edited
 file. `domovoi_test` gets the same treatment on its own evidence: its dump
@@ -1140,8 +1283,18 @@ layout on this page, so you only need the file to change one:
 # The upstream the checkout must follow; a checkout on another remote or branch is refused. Default: not pinned.
 # DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
 # DOMOVOI_UPSTREAM_BRANCH=main
-# 0: leave Ubuntu's background jobs alone (step 11, Internet or not). Default: they follow the answer.
+# 0: leave Ubuntu's background jobs alone (step 12, Internet or not). Default: they follow the answer.
 # DOMOVOI_MANAGE_OS_JOBS=1
+# 0: leave Docker's GPU runtime (the NVIDIA Container Toolkit) alone (step 7, Wake-word training).
+# provision.sh reads it too. Default: set up where an NVIDIA GPU is visible.
+# DOMOVOI_MANAGE_GPU_RUNTIME=1
+# 0: never rebuild the wake-word trainer image (step 13). Default: rebuilt when scripts/wake_word/docker changed.
+# DOMOVOI_MANAGE_WAKE_TRAINER=1
+# The trainer image's name. Default: WAKE_TRAINER_IMAGE from domovoi/.env, else this.
+# DOMOVOI_WAKE_TRAINER_IMAGE=domovoi-wake-trainer:latest
+# Its rebuild in a transient unit: auto (when systemd runs the box), 1, or 0 (in the foreground, bounded below).
+# DOMOVOI_UPDATE_TRAINER_DETACH=auto
+# DOMOVOI_UPDATE_TRAINER_TIMEOUT=1800
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,

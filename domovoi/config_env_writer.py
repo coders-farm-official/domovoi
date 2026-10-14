@@ -68,13 +68,36 @@ def next_boot_value(name: str, current: object, env_path: Path | None = None) ->
     return current
 
 
+def control_character(value: object) -> str | None:
+    """The first control character in ``value``'s text (a newline, a tab, a
+    NUL ...), shown escaped, or None. A .env value never holds one: the
+    core's python-dotenv reads a quoted newline as part of the value, but
+    every line-based reader (scripts/linux/apply-update.sh, provision.sh,
+    by hand with grep) sees the text after it as a line of its own, so a
+    value could smuggle a second setting past the core (review of
+    2026-10-13: a bot name carrying a WAKE_TRAINER_IMAGE line, which root's
+    update reads)."""
+    if isinstance(value, bool) or value is None:
+        return None
+    for ch in str(value):
+        if ord(ch) < 32 or ord(ch) == 127:
+            return repr(ch)
+    return None
+
+
 def write_env_values(
     changes: dict[str, object], env_path: Path | None = None
 ) -> None:
     """Merge ``changes`` (Settings field name → value) into the .env file,
-    creating it if absent. See module docstring for the contract."""
+    creating it if absent. See module docstring for the contract. Raises
+    ``ValueError`` (and writes nothing) when a value holds a control
+    character (:func:`control_character`)."""
     if not changes:
         return
+    for k, v in changes.items():
+        bad = control_character(v)
+        if bad is not None:
+            raise ValueError(f"{k}: a .env value can't hold a control character ({bad})")
     path = env_path or _ENV_FILE
     pending = {k.upper(): _format_value(v) for k, v in changes.items()}
 
@@ -188,3 +211,41 @@ def remove_env_keys(names: Iterable[str], env_path: Path | None = None) -> list[
             pass
         raise
     return removed
+
+
+def get_value(name: str, env_path: Path | None = None) -> str | None:
+    """``name``'s value as the core reads it from the .env (python-dotenv:
+    quotes and escapes undone, the last line for a key wins), or None."""
+    from dotenv import dotenv_values
+
+    key = name.upper()
+    found = None
+    for env_key, value in dotenv_values(env_path or _ENV_FILE).items():
+        if env_key.upper() == key and value is not None:
+            found = value
+    return found
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m domovoi.config_env_writer --get KEY``: print KEY's value
+    as the core reads it from domovoi/.env (nothing when it isn't set), so
+    a shell script (scripts/linux/apply-update.sh) never reads the file
+    differently from the core. Exit 2 on a usage or read error."""
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 2 or args[0] != "--get" or not args[1]:
+        print("usage: python -m domovoi.config_env_writer --get KEY", file=sys.stderr)
+        return 2
+    try:
+        value = get_value(args[1])
+    except (OSError, ValueError) as e:
+        print(f"config_env_writer: {e}", file=sys.stderr)
+        return 2
+    if value is not None:
+        print(value)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

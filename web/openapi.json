@@ -7491,6 +7491,147 @@
         }
       }
     },
+    "/api/wake-words/trainer": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Status",
+        "description": "Whether training is on, the setup job's progress or its error, and\nwhat training needs against what the server has, with any refusal.",
+        "operationId": "trainer_status_api_wake_words_trainer_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/enable": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Enable",
+        "description": "Start \"Turn on wake-word training\" on the core: 200 with the status\n(the job runs in the background), 409 with the reason it can't.",
+        "operationId": "trainer_enable_api_wake_words_trainer_enable_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainerEnableBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/footprint": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Footprint",
+        "description": "What \"Turn off and free the space\" would remove, as Docker sizes it.",
+        "operationId": "trainer_footprint_api_wake_words_trainer_footprint_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/disable": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Disable",
+        "description": "Turn training off and free the space (the core removes the trainer\nimage, its build cache and the cache volume); 409 while it is busy.",
+        "operationId": "trainer_disable_api_wake_words_trainer_disable_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/{wake_word_id}/train/stop": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Train Stop",
+        "description": "Stop this word's training (running or queued): it goes back to\n\"recording\" with its clips. Proxies the core, which owns the run.",
+        "operationId": "train_stop_api_wake_words__wake_word_id__train_stop_post",
+        "parameters": [
+          {
+            "name": "wake_word_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Wake Word Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/wake-words/{wake_word_id}/record/start": {
       "post": {
         "tags": [
@@ -19663,6 +19804,22 @@
         "type": "object",
         "title": "TrackPatch",
         "description": "Partial update for a ``library_tracks`` row: the ``favorited``\nflag, and the title / artist / album a person corrects from the\ntrack drawer (F-024). Only fields actually sent are written; a\nmetadata edit also stamps ``enriched_at`` so the enricher's next\nsweep (which touches unenriched rows only) can't overwrite a hand\ncorrection."
+      },
+      "TrainerEnableBody": {
+        "properties": {
+          "cpu_ok": {
+            "type": "boolean",
+            "title": "Cpu Ok",
+            "default": false
+          },
+          "disk_ok": {
+            "type": "boolean",
+            "title": "Disk Ok",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "TrainerEnableBody"
       },
       "UploadResponse": {
         "properties": {

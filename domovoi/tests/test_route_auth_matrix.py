@@ -260,6 +260,15 @@ SECURITY_TIER_ROUTES = [
     ("web", "DELETE", "/api/captures/rooms/{room_id}"),
     ("web", "PATCH", "/api/captures/clips/{room_id}/{capture_id}"),
     ("web", "DELETE", "/api/captures/clips/{room_id}/{capture_id}"),
+    # "Turn on wake-word training" (2026-10-13): builds and runs a Docker
+    # image as the service user and writes WAKE_WORD_TRAIN_COMMAND, so it
+    # is a config write.
+    ("core", "POST", "/v1/admin/wake/trainer/enable"),
+    ("web", "POST", "/api/wake-words/trainer/enable"),
+    # ...and "Turn off and free the space": two settings off, Docker's
+    # image and volume removed.
+    ("core", "POST", "/v1/admin/wake/trainer/disable"),
+    ("web", "POST", "/api/wake-words/trainer/disable"),
 ]
 
 
