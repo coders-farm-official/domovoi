@@ -2901,10 +2901,12 @@ const SetTokenDialog = ({ open, onCancel, onSave, busy, error }) => {
 
 /* ---- Household token (the device tier) ----------------------------
  * The one secret every household device presents (X-Device-Token) for
- * ordinary actions. Shown ONLY to an admin session — Bearer or the
- * dashboard cookie — because it is what a new phone or browser is
- * enrolled with; a viewer who is not signed in sees nothing here, and
- * nothing is fetched for them (a 401 on this GET would otherwise pop
+ * ordinary actions. Shown ONLY to the admin sign-in in this tab (the
+ * Bearer; the server refuses the dashboard cookie alone since 2026-10-14)
+ * because it is what a new phone or browser is enrolled with. A view-only
+ * tab (the cookie, past the reload window) gets the card with "sign in
+ * again" and no fetch; a viewer who is not signed in sees nothing here,
+ * and nothing is fetched for them (a 401 on this GET would otherwise pop
  * the login modal at everyone who opens the tab).
  *
  * Copy hands it to the clipboard; Set… replaces it with one the admin
@@ -2924,12 +2926,19 @@ const HouseholdTokenCard = ({ fire }) => {
   }, []);
 
   let admin = false;
+  // The token is read with the admin sign-in in this tab only (the
+  // Bearer): since 2026-10-14 the server refuses the cookie alone, which
+  // every other service on the box receives too. A view-only tab — a
+  // reload past the reload window — shows the card and asks for the
+  // sign-in rather than reading.
+  let live = false;
   try {
+    live = typeof Auth !== 'undefined' && Auth.isLoggedIn();
     admin = typeof Auth !== 'undefined'
-      && (Auth.isLoggedIn() || !!(Auth.status && Auth.status.authenticated));
+      && (live || !!(Auth.status && Auth.status.authenticated));
   } catch {}
 
-  const { data, error, refresh } = useApiObject(admin ? '/api/auth/device-token' : null);
+  const { data, error, refresh } = useApiObject(live ? '/api/auth/device-token' : null);
   const [rotating, setRotating] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [rotated, setRotated] = React.useState(false);
@@ -2993,7 +3002,20 @@ const HouseholdTokenCard = ({ fire }) => {
   return (
     <Card title="Household token"
           sub="What a phone or browser presents to prove it belongs to this household. Share it only with devices you own.">
-      {error ? (
+      {!live ? (
+        <div className="household-token-view-only"
+             style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)',
+                      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>
+            This tab is view only, and the household token is shown only to the
+            admin sign-in. Sign in again to see or change it.
+          </span>
+          <Button variant="primary" icon="key"
+                  onClick={() => { try { Auth.openModal(); } catch { /* auth.js absent */ } }}>
+            sign in again
+          </Button>
+        </div>
+      ) : error ? (
         <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>
           {error.status === 501
             ? 'Available once first-run admin setup is complete.'
@@ -3210,7 +3232,10 @@ const CaptureRow = ({ c, labels, playing, busy, onPlay, onLabel, onDelete }) => 
 const CapturesPanel = () => {
   const [fire, toastNode] = useToast();
   const admin = useAdminSignedIn();
-  const { data, loading, error, refresh } = useApiObject(admin ? '/api/captures' : null);
+  // Read with the admin sign-in in this tab only: the server refuses the
+  // cookie alone (2026-10-14), so a view-only tab asks for the sign-in.
+  const live = adminReloadState().live;
+  const { data, loading, error, refresh } = useApiObject(live ? '/api/captures' : null);
   const [room, setRoom] = React.useState('');
   const [only, setOnly] = React.useState('all');   // all | unlabelled | a label key
   const [playing, setPlaying] = React.useState(null);
@@ -3278,6 +3303,24 @@ const CapturesPanel = () => {
 
   if (!admin) {
     return <Card title="Command recordings" sub={sub}>{note('Admins only. Sign in to review recordings.')}</Card>;
+  }
+  if (!live) {
+    return (
+      <Card title="Command recordings" sub={sub}>
+        <div className="captures-view-only"
+             style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)',
+                      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ flex: 1 }}>
+            This tab is view only, and recordings are shown only to the admin
+            sign-in. Sign in again to review them.
+          </span>
+          <Button variant="primary" icon="key"
+                  onClick={() => { try { Auth.openModal(); } catch { /* auth.js absent */ } }}>
+            sign in again
+          </Button>
+        </div>
+      </Card>
+    );
   }
   if (error) {
     return (

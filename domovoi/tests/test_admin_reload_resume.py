@@ -449,6 +449,60 @@ async def test_the_cookie_renders_and_resumes_but_is_no_bearer(_db, window) -> N
 
 
 @requires_db
+@pytest.mark.parametrize(
+    "ended",
+    [
+        "expires_at = now() - interval '1 second'",                     # slid past its expiry
+        f"created_at = now() - interval '{admin_auth.SESSION_MAX_AGE_DAYS} days 1 minute'",  # the cap
+    ],
+    ids=["expired", "past-90-day-cap"],
+)
+async def test_an_ended_sessions_cookie_renders_nothing(_db, window, ended) -> None:
+    """Review round 2 (N10): validate_cookie holds the session's expiry and
+    its 90-day cap, exactly as validate_token does — such a cookie is not
+    signed in, on either process, and slides nothing."""
+    async with web_client() as c:
+        await claim_admin(c)
+    s = await login()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(f"UPDATE admin_sessions SET {ended} WHERE token_hash = :h"),
+            {"h": admin_auth.token_sha256(s.token)},
+        )
+    before = await row(s)
+    st = await status(s)
+    assert st["authenticated"] is False and st["resume_in_sec"] is None
+    async with AsyncClient(
+        transport=ASGITransport(app=core_app), base_url=ORIGIN, cookies={COOKIE: s.cookie},
+    ) as core:
+        assert (await core.get("/v1/admin/config")).status_code == 401
+    async with browser(s) as c:
+        assert (await c.get("/api/auth/sessions")).status_code == 401
+    after = await row(s)
+    assert (after.last_used_at, after.expires_at) == (before.last_used_at, before.expires_at)
+
+
+@requires_db
+async def test_the_security_tier_reads_answer_the_bearer_only(_db, window) -> None:
+    """Review round 2: the household token (both processes) and the
+    recordings are Bearer-only reads; the cookie alone is 403 even inside
+    the reload window, where the page takes its Bearer back instead."""
+    async with web_client() as c:
+        await claim_admin(c)
+    s = await login()
+    async with browser(s) as c:
+        assert (await c.get("/api/auth/device-token")).status_code == 403
+        assert (await c.get("/api/captures")).status_code == 403
+        token = (await c.post("/api/auth/resume")).json()["token"]
+        assert (await c.get("/api/auth/device-token", headers=bearer(token))).status_code == 200
+    async with AsyncClient(
+        transport=ASGITransport(app=core_app), base_url=ORIGIN, cookies={COOKIE: s.cookie},
+    ) as core:
+        assert (await core.get("/v1/admin/device-token")).status_code == 403
+        assert (await core.get("/v1/admin/device-token", headers=bearer(s.token))).status_code == 200
+
+
+@requires_db
 async def test_a_cookie_whose_wrapped_token_does_not_match_never_resumes(_db, window) -> None:
     async with web_client() as c:
         await claim_admin(c)

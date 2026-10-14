@@ -6,8 +6,10 @@ long") and deletes it. The recordings are household speech kept for one
 purpose — tuning when Domovoi stops listening (design notes 2026-09-28) —
 so every route here is the admin SECURITY tier at both ends:
 
-* reads (``GET``) take ``require_admin_security_read``: an admin Bearer or
-  the dashboard cookie, and **501 until first-run setup is complete**. Not
+* reads (``GET``) take ``require_admin_security_read``: an admin Bearer
+  only (since 2026-10-14 — the dashboard cookie reaches every port of the
+  host, so it reads nothing here), and **501 until first-run setup is
+  complete**. Not
   the device tier every other speech read uses: the household token opens
   conversations and voice notes to every paired phone, and these are raw
   audio of anyone who spoke near an opted-in satellite.

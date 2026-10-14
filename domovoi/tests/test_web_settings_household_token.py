@@ -182,11 +182,14 @@ SCENARIOS = {
                    hasSet: !!h.find({ type: 'button', text: 'set…' }) };
         """,
     },
-    "cookie_session_sees_the_token": {
+    # A view-only tab (the cookie, past the reload window): since
+    # 2026-10-14 the server reads the token to the Bearer only, so the
+    # card asks for the sign-in and never fetches.
+    "cookie_session_is_asked_to_sign_in": {
         "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
         "setup": COOKIE_SETUP,
         "api": {"GET /api/auth/device-token": {"token": TOKEN, "header": "X-Device-Token"}},
-        "script": "h.render(); const c = h.find({ type: 'code' }); return { token: c && c.text };",
+        "script": "h.render(); const c = h.find({ type: 'code' }); return { token: c && c.text, texts: h.text(), hookCalls: h.hookCalls, signIn: !!h.find({ type: 'button', text: 'sign in again' }) };",
     },
     "viewer_sees_nothing": {
         "files": [COMPONENTS, SETTINGS], "component": "HouseholdTokenCard", "fnProps": ["fire"],
@@ -426,8 +429,13 @@ def test_admin_session_sees_the_household_token_with_copy_and_rotate(outcomes):
     assert any("Settings → Connection → Household token" in t for t in o["texts"])
 
 
-def test_cookie_session_sees_the_household_token_too(outcomes):
-    assert outcomes["cookie_session_sees_the_token"]["token"] == TOKEN
+def test_a_cookie_only_tab_is_asked_to_sign_in_and_reads_nothing(outcomes):
+    o = outcomes["cookie_session_is_asked_to_sign_in"]
+    assert o["token"] is None
+    assert "/api/auth/device-token" not in o["hookCalls"]
+    assert not any(TOKEN in t for t in o["texts"])
+    assert o["signIn"] is True
+    assert any("view only" in t for t in o["texts"])
 
 
 def test_signed_out_viewer_sees_nothing_and_nothing_is_fetched(outcomes):

@@ -325,8 +325,9 @@ async def test_core_device_token_read_and_rotate(_db) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=core_app), base_url="http://test", cookies={COOKIE: admin_cookie}
     ) as core:
-        # The cookie renders the read, never the rotation.
-        assert (await core.get("/v1/admin/device-token")).status_code == 200
+        # The cookie alone reads nothing on the security tier (Bearer-only
+        # since 2026-10-14), and never rotates.
+        assert (await core.get("/v1/admin/device-token")).status_code == 403
         assert (await core.post("/v1/admin/device-token/rotate")).status_code == 403
 
 
@@ -510,12 +511,12 @@ async def test_web_set_behaves_identically_and_hits_the_same_row(_db) -> None:
         r = await core.get("/v1/admin/device-token", headers=bearer(admin))
         assert r.json()["token"] == CHOSEN
     assert admin_auth.read_device_token_file() == CHOSEN
-    # The cookie renders the read, never the write (the security tier).
+    # The cookie alone neither reads nor writes it (the security tier).
     async with AsyncClient(
         transport=ASGITransport(app=web_app), base_url="http://test",
         headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin_cookie}
     ) as web:
-        assert (await web.get("/api/auth/device-token")).status_code == 200
+        assert (await web.get("/api/auth/device-token")).status_code == 403
         r = await web.post("/api/auth/device-token", json={"token": "another-fine-token"})
         assert r.status_code == 403
 
@@ -622,8 +623,10 @@ async def test_web_device_token_mirror_behaves_like_the_core(_db) -> None:
         transport=ASGITransport(app=web_app), base_url="http://test",
         headers={"X-Requested-With": "domovoi-tests"}, cookies={COOKIE: admin_cookie}
     ) as web:
-        assert (await web.get("/api/auth/device-token")).json()["token"] == rotated
+        assert (await web.get("/api/auth/device-token")).status_code == 403
         assert (await web.post("/api/auth/device-token/rotate")).status_code == 403
+        r = await web.get("/api/auth/device-token", headers=bearer(admin))
+        assert r.json()["token"] == rotated
     # Same table: the core now serves the token the web rotated.
     async with core_client() as core:
         r = await core.get("/v1/admin/device-token", headers=bearer(admin))

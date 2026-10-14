@@ -32,6 +32,10 @@ update applies the migration.
   the token). A browser signed in before the update therefore shows
   **signed out** after its next reload; sign in once and it is back, with
   the hour. A tab you haven't reloaded stays signed in.
+* **The household token and the command recordings need the sign-in in
+  the tab.** A tab reloaded more than the hour after you signed in (view
+  only) no longer shows them; it says "sign in again" there instead. Inside
+  the hour a reload is signed in and shows them as before.
 * **A sign-out that didn't reach the server says so** ("Not signed out —
   the Domovoi server did not answer … try again") instead of showing
   signed out while the server still had you signed in.

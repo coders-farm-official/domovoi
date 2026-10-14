@@ -2296,8 +2296,8 @@ class _AdminChatToolBody(BaseModel):
 
 @app.get(
     "/v1/admin/device-token",
-    # Security-tier READ: the household token is a credential. Bearer or
-    # the dashboard cookie renders it; 501 before setup.
+    # Security-tier READ: the household token is a credential. Bearer-only
+    # (the dashboard cookie reaches every port of the host); 501 before setup.
     dependencies=[Depends(require_admin_security_read)],
 )
 async def admin_get_device_token() -> dict[str, Any]:

@@ -1323,15 +1323,29 @@ async def require_admin_security(request: Request) -> None:
 
 
 async def require_admin_security_read(request: Request) -> None:
-    """The read half of the security tier (today: showing the household
-    device token). Bearer OR cookie renders it; 501 before setup — the
-    token has no value while everything is open, and it is rotated the
-    moment setup completes, so nothing read earlier survives."""
+    """The read half of the security tier: showing the household device
+    token, and the command recordings (their list and their audio).
+    BEARER-ONLY since 2026-10-14 (review round 2): the dashboard cookie
+    reaches every port of its host, so a cookie that read these would hand
+    the household token — and, replayed, a session kept sliding up to its
+    90-day cap — to any other service on the box. A reloaded tab inside the
+    reload window takes its Bearer back (``POST /api/auth/resume``); past
+    it the tab is view only, and these say "sign in again". 501 before
+    setup — the token has no value while everything is open, and it is
+    rotated the moment setup completes, so nothing read earlier survives."""
     result = await check_admin_request(request)
-    if result in ("ok", "cookie-only"):
+    if result == "ok":
         return
     if result == "pre-setup":
         raise HTTPException(status_code=501, detail=_SECURITY_TIER_PRE_SETUP_DETAIL)
+    if result == "cookie-only":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "this needs the admin sign-in in this tab (Authorization: "
+                "Bearer) — the dashboard cookie does not read it"
+            ),
+        )
     raise HTTPException(status_code=401, detail="admin session required")
 
 

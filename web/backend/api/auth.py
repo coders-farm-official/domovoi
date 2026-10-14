@@ -454,8 +454,8 @@ async def auth_change_password(
 async def auth_device_token() -> dict:
     """The household device token for the settings page and for enrolling
     a phone. Same table and same gate as the core's
-    ``GET /v1/admin/device-token``: Bearer or cookie renders it, 401
-    otherwise, 501 before setup."""
+    ``GET /v1/admin/device-token``: Bearer-only (the cookie alone is 403 —
+    it reaches every port of this host), 401 otherwise, 501 before setup."""
     async with session_scope() as s:
         token = await admin_auth.ensure_device_token_row(s)
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER}

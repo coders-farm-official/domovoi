@@ -268,7 +268,7 @@
           "auth"
         ],
         "summary": "Auth Device Token",
-        "description": "The household device token for the settings page and for enrolling\na phone. Same table and same gate as the core's\n``GET /v1/admin/device-token``: Bearer or cookie renders it, 401\notherwise, 501 before setup.",
+        "description": "The household device token for the settings page and for enrolling\na phone. Same table and same gate as the core's\n``GET /v1/admin/device-token``: Bearer-only (the cookie alone is 403 \u2014\nit reaches every port of this host), 401 otherwise, 501 before setup.",
         "operationId": "auth_device_token_api_auth_device_token_get",
         "responses": {
           "200": {
