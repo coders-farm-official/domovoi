@@ -175,7 +175,7 @@ holds the rest of the tree):
 | `datasets` | **3.6.0** | entrypoint RIR download |
 | `scipy` | **<1.15** (1.14.x) | pin reason below |
 
-Two non-obvious pins and five patches make it work — keep these if you bump
+Two non-obvious pins and the patches below make it work — keep these if you bump
 anything:
 
 1. **`scipy<1.15`** — `acoustics 0.2.6` (newest on PyPI) imports
@@ -226,9 +226,30 @@ anything:
      for a missing word the host sent nothing for (a hand run, an older core):
      `domovoi` -> `D AA1 M UW0 V OY2`.
 
-   These shape the near-miss negatives. The synthetic positives are still
-   spoken by the Piper generator through espeak-ng.
-7. **Retraining picks up new clips.** `--augment_clips` does nothing when
+   These shape the near-miss negatives.
+
+   **The synthetic clips say it the household's way.** The Piper generator
+   (dscripka's fork) phonemizes each phrase with espeak-ng itself and takes
+   no phonemes, so espeak-ng said "domovoi" DOM-oo-voy (`dˈɑːmuːvˌɔɪ`). The
+   core now also sends `WAKE_SYNTH_IPA` (`domovoi=dˈoʊmoʊvˌɔɪ`): the
+   phonemizer's IPA, in the voice's espeak "en-us" symbols, for every
+   phrase word the "say it like" list or the lexicon's own fixes cover.
+   `train_runner.py` wraps `espeak_phonemizer.Phonemizer.phonemize` in its
+   process, so the generator speaks those words from these phonemes, in
+   the positives and in any negative containing them; a symbol the voice
+   lacks leaves that word to espeak-ng. The run log says so:
+   `synthesis: 'domovoi' spoken as dˈoʊmoʊvˌɔɪ (... espeak-ng would say
+   dˈɑːmuːvˌɔɪ)`, the first phrases changed with their phonemes, and a
+   count at the end (`104 of 135 phrases ...` in a small test run).
+7. **Near-miss negatives from the phrase.** `custom_negative_phrases` used
+   to be `[]`. The entrypoint now fills it (`train_runner.near_miss_phrases`)
+   with the phrase with one word at a time swapped for a dictionary word
+   that sounds near it: its start ("hey dome", "hey dom"), words spelled and
+   starting like it ("hey domino", "hey dominate"), words a phone away
+   ("hello demo"); call words ("hey", "hello") stay. Worked out from the
+   CMU dictionary and the household's reading; nothing is listed per wake
+   word. The list is in the run log (`near-miss negatives (7): ...`).
+8. **Retraining picks up new clips.** `--augment_clips` does nothing when
    `positive_features_train.npy` exists, and the run dir is kept per slug, so a
    retrain after recording more clips used to reuse the first run's features.
    The entrypoint stores a digest of the real clip set the features were
@@ -431,7 +452,7 @@ for *real WAV files*, so they cannot point at the features dir. Per-run
 synthetic clips + computed features live under `/data/cache/runs/<slug>/`
 (about 0.5 GB per wake word at the defaults) and are resumable: re-running
 tops up to `n_samples`, and augmentation is skipped only while the real clip
-set is the one the features were computed from (patch 7 above). The copies
+set is the one the features were computed from (patch 8 above). The copies
 of the word's recorded clips a run puts in `positive_train/real_*.wav` are
 removed at the end of the run; deleting the wake word in the dashboard does
 not clear the folder.

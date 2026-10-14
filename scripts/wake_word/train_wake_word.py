@@ -144,12 +144,17 @@ DEADLINE_SEC = os.environ.get("WAKE_TRAINER_DEADLINE_SEC", "")
 # ("domovoi=D OW1 M OW2 V OY2;..."), passed to the container's
 # train_runner.py, which prefers them to espeak-ng's.
 PRONUNCIATIONS = os.environ.get("WAKE_PRONUNCIATIONS", "")
+# The same words as IPA in the voice's symbols ("domovoi=dˈoʊmoʊvˌɔɪ"): the
+# synthetic positives are spoken from these (train_runner.py).
+SYNTH_IPA = os.environ.get("WAKE_SYNTH_IPA", "")
 
 LABEL = "org.domovoi.wake-train"
 
 _CPUSET_RE = re.compile(r"^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$")
 _MEMORY_RE = re.compile(r"^[0-9]+(\.[0-9]+)?[bkmg]?$", re.IGNORECASE)
 _PRON_RE = re.compile(r"^[a-z0-9'.=; A-Z-]*$")
+# word=IPA;...: plain words, IPA without blanks, quotes or shell characters.
+_SYNTH_RE = re.compile(r"^[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64}(;[a-z0-9'.-]+=[^\s=;\"'`$\\]{1,64})*$")
 
 
 def log(msg: str) -> None:
@@ -431,6 +436,8 @@ def build_run_argv(
         argv += ["-e", f"WAKE_REAL_TARGET_FRACTION={REAL_TARGET_FRACTION}"]
     if PRONUNCIATIONS and _PRON_RE.match(PRONUNCIATIONS):
         argv += ["-e", f"WAKE_PRONUNCIATIONS={PRONUNCIATIONS}"]
+    if SYNTH_IPA and _SYNTH_RE.match(SYNTH_IPA):
+        argv += ["-e", f"WAKE_SYNTH_IPA={SYNTH_IPA}"]
     argv.append(IMAGE)
     return argv
 

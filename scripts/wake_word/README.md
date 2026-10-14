@@ -179,13 +179,15 @@ systemd drop-in is no longer needed. Every knob:
   (`WAKE_PRONUNCIATIONS`, ARPAbet) from Domovoi's own phonemizer
   (`domovoi/phonemizer/`, MIT): the "say it like" list first (Settings →
   Voices → Say it like; the shipped list says Domovoi = DOH-moe-voy), and
-  its own guess for a word its dictionary lacks. The trainer builds its
-  near-miss negatives around them. The synthetic positives are still
-  spoken by the Piper sample generator through espeak-ng, which says
-  "domovoi" its own way (DOM-oo-voy): the clips recorded on a satellite
-  are what teach the model the household's way. espeak-ng is GPL and lives
-  only inside the trainer image, as a separate program; it gives a
-  pronunciation only for a word the core sent none for.
+  its own guess for a word its dictionary lacks. The synthetic clips are
+  spoken from the same pronunciations (`WAKE_SYNTH_IPA`, IPA): "Domovoi"
+  as DOH-moe-voy, not espeak-ng's DOM-oo-voy, for every word on the list.
+  Change a word's "say it like" entry before training to change how the
+  synthetic clips say it. The trainer also adds near misses of the phrase
+  as negatives ("hey dome", "hey domino", "hello demo"), worked out from
+  the dictionary. espeak-ng is GPL and lives only inside the trainer image,
+  as a separate program; it pronounces only the words the core sent
+  nothing for.
 
 ## 5. Licence: a model trained here is for this household
 

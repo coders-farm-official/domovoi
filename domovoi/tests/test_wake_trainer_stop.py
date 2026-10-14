@@ -281,3 +281,14 @@ def test_runner_stops_the_command_when_cancelled(tmp_path):
     )
     assert r.cancelled and not r.timed_out and r.returncode is None
     assert marker.is_file()
+
+
+def test_synthesis_ipa_passes_only_when_it_is_word_ipa_pairs(monkeypatch):
+    monkeypatch.setattr(tw, "SYNTH_IPA", "domovoi=dˈoʊmoʊvˌɔɪ;domo=dˈoʊmoʊ")
+    argv = tw.build_run_argv("/c", "/m", "hey domovoi", "hey_domovoi", [])
+    assert "WAKE_SYNTH_IPA=domovoi=dˈoʊmoʊvˌɔɪ;domo=dˈoʊmoʊ" in argv
+    assert argv[-1] == tw.IMAGE
+    for bad in ("domovoi=a b", "x=$(id)", "domovoi"):
+        monkeypatch.setattr(tw, "SYNTH_IPA", bad)
+        argv = tw.build_run_argv("/c", "/m", "hey domovoi", "hey_domovoi", [])
+        assert not any(a.startswith("WAKE_SYNTH_IPA=") for a in argv)

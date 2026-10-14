@@ -285,3 +285,19 @@ def test_the_error_tail_prefers_the_trainers_own_lines():
                      "plain"])
     assert wwt.error_tail(out) == "[entrypoint] FATAL: feature dataset download failed: 403"
     assert wwt.error_tail("a\nb\nc") == "a\nb\nc"
+
+
+@pytest.mark.asyncio
+async def test_the_house_pronunciation_is_what_the_synthetic_clips_say(queue, monkeypatch):
+    """espeak-ng (inside the trainer image) says DOM-oo-voy; the household's
+    "say it like" list says DOH-moe-voy, and the clips are spoken from it."""
+    seen = _capture(monkeypatch)
+    with egress.override_policy("always"):
+        await wwt.WakeWordTrainer().tick()
+    assert seen["env"]["WAKE_SYNTH_IPA"] == "domovoi=dˈoʊmoʊvˌɔɪ"
+
+
+def test_only_words_with_a_household_or_lexicon_pronunciation_are_sent():
+    assert wwt.synthesis_ipa("hello domo") == "domo=dˈoʊmoʊ"
+    assert wwt.synthesis_ipa("hey jarvis") == ""          # espeak-ng's own reading stays
+    assert wwt.synthesis_ipa("hey ollama") == "ollama=oʊlˈɑːmə"   # a lexicon fix

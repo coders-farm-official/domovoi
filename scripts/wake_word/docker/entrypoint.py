@@ -31,6 +31,7 @@ NOTHING here assumes a GPU exists or knows any host path — /data/clips,
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -229,6 +230,24 @@ def _first_npy_excluding(glob_root: Path, exclude: str) -> str:
     return ""
 
 
+def near_misses(phrase: str) -> list[str]:
+    """The phrase's near misses for custom_negative_phrases (train_runner.py
+    works them out from the phrase and the CMU dictionary); [] if that
+    fails, which costs the extra negatives and nothing else."""
+    import importlib.util
+
+    try:
+        spec = importlib.util.spec_from_file_location("_train_runner", TRAIN_RUNNER)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        phrases = mod.phrase_near_misses(phrase)
+    except Exception as e:  # noqa: BLE001
+        log(f"no near-miss negatives: {e}")
+        return []
+    log(f"near-miss negatives ({len(phrases)}): {', '.join(phrases)}")
+    return phrases
+
+
 def render_config(slug: str, phrase: str, device: str, work: Path) -> Path:
     n_samples = os.environ.get("WAKE_N_SAMPLES", "5000")
     n_samples_val = os.environ.get("WAKE_N_SAMPLES_VAL", "1000")
@@ -258,6 +277,7 @@ def render_config(slug: str, phrase: str, device: str, work: Path) -> Path:
         "__NEG_FEATURES_NPY__": neg_feat,
         "__BACKGROUND_DIR__": background,
         "__RIR_DIR__": rir,
+        "__CUSTOM_NEGATIVES__": json.dumps(near_misses(phrase), ensure_ascii=False),
     }
     for k, v in repl.items():
         text = text.replace(k, v)

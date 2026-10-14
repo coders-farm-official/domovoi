@@ -152,3 +152,108 @@ def test_warm_downloads_and_trains_nothing(monkeypatch, tmp_path, capsys):
     assert entrypoint.main() == 0
     assert done == ["ensure_dataset", "ensure_rirs", "ensure_background"]
     assert "warm: 0 bytes in the cache" in capsys.readouterr().out
+
+
+# ─── synthesis speaks the household's pronunciation (2026-10-13) ──────────
+# piper-sample-generator phonemizes the phrase with espeak-ng itself and
+# takes no phonemes: espeak-ng says "domovoi" DOM-oo-voy (dˈɑːmuːvˌɔɪ); the
+# household (and Domovoi's "say it like" default) says DOH-moe-voy.
+
+HOUSE = "dˈoʊmoʊvˌɔɪ"
+
+
+def test_synthesis_overrides_parse_and_refuse_anything_else():
+    assert runner.parse_synth_ipa(f"domovoi={HOUSE};domo=dˈoʊmoʊ") == {
+        "domovoi": HOUSE, "domo": "dˈoʊmoʊ"}
+    assert runner.parse_synth_ipa("x=a b;y=$(id);=dˈoʊ;Bad Word=dˈoʊ;z") == {}
+
+
+def test_the_overridden_word_is_swapped_in_place():
+    espeak = "hˈeɪ dˈɑːmuːvˌɔɪ"
+    got = runner.apply_overrides("Hey, Domovoi!", espeak, {"domovoi": HOUSE}, lambda w: "?")
+    assert got == f"hˈeɪ {HOUSE}"
+    # A phrase without such a word is espeak's, untouched.
+    assert runner.apply_overrides("hey dominic", "hˈeɪ dˈɑːmᵻnˌɪk", {"domovoi": HOUSE},
+                                  lambda w: "?") == "hˈeɪ dˈɑːmᵻnˌɪk"
+
+
+def test_when_espeak_splits_a_word_each_word_is_phonemized_alone():
+    # "2" read as two IPA words: the counts differ, so word by word.
+    got = runner.apply_overrides("domovoi 2", "dˈɑːmuːvˌɔɪ tˈuː ɛkstɹə", {"domovoi": HOUSE},
+                                 lambda w: {"2": "tˈuː"}[w])
+    assert got == f"{HOUSE} tˈuː"
+
+
+def test_an_override_with_a_symbol_the_voice_lacks_is_left_to_espeak():
+    symbols = set("dˈoʊmvˌɔɪ")
+    kept, dropped = runner.usable_overrides({"domovoi": HOUSE, "odd": "θx"}, symbols)
+    assert kept == {"domovoi": HOUSE} and dropped == {"odd": "xθ"}
+
+
+def test_the_generators_phonemizer_is_wrapped_and_logged(monkeypatch):
+    import types
+
+    class Phonemizer:
+        def __init__(self, voice):
+            self.voice = voice
+
+        def phonemize(self, text, word_separator=" ", **kw):
+            table = {"hey": "hˈeɪ", "domovoi": "dˈɑːmuːvˌɔɪ", "dome": "dˈoʊm"}
+            return word_separator.join(table[w] for w in text.lower().split())
+
+    fake = types.ModuleType("espeak_phonemizer")
+    fake.Phonemizer = Phonemizer
+    monkeypatch.setitem(sys.modules, "espeak_phonemizer", fake)
+    said = []
+    stats = runner.install_synthesis_overrides({"domovoi": HOUSE}, say=said.append)
+    p = fake.Phonemizer("en-us")
+    assert p.phonemize("hey domovoi") == f"hˈeɪ {HOUSE}"   # what the generator now gets
+    assert p.phonemize("hey dome") == "hˈeɪ dˈoʊm"
+    assert stats == {"changed": 1, "seen": 2}
+    assert any("spoken as dˈoʊmoʊvˌɔɪ" in s and "espeak-ng would say dˈɑːmuːvˌɔɪ" in s
+               for s in said)
+    assert any(s.startswith("[train_runner] synthesising 'hey domovoi' as hˈeɪ dˈoʊmoʊvˌɔɪ")
+               for s in said)
+
+
+# ─── near-miss negatives from the phrase ──────────────────────────────────
+
+LEXICON = {
+    "dome": ["D OW1 M"], "domes": ["D OW1 M Z"], "domed": ["D OW1 M D"],
+    "dough": ["D OW1"], "dom": ["D AA1 M"],
+    "domino": ["D AA1 M AH0 N OW2"], "dominoes": ["D AA1 M AH0 N OW2 Z"],
+    "dominic": ["D AA1 M AH0 N IH0 K"],
+    "demo": ["D EH1 M OW0"], "demos": ["D EH1 M OW0 Z"], "dodo": ["D OW1 D OW0"],
+    "dumbo": ["D AH1 M B OW0"], "hey": ["HH EY1"], "hay": ["HH EY1"],
+    "hello": ["HH AH0 L OW1"], "jello": ["JH EH1 L OW0"],
+    "domovoy": ["D OW1 M OW2 V OY2"],          # a homophone: never a near miss
+}
+READINGS = {"domovoi": ["D OW1 M OW2 V OY2", "D AA1 M UW0 V OY2"], "domo": ["D OW1 M OW2"]}
+
+
+def test_near_misses_are_made_from_the_phrase_not_listed_per_word():
+    hey = runner.near_miss_phrases("hey domovoi", lambda w: READINGS.get(w, LEXICON.get(w, [])),
+                                   LEXICON)
+    assert {"hey dome", "hey dom", "hey domino"} <= set(hey)
+    assert "hey domovoy" not in hey                   # sounds the same
+    assert all(p.startswith("hey ") for p in hey)     # the call word stays
+    hello = runner.near_miss_phrases("hello domo", lambda w: READINGS.get(w, LEXICON.get(w, [])),
+                                     LEXICON)
+    assert {"hello dome", "hello demo"} <= set(hello)
+    assert not any(p.startswith("jello") for p in hello)
+
+
+def test_a_word_with_no_reading_gives_no_near_misses():
+    assert runner.near_miss_phrases("hey zzz", lambda w: [], LEXICON) == []
+
+
+def test_the_config_carries_the_near_misses(monkeypatch, tmp_path):
+    entrypoint = _load("entrypoint")
+    template = tmp_path / "t.yaml"
+    template.write_text("custom_negative_phrases: __CUSTOM_NEGATIVES__\n", encoding="utf-8")
+    monkeypatch.setattr(entrypoint, "TEMPLATE", template)
+    monkeypatch.setattr(entrypoint, "near_misses", lambda phrase: ["hey dome", "hey domino"])
+    cfg = entrypoint.render_config("hey_domovoi", "hey domovoi", "cpu", tmp_path)
+    assert 'custom_negative_phrases: ["hey dome", "hey domino"]' in cfg.read_text(encoding="utf-8")
+    real = (DOCKER_DIR / "train_config.template.yaml").read_text(encoding="utf-8")
+    assert "custom_negative_phrases: __CUSTOM_NEGATIVES__" in real

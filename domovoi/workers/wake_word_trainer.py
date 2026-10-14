@@ -28,7 +28,11 @@ What the command gets beside its argv (environment):
   limit, so the wrapper removes its container before the worker gives up;
 * ``WAKE_PRONUNCIATIONS``: how the phrase's words are said, from Domovoi's
   own phonemizer (the household's "say it like" list first), for the
-  words the dictionary lacks.
+  words the dictionary lacks (the near-miss negatives are built from it);
+* ``WAKE_SYNTH_IPA``: the same pronunciations as IPA in the voice's
+  espeak "en-us" symbols, for every word the household's list (or the
+  lexicon's own fixes) covers. The synthetic positives are spoken from it:
+  "Domovoi" as DOH-moe-voy, not espeak-ng's DOM-oo-voy.
 
 ONE AT A TIME, AND NOTHING LEFT BEHIND
 ======================================
@@ -312,7 +316,7 @@ def _env_file_trainer_keys() -> dict[str, str]:
             if v is not None and k.upper().startswith("WAKE_TRAINER_")}
 
 
-def trainer_env(timeout: int, pronunciations: str = "") -> dict[str, str]:
+def trainer_env(timeout: int, pronunciations: str = "", synth_ipa: str = "") -> dict[str, str]:
     """The command's environment: the core's own, the trainer knobs from
     the settings and ``.env``, the wrapper's deadline and the phrase's
     pronunciations. The process environment wins over ``.env`` (as it does
@@ -330,10 +334,11 @@ def trainer_env(timeout: int, pronunciations: str = "") -> dict[str, str]:
     if mem > 0:
         env["WAKE_TRAINER_MEMORY"] = f"{mem}g"
     env["WAKE_TRAINER_DEADLINE_SEC"] = str(max(60, int(timeout) - 60))
-    if pronunciations:
-        env["WAKE_PRONUNCIATIONS"] = pronunciations
-    else:
-        env.pop("WAKE_PRONUNCIATIONS", None)
+    for key, value in (("WAKE_PRONUNCIATIONS", pronunciations), ("WAKE_SYNTH_IPA", synth_ipa)):
+        if value:
+            env[key] = value
+        else:
+            env.pop(key, None)
     return env
 
 
@@ -377,6 +382,44 @@ def phrase_pronunciations(phrase: str) -> str:
         if phones:
             out.append(f"{token}={' '.join(phones)}")
     return ";".join(out)
+
+
+def _lexicon_fixes() -> frozenset[str]:
+    """The words domovoi/phonemizer/data/lexicon_corrections.txt fixes."""
+    try:
+        from domovoi.phonemizer import DATA_DIR
+
+        text = (Path(DATA_DIR) / "lexicon_corrections.txt").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    return frozenset(line.split()[0] for line in text.splitlines()
+                     if line.strip() and not line.startswith("#"))
+
+
+def synthesis_ipa(phrase: str) -> str:
+    """``word=IPA;…`` for the phrase's words whose pronunciation the
+    household gave (the "say it like" list, its shipped defaults
+    "Domovoi = DOH-moe-voy" and "Domo = DOH-moe" included) or the lexicon
+    fixes, in the "en-us" symbols of the generator's voice. The trainer
+    speaks its synthetic clips from these instead of espeak-ng's reading.
+    "" when there are none or the phonemizer can't load."""
+    try:
+        from domovoi.phonemizer import get_phonemizer
+
+        detail = get_phonemizer().phonemize_detailed(phrase or "", dialect="en-us")
+    except Exception as e:  # noqa: BLE001 - the trainer falls back to espeak-ng
+        log.debug("wake-word trainer: no synthesis pronunciations (%s)", e)
+        return ""
+    fixes = _lexicon_fixes()
+    out: dict[str, str] = {}
+    for _sentence, items in detail:
+        for it in items:
+            word, ipa = it.get("w"), it.get("ipa") or ""
+            if (it.get("kind") == "word" and word and _TOKEN_RE.match(word) and ipa
+                    and (it.get("src") == "say" or word in fixes)
+                    and not any(c.isspace() or c in "=;" for c in ipa)):
+                out.setdefault(word, ipa)
+    return ";".join(f"{w}={ipa}" for w, ipa in out.items())
 
 
 def _log_dir() -> Path:
@@ -547,7 +590,8 @@ class WakeWordTrainer(Worker):
 
         timeout = wake_trainer_setup.train_timeout_sec()
         pron = await asyncio.to_thread(phrase_pronunciations, phrase)
-        env = trainer_env(timeout, pron)
+        synth = await asyncio.to_thread(synthesis_ipa, phrase)
+        env = trainer_env(timeout, pron, synth)
         stop_argv = wake_trainer_setup.wrapper_stop_argv(cmd_template)
         log_path = _log_dir() / f"{slug}.log"
         cancel = threading.Event()
