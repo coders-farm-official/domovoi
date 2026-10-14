@@ -129,13 +129,15 @@ class RoomProtocolTest {
             ),
         )
         assertEquals("health", sample["type"]!!.jsonPrimitive.content)
-        // The core keeps the fixture's keys; battery_percent / battery_charging
-        // are the flat pair wf/sat-pc adds to the core (an older core drops
-        // them, as it drops every key it does not know).
-        val extra = sample.keys - stored - "type" - setOf("battery_percent", "battery_charging")
+        // Only keys the core keeps; the battery as its one object.
+        val extra = sample.keys - stored - "type"
         assertEquals(emptySet<String>(), extra)
-        assertEquals(JsonPrimitive(64), sample["battery_percent"])
-        assertEquals(JsonPrimitive(false), sample["battery_charging"])
+        assertEquals(null, sample["battery_percent"])
+        assertEquals(null, sample["battery_charging"])
+        assertEquals(
+            device["health"]!!.jsonObject["frame"]!!.jsonObject["battery"],
+            sample["battery"],
+        )
         assertEquals(64, sample["battery"]!!.jsonObject["percent"]!!.jsonPrimitive.content.toInt())
         assertEquals(JsonPrimitive(true), sample["mic_blocked"])
         assertTrue(sample.toString().length < 4096)

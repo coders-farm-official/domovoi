@@ -28,8 +28,10 @@ object RoomDevice {
                 if (level >= 0 && scale > 0) level * 100 / scale else null
             }
         val status = sticky?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        // Charging only while the level goes up; a full battery on its
+        // charger is on_power, not charging (the core's battery shape).
         val charging = when (status) {
-            BatteryManager.BATTERY_STATUS_CHARGING, BatteryManager.BATTERY_STATUS_FULL -> true
+            BatteryManager.BATTERY_STATUS_CHARGING -> true
             -1 -> null
             else -> false
         }

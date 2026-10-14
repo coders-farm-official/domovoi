@@ -10,11 +10,11 @@ import kotlinx.serialization.json.put
  * a phone's own — the battery and "the mic hands us silence". Numbers and
  * short strings only, never speech; well under the core's 4 KB cap.
  *
- * The battery goes twice: as `battery` {percent, charging, on_power}, the
- * object the core keeps since S0, and as the flat `battery_percent` (int
- * 0-100) and `battery_charging` (bool) the spare-device work adds to the
- * core (wf/sat-pc). A core without the flat pair drops it, as it drops any
- * key it does not know.
+ * The battery is ONE object, the core's (domovoi/satellite_health.py
+ * `_battery`, the same one a laptop sends): `battery` = {percent 0-100,
+ * charging, on_power}. `charging` while the level goes up; `on_power`
+ * while the charger is plugged in (a battery held full counts, not
+ * charging).
  */
 object HealthSample {
     data class Facts(
@@ -77,8 +77,6 @@ object HealthSample {
                 f.onPower?.let { put("on_power", it) }
             })
         }
-        pct?.let { put("battery_percent", it) }
-        f.batteryCharging?.let { put("battery_charging", it) }
         put("mic_blocked", f.micBlocked)
     }
 
