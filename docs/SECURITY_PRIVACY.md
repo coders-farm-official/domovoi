@@ -1743,19 +1743,28 @@ The admin's **Settings → Satellites → add a spare device** (admin tier,
 ([uml/satellite-protocol.md](uml/satellite-protocol.md#enrolling-a-spare-device-domovoi-room1)),
 shown inside a one-line Linux command and as a QR code. The trust model:
 
-1. **The dashboard pins the bytes.** The command quotes the SHA-256 of the
-   exact satellite bundle the core serves (`/v1/satellite-code/bundle.tar.gz`,
-   built deterministically) and runs nothing unless `sha256sum -c` matches.
-   A host answering in the core's place, or changing the download on the
-   way, hands over different bytes and the command stops.
+1. **The command pins the download — and is only as trustworthy as the
+   page it came from.** It quotes the SHA-256 of the exact satellite bundle
+   the core serves (`/v1/satellite-code/bundle.tar.gz`, built
+   deterministically) and runs nothing unless `sha256sum -c` matches, so a
+   host that answers the *download* in the core's place, or changes it on
+   the way, is refused. But the command, digest included, arrives on the
+   dashboard page, which is **plain HTTP**: whoever can rewrite that page
+   in transit can hand you a different command, digest and fingerprint
+   altogether (see "What this does not cover" below).
 2. **The device pins the server before it writes anything.** The verified
    installer makes the address in the code sign a fresh nonce and the
    address it dialed (the same `/v1/health` challenge every satellite runs),
    checks the key against the fingerprint in the code, and only then writes
-   the pin into its config. From then on every connection, code update,
-   wake-model and sound list is held to that pin; a spare computer **refuses
-   to start without one** (exit 78; its unit does not retry) and never falls
-   back to trusting the first server that answers.
+   the pin into its config. Then a spare computer **refuses to start
+   without one** (exit 78; its unit does not retry) and never falls back to
+   trusting the first server that answers. What the pin covers, exactly:
+   the challenge runs over HTTP **before** each websocket connection, and
+   code updates, wake-model and sound lists must carry the pinned key's
+   signature. The websocket frames themselves (commands, settings, audio)
+   are **not** authenticated: a host on the path after the challenge can
+   still inject or read them, as with a Pi, until the LAN gets TLS. That is
+   why what a frame may do is limited on the device itself (below).
 3. **The code is not a credential.** It carries an address, a public
    fingerprint and a room name. Joining still needs a person to type the
    device's six-digit approval code into the dashboard (strict pairing), as
@@ -1770,10 +1779,21 @@ point a room's microphone at a server outside the house.
 **What this does not cover, plainly.** The dashboard page itself is plain
 HTTP on the LAN (TLS is on the [backlog](#hardening-backlog--deferred-in-v1-on-purpose)):
 someone able to rewrite that page in transit could hand you a different
-command, exactly as they could read the admin password typed into it. To
-rule that out, compare the fingerprint the command prints ("…proved it is
-SHA256:…") with **Settings → About** on another device. The satellite's
-audio is unencrypted on the LAN, as a Pi's is.
+command, exactly as they could read the admin password typed into it, and
+running that command is running their code. To rule that out, compare the
+fingerprint the command prints ("…proved it is SHA256:…") with **Settings
+→ About** on another device — before you type your sudo password, if you
+can. The satellite's audio and its websocket frames are unencrypted and
+unauthenticated on the LAN, as a Pi's are.
+
+**The whole chain an install trusts:** the dashboard page (plain HTTP,
+above); your Domovoi server, which built the bundle and holds the key the
+device pins; the computer's own apt sources, for the system packages; and
+PyPI, for the satellite's Python packages — which the installer takes only
+from the hash-pinned list for that Python in the bundle
+(`satellite/locks/`, `pip --require-hashes --only-binary=:all:`), so PyPI
+supplies the files but cannot choose them. The wake-word models are held
+to pinned SHA-256s the same way.
 
 ### What a spare computer holds, and what the server may do to it
 
@@ -1798,10 +1818,20 @@ audio is unencrypted on the LAN, as a Pi's is.
   nologin account `domovoi-sat`, which owns only `/var/lib/domovoi-sat`,
   with the rest of the system read-only (`ProtectSystem=strict`,
   `ProtectHome`). Both are `NoNewPrivileges`; a restart is the engine
-  exiting 75 for its unit to start it again, so no sudo is ever needed. The
-  installer itself uses sudo for apt, linger, the headless account and the
-  power settings the person agrees to, each asked first, and records what it
-  changed so `--uninstall` undoes exactly that.
+  exiting 75 for its unit to start it again, so the satellite itself never
+  uses sudo. The installer does, for apt, linger, the headless account and
+  the power settings the person agrees to (each asked first), and keeps
+  root's own record of what it changed in
+  `/var/lib/domovoi-satellite/install.json` and root's own copy of itself
+  in `/usr/local/lib/domovoi-satellite/install-pc.sh`. `--uninstall` is
+  run from that copy and acts only on paths written into the script (the
+  unit, the lid-switch drop-in, the charge-limit rule, the four sleep
+  targets); it never runs code, or reads a list of paths, from anything
+  the satellite's account can write. On a headless box the account's own
+  files are removed as that account, and `--purge` ends with `userdel -r`.
+  A desktop's `--purge` removes only the satellite's files from
+  `~/.domovoi`, and the installer refuses an account whose `~/.domovoi`
+  belongs to a Domovoi server.
 * **The person chooses what the server may do on its own**
   (`[pc] permissions`):
 
@@ -1811,24 +1841,37 @@ audio is unencrypted on the LAN, as a Pi's is.
   | runs as | the satellite's account, no way to gain privileges | the same |
 
   With "automatic", your server's key can run code as that account — the
-  same trust a Pi gives it, minus root. That is why the guide asks for a
-  dedicated account for the satellite. The server can never change the
-  permission, the pin or the `[device]` section (the profile, and
-  `full_duplex`, which would let a call open the mic while the speaker
-  plays): a `set_config` carrying `pc.*`, `device.*` or
-  `satellite.server_fingerprint` is dropped by the device.
+  same trust a Pi gives it. **On a desktop that account is a person's, and
+  the installer needed it to be a sudoer**: code running as an account that
+  can use sudo can reach root (it can wait for the next time sudo is used,
+  or for a cached sudo ticket). So "nothing runs as root" describes the
+  satellite, not what code as that account could do. Use a **dedicated
+  account without sudo** for a desktop satellite where you can (give it
+  sudo for the install, take it away afterwards with `sudo deluser
+  <account> sudo`, and give it back to uninstall), or the headless mode,
+  whose `domovoi-sat` account has no sudo and no login. Whatever the permission, the device itself refuses what a
+  frame must not do (security review of wf/sat-pc, B1/B2): a `set_config`
+  may carry only the settings the dashboard's own form has, as exact
+  `section.key` names (a key with a space, a capital or an extra dot is
+  refused, not tidied up), never the pin, the server address, the
+  permission or the `[device]` section, on any board; and an audio device
+  name is accepted only if it is a plain ALSA device (`hw:1,0`,
+  `plughw:CARD=Device`, `default`, …), never a `file`, `pipe` or other
+  plugin that makes ALSA run a command. "Ask me" shows every change it
+  holds in full, or refuses it.
 
 ### The local control socket
 
 The engine and its tray talk over `~/.domovoi/control.sock`, created 0600
 in a 0700 directory; a connecting process whose uid (`SO_PEERCRED`) is
-neither the engine's nor root is closed at once. Nothing on it reaches the
+neither the engine's nor root, or can't be read, is closed at once. Nothing on it reaches the
 network. Anything already running as that account can mute, unmute, set
 the volume, read the approval code and **allow a held update** — "ask me"
 protects the computer from the server, not from software its own account
 already runs. The approval code is never written to the journal: the
-terminal shows it only when it is a real terminal, and otherwise it is in
-the tray, `--approval-code`, and `~/.domovoi/approval_code` (0600).
+engine and the installer print it only to a real terminal (an install
+piped into `tee` gets a pointer instead), and otherwise it is in the tray,
+`--approval-code`, and `~/.domovoi/approval_code` (0600).
 
 ### The microphone indicator
 
