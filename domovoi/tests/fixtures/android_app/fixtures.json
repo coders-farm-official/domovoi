@@ -1,0 +1,110 @@
+{
+  "about": "Made by scripts/dev/make_apk_fixtures.py with throwaway keys (deleted after); not the release key. apksigner_* fields are what apksigner verify printed.",
+  "files": {
+    "release-arm64-v8a.apk": {
+      "about": "the release key, v2 + v3 (SHA-512)",
+      "key": "release",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 28953,
+      "sha256": "162c431dc30cbdce5c38b840c0a7b47b38e751503ef6bb330c1489f374e9b6c1",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_v2": true,
+      "apksigner_v3": true
+    },
+    "release-armeabi-v7a.apk": {
+      "about": "the release key, 32-bit",
+      "key": "release",
+      "abis": [
+        "armeabi-v7a"
+      ],
+      "size": 28955,
+      "sha256": "575dc5ecff8cd96bdfa8187aa7da7ee38986ff1a3c72505c27276fd0084b8336",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_v2": true,
+      "apksigner_v3": true
+    },
+    "release-v2only-arm64-v8a.apk": {
+      "about": "v2 only",
+      "key": "release",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 24857,
+      "sha256": "c846a367ecece9de9f4319a87bc8bf485fd7ead36fff8e786b37e5546862da50",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_v2": true,
+      "apksigner_v3": false
+    },
+    "release-two-abis.apk": {
+      "about": "libraries for two ABIs",
+      "key": "release",
+      "abis": [
+        "arm64-v8a",
+        "armeabi-v7a"
+      ],
+      "size": 45412,
+      "sha256": "40f18cefdb04a94f7d6f904fe787b8f037c2aef1a91f4b23140a240175de32f5",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_v2": true,
+      "apksigner_v3": true
+    },
+    "other-arm64-v8a.apk": {
+      "about": "another RSA key (SHA-256)",
+      "key": "other",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 24857,
+      "sha256": "1feff348f9826e107fad020eb9e7ce2278a0dc67415bdf28f3af921b3e4b10c4",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "ff475ef35f775fa48b01b5e63f571598fe5163d9a728036d97ceac3f873595ef",
+      "apksigner_v2": true,
+      "apksigner_v3": true
+    },
+    "ec-arm64-v8a.apk": {
+      "about": "an EC key: refused",
+      "key": "ec",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 24857,
+      "sha256": "5640c6057f7c5b6c3a1a779f9a4c9090fe35d8a089de54c35ce7b04dd3b77599",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "d9ab5bd8f2c9e3a91b8e97e9eef82390e60f1656114355cc3d11b6e2a991c57f",
+      "apksigner_v2": true,
+      "apksigner_v3": true
+    },
+    "v1only-arm64-v8a.apk": {
+      "about": "JAR signing only: refused",
+      "key": "other",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 19171,
+      "sha256": "62b9a30504156531dda1ff0b1c83b09c8892bdccb7503adbdf9229e2265db84f",
+      "apksigner_verifies": true,
+      "apksigner_cert_sha256": "ff475ef35f775fa48b01b5e63f571598fe5163d9a728036d97ceac3f873595ef",
+      "apksigner_v2": false,
+      "apksigner_v3": false
+    },
+    "unsigned-arm64-v8a.apk": {
+      "about": "not signed at all: refused",
+      "key": null,
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 1003,
+      "sha256": "3e7f591f88cf8e2cef5197b6c9d8a4c2ac3fd3400a0246071f72f325bd6d5b11",
+      "apksigner_verifies": false,
+      "apksigner_cert_sha256": null,
+      "apksigner_v2": false,
+      "apksigner_v3": false
+    }
+  }
+}

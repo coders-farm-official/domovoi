@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>Domovoi app</title>
+<!-- The page a phone's camera opens from the dashboard's QR code
+     (Settings → Satellites → add a spare device), or that a household
+     phone opens to get the app (Settings → Devices → get the Domovoi app).
+     Served by the Domovoi server itself (domovoi/main.py, GET /join), so
+     the app it offers comes from this house, not a store. Deliberately not
+     the dashboard: no React, no fonts, plain colours, so it loads fast on
+     an old phone. The room code rides in the URL fragment (#…), which the
+     browser never sends to any server; join.js reads it. -->
+<link rel="stylesheet" href="/join/join.css">
+<script src="/join/join.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M5 13 C5 9.4 7.5 7.5 12 7.5 C16.5 7.5 19 9.4 19 13 L19 16.2 C19 18 17.4 19.4 15.6 19.4 L8.4 19.4 C6.6 19.4 5 18 5 16.2 Z"/>
+    <path d="M5.6 9.5 L4.4 5.6 L8.5 7.6"/><path d="M18.4 9.5 L19.6 5.6 L15.5 7.6"/>
+    <circle cx="9.6" cy="13.4" r="0.55" fill="currentColor" stroke="none"/><circle cx="14.4" cy="13.4" r="0.55" fill="currentColor" stroke="none"/>
+    <path d="M11.3 15.4 L12 16.1 L12.7 15.4"/><path d="M12 16.1 L12 17"/>
+    <path d="M7.6 15.4 L9.4 15.7 M7.6 16.4 L9.4 16.3"/><path d="M16.4 15.4 L14.6 15.7 M16.4 16.4 L14.6 16.3"/>
+  </svg>
+  <span class="wordmark">domovoi</span>
+</header>
+
+<main>
+  <h1 id="title">Get the Domovoi app</h1>
+  <p id="lede" class="lede">The Domovoi app for this home's Android phones and tablets (Android 8 or newer), straight from this home's own Domovoi server.</p>
+  <noscript><p class="note warn">This page needs JavaScript to offer the right download. Turn it on for this page, or ask whoever runs Domovoi.</p></noscript>
+
+  <p id="not-android" class="note" hidden>This page is for Android phones and tablets. A laptop or PC becomes a room with the install command on the dashboard (Settings → Satellites → add a spare device); iPhones and iPads can't be rooms yet.</p>
+  <p id="bad-code" class="note warn" hidden>The room code in this link can't be read. Make a new code on the dashboard and scan it again.</p>
+  <p id="missing-app" class="note warn" hidden>The Domovoi app isn't on this phone yet. Install it first (step 1), then press the button in step 2 again.</p>
+
+  <ol class="steps">
+    <li class="step" id="step-install">
+      <h2><span class="num">1</span> <span id="install-title">Install the app</span></h2>
+      <div id="install-state" class="state">asking this server about the app…</div>
+
+      <div id="downloads" hidden>
+        <a id="dl-main" class="button primary" href="#">download the app</a>
+        <p id="dl-main-sub" class="small"></p>
+        <p id="dl-other-line" class="small"><a id="dl-other" href="#"></a></p>
+        <p class="small">If the phone says <b>App not installed</b>, download the other one. Domovoi <span id="version"></span>.</p>
+        <p id="skip-install" class="small" hidden>The Domovoi app already on this phone? Go on to step 2.</p>
+
+        <h3>Installing it, the first time</h3>
+        <p class="small">The words differ a little from phone to phone.</p>
+        <div class="pictures">
+          <figure>
+            <svg viewBox="0 0 120 200" role="img" aria-label="The browser's download warning, with Download anyway">
+              <rect class="phone" x="4" y="4" width="112" height="192" rx="12"/>
+              <rect class="screen" x="10" y="16" width="100" height="168" rx="4"/>
+              <rect class="dialog" x="16" y="62" width="88" height="70" rx="5"/>
+              <rect class="line" x="22" y="72" width="70" height="5" rx="2"/>
+              <rect class="line" x="22" y="82" width="58" height="5" rx="2"/>
+              <rect class="line" x="22" y="92" width="64" height="5" rx="2"/>
+              <rect class="hit" x="54" y="110" width="44" height="14" rx="3"/>
+              <text class="hit-text" x="76" y="120" text-anchor="middle">Download</text>
+              <text class="ghost-text" x="38" y="120" text-anchor="middle">Cancel</text>
+            </svg>
+            <figcaption><b>1.</b> The browser may warn about this kind of file: tap <b>Download anyway</b> (or <b>Keep</b>).</figcaption>
+          </figure>
+          <figure>
+            <svg viewBox="0 0 120 200" role="img" aria-label="Android's settings: Allow from this source, turned on">
+              <rect class="phone" x="4" y="4" width="112" height="192" rx="12"/>
+              <rect class="screen" x="10" y="16" width="100" height="168" rx="4"/>
+              <rect class="line" x="18" y="28" width="60" height="6" rx="2"/>
+              <rect class="dialog" x="16" y="48" width="88" height="34" rx="5"/>
+              <text class="dialog-text" x="22" y="62">Allow from</text>
+              <text class="dialog-text" x="22" y="73">this source</text>
+              <rect class="toggle-on" x="78" y="57" width="20" height="11" rx="5.5"/>
+              <circle class="knob" cx="92.5" cy="62.5" r="4"/>
+              <rect class="line" x="18" y="96" width="76" height="5" rx="2"/>
+              <rect class="line" x="18" y="106" width="64" height="5" rx="2"/>
+            </svg>
+            <figcaption><b>2.</b> Open the download. The first time, Android asks: tap <b>Settings</b>, turn on <b>Allow from this source</b>, then go back.</figcaption>
+          </figure>
+          <figure>
+            <svg viewBox="0 0 120 200" role="img" aria-label="Do you want to install this app? Install">
+              <rect class="phone" x="4" y="4" width="112" height="192" rx="12"/>
+              <rect class="screen" x="10" y="16" width="100" height="168" rx="4"/>
+              <rect class="dialog" x="16" y="104" width="88" height="70" rx="5"/>
+              <circle class="app-dot" cx="30" cy="120" r="7"/>
+              <text class="dialog-text" x="42" y="123">Domovoi</text>
+              <rect class="line" x="22" y="134" width="70" height="5" rx="2"/>
+              <rect class="hit" x="62" y="152" width="36" height="14" rx="3"/>
+              <text class="hit-text" x="80" y="162" text-anchor="middle">Install</text>
+            </svg>
+            <figcaption><b>3.</b> Tap <b>Install</b>. If Play Protect offers to scan it, let it (or tap <b>Install anyway</b>).</figcaption>
+          </figure>
+          <figure>
+            <svg viewBox="0 0 120 200" role="img" aria-label="Back to this page in the browser">
+              <rect class="phone" x="4" y="4" width="112" height="192" rx="12"/>
+              <rect class="screen" x="10" y="16" width="100" height="168" rx="4"/>
+              <rect class="line" x="16" y="24" width="88" height="10" rx="3"/>
+              <rect class="line" x="18" y="48" width="60" height="7" rx="2"/>
+              <rect class="line" x="18" y="62" width="80" height="5" rx="2"/>
+              <rect class="hit" x="18" y="80" width="60" height="16" rx="3"/>
+              <text class="hit-text" x="48" y="91" text-anchor="middle">open</text>
+            </svg>
+            <figcaption id="picture-4"><b>4.</b> Come back to this page in the browser.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </li>
+
+    <li class="step" id="step-room" hidden>
+      <h2><span class="num">2</span> Open it as <span id="room-name" class="room"></span></h2>
+      <a id="open-room" class="button primary" href="#">open as this room</a>
+      <p class="small">The app opens <b>Domovoi Room</b> with this room's code filled in. Read its explanation to the end, allow the microphone and press <b>Become this room</b>. The phone then shows a six-digit code: whoever runs Domovoi types it on the dashboard, and the phone is a room.</p>
+      <p class="small">Nothing happens? Open <b>Domovoi Room</b> from the home screen and scan the code on the dashboard with it.</p>
+    </li>
+
+    <li class="step" id="step-connect" hidden>
+      <h2><span class="num">2</span> Open Domovoi</h2>
+      <p class="small">Open the app and pick this home's Domovoi from the list it finds on your Wi-Fi.</p>
+    </li>
+  </ol>
+
+  <p id="server-line" class="small faint"></p>
+</main>
+</body>
+</html>

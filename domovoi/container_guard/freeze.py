@@ -12,6 +12,9 @@ Frozen (docs/CONTAINER_GUARD.md, "The freeze"):
   nothing to install;
 * satellite media preparation — web ``/api/satellites/media/prepare`` and
   its download-cache refresh;
+* handing out the Android app — core ``/v1/android-app/files/*`` (the
+  APKs phones download from the join page) and the admin's fetch and
+  upload that fill that cache;
 * the update pull and apply — core ``/v1/admin/version/pull``, and
   ``/v1/admin/version/restart`` whenever it would load code that isn't
   running yet (pulled code or a staged plugin upgrade; on an update-unit
@@ -50,6 +53,7 @@ OPERATIONS: dict[str, str] = {
     "satellite_upgrade": "Satellite code upgrades are",
     "satellite_channel": "Satellite code and plugin payload downloads are",
     "satellite_media": "Satellite media preparation is",
+    "android_app": "Handing out the Android app is",
     "update_pull": "Pulling Domovoi updates is",
     "update_apply": "Applying Domovoi updates is",
 }

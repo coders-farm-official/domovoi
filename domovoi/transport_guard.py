@@ -249,6 +249,10 @@ UPLOAD_LIMITS: tuple[tuple[str, int], ...] = (
     # A plugin zip, on both the core route and the web proxy in front of it.
     ("/v1/plugins/install", 256 * 1024 * 1024),
     ("/api/plugins/install", 256 * 1024 * 1024),
+    # One release APK an admin hands the server (domovoi/android_app.py
+    # caps an APK at 200 MiB; the route at the release's largest file).
+    ("/v1/admin/android-app/upload", 210 * 1024 * 1024),
+    ("/api/satellites/android-app/upload", 210 * 1024 * 1024),
 )
 
 

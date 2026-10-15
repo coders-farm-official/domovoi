@@ -1488,6 +1488,148 @@ async def admin_satellite_windows_fetch() -> dict[str, Any]:
     return {"started": started, **(await asyncio.to_thread(satellite_windows.status, lock))}
 
 
+# ─── The Android app, from this server (spare devices, 2026-10-15) ────────
+# A phone scans the dashboard's QR code and lands on GET /join here: a small
+# page (domovoi/join_page/) that offers the Domovoi app from this server's
+# cache and opens it as the room. The APKs are the ones android/release.json
+# pins (version, SHA-256, size, the release key's certificate), fetched from
+# the project's GitHub release on an admin's word or uploaded by one, and
+# served only while each passes domovoi/android_app.py check_apk — its own
+# v2/v3 signature verified, by the pinned key. Public on the LAN like the
+# satellite code: a phone that is not in the household yet downloads them.
+
+JOIN_PAGE_DIR = Path(__file__).resolve().parent / "join_page"
+_JOIN_ASSETS = {"join.js": "text/javascript; charset=utf-8", "join.css": "text/css; charset=utf-8"}
+# The page's own headers (the core stamps none of its own): only this
+# server's script and style, no frames, no referrer, revalidated.
+_JOIN_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-cache",
+}
+
+
+def _android_manifest() -> dict[str, Any]:
+    from domovoi import android_app
+
+    try:
+        return android_app.load_manifest()
+    except android_app.ManifestError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.get("/join", include_in_schema=False)
+async def join_page() -> FileResponse:
+    """The page a phone's camera opens from the spare-device QR code (the
+    room code rides in its #fragment, never sent here), and the "get the
+    Domovoi app" page for household phones. Public, static."""
+    return FileResponse(JOIN_PAGE_DIR / "join.html", media_type="text/html; charset=utf-8",
+                        headers=_JOIN_HEADERS)
+
+
+@app.get("/join/{asset}", include_in_schema=False)
+async def join_page_asset(asset: str) -> FileResponse:
+    if asset not in _JOIN_ASSETS:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(JOIN_PAGE_DIR / asset, media_type=_JOIN_ASSETS[asset], headers=_JOIN_HEADERS)
+
+
+@app.get("/v1/android-app")
+async def android_app_public() -> dict[str, Any]:
+    """The app release this server hands out (``release`` null before the
+    first one) and, per ABI, whether it holds a checked copy. Public: the
+    join page reads it on a phone that has not joined the household."""
+    from domovoi import android_app
+
+    return await asyncio.to_thread(android_app.public_status, _android_manifest())
+
+
+@app.get("/v1/android-app/files/{name}")
+async def android_app_file(name: str) -> FileResponse:
+    """One release APK, if the manifest names it and the cached copy passes
+    every check (size, SHA-256, its signature by the pinned release key,
+    its ABI); 404 otherwise. 423 while the container guard's freeze is on."""
+    await container_freeze.require_unfrozen("android_app", public=True)
+    from domovoi import android_app
+
+    manifest = _android_manifest()
+    path = await asyncio.to_thread(android_app.cached_file, manifest, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not on this server")
+    return FileResponse(path, media_type="application/vnd.android.package-archive", filename=name,
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+
+@app.get("/v1/admin/android-app", dependencies=[Depends(require_admin_read)])
+async def admin_android_app() -> dict[str, Any]:
+    """The public view plus what is missing, the sizes, the fetch's state,
+    and whether internet access is off (then only an upload can fill it)."""
+    from domovoi import android_app
+
+    return await asyncio.to_thread(android_app.status, _android_manifest())
+
+
+@app.post("/v1/admin/android-app/fetch", dependencies=[Depends(require_admin_mutation)])
+async def admin_android_app_fetch() -> dict[str, Any]:
+    """Start fetching the release's APKs from the project's GitHub release
+    (each held to the manifest and its signature). Answers at once; poll
+    the status. 409 before the first release; refused under internet
+    access "never" (the job says so)."""
+    await container_freeze.require_unfrozen("android_app")
+    from domovoi import android_app
+
+    manifest = _android_manifest()
+    if not manifest.get("release"):
+        raise HTTPException(status_code=409, detail="there is no app release yet")
+    started = android_app.start_fetch(manifest)
+    return {"started": started, **(await asyncio.to_thread(android_app.status, manifest))}
+
+
+@app.post("/v1/admin/android-app/upload", dependencies=[Depends(require_admin_mutation)])
+async def admin_android_app_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+    """An admin hands the server one of the release's APKs (no internet
+    here, or a slow line): kept only if it is exactly one the manifest
+    names (size and SHA-256) and its signature is the release key's. 422
+    with the reason otherwise; 413 when it is bigger than any of them."""
+    await container_freeze.require_unfrozen("android_app")
+    from domovoi import android_app
+
+    manifest = _android_manifest()
+    if not manifest.get("release"):
+        raise HTTPException(status_code=409, detail="there is no app release yet")
+    limit = max(e["size"] for e in manifest["release"]["apks"])
+    target = android_app.upload_target(manifest)
+    written = 0
+    try:
+        with open(target, "wb") as out:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limit:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"this file is bigger than any app file of Domovoi "
+                               f"{manifest['release']['version_name']}",
+                    )
+                out.write(chunk)
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    try:
+        entry = await asyncio.to_thread(android_app.accept_upload, manifest, target)
+    except android_app.ApkRefused as e:
+        raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
+    return {"accepted": entry["file"], "abi": entry["abi"],
+            **(await asyncio.to_thread(android_app.status, manifest))}
+
+
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
 # A fourth file channel, parallel to /v1/sounds, /v1/satellite-code, and
 # /v1/wake-models — but for ENABLED plugins' [satellite] payloads (files a
