@@ -2738,6 +2738,75 @@ installed app cannot) and is not in a release APK; the main code's hook
 anything running as the app (`run-as`, a debugger), as for the household
 token; a release build closes that.
 
+### The app from your own server (the join page)
+
+Since 2026-10-15 the server hands phones the Android app itself
+(`domovoi/android_app.py`): the spare-device QR code opens the core's join
+page, `GET /join` (`domovoi/join_page/`), which downloads the APK from the
+same server and then opens the app as the room. An executable served to
+devices, so:
+
+* **What may be served is pinned in the repo, not chosen by the server.**
+  `android/release.json` (written by the owner's release script, committed
+  with the release) names, per ABI, the APK's file name, size and SHA-256,
+  and the SHA-256 of the **release key's signing certificate**. The key
+  itself never leaves the owner's machine; no key, password or keystore is
+  in the repo or CI.
+* **Every APK is checked the way Android checks it, not by a hash from the
+  same file.** Before an APK is kept, and again (once per change on disk)
+  before it is served: its size and SHA-256 are the manifest's; its own APK
+  Signature Scheme v2 block (and v3, when present) is verified — the
+  signer's RSA PKCS#1 v1.5 signature over its signed data, the first
+  certificate carrying that same public key, and the content digest over
+  every byte of the ZIP entries, central directory and end record
+  (`domovoi/apk_signature.py`, pure Python, cross-checked against
+  `apksigner` on the test fixtures); that certificate's SHA-256 is the
+  pinned one; and it carries native libraries for exactly its entry's ABI.
+  A v2 block is required (Android 8 reads no v3); RSA-PSS, ECDSA, DSA,
+  keys under 2048 bits, several signers and key rotation are refused.
+* **Where it comes from:** only
+  `https://github.com/coders-farm-official/domovoi/releases/download/<tag>/<file>`
+  (the URL is fixed by the manifest's tag and file name), through the
+  outbound gate (public addresses only, each redirect vetted), on an admin's
+  word (`POST /v1/admin/android-app/fetch`, or by itself when the admin
+  makes a phone's code and Settings → Internet is "always" or unanswered);
+  refused under `INTERNET_ACCESS=never`. Or an admin's upload
+  (`POST /v1/admin/android-app/upload`), kept only if it is byte for byte
+  one of the manifest's files and passes the same checks. Nothing partial is
+  ever in place: a download or upload lands under a temporary name and is
+  moved in only after the checks.
+* **Serving** (`GET /v1/android-app/files/{name}`) is open on the LAN, like
+  the satellite code bundle, because the phone asking has not joined the
+  household; only a name the manifest lists, only bytes that still pass.
+  Paused (423, "Paused by Domovoi's container guard…") while a tamper
+  incident is open, with the fetch and the upload.
+* **The join page** is static, served by the core with its own
+  `Content-Security-Policy` (`default-src 'none'`, this server's script and
+  style only, nothing inline, no frames, `connect-src 'self'`) and
+  `Referrer-Policy: no-referrer`. The room code rides in the URL fragment,
+  which browsers never send, so it is in no server's log; the page shows
+  the room's name with `textContent` only. Its button is an Android
+  `intent:` link to the app's `domovoi-room:` handler restricted to package
+  `com.domovoi.app`; the app then checks the code in full and makes the
+  server prove its key, exactly as when the code is scanned in the app
+  (the link only fills the form).
+
+**What this does not cover, plainly.** The page and the APK travel over
+plain HTTP on the LAN, like the dashboard. Someone who can answer for the
+server's address on your network (a spoofed router, ARP or DNS) could show
+a phone a different page with a different APK; Android accepts any validly
+signed app the first time it is installed, and the phone has no way to
+know our key. After that first install, Android refuses an update signed
+by another key, so a phone that has the real app keeps it. Someone who can
+change the server's own checkout can change what it hands out, as they can
+change everything else it runs. Chrome may warn before a plain-HTTP APK
+download, Android asks once to allow installs from the browser, and Play
+Protect may offer to scan the app; the page says so. From some date in
+2027 Google's developer verification is to block sideloaded apps from
+unregistered developers on certified phones: the release key's
+certificate has to be registered before then
+(android/README.md, "Publishing a release").
+
 ## Response headers and cross-origin rules
 
 Every response this process makes — the dashboard shell, the static
