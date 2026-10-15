@@ -1,9 +1,17 @@
 import com.android.build.api.artifact.SingleArtifact
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ResolvedArtifactResult
+import org.gradle.maven.MavenModule
+import org.gradle.maven.MavenPomArtifact
+import org.gradle.process.CommandLineArgumentProvider
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 plugins {
     alias(libs.plugins.android.application)
@@ -138,6 +146,15 @@ android {
             (findProperty("domovoi.oww.dir") as String?)?.let { test.systemProperty("domovoi.oww.dir", it) }
             (findProperty("domovoi.room.clips") as String?)?.let { test.systemProperty("domovoi.room.clips", it) }
             test.systemProperty("domovoi.repo.dir", rootProject.file("..").absolutePath)
+            // The variant's open-source list (openSource, below), as the APK
+            // carries it: OpenSourceLicencesTest holds it to the licences
+            // decided by hand.
+            val variant = test.name.removePrefix("test").removeSuffix("UnitTest").replaceFirstChar { it.lowercase() }
+            val list = tasks.named<OpenSourceTask>("${variant}OpenSource")
+            test.inputs.files(list).withPathSensitivity(PathSensitivity.RELATIVE)
+            test.jvmArgumentProviders.add(CommandLineArgumentProvider {
+                listOf("-Ddomovoi.licences.dir=${list.get().outputDir.get().asFile.absolutePath}")
+            })
         }
     }
 }
@@ -317,9 +334,190 @@ abstract class NativeAlignmentTask : DefaultTask() {
     }
 }
 
+/**
+ * The open-source libraries in a variant's APK, from its dependency graph
+ * (`variant.runtimeConfiguration`: what gets packaged), for the licences
+ * screen (Settings → About) and OpenSourceLicencesTest. Into the assets:
+ *
+ * - `licences/maven.json`: each library (group, name, version), its POM's
+ *   name and address, and the licences its POM declares (else its parent
+ *   POM's, up the chain);
+ * - `licences/maven/<group>/<name>/…`: the licence and notice files the
+ *   library carries itself (LICENSE, NOTICE, THIRD_PARTY_NOTICE…, anywhere
+ *   in its jar, or in its AAR and the jars inside it); most carry none;
+ * - `licences/texts/`: android/licences/ (the Apache-2.0 text, ONNX
+ *   Runtime's licence and third-party notices), checked against its
+ *   SHA256SUMS first.
+ *
+ * Which licence each library is under is decided by hand
+ * (ui/screens/settings/OpenSourceLicences.kt) and held to these POMs by the
+ * unit tests, so a new library, or a changed licence in an upgrade, fails
+ * them until someone has looked.
+ */
+abstract class OpenSourceTask : DefaultTask() {
+    /** "group:name:version" -> the library's artifact (its AAR or jar). */
+    @get:Input
+    abstract val artifacts: MapProperty<String, String>
+
+    /** "group:name:version" -> its POM, then each parent POM in turn. */
+    @get:Input
+    abstract val poms: MapProperty<String, List<String>>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val files: ConfigurableFileCollection
+
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val texts: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    private val notice = Regex("""(?i)^(licen[cs]e|notice|third[_-]?party[_-]?notices?|copying)([._-][^/]*)?$""")
+
+    private fun json(s: String?): String = if (s == null) "null" else buildString {
+        append('"')
+        for (c in s) when {
+            c == '"' -> append("\\\"")
+            c == '\\' -> append("\\\\")
+            c == '\n' -> append("\\n")
+            c == '\r' -> append("\\r")
+            c == '\t' -> append("\\t")
+            c < ' ' -> append("\\u%04x".format(c.code))
+            else -> append(c)
+        }
+        append('"')
+    }
+
+    private fun pom(file: File): Element =
+        DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file).documentElement
+
+    private fun Element.child(name: String): Element? =
+        (0 until childNodes.length).map { childNodes.item(it) }.filterIsInstance<Element>()
+            .firstOrNull { it.tagName == name }
+
+    private fun Element.text(name: String): String? = child(name)?.textContent?.trim()?.ifBlank { null }
+
+    /** Every licence or notice file in a zip (and the zips inside it):
+     *  entry path -> bytes. */
+    private fun notices(bytes: ByteArray, prefix: String = ""): Map<String, ByteArray> {
+        val out = linkedMapOf<String, ByteArray>()
+        ZipInputStream(bytes.inputStream()).use { zip ->
+            while (true) {
+                val e = zip.nextEntry ?: break
+                if (e.isDirectory) continue
+                val base = e.name.substringAfterLast('/')
+                when {
+                    e.name.endsWith(".jar") -> out += notices(zip.readBytes(), "$prefix${e.name}!")
+                    notice.matches(base) && !base.endsWith(".class") -> out["$prefix${e.name}"] = zip.readBytes()
+                }
+            }
+        }
+        return out
+    }
+
+    @TaskAction
+    fun write() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        val root = File(out, "licences").apply { mkdirs() }
+
+        // The checked-in texts, hash-checked as the voice data is.
+        val src = texts.get().asFile
+        val sums = File(src, "SHA256SUMS").readLines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+        if (sums.isEmpty()) throw GradleException("android/licences/SHA256SUMS lists no files")
+        for (line in sums) {
+            val (want, path) = line.split(Regex("""\s+"""), limit = 2).let { it[0].lowercase() to it[1].removePrefix("*") }
+            val f = File(src, path)
+            if (!f.isFile) throw GradleException("android/licences: $path is listed in SHA256SUMS but missing")
+            val got = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+            if (got != want) throw GradleException("android/licences: $path is $got, SHA256SUMS says $want")
+            f.copyTo(File(root, "texts/$path"), overwrite = true)
+        }
+
+        val rows = artifacts.get().toSortedMap().map { (coord, artifact) ->
+            val (group, name, version) = coord.split(':')
+            val chain = poms.get()[coord].orEmpty().map { pom(File(it)) }
+            val own = chain.firstOrNull()
+            val licences = chain.firstNotNullOfOrNull { p ->
+                p.child("licenses")?.let { ls ->
+                    (0 until ls.childNodes.length).map { ls.childNodes.item(it) }.filterIsInstance<Element>()
+                        .filter { it.tagName == "license" }.map { it.text("name") to it.text("url") }
+                }?.takeIf { it.isNotEmpty() }
+            }.orEmpty()
+            // The library's own notice files, each kept once.
+            val seen = mutableSetOf<String>()
+            val kept = notices(File(artifact).readBytes()).mapNotNull { (entry, bytes) ->
+                val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                if (!seen.add(hash)) return@mapNotNull null
+                val rel = "maven/$group/$name/" + entry.replace('!', '_').replace('/', '_')
+                File(root, rel).apply { parentFile.mkdirs() }.writeBytes(bytes)
+                "licences/$rel"
+            }
+            "{\"group\":${json(group)},\"name\":${json(name)},\"version\":${json(version)}," +
+                "\"pomName\":${json(own?.text("name"))},\"url\":${json(own?.text("url"))}," +
+                "\"licences\":[" + licences.joinToString(",") { (n, u) -> "{\"name\":${json(n)},\"url\":${json(u)}}" } + "]," +
+                "\"notices\":[" + kept.joinToString(",") { json(it) } + "]}"
+        }
+        File(root, "maven.json").writeText(rows.joinToString(",\n", "[\n", "\n]\n"))
+    }
+}
+
+/** POM files, own first, then each parent, for each "group:name:version":
+ *  resolved one by one (offline, from the cache the build already filled)
+ *  so no version is traded for another. */
+fun pomChains(coords: Collection<String>): Map<String, List<String>> {
+    // Gradle's own way to a module's POM (MavenPomArtifact), which works for
+    // libraries published with Gradle module metadata too; offline, before
+    // any online build asked for them, the POMs Gradle keeps in its module
+    // cache from resolving the dependencies.
+    fun resolve(coord: String): File? {
+        val (g, a, v) = coord.split(':')
+        val viaGradle = runCatching {
+            dependencies.createArtifactResolutionQuery().forModule(g, a, v)
+                .withArtifacts(MavenModule::class.java, MavenPomArtifact::class.java).execute()
+                .resolvedComponents.flatMap { it.getArtifacts(MavenPomArtifact::class.java) }
+                .filterIsInstance<ResolvedArtifactResult>().firstOrNull()?.file
+        }.getOrNull()
+        return viaGradle ?: File(gradle.gradleUserHomeDir, "caches/modules-2/files-2.1/$g/$a/$v").listFiles().orEmpty()
+            .map { File(it, "$a-$v.pom") }.firstOrNull { it.isFile }
+    }
+    fun parentOf(pom: File): String? = runCatching {
+        val root = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pom).documentElement
+        val parent = (0 until root.childNodes.length).map { root.childNodes.item(it) }
+            .filterIsInstance<Element>().firstOrNull { it.tagName == "parent" } ?: return null
+        fun part(n: String) = (0 until parent.childNodes.length).map { parent.childNodes.item(it) }
+            .filterIsInstance<Element>().firstOrNull { it.tagName == n }?.textContent?.trim()
+        listOf(part("groupId"), part("artifactId"), part("version")).takeIf { p -> p.all { !it.isNullOrBlank() } }?.joinToString(":")
+    }.getOrNull()
+    return coords.associateWith { coord ->
+        val chain = mutableListOf<String>()
+        var next: String? = coord
+        while (next != null && chain.size < 6) {
+            val pom = resolve(next) ?: break
+            chain += pom.absolutePath
+            next = parentOf(pom)
+        }
+        chain
+    }
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
+        val openSource = tasks.register<OpenSourceTask>("${variant.name}OpenSource") {
+            val resolved = variant.runtimeConfiguration.incoming.artifactView { lenient(false) }.artifacts.resolvedArtifacts
+            artifacts.set(resolved.map { set ->
+                set.mapNotNull { a ->
+                    (a.id.componentIdentifier as? ModuleComponentIdentifier)?.let { id -> "${id.group}:${id.module}:${id.version}" to a.file.absolutePath }
+                }.toMap()
+            })
+            poms.set(artifacts.map { pomChains(it.keys) })
+            files.from(artifacts.map { m -> m.values.map(::File) }, poms.map { m -> m.values.flatten().map(::File) })
+            texts.set(rootProject.layout.projectDirectory.dir("licences"))
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(openSource, OpenSourceTask::outputDir)
         val cap = variant.name.replaceFirstChar { it.uppercase() }
         val alignment = tasks.register<NativeAlignmentTask>("check${cap}NativeAlignment") {
             apkDir.set(variant.artifacts.get(SingleArtifact.APK))
