@@ -69,7 +69,7 @@ def engines(monkeypatch, tmp_path):
     client = RealTTSClient(preferred_engine="piper", piper_voice=PIPER_DEFAULT, speed=1.0)
     monkeypatch.setattr(tts_mod, "_client", client)
     # MP3 encoding: keep the first bytes of the PCM so the file says which
-    # engine rendered it, without needing lameenc.
+    # engine rendered it, without running an encoder.
     monkeypatch.setattr(cs, "_wav_to_mp3", lambda wav: b"MP3" + wav[44:48] if len(wav) > 48 else None)
     return e
 
