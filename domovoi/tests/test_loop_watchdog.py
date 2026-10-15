@@ -263,10 +263,30 @@ def test_install_honours_the_switch(monkeypatch) -> None:
         loop_watchdog_enabled = False
 
     monkeypatch.setattr(loop_watchdog, "_ACTIVE", None)
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
     assert loop_watchdog.install(S()) is None
     # Without one installed (every test that starts the app), the lifespan
     # hooks do nothing.
     loop_watchdog.detach()
+
+
+def test_switched_off_under_systemd_it_still_says_ready_and_feeds(tmp_path, monkeypatch) -> None:
+    """LOOP_WATCHDOG_ENABLED=false under the shipped Type=notify unit: the
+    core must still say READY=1 (or systemd kills it after
+    TimeoutStartSec) and feed WatchdogSec=, but never find a stall."""
+    release = threading.Event()
+    with Harness(tmp_path, limits=Limits(detect=False, check_sec=0.05, heartbeat_sec=0.1),
+                 watchdog_usec=200_000) as h:
+        h.loop.call_soon_threadsafe(blocking_worker, release)
+        time.sleep(2.0)
+        fired = h.exited.is_set()
+        release.set()
+        out = h.output()
+    assert not fired
+    assert h.notifier.sent[0].startswith("READY=1")
+    assert h.notifier.sent.count("WATCHDOG=1") >= 5     # fed, even with the loop stuck
+    assert h.backstops == []                            # no C-level exit either
+    assert "loop watchdog: off" in out
 
 
 def test_last_stall_reads_the_note(tmp_path, monkeypatch) -> None:
@@ -337,6 +357,9 @@ def test_a_dump_on_request_is_kept_but_ends_nothing(tmp_path) -> None:
 
 def test_an_abort_or_a_crash_is_named(tmp_path) -> None:
     kind, *_ = _adopt(tmp_path, "Fatal Python error: Aborted\n\nThread 0x01:\n")
+    assert "SIGABRT" in kind
+    # A stopped process woken by systemd's SIGABRT can trip the backstop too.
+    kind, *_ = _adopt(tmp_path, "Fatal Python error: Aborted\nTimeout (0:00:08)!\nThread 0x01:\n")
     assert "SIGABRT" in kind
     kind, *_ = _adopt(tmp_path, "Fatal Python error: Segmentation fault\n\nThread 0x01:\n")
     assert kind == "the core crashed (Fatal Python error: Segmentation fault)"

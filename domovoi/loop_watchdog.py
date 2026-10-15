@@ -179,12 +179,15 @@ def _dump_kind(text: str) -> tuple[str, bool]:
     """(what happened, whether it ended the core): the backstop's timeout,
     an abort (systemd's watchdog sends SIGABRT), another fatal error, or a
     stack dump someone asked for (SIGUSR1), which ends nothing."""
-    if "Timeout (" in text:
-        return ("the event loop stayed frozen past the backstop, so faulthandler ended the core "
-                "(its watchdog thread could not run)", True)
+    # An abort first: systemd's SIGABRT reaches a process that was stopped
+    # outright, and its resumption can trip the backstop's timer too, so
+    # both dumps are then in the file.
     if "Fatal Python error: Aborted" in text:
         return ("the core was aborted (SIGABRT: systemd's watchdog sends it when the keep-alives "
                 "stop)", True)
+    if "Timeout (" in text:
+        return ("the event loop stayed frozen past the backstop, so faulthandler ended the core "
+                "(its watchdog thread could not run)", True)
     for line in text.splitlines():
         if line.startswith("Fatal Python error:"):
             return (f"the core crashed ({line.strip()[:160]})", True)
@@ -249,6 +252,11 @@ class Limits:
     heartbeat_sec: float = HEARTBEAT_SEC
     check_sec: float = CHECK_SEC
     backstop_extra_sec: float = BACKSTOP_EXTRA_SEC
+    # False (loop_watchdog_enabled=false): no stall is ever found, nothing
+    # exits; READY=1 still goes out and, under a unit with WatchdogSec=,
+    # the thread keeps systemd fed (the shipped unit is Type=notify: a core
+    # that never said READY, or stopped feeding it, would be killed).
+    detect: bool = True
 
     @classmethod
     def from_settings(cls, s: Any) -> "Limits":
@@ -399,6 +407,10 @@ class LoopWatchdog:
         self._beat()
         self._notifier.notify("READY=1\nSTATUS=serving")
         wd = self._notifier.watchdog_sec
+        if not self.limits.detect:
+            self._say("WARNING", "loop watchdog: off (LOOP_WATCHDOG_ENABLED=false): a frozen core "
+                      "stays frozen" + (f"; systemd WatchdogSec={wd:.0f} is still fed" if wd else ""))
+            return
         self._say(
             "INFO",
             f"loop watchdog: watching (a stall is {self.limits.stall_sec:.0f} s without a "
@@ -423,7 +435,8 @@ class LoopWatchdog:
         if loop is None:
             return
         self._beat_at = self._clock()
-        self._backstop(self.limits.stall_sec + self.limits.backstop_extra_sec)
+        if self.limits.detect:
+            self._backstop(self.limits.stall_sec + self.limits.backstop_extra_sec)
         self._beat_handle = loop.call_later(self.limits.heartbeat_sec, self._beat)
 
     # ── the thread ───────────────────────────────────────────────────
@@ -445,6 +458,10 @@ class LoopWatchdog:
         if self._fired or lifecycle.shutting_down():
             return None
         now = self._clock()
+        if not self.limits.detect:
+            if self._loop is not None:
+                self._keepalive(now)
+            return None
         loop = self._loop
         if loop is None:
             if (not self._attached_once and self.limits.startup_sec > 0
@@ -657,8 +674,9 @@ def install(settings: Any) -> LoopWatchdog | None:
     global _ACTIVE, _FAULT_FILE
     if _ACTIVE is not None:
         return _ACTIVE
-    if not getattr(settings, "loop_watchdog_enabled", True):
-        return None
+    # The dumps, whether or not the watchdog itself is on: the dashboard
+    # sends SIGUSR1 before it ends a core that doesn't answer, which with no
+    # handler would end it with nothing written.
     adopt_faulthandler_dump()
     _FAULT_FILE = _open_fault_file()
     target = _FAULT_FILE or sys.stderr
@@ -671,6 +689,14 @@ def install(settings: Any) -> LoopWatchdog | None:
             faulthandler.register(signal.SIGUSR1, file=target, all_threads=True)
         except (RuntimeError, ValueError, OSError, AttributeError):
             pass
+    if not getattr(settings, "loop_watchdog_enabled", True):
+        # Off: only what the service manager needs (READY=1, and WATCHDOG=1
+        # under a WatchdogSec= unit), never a stall or an exit.
+        notifier = Notifier.from_env()
+        if notifier.enabled:
+            _ACTIVE = LoopWatchdog(Limits(detect=False), notifier=notifier, backstop=lambda s: None)
+            _ACTIVE.start()
+        return _ACTIVE
     _ACTIVE = LoopWatchdog(Limits.from_settings(settings), notifier=Notifier.from_env())
     _ACTIVE.start()
     return _ACTIVE
