@@ -35,8 +35,9 @@ Server only (the app's manual gains the examples in its next build).
   music player isn't running is started on request, under its own room
   id. Radio stations and podcasts still play only where they're asked.
 * **A pause before the room name** ("stop the music … in the garage")
-  still acts in the room that asked, as it did before: say it in one go,
-  or put the room first.
+  still acts in the room that asked, as it did before: stop, pause and
+  skip stay instant. To stop, pause or skip in another room, say the room
+  first: "in the garage, stop the music".
 
 ## 2026-10-13 — Android: talk to Domovoi on the phone
 

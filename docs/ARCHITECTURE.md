@@ -684,7 +684,10 @@ paths read them, after the lyric paths (a lyric is read whole) and before
 "play X by Y" and the `^play (.+)` catch-all, so the catch-all no longer
 searches for "jazz in the garage" in the asking room. Never an early
 commit (open slots); a pause before the place still commits a closed
-control ("stop the music … in the garage") on its short hold, as before.
+control ("stop the music … in the garage") on its short hold, as before
+(owner decision 2026-10-15: the controls stay instant). Tip for people:
+to stop, pause or skip in another room, say the room first ("in the
+garage, stop the music").
 
 * **Which place.** `rooms.household_rooms` lists the house's rooms: every
   room id in `satellites`, `mpd_rooms` or `satellite_pairings`, plus the

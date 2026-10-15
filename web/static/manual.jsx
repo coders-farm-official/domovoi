@@ -94,7 +94,8 @@ const UM_HOWTO = {
            'Check the latest V### migration has been applied to both prod and test DBs.'] },
   mpd: {
     act: ['Play, queue and favorite music from the Music page — each room is independent.',
-          'By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”.'],
+          'By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”.',
+          'To stop, pause or skip in another room, saying the room first is safest: “in the garage, stop the music”.'],
     diag: ["'port not listening' usually just means nothing is playing (it binds lazily).",
            "No music in a room? Check that room's MPD container is running."] },
   workers: {

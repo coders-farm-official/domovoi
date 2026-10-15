@@ -462,7 +462,9 @@ same room history; the server side doesn't change at all.
   different queues, simultaneously. Any room can drive another by naming
   it: "play jazz in the garage", "stop the music in the office", "what's
   playing in the kitchen" — the reply comes from the room you asked, the
-  music from the one you named.
+  music from the one you named. To stop, pause or skip in another room,
+  say the room first ("in the garage, stop the music"): those commands
+  act the moment you pause, so a pause before the room name acts here.
 - **Intercom and drop-in** turn the fleet into a house-wide comm system:
   announce to one room or all of them, or open a two-way drop-in between
   rooms. How a target room answers a drop-in (mic opens immediately vs.
