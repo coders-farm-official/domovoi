@@ -11,7 +11,7 @@ administration is the deliberate exception — see *Settings* below.
 | Layer | Choice |
 |---|---|
 | Language / UI | Kotlin + Jetpack Compose (Material 3) |
-| Min / target SDK | 26 / 35 (Android 8.0 to 15; what each version gets: [docs/ANDROID_COMPATIBILITY.md](../docs/ANDROID_COMPATIBILITY.md)) |
+| Min / target SDK | 26 / 36 (Android 8.0 to 16; compiled against 36 with AGP 8.13.2; what each version gets: [docs/ANDROID_COMPATIBILITY.md](../docs/ANDROID_COMPATIBILITY.md)) |
 | ABIs | arm64-v8a, armeabi-v7a, x86_64, x86 (the on-device assistant on the 64-bit ones only; see *ABIs and APKs*) |
 | Networking | OkHttp + kotlinx.serialization (thin JSON client mirroring `web/static/data.js`) |
 | Realtime | One OkHttp WebSocket to `/ws/state`, subscribe-all, exponential-backoff reconnect (1s → 15s) — `net/StateBus.kt` |
@@ -48,6 +48,18 @@ a 64-bit process whose class loader finds `liblitertlm_jni.so`).
 | `libonnxruntime.so`, `libonnxruntime4j_jni.so` (phone voice, speech) | yes | yes | yes | yes | onnxruntime-android 1.28.0 AAR |
 | `libsherpa-onnx-jni.so` (speech recognition, voice detection) | yes | yes | yes | yes | built here, `native/sherpa-onnx/` |
 | `libandroidx.graphics.path.so`, `libdatastore_shared_counter.so` | yes | yes | yes | yes | AndroidX |
+| `libimage_processing_util_jni.so`, `libsurface_util_jni.so` (room mode's QR scanner) | yes | yes | yes | yes | CameraX 1.4.2 |
+
+**16 KB pages.** Every 64-bit library is built with 16 KB aligned LOAD
+segments and stored uncompressed at a 16 KB offset in the APK, so it maps
+on a phone with 16 KB memory pages (Android 15 and later may use them;
+Google Play requires it; Android 16 runs an app that isn't in a
+compatibility mode, with a warning). `check<Variant>NativeAlignment` reads
+every `lib/arm64-v8a` and `lib/x86_64` library in the built APKs and fails
+`assemble` when one isn't (the report is in
+`app/build/reports/native-alignment/`); it caught CameraX 1.3.4's
+`libimage_processing_util_jni.so` (4 KB), which is why CameraX is 1.4.2.
+32-bit libraries are exempt: no 32-bit process runs with 16 KB pages.
 
 What a build carries (`app/build.gradle.kts`):
 
@@ -357,6 +369,44 @@ and the 10-minute heat loop, with results to copy. It shares the model
 files with the assistant, and each frees the other's copy of the model
 before loading its own.
 
+**Report this reply** (Google Play's AI-generated content policy: a
+person can flag an answer without leaving the app). Long-press a finished
+reply, **report this reply**: the sheet shows exactly what the report
+holds (the question before it, marked if spoken; the reply; the model and
+CPU or GPU; when; the app's version) and takes an optional note. **Save on
+this phone** keeps it in `filesDir/assistant-reports/` (one JSON file each,
+app-private, outside backups, apart from the conversations so clearing
+those keeps a report); the model settings' **Reports** card lists them, to
+share or delete one or all. **Share as text** opens Android's share menu
+with the report as plain text; nothing leaves the phone until the person
+picks an app there and sends it. Where reports go beyond that is the
+owner's open decision (an HTTPS endpoint on codersfarm.org, or an email
+draft), so it sits behind one small interface, `assistant/ReplyReport.kt`
+`ReportSink`, with the share menu its only implementation today and no
+button that says it sends. A sink that sends must be declared in Play's
+data safety form.
+
+**The microphone permission** is asked on the first tap of the mic, after
+the app's own one-line reason ("Domovoi needs the microphone to hear your
+question…", `ui/screens/assistant/MicPermission.kt`); after a refusal
+Android won't ask about again, the tap shows the way to the app's settings
+instead of doing nothing.
+
+**Privacy.** Settings → About (and the local shell's settings) has a
+**Privacy** card: what the app keeps and where it goes, and the privacy
+policy's link from `PRIVACY_POLICY_URL`
+(`ui/screens/settings/PrivacyCard.kt`). **The owner fills that address
+in** once the Coders Farm page is published; while it is blank the card
+shows no link. It must be https.
+
+**TalkBack.** Titles are headings; the voice turn's state (listening,
+thinking, speaking) and the engine's loading or failing are live regions,
+read out as they change; a message's copy and report are screen-reader
+actions too, and it says who wrote it; switch rows toggle as one labelled
+control; every icon button and link says what it does
+(`AssistantAccessibilityTest` composes every state and finds no unlabelled
+control).
+
 **Open-source parts** of the assistant (the licences card in Settings →
 About lists them with their notices; nothing GPL):
 
@@ -371,6 +421,19 @@ About lists them with their notices; nothing GPL):
 | Moonshine base, English (speech to text, larger) | MIT | downloaded by the benchmark |
 | Silero VAD v4 (voice detection) | MIT | downloaded by the assistant |
 | Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice; speak the assistant's replies |
+
+Under those parts the licences card lists **every library in the build**,
+from the variant's own dependency graph (`app/build.gradle.kts`
+`OpenSourceTask` writes `licences/maven.json` into the assets, with each
+library's POM licences and the licence and notice files it carries, and
+copies `android/licences/`: the Apache-2.0 text, ONNX Runtime's licence and
+third-party notices, libyuv's licence). Which licence each library is
+under is decided by hand in `ui/screens/settings/OpenSourceLicences.kt`
+(`RULES`), and `OpenSourceLicencesTest` holds the build to it: a library
+with no rule, a non-permissive rule, a POM that disagrees with its rule, a
+stale rule, or an analytics, advertising or crash-reporting library fails
+the unit tests. **Adding a dependency** therefore means checking its
+licence at its source and adding (or confirming) its rule.
 
 ## Settings: device-local only
 

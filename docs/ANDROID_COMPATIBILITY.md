@@ -6,7 +6,8 @@ Android emulator; see [What was tested](#what-was-tested) for exactly how.
 
 ## Requirements
 
-- **Android 8.0 (API 26) or later.** The app targets Android 15 (API 35).
+- **Android 8.0 (API 26) or later.** The app targets Android 16 (API 36),
+  as Google Play requires of new apps; see [Android 16](#android-16-api-36).
 - **Any of four processor types (ABIs):** 64-bit ARM (`arm64-v8a`, almost
   every phone from about 2017 on), 32-bit ARM (`armeabi-v7a`, older and
   budget phones, Android Go), and the x86 / x86_64 used by emulators and a
@@ -95,6 +96,40 @@ Notes:
   phone's echo canceller (`AcousticEchoCanceler.isAvailable()`); a phone
   without one is a room without drop-ins (the emulator images have none).
 
+## Android 16 (API 36)
+
+Since 2026-10-15 the app is compiled against and targets API 36 (AGP
+8.13.2). What Android 16 changes for an app that targets it, and what the
+app does (`TargetApi36Test` holds the code to it):
+
+- **Edge to edge, with no opt-out.** Every activity draws behind the
+  system bars and pads its content itself: the main app as before, and
+  the room mode screens now call `enableEdgeToEdge` too (dark bars over
+  their dark screens) on every Android version. No theme opts out.
+- **Predictive back is the default.** Opted into on every version from
+  Android 13 (`enableOnBackInvokedCallback`), so back behaves the same
+  everywhere; the app handles back only through Compose's `BackHandler`
+  (no `onBackPressed`, no `KEYCODE_BACK`). The room screen still keeps
+  back from leaving the room: Exit is the way out.
+- **Large screens ignore orientation and resize locks** from 600 dp wide:
+  the app has none.
+- **16 KB memory pages.** Every 64-bit native library is 16 KB aligned and
+  the build checks it (`check<Variant>NativeAlignment`), so the app never
+  runs in Android 16's page-size compatibility mode. CameraX moved from
+  1.3.4 to 1.4.2 for it.
+- **Background job quotas.** Android 16 counts jobs that run beside a
+  foreground service against the app's job quota. The assistant's model
+  download is a WorkManager job promoted to a foreground service, which
+  WorkManager keeps running when the scheduler stops the job, and which
+  resumes with an HTTP `Range` request if it is ever stopped.
+- **Not affected:** `announceForAccessibility` (deprecated; the app uses
+  live regions), `elegantTextHeight`, `scheduleAtFixedRate`, intent
+  redirection from extras, health permissions.
+- **Coming later, not yet enforced:** Android is adding a **local network
+  permission** (opt-in on 16, enforced for a later target API). The app
+  talks to its Domovoi server on the home network, so the move past API 36
+  will need it; nothing changes at 36.
+
 ## What was tested
 
 2026-10-12, debug APKs from `wf/android-old-devices`, on the Android
@@ -147,6 +182,27 @@ the host as `10.0.2.2` (in 10/8) with that name in the throwaway core's
 Not tested on the emulator: drop-ins (no image has an echo canceller), a
 real microphone, wake accuracy at a distance, days on a charger. Those
 need real phones.
+
+**API 36 and 16 KB pages, 2026-10-15** (`wf/assistant-m3`, debug APKs,
+no server; the language model copied in after a hash check instead of
+downloaded, the speech files downloaded by the app; the voice turn fed a
+recorded question through the debug build's feed, never the host's
+microphone; every screen also dumped and checked for controls with no
+words for a screen reader or under 48 dp):
+
+| Image | APK | Result |
+|---|---|---|
+| `android-36;google_apis;x86_64` r7, 8 GB | default | edge to edge in the app and on room mode's screens; a typed question answered (3.1 s to first words, 8.3 tokens/s, CPU); long-press → report this reply → note → share as text (the share menu with the report's text; the report saved in `files/assistant-reports/`) → model settings → reports; back through each pane (predictive back); the speech files downloaded with Android 16's job-quota enforcement turned on (`OVERRIDE_QUOTA_ENFORCEMENT_TO_FGS_JOBS`, `…_TOP_STARTED_JOBS`), 10 s; the mic: the app's reason, then Android's dialog; refused twice → "the microphone is off" → open settings opens the app's page; a spoken question transcribed exactly and answered aloud; room mode by `domovoi-room:` link to an address with nothing listening: the room screen (offline), its service foreground with microphone + mediaPlayback, mute and unmute, back stays a room, hold exit → confirm → forget → the normal app; Settings: privacy, all 139 libraries, LiteRT-LM's 2 MB notice opened with no skipped frames |
+| `android-36;google_apis_playstore_ps16k;x86_64` r7, **16 KB pages**, 8 GB | default | no page-size compatibility dialog; LiteRT-LM answered a typed question; Moonshine and Silero (sherpa-onnx on ONNX Runtime) heard a spoken question and the reply was spoken; the room code's camera preview (CameraX 1.4.2) ran |
+| `android-35;google_apis;x86_64`, 3 GB | default | local shell; the assistant says this phone can't run it (3 GB) with no controls; privacy and licences; room mode's explainer and microphone step |
+| `android-26;google_apis;x86_64` r16 (8.0), 3 GB | default | as Android 15, room mode's screens edge to edge; a refused microphone → "open the app's settings" |
+| `android-30;google_apis;x86` r16, **32-bit** | x86 | no assistant tab; privacy (without the assistant's points) and licences; room mode's explainer |
+
+What the scan flagged on the first API 36 pass was fixed the same day and
+scanned again: the licences' notice links (19 dp tall) and two "allow
+mobile data" switches (Settings → Voice, the benchmark card: an
+unlabelled switch beside its words). The rescan found nothing else
+(only rows cut off at the screen's edge, which measure short).
 
 ### 32-bit on the emulator
 

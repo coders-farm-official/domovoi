@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-15 — Android app: Android 16, report a reply, privacy, licences
+
+Android app only (a new APK); nothing changes on the server.
+
+* **The app targets Android 16 (API 36)**, as Google Play requires of new
+  apps, and still runs on Android 8.0 and on 32-bit phones. On Android 16
+  back gestures show where they lead (predictive back), now on Android 13
+  to 15 too. The room mode screens draw under the status and navigation
+  bars like the rest of the app.
+* **Phones with 16 KB memory pages** run the app normally (no
+  compatibility warning): every native library is 16 KB aligned, and the
+  build refuses one that isn't. The room code's QR scanner moved to
+  CameraX 1.4.2 for it.
+* **Report this reply** (the on-device assistant): long-press a reply.
+  The report shows exactly what it holds and takes a note; **save on this
+  phone** keeps it (model settings → reports), **share as text** opens
+  the share menu. The app sends no report anywhere itself: where reports
+  go is still to be decided.
+* **The microphone** is asked for with a one-line reason first; after a
+  refusal Android won't ask about again, the mic button leads to the app's
+  settings instead of doing nothing.
+* **Settings → About → Privacy**: what the app keeps and where it goes.
+  The privacy policy link appears once its page is published (the app has
+  no address for it yet).
+* **Settings → About → Open-source licences** now lists every library in
+  the app (139 in a debug build), with its licence and notices, made from
+  the build itself.
+* **Screen readers (TalkBack)** hear the assistant's state as it changes
+  (listening, thinking, speaking), can copy or report a reply from the
+  actions menu, and find every control labelled, on the assistant and
+  room mode screens alike.
+
 ## 2026-10-14 — A reload no longer signs the admin out
 
 Server update (core, dashboard and a database migration, V028); the

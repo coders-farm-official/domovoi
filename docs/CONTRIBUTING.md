@@ -13,6 +13,13 @@ Related reading: [Architecture](ARCHITECTURE.md) ·
 Domovoi is MIT-licensed ([LICENSE](../LICENSE)); contributions are accepted
 under the same license.
 
+A new **Android dependency** needs its licence decided by hand: check it at
+the project's source, then add (or confirm) its rule in
+`android/app/src/main/java/com/domovoi/app/ui/screens/settings/OpenSourceLicences.kt`.
+The unit tests read the build's own list of libraries and fail until every
+one has a permissive rule its POM agrees with; the app's licences screen is
+made from the same list.
+
 ---
 
 ## Development setup
