@@ -265,6 +265,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
         }
         item { ProblemReportsCard() }
         item { AssistantBenchmarkCard() }
+        item { PrivacyCard() }
         item { LicencesCard() }
     }
 }

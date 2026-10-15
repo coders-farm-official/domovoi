@@ -46,6 +46,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -187,7 +190,8 @@ private fun RoomSetup(
 @Composable
 private fun NeedsLock(onSetLock: () -> Unit, onCancel: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Set a screen lock first", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text("Set a screen lock first", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.semantics { heading() })
         Text(
             "This phone is also paired with your household. While it is a room, the normal app is locked and " +
                 "leaving room mode takes the phone's unlock, so the household app stays out of reach of whoever is " +
@@ -235,11 +239,13 @@ private fun Explainer(onStart: () -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     val atEnd = scroll.maxValue == 0 || scroll.value >= scroll.maxValue - 8
     Column(Modifier.fillMaxSize().padding(20.dp)) {
-        Text("Use this device as a room", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text("Use this device as a room", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.semantics { heading() })
         Spacer(Modifier.height(8.dp))
         Column(Modifier.weight(1f).verticalScroll(scroll)) {
             EXPLAINER.forEachIndexed { i, (title, body) ->
-                Text("${i + 1}. $title", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.brand)
+                Text("${i + 1}. $title", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.brand,
+                    modifier = Modifier.semantics { heading() })
                 Spacer(Modifier.height(4.dp))
                 Text(body, style = MaterialTheme.typography.bodyLarge)
                 Spacer(Modifier.height(16.dp))
@@ -274,7 +280,8 @@ private fun Permissions(onGranted: () -> Unit, onCancel: () -> Unit) {
         return
     }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("The microphone", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text("The microphone", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.semantics { heading() })
         Text(
             "A room listens for the wake word, so Domovoi needs the microphone. It also posts the notification " +
                 "Android requires while it listens.",
@@ -309,14 +316,18 @@ private fun RoomCode(initialPayload: String?, onDone: (Enrolment) -> Unit, onCan
     val parsed = if (text.isBlank()) null else RoomEnrolment.parse(text)
     val ok = parsed as? RoomEnrolment.Result.Ok
     Column(Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("The room code", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+        Text("The room code", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.semantics { heading() })
         Text(
             "On the dashboard, open Settings → Satellites and add a spare device: it shows a room code. Scan it, or copy it " +
                 "and paste it here.",
             style = MaterialTheme.typography.bodyLarge,
         )
         if (scanning) {
-            RoomScanner(Modifier.fillMaxWidth().aspectRatio(1f)) { code ->
+            RoomScanner(
+                Modifier.fillMaxWidth().aspectRatio(1f)
+                    .semantics { contentDescription = "camera: point it at the room code on the dashboard" },
+            ) { code ->
                 text = code
                 scanning = false
             }

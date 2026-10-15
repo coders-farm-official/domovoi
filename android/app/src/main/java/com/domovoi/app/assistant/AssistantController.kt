@@ -88,6 +88,8 @@ data class AssistantUi(
     val voiceName: String? = null,
     /** The last stop's tap to silence, ms. */
     val lastStopMs: Long? = null,
+    /** The reply reports saved on this phone, newest first. */
+    val reports: List<ReplyReport> = emptyList(),
 ) {
     val installed: Boolean get() = setup == ModelSetup.Installed
 
@@ -167,6 +169,11 @@ class AssistantController(
     private val micAllowed: () -> Boolean = { true },
     /** Who else holds the mic, in words (audio/MicArbiter.kt); null: free. */
     private val micRefusal: () -> String? = { null },
+    /** Where "report this reply" keeps its reports; null: no reports (tests
+     *  of everything else). */
+    private val reports: ReplyReportStore? = null,
+    /** The app's versionName, written into a report. */
+    private val appVersion: String = "",
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -235,6 +242,7 @@ class AssistantController(
                 _state.update { it.copy(conversation = restored ?: conversations.create(clock())) }
                 readDisk()
                 readHistory()
+                readReports()
             }
             if (screensShowing > 0) prepare()
             jobs.job.collect { onJob(it) }
@@ -809,6 +817,50 @@ class AssistantController(
         _state.update { it.copy(history = conversations.list()) }
     }
 
+    // ── Reply reports ───────────────────────────────────────────────────
+
+    /** The report for the reply at [index] of [conversation], before the
+     *  person's note; null for a message that is not a reply with words. */
+    fun draftReport(conversation: StoredConversation, index: Int): ReplyReport? =
+        ReplyReport.draft(conversation, index, chatModel, appVersion, clock())
+
+    /** Keeps [report] on the phone (a second save of the same report, with
+     *  a changed note, replaces it). [then]: whether it was written. */
+    fun saveReport(report: ReplyReport, then: (Boolean) -> Unit = {}) {
+        val store = reports ?: return then(false)
+        scope.launch {
+            val clean = report.copy(note = report.note.take(ReplyReport.NOTE_MAX_CHARS))
+            val ok = withContext(io) {
+                runCatching { store.save(clean) }.onFailure { Log.w(TAG, "report not saved", it) }.isSuccess
+                    .also { readReports() }
+            }
+            say(if (ok) "report saved on this phone" else "could not save the report")
+            then(ok)
+        }
+    }
+
+    fun deleteReport(id: String) {
+        val store = reports ?: return
+        scope.launch {
+            val ok = withContext(io) { store.delete(id).also { readReports() } }
+            say(if (ok) "report deleted" else "could not delete the report")
+        }
+    }
+
+    /** Deletes every saved report. */
+    fun clearReports() {
+        val store = reports ?: return
+        scope.launch {
+            val ok = withContext(io) { store.clearAll().also { readReports() } }
+            say(if (ok) "reports deleted" else "some reports could not be deleted")
+        }
+    }
+
+    private fun readReports() {
+        val store = reports ?: return
+        _state.update { it.copy(reports = store.list()) }
+    }
+
     private fun say(text: String) {
         _messages.tryEmit(text)
     }
@@ -841,6 +893,9 @@ class AssistantController(
                     ContextCompat.checkSelfPermission(app, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                 },
                 micRefusal = { MicArbiter.refusal(MicOwnership.Owner.ASSISTANT) },
+                reports = ReplyReportStore(File(app.filesDir, "assistant-reports")),
+                appVersion = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }
+                    .getOrNull().orEmpty(),
             ).also { it.attach(app) }
         }
 

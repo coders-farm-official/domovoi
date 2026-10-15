@@ -24,7 +24,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.assistant.AssistantUi
 import com.domovoi.app.assistant.ModelCatalog
@@ -60,7 +64,8 @@ internal fun AssistantSetupPanel(ui: AssistantUi, actions: AssistantActions) {
     val done = downloading?.bytesDone ?: missing?.bytesDone ?: 0L
 
     DomovoiCard(Modifier.fillMaxWidth()) {
-        Text("Set up the assistant on this phone", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text("Set up the assistant on this phone", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
+            modifier = Modifier.asHeading())
         Text(
             "Domovoi can answer right here, with no server and no internet, once its language model is " +
                 "on the phone. It is a one-time download; after that nothing you ask leaves the phone.",
@@ -86,7 +91,10 @@ internal fun AssistantSetupPanel(ui: AssistantUi, actions: AssistantActions) {
                     "licence",
                     style = MaterialTheme.typography.labelMedium,
                     color = Domovoi.colors.brand,
-                    modifier = Modifier.clickable { openWebLink(context, m.licenseUrl) }.padding(vertical = 2.dp),
+                    modifier = Modifier
+                        .clickable(onClickLabel = "open in the browser", role = Role.Button) { openWebLink(context, m.licenseUrl) }
+                        .semantics { contentDescription = "${m.name} licence" }
+                        .padding(vertical = 2.dp),
                 )
             }
         }
@@ -100,7 +108,7 @@ internal fun AssistantSetupPanel(ui: AssistantUi, actions: AssistantActions) {
             Spacer(Modifier.height(6.dp))
             LinearProgressIndicator(
                 progress = { fraction(done, ui.totalBytes) },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "download progress" },
                 color = Domovoi.colors.brand,
                 trackColor = Domovoi.colors.sunken,
             )
@@ -142,8 +150,12 @@ internal fun AssistantSetupPanel(ui: AssistantUi, actions: AssistantActions) {
         }
 
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(checked = ui.allowMobileData, onCheckedChange = actions.setAllowMobileData)
+        // One control for a screen reader: the row toggles, labelled by its text.
+        Row(
+            Modifier.toggleable(value = ui.allowMobileData, role = Role.Switch, onValueChange = actions.setAllowMobileData),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Switch(checked = ui.allowMobileData, onCheckedChange = null)
             Column(Modifier.padding(start = 10.dp)) {
                 Text("allow mobile data", style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fg)
                 Text(

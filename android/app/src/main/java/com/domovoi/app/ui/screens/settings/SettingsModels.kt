@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.screens.settings
 
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -71,7 +73,8 @@ internal fun PanelCard(
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     DomovoiCard(modifier = modifier.fillMaxWidth()) {
-        Text(title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
+            modifier = Modifier.semantics { heading() })
         if (sub != null) {
             Text(
                 sub,

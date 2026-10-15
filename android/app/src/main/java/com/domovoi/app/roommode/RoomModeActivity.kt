@@ -25,6 +25,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,7 +62,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -289,10 +297,19 @@ fun RoomDisplay(
                 MicChip(open = status?.micOpen == true && running, live = status?.micLive == true, muted = status?.muted == true, red = red)
             }
             Spacer(Modifier.height(gap))
-            Text(label, color = Text1, fontSize = if (compact) 30.sp else 40.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+            Text(label, color = Text1, fontSize = if (compact) 30.sp else 40.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() })
             Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(now)), color = Text2, fontSize = if (compact) 40.sp else 56.sp, fontWeight = FontWeight.Light)
             Spacer(Modifier.height(gap))
-            Box(Modifier.size(ringSize).semantics { contentDescription = "room state: ${RoomStatusText.label(ring)}" }, contentAlignment = Alignment.Center) {
+            // One node for a screen reader (the drawn ring and its word), read
+            // out as the room changes state.
+            Box(
+                Modifier.size(ringSize).clearAndSetSemantics {
+                    contentDescription = roomStateDescription(RoomStatusText.label(ring))
+                    liveRegion = LiveRegionMode.Polite
+                },
+                contentAlignment = Alignment.Center,
+            ) {
                 Canvas(Modifier.fillMaxSize()) {
                     val stroke = 10.dp.toPx()
                     when (ring) {
@@ -314,7 +331,11 @@ fun RoomDisplay(
             }
             if (approvalCode != null && running) {
                 Spacer(Modifier.height(12.dp))
-                Text(approvalCode.chunked(3).joinToString(" "), color = amber, fontSize = if (compact) 40.sp else 48.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    approvalCode.chunked(3).joinToString(" "), color = amber, fontSize = if (compact) 40.sp else 48.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clearAndSetSemantics { contentDescription = approvalCodeDescription(approvalCode) },
+                )
                 BigButton("check now", Dim, Text1, compact, onCheckNow)
             }
             Spacer(Modifier.height(gap))
@@ -327,11 +348,17 @@ fun RoomDisplay(
                 BigButton("resume", amber, Color.Black, compact, onResume)
             }
             Spacer(Modifier.height(gap * 2 / 3))
+            // A tap does nothing (a room is not left by accident); a long press,
+            // or a screen reader's double-tap-and-hold or its "exit room mode"
+            // action, asks for the phone's unlock.
             Box(
                 Modifier.clip(RoundedCornerShape(12.dp)).border(1.dp, Dim, RoundedCornerShape(12.dp))
-                    .combinedClickable(onClick = {}, onLongClick = onExit)
+                    .combinedClickable(onClick = {}, onLongClick = onExit, onLongClickLabel = EXIT_ACTION, role = Role.Button)
                     .padding(horizontal = 20.dp, vertical = 12.dp)
-                    .semantics { contentDescription = "exit room mode (long press)" },
+                    .semantics {
+                        contentDescription = "exit room mode (long press)"
+                        customActions = listOf(CustomAccessibilityAction(EXIT_ACTION) { onExit(); true })
+                    },
             ) {
                 Text("exit room mode · hold", color = Text2, fontSize = 14.sp)
             }
@@ -352,7 +379,10 @@ private fun MicChip(open: Boolean, live: Boolean, muted: Boolean, red: Color) {
     }
     Row(
         Modifier.clip(RoundedCornerShape(50)).border(1.dp, color, RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 6.dp)
-            .semantics { contentDescription = if (off) "microphone off" else if (live) "microphone live" else "microphone listening for the wake word" },
+            .clearAndSetSemantics {
+                contentDescription = micChipDescription(off, live)
+                liveRegion = LiveRegionMode.Polite
+            },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(10.dp).clip(CircleShape).background(if (live && !off) red else color))
@@ -369,12 +399,23 @@ private fun MicChip(open: Boolean, live: Boolean, muted: Boolean, red: Color) {
 private fun BigButton(text: String, bg: Color, fg: Color, compact: Boolean, onClick: () -> Unit) {
     Box(
         Modifier.fillMaxWidth(0.7f).height(if (compact) 56.dp else 72.dp).clip(RoundedCornerShape(36.dp)).background(bg)
-            .combinedClickableCompat(onClick),
+            .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Text(text, color = fg, fontSize = 24.sp, fontWeight = FontWeight.Medium)
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-private fun Modifier.combinedClickableCompat(onClick: () -> Unit): Modifier = this.combinedClickable(onClick = onClick)
+/** The room display's words for a screen reader (RoomModeA11yTest). */
+internal const val EXIT_ACTION = "exit room mode"
+
+internal fun roomStateDescription(label: String): String = "room state: $label"
+
+internal fun micChipDescription(off: Boolean, live: Boolean): String = when {
+    off -> "microphone off"
+    live -> "microphone live"
+    else -> "microphone listening for the wake word"
+}
+
+/** "123456" read digit by digit, as it is typed on the dashboard. */
+internal fun approvalCodeDescription(code: String): String = "approval code " + code.toList().joinToString(" ")
