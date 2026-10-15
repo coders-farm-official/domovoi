@@ -99,6 +99,7 @@ fun PeopleScreen() {
                         onBack = { selectedId = null },
                         onForgotten = { selectedId = null; peopleState.refresh() },
                         modifier = Modifier.fillMaxSize(),
+                        onRenamed = { peopleState.refresh() },
                     )
                 }
                 else -> {
@@ -141,6 +142,7 @@ fun PeopleScreen() {
                             onBack = {},
                             onForgotten = { selectedId = null; peopleState.refresh() },
                             modifier = Modifier.fillMaxSize(),
+                            onRenamed = { peopleState.refresh() },
                         )
                         else -> DomovoiCard(Modifier.fillMaxSize()) {
                             EmptyState(
@@ -281,9 +283,10 @@ private fun RosterRow(p: Person, active: Boolean, onClick: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (live) StatusDot(Tone.Ok, live = true)
+                if (p.namesakes > 0) StatusDot(Tone.Warn)
             }
             Text(
-                "${relTime(p.last_seen_at)} · ${p.presence_tier ?: "high"}",
+                "${rosterNameTag(p)}${relTime(p.last_seen_at)} · ${p.presence_tier ?: "high"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = Domovoi.colors.fgMuted,
             )
