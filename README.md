@@ -3,12 +3,35 @@
        alt="Domovoi, the open-source voice assistant: the amber cat answering &quot;Hey Domovoi&quot;. Your voice stays home, local and privacy-first. github.com/coders-farm-official/domovoi">
 </p>
 
-# Domovoi
+<h1 align="center">Domovoi</h1>
 
-**A self-hosted, local-first voice assistant for your home.**
+<p align="center">
+  <strong>A self-hosted, local-first voice assistant for your home.</strong><br>
+  Made in the open by <a href="https://codersfarm.org">Coders Farm</a>, a nonprofit
+  in Lansing, Michigan that teaches people to code for free.
+</p>
 
-Made in the open by [Coders Farm](https://codersfarm.org), a nonprofit in
-Lansing, Michigan that teaches people to code for free.
+<p align="center">
+  <img alt="status: early, building in public" src="https://img.shields.io/badge/status-early%2C%20building%20in%20public-F2A618?style=flat-square&labelColor=1F1A14">
+  <img alt="your voice: stays home" src="https://img.shields.io/badge/your%20voice-stays%20home-F2A618?style=flat-square&labelColor=1F1A14">
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
+  <br>
+  <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">
+  <img alt="built with: Python, Kotlin" src="https://img.shields.io/badge/built%20with-Python%20%C2%B7%20Kotlin-F2A618?style=flat-square&labelColor=1F1A14">
+</p>
+
+<p align="center">
+  <a href="DISCORD_INVITE_URL"><img alt="Join us on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
+  <a href="EMAIL_SIGNUP_URL"><img alt="Get updates by email" src="https://img.shields.io/badge/Get%20updates%20by%20email-F2A618?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <a href="#status-and-roadmap">Status and roadmap</a> ·
+  <a href="https://learn.codersfarm.org">Learn to code, free</a> ·
+  <a href="https://donate.codersfarm.org">Support Coders Farm</a>
+</p>
+<!-- TODO(owner): replace DISCORD_INVITE_URL and EMAIL_SIGNUP_URL (in the buttons
+     above and in Status and roadmap) with the real links before merging. -->
 
 Domovoi runs entirely on your own hardware: a server on your network does the
 listening, thinking, and speaking, and small Raspberry Pi satellites put a
@@ -26,13 +49,10 @@ radio (via the bundled [radio plugin](plugins/radio)). Everything else is a
 plugin away — installed from the dashboard as a zip upload or a GitHub URL.
 
 > **Status: early, and built in public.** Domovoi works today if you're
-> comfortable running your own server. Easier ways in, starting with an
-> assistant that runs entirely on your phone, are what we're building next:
-> see [Status and roadmap](#status-and-roadmap). Follow along on
-> [Discord](DISCORD_INVITE_URL) or by [email](EMAIL_SIGNUP_URL), and ask
-> questions in [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
-<!-- TODO(owner): replace DISCORD_INVITE_URL and EMAIL_SIGNUP_URL above (and in
-     Status and roadmap) with the real links before merging. -->
+> comfortable running your own server, and the easier ways in (an assistant
+> that runs on your phone, a Windows installer) are in early builds: see
+> [Status and roadmap](#status-and-roadmap). Ask questions in
+> [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
 > **Why "Domovoi"?** In Slavic folklore, a *domovoi* is the guardian spirit of
 > the household — a small, usually benevolent creature that lives behind the
@@ -75,13 +95,21 @@ Domovoi is early, and we build it in public. Here's where it stands.
   phone. With no server it still plays your phone's own music, videos and
   files.
 
+**In early builds**
+
+- **An assistant on your phone, no server needed.** The Android app's
+  Assistant tab runs a model on the phone itself (Gemma 4 E2B on LiteRT-LM)
+  for text chat and push-to-talk voice. It needs a 64-bit phone with 8 GB of
+  memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
+- **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
+  server inside WSL2 on a Windows 11 PC ([Windows installer](docs/WINDOWS_HOST.md)).
+
 **Coming next**
 
-1. **An assistant on your phone, no server needed.** Voice and chat in the
-   Android app, answered by a model running on the phone itself, still working
-   in airplane mode.
-2. **One download for Windows.** An installer that turns the household gaming
-   PC into a Domovoi server. It's being built now.
+1. **The phone assistant on Google Play,** finished and still working in
+   airplane mode.
+2. **The Windows installer out of test,** so one download turns the household
+   gaming PC into a Domovoi server.
 3. **A voice in every room with what you already own.** Satellites on an old
    laptop running Linux or on an old Android phone or tablet, alongside the
    Raspberry Pi, plus a step-by-step guide for each.
