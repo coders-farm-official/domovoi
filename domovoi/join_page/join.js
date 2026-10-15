@@ -145,10 +145,17 @@
     }
     text('version', app.release.version_name);
     show('skip-install', !!(code && !code.bad));
-    text('picture-4', code && !code.bad
-      ? '4. Come back to this page in the browser for step 2.'
-      : '4. Open Domovoi from the home screen.');
+    var caption = $('picture-4');
+    var num = document.createElement('b');
+    num.textContent = '4.';
+    caption.textContent = '';
+    caption.appendChild(num);
+    caption.appendChild(document.createTextNode(code && !code.bad
+      ? ' Come back to this page in the browser for step 2.'
+      : ' Open Domovoi from the home screen.'));
     show('downloads', true);
+    // A household phone's next step, once there is an app to install.
+    show('step-connect', !code);
   }
 
   function main() {
@@ -167,7 +174,6 @@
       show('step-room', true);
       show('missing-app', missingApp);
     }
-    if (!code || code.bad) show('step-connect', !code);
     get('/v1/android-app', function (err, app) { renderApp(err, app, code); });
   }
 

@@ -410,3 +410,88 @@ def test_write_then_check_is_what_the_release_script_runs(tmp_path):
     assert aa._main(["write", str(tmp_path / "bad.json"), str(signed), "--version-name", "1.0; x",
                      "--version-code", "99", "--cert", RELEASE_CERT]) == 2
     assert not (tmp_path / "bad.json").exists()
+
+
+# ─── the join page's script (domovoi/join_page/join.js) ───────────────────
+
+JOIN_HARNESS = Path(__file__).with_name("join_page_harness.js")
+ANDROID_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36"
+PAYLOAD = ("domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"
+           "&room=Kid%27s%20%3Cb%3ERoom%3C%2Fb%3E")
+
+
+def _app_status(ready=(True, True), release=True):
+    if not release:
+        return {"release": None, "apks": [], "ready": False}
+    apks = [{"abi": abi, "file": aa.file_name("1.0.0", abi), "size": size, "ready": r,
+             "path": aa.FILES_PATH + aa.file_name("1.0.0", abi)}
+            for (abi, size), r in zip((("arm64-v8a", 79_409_596), ("armeabi-v7a", 47_927_674)), ready)]
+    return {"release": {"version_name": "1.0.0", "version_code": 1, "cert_sha256": "ab" * 32},
+            "apks": apks, "ready": all(ready)}
+
+
+def _join(href, app, ua=ANDROID_UA, platform="Linux armv81") -> dict:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    assert node, "node is required to run the join page's script"
+    scenario = json.dumps({"href": href, "ua": ua, "platform": platform, "app": app})
+    proc = subprocess.run([node, str(JOIN_HARNESS), str(aa.REPO), scenario],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+def test_the_join_page_offers_the_app_then_opens_it_as_the_room():
+    page = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status())
+    assert page["doc_title"] == "Domovoi room: Kid's <b>Room</b>", "the name is text, never markup"
+    assert page["room-name"]["text"] == "“Kid's <b>Room</b>”" and not page["step-room"]["hidden"]
+    assert page["dl-main"]["href"] == "/v1/android-app/files/domovoi-1.0.0-arm64-v8a.apk"
+    assert page["dl-other"]["href"] == "/v1/android-app/files/domovoi-1.0.0-armeabi-v7a.apk"
+    assert "most phones" in page["dl-main-sub"]["text"] and "79 MB" in page["dl-main-sub"]["text"]
+    link = page["open-room"]["href"]
+    rest = PAYLOAD.split(":", 1)[1]
+    assert link.startswith("intent:" + rest + "#Intent;scheme=domovoi-room;package=com.domovoi.app;")
+    assert link.endswith(";end") and link.count("#") == 1, "the fallback is encoded inside the intent"
+    fallback = link.split("S.browser_fallback_url=", 1)[1][: -len(";end")]
+    from urllib.parse import unquote
+
+    assert unquote(fallback) == "http://192.168.0.117:6370/join?app=missing#" + PAYLOAD
+    assert page["not-android"]["hidden"] and page["missing-app"]["hidden"] and page["bad-code"]["hidden"]
+    assert page["step-connect"]["hidden"], "a room's page has no household step"
+
+
+def test_a_32_bit_browser_gets_the_32_bit_app_first_and_firefox_the_plain_link():
+    page = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status(), platform="Linux armv7l")
+    assert page["dl-main"]["href"].endswith("armeabi-v7a.apk") and page["dl-other"]["href"].endswith("arm64-v8a.apk")
+    assert "32-bit" in page["dl-main-sub"]["text"]
+    ff = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status(),
+               ua="Mozilla/5.0 (Android 10; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0")
+    assert ff["open-room"]["href"] == PAYLOAD
+
+
+@pytest.mark.parametrize("app,words", [
+    (_app_status(release=False), "no Domovoi app release yet"),
+    (_app_status(ready=(False, False)), "hasn’t got the app yet"),
+    (None, "Couldn’t ask this server"),
+], ids=["no_release", "not_on_the_server", "server_error"])
+def test_without_an_app_to_offer_the_page_says_why_and_offers_nothing(app, words):
+    page = _join("http://192.168.0.117:6370/join#" + PAYLOAD, app)
+    assert words in page["install-state"]["text"] and page["install-state"]["cls"] == "state warn"
+    assert page["downloads"]["hidden"]
+    if app is not None:
+        assert "already on this phone, go on to step 2" in page["install-state"]["text"]
+    assert not page["step-room"]["hidden"], "a phone that has the app can still go on"
+
+
+def test_the_household_page_and_a_bad_code():
+    page = _join("http://192.168.0.117:6370/join", _app_status(ready=(True, False)))
+    assert page["doc_title"] == "" and page["step-room"]["hidden"] and not page["step-connect"]["hidden"]
+    assert page["dl-main"]["href"].endswith("arm64-v8a.apk") and page["dl-other-line"]["hidden"]
+    bad = _join("http://192.168.0.117:6370/join#domovoi-room:1?nope", _app_status())
+    assert not bad["bad-code"]["hidden"] and bad["step-room"]["hidden"]
+    missing = _join("http://192.168.0.117:6370/join?app=missing#" + PAYLOAD, _app_status())
+    assert not missing["missing-app"]["hidden"]
+    desktop = _join("http://192.168.0.117:6370/join", _app_status(), ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    assert not desktop["not-android"]["hidden"]
