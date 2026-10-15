@@ -4,7 +4,8 @@
     "Settings -> Satellites -> 'Add a spare device' shows in its install command and",
     "its QR code. Read by satellite/tests/test_enrolment.py (satellite/enrolment.py)",
     "and the Android room mode's Kotlin parser tests. Fingerprints are placeholders.",
-    "Documented in docs/uml/satellite-protocol.md, 'Enrolling a spare device'."
+    "Documented in docs/uml/satellite-protocol.md, 'Enrolling a spare device'.",
+    "Since 2026-10-15 the QR code is a join link (<core>/join#<payload>, grammar.join_link); the join_link cases are in valid and invalid like any other, and build_join pins what the dashboard builds."
   ],
   "fixture_version": 1,
   "grammar": {
@@ -22,7 +23,8 @@
     "room_id": "the core's room-id rule ^[a-z][a-z0-9_]{0,31}$: NFKD, drop combining marks (Mn) and the apostrophes U+0027 and U+2019, lower-case A-Z, keep a-z and 0-9, every other run of characters becomes one '_', none at either end; an id starting with a digit gets 'room_' in front; empty or over 32 characters is bad_room",
     "plus": "'+' is a plus sign, never a space: this is RFC 3986, not HTML form decoding (java.net.URLDecoder is the wrong tool); the fingerprint is base64 and carries '+', which the builder writes as %2B and a person may type raw",
     "reason_order": "the first that applies: not_enrolment (no 'domovoi-room:' prefix); malformed when over max_payload_chars; the version (malformed or unsupported_version); the fields left to right (malformed); then missing_core, missing_fp, missing_room; then bad_core, not_home_network, bad_fp, bad_room",
-    "build": "the builder trims the typed address, fingerprint and room name, then percent-encodes every UTF-8 byte except A-Z a-z 0-9 - . _ ~ with upper-case hex, in the order core, fp, room"
+    "build": "the builder trims the typed address, fingerprint and room name, then percent-encodes every UTF-8 byte except A-Z a-z 0-9 - . _ ~ with upper-case hex, in the order core, fp, room",
+    "join_link": "the link the dashboard's QR code carries: <core>/join#<payload>, where <core> is the payload's own normalised core. A text starting http:// or https:// (ASCII case-insensitive, after the usual trim) is read as one: no '#', or the part before the first '#' not ending in /join, is not_enrolment; that part longer than 256 + 5 characters is malformed; then the fragment is parsed as a payload (every rule above, nothing trimmed); then the part before '#' must equal the payload's core + '/join', ASCII case-insensitively, else malformed. A phone's camera opens the link in its browser (the server's join page); the app's scanner takes either form"
   },
   "reasons": [
     "not_enrolment",
@@ -336,6 +338,62 @@
         "room": " Office ",
         "room_id": "office"
       }
+    },
+    {
+      "name": "join_link",
+      "about": "What the dashboard's QR code carries.",
+      "payload": "http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "expect": {
+        "core": "http://192.168.0.117:6370",
+        "ws_url": "ws://192.168.0.117:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Kitchen",
+        "room_id": "kitchen"
+      }
+    },
+    {
+      "name": "join_link_upper_case_scheme_and_path",
+      "payload": "HTTP://192.168.0.117:6370/JOIN#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "expect": {
+        "core": "http://192.168.0.117:6370",
+        "ws_url": "ws://192.168.0.117:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Kitchen",
+        "room_id": "kitchen"
+      }
+    },
+    {
+      "name": "join_link_trimmed",
+      "payload": "  http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen\n",
+      "expect": {
+        "core": "http://192.168.0.117:6370",
+        "ws_url": "ws://192.168.0.117:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Kitchen",
+        "room_id": "kitchen"
+      }
+    },
+    {
+      "name": "join_link_ipv6",
+      "payload": "http://[fd00::17]:6370/join#domovoi-room:1?core=http%3A%2F%2F%5Bfd00%3A%3A17%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den",
+      "expect": {
+        "core": "http://[fd00::17]:6370",
+        "ws_url": "ws://[fd00::17]:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Den",
+        "room_id": "den"
+      }
+    },
+    {
+      "name": "join_link_local_name",
+      "payload": "http://domovoi.local:6370/join#domovoi-room:1?core=http%3A%2F%2Fdomovoi.local%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kid%27s%20Room",
+      "expect": {
+        "core": "http://domovoi.local:6370",
+        "ws_url": "ws://domovoi.local:6370",
+        "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+        "room": "Kid's Room",
+        "room_id": "kids_room"
+      }
     }
   ],
   "invalid": [
@@ -642,6 +700,61 @@
       "name": "room_format_char",
       "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kit%E2%80%8Dchen",
       "reason": "bad_room"
+    },
+    {
+      "name": "join_link_no_fragment",
+      "payload": "http://192.168.0.117:6370/join",
+      "reason": "not_enrolment"
+    },
+    {
+      "name": "join_link_other_path",
+      "payload": "http://192.168.0.117:6370/other#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_enrolment"
+    },
+    {
+      "name": "join_link_with_a_query",
+      "payload": "http://192.168.0.117:6370/join?app=missing#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_enrolment"
+    },
+    {
+      "name": "join_link_fragment_not_a_code",
+      "payload": "http://192.168.0.117:6370/join#hello",
+      "reason": "not_enrolment"
+    },
+    {
+      "name": "join_link_other_server",
+      "payload": "http://192.168.0.200:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "malformed"
+    },
+    {
+      "name": "join_link_other_port",
+      "payload": "http://192.168.0.117:6369/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "malformed"
+    },
+    {
+      "name": "join_link_https_for_an_http_core",
+      "payload": "https://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "malformed"
+    },
+    {
+      "name": "join_link_address_too_long",
+      "payload": "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.lan/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "malformed"
+    },
+    {
+      "name": "join_link_bad_version",
+      "payload": "http://192.168.0.117:6370/join#domovoi-room:2?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "unsupported_version"
+    },
+    {
+      "name": "join_link_two_fragments",
+      "payload": "http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen#x",
+      "reason": "malformed"
+    },
+    {
+      "name": "join_link_public_core",
+      "payload": "http://8.8.8.8:6370/join#domovoi-room:1?core=http%3A%2F%2F8.8.8.8%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "reason": "not_home_network"
     }
   ],
   "build": [
@@ -668,6 +781,16 @@
       "fp": "SHA256:xFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc",
       "room": "  Office  ",
       "payload": "domovoi-room:1?core=https%3A%2F%2Fdomovoi.home.arpa%3A6370&fp=SHA256%3AxFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc&room=Office"
+    }
+  ],
+  "build_join": [
+    {
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "join_link": "http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen"
+    },
+    {
+      "payload": "domovoi-room:1?core=http%3A%2F%2F%5Bfd00%3A%3A17%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den",
+      "join_link": "http://[fd00::17]:6370/join#domovoi-room:1?core=http%3A%2F%2F%5Bfd00%3A%3A17%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den"
     }
   ]
 }

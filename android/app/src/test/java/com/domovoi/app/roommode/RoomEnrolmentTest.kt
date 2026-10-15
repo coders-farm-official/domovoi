@@ -95,6 +95,23 @@ class RoomEnrolmentTest {
         }
     }
 
+    /** The QR code is a join link (`<core>/join#<payload>`): what the app's
+     *  scanner reads from it is exactly what the bare payload gives. */
+    @Test
+    fun theDashboardsJoinLinkParsesLikeItsPayload() {
+        val cases = fixture["build_join"] as JsonArray
+        assertTrue(cases.isNotEmpty())
+        for (case in cases) {
+            val b = case.jsonObject
+            val link = RoomEnrolment.parse(b["join_link"]!!.jsonPrimitive.content)
+            val bare = RoomEnrolment.parse(b["payload"]!!.jsonPrimitive.content)
+            if (link !is RoomEnrolment.Result.Ok) fail("${b["join_link"]} refused: $link")
+            assertEquals(bare, link)
+        }
+        val names = (fixture["valid"] as JsonArray).map { it.jsonObject["name"]!!.jsonPrimitive.content }
+        assertTrue("the fixture has join-link cases", names.any { it.startsWith("join_link") })
+    }
+
     @Test
     fun aNameTypedOnThePhoneFollowsTheSameRules() {
         assertNull(RoomEnrolment.typedRoomName("  Living Room "))

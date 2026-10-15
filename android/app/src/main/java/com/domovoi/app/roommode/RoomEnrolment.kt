@@ -20,6 +20,10 @@ import java.text.Normalizer
  * makes the first connect safe — the phone refuses any server that cannot
  * prove that key ([RoomIdentity]).
  *
+ * The dashboard's QR code carries the payload inside a join link,
+ * `<core>/join#<payload>`, so a phone's own camera opens the server's join
+ * page (which hands out this app); [RoomEnrolment.parse] takes either form.
+ *
  * A strict, line-for-line port of the reference parser,
  * `satellite/enrolment.py` (wf/sat-pc), and held to the same contract,
  * `docs/uml/spare-device-enrol-fixture.json`: the same normalised values,
@@ -43,6 +47,9 @@ data class Enrolment(
 object RoomEnrolment {
     const val SCHEME = "domovoi-room"
     const val VERSION = "1"
+
+    /** The server's join page: the path of the link the dashboard's QR carries. */
+    const val JOIN_PATH = "/join"
     const val MAX_PAYLOAD_LEN = 1024
     const val MAX_CORE_LEN = 256
 
@@ -100,6 +107,33 @@ object RoomEnrolment {
     private fun parseOrThrow(payload: String): Enrolment {
         // A paste brings a newline or a space along; only those are trimmed.
         val text = payload.trim(' ', '\t', '\r', '\n')
+        val head = asciiLower(text.take(8))
+        if (head.startsWith("http://") || head.startsWith("https://")) return parseJoinLink(text)
+        return parsePayload(text)
+    }
+
+    /**
+     * The join link the dashboard's QR code carries, `<core>/join#<payload>`
+     * (`satellite/enrolment.py` `join_link`): a phone's camera opens it in
+     * the browser, where the server's join page offers the app and then
+     * opens it here; this app's own scanner reads the payload out of it.
+     * The part before `#` must be exactly the payload's core + `/join`.
+     */
+    private fun parseJoinLink(text: String): Enrolment {
+        val hash = text.indexOf('#')
+        val base = if (hash < 0) text else text.substring(0, hash)
+        if (hash < 0 || !asciiLower(base).endsWith(JOIN_PATH)) {
+            throw Refused(Reason.NOT_ENROLMENT, "this link is not a Domovoi room code (<server>/join#$SCHEME:…)")
+        }
+        if (base.length > MAX_CORE_LEN + JOIN_PATH.length) throw Refused(Reason.MALFORMED, "the link's server address is too long")
+        val enrolment = parsePayload(text.substring(hash + 1))
+        if (asciiLower(base) != asciiLower(enrolment.coreUrl + JOIN_PATH)) {
+            throw Refused(Reason.MALFORMED, "the link's server is not the one its room code names")
+        }
+        return enrolment
+    }
+
+    private fun parsePayload(text: String): Enrolment {
         val colon = text.indexOf(':')
         if (colon < 0 || !asciiLower(text.substring(0, colon)).equals(SCHEME)) {
             throw Refused(Reason.NOT_ENROLMENT, "this is not a Domovoi room code (it starts with $SCHEME:)")
