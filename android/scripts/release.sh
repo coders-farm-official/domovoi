@@ -177,10 +177,13 @@ rm -rf "$signed"; mkdir -p "$signed"
 for abi in "${ABIS[@]}"; do
   name="domovoi-$version_name-$abi.apk"
   say "signing $name…"
-  "$java" -jar "$apksigner_jar" sign --ks "$keystore" --ks-key-alias "$alias_name" \
-    --ks-pass env:DOMOVOI_RELEASE_KS_PASS --key-pass env:DOMOVOI_RELEASE_KEY_PASS \
-    --v4-signing-enabled false --out "$signed/$name" "$out_unsigned/app-$abi-release-unsigned.apk" \
-    >/dev/null || die "signing $name failed (wrong password or alias?)"
+  if ! err="$("$java" -jar "$apksigner_jar" sign --ks "$keystore" --ks-key-alias "$alias_name" \
+      --ks-pass env:DOMOVOI_RELEASE_KS_PASS --key-pass env:DOMOVOI_RELEASE_KEY_PASS \
+      --v4-signing-enabled false --out "$signed/$name" "$out_unsigned/app-$abi-release-unsigned.apk" 2>&1 >/dev/null)"; then
+    # apksigner's own first line says why (it never prints a password).
+    printf '%s\n' "$err" | grep -m1 -E 'ERROR|Exception|Failed' >&2 || true
+    die "signing $name failed (wrong password or alias?)"
+  fi
 done
 unset DOMOVOI_RELEASE_KS_PASS DOMOVOI_RELEASE_KEY_PASS
 

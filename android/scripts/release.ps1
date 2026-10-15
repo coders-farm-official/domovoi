@@ -66,11 +66,19 @@ function Say([string]$message) { Write-Host "release: $message" }
 # Run a native program; its output lines (stdout and stderr, as text), or
 # $null when it failed. Windows PowerShell turns a redirected stderr line
 # into an error, which 'Stop' would make fatal, so this scope continues.
+$script:LastToolOutput = @()
 function Invoke-Tool([string]$exe, [string[]]$arguments) {
     $ErrorActionPreference = 'Continue'
     $out = & $exe @arguments 2>&1
+    $script:LastToolOutput = @($out | ForEach-Object { "$_" })
     if ($LASTEXITCODE -ne 0) { return $null }
-    return , @($out | ForEach-Object { "$_" })
+    return , $script:LastToolOutput
+}
+
+# The first line of the last tool's output that says why it failed.
+function Show-ToolError {
+    $why = $script:LastToolOutput | Where-Object { $_ -match 'ERROR|Exception|Failed|failed' } | Select-Object -First 1
+    if ($why) { Write-Host "  $why" }
 }
 
 # The exit code of a native program, its output thrown away.
@@ -220,7 +228,7 @@ try {
             '--ks-pass', 'env:DOMOVOI_RELEASE_KS_PASS', '--key-pass', 'env:DOMOVOI_RELEASE_KEY_PASS',
             '--v4-signing-enabled', 'false', '--out', (Join-Path $signed $name),
             (Join-Path $outUnsigned "app-$abi-release-unsigned.apk"))
-        if ($null -eq $result) { Die "signing $name failed (wrong password or alias?)" }
+        if ($null -eq $result) { Show-ToolError; Die "signing $name failed (wrong password or alias?)" }
     }
 } finally {
     Remove-Item Env:DOMOVOI_RELEASE_KS_PASS -ErrorAction SilentlyContinue
@@ -232,7 +240,7 @@ $cert = $null
 foreach ($abi in $Abis) {
     $apk = Join-Path $signed "domovoi-$versionName-$abi.apk"
     $report = Invoke-Tool $java @('-jar', $apksignerJar, 'verify', '--verbose', '--print-certs', '--min-sdk-version', '26', $apk)
-    if ($null -eq $report) { Die "apksigner does not verify $apk" }
+    if ($null -eq $report) { Show-ToolError; Die "apksigner does not verify $apk" }
     if (-not ($report -contains 'Verified using v2 scheme (APK Signature Scheme v2): true')) { Die "$apk has no v2 signature (Android 8 needs it)" }
     if (-not ($report -contains 'Number of signers: 1')) { Die "$apk must have exactly one signer" }
     if (-not ($report -contains 'Signer #1 key algorithm: RSA')) {
@@ -256,10 +264,11 @@ $staged = Join-Path $signed 'release.json'
 $published = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 if ($null -eq (Invoke-Tool $python @('-m', 'domovoi.android_app', 'write', $staged, $signed, '--version-name', $versionName,
         '--version-code', "$versionCode", '--cert', $cert, '--commit', $commit, '--published', $published))) {
+    $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }
     Die 'writing the manifest failed'
 }
 $checked = Invoke-Tool $python @('-m', 'domovoi.android_app', 'check', $staged, $signed)
-if ($null -eq $checked) { Die 'the server''s own check refuses these APKs' }
+if ($null -eq $checked) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'the server''s own check refuses these APKs' }
 $checked | ForEach-Object { Write-Host "  $_" }
 
 if ($NoPublish) {
@@ -288,7 +297,7 @@ Say "publishing $tag on $RepoSlug..."
 $assets = @($Abis | ForEach-Object { Join-Path $signed "domovoi-$versionName-$_.apk" }) + @(Join-Path $signed 'SHA256SUMS')
 $created = Invoke-Tool 'gh' (@('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $commit,
     '--title', "Domovoi for Android $versionName", '--notes-file', $notesFile))
-if ($null -eq $created) { Die 'gh release create failed' }
+if ($null -eq $created) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'gh release create failed' }
 $created | ForEach-Object { Write-Host "  $_" }
 
 Say 'checking the published files by their manifest URLs...'
