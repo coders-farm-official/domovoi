@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.ui.components.openWebLink
 import com.domovoi.app.ui.components.webLinkOrNull
 import com.domovoi.app.ui.theme.Domovoi
@@ -35,18 +36,30 @@ internal fun privacyPolicyLink(url: String = PRIVACY_POLICY_URL): String? =
  * dependency list (OpenSourceLicencesTest: no analytics, advertising or
  * crash-reporting library).
  */
-internal val PRIVACY_POINTS: List<String> = listOf(
+internal fun privacyPoints(assistant: Boolean): List<String> = listOfNotNull(
     "What the app keeps stays in its private storage on this phone, outside cloud backups and phone-to-phone " +
         "transfers, and goes when the app is uninstalled.",
-    "The on-device assistant answers on this phone: what you ask and what it replies never leave it. Its only " +
-        "network use is the model download you start.",
-    "The assistant opens the microphone only after you tap it, and never keeps the audio: a spoken question is " +
-        "kept as its words. Room mode, which you turn on yourself, listens for its wake word all the time and " +
-        "says what it sends before it starts.",
-    "Conversations, reply reports and problem reports stay on this phone until you delete them; nothing is sent " +
-        "unless you share it yourself.",
+    if (assistant) {
+        "The on-device assistant answers on this phone: what you ask and what it replies never leave it. Its only " +
+            "network use is the model download you start."
+    } else {
+        null
+    },
+    (if (assistant) {
+        "The assistant opens the microphone only after you tap it, and never keeps the audio: a spoken question is " +
+            "kept as its words. "
+    } else {
+        ""
+    }) + "Room mode, which you turn on yourself, listens for its wake word all the time and says what it sends " +
+        "before it starts.",
+    (if (assistant) "Conversations, reply reports and problem reports stay" else "Problem reports stay") +
+        " on this phone until you delete them; nothing is sent unless you share it yourself.",
     "There is no analytics, advertising or crash-reporting service in the app.",
 )
+
+/** This install's points: the assistant's only where it is in the app
+ *  (64-bit installs, [AssistantSupport]). */
+internal val PRIVACY_POINTS: List<String> get() = privacyPoints(AssistantSupport.available)
 
 /** Settings → About (and the local shell's settings): privacy, and the policy. */
 @Composable

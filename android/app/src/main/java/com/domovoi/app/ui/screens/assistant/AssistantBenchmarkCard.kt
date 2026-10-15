@@ -186,6 +186,7 @@ fun AssistantBenchmarkCard() {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .padding(top = 4.dp)
+                .heightIn(min = 48.dp)
                 .toggleable(value = ui.allowMobileData, role = Role.Switch, onValueChange = { bench.setAllowMobileData(it) }),
         ) {
             Switch(checked = ui.allowMobileData, onCheckedChange = null)

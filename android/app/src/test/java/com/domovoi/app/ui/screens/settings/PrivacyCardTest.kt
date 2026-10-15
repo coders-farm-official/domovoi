@@ -41,7 +41,22 @@ class PrivacyCardTest {
         }
         assertTrue(shown.toString(), "Privacy" in shown)
         PRIVACY_POINTS.forEach { assertTrue(it, it in shown) }
+        // On the JVM the assistant's engine is not loadable: the 32-bit wording.
+        assertEquals(privacyPoints(assistant = false), PRIVACY_POINTS)
         assertEquals(PRIVACY_POLICY_URL.isNotBlank(), "read the privacy policy" in shown)
+    }
+
+    /** Where the assistant is not in the install (a 32-bit phone or APK),
+     *  the card says nothing about it. */
+    @Test fun theAssistantsPointsOnlyWhereItIs() {
+        val with = privacyPoints(assistant = true)
+        val without = privacyPoints(assistant = false)
+        assertEquals(5, with.size)
+        assertEquals(4, without.size)
+        assertTrue(without.none { it.contains("assistant") || it.contains("Conversations") })
+        assertTrue(without.any { it.startsWith("Room mode, which you turn on yourself") })
+        assertTrue(with.any { it.startsWith("The assistant opens the microphone only after you tap it") })
+        assertTrue(with.any { it.startsWith("Conversations, reply reports and problem reports stay on this phone") })
     }
 
     @Test fun aboutAndTheLocalSettingsBothShowIt() {

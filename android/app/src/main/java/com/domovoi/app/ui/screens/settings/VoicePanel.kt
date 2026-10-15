@@ -1,5 +1,8 @@
 package com.domovoi.app.ui.screens.settings
 
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -211,8 +214,14 @@ internal fun VoiceCard() {
                 }
             }
             if (!ui.effectiveInstalled || ui.downloading) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = ui.allowMobileData, onCheckedChange = { voice.setAllowMobileData(it) })
+                // One control for a screen reader, 48 dp tall: the row toggles, labelled by its text.
+                Row(
+                    Modifier
+                        .heightIn(min = 48.dp)
+                        .toggleable(value = ui.allowMobileData, role = Role.Switch, onValueChange = { voice.setAllowMobileData(it) }),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Switch(checked = ui.allowMobileData, onCheckedChange = null)
                     Text("  allow mobile data", style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted)
                 }
             }

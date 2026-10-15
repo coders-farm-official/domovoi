@@ -5,7 +5,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,8 +18,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -27,6 +31,8 @@ import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** One open-source part of the app and its licence. [notices]: asset
  *  paths of the licence texts the app carries for it (shown on tap).
@@ -171,28 +177,38 @@ internal fun LibraryGroups(groups: List<Pair<LicenceRule, List<MavenLibrary>>>, 
 @Composable
 private fun NoticeToggle(path: String, open: String?, onOpen: (String?) -> Unit) {
     val context = LocalContext.current
-    Text(
-        (if (open == path) "hide " else "show ") + noticeLabel(path),
-        style = MaterialTheme.typography.labelMedium,
-        color = Domovoi.colors.brand,
-        modifier = Modifier
-            .clickable(role = Role.Button) { onOpen(if (open == path) null else path) }
-            .padding(vertical = 2.dp),
-    )
+    // 48 dp tall to touch (the accessibility minimum), however small it reads.
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button) { onOpen(if (open == path) null else path) },
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            (if (open == path) "hide " else "show ") + noticeLabel(path),
+            style = MaterialTheme.typography.labelMedium,
+            color = Domovoi.colors.brand,
+        )
+    }
     if (open == path) {
-        val text = remember(path) {
-            runCatching { context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) } }
-                .getOrElse { "(not in this build: ${it.message})" }
+        // Read and cut up off the main thread: some run to megabytes.
+        val chunks by produceState<List<String>?>(null, path) {
+            value = withContext(Dispatchers.IO) {
+                noticeChunks(
+                    runCatching { context.assets.open(path).use { it.readBytes().toString(Charsets.UTF_8) } }
+                        .getOrElse { "(not in this build: ${it.message})" },
+                )
+            }
         }
-        NoticeText(text)
+        chunks?.let { NoticeText(it) } ?: Text("loading…", style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
     }
 }
 
 /** A notice's text in a box of its own height: lazily, in chunks, as some
  *  run to megabytes (LiteRT-LM's third-party notice is 2 MB). */
 @Composable
-private fun NoticeText(text: String) {
-    val chunks = remember(text) { noticeChunks(text) }
+private fun NoticeText(chunks: List<String>) {
     LazyColumn(
         Modifier
             .fillMaxWidth()

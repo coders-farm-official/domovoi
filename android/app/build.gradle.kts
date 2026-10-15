@@ -436,6 +436,12 @@ abstract class OpenSourceTask : DefaultTask() {
             f.copyTo(File(root, "texts/$path"), overwrite = true)
         }
 
+        // A notice is kept once across all libraries: AndroidX's per-library
+        // LICENSE.txt files are the Apache-2.0 text, which texts/ already has.
+        fun norm(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+            .digest(bytes.toString(Charsets.UTF_8).replace(Regex("""\s+"""), " ").trim().toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        val seen = File(root, "texts").walkTopDown().filter { it.isFile }.map { norm(it.readBytes()) }.toMutableSet()
         val rows = artifacts.get().toSortedMap().map { (coord, artifact) ->
             val (group, name, version) = coord.split(':')
             val chain = poms.get()[coord].orEmpty().map { pom(File(it)) }
@@ -446,11 +452,9 @@ abstract class OpenSourceTask : DefaultTask() {
                         .filter { it.tagName == "license" }.map { it.text("name") to it.text("url") }
                 }?.takeIf { it.isNotEmpty() }
             }.orEmpty()
-            // The library's own notice files, each kept once.
-            val seen = mutableSetOf<String>()
+            // The library's own notice files, unless the same text is kept already.
             val kept = notices(File(artifact).readBytes()).mapNotNull { (entry, bytes) ->
-                val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-                if (!seen.add(hash)) return@mapNotNull null
+                if (!seen.add(norm(bytes))) return@mapNotNull null
                 val rel = "maven/$group/$name/" + entry.replace('!', '_').replace('/', '_')
                 File(root, rel).apply { parentFile.mkdirs() }.writeBytes(bytes)
                 "licences/$rel"
