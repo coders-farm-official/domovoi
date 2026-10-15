@@ -188,7 +188,7 @@ If your target Python's tag is in all three lists, you're clear.
 Every compiled dependency had cp314 manylinux x86_64 wheels: `torch`
 2.13.0, `ctranslate2` 4.8.2, `numba` 0.67.0, `numpy` 2.5.2, `scipy`
 1.18.1, `asyncpg` 0.31.0, plus `pillow`, `psutil`, `sqlalchemy`,
-`miniaudio` (until 2026-10), `lameenc`, `soxr`, `llvmlite`. `piper-tts` (the voice engine
+`miniaudio` and `lameenc` (until 2026-10), `soxr`, `llvmlite`. `piper-tts` (the voice engine
 until 2026-10) shipped `cp39-abi3`; its replacement, `onnxruntime`, has
 cp314 wheels. The NVIDIA
 CUDA wheels are `py3-none-manylinux` — no Python tag at all.

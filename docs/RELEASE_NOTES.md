@@ -4,6 +4,43 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-15 — Licence clean-up: Domovoi's own tag reader and music-player client
+
+Server update; no migration. Domovoi takes permissively licensed
+dependencies only, and three it still had are gone:
+
+* **mutagen (GPL)**, which read the tags inside audio files, is replaced
+  by Domovoi's own reader (`domovoi/media_tags`). The library and
+  audiobook indexers, the cover art, the lyrics and the podcast chapters
+  read the same answers from the same files: checked on 42 files (18
+  encoded and tagged by FFmpeg: MP3, FLAC, Ogg, Opus, M4A, M4B, WMA, WAV,
+  AIFF, AAC; 24 taggers' quirks) and on 284 more encoder variants. Where
+  the answer changed, it is a fix:
+  * **A tagged FLAC, Ogg or Opus audiobook indexes.** It failed with an
+    error before, and the book never appeared.
+  * **WMA files get their artist and album** in the library, and an M4A
+    with only an album artist gets that as its artist.
+  * A tag with two artists (ID3v2.4) stores the first, not both joined by
+    an invisible character the database refused; an ID3v2.3 tag written
+    unsynchronised reads correctly (title, cover, lyrics); tags on a raw
+    `.aac` file, or on an `.mp3` with no audio in it, are read.
+  * Songs already in the library keep their rows (the indexer only adds
+    new files); audiobooks are re-read at their next index.
+* **python-mpd2 (LGPL)** is replaced by Domovoi's own client for the
+  rooms' music players (`domovoi/clients/mpd_protocol.py`). Nothing
+  changes in use. A title or search with a line break in it is now
+  refused instead of being sent (it could end the command early).
+* **lameenc (LGPL)**, which encoded the satellites' greeting and status
+  clips to MP3, is replaced by the server's own `ffmpeg`, which a Linux
+  server and the Windows install already have. On a server without
+  `ffmpeg` on its PATH no clip is re-rendered, and the satellites keep the
+  clips they have.
+* The three packages stay in an existing install's Python environment,
+  unused, until removed by hand; a fresh install doesn't get them.
+* Still open, waiting on a decision: `soxr` and the libsndfile inside
+  `soundfile` (both LGPL), which voice profiles pull in through librosa
+  ([CONTRIBUTING.md](CONTRIBUTING.md#dependencies-and-licences)).
+
 ## 2026-10-14 — A reload no longer signs the admin out
 
 Server update (core, dashboard and a database migration, V028); the

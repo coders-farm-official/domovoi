@@ -27,7 +27,8 @@ dependencies = [
     # Lightweight clients — kept in core so the real-clients extra only
     # carries the heavy ML/audio deps.
     "ollama>=0.3",
-    "python-mpd2>=3.1",
+    # The MPD control protocol is spoken by domovoi/clients/mpd_protocol.py
+    # (no python-mpd2, LGPL-3.0, since 2026-10-15).
     # Multipart form parsing for the web dashboard's file uploads (Voices
     # page uploads Piper .onnx models). Required by FastAPI's UploadFile.
     "python-multipart>=0.0.18",
@@ -104,13 +105,12 @@ real-clients = [
     # can differ on 1.24 (domovoi/phonemizer/README.md, the golden fixture).
     "onnxruntime>=1.28",
     "numpy>=1.26",
-    # Encode rendered TTS clips (WAV from the engine router) to MP3 so the
-    # Pi can play them via mpg123. Per-voice greeting/canned clip renderer
-    # (canned_sounds.py). Small pure-wheel dep with Windows wheels.
-    "lameenc>=1.7",
-    # Local-music indexer reads ID3/Vorbis/MP4 tags. Pure-Python; small
-    # dep. Tested against MP3/M4A/FLAC/OGG/Opus.
-    "mutagen>=1.47",
+    # No lameenc (LGPL-3.0, carrying LAME) since 2026-10-15: the satellite
+    # clips (canned_sounds.py) are encoded to MP3 by the system ffmpeg, run
+    # as its own program, as ffprobe and fpcalc already are.
+    # No mutagen (GPL-2.0-or-later) since 2026-10-15: the tags inside audio
+    # files (the indexers, cover art, lyrics, podcast chapters) are read by
+    # Domovoi's own reader, domovoi/media_tags.
     # Library enricher (workers/library_enricher.py). pyacoustid wraps
     # Chromaprint via the `fpcalc` binary (must be on PATH — see
     # domovoi/README.md "Library enrichment setup"). Pure Python.

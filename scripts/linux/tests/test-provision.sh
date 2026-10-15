@@ -976,7 +976,10 @@ case_help_and_usage_errors() {
 
 # The install's import check names only what the release installs: the
 # Microsoft Edge voices' edge-tts and its MP3 decoder miniaudio were
-# dropped on 2026-10-12, so a fresh venv without them must pass it.
+# dropped on 2026-10-12; mutagen (GPL), python-mpd2 and lameenc (LGPL) on
+# 2026-10-15 (domovoi/media_tags reads the tags, domovoi/clients/mpd_protocol.py
+# speaks to MPD, the system ffmpeg encodes the clips), so a fresh venv
+# without them must pass it.
 case_import_check_names_no_dropped_package() {
   new_case import_check_names_no_dropped_package
   local mods
@@ -984,6 +987,9 @@ case_import_check_names_no_dropped_package() {
   check "found the import check" grep -qF '"onnxruntime"' <<<"$mods"
   check "no edge_tts" eq "$(grep -c 'edge_tts' <<<"$mods")" 0
   check "no miniaudio" eq "$(grep -c 'miniaudio' <<<"$mods")" 0
+  check "no mutagen" eq "$(grep -c 'mutagen' <<<"$mods")" 0
+  check "no python-mpd2" eq "$(grep -c '"mpd"' <<<"$mods")" 0
+  check "no lameenc" eq "$(grep -c 'lameenc' <<<"$mods")" 0
   end_case
 }
 

@@ -1705,8 +1705,8 @@ plan_venv() { echo "venv $CHECKOUT/.venv; pip install --require-hashes from $LOC
 PY_IMPORT_CHECK='#provision:import-check
 import importlib, sys
 mods = ["fastapi", "uvicorn", "sqlalchemy", "asyncpg", "pydantic_settings", "ollama",
-        "mpd", "argon2", "PIL", "psutil", "httpx", "faster_whisper", "ctranslate2",
-        "onnxruntime", "domovoi.phonemizer", "lameenc", "mutagen", "acoustid",
+        "argon2", "PIL", "psutil", "httpx", "faster_whisper", "ctranslate2",
+        "onnxruntime", "domovoi.phonemizer", "acoustid",
         "feedparser", "librosa", "torch", "resemblyzer", "domovoi.config"]
 bad = []
 for m in mods:
