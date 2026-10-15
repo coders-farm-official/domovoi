@@ -11,9 +11,14 @@ Each tick:
 3. Batch-INSERT with ON CONFLICT DO NOTHING — idempotent if a track is
    partially fingerprinted across crashes.
 
-CPU-bound (~10-30 s per song). One track per tick keeps the wall-clock
-cost bounded, holds a DB connection only briefly, and lets cancellation
-land cleanly between tracks. Gated by ``RADIO_FINGERPRINTER_ENABLED``
+CPU-bound (~10-30 s per song), so the decode and the hashing run in a
+child process under ``fingerprinter_timeout_sec`` (clients/fingerprint.py),
+never on the core's event loop. A track that runs past it is killed and
+marked like an unreadable one, with offset_ms -1 so the two can be told
+apart, and never tried again (delete its row to retry). One track per tick
+keeps the wall-clock cost bounded, holds a DB connection only briefly,
+and lets cancellation land cleanly between tracks (a cancelled tick kills
+its child). Gated by ``RADIO_FINGERPRINTER_ENABLED``
 (design §9.1): switching it off loses nothing except that
 the sampler falls back to online identification for everything.
 
@@ -30,9 +35,18 @@ from sqlalchemy import text
 
 from domovoi.sdk import PluginSDK, Worker
 
-from domovoi_plugin_radio.clients.fingerprint import fingerprint_file
+from domovoi_plugin_radio.clients.fingerprint import (
+    FINGERPRINT_TIMEOUT_SEC,
+    FingerprintTimeout,
+    fingerprint_file,
+)
 
 log = logging.getLogger(__name__)
+
+# offset_ms of the sentinel row (empty hash) that marks a track as done
+# without hashes: nothing usable came out of it, or it ran out of time.
+SENTINEL_NO_HASHES = 0
+SENTINEL_TIMED_OUT = -1
 
 
 class TrackFingerprinter(Worker):
@@ -56,7 +70,21 @@ class TrackFingerprinter(Worker):
         if target is None:
             return 0
         track_id, file_path = target
-        rows = await fingerprint_file(file_path)
+        timeout = float(
+            getattr(self._config, "fingerprinter_timeout_sec", FINGERPRINT_TIMEOUT_SEC)
+            or FINGERPRINT_TIMEOUT_SEC
+        )
+        try:
+            rows = await fingerprint_file(file_path, timeout_sec=timeout)
+        except FingerprintTimeout:
+            await self._insert_sentinel(track_id, SENTINEL_TIMED_OUT)
+            log.warning(
+                "fingerprinter: track #%d at %s took longer than %.0f s to decode "
+                "and was stopped; it won't be tried again (delete its row in "
+                "plugin_radio.track_fingerprints to retry)",
+                track_id, file_path, timeout,
+            )
+            return 0
         if not rows:
             # Nothing produced — unreadable file, too short, or the
             # audio deps are missing. Insert one sentinel row (empty
@@ -129,16 +157,18 @@ class TrackFingerprinter(Worker):
             )
         return len(params)
 
-    async def _insert_sentinel(self, track_id: int) -> None:
+    async def _insert_sentinel(
+        self, track_id: int, offset_ms: int = SENTINEL_NO_HASHES
+    ) -> None:
         async with self.sdk.db.session_scope() as s:
             await s.execute(
                 text(
                     """
                     INSERT INTO track_fingerprints
                         (library_track_id, hash, offset_ms)
-                    VALUES (:track_id, ''::bytea, 0)
+                    VALUES (:track_id, ''::bytea, :offset_ms)
                     ON CONFLICT (library_track_id, hash, offset_ms) DO NOTHING
                     """
                 ),
-                {"track_id": track_id},
+                {"track_id": track_id, "offset_ms": offset_ms},
             )

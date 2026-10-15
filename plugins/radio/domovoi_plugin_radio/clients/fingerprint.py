@@ -25,6 +25,17 @@ Heavy imports (numpy, scipy, librosa) are deferred to function bodies;
 absence is handled by returning empty/None so the sampler degrades to
 online-identify-only without an exception.
 
+**The decode and the hashing never run in the core process.** Both are
+synchronous, CPU-bound and, for a library track, take seconds to tens of
+seconds; until 2026-10-14 they ran on the core's event loop, so every
+satellite, the dashboard and the health check stood still meanwhile
+(about 1.9 s per 20 s test track), and a decode that never returned
+froze the core for good. Each file now goes to a child process (this
+module, run with ``-m``) at a lower CPU priority, under a hard time
+limit: past it the child and anything it started are killed and
+:class:`FingerprintTimeout` is raised. At most :data:`MAX_CHILDREN` run
+at once. The matcher's database work stays in the core (it awaits).
+
 DB access notes: ``track_fingerprints`` is schema-qualified as
 ``plugin_radio.*`` so these helpers work on ANY session regardless of
 its search_path (the router hands handlers a public-search_path
@@ -35,10 +46,18 @@ read can't violate the "plugins never DDL/write core tables" policy.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
+import signal
+import struct
+import subprocess
+import sys
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, AsyncIterator, Iterable
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,31 +146,28 @@ class FingerprintIdentity:
 
 # ─── Public coroutines ──────────────────────────────────────────────────
 
+# Time limits for one child: a library track (the fingerprinter passes the
+# plugin's fingerprinter_timeout_sec) and a radio sample (about 15 s of
+# WAV, a second or two of work).
+FINGERPRINT_TIMEOUT_SEC = 300.0
+SAMPLE_TIMEOUT_SEC = 60.0
+# Children decoding at once, across the fingerprinter and the sampler.
+MAX_CHILDREN = 2
 
-async def fingerprint_file(file_path: str | Path) -> list[FingerprintRow]:
-    """Compute landmark hashes for one audio file. Empty list on any
-    failure (missing scipy/librosa, unreadable file, audio too short)."""
-    try:
-        samples = _load_audio_to_mono_16k(Path(file_path))
-    except _DepMissingError as e:
-        log.debug("fingerprint deps missing for %s: %s", file_path, e)
-        return []
-    except Exception as e:
-        log.debug("fingerprint load failed for %s: %s", file_path, e)
-        return []
 
-    if samples is None or len(samples) < _SAMPLE_RATE:
-        # Need at least 1 second of audio for meaningful hashes.
-        return []
+class FingerprintTimeout(Exception):
+    """Decoding and hashing one file ran past its time limit; the child
+    doing it (and anything it started) was killed."""
 
-    try:
-        return _hash_samples(samples)
-    except _DepMissingError as e:
-        log.debug("fingerprint deps missing during hash: %s", e)
-        return []
-    except Exception as e:
-        log.debug("fingerprint hash failed for %s: %s", file_path, e)
-        return []
+
+async def fingerprint_file(
+    file_path: str | Path, *, timeout_sec: float = FINGERPRINT_TIMEOUT_SEC
+) -> list[FingerprintRow]:
+    """Compute landmark hashes for one audio file, in a child process.
+    Empty list on any failure (missing scipy/librosa, unreadable file,
+    audio too short). Raises :class:`FingerprintTimeout` when the work
+    ran past ``timeout_sec`` and was killed."""
+    return await _hash_file_in_child(Path(file_path), timeout_sec)
 
 
 async def match_sample(
@@ -159,29 +175,17 @@ async def match_sample(
     wav_path: str | Path,
     *,
     min_confidence: int = 10,
+    timeout_sec: float = SAMPLE_TIMEOUT_SEC,
 ) -> LocalMatch | None:
     """Query ``track_fingerprints`` for hashes overlapping the sample at
     ``wav_path``. Returns the best-scoring track above
     ``min_confidence`` (callers pass
-    ``config.fingerprinter_match_threshold``), else ``None``."""
+    ``config.fingerprinter_match_threshold``), else ``None`` (also when
+    hashing the sample ran past ``timeout_sec``)."""
     try:
-        samples = _load_audio_to_mono_16k(Path(wav_path))
-    except _DepMissingError as e:
-        log.debug("match_sample deps missing: %s", e)
-        return None
-    except Exception as e:
-        log.debug("match_sample load failed for %s: %s", wav_path, e)
-        return None
-
-    if samples is None or len(samples) < _SAMPLE_RATE:
-        return None
-
-    try:
-        rows = _hash_samples(samples)
-    except _DepMissingError:
-        return None
-    except Exception as e:
-        log.debug("match_sample hash failed for %s: %s", wav_path, e)
+        rows = await _hash_file_in_child(Path(wav_path), timeout_sec)
+    except FingerprintTimeout as e:
+        log.warning("radio sample not matched locally: %s", e)
         return None
 
     if not rows:
@@ -246,6 +250,209 @@ async def match_sample(
         title=title,
         artist=artist,
     )
+
+
+# ─── Internal: the child process ────────────────────────────────────────
+#
+# The child is this module run with ``-m`` (_child_main). It writes
+# _MAGIC, the row count (uint32) and then each row as 8 hash bytes plus
+# the offset (int32), little-endian, to stdout; anything it has to say
+# goes to stderr. Exit status 0: the rows (possibly none); otherwise one
+# of the _EXIT_* reasons, which the parent treats like the in-process
+# failures it replaced: an empty result.
+
+_CHILD_MODULE = "domovoi_plugin_radio.clients.fingerprint"
+_MAGIC = b"DOMOVOI-FP1\n"
+_ROW = struct.Struct("<8si")
+_COUNT = struct.Struct("<I")
+_EXIT_USAGE = 2
+_EXIT_DEPS = 3
+_EXIT_LOAD = 4
+_EXIT_HASH = 5
+# The tail of a child's stderr the parent puts in its log line.
+_STDERR_MAX = 600
+# How long a killed child gets to be reaped before it is left to the OS.
+_REAP_SEC = 5.0
+# The child runs below normal priority, so the core's own work (speech
+# above all) comes first: a nice value on POSIX, a priority class on
+# Windows.
+_CHILD_NICE = 10
+_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
+# One semaphore per event loop (tests open a new loop each time, and an
+# asyncio.Semaphore stays bound to the loop it first waited on).
+_SLOTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+@contextlib.asynccontextmanager
+async def _child_slot() -> AsyncIterator[None]:
+    loop = asyncio.get_running_loop()
+    sem = _SLOTS.get(loop)
+    if sem is None:
+        sem = _SLOTS[loop] = asyncio.Semaphore(MAX_CHILDREN)
+    async with sem:
+        yield
+
+
+def _child_env() -> dict[str, str]:
+    """The core's environment, plus the plugin's own directory on the
+    import path (the plugin loader puts it on sys.path, which a child
+    does not inherit), and one thread per numeric library: a background
+    job, not a race. The core's systemd notify socket stays the core's."""
+    env = dict(os.environ)
+    plugin_root = str(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (plugin_root, env.get("PYTHONPATH", "")) if p
+    )
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                "NUMBA_NUM_THREADS"):
+        env.setdefault(var, "1")
+    for var in ("NOTIFY_SOCKET", "WATCHDOG_USEC", "WATCHDOG_PID"):
+        env.pop(var, None)
+    return env
+
+
+def _child_command(path: Path) -> list[str]:
+    """The command line of the child that hashes ``path``."""
+    return [sys.executable, "-m", _CHILD_MODULE, str(path)]
+
+
+def _spawn_kwargs() -> dict[str, Any]:
+    if sys.platform == "win32":
+        return {"creationflags": _BELOW_NORMAL_PRIORITY_CLASS}
+    # A process group of its own, so a kill reaches whatever it started
+    # too (librosa hands some formats to ffmpeg).
+    return {"start_new_session": True}
+
+
+async def _kill_tree(proc: "asyncio.subprocess.Process") -> None:
+    """Kill the child and everything it started; reap it if that's quick."""
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            killer = await asyncio.create_subprocess_exec(
+                "taskkill", "/F", "/T", "/PID", str(proc.pid),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(killer.wait(), _REAP_SEC)
+        except (OSError, asyncio.TimeoutError):
+            pass
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(asyncio.TimeoutError):
+        await asyncio.wait_for(proc.wait(), _REAP_SEC)
+
+
+def _kill_now(proc: "asyncio.subprocess.Process") -> None:
+    """:func:`_kill_tree` without awaiting anything (a cancelled caller)."""
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError):
+            subprocess.Popen(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+
+
+def _parse_child_output(out: bytes) -> list[FingerprintRow] | None:
+    """The rows a child wrote, or None when the output isn't an answer."""
+    head = len(_MAGIC) + _COUNT.size
+    if len(out) < head or not out.startswith(_MAGIC):
+        return None
+    (count,) = _COUNT.unpack_from(out, len(_MAGIC))
+    if len(out) != head + count * _ROW.size:
+        return None
+    return [
+        FingerprintRow(hash_bytes=h, offset_ms=off)
+        for h, off in _ROW.iter_unpack(out[head:])
+    ]
+
+
+async def _hash_file_in_child(path: Path, timeout_sec: float) -> list[FingerprintRow]:
+    """Decode and hash ``path`` in a child process: the rows, [] for every
+    failure the in-process code used to swallow, :class:`FingerprintTimeout`
+    when the child ran past ``timeout_sec`` (killed first). A caller
+    cancelled while it waits takes the child down with it."""
+    if not path.exists():
+        return []
+    async with _child_slot():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *_child_command(path),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, env=_child_env(), **_spawn_kwargs(),
+            )
+        except OSError as e:
+            log.debug("fingerprint child for %s didn't start: %s", path, e)
+            return []
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout_sec)
+        except asyncio.TimeoutError:
+            await _kill_tree(proc)
+            raise FingerprintTimeout(
+                f"decoding {path} took longer than {timeout_sec:.0f} s; stopped"
+            ) from None
+        except BaseException:
+            _kill_now(proc)
+            raise
+    detail = (err or b"")[-_STDERR_MAX:].decode("utf-8", "replace").strip()
+    if proc.returncode != 0:
+        log.debug("fingerprint child for %s exited %s: %s", path, proc.returncode, detail)
+        return []
+    rows = _parse_child_output(out or b"")
+    if rows is None:
+        log.debug("fingerprint child for %s wrote no usable answer: %s", path, detail)
+        return []
+    return rows
+
+
+def _child_main(argv: list[str]) -> int:
+    """The child: decode one file, hash it, write the rows to stdout."""
+    if len(argv) != 2:
+        print("usage: python -m domovoi_plugin_radio.clients.fingerprint FILE", file=sys.stderr)
+        return _EXIT_USAGE
+    if sys.platform != "win32":
+        with contextlib.suppress(OSError):
+            os.nice(_CHILD_NICE)
+    path = Path(argv[1])
+    try:
+        samples = _load_audio_to_mono_16k(path)
+    except _DepMissingError as e:
+        print(f"fingerprint deps missing: {e}", file=sys.stderr)
+        return _EXIT_DEPS
+    except Exception as e:  # noqa: BLE001 - any decode failure is "unreadable"
+        print(f"load failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return _EXIT_LOAD
+    rows: list[FingerprintRow] = []
+    # Need at least 1 second of audio for meaningful hashes.
+    if samples is not None and len(samples) >= _SAMPLE_RATE:
+        try:
+            rows = _hash_samples(samples)
+        except _DepMissingError as e:
+            print(f"fingerprint deps missing during hash: {e}", file=sys.stderr)
+            return _EXIT_DEPS
+        except Exception as e:  # noqa: BLE001
+            print(f"hash failed: {type(e).__name__}: {e}", file=sys.stderr)
+            return _EXIT_HASH
+    out = sys.stdout.buffer
+    out.write(_MAGIC + _COUNT.pack(len(rows)))
+    out.write(b"".join(_ROW.pack(r.hash_bytes, r.offset_ms) for r in rows))
+    out.flush()
+    return 0
 
 
 # ─── Internal: dep-gated implementations ────────────────────────────────
@@ -351,3 +558,7 @@ def _hash_samples(samples: "Any") -> list[FingerprintRow]:
                 fan += 1
             j += 1
     return rows
+
+
+if __name__ == "__main__":
+    sys.exit(_child_main(sys.argv))

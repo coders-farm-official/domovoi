@@ -41,7 +41,7 @@ async def _fingerprint_rows(session):
 async def test_tick_fingerprints_one_track(radio_sdk, db_session, monkeypatch) -> None:
     tid = await _insert_track(db_session, "C:/music/a.mp3")
 
-    async def fake_fp(path):
+    async def fake_fp(path, **_kw):
         assert path == "C:/music/a.mp3"
         return [
             FingerprintRow(hash_bytes=b"\x01" * 8, offset_ms=0),
@@ -60,7 +60,7 @@ async def test_sentinel_marks_unfingerprintable_track(
 ) -> None:
     tid = await _insert_track(db_session, "C:/music/broken.mp3")
 
-    async def fake_fp(path):
+    async def fake_fp(path, **_kw):
         return []
 
     monkeypatch.setattr(tf_mod, "fingerprint_file", fake_fp)
@@ -73,13 +73,43 @@ async def test_sentinel_marks_unfingerprintable_track(
     assert await worker._claim_next_track() is None
 
 
+async def test_a_track_that_runs_out_of_time_is_marked_and_skipped(
+    radio_sdk, db_session, monkeypatch
+) -> None:
+    """Incident 2026-10-14: a decode that never ends is killed by its time
+    limit, recorded (empty hash, offset_ms -1) and never tried again; the
+    next tick moves on to the next track."""
+    slow = await _insert_track(db_session, "C:/music/slow.mp3")
+    nxt = await _insert_track(db_session, "C:/music/next.mp3")
+    radio_sdk.config.fingerprinter_timeout_sec = 7.0
+    calls: list[tuple[str, float]] = []
+
+    async def fake_fp(path, *, timeout_sec):
+        calls.append((path, timeout_sec))
+        if path.endswith("slow.mp3"):
+            raise tf_mod.FingerprintTimeout("took too long")
+        return [FingerprintRow(hash_bytes=b"" * 8, offset_ms=0)]
+
+    monkeypatch.setattr(tf_mod, "fingerprint_file", fake_fp)
+    worker = TrackFingerprinter(radio_sdk)
+    assert await worker.tick() == 0
+    rows = await _fingerprint_rows(db_session)
+    assert [(r.library_track_id, bytes(r.hash), r.offset_ms) for r in rows] == [
+        (slow, b"", tf_mod.SENTINEL_TIMED_OUT)
+    ]
+    assert await worker.tick() == 1
+    assert calls == [("C:/music/slow.mp3", 7.0), ("C:/music/next.mp3", 7.0)]
+    assert {r.library_track_id for r in await _fingerprint_rows(db_session)} == {slow, nxt}
+    assert await worker._claim_next_track() is None
+
+
 async def test_resumes_where_it_left_off(radio_sdk, db_session, monkeypatch) -> None:
     a = await _insert_track(db_session, "C:/music/a.mp3")
     b = await _insert_track(db_session, "C:/music/b.mp3")
 
     seen: list[str] = []
 
-    async def fake_fp(path):
+    async def fake_fp(path, **_kw):
         seen.append(path)
         return [FingerprintRow(hash_bytes=b"\x03" * 8, offset_ms=0)]
 
@@ -98,7 +128,7 @@ async def test_insert_is_idempotent_across_crashes(
 ) -> None:
     await _insert_track(db_session, "C:/music/a.mp3")
 
-    async def fake_fp(path):
+    async def fake_fp(path, **_kw):
         return [FingerprintRow(hash_bytes=b"\x04" * 8, offset_ms=0)]
 
     monkeypatch.setattr(tf_mod, "fingerprint_file", fake_fp)
