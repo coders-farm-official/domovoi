@@ -139,6 +139,9 @@ def _path(transcript: str) -> str | None:
     ("continue my audiobook in the garage", "spoken_audio._room_spoken_from_match"),
     ("keep reading in the garage", "spoken_audio._room_spoken_from_match"),
     ("play my audiobook in the office", "spoken_audio._room_spoken_from_match"),
+    ("Play the audio book Dune in the Garage.", "spoken_audio._room_spoken_from_match"),
+    ("play my audio book", "spoken_audio._play_mine_from_match"),
+    ("resume my audio book", "spoken_audio._resume_from_match"),
     # without a place: the paths as they were (and "play my audiobook" is
     # a resume now, not a music search for "my audiobook")
     ("play the latest episode of the daily", "spoken_audio._play_latest_from_match"),
@@ -195,6 +198,7 @@ async def test_an_audiobook_by_name_in_a_room_by_its_label(store) -> None:
     ("resume my book in the garage", sa.ITEM_AUDIOBOOK),
     ("play my audiobook in the garage", sa.ITEM_AUDIOBOOK),
     ("keep reading in the garage", sa.ITEM_AUDIOBOOK),
+    ("continue my audio book in the garage", sa.ITEM_AUDIOBOOK),
 ])
 async def test_resume_picks_up_the_garages_own_place(store, said, kind) -> None:
     item_id = EPISODE["id"] if kind == sa.ITEM_PODCAST else BOOK["id"]

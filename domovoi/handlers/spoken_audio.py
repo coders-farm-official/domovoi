@@ -56,8 +56,8 @@ log = logging.getLogger(__name__)
 # enough to stand alone (→ audiobook).
 _RESUME_RE = re.compile(
     r"^(?:"
-    r"(?:resume|continue|pick up|go back to)(?: (?:my|the))? (?P<kind>book|audiobook|podcast|episode|show)"
-    r"|keep reading(?: my (?P<kind2>book|audiobook))?"
+    r"(?:resume|continue|pick up|go back to)(?: (?:my|the))? (?P<kind>book|audio ?book|podcast|episode|show)"
+    r"|keep reading(?: my (?P<kind2>book|audio ?book))?"
     r")\b.*$"
 )
 # Only claim EXPLICIT podcast phrasing here — an "episode" keyword, or a show
@@ -75,11 +75,13 @@ _PLAY_LATEST_RE = re.compile(
     r")$"
 )
 _PLAY_BOOK_RE = re.compile(
-    r"^(?:play|read|start)(?: me)? (?:the )?(?:audiobook|book) (?P<book>.+)$"
+    r"^(?:play|read|start)(?: me)? (?:the )?(?:audio ?book|book) (?P<book>.+)$"
 )
 # "play my audiobook" / "play the podcast": what is in progress — a resume.
+# "audio book" in two words throughout: how Whisper writes it (ft run
+# 2026-10-15 heard "play the audiobook Dune" as "play the audio book dune").
 # (It used to reach music's catch-all, which searched for "my audiobook".)
-_PLAY_MINE_RE = re.compile(r"^play (?:me )?(?:my|the) (?P<kind>audiobook|book|podcast)$")
+_PLAY_MINE_RE = re.compile(r"^play (?:me )?(?:my|the) (?P<kind>audio ?book|book|podcast)$")
 _NEXT_CHAPTER_RE = re.compile(r"^(?:next|skip to (?:the )?next) chapter$")
 _PREV_CHAPTER_RE = re.compile(r"^(?:previous|prior|last|go back a) chapter$")
 _SKIP_RE = re.compile(
@@ -274,7 +276,8 @@ class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
         return self._reply(ctx, "Which podcast should I subscribe to?")
 
     async def _resume_from_match(self, m, ctx, session):
-        kind = (m.group("kind") or m.group("kind2") or "").lower()
+        # Whisper often writes "audio book" as two words.
+        kind = (m.group("kind") or m.group("kind2") or "").lower().replace(" ", "")
         # "keep reading" with no explicit noun → audiobook.
         if not kind and m.group(0).startswith("keep reading"):
             kind = "book"
