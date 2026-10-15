@@ -8,9 +8,9 @@
         "arm64-v8a"
       ],
       "size": 28953,
-      "sha256": "162c431dc30cbdce5c38b840c0a7b47b38e751503ef6bb330c1489f374e9b6c1",
+      "sha256": "ff17d7eb8b9a3be27d1a303ca74a90a537009af63fa8d39b6e94ed2ed269eaa7",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -21,9 +21,9 @@
         "armeabi-v7a"
       ],
       "size": 28955,
-      "sha256": "575dc5ecff8cd96bdfa8187aa7da7ee38986ff1a3c72505c27276fd0084b8336",
+      "sha256": "0ed768b78ca543ffbf416abba5a207b9f1419ac575acfe8d935ac297fb89e0d1",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -34,9 +34,9 @@
         "arm64-v8a"
       ],
       "size": 24857,
-      "sha256": "c846a367ecece9de9f4319a87bc8bf485fd7ead36fff8e786b37e5546862da50",
+      "sha256": "550695d270d7a0716378b3ab7aedfa03eca8c71d68475aef05039246e87c71ce",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
       "apksigner_v2": true,
       "apksigner_v3": false
     },
@@ -48,9 +48,9 @@
         "armeabi-v7a"
       ],
       "size": 45412,
-      "sha256": "40f18cefdb04a94f7d6f904fe787b8f037c2aef1a91f4b23140a240175de32f5",
+      "sha256": "0182acbebfdb50264735526a5a11e833f1705c95f0ca0a600be0e972377dc2e2",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "5d1fe4c3870fe0f71e26dbb994a0b94ac1101dabe43926580ca0f0f98265c8b8",
+      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -61,9 +61,9 @@
         "arm64-v8a"
       ],
       "size": 24857,
-      "sha256": "1feff348f9826e107fad020eb9e7ce2278a0dc67415bdf28f3af921b3e4b10c4",
+      "sha256": "223cf78f4d226483570e45d0160952d46e4f9b3f292bff20e004eb304b1defb4",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "ff475ef35f775fa48b01b5e63f571598fe5163d9a728036d97ceac3f873595ef",
+      "apksigner_cert_sha256": "e23d63a16629471c0f0c6e301143fde31646774c80e5d896f81708cfe6f0daa2",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -74,9 +74,9 @@
         "arm64-v8a"
       ],
       "size": 24857,
-      "sha256": "5640c6057f7c5b6c3a1a779f9a4c9090fe35d8a089de54c35ce7b04dd3b77599",
+      "sha256": "54218deb37823ad51573189eba997388a879c53f85ab18311f8805f4dd8673e5",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "d9ab5bd8f2c9e3a91b8e97e9eef82390e60f1656114355cc3d11b6e2a991c57f",
+      "apksigner_cert_sha256": "6f7e262eda2a40a4fe387b112019410c218599426c1782a34ecfd19df3aaeae9",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -86,10 +86,10 @@
       "abis": [
         "arm64-v8a"
       ],
-      "size": 19171,
-      "sha256": "62b9a30504156531dda1ff0b1c83b09c8892bdccb7503adbdf9229e2265db84f",
+      "size": 19172,
+      "sha256": "f0a1943c1e831bd627386e50d6043709dd9b45dbd4fbcb07368fafd645ca493a",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "ff475ef35f775fa48b01b5e63f571598fe5163d9a728036d97ceac3f873595ef",
+      "apksigner_cert_sha256": "e23d63a16629471c0f0c6e301143fde31646774c80e5d896f81708cfe6f0daa2",
       "apksigner_v2": false,
       "apksigner_v3": false
     },
@@ -100,7 +100,20 @@
         "arm64-v8a"
       ],
       "size": 1003,
-      "sha256": "3e7f591f88cf8e2cef5197b6c9d8a4c2ac3fd3400a0246071f72f325bd6d5b11",
+      "sha256": "1ce8671c0bd84141bfb4cdcf3f6ebf114811dbfbfdf584172822605bb4f79239",
+      "apksigner_verifies": false,
+      "apksigner_cert_sha256": null,
+      "apksigner_v2": false,
+      "apksigner_v3": false
+    },
+    "forged-cert-arm64-v8a.apk": {
+      "about": "the release certificate in a signer whose key is another: refused",
+      "key": "other",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 22789,
+      "sha256": "da580307310d1d24edbf1f63381b1f526f7e482629865fd0705230358ba4bd97",
       "apksigner_verifies": false,
       "apksigner_cert_sha256": null,
       "apksigner_v2": false,

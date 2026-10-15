@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import io
 import ipaddress
+import struct
 import json
 from pathlib import Path
 
@@ -495,3 +496,37 @@ def test_the_household_page_and_a_bad_code():
     assert not missing["missing-app"]["hidden"]
     desktop = _join("http://192.168.0.117:6370/join", _app_status(), ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     assert not desktop["not-android"]["hidden"]
+
+
+def test_a_forged_signer_naming_the_release_certificate_is_never_kept(tmp_path, cache, github):
+    forged = fixture("forged-cert-arm64-v8a.apk")
+    github.files[aa.file_name(VERSION, "arm64-v8a")] = forged
+    m = load(tmp_path, manifest_doc({"arm64-v8a": forged}))
+    with egress.override_policy("always"):
+        ok, message = aa.fetch(m)
+    assert not ok and "does not carry the key that signed" in message
+    with pytest.raises(aa.ApkRefused) as e:
+        aa.accept_upload(m, _upload(m, forged))
+    assert e.value.reason == "signature"
+    assert aa.cached_file(m, aa.file_name(VERSION, "arm64-v8a")) is None
+
+
+def test_a_validly_signed_file_that_is_not_the_pinned_bytes_is_not_served(tmp_path, cache):
+    """apksigner pads the signing block with bytes no signature covers: a
+    copy that differs only there still verifies, but it is not the file
+    the release pinned, so the SHA-256 check refuses it."""
+    good = GOOD["arm64-v8a"]
+    pad = good.index(struct.pack("<I", 0x42726577))          # apksigner's padding block
+    variant = good[:pad + 8] + bytes([good[pad + 8] ^ 1]) + good[pad + 9:]
+    from domovoi import apk_signature
+
+    probe = tmp_path / "variant.apk"
+    probe.write_bytes(variant)
+    assert apk_signature.verify(probe).cert_sha256 == RELEASE_CERT, "the variant is validly signed"
+    m = load(tmp_path, manifest_doc({"arm64-v8a": good}))
+    cache.mkdir(parents=True)
+    (cache / aa.file_name(VERSION, "arm64-v8a")).write_bytes(variant)
+    assert aa.cached_file(m, aa.file_name(VERSION, "arm64-v8a")) is None
+    with pytest.raises(aa.ApkRefused) as e:
+        aa.check_apk(probe, m["release"]["apks"][0], RELEASE_CERT)
+    assert e.value.reason == "sha256"

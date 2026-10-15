@@ -14,6 +14,10 @@ SHA-256 and what ``apksigner verify --print-certs`` says about it (the
 certificate SHA-256, the schemes), so the tests compare the core's own
 verifier with Google's.
 
+Also one forgery (forged-cert-*.apk): the release certificate in a v2
+signer whose signature and key are the other key's, made here with openssl
+(a build-time tool) reading that throwaway key.
+
 Run from the repo root with JAVA_HOME set and the SDK at ANDROID_HOME or
 %LOCALAPPDATA%\\Android\\Sdk:
 
@@ -30,6 +34,7 @@ import os
 import re
 import secrets
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -99,6 +104,122 @@ def sign(src: Path, dest: Path, ks: Path, password: str, *, v1: bool = False, v2
               "--out", str(dest), str(src))
 
 
+# ─── a forgery: the pinned certificate, signed by another key ─────────────
+# What an attacker who can't sign with the release key would try: put the
+# release key's certificate in the v2 signer and sign the signed data with
+# a key of their own (whose public key goes in the signer's key field).
+# Only the check that the certificate carries the signing key catches it.
+
+def _lp(b: bytes) -> bytes:
+    return struct.pack("<I", len(b)) + b
+
+
+def _seq(items: list[bytes]) -> bytes:
+    return _lp(b"".join(_lp(i) for i in items))
+
+
+class _R:
+    def __init__(self, b: bytes) -> None:
+        self.b, self.p = b, 0
+
+    def u32(self) -> int:
+        v = struct.unpack_from("<I", self.b, self.p)[0]
+        self.p += 4
+        return v
+
+    def lp(self) -> bytes:
+        n = self.u32()
+        v = self.b[self.p:self.p + n]
+        self.p += n
+        return v
+
+    def items(self) -> list[bytes]:
+        inner = _R(self.lp())
+        out = []
+        while inner.p < len(inner.b):
+            out.append(inner.lp())
+        return out
+
+
+def _der_ints(der: bytes) -> list[int]:
+    """The INTEGERs of a DER SEQUENCE of INTEGERs (an RSAPrivateKey)."""
+    def length(pos: int) -> tuple[int, int]:
+        first = der[pos]
+        if first < 0x80:
+            return first, pos + 1
+        n = first & 0x7F
+        return int.from_bytes(der[pos + 1:pos + 1 + n], "big"), pos + 1 + n
+    assert der[0] == 0x30
+    _, pos = length(1)
+    out = []
+    while pos < len(der):
+        assert der[pos] == 0x02
+        n, pos = length(pos + 1)
+        out.append(int.from_bytes(der[pos:pos + n], "big"))
+        pos += n
+    return out
+
+
+def private_key(ks: Path, password: str) -> tuple[int, int]:
+    """(n, d) of the keystore's RSA key, through openssl (a build-time tool)."""
+    pem = subprocess.run(["openssl", "pkcs12", "-in", str(ks), "-nocerts", "-nodes", "-passin", f"pass:{password}"],
+                         check=True, capture_output=True).stdout
+    der = subprocess.run(["openssl", "rsa", "-traditional", "-outform", "DER"], input=pem,
+                         check=True, capture_output=True).stdout
+    ints = _der_ints(der)
+    return ints[1], ints[3]
+
+
+def _first_cert(apk: Path) -> bytes:
+    data = apk.read_bytes()
+    eocd = data.rindex(b"PK\x05\x06")
+    _, cd_off = struct.unpack_from("<II", data, eocd + 12)
+    size = struct.unpack_from("<Q", data, cd_off - 24)[0]
+    pairs, pos = data[cd_off - size - 8 + 8:cd_off - 24], 0
+    while pos < len(pairs):
+        ln = struct.unpack_from("<Q", pairs, pos)[0]
+        if struct.unpack_from("<I", pairs, pos + 8)[0] == 0x7109871A:
+            signer = _R(_R(pairs[pos + 12:pos + 8 + ln]).items()[0])
+            sd = _R(signer.lp())
+            sd.items()
+            return sd.items()[0]
+        pos += 8 + ln
+    raise SystemExit(f"no v2 block in {apk}")
+
+
+def forge_cert(src: Path, dest: Path, foreign_cert: bytes, n: int, d: int) -> None:
+    data = src.read_bytes()
+    eocd = data.rindex(b"PK\x05\x06")
+    cd_size, cd_off = struct.unpack_from("<II", data, eocd + 12)
+    size = struct.unpack_from("<Q", data, cd_off - 24)[0]
+    block_off = cd_off - size - 8
+    pairs, pos, v2 = data[block_off + 8:cd_off - 24], 0, None
+    while pos < len(pairs):
+        ln = struct.unpack_from("<Q", pairs, pos)[0]
+        if struct.unpack_from("<I", pairs, pos + 8)[0] == 0x7109871A:
+            v2 = pairs[pos + 12:pos + 8 + ln]
+        pos += 8 + ln
+    signer = _R(_R(v2).items()[0])
+    signed, sigs, pub = signer.lp(), signer.items(), signer.lp()
+    sd = _R(signed)
+    digests, _certs, attrs = sd.items(), sd.items(), sd.items()
+    new_signed = _seq(digests) + _seq([foreign_cert]) + _seq(attrs)
+    algo = _R(sigs[0]).u32()
+    assert algo == 0x0103, "the forger's key is the RSA-2048 one (SHA-256)"
+    k = (n.bit_length() + 7) // 8
+    t = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(new_signed).digest()
+    em = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
+    sig = pow(int.from_bytes(em, "big"), d, n).to_bytes(k, "big")
+    new_signer = _lp(new_signed) + _seq([struct.pack("<I", algo) + _lp(sig)]) + _lp(pub)
+    value = _seq([new_signer])
+    new_pairs = struct.pack("<Q", 4 + len(value)) + struct.pack("<I", 0x7109871A) + value
+    blk_size = len(new_pairs) + 24
+    block = struct.pack("<Q", blk_size) + new_pairs + struct.pack("<Q", blk_size) + b"APK Sig Block 42"
+    new_eocd = bytearray(data[eocd:])
+    struct.pack_into("<I", new_eocd, 16, block_off + len(block))
+    dest.write_bytes(data[:block_off] + block + data[cd_off:eocd] + bytes(new_eocd))
+
+
 def describe(apk: Path) -> dict:
     r = subprocess.run([java_bin("java"), "-jar", str(APKSIGNER), "verify", "--verbose", "--print-certs",
                         "--min-sdk-version", "26", str(apk)], capture_output=True, text=True)
@@ -148,6 +269,14 @@ def main() -> int:
         raw = OUT / "unsigned-arm64-v8a.apk"
         unsigned_apk(raw, ["arm64-v8a"])
         plan.append(("unsigned-arm64-v8a.apk", ["arm64-v8a"], None, {}, "not signed at all: refused"))
+        # The release certificate (the first in the release APK's v2 signer),
+        # signed by the "other" key: refused, the certificate does not carry
+        # the key that signed.
+        release_cert = _first_cert(OUT / "release-arm64-v8a.apk")
+        n, d = private_key(keys["other"], pw)
+        forge_cert(OUT / "other-arm64-v8a.apk", OUT / "forged-cert-arm64-v8a.apk", release_cert, n, d)
+        plan.append(("forged-cert-arm64-v8a.apk", ["arm64-v8a"], "other",
+                     {}, "the release certificate in a signer whose key is another: refused"))
         for name, abis, key, schemes, about in plan:
             data = (OUT / name).read_bytes()
             manifest["files"][name] = {

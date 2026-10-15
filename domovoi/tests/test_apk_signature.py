@@ -166,3 +166,14 @@ def test_rsa_verification_rebuilds_the_whole_encoding():
     n = (1 << 2047) + 12345
     assert sig.rsa_pkcs1_v15_verify(n, 65537, b"\x01" * 10, b"m", "sha256") is False
     assert sig.rsa_pkcs1_v15_verify(n, 65537, n.to_bytes(256, "big"), b"m", "sha256") is False
+
+
+def test_the_pinned_certificate_signed_by_another_key_is_refused():
+    """forged-cert: the release key's certificate in a v2 signer whose
+    signature (valid) and key field are another key's, over the right
+    content digest. Only "the certificate carries the key that signed"
+    stands between this file and the release key's name."""
+    with pytest.raises(sig.ApkSignatureError) as e:
+        sig.verify(FIX / "forged-cert-arm64-v8a.apk")
+    assert "does not carry the key that signed" in str(e.value)
+    assert META["forged-cert-arm64-v8a.apk"]["apksigner_verifies"] is False, "apksigner refuses it too"
