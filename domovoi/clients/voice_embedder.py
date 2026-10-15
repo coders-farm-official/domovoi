@@ -94,9 +94,9 @@ class RealVoiceEmbedder:
         """Load the encoder and run it once on a short silence, in a worker
         thread, so the first turn after a boot pays neither the load nor
         the first forward pass. True when the encoder is ready."""
-        import asyncio
+        from domovoi import executors
 
-        return await asyncio.to_thread(self._preload_sync)
+        return await executors.run("speech", self._preload_sync)
 
     def _preload_sync(self) -> bool:
         self._ensure_encoder()
@@ -119,8 +119,9 @@ class RealVoiceEmbedder:
         # The load (when the boot preload hasn't done it) and the NN
         # forward pass both run in a worker thread — synchronous torch
         # code that would otherwise block the event loop.
-        import asyncio
-        return await asyncio.to_thread(self._embed_sync, pcm_int16)
+        from domovoi import executors
+
+        return await executors.run("speech", self._embed_sync, pcm_int16)
 
     def _embed_sync(self, pcm_int16: bytes) -> np.ndarray | None:
         try:

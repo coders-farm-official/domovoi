@@ -39,7 +39,6 @@ the event loop responsive.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
 import json
@@ -57,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from domovoi import egress, net_safety
+from domovoi import egress, executors, net_safety
 from domovoi.config import settings
 from domovoi.speech_sanitize import sanitize_for_speech
 
@@ -180,7 +179,20 @@ def _wav_is_silent(wav_bytes: bytes) -> bool:
 
 
 _piper_voice_cache: dict[str, "PiperVoice"] = {}
+# Guards _piper_voice_locks only, and is never held across a download or
+# a model load: one voice's first fetch (minutes on a slow line) must not
+# hold up a reply in another voice. Each voice has its own lock for that.
 _piper_load_lock = threading.Lock()
+_piper_voice_locks: dict[str, threading.Lock] = {}
+
+
+def _piper_voice_lock(voice: str) -> threading.Lock:
+    """The lock that makes one voice's download and load happen once."""
+    with _piper_load_lock:
+        lock = _piper_voice_locks.get(voice)
+        if lock is None:
+            lock = _piper_voice_locks[voice] = threading.Lock()
+        return lock
 
 
 def _voices_dir() -> Path:
@@ -763,11 +775,15 @@ class PiperVoice:
 
 def _piper_voice(voice: str) -> PiperVoice:
     """The loaded voice for ``voice`` (a model_ref), loading it once.
-    Blocking — worker threads only. The lock makes a boot or connect-time
-    preload and a turn racing it load the model once between them."""
+    Blocking — worker threads only. The voice's own lock makes a boot or
+    connect-time preload and a turn racing it download and load the model
+    once between them; a turn in another voice never waits on it (until
+    2026-10-14 one global lock was held through the download, and every
+    reply in every voice queued behind a slow one, a thread each: see
+    domovoi/executors.py)."""
     v = _piper_voice_cache.get(voice)
     if v is None:
-        with _piper_load_lock:
+        with _piper_voice_lock(voice):
             v = _piper_voice_cache.get(voice)
             if v is None:
                 v = PiperVoice(_piper_voice_path(voice))
@@ -932,7 +948,7 @@ class RealTTSClient:
         # narrate an emoji's Unicode name. Single choke point: every spoken
         # path in the core lands here (see domovoi/speech_sanitize).
         text = sanitize_for_speech(text or "")
-        return await asyncio.to_thread(self._synth_detailed_blocking, text, engine, voice)
+        return await executors.run("tts", self._synth_detailed_blocking, text, engine, voice)
 
     def _synth_blocking(
         self, text: str, engine: str | None = None, voice: str | None = None

@@ -83,6 +83,7 @@ from fastapi import WebSocket
 from sqlalchemy import text
 
 from domovoi.config import settings as core_settings
+from domovoi.db.session import connect_url
 
 from web.backend import satellite_adoption, timer_fires
 from web.backend.db import session_scope
@@ -1141,11 +1142,12 @@ class ListenTask:
     def _asyncpg_dsn() -> str:
         """Convert the sqlalchemy DSN (``postgresql+asyncpg://...``) to
         the bare ``postgresql://...`` form asyncpg's ``connect``
-        accepts. No-op if the DSN is already bare."""
+        accepts. No-op if the DSN is already bare. A ``localhost`` host
+        is dialed at 127.0.0.1, like every session's (connect_url)."""
         return re.sub(
             r"^postgresql\+asyncpg://",
             "postgresql://",
-            core_settings.database_url,
+            connect_url(core_settings.database_url),
             count=1,
         )
 
