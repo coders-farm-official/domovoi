@@ -40,19 +40,22 @@ neither create nor extend phone profiles.
 
 One name, one person — everywhere (2026-10-15; the phone had it first).
 Nothing that enrols makes a second person with a name someone already
-has (case and surrounding space aside, ``PeopleRepository.find_by_name``):
+has (case and surrounding space aside, ``PeopleRepository.find_by_name``)
+without asking first:
 
   * "my name is X" at a satellite, for an X who exists and isn't who the
     voice was matched as: "I already know someone called X. Is that
-    you?" — a yes on the very next turn adds this clip to X's SATELLITE
-    samples, tagged with the room
-    (:meth:`VoiceProfileHandler._offer_room_voice`); a no says how to be
-    told apart (a full name).
+    you?" (:meth:`VoiceProfileHandler._offer_room_voice`), answered by
+    the very next turn. Yes: it is X — this clip joins X's SATELLITE
+    samples, tagged with the room. No: a different X — a new person with
+    the name, from the same clip, at once ("Okay, I've added you as a new
+    X. …", owner decision 2026-10-15); the pair is then namesakes.
   * the yes to "Did I get that right?" / "was that X?" (enrolment proper)
     re-checks the name under ``PeopleRepository.lock_names``: someone
     called X by then gets the sample instead of a twin.
-  * two or more people called X (left over from before this rule, or a
-    parent and child): nobody is guessed, and the answer says what to do —
+  * two or more people called X (left over from before this rule, a
+    "no" above, or a parent and child): nobody is guessed, and the answer
+    says what to do —
     an admin renames or removes one on the People page
     (:func:`_more_than_one`).
   * "who am I" names the person the voice matched and, when someone else
@@ -983,8 +986,9 @@ class VoiceProfileHandler(Handler):
         who this voice was matched as (a room they were never heard in, a
         voice that drifted, or a mix-up with somebody else): ask before
         adding this clip to X's SATELLITE samples for this room — the
-        phone's "Add this phone's voice to X?", in the room's words. Never
-        a second X. Answered by the very next turn only, within
+        phone's "Add this phone's voice to X?", in the room's words; a no
+        enrols a second X on purpose (:meth:`_enroll_namesake`), never
+        silently. Answered by the very next turn only, within
         :data:`VOICE_ADD_TTL_SEC` (a choice kind)."""
         person_id, name = known
         payload = {
@@ -1022,23 +1026,16 @@ class VoiceProfileHandler(Handler):
         ctx: Context,
         session: AsyncSession,
     ) -> Response:
-        """The answer to "I already know someone called X. Is that you?".
-        Yes adds the clip from the question's turn to X's SATELLITE
-        samples, tagged with the room it was asked in; no changes nothing
-        and says how to be told apart. Only from a satellite: a chat mic
+        """The answer to "I already know someone called X. Is that you?"
+        (owner decision 2026-10-15). Yes: it is that person — the clip from
+        the question's turn goes into X's SATELLITE samples, tagged with the
+        room it was asked in. No: a different X — a new person with the
+        name, enrolled from the same clip right away, and the People page
+        flags the pair (``namesakes``). Only from a satellite: a chat mic
         never writes a satellite sample."""
         name = str(data.get("name") or "")
         if _asked_on_the_phone(data) or not _answered_where_asked(data, ctx):
             return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
-        if not affirmative:
-            return Response(
-                text=(
-                    f"Okay, I won't add it. If you're a different {name}, tell me "
-                    "your full name so I can tell you apart."
-                ),
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
         try:
             person_id = int(data.get("person_id"))
         except (TypeError, ValueError):
@@ -1051,7 +1048,61 @@ class VoiceProfileHandler(Handler):
                 matched_handler=self.name,
             )
         room_id = data.get(_ORIGIN_ROOM_KEY) or ctx.room_id
+        if not affirmative:
+            return await self._enroll_namesake(name, embedding, room_id, ctx, session)
         return await self._add_room_sample(person_id, name, embedding, room_id, ctx, session)
+
+    async def _enroll_namesake(
+        self,
+        name: str,
+        embedding: np.ndarray,
+        room_id: str | None,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """The "no" to "I already know someone called X. Is that you?": a
+        new person called X, on purpose, with this clip as their satellite
+        sample for ``room_id``. The opt-out list first, under the name lock
+        like every enrolment. From then on "my name is X" from a voice
+        neither of them is matched as meets the two-namesakes refusal."""
+        if await self._is_denylisted(embedding, session):
+            return Response(
+                text="I wasn't able to save that voice profile.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        people = PeopleRepository(session)
+        try:
+            await people.lock_names()
+            others = await people.find_by_name(name)
+            person_id = await people.create(name=name)
+            await VoiceProfilesRepository(session).add(
+                person_id=person_id,
+                embedding=embedding.astype(np.float32).tobytes(),
+                model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                room_id=room_id,
+                sample_seconds=None,
+            )
+        except Exception as e:
+            log.warning("namesake enrollment failed for name=%s: %s", name, e)
+            return Response(
+                text=(
+                    "Something went wrong saving your voice — your name "
+                    "didn't get recorded."
+                ),
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        log.info("enrolled namesake person=%s id=%d (%d before)", name, person_id, len(others))
+        if not others:
+            # The other X was forgotten since the question: no pair to flag.
+            text = f"Got it, {name}."
+        else:
+            text = (
+                f"Okay, I've added you as a new {name}. An admin can give one of "
+                "you a different name on the People page."
+            )
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
     async def _add_room_sample(
         self,

@@ -8,7 +8,8 @@ satellite still enrolled a second X. Now:
 * a satellite's "my name is X", for an X who exists and isn't who the
   voice was matched as, asks "I already know someone called X. Is that
   you?"; a yes on the very next turn adds the clip to X's SATELLITE
-  samples, tagged with the room; a no says how to be told apart;
+  samples, tagged with the room; a no enrols a new X from the same clip
+  at once (owner decision 2026-10-15), and the two are then namesakes;
 * the yes to "Did I get that right?" / "was that X?" re-checks the name,
   under a lock (two enrolments of one new name at once make one person);
 * two people called X: nobody is guessed, and the answer says what to do
@@ -242,23 +243,81 @@ async def test_my_name_at_a_satellite_for_someone_known_asks_then_adds_a_room_sa
         )).scalar_one() == 0
 
 
-async def test_no_says_how_to_be_told_apart_and_a_full_name_enrols(room) -> None:
+NEW_NAMESAKE = (
+    "Okay, I've added you as a new Kamron. An admin can give one of you a "
+    "different name on the People page."
+)
+
+
+async def test_no_enrols_a_new_namesake_from_the_same_clip(room) -> None:
+    """Owner decision 2026-10-15: "no" to "Is that you?" is a different
+    Kamron, added at once (no "tell me your full name" first). From then
+    on "my name is Kamron" from a voice neither of them is matched as meets
+    the two-namesakes refusal; the one the voice names is told so."""
+    kamron = await _person("Kamron", (KAMRON_OFFICE, "office"))
+    asked = await room.say("My name is Kamron.", STRANGER)
+    assert _reply(asked) == ROOM_QUESTION
+    # The QUESTION's clip is the new person's, whoever says the no.
+    no = await room.say("No.", KAMRON_HERE, trigger="followup")
+    assert _reply(no) == NEW_NAMESAKE
+    people = await _people()
+    assert [n for _, n in people] == ["Kamron", "Kamron"]
+    newcomer = people[1][0]
+    assert await _samples(kamron) == [("satellite", "office")]
+    assert await _samples(newcomer) == [("satellite", ROOM)]
+    assert await room.pending() is None
+
+    # The first Kamron, unknown to this room's mic: never guessed.
+    again = await room.say("My name is Kamron.", KAMRON_HERE)
+    assert _reply(again) == _more_than_one("Kamron")
+    assert again["expect_followup"] is False
+    # The newcomer from a mic that doesn't know their voice either.
+    other_mic = np.full(16_000, 4444, dtype=np.int16).tobytes()
+    assert _reply(await room.say("My name is Kamron.", other_mic)) == _more_than_one("Kamron")
+    # The newcomer as this room hears them: named by voice, not a guess.
+    assert _reply(await room.say("My name is Kamron.", STRANGER)) == "I already know you, Kamron."
+    assert len(await _people()) == 2
+    assert await _samples(kamron) == [("satellite", "office")]
+    assert await _samples(newcomer) == [("satellite", ROOM)]
+
+
+async def test_a_no_after_the_other_was_forgotten_just_enrols(room) -> None:
     kamron = await _person("Kamron", (KAMRON_OFFICE, "office"))
     await room.say("My name is Kamron.", STRANGER)
+    async with SessionLocal() as s:
+        await s.execute(text("DELETE FROM people WHERE id = :p"), {"p": kamron})
+        await s.commit()
     no = await room.say("No.", STRANGER, trigger="followup")
-    assert _reply(no) == (
-        "Okay, I won't add it. If you're a different Kamron, tell me your full "
-        "name so I can tell you apart."
-    )
-    assert await _samples(kamron) == [("satellite", "office")]
-
-    asked = await room.say("My name is Kamron Smith.", STRANGER)
-    assert _reply(asked) == "Nice to meet you, Kamron Smith. Did I get that right?"
-    done = await room.say("Yes.", STRANGER, trigger="followup")
-    assert _reply(done) == "Got it, Kamron Smith."
+    assert _reply(no) == "Got it, Kamron."
     people = await _people()
-    assert [n for _, n in people] == ["Kamron", "Kamron Smith"]
-    assert await _samples(people[1][0]) == [("satellite", ROOM)]
+    assert [n for _, n in people] == ["Kamron"]
+    assert await _samples(people[0][0]) == [("satellite", ROOM)]
+
+
+async def test_an_opted_out_voice_is_not_enrolled_by_the_rooms_no(room) -> None:
+    await _person("Kamron", (KAMRON_OFFICE, "office"))
+    await room.say("My name is Kamron.", KAMRON_HERE)
+    async with SessionLocal() as s:
+        await VoiceDenylistRepository(s).add(
+            embedding=await _vec(KAMRON_HERE), model=VoiceDenylistRepository.EMBEDDING_MODEL_TAG,
+        )
+        await s.commit()
+    no = await room.say("No.", STRANGER, trigger="followup")
+    assert _reply(no) == "I wasn't able to save that voice profile."
+    assert [n for _, n in await _people()] == ["Kamron"]
+
+
+async def test_a_late_no_enrols_nobody(room, monkeypatch) -> None:
+    from domovoi.handlers import voice_profile
+
+    monkeypatch.setattr(voice_profile, "VOICE_ADD_TTL_SEC", -1.0)
+    await _person("Kamron", (KAMRON_OFFICE, "office"))
+    await room.say("My name is Kamron.", KAMRON_HERE)
+    late = await room.say("No.", KAMRON_HERE, trigger="followup")
+    assert _reply(late) == (
+        "That was a while ago, so I didn't add it. Say your name again if you'd like me to."
+    )
+    assert [n for _, n in await _people()] == ["Kamron"]
 
 
 async def test_two_people_with_the_name_at_a_satellite_are_never_guessed_between(room) -> None:
@@ -360,9 +419,11 @@ async def test_the_room_question_takes_no_answer_from_a_chat_mic(db_session) -> 
         r3 = await handler._handle_room_voice_add(
             {**asked_here, "origin": "phone", "origin_room": "phone-android-1"}, True, satellite, s,
         )
+        r4 = await handler._handle_room_voice_add(asked_here, False, chat_mic, s)
         await s.commit()
-    assert r1.text == r2.text == r3.text == elsewhere
+    assert r1.text == r2.text == r3.text == r4.text == elsewhere
     assert await _samples(kamron) == [("satellite", "office")]
+    assert len(await _people()) == 1
 
 
 # ─── Enrolment proper: the yes re-checks the name ────────────────────────

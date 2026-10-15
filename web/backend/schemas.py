@@ -301,10 +301,11 @@ class Person(BaseModel):
     voice_profile_count: int = 0
     presence_tier: Literal["low", "medium", "high"] = "high"
     # How many OTHER people have this name (case and surrounding space
-    # aside). Voice enrolment never makes a second person with a name, but
-    # an install may hold some from before that rule (or a parent and
-    # child): voice ID then won't guess between them when the name is
-    # said, and the People page says so until one is renamed or removed.
+    # aside). Voice enrolment makes a second person with a name only on
+    # purpose (a "no" to "I already know someone called X. Is that you?");
+    # an install may also hold some from before that rule. Voice ID won't
+    # guess between them when the name is said, and the People page says
+    # so until one is renamed or removed.
     namesakes: int = 0
 
 

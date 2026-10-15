@@ -261,7 +261,8 @@ satellite samples on the People page.
 rule (2026-10-15): for an X who exists, and who the voice was not matched
 as, the satellite asks "I already know someone called X. Is that you?",
 and a "yes" as the very next turn (within 60 s) adds that clip to X's
-**satellite** samples for that room, instead of enrolling a second X. Next
+**satellite** samples for that room; a "no" enrols a new person called X
+from that clip, and the People page flags the pair. Next
 to the learning from a run of confident matches, this is the one way a
 satellite sample is added to someone who already exists, and it rests on
 what the speaker says: a voice is not a password, and anyone in a room can

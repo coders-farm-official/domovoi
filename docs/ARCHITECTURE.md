@@ -171,9 +171,10 @@ prose:
    the chat mic), never learned. One name, one person: no enrolment path
    (a satellite's or the chat mic's "my name is …", a "this is my friend
    …" introduction, the People page's rename) makes a second person with
-   a name someone already has; "my name is X" for an existing X asks to
-   add this voice to X, and two people who already share a name are never
-   guessed between (`domovoi/handlers/voice_profile.py`).
+   a name someone already has without asking; at a satellite "my name is
+   X" for an existing X asks "Is that you?" — yes adds this voice to X, no
+   adds a new X — and two people who share a name are never guessed
+   between (`domovoi/handlers/voice_profile.py`).
 4. **Chat-mode bypass.** If the session is in conversational chat mode, the
    turn skips the command router entirely and goes to the Letta agent (or ends
    the chat on an exit phrase). Command mode pays only one session-context

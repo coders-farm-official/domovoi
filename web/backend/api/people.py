@@ -146,8 +146,9 @@ async def rename_person(person_id: int, payload: PersonRename) -> Person:
     "my name is …" finds them by.
 
     One name, one person (handlers/voice_profile.py): a name someone ELSE
-    already has (case and surrounding space aside) is refused with 409, so
-    the People page can't make the twin a voice enrolment no longer makes.
+    already has (case and surrounding space aside) is refused with 409:
+    renaming is how a pair of namesakes is told apart, never how one is
+    made.
     Changing only the case or spacing of a person's own name is fine.
     Checked and written under the same lock enrolment takes
     (``PeopleRepository.lock_names``). Admin tier, like deleting a person:

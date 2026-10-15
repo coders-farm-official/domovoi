@@ -4,19 +4,20 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
-## 2026-10-15 — One name, one person: satellites stop enrolling a second you
+## 2026-10-15 — One name, one person: satellites ask before a second you
 
 A server update (core and dashboard; no migration).
 
-* **"My name is Kamron" at a satellite no longer makes a second Kamron.**
-  If someone already has that name and the room doesn't recognize the
-  voice as them, Domovoi asks "I already know someone called Kamron. Is
-  that you?". A "yes" as your very next answer (within a minute) adds
-  that clip to Kamron's voice **for that room**, so the room knows you
-  from then on; "no" changes nothing and suggests a full name ("my name
-  is Kamron Smith") for a different Kamron. This is how you teach a new
-  room your voice. The phone's chat mic already worked this way (its own
-  "Add this phone's voice to …?").
+* **"My name is Kamron" at a satellite no longer makes a second Kamron
+  without asking.** If someone already has that name and the room
+  doesn't recognize the voice as them, Domovoi asks "I already know
+  someone called Kamron. Is that you?". A "yes" as your very next answer
+  (within a minute) adds that clip to Kamron's voice **for that room**,
+  so the room knows you from then on: this is how you teach a new room
+  your voice. A "no" adds you as a new Kamron right away ("Okay, I've
+  added you as a new Kamron. An admin can give one of you a different
+  name on the People page."). The phone's chat mic has its own question
+  ("Add this phone's voice to …?"), where "no" still adds nothing.
 * **A yes is a claim, not a proof.** Whoever answers "yes" adds their
   voice to that person's, as anyone in a room could already enrol a
   second person with the name. An admin sees every voice sample with its

@@ -407,7 +407,8 @@ class PeopleRepository:
     #: one-name-one-person rule is checked and the row written under it, so
     #: two enrolments of one new name at the same moment can't both see
     #: "nobody" and make two. Not a unique index: an install may already
-    #: hold two people with one name (enrolled before the rule, or a parent
+    #: hold two people with one name (a "no" to "is that you?", from before
+    #: the rule, or a parent
     #: and child), and they stay until an admin renames or removes one.
     NAME_LOCK_KEY = 0x646F6D6F6E616D65  # "domoname"
 

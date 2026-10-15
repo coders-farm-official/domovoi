@@ -35,7 +35,8 @@ internal data class Person(
     val voice_profile_count: Int = 0,
     val presence_tier: String? = null,
     /** How many OTHER people have this name (case and spacing aside). Voice
-     *  enrolment never makes a second person with a name; people who already
+     *  enrolment makes a second person with a name only when asked to (a
+     *  "no" to "I already know someone called X. Is that you?"); people who
      *  share one are never guessed between when the name is said, so the
      *  page flags them until one is renamed or removed. */
     val namesakes: Int = 0,

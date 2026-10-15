@@ -137,10 +137,11 @@ const PersonVoiceSamples = ({ samples, onDelete }) => (
 
 /* ---- Same name as somebody else ---------------------------- */
 /*
- * One name, one person (handlers/voice_profile.py): voice enrolment never
- * makes a second person with a name, and the rename below refuses one
- * someone else has (409). People who already share a name (enrolled
- * before that rule, or a parent and child) are flagged here, because when
+ * One name, one person (handlers/voice_profile.py): voice enrolment makes
+ * a second person with a name only when told to (a "no" to "I already know
+ * someone called X. Is that you?"), and the rename below refuses one
+ * someone else has (409). People who share a name (that "no", an
+ * enrolment from before the rule, a parent and child) are flagged here, because when
  * the name is said Domovoi won't guess which of them is meant — "my name
  * is …" and "who am I" both send the speaker to this page.
  */

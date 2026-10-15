@@ -3058,7 +3058,7 @@
           "people"
         ],
         "summary": "Rename Person",
-        "description": "Give a person another name \u2014 what voice ID calls them, and the name\n\"my name is \u2026\" finds them by.\n\nOne name, one person (handlers/voice_profile.py): a name someone ELSE\nalready has (case and surrounding space aside) is refused with 409, so\nthe People page can't make the twin a voice enrolment no longer makes.\nChanging only the case or spacing of a person's own name is fine.\nChecked and written under the same lock enrolment takes\n(``PeopleRepository.lock_names``). Admin tier, like deleting a person:\nit changes who the household's history and memories answer to.",
+        "description": "Give a person another name \u2014 what voice ID calls them, and the name\n\"my name is \u2026\" finds them by.\n\nOne name, one person (handlers/voice_profile.py): a name someone ELSE\nalready has (case and surrounding space aside) is refused with 409:\nrenaming is how a pair of namesakes is told apart, never how one is\nmade.\nChanging only the case or spacing of a person's own name is fine.\nChecked and written under the same lock enrolment takes\n(``PeopleRepository.lock_names``). Admin tier, like deleting a person:\nit changes who the household's history and memories answer to.",
         "operationId": "rename_person_api_people__person_id__patch",
         "parameters": [
           {
