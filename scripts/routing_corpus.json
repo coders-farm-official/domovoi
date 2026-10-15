@@ -694,6 +694,13 @@
       "note": "2026-10-14 music in another room: skip"
     },
     {
+      "utterance": "skip the song in the garage",
+      "handler": "music",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 ft run: how Whisper heard 'skip this song in the garage'"
+    },
+    {
       "utterance": "turn it up in the garage",
       "handler": "music",
       "path": "fast",
@@ -718,7 +725,7 @@
       "utterance": "could you put something relaxing on in the garage",
       "handler": "music",
       "tags": ["action", "rooms"],
-      "note": "2026-10-14 music in another room: a phrasing no fast path reads; the tool's 'room' argument carries the place"
+      "note": "2026-10-14 music in another room: the room path declines it ('something relaxing' names nothing in the library), so the tool model routes it, its 'room' argument carrying the place"
     }
   ]
 }

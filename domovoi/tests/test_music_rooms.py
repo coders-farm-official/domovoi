@@ -355,6 +355,7 @@ def _path(transcript: str) -> str | None:
     ("set the volume to 5 in the garage", "music._room_control_from_match"),
     ("what's playing in the garage", "music._room_control_from_match"),
     ("turn off the music in the garage", "music._room_control_from_match"),
+    ("skip the song in the garage", "music._room_control_from_match"),
     ("shuffle in the garage", "music._room_control_from_match"),
     ("in the garage, play some jazz", "music._room_first_from_match"),
     # Not a place at the end: today's paths, unchanged.
@@ -711,6 +712,9 @@ async def test_stop_pause_skip_and_whats_playing_in_another_room(house) -> None:
     resp = await _say("skip in the garage", ctx)
     assert resp.text == "Next track in the garage."
     assert garage._song["title"] == "two"
+    resp = await _say("Skip the song in the garage.", ctx)  # as Whisper heard "skip this song"
+    assert resp.text == "Next track in the garage."
+    assert garage._song["title"] == "three"
     assert (await _say("pause the music in the garage", ctx)).text == "Paused the music in the garage."
     assert garage._state == "pause"
     assert (await _say("resume the music in the garage", ctx)).text == "Resuming the music in the garage."

@@ -89,6 +89,10 @@ CONTROL_ALIASES: dict[str, str] = {
     "turn the music off": "stop",
     "shut off the music": "stop",
     "pause the song": "pause",
+    # Whisper's usual hearing of "skip this song" (ft run 2026-10-15).
+    "skip the song": "skip",
+    "skip the track": "skip",
+    "skip that song": "skip",
     "what's on": "what's playing",
     "what is on": "what's playing",
     "what song is playing": "what's playing",
