@@ -177,3 +177,17 @@ def test_the_pinned_certificate_signed_by_another_key_is_refused():
         sig.verify(FIX / "forged-cert-arm64-v8a.apk")
     assert "does not carry the key that signed" in str(e.value)
     assert META["forged-cert-arm64-v8a.apk"]["apksigner_verifies"] is False, "apksigner refuses it too"
+
+
+@pytest.mark.parametrize("name,words", [
+    ("digest-list-arm64-v8a.apk", "name different algorithms"),
+    ("mixed-v3-arm64-v8a.apk", "v2 and v3 signers differ"),
+])
+def test_signers_android_would_refuse_are_refused(name, words):
+    """Validly signed, but not as Android accepts: a digest with no
+    signature beside it; the release key's v2 block next to another key's
+    v3 block (a phone on Android 9+ would take the v3 signer)."""
+    with pytest.raises(sig.ApkSignatureError) as e:
+        sig.verify(FIX / name)
+    assert words in str(e.value)
+    assert META[name]["apksigner_verifies"] is False

@@ -187,37 +187,90 @@ def _first_cert(apk: Path) -> bytes:
     raise SystemExit(f"no v2 block in {apk}")
 
 
-def forge_cert(src: Path, dest: Path, foreign_cert: bytes, n: int, d: int) -> None:
-    data = src.read_bytes()
+def _blocks(data: bytes) -> tuple[int, int, int, dict[int, bytes]]:
+    """(signing block offset, central directory offset, end record offset,
+    {scheme id: value}) of a signed APK."""
     eocd = data.rindex(b"PK\x05\x06")
-    cd_size, cd_off = struct.unpack_from("<II", data, eocd + 12)
+    _, cd_off = struct.unpack_from("<II", data, eocd + 12)
     size = struct.unpack_from("<Q", data, cd_off - 24)[0]
     block_off = cd_off - size - 8
-    pairs, pos, v2 = data[block_off + 8:cd_off - 24], 0, None
+    pairs, pos, out = data[block_off + 8:cd_off - 24], 0, {}
     while pos < len(pairs):
         ln = struct.unpack_from("<Q", pairs, pos)[0]
-        if struct.unpack_from("<I", pairs, pos + 8)[0] == 0x7109871A:
-            v2 = pairs[pos + 12:pos + 8 + ln]
+        out[struct.unpack_from("<I", pairs, pos + 8)[0]] = pairs[pos + 12:pos + 8 + ln]
         pos += 8 + ln
-    signer = _R(_R(v2).items()[0])
-    signed, sigs, pub = signer.lp(), signer.items(), signer.lp()
-    sd = _R(signed)
-    digests, _certs, attrs = sd.items(), sd.items(), sd.items()
-    new_signed = _seq(digests) + _seq([foreign_cert]) + _seq(attrs)
-    algo = _R(sigs[0]).u32()
-    assert algo == 0x0103, "the forger's key is the RSA-2048 one (SHA-256)"
-    k = (n.bit_length() + 7) // 8
-    t = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(new_signed).digest()
-    em = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
-    sig = pow(int.from_bytes(em, "big"), d, n).to_bytes(k, "big")
-    new_signer = _lp(new_signed) + _seq([struct.pack("<I", algo) + _lp(sig)]) + _lp(pub)
-    value = _seq([new_signer])
-    new_pairs = struct.pack("<Q", 4 + len(value)) + struct.pack("<I", 0x7109871A) + value
-    blk_size = len(new_pairs) + 24
-    block = struct.pack("<Q", blk_size) + new_pairs + struct.pack("<Q", blk_size) + b"APK Sig Block 42"
+    return block_off, cd_off, eocd, out
+
+
+def _assemble(data: bytes, values: list[tuple[int, bytes]]) -> bytes:
+    """``data`` with its signing block replaced by one holding ``values``."""
+    block_off, cd_off, eocd, _ = _blocks(data)
+    pairs = b"".join(struct.pack("<Q", 4 + len(v)) + struct.pack("<I", i) + v for i, v in values)
+    size = len(pairs) + 24
+    block = struct.pack("<Q", size) + pairs + struct.pack("<Q", size) + b"APK Sig Block 42"
     new_eocd = bytearray(data[eocd:])
     struct.pack_into("<I", new_eocd, 16, block_off + len(block))
-    dest.write_bytes(data[:block_off] + block + data[cd_off:eocd] + bytes(new_eocd))
+    return data[:block_off] + block + data[cd_off:eocd] + bytes(new_eocd)
+
+
+def _sign_sha256(n: int, d: int, message: bytes) -> bytes:
+    k = (n.bit_length() + 7) // 8
+    t = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(message).digest()
+    em = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
+    return pow(int.from_bytes(em, "big"), d, n).to_bytes(k, "big")
+
+
+def _v2_parts(value: bytes) -> tuple[list[bytes], list[bytes], list[bytes], bytes]:
+    """(digests, certificates, attributes, public key) of a v2 block's one signer."""
+    signer = _R(_R(value).items()[0])
+    signed, _sigs, pub = signer.lp(), signer.items(), signer.lp()
+    sd = _R(signed)
+    return sd.items(), sd.items(), sd.items(), pub
+
+
+def _v2_value(digests: list[bytes], certs: list[bytes], attrs: list[bytes], pub: bytes,
+              n: int, d: int) -> bytes:
+    signed = _seq(digests) + _seq(certs) + _seq(attrs)
+    signer = _lp(signed) + _seq([struct.pack("<I", 0x0103) + _lp(_sign_sha256(n, d, signed))]) + _lp(pub)
+    return _seq([signer])
+
+
+def forge_cert(src: Path, dest: Path, foreign_cert: bytes, n: int, d: int) -> None:
+    """``src`` (signed by the key n, d; SHA-256) re-signed with
+    ``foreign_cert`` in place of its own certificate; v2 only."""
+    data = src.read_bytes()
+    digests, _certs, attrs, pub = _v2_parts(_blocks(data)[3][0x7109871A])
+    dest.write_bytes(_assemble(data, [(0x7109871A, _v2_value(digests, [foreign_cert], attrs, pub, n, d))]))
+
+
+def forge_digest_list(src: Path, dest: Path, n: int, d: int) -> None:
+    """``src`` re-signed (validly, by its own key) with one more digest in its
+    signed data than it has signatures: Android refuses the mismatch."""
+    data = src.read_bytes()
+    digests, certs, attrs, pub = _v2_parts(_blocks(data)[3][0x7109871A])
+    extra = struct.pack("<I", 0x0104) + _lp(b"\x00" * 64)
+    dest.write_bytes(_assemble(data, [(0x7109871A, _v2_value(digests + [extra], certs, attrs, pub, n, d))]))
+
+
+def forge_mixed_v3(src: Path, dest: Path, other_cert: bytes, n: int, d: int) -> None:
+    """``src``'s own v2 block (the release key's) next to a v3 block signed,
+    validly, by another key over the same contents: two signers."""
+    sys.path.insert(0, str(REPO))
+    from domovoi import apk_signature
+
+    data = src.read_bytes()
+    block_off, cd_off, eocd, values = _blocks(data)
+    eocd_for_digest = data[eocd:eocd + 16] + struct.pack("<I", block_off) + data[eocd + 20:]
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    with open(tmp, "rb") as f:
+        digest = apk_signature._chunked_digest(f, "sha256", [(0, block_off), (cd_off, eocd), eocd_for_digest])
+    tmp.unlink()
+    sdk = struct.pack("<II", 26, 0x7FFFFFFF)
+    signed = _seq([struct.pack("<I", 0x0103) + _lp(digest)]) + _seq([other_cert]) + sdk + _seq([])
+    pub = apk_signature.certificate_public_key(other_cert)
+    signer = _lp(signed) + sdk + _seq([struct.pack("<I", 0x0103) + _lp(_sign_sha256(n, d, signed))]) + _lp(pub)
+    dest.write_bytes(_assemble(data, [(0x7109871A, values[0x7109871A]), (0xF05368C0, _seq([signer]))]))
 
 
 def describe(apk: Path) -> dict:
@@ -277,6 +330,13 @@ def main() -> int:
         forge_cert(OUT / "other-arm64-v8a.apk", OUT / "forged-cert-arm64-v8a.apk", release_cert, n, d)
         plan.append(("forged-cert-arm64-v8a.apk", ["arm64-v8a"], "other",
                      {}, "the release certificate in a signer whose key is another: refused"))
+        forge_digest_list(OUT / "other-arm64-v8a.apk", OUT / "digest-list-arm64-v8a.apk", n, d)
+        plan.append(("digest-list-arm64-v8a.apk", ["arm64-v8a"], "other",
+                     {}, "a digest with no signature beside it: refused"))
+        forge_mixed_v3(OUT / "release-arm64-v8a.apk", OUT / "mixed-v3-arm64-v8a.apk",
+                       _first_cert(OUT / "other-arm64-v8a.apk"), n, d)
+        plan.append(("mixed-v3-arm64-v8a.apk", ["arm64-v8a"], "release",
+                     {}, "the release key's v2 block, another key's (valid) v3 block: refused"))
         for name, abis, key, schemes, about in plan:
             data = (OUT / name).read_bytes()
             manifest["files"][name] = {

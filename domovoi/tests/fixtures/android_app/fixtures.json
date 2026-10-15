@@ -8,9 +8,9 @@
         "arm64-v8a"
       ],
       "size": 28953,
-      "sha256": "ff17d7eb8b9a3be27d1a303ca74a90a537009af63fa8d39b6e94ed2ed269eaa7",
+      "sha256": "beae4082554d1563389427b12e6776d4f5b983650ac7a995755b8bfe8bc744be",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
+      "apksigner_cert_sha256": "8b1816456fda73ae9f70b23b082e4904a772d98c9b9c2efca4e53472651b8f7d",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -21,9 +21,9 @@
         "armeabi-v7a"
       ],
       "size": 28955,
-      "sha256": "0ed768b78ca543ffbf416abba5a207b9f1419ac575acfe8d935ac297fb89e0d1",
+      "sha256": "89fa3bb31a4e41412e828ac68f8057b5f6b5c37003c326ccd3bc7043d19f9cac",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
+      "apksigner_cert_sha256": "8b1816456fda73ae9f70b23b082e4904a772d98c9b9c2efca4e53472651b8f7d",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -34,9 +34,9 @@
         "arm64-v8a"
       ],
       "size": 24857,
-      "sha256": "550695d270d7a0716378b3ab7aedfa03eca8c71d68475aef05039246e87c71ce",
+      "sha256": "d401278ce3cea87580916ab411091ffb6ae76012a3688b85c1675ff93a906574",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
+      "apksigner_cert_sha256": "8b1816456fda73ae9f70b23b082e4904a772d98c9b9c2efca4e53472651b8f7d",
       "apksigner_v2": true,
       "apksigner_v3": false
     },
@@ -48,9 +48,9 @@
         "armeabi-v7a"
       ],
       "size": 45412,
-      "sha256": "0182acbebfdb50264735526a5a11e833f1705c95f0ca0a600be0e972377dc2e2",
+      "sha256": "56845534b3505f1954b1a505e12ba9969c0e37af977e0aae9924125d08d274f7",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "abc652cb82375ae7cf18163b13197578d57bf40ceb862c96643c35f124a0be05",
+      "apksigner_cert_sha256": "8b1816456fda73ae9f70b23b082e4904a772d98c9b9c2efca4e53472651b8f7d",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -61,9 +61,9 @@
         "arm64-v8a"
       ],
       "size": 24857,
-      "sha256": "223cf78f4d226483570e45d0160952d46e4f9b3f292bff20e004eb304b1defb4",
+      "sha256": "01b84e8eb5335e594c8838367c1d9ad69be35ea22e3c4ce9ee60494049e0348d",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "e23d63a16629471c0f0c6e301143fde31646774c80e5d896f81708cfe6f0daa2",
+      "apksigner_cert_sha256": "308e208758dbe2846aaa8a35d434682346d3d948fb431023017b45ddccf80a76",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -74,9 +74,9 @@
         "arm64-v8a"
       ],
       "size": 24857,
-      "sha256": "54218deb37823ad51573189eba997388a879c53f85ab18311f8805f4dd8673e5",
+      "sha256": "124a37c8d1afcf2f6b115d3a2d01054bdf6be727c60d9f9bcb6994bdb3b0c314",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "6f7e262eda2a40a4fe387b112019410c218599426c1782a34ecfd19df3aaeae9",
+      "apksigner_cert_sha256": "82904339c507513bb76a2b4658ff5e25a6cda0e1547c628fe699f5ee7af3f49e",
       "apksigner_v2": true,
       "apksigner_v3": true
     },
@@ -86,10 +86,10 @@
       "abis": [
         "arm64-v8a"
       ],
-      "size": 19172,
-      "sha256": "f0a1943c1e831bd627386e50d6043709dd9b45dbd4fbcb07368fafd645ca493a",
+      "size": 19167,
+      "sha256": "585421c477e7c4092f774b0d06b6e291e19d4b62f46b843995ccca9884eecdce",
       "apksigner_verifies": true,
-      "apksigner_cert_sha256": "e23d63a16629471c0f0c6e301143fde31646774c80e5d896f81708cfe6f0daa2",
+      "apksigner_cert_sha256": "308e208758dbe2846aaa8a35d434682346d3d948fb431023017b45ddccf80a76",
       "apksigner_v2": false,
       "apksigner_v3": false
     },
@@ -100,7 +100,7 @@
         "arm64-v8a"
       ],
       "size": 1003,
-      "sha256": "1ce8671c0bd84141bfb4cdcf3f6ebf114811dbfbfdf584172822605bb4f79239",
+      "sha256": "a5fb2046585b05ba274da298cfae615a4dbe9f0f0607829a96d7d4032cf01be0",
       "apksigner_verifies": false,
       "apksigner_cert_sha256": null,
       "apksigner_v2": false,
@@ -112,8 +112,34 @@
       "abis": [
         "arm64-v8a"
       ],
-      "size": 22789,
-      "sha256": "da580307310d1d24edbf1f63381b1f526f7e482629865fd0705230358ba4bd97",
+      "size": 22788,
+      "sha256": "466eaea056cb39d3668af296fef9d853967098925f0c345f6c06fef8953d8fdb",
+      "apksigner_verifies": false,
+      "apksigner_cert_sha256": null,
+      "apksigner_v2": false,
+      "apksigner_v3": false
+    },
+    "digest-list-arm64-v8a.apk": {
+      "about": "a digest with no signature beside it: refused",
+      "key": "other",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 22352,
+      "sha256": "91c60e6a64cd7d7e59d253d54ea2b642c988267477d4110b8cc5a317f6264f8e",
+      "apksigner_verifies": false,
+      "apksigner_cert_sha256": null,
+      "apksigner_v2": false,
+      "apksigner_v3": false
+    },
+    "mixed-v3-arm64-v8a.apk": {
+      "about": "the release key's v2 block, another key's (valid) v3 block: refused",
+      "key": "release",
+      "abis": [
+        "arm64-v8a"
+      ],
+      "size": 24823,
+      "sha256": "e2d5ad8bd4b2f61a00c0dd3271e7a7f131efe8e0d7976fd383da47cb835b37f3",
       "apksigner_verifies": false,
       "apksigner_cert_sha256": null,
       "apksigner_v2": false,
