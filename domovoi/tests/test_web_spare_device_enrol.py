@@ -40,16 +40,42 @@ class Req:
     client = None
 
 
+IDLE = {"running": False, "started_at": None, "finished_at": None, "ok": None, "message": None}
+APP_NONE = {"release": None, "apks": [], "ready": False, "missing": [], "bytes_total": 0, "bytes_cached": 0,
+            "upload_max": 0, "internet_off": False, "fetch": IDLE}
+APP_APKS = [
+    {"abi": "arm64-v8a", "file": "domovoi-9.9.9-arm64-v8a.apk", "size": 79409584, "ready": False,
+     "path": "/v1/android-app/files/domovoi-9.9.9-arm64-v8a.apk"},
+    {"abi": "armeabi-v7a", "file": "domovoi-9.9.9-armeabi-v7a.apk", "size": 47927662, "ready": False,
+     "path": "/v1/android-app/files/domovoi-9.9.9-armeabi-v7a.apk"},
+]
+APP_MISSING = dict(APP_NONE, release={"version_name": "9.9.9", "version_code": 99, "cert_sha256": "ab" * 32},
+                   apks=APP_APKS, missing=[a["file"] for a in APP_APKS], bytes_total=127337246,
+                   upload_max=79409584)
+APP_READY = dict(APP_MISSING, ready=True, missing=[], bytes_cached=127337246,
+                 apks=[dict(a, ready=True) for a in APP_APKS])
+
+
 @pytest.fixture
 def core(monkeypatch):
     answers = {
         "/v1/health": (200, {"status": "ok", "identity": {"fingerprint": FP, "algorithm": "ed25519"}}),
         "/v1/satellite-code/bundle.sha256": (200, {"sha256": SHA, "size": 812345, "files": 70}),
         "/v1/admin/satellite-windows": (200, WIN_RUNTIME),
+        "/v1/admin/android-app": (200, APP_NONE),
     }
+    posted: list[str] = []
+    answers["posted"] = posted
 
     async def get_admin(path, headers=None, **kw):
         return answers[path]
+
+    async def post_admin(path, body=None, headers=None, **kw):
+        posted.append(path)
+        return 200, dict(answers["/v1/admin/android-app"][1], started=True,
+                         fetch=dict(IDLE, running=True))
+
+    monkeypatch.setattr(web_sats, "post_admin", post_admin)
 
     async def rooms():
         return [{"room_id": "kitchen"}, {"room_id": "office"}]
@@ -364,3 +390,232 @@ def test_the_card_gives_windows_its_command_the_unsigned_warning_and_the_files_b
     assert "not as administrator" in text or "Run as administrator" in text
     assert "get the Windows files" in text and "96 MB" in text
     assert any("windows-runtime/fetch" in json.dumps(c) for c in r["calls"]), "the button asks the server"
+
+
+# ─── the phone's join link and the app this server hands out (2026-10-15) ──
+
+async def test_the_qr_is_a_join_link_the_app_parses_like_the_payload(core):
+    got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Kid's Room"), Req())
+    assert got["join_url"] == "http://192.168.0.117:6370/join#" + got["payload"]
+    assert enrolment.parse(got["join_url"]) == enrolment.parse(got["payload"])
+    assert got["android_app"] == APP_NONE
+    assert core["posted"] == [], "no release: nothing to fetch"
+
+
+@pytest.mark.parametrize("policy,app,fetches", [
+    ("always", APP_MISSING, True),
+    ("", APP_MISSING, True),                                   # not answered: today's behaviour
+    ("sometimes", APP_MISSING, False),                         # slow or metered: the button
+    ("always", dict(APP_MISSING, internet_off=True), False),
+    ("always", dict(APP_MISSING, fetch=dict(IDLE, running=True)), False),
+    ("always", dict(APP_MISSING, fetch=dict(IDLE, ok=False, message="HTTP 404")), False),
+    ("always", APP_READY, False),
+])
+async def test_making_a_code_fetches_the_app_by_itself_only_on_an_unmetered_line(core, monkeypatch, policy, app, fetches):
+    from domovoi import egress
+
+    core["/v1/admin/android-app"] = (200, app)
+    monkeypatch.setattr(egress, "policy", lambda: policy)
+    got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Den"), Req())
+    assert (core["posted"] == ["/v1/admin/android-app/fetch"]) is fetches
+    assert got["android_app"]["fetch"]["running"] is (fetches or app["fetch"]["running"])
+
+
+async def test_the_app_routes_go_to_the_core_with_the_right_tiers(monkeypatch):
+    seen = []
+
+    async def get_admin(path, headers=None, **kw):
+        seen.append(("GET", path))
+        return 200, APP_MISSING
+
+    async def post_admin(path, body=None, headers=None, **kw):
+        seen.append(("POST", path))
+        return 200, dict(APP_MISSING, started=True)
+
+    monkeypatch.setattr(web_sats, "get_admin", get_admin)
+    monkeypatch.setattr(web_sats, "post_admin", post_admin)
+    assert (await web_sats.android_app_status(Req())) == APP_MISSING
+    assert (await web_sats.android_app_fetch(Req()))["started"] is True
+    assert seen == [("GET", "/v1/admin/android-app"), ("POST", "/v1/admin/android-app/fetch")]
+    from domovoi.admin_auth import require_admin_mutation, require_admin_read
+    from web.backend.api import devices
+
+    routes = {r.path: r for r in web_sats.router.routes}
+    assert any(d.dependency is require_admin_read for d in routes["/api/satellites/android-app"].dependencies)
+    for path in ("/api/satellites/android-app/fetch", "/api/satellites/android-app/upload"):
+        assert any(d.dependency is require_admin_mutation for d in routes[path].dependencies), path
+        assert routes[path].methods == {"POST"}
+    household = next(r for r in devices.router.routes if r.path == "/api/devices/android-app")
+    assert not household.dependencies, "open, like the page it points at"
+
+
+class _StreamReq(Req):
+    def __init__(self, body: bytes, content_type: str):
+        self.headers = {"content-type": content_type, "content-length": str(len(body))}
+        self._body = body
+
+    async def stream(self):
+        for i in range(0, len(self._body), 7):
+            yield self._body[i:i + 7]
+
+
+async def test_the_upload_is_streamed_to_the_core_and_its_answer_passed_back(monkeypatch):
+    import httpx
+
+    sent = {}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, content=None, headers=None):
+            sent["url"], sent["headers"] = url, headers
+            sent["body"] = b"".join([c async for c in content])
+            return httpx.Response(422, json={"detail": {"reason": "unknown", "message": "not one of them"}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:6370")
+    body = b"--b\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.apk\"\r\n\r\nPK\r\n--b--\r\n"
+    resp = await web_sats.android_app_upload(_StreamReq(body, "multipart/form-data; boundary=b"))
+    assert sent["url"] == "http://127.0.0.1:6370/v1/admin/android-app/upload"
+    assert sent["body"] == body and sent["headers"]["Content-Type"].startswith("multipart/form-data")
+    assert sent["headers"]["Content-Length"] == str(len(body))
+    assert resp.status_code == 422 and json.loads(resp.body)["detail"]["reason"] == "unknown"
+    with pytest.raises(HTTPException) as e:
+        await web_sats.android_app_upload(_StreamReq(b"{}", "application/json"))
+    assert e.value.status_code == 415
+
+
+async def test_household_phones_get_the_join_page_without_a_room_code(monkeypatch):
+    from web.backend.api import devices
+    from web.backend import domovoi_client
+
+    async def get_admin(path, headers=None, **kw):
+        assert path == "/v1/android-app" and not headers, "the core's public view, no credential"
+        return 200, {"release": APP_READY["release"], "apks": APP_READY["apks"], "ready": True}
+
+    monkeypatch.setattr(domovoi_client, "get_admin", get_admin)
+    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.0.117:6370")
+    got = await devices.android_app_for_household_phones()
+    assert got["join_url"] == "http://192.168.0.117:6370/join" and got["ready"] is True
+    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://127.0.0.1:6370")
+    got = await devices.android_app_for_household_phones()
+    assert got["join_url"] is None and "home network" in got["join_problem"]
+
+
+_PHONE_SCRIPT = r"""
+const w = h.global('window'); h.render(); await w.__settle(h);
+const isBtn = (label) => (e) => e.type === 'button' && w.__deep(e).includes(label);
+await h.click(isBtn('add a spare device')); await w.__settle(h);
+h.type({ placeholder: "room name, e.g. Kid's Room" }, "Kid's Room");
+await w.__settle(h);
+await h.click(isBtn('make the code')); await w.__settle(h, 10);
+const phone = h.find((e) => String((e.props && e.props.className) || '').includes('spare-phone'));
+const app = () => h.find((e) => String((e.props && e.props.className) || '').includes('spare-app'));
+const out = { text: (phone ? w.__deep(phone) : '') + ' | ' + (app() ? w.__deep(app()) : ''),
+              qr: w.__qrData.slice(), buttons: [] };
+out.buttons = app() ? h.findAll((e) => e.type === 'button' && h.ancestors(e).includes(app())).map(w.__deep) : [];
+if (w.__act === 'fetch') { await h.click(isBtn('get the app')); await w.__settle(h, 10); }
+if (w.__act === 'upload') {
+  const input = h.find((e) => e.type === 'input' && e.props.type === 'file');
+  await input.props.onChange({ target: { files: [{ name: 'domovoi-9.9.9-arm64-v8a.apk' }] } });
+  await w.__settle(h, 10);
+}
+out.after = app() ? w.__deep(app()) : '';
+out.calls = h.calls;
+return out;
+"""
+
+_QR_SPY = r"""
+window.__qrData = [];
+const __qr = qrcode;
+window.qrcode = (...a) => { const q = __qr(...a); const add = q.addData.bind(q); q.addData = (t) => { window.__qrData.push(t); return add(t); }; return q; };
+"""
+
+
+@pytest.fixture(scope="module")
+def phone(tmp_path_factory) -> dict:
+    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
+    base = {
+        "payload": payload, "join_url": enrolment.join_link(payload), "room": "Kid's Room", "room_id": "kids_room",
+        "core": "http://192.168.0.117:6370", "fingerprint": FP, "bundle_sha256": SHA, "bundle_size": 812345,
+        "command": "c", "command_windows": None, "windows_runtime": None, "conflict": None,
+    }
+    qr_js = (REPO / "web" / "static" / "vendor" / "qrcode" / "qrcode.js").read_text(encoding="utf-8")
+    common = {"GET /api/satellites": [], "GET /api/satellites/approvals": [],
+              "GET /api/satellites/pending": [], "GET /api/capabilities": {"host_kind": "linux"}}
+
+    def scenario(app, act="", extra=None):
+        api = dict(common, **{"POST /api/satellites/enrolment": dict(base, android_app=app)}, **(extra or {}))
+        return {"files": FILES, "component": "SatellitesPanel", "api": api, "script": _PHONE_SCRIPT,
+                "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY + f"\nwindow.__act = {act!r};\n"}
+
+    def card(app):
+        return {"files": FILES, "component": "GetTheAppCard",
+                "api": {"GET /api/devices/android-app": app},
+                "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY,
+                "script": "const w = h.global('window'); h.render(); await w.__settle(h); "
+                          "return { text: h.text().join(' '), qr: w.__qrData.slice() };"}
+
+    ready_public = {"join_url": "http://192.168.0.117:6370/join", "join_problem": None,
+                    "release": APP_READY["release"], "apks": APP_READY["apks"], "ready": True}
+    return _drive({
+        "none": scenario(APP_NONE),
+        "missing": scenario(APP_MISSING, "fetch",
+                            {"POST /api/satellites/android-app/fetch": dict(APP_MISSING, fetch=dict(IDLE, running=True))}),
+        "offline": scenario(dict(APP_MISSING, internet_off=True), "upload",
+                            {"UPLOAD /api/satellites/android-app/upload": dict(
+                                APP_READY, accepted="domovoi-9.9.9-arm64-v8a.apk")}),
+        "ready": scenario(APP_READY),
+        "card_ready": card(ready_public),
+        "card_none": card(dict(ready_public, release=None, apks=[], ready=False)),
+        "card_missing": card(dict(ready_public, ready=False)),
+    }, tmp_path_factory.mktemp("spare-phone"))
+
+
+def test_the_phone_qr_carries_the_join_link(phone):
+    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
+    assert phone["none"]["qr"] == [enrolment.join_link(payload)]
+    assert "phone's camera" in phone["none"]["text"]
+
+
+def test_no_release_is_said_plainly_with_no_buttons(phone):
+    r = phone["none"]
+    assert "No app release yet" in r["text"]
+    assert r["buttons"] == [], "no dead buttons"
+
+
+def test_a_missing_app_offers_the_fetch_and_an_upload(phone):
+    r = phone["missing"]
+    assert "doesn’t have Domovoi 9.9.9 yet" in r["text"] and "64-bit 79 MB" in r["text"] and "32-bit 48 MB" in r["text"]
+    assert any("get the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
+    assert any(c.get("path") == "/api/satellites/android-app/fetch" for c in r["calls"])
+    assert "Getting Domovoi 9.9.9 onto this server" in r["after"]
+
+
+def test_with_internet_off_only_the_upload_is_offered_and_it_lands(phone):
+    r = phone["offline"]
+    assert "Internet access is off" in r["text"] and "domovoi-9.9.9-arm64-v8a.apk" in r["text"]
+    assert not any("get the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
+    assert any(c.get("method") == "UPLOAD" and c.get("path") == "/api/satellites/android-app/upload" for c in r["calls"])
+    assert "This server hands out Domovoi 9.9.9" in r["after"]
+
+
+def test_a_ready_server_says_what_it_hands_out(phone):
+    r = phone["ready"]
+    assert "This server hands out Domovoi 9.9.9 (64-bit 79 MB, 32-bit 48 MB)" in r["text"]
+    assert r["buttons"] == []
+
+
+def test_settings_devices_offers_the_app_to_household_phones(phone):
+    r = phone["card_ready"]
+    assert "Get the Domovoi app" in r["text"] and "http://192.168.0.117:6370/join" in r["text"]
+    assert r["qr"] == ["http://192.168.0.117:6370/join"]
+    assert "No app release yet" in phone["card_none"]["text"] and phone["card_none"]["qr"] == []
+    assert "doesn’t have Domovoi 9.9.9 yet" in phone["card_missing"]["text"] and phone["card_missing"]["qr"] == []

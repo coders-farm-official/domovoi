@@ -2438,6 +2438,98 @@ const SpareWindows = ({ res, fire }) => {
   );
 };
 
+/* The Android app this server hands phones (2026-10-15,
+ * domovoi/android_app.py). The release android/release.json pins comes
+ * from the project's GitHub release, by itself when the code is made on an
+ * unmetered line, else with the button here, or as a file an admin uploads
+ * (a house with internet access off). The server keeps an APK only when it
+ * is one the release names and its signature is the release key's. Until
+ * a first release exists this says so plainly, with no buttons. */
+const spareAppMessage = (e) => {
+  const d = e && e.detail && e.detail.detail;
+  return (d && typeof d === 'object' && typeof d.message === 'string') ? d.message : apiErrorText(e, 300);
+};
+const SparePhoneApp = ({ app: initial, fire }) => {
+  const [app, setApp] = React.useState(initial || null);
+  const [busy, setBusy] = React.useState(false);
+  const fileRef = React.useRef(null);
+  React.useEffect(() => { setApp(initial || null); }, [initial]);
+  const running = !!(app && app.fetch && app.fetch.running);
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(async () => {
+      try { setApp(await apiGet('/api/satellites/android-app')); } catch (e) { /* keep the last */ }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [running]);
+  const getApp = async () => {
+    setBusy(true);
+    try { setApp(await apiPost('/api/satellites/android-app/fetch', {})); }
+    catch (e) { fire(spareAppMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const upload = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await apiUpload('/api/satellites/android-app/upload', fd);
+      setApp(r);
+      fire(`this server now hands out ${r.accepted}`);
+    } catch (e) {
+      fire(spareAppMessage(e));
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+  const note = { fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 };
+  if (!app) return <div className="spare-app" style={note}>Couldn’t ask the server about the Android app.</div>;
+  if (!app.release) {
+    return (
+      <div className="spare-app spare-app-none" role="note" style={note}>
+        No app release yet: the page tells the phone so. A phone that already has the Domovoi app
+        can still use this code in Domovoi Room.
+      </div>
+    );
+  }
+  const v = app.release.version_name;
+  const sizes = (app.apks || []).map(a => `${a.abi === 'armeabi-v7a' ? '32-bit' : '64-bit'} ${spareMb(a.size)}`).join(', ');
+  if (app.ready) {
+    return (
+      <div className="spare-app spare-app-ready" style={note}>
+        This server hands out Domovoi {v} ({sizes}).
+      </div>
+    );
+  }
+  const last = app.fetch && app.fetch.ok === false && app.fetch.message;
+  return (
+    <div className="spare-app spare-app-missing" style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div>
+        {running
+          ? <>Getting Domovoi {v} onto this server from GitHub ({spareMb(app.bytes_total)})…</>
+          : app.internet_off
+            ? <>Internet access is off here, so this server can’t download Domovoi {v}. Upload its APKs
+                ({(app.missing || []).join(', ')}) from the release on GitHub instead.</>
+            : <>This server doesn’t have Domovoi {v} yet ({sizes}); the page tells the phone so.</>}
+      </div>
+      {last && !running && <div style={{ color: 'var(--err)' }}>Last try: {last}</div>}
+      {!running && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {!app.internet_off && <Button icon="download" disabled={busy} onClick={getApp}>get the app</Button>}
+          <Button icon="upload" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>
+            {busy ? 'checking…' : 'upload an APK'}
+          </Button>
+          <input ref={fileRef} type="file" accept=".apk,application/vnd.android.package-archive" hidden
+                 aria-label="upload an APK of the release"
+                 onChange={e => upload(e.target.files && e.target.files[0])}/>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SpareDeviceCard = ({ fire }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
@@ -2548,12 +2640,15 @@ const SpareDeviceCard = ({ fire }) => {
                     updating Domovoi.
                   </div>
                 </div>
-                <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div className="label">phone or tablet</div>
-                  <SpareQr text={res.payload}/>
-                  <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', maxWidth: 216, lineHeight: 1.5 }}>
-                    In the Domovoi app: Settings → Satellites → Use this device as a room, then scan.
+                <div className="spare-phone" style={{ flex: '0 1 260px', minWidth: 216, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="label">phone or tablet (android 8 or newer)</div>
+                  <SpareQr text={res.join_url || res.payload}/>
+                  <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                    Scan it with the phone's camera: it opens a page on this server that installs the
+                    Domovoi app and starts it as this room. A phone that already has the app: open
+                    Domovoi Room and scan it there.
                   </div>
+                  <SparePhoneApp app={res.android_app} fire={fire}/>
                 </div>
               </div>
               {res.command_windows && <SpareWindows res={res} fire={fire}/>}

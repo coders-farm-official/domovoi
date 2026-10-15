@@ -3512,6 +3512,55 @@ const PhoneBarPanel = () => {
   return <><PhoneBarCard fire={fire}/>{toastNode}</>;
 };
 
+/* Get the Domovoi app (2026-10-15): this server hands its household's
+ * Android phones the app (domovoi/android_app.py, the join page at
+ * <server>/join). Scan the code with the phone's camera, or open the link
+ * on it. Until a first release exists, the card says so and offers nothing. */
+const GetTheAppCard = () => {
+  const [app, setApp] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    apiGet('/api/devices/android-app', { quiet: true })
+      .then(r => { if (alive) setApp(r); })
+      .catch(e => { if (alive) setErr(apiErrorText(e)); });
+    return () => { alive = false; };
+  }, []);
+  const note = (t) => <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>{t}</div>;
+  const sub = 'For this home’s Android phones and tablets (Android 8 or newer): from this server, no store.';
+  if (err) return <Card title="Get the Domovoi app" sub={sub}>{note(`Couldn’t ask the server: ${err}`)}</Card>;
+  if (!app) return <Card title="Get the Domovoi app" sub={sub}>{note('loading…')}</Card>;
+  if (app.unreachable) return <Card title="Get the Domovoi app" sub={sub}>{note('The Domovoi server isn’t answering right now.')}</Card>;
+  if (!app.release) {
+    return <Card title="Get the Domovoi app" sub={sub}>{note('No app release yet. When there is one, this server offers it here.')}</Card>;
+  }
+  if (!app.ready) {
+    return (
+      <Card title="Get the Domovoi app" sub={sub}>
+        {note(`This server doesn’t have Domovoi ${app.release.version_name} yet. An admin gets it under Settings → Satellites → add a spare device (get the app).`)}
+      </Card>
+    );
+  }
+  return (
+    <Card title="Get the Domovoi app" sub={sub}>
+      <div className="get-app" style={{ padding: '12px 16px', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {app.join_url && <SpareQr text={app.join_url}/>}
+        <div style={{ flex: '1 1 220px', minWidth: 0, fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.6 }}>
+          {app.join_url ? (
+            <>
+              <div>Scan this with the phone’s camera, or open this link on the phone:</div>
+              <div className="mono" style={{ wordBreak: 'break-all', color: 'var(--fg)', margin: '4px 0 8px' }}>{app.join_url}</div>
+              <div>The page there downloads Domovoi {app.release.version_name} and shows how to install it. Then open the app: it finds this server on your Wi-Fi.</div>
+            </>
+          ) : (
+            <div role="alert" style={{ color: 'var(--warn)' }}>{app.join_problem}</div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+};
+
 const DevicesPanel = () => {
   const [fire, toastNode] = useToast();
   // ONE devices list for the whole tab. Each card used to fetch its own,
@@ -3522,6 +3571,7 @@ const DevicesPanel = () => {
   return (
     <>
       <ThisDeviceCard fire={fire} onRenamed={deviceList.refresh}/>
+      <GetTheAppCard/>
       <HouseholdTokenCard fire={fire}/>
       <QueueAccessCard fire={fire} deviceList={deviceList}/>
       <GuestAccessCard fire={fire}/>

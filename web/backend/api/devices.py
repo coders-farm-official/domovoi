@@ -361,3 +361,33 @@ async def list_devices(limit: int = 200) -> list[Device]:
             {"limit": max(1, min(limit, 500))},
         )
         return [_row_to_device(r) for r in rows.all()]
+
+
+@router.get("/android-app")
+async def android_app_for_household_phones() -> dict[str, Any]:
+    """Settings → Devices → "get the Domovoi app": the server's join page
+    without a room code (``join_url``, ``<core>/join``, for the card's QR
+    code and link) and what that page will offer, from the core's public
+    ``GET /v1/android-app`` (``release`` null before the first release;
+    ``ready`` once the server holds a checked copy of every APK).
+
+    Open, like the page it points at: a phone that has not joined the
+    household yet opens it. ``join_url`` is null with ``join_problem``
+    when this server's address is not one a phone on the home network can
+    reach (a box that found no LAN address)."""
+    from satellite import enrolment
+
+    from web.backend.api.satellites import _advertised_core_http
+    from web.backend.domovoi_client import get_admin
+
+    join_url: str | None = None
+    problem: str | None = None
+    try:
+        core, _ = enrolment.normalize_core(_advertised_core_http())
+        join_url = core + enrolment.JOIN_PATH
+    except enrolment.EnrolmentError as e:
+        problem = str(e)
+    status, app = await get_admin("/v1/android-app")
+    if status != 200 or not isinstance(app, dict):
+        app = {"release": None, "apks": [], "ready": False, "unreachable": True}
+    return {"join_url": join_url, "join_problem": problem, **app}
