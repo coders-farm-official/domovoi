@@ -1,7 +1,9 @@
 """MPD (Music Player Daemon) client.
 
-Thin async wrapper around `python-mpd2`'s async client. One connection per
-command keeps state simple (MPD is local, per-command handshake is ~1 ms).
+Thin async wrapper around Domovoi's own MPD protocol client
+(`domovoi/clients/mpd_protocol.py`, which replaced python-mpd2, LGPL, in
+2026-10). One connection per command keeps state simple (MPD is local,
+per-command handshake is ~1 ms).
 A future revision may add a persistent idle-listening connection for play-state change
 notifications.
 """
@@ -359,12 +361,11 @@ class MPDStubClient:
 def _is_not_playing(exc: BaseException) -> bool:
     """Is this MPD's ACK 55 refusal rather than a real fault?
 
-    python-mpd2 surfaces it as
+    The protocol client surfaces it as
     ``CommandError("[55@0] {previous} Not playing")``. Matched on the
     numeric ACK code, which is wire protocol rather than prose; the
-    English text is only a fallback. Matching by exception TYPE would
-    mean importing python-mpd2 at module import, which the stub path
-    (``use_stubs``) deliberately does not require.
+    English text is only a fallback, and a test double can raise any
+    exception with that text.
     """
     text = str(exc)
     return "[55@" in text or "not playing" in text.lower()
@@ -386,8 +387,8 @@ def filename_hit_matches(path: str, substrings: tuple[str, ...]) -> bool:
 
 def _is_ack(exc: BaseException) -> bool:
     """Did MPD answer this command with an ACK (it refused it) rather than
-    the connection failing? python-mpd2's ``CommandError`` text starts with
-    the wire ACK code, ``[50@0] {add} Not found``."""
+    the connection failing? The protocol client's ``CommandError`` text
+    starts with the wire ACK code, ``[50@0] {add} Not found``."""
     text = str(exc).lstrip()
     return type(exc).__name__ == "CommandError" or (text.startswith("[") and "@" in text[:12])
 
@@ -401,9 +402,9 @@ class RealMPDClient:
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[Any]:
-        from mpd.asyncio import MPDClient as _MPDClient
+        from domovoi.clients.mpd_protocol import MPDConnection
 
-        c = _MPDClient()
+        c = MPDConnection()
         await c.connect(self.host, self.port)
         try:
             yield c
@@ -1259,7 +1260,7 @@ async def ensure_stream_serving(
         # playing to nobody. A turn that cancels this wait (a wake, a
         # barge-in) must not be able to split the pair. And bounded by what
         # is left of the budget: a daemon that accepts the connection and
-        # then says nothing (a frozen container — python-mpd2 waits 5 s for
+        # then says nothing (a frozen container — the client waits 5 s for
         # the hello and has no bound on a command after it) must not hold
         # the music_start past it. Timed out or cancelled, the prime carries
         # on by itself (its outcome is fetched and dropped when it lands).

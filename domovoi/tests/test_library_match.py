@@ -451,7 +451,8 @@ def test_match_reply_knows_a_parked_title_or_album_by_its_artist() -> None:
 
 
 class _AckError(Exception):
-    """What python-mpd2 raises when MPD refuses a command."""
+    """What the MPD client (domovoi/clients/mpd_protocol.py) raises when
+    MPD refuses a command."""
 
 
 _AckError.__name__ = "CommandError"

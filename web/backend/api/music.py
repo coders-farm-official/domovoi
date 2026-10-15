@@ -2059,13 +2059,9 @@ async def _read_mpd(
     """
     import asyncio
 
-    try:
-        from mpd.asyncio import MPDClient as _MPDClient  # type: ignore[import]
-    except Exception as e:
-        log.debug("python-mpd2 not importable: %s", e)
-        return "stop", None, None
+    from domovoi.clients.mpd_protocol import MPDConnection
 
-    client = _MPDClient()
+    client = MPDConnection()
     try:
         await asyncio.wait_for(client.connect(host, port), timeout=timeout)
     except Exception as e:
