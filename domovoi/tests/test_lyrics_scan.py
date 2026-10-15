@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import importlib.util
 import itertools
 import json
 import logging
@@ -30,14 +29,10 @@ from domovoi.lyrics.lrc import format_lrc
 from domovoi.lyrics.sidecar import sha256_hex
 from domovoi.lyrics.sources import SidecarBytes, change_stamp_ns
 from domovoi.tests.conftest import requires_db
-from domovoi.tests.test_library_cover_art import silent_mp3
+from domovoi.tests import media_writer as mw
+from domovoi.tests.media_writer import silent_mp3
 from domovoi.workers import lyrics_scan
 from domovoi.workers.lyrics_scan import LyricsScanError, LyricsScanner
-
-needs_mutagen = pytest.mark.skipif(
-    importlib.util.find_spec("mutagen") is None,
-    reason="mutagen (the [real-clients] extra) writes the tagged fixtures",
-)
 
 L1 = "the lantern hums beside the river door"
 L2 = "and every copper kettle sings at dawn"
@@ -48,15 +43,11 @@ OWNER_LRC = f"[00:01.00]{L1}\n[00:02.00]{L2}\n".encode()
 
 def tagged_mp3(path: Path, lyrics: str | None = None) -> Path:
     """A silent MP3, with an English USLT frame when ``lyrics`` is given."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(silent_mp3())
-    if lyrics is not None and importlib.util.find_spec("mutagen") is not None:
-        from mutagen.id3 import ID3, USLT
-
-        tags = ID3()
-        tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
-        tags.save(str(path))
-    return path
+    if lyrics is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(silent_mp3())
+        return path
+    return mw.write_mp3(path, [mw.USLT(encoding=3, lang="eng", desc="", text=lyrics)])
 
 
 def domovoi_lrc() -> bytes:
@@ -140,7 +131,6 @@ def snapshot(root: Path) -> dict[str, tuple[int, int]]:
 # ═══ DB-free ════════════════════════════════════════════════════════════
 
 
-@needs_mutagen
 def test_first_sight_reads_the_sidecar_then_the_tags(music, caplog) -> None:
     s = FakeScanStore()
     a = tagged_mp3(music / "a" / "Lantern Song.mp3", lyrics=L3)
@@ -210,7 +200,6 @@ def test_a_new_scan_version_reads_everything_again(music) -> None:
     assert run(LyricsScanner(store=s).tick())["read"] == 1
 
 
-@needs_mutagen
 def test_domovois_own_file_is_never_read_as_the_households(music) -> None:
     s = FakeScanStore()
     audio = tagged_mp3(music / "Lantern Song.mp3", lyrics=L2)
@@ -378,7 +367,6 @@ def test_the_batch_holds_the_sidecar_lock(music) -> None:
 HOUSEHOLD_AT = f"[00:01.00]{L2}\n[00:02.00]{L1}\n".encode()
 
 
-@needs_mutagen
 def test_domovois_own_lrc_never_hides_the_households_artist_title_file(music) -> None:
     """Domovoi wrote "01 Lantern Song.lrc" (LRCLIB's lyrics); the household
     later added "The Example Band - Lantern Song.lrc". Theirs is the song's
@@ -426,7 +414,6 @@ def _unreadable(monkeypatch, *paths: Path) -> None:
     monkeypatch.setattr(lyrics_scan, "read_sidecar_bytes", read)
 
 
-@needs_mutagen
 def test_an_unreadable_households_lrc_is_read_once_it_can_be(music, monkeypatch) -> None:
     """A .lrc copied in as another user's (0600): no verdict while it can't
     be read — the next tick tries again — and read as soon as it can,
@@ -470,7 +457,6 @@ def test_a_song_read_before_keeps_its_lyrics_while_its_lrc_cannot_be_read(music,
     assert s.local[1].lyrics.synced[-1] == (3000, L3)
 
 
-@needs_mutagen
 def test_an_unreadable_audio_file_is_read_once_it_can_be(music, monkeypatch) -> None:
     s = FakeScanStore()
     audio = tagged_mp3(music / "Lantern Song.mp3", lyrics=L3)
@@ -562,7 +548,6 @@ async def _rows(sql: str, **params) -> list[tuple]:
 
 
 @requires_db
-@needs_mutagen
 async def test_rows_are_created_on_first_sight_and_left_alone_when_unchanged(v021, music) -> None:
     a = await _seed(tagged_mp3(music / "Lantern Song.mp3", lyrics=f"{L1}\n{L2}"))
     (music / "Glass Harbor.lrc").write_bytes(OWNER_LRC)
@@ -587,7 +572,6 @@ async def test_rows_are_created_on_first_sight_and_left_alone_when_unchanged(v02
 
 
 @requires_db
-@needs_mutagen
 async def test_a_missing_file_keeps_its_lyrics(v021, music) -> None:
     audio = tagged_mp3(music / "Lantern Song.mp3", lyrics=L1)
     tid = await _seed(audio)
@@ -619,7 +603,6 @@ async def test_edited_and_deleted_transitions_reach_the_row(v021, music) -> None
 
 
 @requires_db
-@needs_mutagen
 async def test_the_scan_and_the_writer_at_the_same_time_finish_and_agree(
     v021, music, monkeypatch,
 ) -> None:

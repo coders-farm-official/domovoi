@@ -307,7 +307,7 @@ async def test_index_music_dir_insert_triggers_library_notify(tmp_path, monkeypa
     must produce a ``library_changed`` NOTIFY that wakes the LISTEN task —
     the full upload/rescan-to-frontend path, not just the LISTEN side in
     isolation. (A junk-byte ``.mp3`` is fine: the indexer falls back to
-    the filename when mutagen can't read tags, so the row still inserts.)"""
+    the filename when it finds no tags, so the row still inserts.)"""
     from domovoi.config import settings
     from domovoi.db.session import engine
     from domovoi.workers.library_indexer import index_music_dir

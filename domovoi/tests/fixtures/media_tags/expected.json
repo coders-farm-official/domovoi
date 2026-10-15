@@ -1,0 +1,1170 @@
+{
+ "_about": "What the tag-reading functions answer for each corpus file (make_corpus.py). 'files' is what the current code must answer; 'mutagen_differed' records, for each file where it differs, what the mutagen-based functions of e4dffc1 (the last commit with mutagen) answered, and why the new answer is the right one. Every other answer is mutagen's own, recorded with the corpus. A picture is [type, the first 16 hex digits of its SHA-256, length], the cover [those digits, content type], and lyrics over 400 characters their digits and length.",
+ "files": {
+  "ff_cbr_no_xing.mp3": {
+   "audiobook": {
+    "author": "Constant Rate",
+    "duration_sec": 3,
+    "narrator": null,
+    "title": "No Xing Header"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Constant Rate",
+    "duration_sec": 3,
+    "title": "No Xing Header"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_flac_in_ogg.oga": {
+   "audiobook": {
+    "author": "Xiph",
+    "duration_sec": 1,
+    "narrator": null,
+    "title": "FLAC In Ogg"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Xiph",
+    "duration_sec": 1,
+    "title": "FLAC In Ogg"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_id3.aac": {
+   "audiobook": {
+    "author": "Raw",
+    "duration_sec": 1,
+    "narrator": null,
+    "title": "ADTS With ID3"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Raw",
+    "duration_sec": 1,
+    "title": "ADTS With ID3"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_id3.aiff": {
+   "audiobook": {
+    "author": "Aiff Artist",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Aiff Title"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Aiff Artist",
+    "duration_sec": 0,
+    "title": "Aiff Title"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_id3.wav": {
+   "audiobook": {
+    "duration_sec": 0
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": null
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_id3v1_only.mp3": {
+   "audiobook": {
+    "duration_sec": 1
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 1,
+    "title": null
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_id3v23.mp3": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 2,
+    "narrator": "A. Writer",
+    "title": "Lantern Song"
+   },
+   "chapters": [
+    {
+     "start_sec": 0,
+     "title": "Opening"
+    },
+    {
+     "start_sec": 1,
+     "title": "The Middle Bit"
+    }
+   ],
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 2,
+    "title": "Lantern Song"
+   },
+   "lyrics": null,
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ],
+    [
+     4,
+     "216381b5dad6fd5c",
+     98
+    ]
+   ]
+  },
+  "ff_id3v24.mp3": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 2,
+    "narrator": "A. Writer",
+    "title": "Lantern Song"
+   },
+   "chapters": [
+    {
+     "start_sec": 0,
+     "title": "Opening"
+    },
+    {
+     "start_sec": 1,
+     "title": "The Middle Bit"
+    }
+   ],
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 2,
+    "title": "Lantern Song"
+   },
+   "lyrics": null,
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ],
+    [
+     4,
+     "216381b5dad6fd5c",
+     98
+    ]
+   ]
+  },
+  "ff_info.wav": {
+   "audiobook": {
+    "duration_sec": 0
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": null
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_raw.aac": {
+   "audiobook": {
+    "duration_sec": 2
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 2,
+    "title": null
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_tagged.flac": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 2,
+    "narrator": "A. Writer",
+    "title": "Lantern Song"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 2,
+    "title": "Lantern Song"
+   },
+   "lyrics": {
+    "detail": "LYRICS (LRC)",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": [
+     [
+      500,
+      "first line of the lantern song"
+     ],
+     [
+      1500,
+      "second line by the river door"
+     ]
+    ]
+   },
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "ff_tagged.m4a": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 2,
+    "narrator": null,
+    "title": "Lantern Song"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 2,
+    "title": "Lantern Song"
+   },
+   "lyrics": {
+    "detail": "©lyr",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     null,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "ff_tagged.m4b": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 2,
+    "narrator": null,
+    "title": "Lantern Song"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 2,
+    "title": "Lantern Song"
+   },
+   "lyrics": {
+    "detail": "©lyr",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     null,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "ff_tagged.ogg": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 1,
+    "narrator": "A. Writer",
+    "title": "Lantern Song"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 1,
+    "title": "Lantern Song"
+   },
+   "lyrics": {
+    "detail": "LYRICS",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "ff_tagged.opus": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 1,
+    "narrator": "A. Writer",
+    "title": "Lantern Song"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 1,
+    "title": "Lantern Song"
+   },
+   "lyrics": {
+    "detail": "LYRICS",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "ff_tagged.wma": {
+   "audiobook": {
+    "author": "The Example Band",
+    "duration_sec": 2,
+    "narrator": null,
+    "title": "Lantern Song"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": "River Door",
+    "artist": "The Example Band",
+    "duration_sec": 2,
+    "title": "Lantern Song"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_unicode_v23.mp3": {
+   "audiobook": {
+    "author": "Ärtist",
+    "duration_sec": 1,
+    "narrator": null,
+    "title": "Ünïcödé ✓ 中文"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Ärtist",
+    "duration_sec": 1,
+    "title": "Ünïcödé ✓ 中文"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "ff_vbr.mp3": {
+   "audiobook": {
+    "author": "VBR",
+    "duration_sec": 2,
+    "narrator": null,
+    "title": "Variable Rate"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "VBR",
+    "duration_sec": 2,
+    "title": "Variable Rate"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_ape_header.ape": {
+   "audiobook": {
+    "author": null,
+    "narrator": null,
+    "title": "Header First"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": "Ape Album",
+    "artist": null,
+    "duration_sec": null,
+    "title": "Header First"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_asf.wma": {
+   "audiobook": {
+    "author": "Asf Author",
+    "duration_sec": 1,
+    "narrator": null,
+    "title": "Asf Title"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "Asf Album",
+    "artist": "Asf Author",
+    "duration_sec": 1,
+    "title": "Asf Title"
+   },
+   "lyrics": {
+    "detail": "WM/Lyrics",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "mw_chapters_v23.mp3": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 0,
+    "narrator": null,
+    "title": null
+   },
+   "chapters": [
+    {
+     "start_sec": 2,
+     "title": "Only One"
+    }
+   ],
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": null
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_chapters_v24.mp3": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Episode 12"
+   },
+   "chapters": [
+    {
+     "start_sec": 0,
+     "title": "Cold Open"
+    },
+    {
+     "start_sec": 61,
+     "title": "Second"
+    },
+    {
+     "start_sec": 120,
+     "title": ""
+    }
+   ],
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": "Episode 12"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_empty.mp3": {
+   "audiobook": {},
+   "chapters": null,
+   "cover": null,
+   "library": {},
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_id3.wav": {
+   "audiobook": {
+    "author": "Chunk Artist",
+    "duration_sec": 1,
+    "narrator": null,
+    "title": "Chunk Title"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Chunk Artist",
+    "duration_sec": 1,
+    "title": "Chunk Title"
+   },
+   "lyrics": {
+    "detail": "USLT",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": []
+  },
+  "mw_id3_prefixed.flac": {
+   "audiobook": {
+    "author": "Hidden",
+    "duration_sec": 2,
+    "narrator": null,
+    "title": "Flac Under Id3"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Hidden",
+    "duration_sec": 2,
+    "title": "Flac Under Id3"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_id3v22.mp3": {
+   "audiobook": {
+    "author": "Old iTunes",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Two Point Two"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": "Legacy",
+    "artist": "Old iTunes",
+    "duration_sec": 0,
+    "title": "Two Point Two"
+   },
+   "lyrics": {
+    "detail": "USLT",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "mw_items.m4a": {
+   "audiobook": {
+    "author": "Atom Writer",
+    "duration_sec": 125,
+    "narrator": "Atom Narrator",
+    "title": "Atom Title"
+   },
+   "chapters": null,
+   "cover": [
+    "216381b5dad6fd5c",
+    "image/png"
+   ],
+   "library": {
+    "album": "Atom Album",
+    "artist": "Album Artist Atom",
+    "duration_sec": 125,
+    "title": "Atom Title"
+   },
+   "lyrics": null,
+   "pictures": [
+    [
+     null,
+     "216381b5dad6fd5c",
+     98
+    ],
+    [
+     null,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "mw_junk.mp3": {
+   "audiobook": {},
+   "chapters": null,
+   "cover": null,
+   "library": {},
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_long_comment.opus": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 2,
+    "narrator": null,
+    "title": "Many Pages"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 2,
+    "title": "Many Pages"
+   },
+   "lyrics": {
+    "detail": "LYRICS",
+    "plain": {
+     "chars": 54899,
+     "sha256_16": "40678d80ecea2af0"
+    },
+    "synced": null
+   },
+   "pictures": []
+  },
+  "mw_pictures_order.mp3": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 0,
+    "narrator": null,
+    "title": null
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": null
+   },
+   "lyrics": null,
+   "pictures": [
+    [
+     4,
+     "216381b5dad6fd5c",
+     98
+    ],
+    [
+     0,
+     "0caa0399aa3eea03",
+     225
+    ],
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "mw_sylt.mp3": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 0,
+    "narrator": null,
+    "title": null
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": null
+   },
+   "lyrics": {
+    "detail": "SYLT",
+    "plain": "first line\nsecond line",
+    "synced": [
+     [
+      500,
+      "first line"
+     ],
+     [
+      1500,
+      "second line"
+     ]
+    ]
+   },
+   "pictures": []
+  },
+  "mw_tag_only.mp3": {
+   "audiobook": {
+    "author": null,
+    "narrator": null,
+    "title": "No Audio Frames"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": null,
+    "title": "No Audio Frames"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_truncated.flac": {
+   "audiobook": {},
+   "chapters": null,
+   "cover": null,
+   "library": {},
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_v1_merge.mp3": {
+   "audiobook": {
+    "author": "V1 Artist",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "From Version Two"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": "V1 Album",
+    "artist": "V1 Artist",
+    "duration_sec": 0,
+    "title": "From Version Two"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_v23_compressed.mp3": {
+   "audiobook": {
+    "author": "Zlib",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Squeezed Title"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Zlib",
+    "duration_sec": 0,
+    "title": "Squeezed Title"
+   },
+   "lyrics": {
+    "detail": "USLT",
+    "plain": "first line of the lantern song\nsecond line by the river doorfirst line of the lantern song\nsecond line by the river doorfirst line of the lantern song\nsecond line by the river doorfirst line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": []
+  },
+  "mw_v23_unsync_ext.mp3": {
+   "audiobook": {
+    "author": "Tag Wide",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Unsynchronised"
+   },
+   "chapters": null,
+   "cover": [
+    "c49a2099cb1d4733",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": null,
+    "artist": "Tag Wide",
+    "duration_sec": 0,
+    "title": "Unsynchronised"
+   },
+   "lyrics": {
+    "detail": "USLT",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": [
+    [
+     3,
+     "c49a2099cb1d4733",
+     520
+    ]
+   ]
+  },
+  "mw_v24_frame_unsync.mp3": {
+   "audiobook": {
+    "author": "Compressed Artist",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Per Frame"
+   },
+   "chapters": null,
+   "cover": [
+    "c49a2099cb1d4733",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": null,
+    "artist": "Compressed Artist",
+    "duration_sec": 0,
+    "title": "Per Frame"
+   },
+   "lyrics": null,
+   "pictures": [
+    [
+     3,
+     "c49a2099cb1d4733",
+     520
+    ]
+   ]
+  },
+  "mw_v24_multi.mp3": {
+   "audiobook": {
+    "author": "First Artist",
+    "duration_sec": 0,
+    "narrator": "Late Composer",
+    "title": "Two Artists"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": "Split",
+    "artist": "First Artist",
+    "duration_sec": 0,
+    "title": "Two Artists"
+   },
+   "lyrics": null,
+   "pictures": []
+  },
+  "mw_v24_plain_sizes.mp3": {
+   "audiobook": {
+    "author": "iTunes Seven",
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Plain Sizes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "iTunes Seven",
+    "duration_sec": 0,
+    "title": "Plain Sizes xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "lyrics": {
+    "detail": "USLT",
+    "plain": "first line of the lantern song\nsecond line by the river doorfirst line of the lantern song\nsecond line by the river doorfirst line of the lantern song\nsecond line by the river door",
+    "synced": null
+   },
+   "pictures": []
+  },
+  "mw_v24_tag_unsync.mp3": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 0,
+    "narrator": null,
+    "title": "Whole Tag Flag"
+   },
+   "chapters": null,
+   "cover": [
+    "c49a2099cb1d4733",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": null,
+    "artist": null,
+    "duration_sec": 0,
+    "title": "Whole Tag Flag"
+   },
+   "lyrics": null,
+   "pictures": [
+    [
+     0,
+     "c49a2099cb1d4733",
+     520
+    ]
+   ]
+  },
+  "mw_vorbis_keys.flac": {
+   "audiobook": {
+    "author": null,
+    "duration_sec": 1,
+    "narrator": null,
+    "title": "Mixed Case Keys"
+   },
+   "chapters": null,
+   "cover": [
+    "0caa0399aa3eea03",
+    "image/jpeg"
+   ],
+   "library": {
+    "album": null,
+    "artist": "Only Album Artist",
+    "duration_sec": 1,
+    "title": "Mixed Case Keys"
+   },
+   "lyrics": {
+    "detail": "SYNCEDLYRICS (LRC)",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": [
+     [
+      500,
+      "first line of the lantern song"
+     ],
+     [
+      1500,
+      "second line by the river door"
+     ]
+    ]
+   },
+   "pictures": [
+    [
+     4,
+     "216381b5dad6fd5c",
+     98
+    ],
+    [
+     3,
+     "0caa0399aa3eea03",
+     225
+    ],
+    [
+     null,
+     "0caa0399aa3eea03",
+     225
+    ]
+   ]
+  },
+  "mw_wavpack.wv": {
+   "audiobook": {
+    "author": "Ape Artist",
+    "narrator": null,
+    "title": "Ape Title"
+   },
+   "chapters": null,
+   "cover": null,
+   "library": {
+    "album": null,
+    "artist": "Ape Artist",
+    "duration_sec": null,
+    "title": "Ape Title"
+   },
+   "lyrics": {
+    "detail": "APE Lyrics (LRC)",
+    "plain": "first line of the lantern song\nsecond line by the river door",
+    "synced": [
+     [
+      500,
+      "first line of the lantern song"
+     ],
+     [
+      1500,
+      "second line by the river door"
+     ]
+    ]
+   },
+   "pictures": []
+  }
+ },
+ "mutagen_differed": {
+  "ff_flac_in_ogg.oga": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  },
+  "ff_id3.aac": {
+   "mutagen": {
+    "audiobook": {},
+    "library": {}
+   },
+   "why": "mutagen took an ID3-tagged raw AAC (ADTS) file for an MP3, found no MPEG frame and read nothing; the indexers now get its tags and length (the cover route already read its ID3 tag)"
+  },
+  "ff_tagged.flac": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  },
+  "ff_tagged.ogg": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  },
+  "ff_tagged.opus": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  },
+  "ff_tagged.wma": {
+   "mutagen": {
+    "library": {
+     "album": null,
+     "artist": null,
+     "duration_sec": 2,
+     "title": "Lantern Song"
+    }
+   },
+   "why": "the library indexer never asked for WMA's own names for the artist (Author) and the album (WM/AlbumTitle); it does since the mutagen replacement"
+  },
+  "mw_ape_header.ape": {
+   "mutagen": {
+    "audiobook": {},
+    "library": {}
+   },
+   "why": "mutagen refused a file that starts with an APEv2 tag"
+  },
+  "mw_asf.wma": {
+   "mutagen": {
+    "library": {
+     "album": null,
+     "artist": null,
+     "duration_sec": 1,
+     "title": "Asf Title"
+    }
+   },
+   "why": "the library indexer never asked for WMA's own names for the artist (Author) and the album (WM/AlbumTitle); it does since the mutagen replacement"
+  },
+  "mw_id3_prefixed.flac": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  },
+  "mw_items.m4a": {
+   "mutagen": {
+    "library": {
+     "album": "Atom Album",
+     "artist": null,
+     "duration_sec": 125,
+     "title": "Atom Title"
+    }
+   },
+   "why": "the library indexer never asked for MP4's album artist (aART) when the track artist is missing, as it does for ID3 (TPE2) and Vorbis (ALBUMARTIST)"
+  },
+  "mw_long_comment.opus": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  },
+  "mw_tag_only.mp3": {
+   "mutagen": {
+    "audiobook": {},
+    "library": {}
+   },
+   "why": "mutagen refused a tagged .mp3 with no MPEG frames, tags and all"
+  },
+  "mw_v23_unsync_ext.mp3": {
+   "mutagen": {
+    "audiobook": {
+     "author": null,
+     "duration_sec": 0,
+     "narrator": null,
+     "title": "ÿ嗾渀猀礀渀挀栀爀漀渀椀猀攀搀"
+    },
+    "cover": null,
+    "library": {
+     "album": null,
+     "artist": null,
+     "duration_sec": 0,
+     "title": "ÿ嗾渀猀礀渀挀栀爀漀渀椀猀攀搀"
+    },
+    "lyrics": null,
+    "pictures": []
+   },
+   "why": "mutagen did not undo ID3v2.3 whole-tag unsynchronisation (the v2.3 standard, as TagLib reads it): a garbled title and no picture or lyrics"
+  },
+  "mw_v24_multi.mp3": {
+   "mutagen": {
+    "audiobook": {
+     "author": "First Artist\u0000Second Artist",
+     "duration_sec": 0,
+     "narrator": "\u0000Late Composer",
+     "title": "Two Artists"
+    },
+    "library": {
+     "album": "Split",
+     "artist": "First Artist\u0000Second Artist",
+     "duration_sec": 0,
+     "title": "Two Artists"
+    }
+   },
+   "why": "mutagen joined a multi-valued ID3v2.4 frame with NUL characters, which Postgres refuses in a text column; the reader gives the first value that isn't blank, as for Vorbis and MP4"
+  },
+  "mw_vorbis_keys.flac": {
+   "mutagen": {
+    "audiobook": {
+     "raises": "ValueError"
+    }
+   },
+   "why": "mutagen raised ValueError when an MP4 tag name was looked up in Vorbis comments, so a tagged FLAC / Ogg / Opus audiobook failed to index"
+  }
+ }
+}

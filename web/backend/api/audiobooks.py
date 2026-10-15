@@ -184,8 +184,8 @@ async def get_book(book_id: int) -> dict[str, Any]:
 @router.post("/reindex", dependencies=DEVICE)
 async def reindex() -> dict[str, int]:
     """Re-walk ``audiobooks_dir``. Runs the indexer directly in the web
-    process against the shared DB (best-effort — ffprobe/mutagen for
-    chapters where present)."""
+    process against the shared DB (best-effort — ffprobe for
+    chapters where present, domovoi.media_tags for tags)."""
     from domovoi.workers.audiobook_indexer import index_audiobooks_dir
 
     try:

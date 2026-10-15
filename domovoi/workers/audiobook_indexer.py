@@ -5,7 +5,7 @@ on-disk shapes and this walker handles both:
 
   * A single ``.m4b`` (or ``.m4a`` / ``.mp3``) file with EMBEDDED chapters
     — the common Audible-style layout. Chapters are read via ffprobe
-    (``-show_chapters``) with a mutagen fallback for tags.
+    (``-show_chapters``), with the tags read by ``domovoi.media_tags``.
   * A PER-CHAPTER FOLDER — one audio file per chapter, played in filename
     order. The folder is the book; each file is a chapter and its
     ``start_sec`` is the cumulative duration of the files before it.
@@ -88,50 +88,35 @@ async def _ffprobe_chapters(path: Path) -> tuple[list[dict[str, Any]] | None, in
     return (chapters or None), duration
 
 
-def _mutagen_tags(path: Path) -> dict[str, Any]:
-    """title / author / narrator / duration_sec from tags (best-effort)."""
+def _read_tags(path: Path) -> dict[str, Any]:
+    """title / author / narrator / duration_sec from tags (best-effort,
+    ``domovoi.media_tags``). A name a format can't hold is just absent:
+    before 2026-10-15 the MP4 names probed against a tagged FLAC, Ogg or
+    Opus file's Vorbis comments raised, and the book was not indexed."""
+    from domovoi import media_tags
+
     try:
-        from mutagen import File as MutagenFile
-    except ImportError:
-        return {}
-    try:
-        f = MutagenFile(str(path))
+        f = media_tags.read(path)
     except Exception:
         return {}
     if f is None:
         return {}
     out: dict[str, Any] = {}
-    info = getattr(f, "info", None)
-    length = getattr(info, "length", None) if info is not None else None
-    if isinstance(length, (int, float)) and length > 0:
-        out["duration_sec"] = int(length)
-    tags = getattr(f, "tags", None)
+    if f.duration is not None and f.duration > 0:
+        out["duration_sec"] = int(f.duration)
+    tags = f.tags
     if not tags:
         return out
-
-    def _first(*keys: str) -> str | None:
-        for k in keys:
-            if k in tags:
-                v = tags[k]
-                if isinstance(v, list):
-                    v = v[0] if v else None
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    return s
-        return None
-
-    out["title"] = _first("TIT2", "title", "\xa9nam", "Title", "\xa9alb", "album")
-    out["author"] = _first("TPE1", "artist", "\xa9ART", "Author", "\xa9wrt", "composer")
-    out["narrator"] = _first("\xa9nrt", "narrator", "TCOM", "composer")
+    out["title"] = tags.first("TIT2", "title", "\xa9nam", "Title", "\xa9alb", "album")
+    out["author"] = tags.first("TPE1", "artist", "\xa9ART", "Author", "\xa9wrt", "composer")
+    out["narrator"] = tags.first("\xa9nrt", "narrator", "TCOM", "composer")
     return out
 
 
 async def _resolve_book_file(path: Path) -> dict[str, Any]:
     """Metadata for a single-file audiobook."""
     chapters, ff_dur = await _ffprobe_chapters(path)
-    tags = _mutagen_tags(path)
+    tags = _read_tags(path)
     return {
         "title": tags.get("title") or path.stem,
         "author": tags.get("author"),
@@ -156,7 +141,7 @@ async def _resolve_book_folder(folder: Path) -> dict[str, Any] | None:
     cursor = 0
     author = narrator = None
     for i, f in enumerate(files):
-        tags = _mutagen_tags(f)
+        tags = _read_tags(f)
         author = author or tags.get("author")
         narrator = narrator or tags.get("narrator")
         chapters.append({

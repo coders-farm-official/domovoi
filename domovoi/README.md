@@ -400,8 +400,8 @@ own tag DB; `library_tracks` would stay empty and break random play,
 "how many songs", and add-to-library dedup against
 hand-placed files.
 
-**Metadata extraction**: the indexer reads ID3 / Vorbis / MP4 tags via
-`mutagen` first. If title or artist is missing or empty, it falls back
+**Metadata extraction**: the indexer reads ID3 / Vorbis / MP4 / WMA tags
+with Domovoi's own tag reader (`domovoi/media_tags`) first. If title or artist is missing or empty, it falls back
 to filename parsing (the same `Artist - Title.mp3` pattern every
 ingest path uses — `domovoi/library_naming.py`). Worst case, a file with no tags and no separator in its
 name gets indexed with `title=<bare stem>, artist=NULL` — still
@@ -429,7 +429,7 @@ else in `MUSIC_DIR` (cover art, lyrics, scripts, junk) is skipped.
 
 ### Library enrichment (acoustic fingerprinting)
 
-After the indexer populates `library_tracks` with mutagen + filename
+After the indexer populates `library_tracks` with tag + filename
 metadata, the **enricher** (`domovoi/workers/library_enricher.py`)
 identifies each track acoustically and writes back canonical metadata:
 

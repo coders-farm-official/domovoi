@@ -4,3 +4,6 @@
 domovoi/phonemizer/data/** -text
 domovoi/phonemizer/golden.json -text
 domovoi/voice_clips/** -text
+# The tag-reader corpus: real audio files and the answers recorded for
+# them, compared byte for byte.
+domovoi/tests/fixtures/media_tags/** -text

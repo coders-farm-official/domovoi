@@ -10824,7 +10824,7 @@
           "audiobooks"
         ],
         "summary": "Reindex",
-        "description": "Re-walk ``audiobooks_dir``. Runs the indexer directly in the web\nprocess against the shared DB (best-effort \u2014 ffprobe/mutagen for\nchapters where present).",
+        "description": "Re-walk ``audiobooks_dir``. Runs the indexer directly in the web\nprocess against the shared DB (best-effort \u2014 ffprobe for\nchapters where present, domovoi.media_tags for tags).",
         "operationId": "reindex_api_audiobooks_reindex_post",
         "responses": {
           "200": {

@@ -1,7 +1,7 @@
 """Library indexer tests — filename fallback parsing, idempotent
-re-runs, non-audio-file skipping. The mutagen path is exercised
-implicitly via the user's real library; these tests don't fabricate
-fake ID3 tags (mutagen mocking is more drag than value at this scale).
+re-runs, non-audio-file skipping, and tags read from tagged files (made by
+the tests' own writer, domovoi/tests/media_writer.py; the tag reader
+itself is covered in test_media_tags*.py).
 """
 
 from __future__ import annotations
@@ -101,8 +101,8 @@ async def test_indexer_inserts_audio_files_via_filename_parse(
     tags), indexer parses filenames and inserts rows."""
     music_dir = tmp_path / "music"
     music_dir.mkdir()
-    # Create some empty (no-ID3) audio-extension files. Mutagen will
-    # return None for these; the indexer falls through to filename
+    # Create some empty (no-ID3) audio-extension files. The tag reader
+    # finds nothing in these; the indexer falls through to filename
     # parsing.
     (music_dir / "Akon - Sunny Day.mp3").write_bytes(b"")
     (music_dir / "Radiohead - Creep.flac").write_bytes(b"")
@@ -132,7 +132,47 @@ async def test_indexer_inserts_audio_files_via_filename_parse(
 
 @requires_db
 @pytest.mark.asyncio
+async def test_indexer_reads_tags_from_tagged_files(db_session, monkeypatch, tmp_path) -> None:
+    """Tags beat the filename, format by format, through the real insert:
+    an ID3v2.4 MP3 with two artists (the first is stored, never both
+    joined by a NUL Postgres would refuse), a FLAC, an Opus file, a WMA
+    (artist in Author, album in WM/AlbumTitle) and an M4A whose only
+    artist is the album artist."""
+    from domovoi.tests import media_writer as mw
+
+    music_dir = tmp_path / "music"
+    music_dir.mkdir()
+    mw.write_mp3(music_dir / "Wrong - Name.mp3",
+                 [mw.text_frame("TIT2", "Mp3 Title"), mw.text_frame("TPE1", "First", "Second"),
+                  mw.text_frame("TALB", "Mp3 Album")], audio=mw.silent_mp3(400))
+    (music_dir / "x.flac").write_bytes(mw.flac_file({"TITLE": ["Flac Title"], "ARTIST": ["Flac Artist"]},
+                                                    rate=22050, samples=22050 * 3))
+    (music_dir / "y.opus").write_bytes(mw.ogg_file("opus", {"TITLE": ["Opus Title"], "ALBUMARTIST": ["Opus Band"]}))
+    (music_dir / "z.wma").write_bytes(mw.asf_file(title="Wma Title", author="Wma Artist",
+                                                  extended=[("WM/AlbumTitle", 0, mw.asf_text("Wma Album"))]))
+    (music_dir / "w.m4a").write_bytes(mw.m4a_file([mw.mp4_text("\xa9nam", "M4a Title"),
+                                                   mw.mp4_text("aART", "M4a Band")]))
+    monkeypatch.setattr("domovoi.workers.library_indexer.settings.music_dir", str(music_dir))
+
+    counts = await index_music_dir()
+    assert counts["inserted"] == 5
+
+    rows = (await db_session.execute(
+        text("SELECT title, artist, album, duration_sec FROM library_tracks ORDER BY title")
+    )).all()
+    assert [tuple(r) for r in rows] == [
+        ("Flac Title", "Flac Artist", None, 3),
+        ("M4a Title", "M4a Band", None, 1),
+        ("Mp3 Title", "First", "Mp3 Album", 10),
+        ("Opus Title", "Opus Band", None, 0),     # 13.5 ms of audio
+        ("Wma Title", "Wma Artist", "Wma Album", 3),
+    ]
+
+
+@requires_db
+@pytest.mark.asyncio
 async def test_indexer_is_idempotent(db_session, monkeypatch, tmp_path) -> None:
+
     """Re-running the indexer doesn't double-insert. ON CONFLICT
     (file_path) DO NOTHING is the workhorse here — the second call
     should report skipped=N, inserted=0."""

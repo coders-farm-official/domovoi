@@ -35,8 +35,8 @@ Indexer fires from three places:
 
 Metadata strategy:
 
-  1. ID3 / Vorbis / MP4 tags via ``mutagen`` (title, artist, album,
-     duration in seconds).
+  1. ID3 / Vorbis / MP4 / ASF tags via ``domovoi.media_tags`` (title,
+     artist, album, duration in seconds).
   2. If title or artist is empty, parse the filename. Reuses the core
      ``library_naming.parse_title_artist`` so the "Artist - Title.mp3"
      parsing rules are consistent across every ingest path (this
@@ -63,7 +63,7 @@ from domovoi.library_naming import parse_title_artist as _parse_title_artist
 log = logging.getLogger(__name__)
 
 
-# Extensions mutagen can read. We skip everything else to avoid
+# Extensions the tag reader (domovoi.media_tags) reads. We skip everything else to avoid
 # pointless inserts of cover art / lyrics / random binaries that
 # happen to live in MUSIC_DIR.
 _AUDIO_EXTENSIONS = frozenset({
@@ -76,69 +76,43 @@ def _read_tags(path: Path) -> dict[str, Any]:
     """Pull title / artist / album / duration_sec from a file's tags.
 
     Returns a dict with whatever was present; missing keys map to None.
-    Best-effort: a corrupt file or a format mutagen can't parse just
+    Best-effort: a corrupt file or a format the reader doesn't know just
     yields an empty dict, the indexer falls through to filename
     parsing.
 
-    mutagen's ``File`` returns format-specific tag dicts (ID3, Vorbis,
-    MP4), so the same key has different names depending on container.
-    We try a few common names per field rather than special-casing
-    every format.
+    Each container keeps its tags under its own names (ID3 frames,
+    Vorbis fields, MP4 atoms, ASF attributes), so the same field has a
+    different name per format: ``Tags.first`` tries a few common names
+    per field, in priority order, and a name a format can't hold is just
+    absent. A multi-valued field gives its first value (an ID3v2.4 frame
+    with two artists gives the first; before 2026-10-15 it gave both
+    joined by a NUL, which Postgres refuses).
     """
-    try:
-        from mutagen import File as MutagenFile
-    except ImportError:
-        return {}
+    from domovoi import media_tags
 
     try:
-        f = MutagenFile(str(path))
+        f = media_tags.read(path)
     except Exception as e:
-        log.debug("mutagen open failed for %s: %s", path, e)
+        log.debug("tag read failed for %s: %s", path, e)
         return {}
     if f is None:
         return {}
 
     out: dict[str, Any] = {"title": None, "artist": None, "album": None, "duration_sec": None}
 
-    # Duration is stable across formats (info.length).
-    info = getattr(f, "info", None)
-    if info is not None:
-        length = getattr(info, "length", None)
-        if isinstance(length, (int, float)) and length > 0:
-            out["duration_sec"] = int(length)
+    if f.duration is not None and f.duration > 0:
+        out["duration_sec"] = int(f.duration)
 
-    # Tags vary by format. Common keys per field, in priority order.
-    # Many mutagen tag values are lists (or special list-like classes);
-    # take the first element and stringify.
-    tags = getattr(f, "tags", None)
+    tags = f.tags
     if tags is None:
         return out
 
-    def _first(*keys: str) -> str | None:
-        for k in keys:
-            # Membership itself can raise: mutagen's VComment rejects
-            # keys with non-ASCII chars (e.g. the MP4 "©"-keys probed
-            # against a Vorbis tag dict) with a bare ValueError instead
-            # of returning False. Treat "invalid key for this format"
-            # the same as "key absent".
-            try:
-                present = k in tags
-            except (ValueError, KeyError):
-                continue
-            if present:
-                v = tags[k]
-                if isinstance(v, list):
-                    v = v[0] if v else None
-                if v is None:
-                    continue
-                s = str(v).strip()
-                if s:
-                    return s
-        return None
-
-    out["title"] = _first("TIT2", "title", "©nam", "Title")
-    out["artist"] = _first("TPE1", "artist", "©ART", "Artist", "albumartist", "TPE2")
-    out["album"] = _first("TALB", "album", "©alb", "Album")
+    out["title"] = tags.first("TIT2", "title", "©nam", "Title")
+    # WMA keeps the artist in Author and the album in WM/AlbumTitle, and
+    # MP4 the album artist in aART (read since 2026-10-15).
+    out["artist"] = tags.first("TPE1", "artist", "©ART", "Artist", "Author", "albumartist",
+                               "TPE2", "aART", "WM/AlbumArtist")
+    out["album"] = tags.first("TALB", "album", "©alb", "Album", "WM/AlbumTitle")
     return out
 
 

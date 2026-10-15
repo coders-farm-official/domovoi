@@ -3,17 +3,16 @@ the ``.lrc`` beside a song ([F-S1]–[F-S5]) and the lyrics inside the file
 ([E1]–[E6]).
 
 DB-free. The media are generated here (silent MPEG frames, a bare FLAC
-STREAMINFO, an Ogg Opus stream, a minimal MP4 — the cover-art test's
-generators) and mutagen writes the lyric tags into them, as a tagger would.
+STREAMINFO, an Ogg Opus stream, a minimal MP4) by the tests' own writer
+(``domovoi/tests/media_writer.py``), which puts the lyric tags in as a
+tagger would.
 Every lyric line is INVENTED ([C2]).
 """
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -34,12 +33,9 @@ from domovoi.lyrics.sources import (
     stat_file,
     sylt_lines,
 )
-from domovoi.tests.test_library_cover_art import bare_flac, bare_m4a, bare_ogg, silent_mp3
-
-needs_mutagen = pytest.mark.skipif(
-    importlib.util.find_spec("mutagen") is None,
-    reason="mutagen (the [real-clients] extra) writes the tagged fixtures",
-)
+from domovoi import media_tags
+from domovoi.tests import media_writer as mw
+from domovoi.tests.media_writer import SYLT, USLT, silent_mp3
 
 L1 = "the lantern hums beside the river door"
 L2 = "and every copper kettle sings at dawn"
@@ -211,30 +207,15 @@ def test_the_symlink_rule_where_symlinks_cannot_be_made(tmp_path, monkeypatch) -
 
 
 def _mp3(path: Path, *frames) -> Path:
-    from mutagen.id3 import ID3
-
-    path.write_bytes(silent_mp3())
-    tags = ID3()
-    for f in frames:
-        tags.add(f)
-    tags.save(str(path))
-    return path
+    return mw.write_mp3(path, frames)
 
 
 def _flac(path: Path, comments: dict[str, list[str]]) -> Path:
-    from mutagen.flac import FLAC
-
-    path.write_bytes(bare_flac())
-    f = FLAC(str(path))
-    for k, v in comments.items():
-        f[k] = v
-    f.save()
+    path.write_bytes(mw.flac_file(comments))
     return path
 
 
-@needs_mutagen
 def test_uslt_english_first_then_the_longest(tmp_path) -> None:
-    from mutagen.id3 import USLT
 
     p = _mp3(tmp_path / "a.mp3",
              USLT(encoding=3, lang="fra", desc="x", text=f"{L1}\n{L2}\n{L3}\n{L1}"),
@@ -245,9 +226,7 @@ def test_uslt_english_first_then_the_longest(tmp_path) -> None:
     assert got.lyrics.synced is None and got.lyrics.plain == f"{L1}\n{L2}"
 
 
-@needs_mutagen
 def test_unknown_language_beats_other_languages(tmp_path) -> None:
-    from mutagen.id3 import USLT
 
     p = _mp3(tmp_path / "a.mp3",
              USLT(encoding=3, lang="deu", desc="x", text=f"{L1}\n{L2}\n{L3}"),
@@ -255,9 +234,7 @@ def test_unknown_language_beats_other_languages(tmp_path) -> None:
     assert read_embedded(p).lyrics.plain == L3
 
 
-@needs_mutagen
 def test_lrc_text_in_uslt_is_timed(tmp_path) -> None:
-    from mutagen.id3 import USLT
 
     p = _mp3(tmp_path / "a.mp3", USLT(encoding=3, lang="eng", desc="", text=LRC))
     got = read_embedded(p)
@@ -265,9 +242,7 @@ def test_lrc_text_in_uslt_is_timed(tmp_path) -> None:
     assert got.lyrics.synced == ((1000, L1), (2500, L2), (4000, L3))
 
 
-@needs_mutagen
 def test_sylt_in_milliseconds_wins_and_the_longest_frame_is_used(tmp_path) -> None:
-    from mutagen.id3 import SYLT, USLT
 
     p = _mp3(tmp_path / "a.mp3",
              USLT(encoding=3, lang="eng", desc="", text=L3),
@@ -282,16 +257,13 @@ def test_sylt_in_milliseconds_wins_and_the_longest_frame_is_used(tmp_path) -> No
     assert got.lyrics.plain == f"{L1}\n{L2}\n{L3}"
 
 
-@needs_mutagen
 def test_sylt_in_mpeg_frames_alone_is_ignored(tmp_path) -> None:
-    from mutagen.id3 import SYLT
 
     p = _mp3(tmp_path / "a.mp3",
              SYLT(encoding=3, lang="eng", format=1, type=1, desc="", text=[(L1, 10)]))
     assert read_embedded(p) is None
 
 
-@needs_mutagen
 def test_flac_lyrics_keys_in_order(tmp_path) -> None:
     p = _flac(tmp_path / "a.flac", {"UNSYNCEDLYRICS": [L2], "LYRICS": [L1]})
     got = read_embedded(p)
@@ -306,52 +278,39 @@ def test_flac_lyrics_keys_in_order(tmp_path) -> None:
     assert read_embedded(s).detail == "UNSYNCED LYRICS"
 
 
-@needs_mutagen
 def test_ogg_opus_lyrics(tmp_path) -> None:
-    from mutagen.oggopus import OggOpus
-
     p = tmp_path / "a.opus"
-    p.write_bytes(bare_ogg("opus"))
-    f = OggOpus(str(p))
-    f["LYRICS"] = [f"{L3}\n{L1}"]
-    f.save()
+    p.write_bytes(mw.ogg_file("opus", {"LYRICS": [f"{L3}\n{L1}"]}))
     got = read_embedded(p)
     assert (got.detail, got.lyrics.plain) == ("LYRICS", f"{L3}\n{L1}")
 
 
-@needs_mutagen
 def test_mp4_lyrics_atom(tmp_path) -> None:
-    from mutagen.mp4 import MP4
-
     p = tmp_path / "a.m4a"
-    p.write_bytes(bare_m4a())
-    f = MP4(str(p))
-    if f.tags is None:
-        f.add_tags()
-    f.tags["\xa9lyr"] = [f"{L2}\n{L3}"]
-    f.save()
+    p.write_bytes(mw.m4a_file([mw.mp4_text("\xa9lyr", f"{L2}\n{L3}")]))
     got = read_embedded(p)
     assert (got.detail, got.lyrics.plain) == ("\xa9lyr", f"{L2}\n{L3}")
 
 
-@needs_mutagen
-def test_asf_and_ape_tags() -> None:
-    from mutagen.apev2 import APEv2
-    from mutagen.asf import ASFTags, ASFUnicodeAttribute
+def test_asf_and_ape_tags(tmp_path) -> None:
+    wma = tmp_path / "a.wma"
+    wma.write_bytes(mw.asf_file(title="t", extended=[("WM/Lyrics", 0, mw.asf_text(f"{L1}\n{L2}"))]))
+    got = read_embedded(wma)
+    assert (got.detail, got.lyrics.plain) == ("WM/Lyrics", f"{L1}\n{L2}")
+    ape = tmp_path / "a.ape"
+    ape.write_bytes(b"MAC " + b"\x00" * 60 + mw.ape_tag([("lyrics", LRC)]))
+    got = read_embedded(ape)
+    assert got.detail == "APE Lyrics (LRC)" and len(got.lyrics.synced) == 3
+    # a binary APE item named Lyrics is not lyrics
+    binary = tmp_path / "b.ape"
+    binary.write_bytes(b"MAC " + b"\x00" * 60 + mw.ape_tag([("Lyrics", LRC.encode())]))
+    assert read_embedded(binary) is None
+    # the classes the dispatch looks at, built directly
+    asf = media_tags.ASFTags([("WM/Lyrics", media_tags.ASFValue(0, L3))])
+    assert [c.detail for c in sources._candidates(asf) if c is not None] == ["WM/Lyrics"]
 
-    asf = ASFTags()
-    asf.append(("WM/Lyrics", ASFUnicodeAttribute(f"{L1}\n{L2}")))
-    found = [c for c in sources._candidates(asf) if c is not None]
-    assert [(c.detail, c.lyrics.plain) for c in found] == [("WM/Lyrics", f"{L1}\n{L2}")]
-    ape = APEv2()
-    ape["lyrics"] = LRC
-    found = [c for c in sources._candidates(ape) if c is not None]
-    assert found[0].detail == "APE Lyrics (LRC)" and len(found[0].lyrics.synced) == 3
 
-
-@needs_mutagen
 def test_no_tags_corrupt_files_and_oversize_text_give_nothing(tmp_path, caplog) -> None:
-    from mutagen.id3 import USLT
 
     bare = tmp_path / "bare.mp3"
     bare.write_bytes(silent_mp3())
@@ -369,16 +328,15 @@ def test_no_tags_corrupt_files_and_oversize_text_give_nothing(tmp_path, caplog) 
     assert read_embedded(empty) is None
 
 
-def test_without_mutagen_the_tags_yield_nothing(tmp_path, monkeypatch) -> None:
+def test_an_untagged_file_yields_nothing_and_needs_no_tagging_library(tmp_path) -> None:
+    """The tags are read by Domovoi's own reader: no optional extra to be
+    missing, so an untagged file is simply untagged."""
     p = tmp_path / "a.mp3"
     p.write_bytes(silent_mp3())
-    monkeypatch.setitem(sys.modules, "mutagen", None)        # import mutagen → ImportError
     assert read_embedded(p, track_id=1) is None
 
 
-@needs_mutagen
 def test_nothing_here_logs_lyric_text(tmp_path, caplog) -> None:
-    from mutagen.id3 import USLT
 
     p = _mp3(tmp_path / "a.mp3", USLT(encoding=3, lang="eng", desc="", text=LRC))
     with caplog.at_level(logging.DEBUG):
@@ -535,9 +493,7 @@ def test_sylt_of_whole_lines_is_read_one_entry_a_line() -> None:
     assert sylt_lines(_pairs(no_newlines)) == _pairs(no_newlines)
 
 
-@needs_mutagen
 def test_a_syllable_synced_sylt_frame_reads_as_lines(tmp_path) -> None:
-    from mutagen.id3 import SYLT, USLT
 
     from domovoi.handlers.shared.lyric_search import build_lines
 
@@ -554,7 +510,6 @@ def test_a_syllable_synced_sylt_frame_reads_as_lines(tmp_path) -> None:
 # ─── Timed beats plain inside a file too ([E3] amended, [M1]) ─────────────
 
 
-@needs_mutagen
 def test_a_flac_with_plain_and_timed_lyrics_shows_the_timed(tmp_path) -> None:
     both = _flac(tmp_path / "a.flac", {"LYRICS": [f"{L1}\n{L2}\n{L3}"], "SYNCEDLYRICS": [LRC]})
     got = read_embedded(both)
@@ -565,9 +520,7 @@ def test_a_flac_with_plain_and_timed_lyrics_shows_the_timed(tmp_path) -> None:
     assert read_embedded(plain).detail == "LYRICS"
 
 
-@needs_mutagen
 def test_an_lrc_uslt_beats_a_plain_english_one(tmp_path) -> None:
-    from mutagen.id3 import USLT
 
     p = _mp3(tmp_path / "a.mp3",
              USLT(encoding=3, lang="eng", desc="plain", text=f"{L1}\n{L2}"),
