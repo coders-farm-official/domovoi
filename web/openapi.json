@@ -6376,6 +6376,44 @@
         }
       }
     },
+    "/api/config/core/restart": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Core Restart Status",
+        "description": "Whether the core answers, and when it doesn't, what \"restart the\ncore\" would do from here: ``{answering, capable, how, why, starting,\nmanual_command}`` (web/backend/core_restart.py). The Version card and\nHome's \"the Domovoi server isn't answering\" row read it to offer the\nbutton, or the reason and the command to run by hand.",
+        "operationId": "core_restart_status_api_config_core_restart_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Core Restart Now",
+        "description": "Restart a core that doesn't answer (incident 2026-10-14): the web\nprocess ends it and systemd starts it again, or, where this process\ncan use the restart grant, runs the core's own restart. Refused while\nthe core answers (use ``/config/version/restart``) or is starting.\n``{ok, how, error, answering, starting, manual_command}``; the client\nthen follows ``/api/health`` until ``domovoi_reachable`` is true.",
+        "operationId": "core_restart_now_api_config_core_restart_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/config/version/pull": {
       "post": {
         "tags": [
@@ -12033,7 +12071,7 @@
           "models"
         ],
         "summary": "Delete Installed",
-        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.",
+        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.\n\nWhen Ollama refuses, the detail is Ollama's own reason (\"model 'x' not\nfound\"), not httpx's message: that was a status line, the URL and a\nlink to MDN, which is what the Models page put in front of the person\n(2026-10-13).",
         "operationId": "delete_installed_api_models__name__delete",
         "parameters": [
           {
@@ -18096,6 +18134,18 @@
               }
             ],
             "title": "Last Connected At"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
           },
           "wifi": {
             "anyOf": [

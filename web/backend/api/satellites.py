@@ -130,8 +130,9 @@ async def list_satellites() -> list[Satellite]:
     meta = await _list_satellite_meta()
     captures = await command_captures.opted_in_rooms_or_empty()
     own_only = await _own_only_rooms_or_empty()
+    heard = await _last_heard_or_empty()
     return [
-        await _satellite_for(r, snapshot, pairings, meta, captures, own_only=own_only)
+        await _satellite_for(r, snapshot, pairings, meta, captures, own_only=own_only, heard=heard)
         for r in rooms
     ]
 
@@ -391,7 +392,9 @@ async def get_satellite(room_id: str) -> Satellite:
     meta = await _list_satellite_meta()
     captures = await command_captures.opted_in_rooms_or_empty()
     own_only = await _own_only_rooms_or_empty()
-    return await _satellite_for(match, snapshot, pairings, meta, captures, own_only=own_only)
+    heard = await _last_heard_or_empty(room_id)
+    return await _satellite_for(match, snapshot, pairings, meta, captures, own_only=own_only,
+                                heard=heard)
 
 
 # ─── Sessions / conversations / notes / timers (per room) ─────────────────
@@ -1250,6 +1253,32 @@ async def _list_satellite_meta() -> dict[str, dict[str, Any]]:
         return {}
 
 
+async def _last_heard_or_empty(room_id: str | None = None) -> dict[str, Any]:
+    """Each room's newest health sample time (``satellite_health``, V022:
+    about one a minute from every connected satellite on current code),
+    for ``last_seen_at``. {} on any failure (a database from before V022):
+    the roster must not fail over it."""
+    try:
+        async with session_scope() as s:
+            if room_id is None:
+                rows = await s.execute(text(
+                    "SELECT room_id, max(received_at) FROM satellite_health GROUP BY room_id"))
+            else:
+                rows = await s.execute(text(
+                    "SELECT room_id, max(received_at) FROM satellite_health "
+                    "WHERE room_id = :r GROUP BY room_id"), {"r": room_id})
+            return {r[0]: r[1] for r in rows.all() if r[1] is not None}
+    except Exception as e:  # noqa: BLE001
+        log.debug("satellite health times unavailable: %s", e)
+        return {}
+
+
+def _latest(*times: Any) -> Any:
+    """The latest of the datetimes given (None ignored), or None."""
+    known = [t for t in times if t is not None]
+    return max(known) if known else None
+
+
 async def _own_only_rooms_or_empty() -> dict[str, Any]:
     """For display only (each roster row's ``timers_own_only``): the rooms
     whose "Only reminders for this device" is on. {} on any failure — the
@@ -1270,6 +1299,7 @@ async def _satellite_for(
     captures: dict[str, Any] | None = None,
     *,
     own_only: dict[str, Any] | None = None,
+    heard: dict[str, Any] | None = None,
 ) -> Satellite:
     room_id = room["room_id"]
     active_rooms = set(snapshot.get("active_rooms") or [])
@@ -1369,6 +1399,11 @@ async def _satellite_for(
         room_id=room_id,
         status="online" if online else ("waiting" if waiting else "offline"),
         last_connected_at=room["last_connected_at"],
+        last_seen_at=_latest(
+            (heard or {}).get(room_id),
+            pair_row["last_seen_at"] if pair_row else None,
+            room["last_connected_at"],
+        ),
         wifi=wifi,
         now_playing=now_playing_model,
         active_session_id=None,  # TODO: lift from the snapshot proxy
