@@ -111,6 +111,7 @@ for abi in "${ABIS[@]}"; do
   apk="$out_unsigned/app-$abi-release-unsigned.apk"
   [ -f "$apk" ] || die "no $apk: build first (drop --skip-build)"
   badging="$("$aapt2" dump badging "$apk" 2>/dev/null)" || die "aapt2 can't read $apk"
+  badging="${badging//$'\r'/}"
   pkg="$(printf '%s\n' "$badging" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
   vc="$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionCode='\([0-9]*\)'.*/\1/p")"
   vn="$(printf '%s\n' "$badging" | sed -n "s/^package: .* versionName='\([^']*\)'.*/\1/p")"
@@ -132,6 +133,7 @@ except (OSError, ValueError):
 print(rel.get("version_code") or 0, rel.get("cert_sha256") or "-")
 PY
 )"
+prev="${prev//$'\r'/}"
 prev_code="${prev%% *}"; prev_cert="${prev##* }"
 [ "$version_code" -gt "$prev_code" ] || die "versionCode $version_code is not above the last release's ($prev_code): raise versionCode (and versionName) in android/app/build.gradle.kts, commit, and run again"
 if [ "$publish" = 1 ] && gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1; then
@@ -188,6 +190,7 @@ for abi in "${ABIS[@]}"; do
   apk="$signed/domovoi-$version_name-$abi.apk"
   report="$("$java" -jar "$apksigner_jar" verify --verbose --print-certs --min-sdk-version 26 "$apk")" \
     || die "apksigner does not verify $apk"
+  report="${report//$'\r'/}"
   printf '%s\n' "$report" | grep -q '^Verified using v2 scheme (APK Signature Scheme v2): true' \
     || die "$apk has no v2 signature (Android 8 needs it)"
   printf '%s\n' "$report" | grep -q '^Number of signers: 1$' || die "$apk must have exactly one signer"
@@ -243,7 +246,8 @@ gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG"
 
 say "checking the published files by their manifest URLs…"
 check_dir="$(mktemp -d)"
-"$python" - "$staged" <<'PY' > "$check_dir/urls"
+# (tr: a Windows Python ends its lines with CR LF.)
+"$python" - "$staged" <<'PY' | tr -d '\r' > "$check_dir/urls"
 import json, sys
 for e in json.load(open(sys.argv[1], encoding="utf-8"))["release"]["apks"]:
     print(e["url"], e["file"], e["sha256"])
