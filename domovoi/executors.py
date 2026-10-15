@@ -37,12 +37,13 @@ from typing import Any, Callable, TypeVar
 T = TypeVar("T")
 
 # Pool name -> worker threads. Sized for a household: a few rooms talking
-# at once, never a crowd. Speech recognition is CPU or GPU bound, so more
-# threads than this would only slow each turn down.
+# at once, never a crowd. The streaming layer runs one Whisper call (or
+# voice embedding) per room at a time, so "speech" is how many rooms,
+# phones and chat mics can be heard at the same moment before one waits.
 POOL_SIZES: dict[str, int] = {
     # Whisper transcriptions (speculative and final) and the voice
     # embedder that tells household members apart.
-    "speech": 4,
+    "speech": 8,
     # Text to speech: Piper synthesis, and a Piper voice's first download.
     "tts": 4,
     # Plugin installs, upgrades and packaging: pip, unzip, hashing.
