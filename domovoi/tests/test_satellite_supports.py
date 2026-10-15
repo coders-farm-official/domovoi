@@ -594,7 +594,10 @@ async def test_the_settings_endpoint_refuses_what_the_satellite_would_refuse(cor
     assert "card number or name" in body["rejected"]["audio.output_mixer_card"]
     assert "mixer control name" in body["rejected"]["audio.output_mixer_control"]
     assert "120 characters" in body["rejected"]["audio.input_device"]
-    assert "control characters" in body["rejected"]["audio.output_device"]
+    # The core's own text check (any setting, since 2026-10-13: "can't hold
+    # a control character") answers before the satellite limit's ("no
+    # control characters"); either says why.
+    assert "control character" in body["rejected"]["audio.output_device"]
     assert pi_ws.sent == [{"type": "set_config", "changes": {"wake.threshold": 0.6}}]
 
 
