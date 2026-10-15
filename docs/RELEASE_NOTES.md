@@ -4,6 +4,38 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-15 — One name, one person: satellites stop enrolling a second you
+
+A server update (core and dashboard; no migration).
+
+* **"My name is Kamron" at a satellite no longer makes a second Kamron.**
+  If someone already has that name and the room doesn't recognize the
+  voice as them, Domovoi asks "I already know someone called Kamron. Is
+  that you?". A "yes" as your very next answer (within a minute) adds
+  that clip to Kamron's voice **for that room**, so the room knows you
+  from then on; "no" changes nothing and suggests a full name ("my name
+  is Kamron Smith") for a different Kamron. This is how you teach a new
+  room your voice. The phone's chat mic already worked this way (its own
+  "Add this phone's voice to …?").
+* **A yes is a claim, not a proof.** Whoever answers "yes" adds their
+  voice to that person's, as anyone in a room could already enrol a
+  second person with the name. An admin sees every voice sample with its
+  room and date on the People page and can delete a wrong one.
+* **Two people with one name are never guessed between**, at a
+  satellite or on the phone: "my name is …", "who am I" and "forget me"
+  say so and send you to the People page ("An admin can rename or remove
+  one of them on the People page"). "Who am I" also says when your voice
+  matches two people, and whether they share a name.
+* **Already have two Kamrons?** (the old satellite path made them.) The
+  People page marks everyone who shares a name ("same name", with each
+  one's number). If they are the same person, forget the extra one and
+  say "my name is Kamron" again in any room that then doesn't know the
+  voice; if they are different people, rename one.
+* **The People page's rename works** (it used to say "not implemented").
+  It is admin only and refuses a name someone else already has.
+  `GET /api/people` rows carry `namesakes` (how many others share the
+  name).
+
 ## 2026-10-14 — A reload no longer signs the admin out
 
 Server update (core, dashboard and a database migration, V028); the

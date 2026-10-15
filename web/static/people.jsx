@@ -49,7 +49,9 @@ const ConfirmForget = ({ person, sessionCount, turnCount, open, onClose, onConfi
                         display: 'grid', placeItems: 'center', color: 'var(--err)' }}>
             <Icon name="alert-triangle" size={14}/>
           </div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Forget {person.name}?</div>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            Forget {person.name}{person.namesakes > 0 ? ` (#${person.id})` : ''}?
+          </div>
         </div>
         <div style={{ padding: 16, fontSize: 13, color: 'var(--fg)' }}>
           <p style={{ margin: 0, marginBottom: 10 }}>This is a cascade delete. Domovoi will lose:</p>
@@ -133,19 +135,54 @@ const PersonVoiceSamples = ({ samples, onDelete }) => (
   </div>
 );
 
+/* ---- Same name as somebody else ---------------------------- */
+/*
+ * One name, one person (handlers/voice_profile.py): voice enrolment never
+ * makes a second person with a name, and the rename below refuses one
+ * someone else has (409). People who already share a name (enrolled
+ * before that rule, or a parent and child) are flagged here, because when
+ * the name is said Domovoi won't guess which of them is meant — "my name
+ * is …" and "who am I" both send the speaker to this page.
+ */
+const PersonNamesakes = ({ person }) => (
+  <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-soft)',
+                background: 'var(--warn-soft, var(--sunken))', fontSize: 13, lineHeight: 1.5 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+      <Icon name="users" size={14}/>
+      {person.namesakes + 1} people are called {person.name}
+    </div>
+    <div style={{ color: 'var(--fg-muted)', marginTop: 4 }}>
+      When someone says “my name is {person.name}”, Domovoi won’t guess which one they are.
+      If these are the same person, forget the extra one (below); they can then say
+      “my name is {person.name}” wherever Domovoi doesn’t know their voice yet.
+      If they are different people, rename one of them.
+    </div>
+  </div>
+);
+
 /* ---- Profile tab ------------------------------------------ */
-const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, onForget, fire }) => {
-  // Rename via PATCH not yet on the people API; surface it as a toast
-  // until the endpoint lands. Kept the input for visual continuity.
+const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, onForget, onRenamed, fire }) => {
+  // Rename: PATCH /api/people/{id}, admin tier. A name somebody else has
+  // is refused (409) with the server's reason, and the box stays open.
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(person.name);
+  const [saving, setSaving] = React.useState(false);
   React.useEffect(() => { setDraft(person.name); setEditing(false); }, [person.id]);
 
-  const save = () => {
-    if (draft.trim() && draft.trim() !== person.name) {
-      fire('rename: PATCH /api/people/{id} not implemented yet');
+  const save = async () => {
+    const name = draft.trim().replace(/\s+/g, ' ');
+    if (!name || name === person.name) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      await apiPatch(`/api/people/${person.id}`, { name });
+      fire(`renamed to ${name}`);
+      setEditing(false);
+      onRenamed();
+    } catch (e) {
+      reportMutationFailure(fire, 'rename', e, { kept: true });
+    } finally {
+      setSaving(false);
     }
-    setEditing(false);
   };
 
   return (
@@ -155,18 +192,21 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, 
         <div style={{ minWidth: 0, flex: 1 }}>
           {editing ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <input autoFocus value={draft} onChange={e => setDraft(e.target.value)}
+              <input autoFocus value={draft} maxLength={60} disabled={saving}
+                     aria-label="new name"
+                     onChange={e => setDraft(e.target.value)}
                      onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setDraft(person.name); setEditing(false); } }}
                      style={{ font: 'inherit', fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em',
-                              padding: '4px 8px', borderRadius: 'var(--r-sm)',
+                              padding: '4px 8px', borderRadius: 'var(--r-sm)', minWidth: 0,
                               border: '1px solid var(--brand)', background: 'var(--card)', color: 'var(--fg)' }}/>
-              <Button icon="check" variant="primary" onClick={save}>save</Button>
+              <Button icon="check" variant="primary" onClick={save} disabled={saving}>save</Button>
               <Button icon="x" onClick={() => { setDraft(person.name); setEditing(false); }}>cancel</Button>
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <h2 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: '-0.01em' }}>{person.name}</h2>
               {isLive(person.last_seen_at) && <Pill tone="live" live>live</Pill>}
+              {person.namesakes > 0 && <Pill tone="warn">same name</Pill>}
               <Button icon="pencil" onClick={() => setEditing(true)}>rename</Button>
             </div>
           )}
@@ -175,6 +215,8 @@ const ProfileTab = ({ person, sessionCount, turnCount, samples, onDeleteSample, 
           </div>
         </div>
       </div>
+
+      {person.namesakes > 0 && <PersonNamesakes person={person}/>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', borderBottom: '1px solid var(--border-soft)' }}>
         <div style={{ padding: '14px 16px', borderRight: '1px solid var(--border-soft)' }}>
@@ -773,8 +815,10 @@ const PeoplePage = () => {
                             <span style={{ fontSize: 14, fontWeight: 500,
                                            color: active ? 'var(--brand-press)' : 'var(--fg)' }}>{p.name}</span>
                             {live && <StatusDot tone="ok" live/>}
+                            {p.namesakes > 0 && <span title="someone else has this name too"><StatusDot tone="warn"/></span>}
                           </div>
                           <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+                            {p.namesakes > 0 && <>#{p.id} · same name · </>}
                             {relTime(p.last_seen_at)} · {p.presence_tier || 'high'}
                           </div>
                         </div>
@@ -828,6 +872,7 @@ const PeoplePage = () => {
                           samples={samples}
                           onDeleteSample={onDeleteSample}
                           onForget={() => setConfirmFor(selected)}
+                          onRenamed={refreshPeople}
                           fire={fire}/>
             )}
             {tab === 'memory' && (

@@ -300,10 +300,10 @@ async def test_a_person_forgotten_before_the_yes_is_not_brought_back(db_session,
 
 @requires_db
 @pytest.mark.asyncio
-async def test_on_a_satellite_my_name_still_takes_the_old_path(db_session, open_gate) -> None:
-    """Out of scope, pinned so it is a decision: a satellite's "my name is
-    X" for an X who exists still asks "Did I get that right?" (the
-    duplicate-name gap), and never writes a phone sample."""
+async def test_on_a_satellite_my_name_never_takes_the_phone_path(db_session, open_gate) -> None:
+    """A satellite's "my name is X" for an X who exists asks the ROOM's
+    question (one name, one person — test_voice_id_namesakes.py has the
+    rest), never the phone's, and parks no phone sample."""
     from domovoi.db.repositories import SessionRepository
     from domovoi.handlers.voice_profile import VoiceProfileHandler
 
@@ -317,7 +317,9 @@ async def test_on_a_satellite_my_name_still_takes_the_old_path(db_session, open_
         )
         r = await VoiceProfileHandler()._start_self_intro("Kamron", ctx, s)
         await s.commit()
-    assert r.text == "Nice to meet you, Kamron. Did I get that right?"
+        pending = (await SessionRepository(s).get_context(sid))["pending_confirmation"]
+    assert r.text == "I already know someone called Kamron. Is that you?"
+    assert pending["kind"] == "core.room_voice_add" and pending["origin"] == "satellite"
 
 
 # ─── Review fixes (2026-10-12) ────────────────────────────────────────────
@@ -419,7 +421,8 @@ async def test_two_people_with_the_name_are_never_guessed_between(db_session, op
         yes = await _say(c, tid, whisper, "Yes.", KAMRON_PHONE)
     assert asked["reply"] == (
         "There's more than one Alex, so I won't guess which one is you. "
-        "An admin can sort them out on the People page."
+        "An admin can rename or remove one of them on the People page. "
+        "Then tell me your name again."
     )
     assert asked["expect_followup"] is False
     assert yes["matched_handler"] != "voice_profile"
@@ -449,7 +452,7 @@ async def test_the_phone_voice_question_is_answered_by_the_next_press_or_not_at_
 async def test_the_phone_voice_question_runs_out(db_session, open_gate, whisper, monkeypatch) -> None:
     from domovoi.handlers import voice_profile
 
-    monkeypatch.setattr(voice_profile, "PHONE_VOICE_ADD_TTL_SEC", -1.0)
+    monkeypatch.setattr(voice_profile, "VOICE_ADD_TTL_SEC", -1.0)
     kamron = await _person("Kamron", satellite=KAMRON_ROOM)
     tid = await _thread()
     async with _client() as c:

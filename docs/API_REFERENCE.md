@@ -861,8 +861,9 @@ Person-centric views over the voice-profile / memory tables.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/people` | **Device read** | Everyone Domovoi has voice-identified, with `last_seen_at`. |
-| `GET /api/people/{person_id}` | **Device read** | One person. |
+| `GET /api/people` | **Device read** | Everyone Domovoi has voice-identified, with `last_seen_at`, and `namesakes`: how many OTHER people have the same name (case and surrounding space aside). Voice enrolment never makes a second person with a name; a non-zero `namesakes` is a pair from before that rule (or a parent and child), which voice ID won't guess between when the name is said, so the People page flags it. |
+| `GET /api/people/{person_id}` | **Device read** | One person (with `namesakes`). |
+| `PATCH /api/people/{person_id}` | **Admin** · `{name}` (1-60 characters; runs of whitespace become one space) | Rename a person: what voice ID calls them and the name "my name is …" finds them by. A name someone else already has is `409` (one name, one person); changing only the case of a person's own name is fine. `404` unknown person, `422` an empty name or one with control characters. Answers the updated person. |
 | `DELETE /api/people/{person_id}` | **Admin** | Forget a person (profiles, memories, links). |
 | `GET /api/people/{person_id}/sessions` | **Device read** · `?limit=20` | Recent conversation sessions. |
 | `GET /api/people/{person_id}/conversations` | **Device read** · `?limit=50` | Recent conversation turns. |

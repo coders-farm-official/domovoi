@@ -82,7 +82,9 @@ class IdentificationResult:
     (None with fewer than two people enrolled).
     ``ambiguous`` is True when two people both cleared the threshold too
     close together to tell apart: ``person_id`` is None, but the voice is
-    someone known, not a newcomer.
+    someone known, not a newcomer. ``candidates`` are those two people,
+    best first (empty unless ambiguous) — "who am I" says when they share
+    a name (handlers/voice_profile.py).
     ``denylisted`` is True when this voice has been opted out via the
     denylist — downstream tier-driven prompts should skip them.
     """
@@ -94,6 +96,7 @@ class IdentificationResult:
     denylisted: bool = False
     runner_up_similarity: float | None = None
     ambiguous: bool = False
+    candidates: tuple[int, ...] = ()
 
 
 # In-memory counter for learning a person's voice in a room. Keyed by
@@ -467,6 +470,7 @@ async def identify(
         log.warning("voice identification DB lookup failed: %s", e)
         matched_person = None
 
+    ambiguous = decision.ambiguous and matched_person is None
     return IdentificationResult(
         person_id=matched_person,
         presence_tier=_presence_tier_from_last_seen(last_seen),
@@ -474,5 +478,12 @@ async def identify(
         best_similarity=decision.best,
         denylisted=False,
         runner_up_similarity=decision.runner_up,
-        ambiguous=decision.ambiguous and matched_person is None,
+        ambiguous=ambiguous,
+        candidates=(
+            tuple(
+                pid for pid in (decision.best_person, decision.runner_up_person)
+                if pid is not None
+            )
+            if ambiguous else ()
+        ),
     )

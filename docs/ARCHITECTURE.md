@@ -168,7 +168,12 @@ prose:
    are all a satellite ever matches, and phone samples from the app's chat
    mic, which a phone turn matches first (falling back to the satellite
    set). Phone samples are only added on purpose ("my name is …" said into
-   the chat mic), never learned.
+   the chat mic), never learned. One name, one person: no enrolment path
+   (a satellite's or the chat mic's "my name is …", a "this is my friend
+   …" introduction, the People page's rename) makes a second person with
+   a name someone already has; "my name is X" for an existing X asks to
+   add this voice to X, and two people who already share a name are never
+   guessed between (`domovoi/handlers/voice_profile.py`).
 4. **Chat-mode bypass.** If the session is in conversational chat mode, the
    turn skips the command router entirely and goes to the Letta agent (or ends
    the chat on an exit phrase). Command mode pays only one session-context

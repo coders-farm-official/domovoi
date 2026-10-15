@@ -701,6 +701,7 @@ async def _answer(
         person_id=person_id,
         presence_tier=getattr(ident, "presence_tier", None),
         embedding_bytes=embedding.astype("float32").tobytes() if embedding is not None else None,
+        voice_candidates=list(getattr(ident, "candidates", ()) or ()),
         trigger="push_to_talk",
         app=app,
         device_kind="phone",

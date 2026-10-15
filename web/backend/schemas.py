@@ -300,6 +300,18 @@ class Person(BaseModel):
     notes: str | None = None
     voice_profile_count: int = 0
     presence_tier: Literal["low", "medium", "high"] = "high"
+    # How many OTHER people have this name (case and surrounding space
+    # aside). Voice enrolment never makes a second person with a name, but
+    # an install may hold some from before that rule (or a parent and
+    # child): voice ID then won't guess between them when the name is
+    # said, and the People page says so until one is renamed or removed.
+    namesakes: int = 0
+
+
+class PersonRename(BaseModel):
+    # What voice ID will call them. Kept to the length an enrolment takes
+    # (handlers/voice_profile.py _clean_name); surrounding space is dropped.
+    name: str = Field(min_length=1, max_length=60)
 
 
 class VoiceProfile(BaseModel):
