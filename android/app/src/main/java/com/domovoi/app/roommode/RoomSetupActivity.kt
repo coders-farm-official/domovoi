@@ -9,9 +9,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.graphics.Color as AndroidColor
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -85,6 +88,10 @@ class RoomSetupActivity : ComponentActivity() {
             return
         }
         incoming = intent?.dataString
+        // Edge to edge on every Android version, as Android 15+ enforces it
+        // for apps targeting API 35+ (and 16 with no opt-out): dark bars over
+        // the dark screen; the content pads itself (safeDrawingPadding).
+        enableEdgeToEdge(SystemBarStyle.dark(AndroidColor.TRANSPARENT), SystemBarStyle.dark(AndroidColor.TRANSPARENT))
         setContent {
             DomovoiTheme(mode = ThemeMode.Dark) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {

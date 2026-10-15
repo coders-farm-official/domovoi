@@ -1,4 +1,9 @@
+import com.android.build.api.artifact.SingleArtifact
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -42,12 +47,12 @@ appAbis.forEach { abi ->
 
 android {
     namespace = "com.domovoi.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.domovoi.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
         // The ABIs above. One APK per ABI filters by splits (below)
@@ -210,9 +215,117 @@ val voiceAssets = tasks.register<VoiceAssetsTask>("voiceAssets") {
     sherpaLicenses.set(rootProject.layout.projectDirectory.dir("native/sherpa-onnx/licenses"))
 }
 
+/**
+ * Every 64-bit native library in the built APKs loads on a phone with 16 KB
+ * memory pages (Android 15+ phones may use them, Google Play requires it of
+ * apps targeting Android 15 and later, and Android 16 runs an app that is not
+ * in a page-size compatibility mode with a warning to the user): each ELF
+ * LOAD segment aligned to 16 KB or more, and the library stored uncompressed
+ * at a 16 KB offset in the APK, so it maps straight from there. Checked on
+ * the APKs themselves, so a library that arrives with a dependency bump (as
+ * CameraX 1.3's libimage_processing_util_jni.so did, 4 KB) fails the build.
+ * 32-bit libraries are exempt: no 32-bit process runs with 16 KB pages.
+ */
+abstract class NativeAlignmentTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val apkDir: DirectoryProperty
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    private val page = 16_384L
+    private val checked = Regex("""^lib/(arm64-v8a|x86_64)/[^/]+\.so$""")
+
+    /** The p_align of each PT_LOAD segment of a 64-bit ELF file; null when
+     *  [b] is not one. */
+    private fun loadAligns(b: ByteArray): List<Long>? {
+        if (b.size < 64 || b[0] != 0x7f.toByte() || b[1] != 'E'.code.toByte() || b[4].toInt() != 2) return null
+        val bb = ByteBuffer.wrap(b).order(if (b[5].toInt() == 1) ByteOrder.LITTLE_ENDIAN else ByteOrder.BIG_ENDIAN)
+        val phoff = bb.getLong(0x20)
+        val size = bb.getShort(0x36).toInt() and 0xffff
+        val count = bb.getShort(0x38).toInt() and 0xffff
+        return (0 until count).mapNotNull { i ->
+            val at = (phoff + i.toLong() * size).toInt()
+            if (bb.getInt(at) == 1) bb.getLong(at + 0x30) else null
+        }
+    }
+
+    /** name -> (stored uncompressed, offset of its data in the file), from
+     *  the zip's central directory and each entry's local header. */
+    private fun entryOffsets(apk: File): Map<String, Pair<Boolean, Long>> {
+        val raf = RandomAccessFile(apk, "r")
+        return raf.use {
+            val tail = minOf(raf.length(), 65_557L).toInt()
+            val end = ByteArray(tail).also { buf -> raf.seek(raf.length() - tail); raf.readFully(buf) }
+            val eocd = (tail - 22 downTo 0).firstOrNull { i ->
+                end[i] == 0x50.toByte() && end[i + 1] == 0x4b.toByte() && end[i + 2] == 0x05.toByte() && end[i + 3] == 0x06.toByte()
+            } ?: throw GradleException("$apk: no end of central directory")
+            val e = ByteBuffer.wrap(end).order(ByteOrder.LITTLE_ENDIAN)
+            val entries = e.getShort(eocd + 10).toInt() and 0xffff
+            val cdSize = e.getInt(eocd + 12).toLong() and 0xffffffffL
+            val cdOffset = e.getInt(eocd + 16).toLong() and 0xffffffffL
+            val cd = ByteArray(cdSize.toInt()).also { buf -> raf.seek(cdOffset); raf.readFully(buf) }
+            val c = ByteBuffer.wrap(cd).order(ByteOrder.LITTLE_ENDIAN)
+            val out = mutableMapOf<String, Pair<Boolean, Long>>()
+            var p = 0
+            repeat(entries) {
+                val method = c.getShort(p + 10).toInt() and 0xffff
+                val nameLen = c.getShort(p + 28).toInt() and 0xffff
+                val extraLen = c.getShort(p + 30).toInt() and 0xffff
+                val commentLen = c.getShort(p + 32).toInt() and 0xffff
+                val local = c.getInt(p + 42).toLong() and 0xffffffffL
+                val name = String(cd, p + 46, nameLen, Charsets.UTF_8)
+                val lh = ByteArray(30).also { buf -> raf.seek(local); raf.readFully(buf) }
+                val l = ByteBuffer.wrap(lh).order(ByteOrder.LITTLE_ENDIAN)
+                val data = local + 30 + (l.getShort(26).toInt() and 0xffff) + (l.getShort(28).toInt() and 0xffff)
+                out[name] = (method == 0) to data
+                p += 46 + nameLen + extraLen + commentLen
+            }
+            out
+        }
+    }
+
+    @TaskAction
+    fun check() {
+        val apks = apkDir.get().asFile.walkTopDown().filter { it.isFile && it.name.endsWith(".apk") }.sortedBy { it.name }.toList()
+        if (apks.isEmpty()) throw GradleException("no APK in ${apkDir.get().asFile}")
+        val lines = mutableListOf<String>()
+        val bad = mutableListOf<String>()
+        for (apk in apks) {
+            val offsets = entryOffsets(apk)
+            ZipFile(apk).use { zip ->
+                for (entry in zip.entries().asSequence().filter { checked.matches(it.name) }) {
+                    val aligns = loadAligns(zip.getInputStream(entry).readBytes())
+                    val (stored, at) = offsets[entry.name] ?: (false to -1L)
+                    val problems = buildList {
+                        if (aligns == null) add("not a 64-bit ELF library")
+                        else if (aligns.isEmpty() || aligns.any { it < page }) add("LOAD segments aligned to ${aligns.distinct()}, not 16 KB")
+                        if (!stored) add("compressed in the APK")
+                        else if (at % page != 0L) add("at offset $at, not 16 KB aligned in the APK")
+                    }
+                    val line = "${apk.name} ${entry.name}: " + if (problems.isEmpty()) "16 KB ok (${aligns!!.distinct().joinToString()})" else problems.joinToString("; ")
+                    lines += line
+                    if (problems.isNotEmpty()) bad += line
+                }
+            }
+        }
+        report.get().asFile.apply { parentFile.mkdirs() }.writeText(lines.joinToString("\n", postfix = "\n"))
+        if (bad.isNotEmpty()) {
+            throw GradleException("native libraries not ready for 16 KB pages:\n" + bad.joinToString("\n"))
+        }
+    }
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(voiceAssets, VoiceAssetsTask::outputDir)
+        val cap = variant.name.replaceFirstChar { it.uppercase() }
+        val alignment = tasks.register<NativeAlignmentTask>("check${cap}NativeAlignment") {
+            apkDir.set(variant.artifacts.get(SingleArtifact.APK))
+            report.set(layout.buildDirectory.file("reports/native-alignment/${variant.name}.txt"))
+        }
+        tasks.matching { it.name == "assemble$cap" }.configureEach { dependsOn(alignment) }
     }
 }
 

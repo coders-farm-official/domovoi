@@ -77,9 +77,15 @@
          excludes every domain from both (res/xml/data_extraction_rules.xml);
          fullBackupContent says the same to API 26-30. networkSecurityConfig
          scopes cleartext to the home network; see
-         res/xml/network_security_config.xml. -->
+         res/xml/network_security_config.xml.
+         enableOnBackInvokedCallback: predictive back, the default once the
+         app targets API 36 on Android 16, opted into from Android 13 too, so
+         back behaves the same on every version: the app handles back only
+         through BackHandler / OnBackPressedDispatcher, never onBackPressed()
+         or KEYCODE_BACK (TargetApi36Test checks). -->
     <application
         android:name=".DomovoiApplication"
+        android:enableOnBackInvokedCallback="true"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

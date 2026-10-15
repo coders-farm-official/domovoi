@@ -8,9 +8,12 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import android.graphics.Color as AndroidColor
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -116,6 +119,10 @@ class RoomModeActivity : ComponentActivity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         }
         checkLockAndStart()
+        // Edge to edge on every Android version (enforced from Android 15
+        // for API 35+ targets): black bars over the black room screen, which
+        // pads itself (safeDrawingPadding).
+        enableEdgeToEdge(SystemBarStyle.dark(AndroidColor.TRANSPARENT), SystemBarStyle.dark(AndroidColor.TRANSPARENT))
         setContent {
             DomovoiTheme(mode = ThemeMode.Dark) {
                 val engine by RoomMode.engine.collectAsState()
