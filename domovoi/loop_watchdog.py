@@ -1,9 +1,10 @@
 """The loop watchdog: notice a frozen core, say why, and get it restarted.
 
-On 2026-10-14 the core stopped answering for 40 minutes: its port still
-accepted connections, nothing answered, every satellite dropped, and the
+On 2026-10-14 the core stopped answering: its port still accepted
+connections, nothing answered, every satellite dropped, and the
 dashboard's Restart could not help because it asks the core to restart
-itself. Only a power cycle ended it. Two ways to get there were found
+itself. It stayed that way until a power cycle a day and a half later,
+which also erased the box's RAM-only journal, and with it the record. Two ways to get there were found
 (functional-testing incident-1014): synchronous work on the event loop
 that never returns, and a full thread pool that every database connect
 waits on forever. Both are fixed where they were found; this module is
@@ -26,11 +27,13 @@ A daemon thread, outside the event loop, checks two things:
 On a stall it writes the reason and every thread's stack (thread names
 included, then the event loop's tasks) straight to the journal (stderr,
 by file descriptor: no logging lock can hold it up) and to the retained
-log ``~/.domovoi/logs/core-watchdog.log`` (1 MB, one older copy), notes
-the stall in ``core-watchdog-last.json`` beside it for the dashboard's
-Version card, and exits with :data:`EXIT_CODE` (70). The unit's
-``Restart=on-failure`` (or ``always``) starts the core again
-(docs/LINUX_HOST.md, "The loop watchdog").
+log ``~/.domovoi/logs/core-watchdog.log`` (1 MB, one older copy, flushed
+to disk before the exit: on 2026-10-14 a power cycle took the RAM-only
+journal of the box with it), notes the stall in
+``core-watchdog-last.json`` beside it for the dashboard's Version card,
+and exits with :data:`EXIT_CODE` (70). The unit's ``Restart=on-failure``
+(or ``always``) starts the core again (docs/LINUX_HOST.md, "The loop
+watchdog").
 
 Two backstops for a freeze that stops this thread too (C code holding the
 interpreter lock, say):
@@ -38,11 +41,17 @@ interpreter lock, say):
 * every heartbeat re-arms ``faulthandler.dump_traceback_later``, which
   runs in C without the interpreter lock: if the loop hasn't beaten for
   the stall time plus :data:`BACKSTOP_EXTRA_SEC`, it dumps every thread's
-  stack to the journal and exits (status 1);
+  stack and exits (status 1);
 * under the shipped unit (``Type=notify``, ``WatchdogSec=``) this thread
   sends systemd ``WATCHDOG=1`` only while all is well; if the keep-alives
   stop, systemd kills the core with SIGABRT (faulthandler, enabled in
   ``main()``, prints the stacks) and starts it again.
+
+Everything faulthandler writes (those two, a crash, a SIGUSR1 dump) goes
+to ``~/.domovoi/logs/core-faulthandler.log``, a file on disk, since C code
+can write one file only. The next start moves it into the retained log,
+says so in the journal with the dump itself, and notes a stall, an abort
+or a crash for the Version card (:func:`adopt_faulthandler_dump`).
 
 It runs only in the real server (``python -m domovoi.main`` installs it,
 :func:`install`), and watches from the end of the lifespan startup
@@ -104,6 +113,132 @@ def last_stall_path() -> Path:
     return logs_dir() / "core-watchdog-last.json"
 
 
+def faulthandler_path() -> Path:
+    return logs_dir() / "core-faulthandler.log"
+
+
+def _fsync_dir(path: Path) -> None:
+    if sys.platform == "win32":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _append_synced(path: Path, text: str) -> None:
+    """Append ``text`` to ``path`` (rotated past :data:`REPORT_MAX_BYTES`
+    to one ``.1`` copy) and flush it to disk: the exit, or a power cycle,
+    may follow at once."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if path.stat().st_size > REPORT_MAX_BYTES:
+            os.replace(path, path.with_name(path.name + ".1"))
+    except FileNotFoundError:
+        pass
+    with open(path, "ab") as f:
+        f.write(text.encode("utf-8", "replace"))
+        f.flush()
+        os.fsync(f.fileno())
+    _fsync_dir(path.parent)
+
+
+def note_last_stall(reason: str, *, pid: int | None, at: str | None = None,
+                    path: Path | None = None, log: Path | None = None) -> None:
+    """Write ``core-watchdog-last.json`` (what the Version card shows as
+    the last time the core was ended for freezing), atomically and to disk.
+    The dashboard writes it too, when it ends a core that doesn't answer
+    (web/backend/core_restart.py)."""
+    path = path or last_stall_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "at": at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "reason": reason,
+                "pid": pid,
+                "log": str(log or report_path()),
+            }))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        _fsync_dir(path.parent)
+    except OSError:
+        pass
+
+
+# What a faulthandler dump says about how the run before ended.
+def _dump_kind(text: str) -> tuple[str, bool]:
+    """(what happened, whether it ended the core): the backstop's timeout,
+    an abort (systemd's watchdog sends SIGABRT), another fatal error, or a
+    stack dump someone asked for (SIGUSR1), which ends nothing."""
+    if "Timeout (" in text:
+        return ("the event loop stayed frozen past the backstop, so faulthandler ended the core "
+                "(its watchdog thread could not run)", True)
+    if "Fatal Python error: Aborted" in text:
+        return ("the core was aborted (SIGABRT: systemd's watchdog sends it when the keep-alives "
+                "stop)", True)
+    for line in text.splitlines():
+        if line.startswith("Fatal Python error:"):
+            return (f"the core crashed ({line.strip()[:160]})", True)
+    return ("a stack dump on request (SIGUSR1)", False)
+
+
+# The most of an adopted dump echoed to the journal (the retained log
+# keeps all of it).
+_ADOPT_ECHO_MAX = 64 * 1024
+
+
+def adopt_faulthandler_dump(src: Path | None = None, *, out_fd: int | None = None,
+                            report: Path | None = None, last: Path | None = None) -> str | None:
+    """At start: move what faulthandler wrote during the run before into
+    the retained log (with a header naming what it was), echo it to the
+    journal, note a stall, abort or crash as the last stall unless a newer
+    note is there (the watchdog's own, or the dashboard's), and empty the
+    file. Returns what it was, or None when there was nothing."""
+    src = src or faulthandler_path()
+    try:
+        data = src.read_bytes()
+        mtime = src.stat().st_mtime
+    except OSError:
+        return None
+    if not data.strip():
+        return None
+    text = data.decode("utf-8", "replace")
+    kind, ended = _dump_kind(text)
+    at = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+    report = report or report_path()
+    try:
+        _append_synced(report, f"===== {at} (faulthandler: {kind}) =====\n{text}"
+                       + ("" if text.endswith("\n") else "\n"))
+    except OSError:
+        return kind
+    fd = out_fd if out_fd is not None else _stderr_fd()
+    echo = (f"{time.strftime('%H:%M:%S')} WARNING {__name__}: the run before left a faulthandler "
+            f"dump from {at}: {kind}; it is kept in {report}\n{text[-_ADOPT_ECHO_MAX:]}\n")
+    try:
+        os.write(fd, echo.encode("utf-8", "replace"))
+    except OSError:
+        pass
+    if ended:
+        prior = last_stall(last)
+        if prior is None or str(prior.get("at") or "") < at:
+            note_last_stall(kind, pid=None, at=at, path=last, log=report)
+    try:
+        with open(src, "wb"):
+            pass
+    except OSError:
+        pass
+    return kind
+
+
 @dataclass(frozen=True)
 class Limits:
     stall_sec: float = 30.0
@@ -136,13 +271,19 @@ async def db_probe() -> None:
         await s.execute(text("SELECT 1"))
 
 
+# The file faulthandler writes to (install() opens it and keeps it open:
+# faulthandler holds the descriptor, not the path); stderr until then.
+_FAULT_FILE: Any = None
+
+
 def _faulthandler_backstop(seconds: float | None) -> None:
     """Arm (or, with None, cancel) faulthandler's C-level dump-and-exit."""
     try:
         if seconds is None:
             faulthandler.cancel_dump_traceback_later()
         else:
-            faulthandler.dump_traceback_later(seconds, repeat=False, file=sys.stderr, exit=True)
+            faulthandler.dump_traceback_later(seconds, repeat=False,
+                                              file=_FAULT_FILE or sys.stderr, exit=True)
     except (RuntimeError, ValueError, OSError, AttributeError):
         pass
 
@@ -478,27 +619,14 @@ class LoopWatchdog:
                     os.replace(path, path.with_name(path.name + ".1"))
             except FileNotFoundError:
                 pass
-            with open(path, "ab") as f:
-                f.write(f"===== {datetime.now(timezone.utc).isoformat(timespec='seconds')} =====\n"
-                        .encode("utf-8"))
-                f.write(text.encode("utf-8", "replace"))
+            _append_synced(path, f"===== {datetime.now(timezone.utc).isoformat(timespec='seconds')} =====\n"
+                           + text)
         except OSError:
             pass
 
     def _note_last(self, reason: str) -> None:
-        path = self._last_file or last_stall_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(json.dumps({
-                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "reason": reason,
-                "pid": os.getpid(),
-                "log": str(self._report_file or report_path()),
-            }), encoding="utf-8")
-            os.replace(tmp, path)
-        except OSError:
-            pass
+        note_last_stall(reason, pid=os.getpid(), path=self._last_file,
+                        log=self._report_file or report_path())
 
     def _say(self, level: str, message: str) -> None:
         """One log line straight to stderr: the thread never takes the
@@ -511,22 +639,36 @@ class LoopWatchdog:
 _ACTIVE: LoopWatchdog | None = None
 
 
+def _open_fault_file() -> Any:
+    try:
+        path = faulthandler_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return open(path, "a", encoding="utf-8")  # noqa: SIM115 - held for the process's life
+    except OSError:
+        return None
+
+
 def install(settings: Any) -> LoopWatchdog | None:
     """Start the watchdog for this process (``main()``, before uvicorn),
-    unless ``loop_watchdog_enabled`` is off. Also turns faulthandler on
-    (POSIX), so a SIGABRT from systemd's watchdog prints every stack."""
-    global _ACTIVE
+    unless ``loop_watchdog_enabled`` is off. Moves the run before's
+    faulthandler dump into the retained log first, then points faulthandler
+    at its file and turns it on (POSIX): a crash, a SIGABRT from systemd's
+    watchdog and a SIGUSR1 each leave every stack there."""
+    global _ACTIVE, _FAULT_FILE
     if _ACTIVE is not None:
         return _ACTIVE
     if not getattr(settings, "loop_watchdog_enabled", True):
         return None
+    adopt_faulthandler_dump()
+    _FAULT_FILE = _open_fault_file()
+    target = _FAULT_FILE or sys.stderr
     if sys.platform != "win32":
         try:
-            faulthandler.enable(file=sys.stderr, all_threads=True)
-            # SIGUSR1: every stack to the journal, and the core carries on.
-            # The dashboard sends it before it ends a core that doesn't
-            # answer (web/backend/core_restart.py); anyone may by hand.
-            faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+            faulthandler.enable(file=target, all_threads=True)
+            # SIGUSR1: every stack, and the core carries on. The dashboard
+            # sends it before it ends a core that doesn't answer
+            # (web/backend/core_restart.py); anyone may by hand.
+            faulthandler.register(signal.SIGUSR1, file=target, all_threads=True)
         except (RuntimeError, ValueError, OSError, AttributeError):
             pass
     _ACTIVE = LoopWatchdog(Limits.from_settings(settings), notifier=Notifier.from_env())
@@ -546,11 +688,12 @@ def detach() -> None:
         _ACTIVE.detach()
 
 
-def last_stall() -> dict[str, Any] | None:
-    """The last watchdog exit on this box (``core-watchdog-last.json``):
-    ``{"at", "reason", "pid", "log"}``, or None."""
+def last_stall(path: Path | None = None) -> dict[str, Any] | None:
+    """The last time the core was ended for freezing on this box
+    (``core-watchdog-last.json``): ``{"at", "reason", "pid", "log"}``, or
+    None."""
     try:
-        data = json.loads(last_stall_path().read_text(encoding="utf-8"))
+        data = json.loads((path or last_stall_path()).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or not isinstance(data.get("at"), str):

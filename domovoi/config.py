@@ -454,7 +454,8 @@ class Settings(BaseSettings):
     shutdown_deadline_sec: float = 20.0
 
     # The loop watchdog (domovoi/loop_watchdog.py; incident 2026-10-14,
-    # when the core stopped answering for 40 minutes until a power cycle).
+    # when the core stopped answering and stayed that way, port open and
+    # every satellite offline, until a power cycle a day and a half later).
     # A thread outside the event loop watches a heartbeat the loop beats
     # every couple of seconds, and every loop_watchdog_probe_interval_sec
     # sends a real `SELECT 1` through the normal session path. When the

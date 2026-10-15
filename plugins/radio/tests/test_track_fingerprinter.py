@@ -88,7 +88,7 @@ async def test_a_track_that_runs_out_of_time_is_marked_and_skipped(
         calls.append((path, timeout_sec))
         if path.endswith("slow.mp3"):
             raise tf_mod.FingerprintTimeout("took too long")
-        return [FingerprintRow(hash_bytes=b"" * 8, offset_ms=0)]
+        return [FingerprintRow(hash_bytes=b"\x05" * 8, offset_ms=0)]
 
     monkeypatch.setattr(tf_mod, "fingerprint_file", fake_fp)
     worker = TrackFingerprinter(radio_sdk)

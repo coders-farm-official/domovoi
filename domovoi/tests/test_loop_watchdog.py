@@ -282,6 +282,75 @@ def test_last_stall_reads_the_note(tmp_path, monkeypatch) -> None:
     assert loop_watchdog.last_stall() is None
 
 
+def test_the_reports_reach_the_disk(tmp_path, monkeypatch) -> None:
+    """A power cycle may follow at once (2026-10-14: it took a RAM-only
+    journal with it), so the report and the note are fsynced."""
+    synced: list[int] = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(loop_watchdog.os, "fsync", lambda fd: (synced.append(fd), real_fsync(fd)))
+    wd = LoopWatchdog(FAST, report_file=tmp_path / "w.log", last_file=tmp_path / "l.json",
+                      out_fd=os.open(os.devnull, os.O_WRONLY), exit_fn=lambda c: None)
+    wd.fire("a test stall")
+    assert "a test stall" in (tmp_path / "w.log").read_text(encoding="utf-8")
+    assert json.loads((tmp_path / "l.json").read_text())["reason"] == "a test stall"
+    assert len(synced) >= 2
+
+
+def _adopt(tmp_path, text: str, *, prior: dict | None = None):
+    src = tmp_path / "core-faulthandler.log"
+    src.write_text(text, encoding="utf-8")
+    last = tmp_path / "last.json"
+    if prior is not None:
+        last.write_text(json.dumps(prior), encoding="utf-8")
+    out = tmp_path / "journal.txt"
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+    try:
+        kind = loop_watchdog.adopt_faulthandler_dump(src, out_fd=fd, report=tmp_path / "w.log", last=last)
+    finally:
+        os.close(fd)
+    return kind, src, last, out
+
+
+_BACKSTOP_DUMP = ("Timeout (0:01:00)!\nThread 0x00007f (most recent call first):\n"
+                  "  File \"/opt/domovoi/plugins/radio/x.py\", line 9 in gil_holder\n")
+
+
+def test_a_faulthandler_dump_from_the_run_before_is_kept_and_told(tmp_path) -> None:
+    kind, src, last, out = _adopt(tmp_path, _BACKSTOP_DUMP)
+    assert kind and "frozen past the backstop" in kind
+    retained = (tmp_path / "w.log").read_text(encoding="utf-8")
+    assert "(faulthandler: the event loop stayed frozen" in retained and "gil_holder" in retained
+    assert "the run before left a faulthandler dump" in out.read_text(encoding="utf-8")
+    assert "gil_holder" in out.read_text(encoding="utf-8")
+    assert "frozen past the backstop" in json.loads(last.read_text())["reason"]
+    assert src.read_text() == ""     # moved, not kept twice
+    # Nothing left: the next start has nothing to say.
+    assert loop_watchdog.adopt_faulthandler_dump(src, report=tmp_path / "w.log", last=last) is None
+
+
+def test_a_dump_on_request_is_kept_but_ends_nothing(tmp_path) -> None:
+    kind, _src, last, _out = _adopt(tmp_path, "Thread 0x01 (most recent call first):\n  File \"a.py\", line 1 in f\n")
+    assert kind == "a stack dump on request (SIGUSR1)"
+    assert "f" in (tmp_path / "w.log").read_text(encoding="utf-8")
+    assert not last.exists()
+
+
+def test_an_abort_or_a_crash_is_named(tmp_path) -> None:
+    kind, *_ = _adopt(tmp_path, "Fatal Python error: Aborted\n\nThread 0x01:\n")
+    assert "SIGABRT" in kind
+    kind, *_ = _adopt(tmp_path, "Fatal Python error: Segmentation fault\n\nThread 0x01:\n")
+    assert kind == "the core crashed (Fatal Python error: Segmentation fault)"
+
+
+def test_a_newer_note_is_not_overwritten(tmp_path) -> None:
+    """The dashboard's note (or the watchdog's) is newer than a SIGABRT
+    dump left from long ago: the newer one stays."""
+    prior = {"at": "2999-01-01T00:00:00+00:00", "reason": "the dashboard restarted the core",
+             "pid": 1, "log": "x"}
+    _kind, _src, last, _out = _adopt(tmp_path, "Fatal Python error: Aborted\n", prior=prior)
+    assert json.loads(last.read_text())["reason"] == "the dashboard restarted the core"
+
+
 def test_the_retained_log_is_capped(tmp_path) -> None:
     wd = LoopWatchdog(FAST, report_file=tmp_path / "w.log", out_fd=os.open(os.devnull, os.O_WRONLY))
     (tmp_path / "w.log").write_bytes(b"x" * (loop_watchdog.REPORT_MAX_BYTES + 10))
@@ -322,7 +391,7 @@ def test_notifier_speaks_the_protocol(tmp_path) -> None:
 # ─── the real thing, in a child process ──────────────────────────────────
 
 _CHILD = textwrap.dedent("""
-    import asyncio, re, sys, threading, time
+    import asyncio, dataclasses, re, sys, threading, time
     from pathlib import Path
     sys.path.insert(0, sys.argv[1])
     from domovoi import loop_watchdog
@@ -341,19 +410,34 @@ _CHILD = textwrap.dedent("""
         # catastrophic backtracking. No Python thread can run past it.
         re.match(r"(a+)+$", "a" * 64 + "b")
 
+    class Settings:
+        loop_watchdog_enabled = True
+        loop_watchdog_stall_sec = 5.0
+        loop_watchdog_probe_interval_sec = 600.0
+        loop_watchdog_probe_timeout_sec = 10.0
+        loop_watchdog_probe_failures = 3
+        loop_watchdog_startup_sec = 0.0
+
     async def main():
         loop = asyncio.get_running_loop()
-        extra = 2.0 if mode == "gil" else 30.0
-        wd = LoopWatchdog(
-            Limits(stall_sec=2.0, heartbeat_sec=0.2, check_sec=0.1, probe_interval_sec=60,
-                   backstop_extra_sec=extra, startup_sec=0),
-            probe=ok_probe, report_file=tmp / "core-watchdog.log",
-            last_file=tmp / "core-watchdog-last.json")
-        wd.start()
+        if mode == "installed-gil":
+            # The real install(): its faulthandler file under ~/.domovoi.
+            wd = loop_watchdog.install(Settings())
+            wd.limits = dataclasses.replace(wd.limits, heartbeat_sec=0.2, check_sec=0.1,
+                                            backstop_extra_sec=1.0)
+            wd._probe = ok_probe
+        else:
+            extra = 2.0 if mode == "gil" else 30.0
+            wd = LoopWatchdog(
+                Limits(stall_sec=2.0, heartbeat_sec=0.2, check_sec=0.1, probe_interval_sec=60,
+                       backstop_extra_sec=extra, startup_sec=0),
+                probe=ok_probe, report_file=tmp / "core-watchdog.log",
+                last_file=tmp / "core-watchdog-last.json")
+            wd.start()
         wd.attach(loop)
         await asyncio.sleep(0.5)
         print("frozen now", flush=True)
-        loop.call_soon(gil_holder if mode == "gil" else blocking_worker)
+        loop.call_soon(gil_holder if mode.endswith("gil") else blocking_worker)
         await asyncio.sleep(600)
 
     asyncio.run(main())
@@ -364,8 +448,11 @@ def _run_child(tmp_path: Path, mode: str, timeout: float = 60) -> subprocess.Com
     repo = str(Path(__file__).resolve().parents[2])
     script = tmp_path / "child.py"
     script.write_text(_CHILD, encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
     return subprocess.run([sys.executable, str(script), repo, mode, str(tmp_path)],
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=timeout, env=env)
 
 
 def test_a_real_process_with_a_frozen_loop_exits_70_with_its_stacks(tmp_path) -> None:
@@ -386,3 +473,19 @@ def test_a_real_process_holding_the_interpreter_is_ended_by_the_backstop(tmp_pat
     assert proc.returncode == 1, proc.stderr[-2000:]
     assert "Timeout (0:00:04)!" in proc.stderr
     assert "gil_holder" in proc.stderr
+
+
+def test_an_installed_watchdog_keeps_faulthandlers_dump_on_disk(tmp_path, monkeypatch) -> None:
+    """install() points faulthandler at ~/.domovoi/logs/core-faulthandler.log:
+    the backstop's dump of a process stuck in C survives a power cycle,
+    and the next start moves it into the retained log and the note."""
+    proc = _run_child(tmp_path, "installed-gil")
+    assert proc.returncode == 1, proc.stderr[-2000:]
+    logs = tmp_path / "home" / ".domovoi" / "logs"
+    dump = (logs / "core-faulthandler.log").read_text(encoding="utf-8")
+    assert "Timeout (0:00:06)!" in dump and "gil_holder" in dump
+    monkeypatch.setattr(loop_watchdog, "logs_dir", lambda: logs)
+    kind = loop_watchdog.adopt_faulthandler_dump(out_fd=os.open(os.devnull, os.O_WRONLY))
+    assert kind and "frozen past the backstop" in kind
+    assert "gil_holder" in (logs / "core-watchdog.log").read_text(encoding="utf-8")
+    assert "frozen past the backstop" in loop_watchdog.last_stall()["reason"]
