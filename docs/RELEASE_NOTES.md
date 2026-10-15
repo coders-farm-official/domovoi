@@ -33,7 +33,13 @@ Server only (the app's manual gains the examples in its next build).
   the volume in another room (it may pause, resume, skip or ask what's
   playing there while that room is playing, as a guest may). A room whose
   music player isn't running is started on request, under its own room
-  id. Radio stations and podcasts still play only where they're asked.
+  id. Radio stations still play only where they're asked.
+* **Podcasts and audiobooks too**: "play the latest episode of The Daily
+  in the garage", "play the audiobook Dune in the office", "resume the
+  podcast in the kitchen", "play my audiobook in the office" — with the
+  same rooms, answers and rules, picking up where that room left off for
+  you. "Play my audiobook" on its own now resumes your book (it used to
+  search the music library for "my audiobook").
 * **A pause before the room name** ("stop the music … in the garage")
   still acts in the room that asked, as it did before: stop, pause and
   skip stay instant. To stop, pause or skip in another room, say the room

@@ -726,6 +726,34 @@
       "handler": "music",
       "tags": ["action", "rooms"],
       "note": "2026-10-14 music in another room: the room path declines it ('something relaxing' names nothing in the library), so the tool model routes it, its 'room' argument carrying the place"
+    },
+    {
+      "utterance": "play the latest episode of the daily in the garage",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 a podcast in another room: the place is no part of the show's name"
+    },
+    {
+      "utterance": "resume the podcast in the kitchen",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 a podcast in another room: resume picks up that room's own place"
+    },
+    {
+      "utterance": "play my audiobook in the office",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15 an audiobook in another room ('play my audiobook' is a resume)"
+    },
+    {
+      "utterance": "play my audiobook",
+      "handler": "spoken_audio",
+      "path": "fast",
+      "tags": ["action", "rooms"],
+      "note": "2026-10-15: a resume of the book in progress; it used to reach music's catch-all as 'my audiobook'"
     }
   ]
 }

@@ -60,7 +60,16 @@ from typing import Any, Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi.handlers.base import as_fast_path
+from domovoi.handlers.room_commands import (
+    _PREP,
+    EVERYWHERE_OTHER_TEXT,
+    NO_APP_TEXT,
+    ROOM_TAIL,
+    UNPAIRED_TEXT,
+    RoomCommandsMixin,
+    say_in_room,
+    unknown_room_text,
+)
 from domovoi.handlers.shared import rooms as rooms_mod
 from domovoi.handlers.shared.rooms import Place, Room
 from domovoi.models import Context, Response
@@ -74,9 +83,6 @@ ROOM_OR_TITLE_TTL_SEC = 60.0
 
 # ─── The fast paths' patterns ────────────────────────────────────────────
 
-_PREP = r"(?:" + "|".join(sorted(rooms_mod.PLACE_PREPOSITIONS)) + r")"
-#: A place at the end of a command (the splitting itself is done in code).
-ROOM_TAIL = r"(?: " + _PREP + r" .+| everywhere| all over the house)"
 #: "play X in R", "put on X in R", "put X on in R", "shuffle X in R".
 ROOM_PLAY_RE = re.compile(r"^(?:play|put on|put|shuffle) .+?" + ROOM_TAIL + r"$")
 
@@ -156,67 +162,9 @@ def _play_parts(words: list[str]) -> tuple[str, int] | None:
     return None
 
 
-def say_in_room(text: str, where: str) -> str:
-    """A reply the target room's command gave, said in the room that asked
-    ("Paused." → "Paused the music in the garage."). ``where`` as
-    ``rooms.spoken_room`` says it ("the garage"). Replies it doesn't know
-    are kept as they are (a "did you mean …?", a search that found
-    nothing)."""
-    t = (text or "").strip()
-    place = f"in {where}"
-    fixed = {
-        "Paused.": f"Paused the music {place}.",
-        "Resuming.": f"Resuming the music {place}.",
-        "Stopped.": f"Stopped the music {place}.",
-        "Next track.": f"Next track {place}.",
-        "Previous track.": f"Previous track {place}.",
-        "Nothing is playing right now.": f"Nothing is playing {place} right now.",
-        "I couldn't reach the music player.": f"I couldn't reach the music player {place}.",
-        "That was the last song in the queue.": f"That was the last song in the queue {place}.",
-    }
-    if t in fixed:
-        return fixed[t]
-    m = re.match(r"^This is (.+)\.$", t)
-    if m:
-        return f"{where[:1].upper()}{where[1:]} is playing {m.group(1)}."
-    m = re.match(r"^(Volume (?:up|down) to \d+|Volume set to \d+)\.$", t)
-    if m:
-        return f"{m.group(1)} {place}."
-    if t.startswith(("Playing ", "Shuffling ", "Streaming ")):
-        for tail in (", shuffled.", ", the song with those words."):
-            if t.endswith(tail):
-                return t[: -len(tail)] + f" {place}" + tail
-        if t.endswith("."):
-            return t[:-1] + f" {place}."
-    if t.startswith("Next in ") and t.endswith("."):
-        return t[:-1] + f", {place}."
-    return t
-
-
-def _offline_text(room: Room, action: str) -> str:
-    where = room.spoken
-    if not room.seen:
-        return f"The satellite in {where} hasn't connected yet, so I can't play music there."
-    what = "play music there" if action == "play" else "do that there"
-    return f"The speaker in {where} is offline right now, so I can't {what}."
-
-
-def _unknown_room_text(said: str, rooms: list[Room]) -> str:
-    said = said.strip()
-    if not rooms:
-        return f"I don't have a room called {said} — no satellites have joined yet."
-    return f"I don't have a room called {said}. I have {rooms_mod.say_rooms(rooms)}."
-
-
-_UNPAIRED_TEXT = (
-    "This speaker isn't paired with the house, so it can't change the music "
-    "in other rooms."
-)
-_NO_APP_TEXT = "I can only reach another room's speaker from a satellite or the app."
 _EVERYWHERE_PLAY_TEXT = (
     "I can only play music in one room at a time. Ask again with the room's name."
 )
-_EVERYWHERE_OTHER_TEXT = "I can only do that in one room at a time."
 
 # MusicHandler's fast-path methods, by the command each is (see _action_of).
 _ACTION_BY_METHOD = {
@@ -231,12 +179,6 @@ _ACTION_BY_METHOD = {
     "_volume_up_from_match": "volume",
     "_volume_down_from_match": "volume",
 }
-# What a satellite without a pairing token may do in a room that is
-# playing — a guest's controls (guest_queue.GUEST_TRANSPORT_ACTIONS), and
-# the read.
-_GUEST_ACTIONS = frozenset({"pause", "resume", "next", "previous", "now_playing"})
-# What needs the target's satellite connected (it would play to nobody).
-_NEEDS_ONLINE = frozenset({"play", "resume", "next", "previous", "volume"})
 # Core handlers whose plays are the room's player and nothing else, so a
 # play in another room may go through them: MusicHandler itself and
 # playlists ("play my road trip playlist in the garage").
@@ -250,10 +192,16 @@ _TOOL_ACTIONS = {
 }
 
 
-class MusicRoomsMixin:
-    """MusicHandler's commands for a named room. Relies on MusicHandler for
-    ``name``, ``fast_paths``, ``_play_random``, ``_simple_ack``,
-    ``execute_from_tool``, ``play_candidate`` and ``_choice_phrase``."""
+class MusicRoomsMixin(RoomCommandsMixin):
+    """MusicHandler's commands for a named room (the shared checks and the
+    delivery: :class:`~domovoi.handlers.room_commands.RoomCommandsMixin`).
+    Relies on MusicHandler for ``name``, ``fast_paths``, ``_play_random``,
+    ``_simple_ack``, ``execute_from_tool``, ``play_candidate`` and
+    ``_choice_phrase``."""
+
+    ROOM_PATH_METHODS = (
+        "_room_play_from_match", "_room_control_from_match", "_room_first_from_match",
+    )
 
     # ── the fast paths ──
     async def _room_play_from_match(self, m, ctx, session):
@@ -275,33 +223,6 @@ class MusicRoomsMixin:
         return await self._room_command(
             f"{cmd} in {place}", ctx, session, family, name_checked=True,
         )
-
-    def _is_room_path(self, fp: Any) -> bool:
-        name = getattr(fp.method, "__name__", "")
-        return name in (
-            "_room_play_from_match", "_room_control_from_match", "_room_first_from_match",
-        )
-
-    def _own_path(self, text_: str) -> tuple[Any, re.Match[str]] | None:
-        """MusicHandler's own fast path for ``text_``, its room paths left
-        out."""
-        for entry in self.fast_paths:  # type: ignore[attr-defined]
-            fp = as_fast_path(entry)
-            if self._is_room_path(fp):
-                continue
-            m = fp.pattern.match(text_)
-            if m:
-                return fp, m
-        return None
-
-    async def _as_without_place(self, transcript: str, ctx: Context, session: AsyncSession):
-        """The turn as MusicHandler took it before it knew rooms: its first
-        other fast path, or None (the router routes on)."""
-        hit = self._own_path(transcript)
-        if hit is None:
-            return None
-        fp, m = hit
-        return await fp.method(self, m, ctx, session)
 
     def _action_of(self, text_: str) -> str | None:
         hit = self._own_path(CONTROL_ALIASES.get(text_, text_))
@@ -402,7 +323,7 @@ class MusicRoomsMixin:
             assert unknown is not None
             if unknown.verb not in ("", "play") and not await self._worth_a_room(unknown, session):
                 return await self._as_without_place(transcript, ctx, session)
-            return self._room_reply(ctx, _unknown_room_text(unknown.place.said, rooms))
+            return self._room_reply(ctx, unknown_room_text(unknown.place.said, rooms))
         if family == "play" and ask.verb != "play" and not await self._worth_a_room(ask, session):
             # "put the kettle on in the kitchen": not a name in the library,
             # so not a request for music — the router routes it on.
@@ -451,15 +372,6 @@ class MusicRoomsMixin:
             return None
         return handler, fp, m
 
-    @staticmethod
-    def _pick_room(candidates: Iterable[Room]) -> Room:
-        """One room of several sharing a label: a connected one, with a
-        music player, a voice satellite before a display — then by id."""
-        return sorted(
-            candidates,
-            key=lambda r: (not r.online, not r.has_player, r.sat_type != "voice", r.room_id),
-        )[0]
-
     async def _here(self, ask: _Ask, transcript: str, ctx: Context, session: AsyncSession):
         """ "... in here", or the room the person is in by name: the command
         without its place, here."""
@@ -485,73 +397,6 @@ class MusicRoomsMixin:
         return await hit[0].method(self, hit[1], ctx, session)
 
     # ── another room ──
-    async def _target(
-        self, room: Room, action: str, ctx: Context,
-    ) -> Context | Response:
-        """The checks of step 3 (module docstring) for ``action`` in
-        ``room``, and the turn's context for it — or the reply that says
-        why not."""
-        from domovoi.config import settings
-        from domovoi.dropin_common import room_may_reach_other_rooms
-
-        app = ctx.app
-        if app is None:
-            return self._room_reply(ctx, _NO_APP_TEXT)
-        if not room_may_reach_other_rooms(app, ctx.room_id):
-            from domovoi import guest_queue
-
-            allowed = (
-                action in _GUEST_ACTIONS
-                and settings.guest_queue_editing
-                and (await guest_queue.room_activity(room.room_id)).active
-            )
-            if not allowed:
-                log.warning(
-                    "music: room=%s (no pairing token) refused %s in room=%s",
-                    ctx.room_id, action, room.room_id,
-                )
-                return self._room_reply(ctx, _UNPAIRED_TEXT)
-        if action in _NEEDS_ONLINE and not room.online:
-            return self._room_reply(ctx, _offline_text(room, action))
-        if action == "play":
-            if not await self._make_player(room):
-                return self._room_reply(
-                    ctx,
-                    f"I couldn't start the music player for {room.spoken}. "
-                    "Check that Docker is running on the Domovoi server.",
-                )
-        elif not room.has_player and action != "volume":
-            return self._room_reply(ctx, f"Nothing is playing in {room.spoken} right now.")
-        volumes = getattr(app.state, "satellite_volume", None) or {}
-        return ctx.model_copy(update={
-            "room_id": room.room_id,
-            "device_kind": None,
-            "device_player": {},
-            "satellite_volume": volumes.get(room.room_id),
-            "asked_from_room": ctx.room_id,
-            # The asking conversation's last play and its "did you mean"
-            # follow a play; a control is about the room's own queue.
-            "session_id": ctx.session_id if action == "play" else None,
-        })
-
-    async def _make_player(self, room: Room) -> bool:
-        """The room's music player, started if it isn't yet: a room the
-        house has, by its own id (one container per room, as the
-        container guard expects)."""
-        from domovoi.clients import mpd as mpd_module
-
-        if room.has_player:
-            return True
-        try:
-            from domovoi.mpd_provisioner import ensure_room
-
-            await ensure_room(room.room_id)
-        except Exception as e:  # noqa: BLE001 — said aloud below
-            log.warning("music: could not start the music player for room=%s: %s", room.room_id, e)
-            return False
-        log.info("music: started the music player for room=%s on request", room.room_id)
-        return room.room_id in mpd_module._room_ports
-
     async def _in_room(
         self, ask: _Ask, action: str, room: Room, ctx: Context, session: AsyncSession,
     ) -> Response | None:
@@ -600,27 +445,6 @@ class MusicRoomsMixin:
             return response
         return self._room_reply(target, "That isn't something I can play in another room yet.")
 
-    def _finish_in_room(self, response: Response | None, room: Room, ctx: Context) -> Response | None:
-        """The target's reply, made the asking room's: its music frames and
-        volume go to the target's satellite, its words are said here."""
-        from domovoi.room_music import deliver_later
-
-        if response is None:
-            return None
-        action, url, volume = (
-            response.music_action, response.music_stream_url, response.satellite_volume,
-        )
-        response.music_action = None
-        response.music_stream_url = None
-        response.satellite_volume = None
-        response.device_actions = []
-        deliver_later(
-            ctx.app, room.room_id, music_action=action, stream_url=url, volume_percent=volume,
-        )
-        response.text = say_in_room(response.text, room.spoken)
-        response.data = {**(response.data or {}), "room_id": room.room_id, "room": room.spoken}
-        return response
-
     async def _everywhere(
         self, ask: _Ask, action: str, rooms: list[Room], ctx: Context, session: AsyncSession,
     ) -> Response:
@@ -633,11 +457,11 @@ class MusicRoomsMixin:
         if action == "play":
             return self._room_reply(ctx, _EVERYWHERE_PLAY_TEXT)
         if action not in ("stop", "pause"):
-            return self._room_reply(ctx, _EVERYWHERE_OTHER_TEXT)
+            return self._room_reply(ctx, EVERYWHERE_OTHER_TEXT)
         if ctx.app is None:
-            return self._room_reply(ctx, _NO_APP_TEXT)
+            return self._room_reply(ctx, NO_APP_TEXT)
         if action == "stop" and not room_may_reach_other_rooms(ctx.app, ctx.room_id):
-            return self._room_reply(ctx, _UNPAIRED_TEXT)
+            return self._room_reply(ctx, UNPAIRED_TEXT)
         done: list[Room] = []
         own_action = None
         for room in rooms:
@@ -780,7 +604,7 @@ class MusicRoomsMixin:
         rooms = await rooms_mod.household_rooms(session, ctx.app)
         place = rooms_mod.read_place(said, rooms) or Place("unknown", said)
         if place.kind == "unknown":
-            return self._room_reply(ctx, _unknown_room_text(said, rooms))
+            return self._room_reply(ctx, unknown_room_text(said, rooms))
         if place.kind == "here" or any(r.room_id == ctx.room_id for r in place.rooms):
             return await self.execute_from_tool(rest, ctx, session)  # type: ignore[attr-defined]
         if place.kind == "everywhere":
@@ -793,20 +617,13 @@ class MusicRoomsMixin:
         response = await self.execute_from_tool(rest, target, session)  # type: ignore[attr-defined]
         return self._finish_in_room(response, room, ctx)
 
-    def _room_reply(self, ctx: Context, text_: str) -> Response:
-        return Response(
-            text=text_,
-            session_id=ctx.session_id,
-            matched_handler=self.name,  # type: ignore[attr-defined]
-        )
-
-
 __all__ = [
     "CONTROL_ALIASES",
     "MusicRoomsMixin",
     "RANDOM_WORDS",
     "ROOM_OR_TITLE_KIND",
     "ROOM_PLAY_RE",
+    "ROOM_TAIL",
     "control_room_patterns",
     "say_in_room",
 ]

@@ -269,7 +269,7 @@ map (from `domovoi/handlers/__init__.py`):
 | 240 | `memory` | |
 | 250 | `homelab` | |
 | 260 | `news` | Before all greedy media |
-| 270 | `spoken_audio` | Anchored media before playlist/music |
+| 270 | `spoken_audio` | Anchored media before playlist/music; its room path ("… in the garage") comes first within it |
 | 280 | *(radio plugin)* | Before music so "play 97.5 fm" isn't poached |
 | 290 | `playlist` | Before music's `^play` catch-all |
 | 300 | `music` | Greedy `^play` catch-all; its room paths ("… in the garage") come first within it |
@@ -724,8 +724,21 @@ garage, stop the music").
   same `dispatch_music` the dashboard's casts use), and the reply is said
   where it was asked ("Playing Weezer in the garage, shuffled."). The
   asking room's own music resumes after the turn as after any other.
-  Playlists go through too ("play my road trip playlist in the garage");
-  other handlers' media (radio, podcasts) are not sent to another room.
+  Playlists go through too ("play my road trip playlist in the garage").
+* **Podcasts and audiobooks** (`handlers/spoken_audio_rooms.py`, the
+  first fast path of `spoken_audio` at band 270, which would otherwise
+  read the place as part of a show's or a book's name): "play the latest
+  episode of X in the garage", "play the audiobook X in the office",
+  "resume the podcast in the kitchen", "play my audiobook in the office"
+  ("play my audiobook" alone is now a resume, not a music search). The
+  same place reading and checks (`handlers/room_commands.py`, shared with
+  music); a show or book whose whole name ends in the place, and whose
+  words before it name nothing else, is that show or book, here. It plays
+  with the target room's own resume position for the person (positions
+  never roam) and without the asking conversation's session; only
+  commands that start playback take a room. Radio stations don't: the
+  radio plugin's paths (band 280) take the place as part of a station's
+  name, and a plugin has no room surface in the SDK yet.
 * **Everywhere.** A stop or a pause applies to every room that is playing;
   a play is "one room at a time".
 * **The tool.** The `music` tool's optional `room` argument takes the same

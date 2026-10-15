@@ -43,6 +43,7 @@ from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
 from domovoi.config import settings
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.spoken_audio_rooms import SpokenAudioRoomsMixin, spoken_room_pattern
 from domovoi.models import Context, Intent, Response
 from domovoi import spoken_audio as sa
 
@@ -76,6 +77,9 @@ _PLAY_LATEST_RE = re.compile(
 _PLAY_BOOK_RE = re.compile(
     r"^(?:play|read|start)(?: me)? (?:the )?(?:audiobook|book) (?P<book>.+)$"
 )
+# "play my audiobook" / "play the podcast": what is in progress — a resume.
+# (It used to reach music's catch-all, which searched for "my audiobook".)
+_PLAY_MINE_RE = re.compile(r"^play (?:me )?(?:my|the) (?P<kind>audiobook|book|podcast)$")
 _NEXT_CHAPTER_RE = re.compile(r"^(?:next|skip to (?:the )?next) chapter$")
 _PREV_CHAPTER_RE = re.compile(r"^(?:previous|prior|last|go back a) chapter$")
 _SKIP_RE = re.compile(
@@ -108,6 +112,9 @@ _SUBSCRIBE_RE = re.compile(r"^subscribe(?: me)? to (?P<show>.+?)(?: podcast)?$")
 _SUBSCRIBE_BARE_RE = re.compile(
     r"^subscribe(?: me)?(?: to)?(?: (?:a|an|the|another|new))*(?: (?:podcast|show))?$"
 )
+# Any of the playback commands above with a place after it: "play the
+# latest episode of The Daily in the garage" (spoken_audio_rooms.py).
+_ROOM_SPOKEN_RE = spoken_room_pattern(_PLAY_LATEST_RE, _PLAY_BOOK_RE, _RESUME_RE, _PLAY_MINE_RE)
 
 # Session-context key holding the currently-playing spoken item so chapter /
 # time-left / "what am I listening to" can resolve without re-querying MPD's
@@ -128,7 +135,7 @@ def _subscribe_offline_text() -> str:
     return "I need an internet connection to subscribe to a new podcast."
 
 
-class SpokenAudioHandler(Handler):
+class SpokenAudioHandler(SpokenAudioRoomsMixin, Handler):
     name = "spoken_audio"
     # band rationale: anchored media BEFORE radio (plugin band 280) / playlist (290) /
     #   music (300) so podcast/audiobook phrasings win over music's greedy
@@ -167,6 +174,10 @@ class SpokenAudioHandler(Handler):
                 "seconds": {"type": "integer", "description": "Skip amount (negative = back)"},
                 "speed": {"type": "number", "description": "Playback rate, e.g. 1.5"},
                 "kind": {"type": "string", "enum": ["podcast", "audiobook", "book"]},
+                "room": {
+                    "type": "string",
+                    "description": "Only when the person names a room, e.g. 'garage'",
+                },
             },
             "required": ["action"],
         },
@@ -174,8 +185,13 @@ class SpokenAudioHandler(Handler):
 
     def __init__(self) -> None:
         self.fast_paths = [
+            # A playback command with a place after it, before the paths
+            # below take the place as part of a show's or a book's name.
+            # Open slots: never an early commit.
+            FastPath(_ROOM_SPOKEN_RE, SpokenAudioHandler._room_spoken_from_match),
             FastPath(_PLAY_LATEST_RE, SpokenAudioHandler._play_latest_from_match),
             FastPath(_PLAY_BOOK_RE, SpokenAudioHandler._play_book_from_match),
+            FastPath(_PLAY_MINE_RE, SpokenAudioHandler._play_mine_from_match),
             FastPath(_NEXT_CHAPTER_RE, SpokenAudioHandler._next_chapter_from_match, early_commit="A"),
             FastPath(_PREV_CHAPTER_RE, SpokenAudioHandler._prev_chapter_from_match, early_commit="A"),
             FastPath(_SKIP_RE, SpokenAudioHandler._skip_from_match, early_commit="B"),
@@ -223,6 +239,12 @@ class SpokenAudioHandler(Handler):
     async def _play_book_from_match(self, m, ctx, session):
         return await self._play_book(ctx, session, m.group("book").strip().rstrip(".,!?"))
 
+    async def _play_mine_from_match(self, m, ctx, session):
+        kind = m.group("kind")
+        return await self._resume(
+            ctx, session, sa.ITEM_PODCAST if kind == "podcast" else sa.ITEM_AUDIOBOOK,
+        )
+
     async def _next_chapter_from_match(self, m, ctx, session):
         return await self._chapter_nav(ctx, session, +1)
 
@@ -268,6 +290,9 @@ class SpokenAudioHandler(Handler):
         return self._reply(ctx, "I didn't catch a podcast or audiobook command.")
 
     async def execute_from_tool(self, args: dict[str, Any], ctx: Context, session: AsyncSession) -> Response:
+        if isinstance(args.get("room"), str) and args["room"].strip():
+            # "Play the Daily in the garage" as the model read it.
+            return await self.spoken_room_tool_call(args, ctx, session)
         action = args.get("action")
         query = (args.get("query") or "").strip()
         if action == "resume":

@@ -207,7 +207,7 @@ internal val MANUAL_HOWTO = listOf(
         "music playback",
         listOf(
             "Play, queue and favorite music from the Music page — each room is independent.",
-            "By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”.",
+            "By voice, from any room, name the room: “play jazz in the garage”, “stop the music in the office”, “what’s playing in the kitchen”, “turn it up in the den”, “resume my audiobook in the office”.",
             "To stop, pause or skip in another room, saying the room first is safest: “in the garage, stop the music”.",
         ),
         listOf(
