@@ -113,7 +113,8 @@ build_origin() {
   # The real manifest, with the Whisper pin swapped for the fake model's.
   sed "s/^whisper_model_bin_sha256=.*/whisper_model_bin_sha256=$(sha_of_text "$WHISPER_CONTENT")/" \
     "$REAL_REPO/scripts/linux/provision-manifest.conf" >"$o/scripts/linux/provision-manifest.conf"
-  cp "$REAL_REPO"/scripts/linux/units/*.service "$o/scripts/linux/units/"
+  cp "$REAL_REPO"/scripts/linux/units/*.service "$REAL_REPO/scripts/linux/units/journald-domovoi.conf" \
+    "$o/scripts/linux/units/"
   # The real helper: provision.sh runs it from the checkout, under the
   # same harness root.
   cp "$REAL_REPO/scripts/linux/os-jobs.sh" "$o/scripts/linux/os-jobs.sh"
@@ -1560,6 +1561,45 @@ case_update_defaults_opt_into_the_lock() {
 # Review 2026-10-11, finding 4: DOMOVOI_MANAGE_OS_JOBS=0 in
 # /etc/default/domovoi-update leaves Ubuntu's jobs alone on a provision
 # run too, as it does in the update unit (WSL's wsl-pro and snapd included).
+# The journal kept on disk, so what the core logs about why it stopped
+# (its loop watchdog's report) survives a power cycle (incident
+# 2026-10-14): the units step installs the drop-in and restarts journald
+# once; a second run does nothing; an edited drop-in is put back.
+case_journal_kept_on_disk() {
+  new_case journal_kept_on_disk
+  local f=$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "the shipped drop-in" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
+  check "Storage=persistent" has_line "$f" "Storage=persistent"
+  check "a size cap" has_line "$f" "SystemMaxUse=1G"
+  check "journald restarted to read it" called "systemctl restart systemd-journald.service"
+  check "the journal so far moved to disk" called "journalctl --flush"
+  check "said so" said "the journal is kept on disk"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run exit 0" eq "$RC" 0
+  check "second run: units skipped" eq "$(state_of units)" skip
+  check "second run: journald left alone" not_called "systemd-journald"
+  printf '[Journal]\nStorage=volatile\n' >"$f"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "an edited drop-in: units ran again" eq "$(state_of units)" done
+  check "and put it back" cmp -s "$f" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
+  check "and restarted journald" called "systemctl restart systemd-journald.service"
+  end_case
+}
+
+case_journal_opt_out_is_honoured() {
+  new_case journal_opt_out_is_honoured
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_MANAGE_JOURNAL=0\n' >"$ROOT/etc/default/domovoi-update"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 0" eq "$RC" 0
+  check "no drop-in" absent "$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf"
+  check "journald left alone" not_called "systemd-journald"
+  check "says why" said "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"
+  end_case
+}
+
 case_os_jobs_opt_out_is_honoured() {
   new_case os_jobs_opt_out_is_honoured
   mkdir -p "$ROOT/etc/default"
@@ -2186,6 +2226,8 @@ CASES=(
   case_bare_metal_sets_the_zone
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
+  case_journal_kept_on_disk
+  case_journal_opt_out_is_honoured
   case_os_jobs_opt_out_is_honoured
   case_os_jobs_never_leaves_the_box_degraded
   case_vision_model_pull_is_optional

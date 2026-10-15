@@ -1,7 +1,10 @@
 [Unit]
 Description=Domovoi web dashboard
-After=domovoi-core.service
-Wants=domovoi-core.service
+# Not After=domovoi-core.service: the core is Type=notify, "activating"
+# until its startup is done, and the dashboard must be up meanwhile, and
+# while the core is stuck, to say so and to restart it.
+After=domovoi-db.service
+Wants=domovoi-db.service domovoi-core.service
 
 [Service]
 Type=simple
@@ -16,7 +19,10 @@ TimeoutStopSec=30
 # Sandboxing (docs/LINUX_HOST.md, "Sandboxing the units"): the full set,
 # NoNewPrivileges and no capabilities included, since the dashboard
 # process never runs sudo (the Restart button goes through the core, whose
-# unit is looser for exactly that reason).
+# unit is looser for exactly that reason). Restarting a core that doesn't
+# answer needs no privilege either: the dashboard signals the core's main
+# process, which runs as the same user, and the core unit's Restart=
+# starts it again (web/backend/core_restart.py).
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=

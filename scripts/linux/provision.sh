@@ -68,7 +68,11 @@
 #                helper after every healthy restart or update, so an answer
 #                changed later in Settings follows there
 #   units        the three shipped units from scripts/linux/units/, the
-#                restart sudoers grant, sleep targets masked
+#                restart sudoers grant, sleep targets masked, and the
+#                journal kept on disk (scripts/linux/units/journald-domovoi.conf
+#                as /etc/systemd/journald.conf.d/50-domovoi.conf, then
+#                systemd-journald restarted; DOMOVOI_MANAGE_JOURNAL=0 in
+#                /etc/default/domovoi-update leaves the journal alone)
 #   timezone     bare metal: --timezone, through timedatectl. WSL: the zone
 #                follows Windows (WSL rewrites /etc/localtime and
 #                /etc/timezone at every distro start), so --timezone is
@@ -2355,6 +2359,19 @@ do_os_jobs() {
 
 SHIPPED_UNITS=(domovoi-db.service domovoi-core.service domovoi-web.service)
 SLEEP_TARGETS=(sleep.target suspend.target hibernate.target hybrid-sleep.target)
+# The journal on disk, so what the core logs (its loop watchdog's report
+# included) survives a power cycle (incident 2026-10-14). The update unit
+# installs the same file (apply-update.sh, reconcile_journal).
+JOURNALD_DROPIN=$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf
+journald_dropin_src() { printf '%s' "$CHECKOUT/scripts/linux/units/journald-domovoi.conf"; }
+# DOMOVOI_MANAGE_JOURNAL=0 (or false/no/off) in /etc/default/domovoi-update:
+# the administrator decides where the journal lives, here as in updates.
+manage_journal() {
+  local v
+  v=$(update_default DOMOVOI_MANAGE_JOURNAL)
+  case ${v,,} in 0|false|no|off) return 1 ;; esac
+  return 0
+}
 
 # A shipped unit with this box's checkout, home and user (docs/LINUX_HOST.md,
 # Make it an appliance: "change User=, WorkingDirectory=, ExecStart=,
@@ -2391,6 +2408,7 @@ inputs_units() {
   restart_grant
   media_dropin_text
   printf '%s\n' "${SLEEP_TARGETS[@]}"
+  if manage_journal; then cat "$(journald_dropin_src)" 2>/dev/null; else echo "journal: left alone"; fi
 }
 check_units() {
   local u d
@@ -2401,9 +2419,15 @@ check_units() {
     if [ -n "$d" ]; then printf '%s\n' "$d" | cmp -s - "$UNIT_DIR/$u.d/domovoi-media.conf" || return 1
     else [ ! -e "$UNIT_DIR/$u.d/domovoi-media.conf" ] || return 1; fi
   done
-  masks_in_place "${SLEEP_TARGETS[@]}"
+  masks_in_place "${SLEEP_TARGETS[@]}" || return 1
+  if manage_journal; then cmp -s "$(journald_dropin_src)" "$JOURNALD_DROPIN" || return 1; fi
 }
-plan_units() { printf '%s\n' "${SHIPPED_UNITS[@]/#//etc/systemd/system/}"; restart_grant; }
+plan_units() {
+  printf '%s\n' "${SHIPPED_UNITS[@]/#//etc/systemd/system/}"
+  restart_grant
+  if manage_journal; then echo "/etc/systemd/journald.conf.d/50-domovoi.conf (the journal on disk), then restart systemd-journald"
+  else echo "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"; fi
+}
 do_units() {
   local u d out changed=()
   [ -x "$ROOT/usr/bin/docker" ] || die "/usr/bin/docker is missing; domovoi-db.service names that path"
@@ -2434,6 +2458,7 @@ do_units() {
   # LINUX_HOST.md "Don't suspend". Inside WSL Windows decides when the box
   # sleeps; masked anyway, as on the Beelink.
   mask_units "${SLEEP_TARGETS[@]}"
+  install_journald_dropin
   if [ "${#changed[@]}" -gt 0 ]; then
     printf '%s\n' "${changed[@]}" >>"$UNITS_CHANGED_FILE"
     systemctl daemon-reload
@@ -2441,6 +2466,25 @@ do_units() {
   as_svc sudo -n -l "$SYSTEMCTL_PATH" --no-block restart domovoi-core.service domovoi-web.service >/dev/null 2>&1 \
     || warn "$SVC_USER can't run the restart grant through sudo; the dashboard will show the manual command"
   STEP_DONE_MSG="Services installed"
+}
+
+# The journal on disk (JOURNALD_DROPIN above). journald reads its
+# configuration at start: restarted when the drop-in is new or changed,
+# then the journal so far is moved out of /run. Neither failure is fatal:
+# the drop-in takes effect at the next boot anyway.
+install_journald_dropin() {
+  local src
+  if ! manage_journal; then log "the journal left as it is (DOMOVOI_MANAGE_JOURNAL in /etc/default/domovoi-update)"; return 0; fi
+  src=$(journald_dropin_src)
+  [ -f "$src" ] || die "the checkout has no scripts/linux/units/journald-domovoi.conf"
+  if write_if_changed "$JOURNALD_DROPIN" 0644 <"$src"; then
+    log "installed /etc/systemd/journald.conf.d/50-domovoi.conf: the journal is kept on disk (at most 1 GB)"
+    if systemd_running; then
+      systemctl restart systemd-journald.service \
+        || warn "systemd-journald did not restart; the journal moves to disk at the next boot"
+      journalctl --flush >/dev/null 2>&1 || true
+    fi
+  fi
 }
 
 # ─── timezone ────────────────────────────────────────────────────────────
