@@ -12,8 +12,7 @@
 </p>
 
 <p align="center">
-  <img alt="status: early, building in public" src="https://img.shields.io/badge/status-early%2C%20building%20in%20public-F2A618?style=flat-square&labelColor=1F1A14">
-  <img alt="your voice: stays home" src="https://img.shields.io/badge/your%20voice-stays%20home-F2A618?style=flat-square&labelColor=1F1A14">
+  <img alt="status: tested and ready" src="https://img.shields.io/badge/status-tested%20and%20ready-2EA043?style=flat-square&labelColor=1F1A14">
   <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
   <br>
   <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">
@@ -21,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="DISCORD_INVITE_URL"><img alt="Join us on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
+  <a href="https://discord.gg/pg8QQPwhq"><img alt="Join us on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
   <a href="EMAIL_SIGNUP_URL"><img alt="Get updates by email" src="https://img.shields.io/badge/Get%20updates%20by%20email-F2A618?style=for-the-badge"></a>
 </p>
 
@@ -30,8 +29,8 @@
   <a href="https://learn.codersfarm.org">Learn to code, free</a> ·
   <a href="https://donate.codersfarm.org">Support Coders Farm</a>
 </p>
-<!-- TODO(owner): replace DISCORD_INVITE_URL and EMAIL_SIGNUP_URL (in the buttons
-     above and in Status and roadmap) with the real links before merging. -->
+<!-- TODO(owner): replace EMAIL_SIGNUP_URL (in the button above and in Status
+     and roadmap) with the real signup link before merging. -->
 
 Domovoi runs entirely on your own hardware: a server on your network does the
 listening, thinking, and speaking, and small Raspberry Pi satellites put a
@@ -48,7 +47,7 @@ news briefings, podcasts and audiobooks, a calendar, documents, and internet
 radio (via the bundled [radio plugin](plugins/radio)). Everything else is a
 plugin away — installed from the dashboard as a zip upload or a GitHub URL.
 
-> **Status: early, and built in public.** Domovoi works today if you're
+> **Status: tested, and built in public.** Domovoi works today if you're
 > comfortable running your own server, and the easier ways in (an assistant
 > that runs on your phone, a Windows installer) are in early builds: see
 > [Status and roadmap](#status-and-roadmap). Ask questions in
@@ -79,7 +78,7 @@ plugin away — installed from the dashboard as a zip upload or a GitHub URL.
 
 ## Status and roadmap
 
-Domovoi is early, and we build it in public. Here's where it stands.
+We build Domovoi in public. Here's where it stands.
 
 **Works today**
 
@@ -118,7 +117,7 @@ Domovoi is early, and we build it in public. Here's where it stands.
 same bar Coders Farm teaches: automated tests, review, and a written
 [security model](docs/SECURITY_PRIVACY.md). The code is all here; read it.
 
-**Follow along and get help.** Updates go out on [Discord](DISCORD_INVITE_URL)
+**Follow along and get help.** Updates go out on [Discord](https://discord.gg/pg8QQPwhq)
 and by [email](EMAIL_SIGNUP_URL). For questions and install help, use
 [Discussions](https://github.com/coders-farm-official/domovoi/discussions);
 replies can take a few days while we build.
