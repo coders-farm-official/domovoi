@@ -453,6 +453,31 @@ class Settings(BaseSettings):
     shutdown_teardown_sec: float = 10.0
     shutdown_deadline_sec: float = 20.0
 
+    # The loop watchdog (domovoi/loop_watchdog.py; incident 2026-10-14,
+    # when the core stopped answering for 40 minutes until a power cycle).
+    # A thread outside the event loop watches a heartbeat the loop beats
+    # every couple of seconds, and every loop_watchdog_probe_interval_sec
+    # sends a real `SELECT 1` through the normal session path. When the
+    # loop has not run for loop_watchdog_stall_sec, or
+    # loop_watchdog_probe_failures probes in a row got no answer within
+    # loop_watchdog_probe_timeout_sec (a database that refuses at once is
+    # down, which a restart can't fix, so that is only logged), it writes
+    # every thread's stack to the journal and to
+    # ~/.domovoi/logs/core-watchdog.log, then exits with status 70 so the
+    # service manager starts the core again (the unit needs
+    # Restart=on-failure or always; docs/LINUX_HOST.md). It watches only
+    # the real server (`python -m domovoi.main`), from the end of startup
+    # until a stop begins; a startup that hasn't finished after
+    # loop_watchdog_startup_sec is treated the same way (0: no limit).
+    # Under systemd it also keeps the unit's WatchdogSec= fed while all is
+    # well. loop_watchdog_enabled=false turns all of it off.
+    loop_watchdog_enabled: bool = True
+    loop_watchdog_stall_sec: float = 30.0
+    loop_watchdog_probe_interval_sec: float = 15.0
+    loop_watchdog_probe_timeout_sec: float = 10.0
+    loop_watchdog_probe_failures: int = 3
+    loop_watchdog_startup_sec: float = 900.0
+
     timer_watcher_interval_sec: float = 1.0
 
     # ─── Timers & reminders: house-wide delivery (V018) ────────────────
