@@ -1246,6 +1246,96 @@ const RestartByHandHint = ({ version, style }) => {
   );
 };
 
+/* ---- a core that doesn't answer (incident 2026-10-14) ------------------
+ * Every other restart in the dashboard asks the CORE to restart itself,
+ * which a frozen core can't do: on 2026-10-14 the dashboard was up, the
+ * core wasn't, and only a power cycle helped. Here an admin gets "Restart
+ * the core": the web process ends it and the system starts it again
+ * (GET/POST /api/config/core/restart, web/backend/core_restart.py), then
+ * this waits for /api/health to say the core answers. Shown only where it
+ * works (the read says `capable`); otherwise the reason and the command to
+ * run by hand, or that the core is starting. Nothing at all for a viewer
+ * without the admin sign-in, or while the core answers. Settings → Version
+ * and Home's "isn't answering" row use it. */
+const CORE_BACK_WAIT_MS = 4 * 60 * 1000;
+const CORE_BACK_POLL_MS = 2000;
+
+const coreAnswersAgain = async (deadline) => {
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, CORE_BACK_POLL_MS));
+    try {
+      const r = await fetch('/api/health', { cache: 'no-store' });
+      if (r.ok) {
+        const h = await r.json();
+        if (h && h.domovoi_reachable) return true;
+      }
+    } catch { /* the dashboard itself restarting: keep waiting */ }
+  }
+  return false;
+};
+
+const CoreRestart = ({ onBack, style }) => {
+  const admin = useAdminSignedIn();
+  const { data: st, refresh } = useApiObject(admin ? '/api/config/core/restart' : null, { quiet: true });
+  const [fire, node] = useToast();
+  const [busy, setBusy] = React.useState(false);
+  if (!admin || !st || st.answering) return null;
+  const press = async () => {
+    if (!window.confirm(
+      'Restart the Domovoi core?\n\n' +
+      'It isn’t answering, so the dashboard ends it and the system starts it ' +
+      'again (about a minute). Satellites and the app reconnect by themselves.'
+    )) return;
+    setBusy(true);
+    try {
+      const res = await apiPost('/api/config/core/restart', {});
+      if (!res || !res.ok) {
+        fire(res && res.answering
+          ? 'the core is answering again'
+          : `couldn’t restart the core: ${(res && res.error) || 'no answer'}`);
+        refresh();
+        return;
+      }
+      const back = await coreAnswersAgain(Date.now() + CORE_BACK_WAIT_MS);
+      fire(back ? 'the core is back' : 'the core hasn’t answered yet: it may still be loading');
+      refresh();
+      if (back && onBack) onBack();
+    } catch (e) {
+      reportMutationFailure(fire, 'restart the core', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  let body;
+  if (busy) {
+    body = <Button variant="primary" icon="refresh-cw" disabled>Restarting the core…</Button>;
+  } else if (st.starting) {
+    body = <span className="core-restart-why" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{st.why || 'the core is starting · give it a minute'}</span>;
+  } else if (st.capable) {
+    body = (
+      <Button variant="primary" icon="rotate-cw" onClick={press}
+              title="The core isn’t answering: end it and let the system start it again">
+        Restart the core
+      </Button>
+    );
+  } else {
+    body = (
+      <span className="mono core-restart-why" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
+        {String(st.why || 'The dashboard can’t restart the core here').replace(/[.\s]*$/, '.')}
+        {st.manual_command && (
+          <> Run by hand: <span style={{ userSelect: 'all', color: 'var(--fg-muted)' }}>{st.manual_command}</span></>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="core-restart" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', ...(style || {}) }}>
+      {body}
+      {node}
+    </span>
+  );
+};
+
 /* ---- Tabs (page-level helper) ------------------------------ */
 // Keeps the active tab visible in a strip that has scrolled sideways.
 // Moves only the strip's own scrollLeft — scrollIntoView would also

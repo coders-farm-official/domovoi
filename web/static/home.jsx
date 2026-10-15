@@ -357,7 +357,9 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
           text: "the database isn't answering · nothing new can be saved" });
   }
   if (coreDown) {
-    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites',
+    // An admin gets the restart on the row itself (CoreRestart: it
+    // renders nothing for anyone else); the row still links to Satellites.
+    add({ key: 'core', tone: 'err', scope: 'open', href: '#satellites', coreDown: true,
           text: "the Domovoi server isn't answering · rooms show the last known state" });
   }
 
@@ -660,6 +662,17 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
                 <span className="home-att-acts">
                   <a href="#manual" className="home-link">how domovoi works</a>
                   <Button variant="primary" icon="key" onClick={() => { onClaim(); }}>claim it</Button>
+                </span>
+              </div>
+            );
+          }
+          if (r.coreDown && viewer.isAdmin && !shared) {
+            return (
+              <div key={r.key} className={`${cls} home-att-claim`} data-key={r.key}>
+                {body}
+                <span className="home-att-acts">
+                  <a href={r.href} className="home-link">satellites</a>
+                  <CoreRestart/>
                 </span>
               </div>
             );

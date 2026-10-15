@@ -22,9 +22,11 @@ from domovoi.admin_auth import (
     require_admin_read,
     require_admin_security,
     require_device,
+    require_device_read,
 )
 from domovoi.config import HOME_PROBLEMS_VISIBILITY_CHOICES
 from domovoi.config import settings as core_settings
+from web.backend import core_restart
 from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
@@ -281,6 +283,37 @@ async def restart_version(request: Request):
             headers=auth_forward_headers(request),
         )
     )
+
+
+@router.get(
+    "/config/core/restart",
+    # The device tier's read half, like the Version card's own read.
+    dependencies=[Depends(require_device_read)],
+)
+async def core_restart_status():
+    """Whether the core answers, and when it doesn't, what "restart the
+    core" would do from here: ``{answering, capable, how, why, starting,
+    manual_command}`` (web/backend/core_restart.py). The Version card and
+    Home's "the Domovoi server isn't answering" row read it to offer the
+    button, or the reason and the command to run by hand."""
+    return await core_restart.status()
+
+
+@router.post(
+    "/config/core/restart",
+    # Security tier, checked HERE against the shared admin_sessions table:
+    # the core that would normally check it is the one not answering.
+    # Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def core_restart_now():
+    """Restart a core that doesn't answer (incident 2026-10-14): the web
+    process ends it and systemd starts it again, or, where this process
+    can use the restart grant, runs the core's own restart. Refused while
+    the core answers (use ``/config/version/restart``) or is starting.
+    ``{ok, how, error, answering, starting, manual_command}``; the client
+    then follows ``/api/health`` until ``domovoi_reachable`` is true."""
+    return await core_restart.restart_unanswering_core()
 
 
 @router.post(
