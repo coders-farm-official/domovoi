@@ -36,6 +36,7 @@ from domovoi.clients.mpd import get_mpd_client_for, mpd_stream_url_for
 from domovoi.confirmations import request_confirmation
 from domovoi.db.repositories import SessionRepository
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.shared import phone_play
 from domovoi.handlers.shared.library_dedup import find_fuzzy_library_match
 from domovoi.handlers.shared.library_match import library_path_for_mpd_file
 from domovoi.handlers.shared.play_history import record_media_play
@@ -309,6 +310,11 @@ class PlaylistHandler(Handler):
             return self._reply(
                 ctx, f"The {playlist_name} playlist is empty."
             )
+        if ctx.from_phone:
+            return await self._play_on_phone(
+                playlist_id=playlist_id, playlist_name=playlist_name, mode=mode,
+                picked=picked, ctx=ctx, session=session,
+            )
 
         # Three-stage MPD lookup mirroring MusicHandler._play_random.
         # Stamps current_playlist on success.
@@ -394,6 +400,51 @@ class PlaylistHandler(Handler):
             matched_handler=self.name,
             music_action="start",
             music_stream_url=mpd_stream_url_for(ctx.room_id),
+            data={
+                "playlist_id": playlist_id,
+                "playlist_name": playlist_name,
+                "mode": mode,
+                "track_id": picked.track_id,
+            },
+        )
+
+    async def _play_on_phone(
+        self,
+        *,
+        playlist_id: int,
+        playlist_name: str,
+        mode: str,
+        picked: Any,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """A playlist asked for from a phone (the chat mic): the whole list
+        goes to the phone's own player, starting where a room would
+        (``pick_next_track``; ordered mode resumes where it was left), so
+        "next" there is the phone's own next and no room's state is
+        touched."""
+        queue = await phone_play.playlist_queue(session, playlist_id, mode, picked.track_id)
+        await persist_resume_position(session, playlist_id, mode, picked.position)
+        await record_media_play(
+            session,
+            room_id=ctx.room_id,
+            source="playlist",
+            title=picked.title,
+            artist=picked.artist,
+            library_track_id=picked.track_id,
+        )
+        if ctx.session_id:
+            try:
+                repo = SessionRepository(session)
+                await repo.set_context_key(ctx.session_id, "last_play_source", "playlist")
+                await repo.set_context_key(ctx.session_id, "last_stream_query", None)
+                await repo.set_context_key(ctx.session_id, "last_stream_title", None)
+            except Exception as e:
+                log.debug("couldn't save playlist play state: %s", e)
+        verb = "Shuffling" if mode == "shuffle" else "Playing"
+        return phone_play.play_on_phone(
+            self.name, ctx, f"{verb} {playlist_name}.",
+            [phone_play.track_item(r) for r in queue],
             data={
                 "playlist_id": playlist_id,
                 "playlist_name": playlist_name,

@@ -8,6 +8,7 @@ import com.domovoi.app.net.Capabilities
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.parseInstant
 import com.domovoi.app.ui.shell.EverythingRoutes
+import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.visibleOn
 import kotlinx.serialization.Serializable
@@ -145,6 +146,10 @@ internal data class HomeNowPlaying(
 internal data class HomeWifi(
     val rx_mbits: Double? = null,
     val tx_mbits: Double? = null,
+    // Since 2026-10-12 (null from an older satellite): the received signal,
+    // and "ap" while the radio hosts the setup hotspot.
+    val signal_dbm: Double? = null,
+    val mode: String? = null,
 )
 
 @Serializable
@@ -422,6 +427,20 @@ internal fun timerLeftByRoom(active: List<HomeTimer>, nowMs: Long): Map<String, 
 
 // ─── Rooms ────────────────────────────────────────────────────────────────
 
+/**
+ * What a room is playing, or null. Only an online room that is playing or
+ * paused has a song: a STOPPED room's player keeps the last song loaded and
+ * the read still names it (state "stop", song set), which made a room
+ * nobody was listening to look like it was playing that song at 0:00 on
+ * Home while Music and Satellites said nothing (2026-10-11). A stopped room
+ * is quiet, as everywhere else — the web's HomeRoomSong.
+ */
+internal fun roomSong(r: HomeRoom): HomeSong? {
+    val np = r.now_playing ?: return null
+    if (!r.online || np.song == null) return null
+    return if (np.state == "play" || np.state == "pause") np.song else null
+}
+
 /** Playing, then paused, then online and quiet, then waiting, then offline. */
 internal fun roomRank(r: HomeRoom): Int {
     val np = r.now_playing
@@ -450,13 +469,15 @@ internal fun groupRooms(sorted: List<HomeRoom>): List<RoomGroup> {
     return if (loose.isEmpty()) out else out + RoomGroup("ungrouped", loose)
 }
 
-/** A Wi-Fi push carries every room's new rx/tx: merged in, never re-read
+/** A Wi-Fi push carries every room's new link: merged in, never re-read
  *  (every room sends one a minute). Nothing else is taken from it. */
 internal fun mergeWifi(rooms: List<HomeRoom>, push: Map<String, HomeWifi>?): List<HomeRoom> {
     if (push.isNullOrEmpty()) return rooms
     return rooms.map { r ->
         val w = push[r.room_id] ?: return@map r
-        r.copy(wifi = (r.wifi ?: HomeWifi()).copy(rx_mbits = w.rx_mbits, tx_mbits = w.tx_mbits))
+        r.copy(wifi = (r.wifi ?: HomeWifi()).copy(
+            rx_mbits = w.rx_mbits, tx_mbits = w.tx_mbits, signal_dbm = w.signal_dbm, mode = w.mode,
+        ))
     }
 }
 
@@ -466,8 +487,7 @@ internal fun mergeWifi(rooms: List<HomeRoom>, push: Map<String, HomeWifi>?): Lis
  *  brings the next one, the count used to run on ("0:14 / 0:13"). */
 internal fun roomElapsedSec(r: HomeRoom, stale: Boolean, sinceReadSec: Double): Double {
     val np = r.now_playing ?: return 0.0
-    val song = np.song
-    if (!r.online || song == null) return 0.0
+    val song = roomSong(r) ?: return 0.0
     val playing = np.state == "play"
     val ran = (np.elapsed_sec ?: 0.0) + if (playing && !stale) sinceReadSec else 0.0
     val dur = song.duration_sec ?: 0.0
@@ -484,10 +504,18 @@ internal fun songTitle(song: HomeSong?): String =
         ?: song?.file?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
         ?: "unknown"
 
-/** Weak Wi-Fi is the web wifiTone's 'err' band: under 5 Mbit/s. */
+/** Weak Wi-Fi is the web wifiTone's 'err' band: by signal (below -70 dBm,
+ *  or the radio hosting the setup hotspot) when the satellite reports one;
+ *  an older satellite's rate under 5 Mbit/s otherwise. An idle link reads
+ *  the 1 Mbit/s beacon rate, so a signal-reporting room is never weak for
+ *  its rate alone. */
 internal fun weakWifi(r: HomeRoom): Boolean {
-    val rx = r.wifi?.rx_mbits ?: return false
-    return r.online && rx < 5
+    val w = r.wifi ?: return false
+    if (!r.online) return false
+    if (w.mode == "ap") return true
+    w.signal_dbm?.let { return it < -70.0 }
+    val rx = w.rx_mbits ?: return false
+    return rx < 5
 }
 
 internal fun kioskDead(r: HomeRoom): Boolean =
@@ -820,11 +848,15 @@ internal fun hintPhrase(manual: HomeManual?): String {
 
 // ─── Everything ───────────────────────────────────────────────────────────
 
-/** The "everything" grid: every screen that is not a bottom-bar tab, that
- *  this server's plugins allow, and — on a shared screen — that is not
- *  somebody's own. */
-internal fun everythingTiles(caps: Capabilities, shared: Boolean): List<Route> =
-    EverythingRoutes.filter { it.visibleOn(caps, shared) }
+/** The "everything" grid: every screen that is not on this phone's bar
+ *  ([bar], ui/shell/PhoneBar.kt; the default bar unless given), that this
+ *  server's plugins allow, and — on a shared screen — that is not
+ *  somebody's own. Satellites is not here: it is a Settings tab. */
+internal fun everythingTiles(
+    caps: Capabilities,
+    shared: Boolean,
+    bar: List<Route> = PhoneBar.routes(null, caps, shared),
+): List<Route> = EverythingRoutes.filter { it !in bar && it.visibleOn(caps, shared) }
 
 // ─── Stop all ─────────────────────────────────────────────────────────────
 

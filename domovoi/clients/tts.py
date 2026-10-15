@@ -2,19 +2,29 @@
 
 A short fallback chain that starts at the preferred engine. Output is always
 a complete WAV file's bytes (int16 mono, native sample rate of the engine),
-so HTTP clients can stream it directly without re-encoding.
+so HTTP clients can stream it directly without re-encoding. Every rung is
+local: nothing Domovoi says leaves the house.
 
-- `edge`   — Microsoft Edge neural voices (online, very natural, ~24 kHz).
-  The reply text goes to Microsoft, so Edge is an informed opt-in: it is
-  used ONLY when it is the preferred engine for the call (``TTS_ENGINE=edge``
-  or a voice registered on the edge engine) and the internet answer allows
-  it. It is never a fallback rung, and under ``INTERNET_ACCESS=never`` it is
-  never used at all (see :func:`engine_order`).
-- `piper`  — local neural (offline, auto-downloads voice, 22 kHz). The
+(The Microsoft Edge online voices, edge-tts, were dropped on 2026-10-12, by
+the owner's decision: Microsoft's service had started refusing edge-tts,
+every reply text went to Microsoft, and edge-tts is LGPL. An ``engine`` of
+"edge" still named by an old setting or registry row is spoken by Piper;
+the boot removes the rows, domovoi/voice_catalog.py.)
+
+- `piper`  — local neural (offline, auto-downloads voice, 22 kHz): a Piper
+  VITS model run directly on ONNX Runtime, fed by Domovoi's own permissive
+  text-to-phoneme converter (``domovoi/phonemizer``; no espeak-ng, no
+  piper-tts). It speaks voices trained on espeak's British ``"en"`` phoneme
+  set (the three public-domain voices Domovoi offers, ``SHIPPED_VOICES``)
+  or its American ``"en-us"`` set (most voices people train and upload):
+  the converter writes the set the voice's ``.onnx.json`` names. A voice
+  trained on any other set can't speak here and the chain carries on to
+  `system` (:func:`piper_voice_problem` says why, for the UI). The
   one-time voice download goes through the egress gate, so it is refused
   under ``never`` and the chain carries on to `system`.
 - `system` — the OS's own synthesizer: pyttsx3/SAPI5 on Windows,
-  `espeak-ng` (or `espeak`) on Linux/BSD, `say` on macOS. Robotic, but it
+  `espeak-ng` (or `espeak`) on Linux/BSD when the owner installed one (Domovoi
+  no longer installs it), `say` on macOS. Robotic, but it
   is the floor of the chain — the thing that still talks when the network
   is down AND the Piper voice is missing or broken. Returns None when no
   system synthesizer is installed, which just ends the chain.
@@ -32,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -42,7 +53,7 @@ import tempfile
 import threading
 import wave
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -52,56 +63,50 @@ from domovoi.speech_sanitize import sanitize_for_speech
 
 log = logging.getLogger(__name__)
 
-ENGINES: tuple[str, ...] = ("edge", "piper", "system")
+ENGINES: tuple[str, ...] = ("piper", "system")
 
 
 @dataclass(frozen=True)
 class SynthResult:
     """What a synthesis produced, and which rung of the chain produced it.
 
-    ``engine`` is ``"edge"``, ``"piper"`` or ``"system"``, or ``""`` when
-    every rung failed and ``wav`` is the empty WAV callers get so they don't
-    crash. ``voice`` is the model_ref / Edge voice id the rung used, and
+    ``engine`` is ``"piper"`` or ``"system"``, or ``""`` when every rung
+    failed and ``wav`` is the empty WAV callers get so they don't crash.
+    ``voice`` is the Piper model_ref the rung used, and
     None for ``system`` (the OS voice has no id here) and for the empty
     result."""
 
     wav: bytes
     engine: str
     voice: str | None
+    # Why each rung tried before the one that answered gave nothing, in
+    # words for the owner ("piper: en_GB-x.onnx can't speak here: ..."):
+    # what a sample that can't play its own voice says. Not part of
+    # equality.
+    failures: tuple[str, ...] = field(default=(), compare=False)
 
 
-_edge_skip_logged = False
+def engine_failure_words(engine: str, exc: BaseException) -> str:
+    """One rung's failure, short and in words (no URLs)."""
+    if isinstance(exc, egress.InternetTurnedOff):
+        return f"{engine}: {egress.TURNED_OFF_REASON}"
+    text = str(exc).split(", url=")[0].strip() or type(exc).__name__
+    return f"{engine}: {text[:160]}"
 
 
 def engine_order(preferred: str | None) -> list[str]:
-    """The rungs to try, in order, for a call that prefers ``preferred``.
-
-    Edge appears ONLY when it is the preferred engine and the internet
-    answer allows it: never as a fallback, so a broken Piper on an online
-    box can't quietly send reply text to Microsoft, and never under
-    ``INTERNET_ACCESS=never``. An unknown engine name is treated as Piper.
+    """The rungs to try, in order, for a call that prefers ``preferred``:
+    ``system`` first only when asked for, else Piper; anything else
+    (``piper``, the dropped ``edge``, an unknown name) is Piper.
 
     =====================  ===========================
     preferred              order
     =====================  ===========================
-    edge (allowed)         edge, piper, system
-    edge (under never)     piper, system
-    piper / unknown        piper, system
+    piper / edge / other   piper, system
     system                 system, piper
     =====================  ===========================
     """
-    global _edge_skip_logged
     pref = (preferred or "").strip().lower()
-    if pref == "edge":
-        if egress.internet_allowed():
-            return ["edge", "piper", "system"]
-        if not _edge_skip_logged:
-            _edge_skip_logged = True
-            log.info(
-                "TTS: the Microsoft Edge voice is skipped (%s); speaking with "
-                "Piper instead", egress.TURNED_OFF_REASON,
-            )
-        return ["piper", "system"]
     if pref == "system":
         return ["system", "piper"]
     return ["piper", "system"]
@@ -139,8 +144,7 @@ class TTSStubClient:
             wf.setsampwidth(2)
             wf.setframerate(16_000)
             wf.writeframes(b"")
-        # The stub "renders" on the first rung the real router would try, so
-        # what it reports follows the same Edge rules.
+        # The stub "renders" on the first rung the real router would try.
         requested = (engine or "piper").strip().lower()
         rung = engine_order(requested)[0]
         return SynthResult(
@@ -175,47 +179,7 @@ def _wav_is_silent(wav_bytes: bytes) -> bool:
         return False
 
 
-def _synth_edge_sync(text: str, voice: str, speed: float) -> bytes | None:
-    """Run edge-tts (async under the hood) from a sync context.
-
-    Refuses under ``INTERNET_ACCESS=never`` before anything is imported or
-    sent (``egress.InternetTurnedOff``). :func:`engine_order` already keeps
-    Edge out of the chain there; this is the defence in depth for any other
-    caller."""
-    egress.require_internet("Microsoft Edge voice")
-    try:
-        import edge_tts
-        import miniaudio
-    except ImportError:
-        return None
-
-    rate = f"{int(round((speed - 1.0) * 100)):+d}%"
-
-    async def _go() -> bytes:
-        chunks: list[bytes] = []
-        async for c in edge_tts.Communicate(text, voice, rate=rate).stream():
-            if c["type"] == "audio":
-                chunks.append(c["data"])
-        return b"".join(chunks)
-
-    mp3 = asyncio.run(_go())
-    if not mp3:
-        return None
-    # miniaudio.decode defaults to nchannels=2, sample_rate=44100 — silently
-    # upmixes/resamples. Edge MP3 is mono 24 kHz; pin both so the WAV we
-    # write matches the bytes (otherwise _pcm_to_wav_bytes writes a mono
-    # header over stereo-interleaved data → playback at half speed).
-    decoded = miniaudio.decode(
-        mp3,
-        output_format=miniaudio.SampleFormat.SIGNED16,
-        nchannels=1,
-        sample_rate=24_000,
-    )
-    pcm_bytes = decoded.samples.tobytes()
-    return _pcm_to_wav_bytes(pcm_bytes, decoded.sample_rate)
-
-
-_piper_voice_cache: dict[str, object] = {}
+_piper_voice_cache: dict[str, "PiperVoice"] = {}
 _piper_load_lock = threading.Lock()
 
 
@@ -236,24 +200,61 @@ def _voices_dir() -> Path:
 
 PIPER_REPO_URL = "https://huggingface.co/rhasspy/piper-voices"
 PIPER_API_URL = "https://huggingface.co/api/models/rhasspy/piper-voices"
-# The rhasspy/piper-voices commit the pins were read from (2026-09-17).
+# The rhasspy/piper-voices commit the pins were read from (2026-10-12).
 PIPER_PINNED_REVISION = "c10ece1aade47bb51c153c893d14e5bf8e5b7117"
+
+
+@dataclass(frozen=True)
+class ShippedVoice:
+    """One of the voices Domovoi offers: public domain (LibriVox / LJ Speech
+    recordings, trained from scratch by Bryce Beattie, no lessac base), and
+    trained on espeak's British "en" phoneme set, one of the two sets
+    domovoi/phonemizer writes. ``onnx_sha256`` is the LFS oid of the model at
+    PIPER_PINNED_REVISION; ``json_blob_sha1`` the git blob id of its config,
+    sha1(b"blob <len>\\0" + content)."""
+
+    model_ref: str
+    name: str        # the spoken name ("switch to Norman")
+    sex: str
+    sample_rate: int
+    onnx_sha256: str
+    onnx_bytes: int
+    json_blob_sha1: str
+    json_bytes: int
+
+
+SHIPPED_VOICES: tuple[ShippedVoice, ...] = (
+    ShippedVoice("en_US-norman-medium", "Norman", "male", 22050,
+                 "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71", 63531379,
+                 "64985a9c6620d5522c500dd42224be7998f83f39", 4968),
+    ShippedVoice("en_US-kristin-medium", "Kristin", "female", 22050,
+                 "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4", 63531379,
+                 "e94be84ab0dc3532b4b2b48cbb1f5d4a8746bedd", 4968),
+    ShippedVoice("en_US-ljspeech-medium", "Linda", "female", 22050,
+                 "6f52a751e2349abe7a76735eb09dc1875298c77ea2342ffd2fef79ff81b87f22", 63531379,
+                 "73ecdec4f6ab17a437936652dfe3a925bb19e098", 4972),
+)
+# The house voice: Kristin since 2026-10-12 (the owner's pick), Norman
+# before; an install still on Norman moves once (domovoi/voice_migration.py).
+DEFAULT_PIPER_VOICE = "en_US-kristin-medium"
+PREVIOUS_DEFAULT_PIPER_VOICE = "en_US-norman-medium"
 # model_ref -> (.onnx SHA-256, .onnx bytes, .onnx.json git blob SHA-1,
-# .onnx.json bytes), from the Hub's tree API at PIPER_PINNED_REVISION: the
-# LFS oid is the SHA-256 of the model; the small JSON config is a plain git
-# blob, whose id is sha1(b"blob <len>\0" + content). Every voice in
-# voice_catalog.PIPER_CATALOG is here.
+# .onnx.json bytes), read from the Hub's tree API at PIPER_PINNED_REVISION.
 PIPER_PINS: dict[str, tuple[str, int, str, int]] = {
-    "en_US-kusal-medium": ("438ae25bb305b2a7f6d632327d6102df25011f793e8222fa9db876e7321df8f3", 63201294, "68eff4cb75e728b75ada72c3d1b8e54ba5cf0b3f", 4884),
-    "en_US-lessac-medium": ("5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f", 63201294, "c67cea2c9a7a6501d89f7b2cdff411bc49e54a28", 4885),
-    "en_US-amy-medium": ("b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18", 63201294, "5a1e0a2d94d3719de29a4771aa0e6c116552445f", 4882),
-    "en_US-ryan-high": ("b3990d7606e183ec8dbfba70a4607074f162de1a0c412e0180d1ff60bb154eca", 120786792, "d50091e9aeb2e7b02517749d953ade2be28dcdb1", 4166),
-    "en_US-joe-medium": ("58afce0321b8d9c46d7cdf9c16500cc55a793b4220212dba6b70fb788b3baf06", 63201294, "b4ab600fbd71cee986a8e7714bd88996f33be945", 4794),
-    "en_US-kathleen-low": ("87adf17f5326bc0782282147a8b9788406236245f0f9b0e68dacb651bc1de8b6", 63104526, "95db36461a4f0479b68b06eb20a3f86e383a14db", 4169),
-    "en_GB-alan-medium": ("0a309668932205e762801f1efc2736cd4b0120329622adf62be09e56339d3330", 63201294, "31f864659bfb7678af373cf4e58a7a0866ff52af", 4888),
-    "en_GB-alba-medium": ("401369c4a81d09fdd86c32c5c864440811dbdcc66466cde2d64f7133a66ad03b", 63201294, "c0969252c640fd7c2765baa62936a1106ca856d7", 4888),
-    "en_GB-cori-high": ("470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903", 114219352, "ec08ff84191b2e7fe7dd91928b6068bca12ff81b", 4963),
+    v.model_ref: (v.onnx_sha256, v.onnx_bytes, v.json_blob_sha1, v.json_bytes) for v in SHIPPED_VOICES
 }
+# The voices Domovoi offered before 2026-10-12 whose licences don't allow
+# every use: lessac is research-only, amy and ryan have non-commercial data,
+# and kusal, joe, kathleen, alan and alba were fine-tuned from lessac or
+# ryan. An install configured for one of them moves to DEFAULT_PIPER_VOICE,
+# and their registry rows and files go (domovoi/voice_migration.py,
+# domovoi/voice_catalog.py). The old catalog's cori is public domain and
+# trained on the same "en" phonemes, so an install that chose it keeps it;
+# it is just no longer offered.
+RETIRED_PIPER_VOICES: frozenset[str] = frozenset({
+    "en_US-kusal-medium", "en_US-lessac-medium", "en_US-amy-medium", "en_US-ryan-high",
+    "en_US-joe-medium", "en_US-kathleen-low", "en_GB-alan-medium", "en_GB-alba-medium",
+})
 # LANG_REGION-SPEAKER-QUALITY, the catalogue's naming ("en_US-lessac-medium",
 # "en_GB-northern_english_male-medium", "zh_CN-huayan-x_low").
 PIPER_MODEL_REF_RE = re.compile(
@@ -450,8 +451,318 @@ def _piper_voice_path(model_ref: str) -> Path:
     return _piper_download(model_ref, voices_dir)
 
 
-def _piper_voice(voice: str) -> object:
-    """The loaded PiperVoice for ``voice`` (a model_ref), loading it once.
+class UnsupportedPiperVoice(ValueError):
+    """A Piper model this engine can't speak: its config asks for phonemes
+    other than espeak's English sets ("en", "en-us": the ones Domovoi's
+    converter writes), or it is not a Piper model at all."""
+
+
+def piper_config_problem(cfg: object) -> str | None:
+    """Why a voice with this ``.onnx.json`` (parsed) can't speak here, in
+    words for the owner; None when it can (espeak "en" or "en-us"
+    phonemes and a phoneme id map)."""
+    from domovoi.phonemizer import dialect_for_espeak_voice
+
+    if not isinstance(cfg, dict) or not isinstance(cfg.get("phoneme_id_map"), dict):
+        return "its config has no phoneme map, so it is not a Piper voice config"
+    phoneme_type = str(cfg.get("phoneme_type") or "espeak")
+    espeak = cfg.get("espeak")
+    espeak_voice = str((espeak.get("voice") if isinstance(espeak, dict) else None) or "")
+    if phoneme_type != "espeak":
+        return (f"it was trained on {phoneme_type!r} phonemes; Domovoi writes espeak's English phonemes "
+                f"(\"en\" or \"en-us\") only")
+    if dialect_for_espeak_voice(espeak_voice) is None:
+        return (f"it was trained on espeak's {espeak_voice or 'unnamed'!r} phonemes; Domovoi writes "
+                f"English (\"en\" or \"en-us\") only")
+    return None
+
+
+def piper_voice_problem(model_ref: str) -> str | None:
+    """Why the Piper voice ``model_ref`` can't speak, read from its config
+    on disk without loading the model; None when it can, or when it is not
+    on disk (a catalogue voice downloads on first use)."""
+    local = _piper_local_path(model_ref)
+    if local is None:
+        return None
+    try:
+        cfg = json.loads(Path(f"{local}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return f"its config can't be read ({e.__class__.__name__})"
+    return piper_config_problem(cfg)
+
+
+def piper_voice_dialect(model_ref: str) -> str:
+    """The phoneme set ("en" or "en-us") the Piper voice ``model_ref``
+    speaks: the loaded voice's, else its config's on disk, else "en" (the
+    catalogue voices). Loads nothing."""
+    from domovoi.phonemizer import DEFAULT_DIALECT, dialect_for_espeak_voice
+
+    loaded = _piper_voice_cache.get(model_ref)
+    if loaded is not None:
+        return loaded.dialect
+    local = _piper_local_path(model_ref)
+    if local is not None:
+        try:
+            cfg = json.loads(Path(f"{local}.json").read_text(encoding="utf-8"))
+            return dialect_for_espeak_voice((cfg.get("espeak") or {}).get("voice")) or DEFAULT_DIALECT
+        except (OSError, ValueError, AttributeError):
+            pass
+    return DEFAULT_DIALECT
+
+
+# Silence between the sentences of one reply, as the Piper voices' original
+# command line put it (and as the owner heard them on 2026-10-12).
+SENTENCE_SILENCE_SEC = 0.2
+# Said, in the voice, when a text has words but none the converter can read
+# (no Latin letters: another script entirely), rather than silence.
+UNREADABLE_TEXT_FALLBACK = "Sorry, I can't read that out loud."
+# The most text one synthesis call speaks (a few minutes of speech). Replies
+# are spoken a sentence or a paragraph at a time; a longer text is cut at
+# the last sentence end (else the last space) before this and the rest
+# dropped with a log line, so one runaway reply can't hold a voice turn.
+MAX_SPOKEN_CHARS = 5000
+
+
+# Some voices run away on a short sentence said on its own: Norman (the
+# shipped default until 2026-10-12) says "Cameron." as four to six seconds
+# of babble in no language (and "Okay.", "Done.", "Hi, I'm Norman." much
+# the same), while
+# the very same ids come out right after a sentence of context, and Kristin
+# and Linda say them right either way (measured 2026-10-12, Whisper and
+# by length). A voice is checked once, the first time it says a short
+# sentence (:meth:`PiperVoice.runs_away`; the boot warm-up's "Okay." is
+# one): if one of the probe words alone comes out longer than
+# RUNAWAY_SECONDS, its short sentences are said after the lead-in sentence
+# in the same call and cut off again at the pause between the two
+# (:func:`cut_after_lead_in`). The Kotlin engine on the phone does the same
+# with the same numbers (PiperSpeechOut.kt, LeadIn.kt).
+LEAD_IN_TEXT = "The weather today is sunny with a high of seventy two degrees."
+# A sentence with fewer phonemes than this (letters of the phoneme string,
+# not stress or length marks) counts as short. Norman failed on sentences
+# of up to 12 and was right from about 14, in a 32-sentence sample.
+LEAD_IN_MAX_PHONEMES = 20
+RUNAWAY_PROBES = ("Cameron.", "Norman.")
+# Norman says each probe in 3.5 to 6 s; Kristin and Linda in about 0.5 s.
+RUNAWAY_SECONDS = 1.5
+# The cut: a pause is 10 ms frames quieter than this (dB under the loudest
+# frame) for at least LEAD_IN_MIN_PAUSE_SEC (the lead-in's end is 0.3 to
+# 0.9 s; the stops inside it at most 0.14 s), the first one that starts
+# after LEAD_IN_SEARCH_FROM of the lead-in's own length (said before a
+# sentence it lasts 0.8 to 0.9 of that); the sentence's audio starts
+# LEAD_IN_KEEP_SEC before that pause ends, so a soft first sound (a vowel,
+# an n) is not clipped. No such pause: the call is made once more, then
+# the sentence is said alone.
+LEAD_IN_PAUSE_DB = -40.0
+LEAD_IN_MIN_PAUSE_SEC = 0.16
+LEAD_IN_SEARCH_FROM = 0.6
+LEAD_IN_KEEP_SEC = 0.1
+LEAD_IN_FADE_SEC = 0.005
+LEAD_IN_TRIES = 2
+
+
+def phoneme_count(phonemes: str) -> int:
+    """How many phonemes a phoneme string holds: its letters, without the
+    stress and length marks (ˈ ˌ ː), spaces or punctuation."""
+    return sum(1 for c in phonemes if c.isalpha() and c not in "ˈˌː")
+
+
+def cut_after_lead_in(audio, sample_rate: int, lead_in_seconds: float):
+    """The part of ``audio`` (the lead-in sentence, then a short sentence,
+    from one model call) after the pause that ends the lead-in, faded in;
+    None when no such pause is found. ``lead_in_seconds``: how long the
+    lead-in alone lasts at this call's speed."""
+    import numpy as np
+
+    hop = max(1, int(sample_rate * 0.01))
+    n = len(audio) // hop
+    if n < 3:
+        return None
+    frames = np.asarray(audio[: n * hop], dtype=np.float32).reshape(n, hop)
+    rms = np.sqrt(np.mean(frames * frames, axis=1)) + 1e-12
+    quiet = 20 * np.log10(rms / float(np.max(rms))) < LEAD_IN_PAUSE_DB
+    start = int(LEAD_IN_SEARCH_FROM * lead_in_seconds / 0.01)
+    min_frames = int(round(LEAD_IN_MIN_PAUSE_SEC / 0.01))
+    k = max(1, start)
+    while k < n:
+        if not quiet[k]:
+            k += 1
+            continue
+        j = k
+        while j < n and quiet[j]:
+            j += 1
+        if j - k >= min_frames and j < n:
+            cut = max(k, j - int(round(LEAD_IN_KEEP_SEC / 0.01))) * hop
+            out = np.array(audio[cut:], dtype=np.float32)
+            fade = min(len(out), max(1, int(sample_rate * LEAD_IN_FADE_SEC)))
+            out[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            return out
+        k = j
+    return None
+
+
+def _cap_text(text: str) -> str:
+    if len(text) <= MAX_SPOKEN_CHARS:
+        return text
+    head = text[:MAX_SPOKEN_CHARS]
+    cut = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if cut < MAX_SPOKEN_CHARS // 2:
+        cut = head.rfind(" ")
+    cut = cut + 1 if cut > 0 else MAX_SPOKEN_CHARS
+    log.warning("TTS: a %d-character text was cut to %d characters", len(text), cut)
+    return text[:cut]
+
+
+class PiperVoice:
+    """A Piper VITS voice on ONNX Runtime, fed by domovoi.phonemizer.
+
+    Loads ``<model>.onnx`` and its ``.onnx.json``: the phoneme set
+    (``espeak.voice``: "en" or "en-us", :attr:`dialect`), the phoneme id
+    map, the sample rate and the inference scales come from the config.
+    Thread-safe to share (ONNX Runtime's ``run`` is)."""
+
+    def __init__(self, onnx_path: Path, *, threads: int | None = None) -> None:
+        """``threads``: ONNX Runtime's intra-op threads (default: its own
+        choice; scripts that need repeatable output pass 1)."""
+        import numpy as np
+        import onnxruntime as ort
+
+        from domovoi.phonemizer import dialect_for_espeak_voice
+
+        cfg_path = Path(f"{onnx_path}.json")
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise UnsupportedPiperVoice(f"{cfg_path.name}: not a readable Piper config ({e})") from None
+        problem = piper_config_problem(cfg)
+        if problem is not None:
+            raise UnsupportedPiperVoice(f"{onnx_path.name} can't speak here: {problem}")
+        inf = cfg.get("inference") or {}
+        self.name = onnx_path.name
+        self.np = np
+        self.dialect: str = dialect_for_espeak_voice(cfg["espeak"]["voice"])
+        self.id_map: dict[str, list[int]] = cfg["phoneme_id_map"]
+        # Symbols the converter writes that this voice's map lacks -> what
+        # is said instead (phoneme_ids.fit_to_map), filled as they turn up.
+        self._missing: dict[str, str] = {}
+        self.sample_rate = int((cfg.get("audio") or {}).get("sample_rate") or 22050)
+        self.noise_scale = float(inf.get("noise_scale", 0.667))
+        self.length_scale = float(inf.get("length_scale", 1.0))
+        self.noise_w = float(inf.get("noise_w", 0.8))
+        self.multi_speaker = int(cfg.get("num_speakers") or 1) > 1
+        so = ort.SessionOptions()
+        so.inter_op_num_threads = 1
+        if threads:
+            so.intra_op_num_threads = threads
+        self.session = ort.InferenceSession(str(onnx_path), so, providers=["CPUExecutionProvider"])
+        # Whether short sentences are said after the lead-in (runs_away),
+        # and the lead-in's phonemes and length alone: checked on first need.
+        self._lead_in: tuple[bool, str, float] | None = None
+        self._lead_in_lock = threading.Lock()
+
+    def _raw_audio(self, ids: list[int], speed: float):
+        """The model's float output for ``ids``, not normalized."""
+        np = self.np
+        length = self.length_scale / speed if speed > 0 else self.length_scale
+        args = {
+            "input": np.array([ids], dtype=np.int64),
+            "input_lengths": np.array([len(ids)], dtype=np.int64),
+            "scales": np.array([self.noise_scale, length, self.noise_w], dtype=np.float32),
+        }
+        if self.multi_speaker:
+            args["sid"] = np.array([0], dtype=np.int64)
+        return self.session.run(None, args)[0].squeeze()
+
+    def _lead_in_state(self) -> tuple[bool, str, float]:
+        """(runs away, lead-in phonemes, lead-in seconds at speed 1),
+        measured once: each probe word said alone, then the lead-in."""
+        if self._lead_in is None:
+            with self._lead_in_lock:
+                if self._lead_in is None:
+                    from domovoi.phonemizer import get_phonemizer
+
+                    ph = get_phonemizer()
+                    longest = 0.0
+                    for word in RUNAWAY_PROBES:
+                        ids = self.sentence_ids(" ".join(ph.phonemize(word, dialect=self.dialect)))
+                        if ids:
+                            longest = max(longest, self._raw_audio(ids, 1.0).size / self.sample_rate)
+                    runs_away = longest > RUNAWAY_SECONDS
+                    lead = " ".join(ph.phonemize(LEAD_IN_TEXT, dialect=self.dialect))
+                    seconds = 0.0
+                    if runs_away:
+                        ids = self.sentence_ids(lead)
+                        seconds = self._raw_audio(ids, 1.0).size / self.sample_rate if ids else 0.0
+                        log.info("TTS: %s says a short sentence alone in %.1f s; its short sentences "
+                                 "are said after a lead-in", self.name, longest)
+                    self._lead_in = (runs_away, lead, seconds)
+        return self._lead_in
+
+    def runs_away(self) -> bool:
+        """Whether this voice garbles a short sentence said on its own (a
+        probe word alone comes out longer than RUNAWAY_SECONDS)."""
+        return self._lead_in_state()[0]
+
+    def sentence_ids(self, phonemes: str) -> list[int] | None:
+        """One sentence's phoneme string -> this voice's ids, a symbol its
+        map lacks said as the nearest one it has (logged once); None when
+        nothing in it is a sound the voice knows."""
+        from domovoi.phonemizer import fit_to_map, phoneme_ids, speaks_anything
+
+        seen = len(self._missing)
+        fitted = fit_to_map(phonemes, self.id_map, self._missing)
+        if len(self._missing) > seen:
+            new = list(self._missing)[seen:]
+            log.warning("TTS: %s has no %s in its phoneme map; said as %s", self.name,
+                        ", ".join(repr(c) for c in new),
+                        ", ".join(repr(self._missing[c]) if self._missing[c] else "nothing" for c in new))
+        ids = phoneme_ids(fitted, self.id_map)
+        return ids if speaks_anything(ids, self.id_map) else None
+
+    def sentence_audio(self, phonemes: str, speed: float) -> "object":
+        """One sentence's phoneme string -> float32 samples in [-1, 1]
+        (none when nothing in it is a sound the voice knows). A short
+        sentence in a voice that runs away is said after the lead-in and
+        cut off from it."""
+        np = self.np
+        ids = self.sentence_ids(phonemes)
+        if ids is None:
+            return np.zeros(0, dtype=np.float32)
+        audio = None
+        if phoneme_count(phonemes) < LEAD_IN_MAX_PHONEMES:
+            runs_away, lead, lead_seconds = self._lead_in_state()
+            if runs_away and lead_seconds > 0:
+                both = self.sentence_ids(f"{lead} {phonemes}")
+                for _ in range(LEAD_IN_TRIES if both is not None else 0):
+                    audio = cut_after_lead_in(self._raw_audio(both, speed), self.sample_rate,
+                                              lead_seconds / (speed if speed > 0 else 1.0))
+                    if audio is not None:
+                        break
+                if audio is None:
+                    log.warning("TTS: no pause after the lead-in; %s says the sentence alone", self.name)
+        if audio is None:
+            audio = self._raw_audio(ids, speed)
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        if peak < 1e-8:
+            return np.zeros_like(audio, dtype=np.float32)
+        return np.clip(audio / peak, -1.0, 1.0).astype(np.float32)
+
+    def synthesize_pcm(self, sentences: list[str], speed: float) -> bytes:
+        """int16 mono PCM for the sentences, a short silence between them."""
+        np = self.np
+        gap = np.zeros(int(SENTENCE_SILENCE_SEC * self.sample_rate), dtype=np.int16)
+        parts = []
+        for ph in sentences:
+            audio = self.sentence_audio(ph, speed)
+            if not audio.size:
+                continue
+            if parts:
+                parts.append(gap)
+            parts.append((audio * 32767).astype(np.int16))
+        return b"".join(p.tobytes() for p in parts)
+
+
+def _piper_voice(voice: str) -> PiperVoice:
+    """The loaded voice for ``voice`` (a model_ref), loading it once.
     Blocking — worker threads only. The lock makes a boot or connect-time
     preload and a turn racing it load the model once between them."""
     v = _piper_voice_cache.get(voice)
@@ -459,9 +770,7 @@ def _piper_voice(voice: str) -> object:
         with _piper_load_lock:
             v = _piper_voice_cache.get(voice)
             if v is None:
-                from piper import PiperVoice
-
-                v = PiperVoice.load(str(_piper_voice_path(voice)))
+                v = PiperVoice(_piper_voice_path(voice))
                 _piper_voice_cache[voice] = v
     return v
 
@@ -471,39 +780,43 @@ def piper_voice_loaded(voice: str) -> bool:
 
 
 def preload_piper_voice_sync(voice: str) -> bool:
-    """Load a Piper voice and synthesize one short word with it, so the
-    first reply in that voice pays neither the model load nor the first
-    inference (~600 ms on a CPU host, against ~50 ms warm). Blocking —
-    run it in a worker thread (``domovoi/speech_warmup.py``). True when
-    the voice rendered audio."""
+    """Load a Piper voice (and the text-to-phoneme converter) and
+    synthesize one short word with it, so the first reply in that voice
+    pays neither the model load nor the first inference. Blocking — run it
+    in a worker thread (``domovoi/speech_warmup.py``). True when the voice
+    rendered audio."""
     return _synth_piper_sync("Okay.", voice, 1.0) is not None
+
+
+def _phonemize(text: str, dialect: str = "en") -> list[str]:
+    from domovoi.phonemizer import get_phonemizer
+
+    return get_phonemizer().phonemize(text, dialect=dialect)
 
 
 def _synth_piper_sync(text: str, voice: str, speed: float) -> bytes | None:
     try:
-        from piper import SynthesisConfig
+        import onnxruntime  # noqa: F401
     except ImportError:
         return None
 
     v = _piper_voice(voice)
-
-    syn_config = SynthesisConfig(length_scale=(1.0 / speed) if speed > 0 else 1.0)
-    pcm_parts: list[bytes] = []
-    sr: int | None = None
-    for chunk in v.synthesize(text, syn_config=syn_config):
-        if sr is None:
-            sr = chunk.sample_rate
-        pcm_parts.append(chunk.audio_int16_bytes)
-    pcm = b"".join(pcm_parts)
-    if not pcm or sr is None:
-        # Defensive: if a voice ever renders no audio (a bad/empty uploaded
-        # model, a degenerate phonemization) that's a failure, not a silent
-        # success — return None so the router falls through to the next engine
-        # instead of emitting a zero-frame WAV. (Verified 2026-06-13: piper-tts
-        # 1.4.2 renders every current voice fine; this is a safety net, not a
-        # known bug.)
+    text = _cap_text(text)
+    dialect = getattr(v, "dialect", "en")   # the voice's phoneme set
+    sentences = _phonemize(text, dialect)
+    if not sentences and any(ch.isalnum() for ch in text):
+        # Words, but none in a script the converter reads (Cyrillic, CJK,
+        # ...): say so in the voice instead of going silent.
+        log.warning("TTS: no pronounceable words in a %d-character text; saying the fallback line", len(text))
+        sentences = _phonemize(UNREADABLE_TEXT_FALLBACK, dialect)
+    pcm = v.synthesize_pcm(sentences, speed) if sentences else b""
+    if not pcm:
+        # Nothing to say (punctuation only), or a voice that rendered no
+        # audio: a failure, not a silent success — return None so the
+        # router falls through to the next engine instead of emitting a
+        # zero-frame WAV.
         return None
-    return _pcm_to_wav_bytes(pcm, sr)
+    return _pcm_to_wav_bytes(pcm, v.sample_rate)
 
 
 def _synth_system_windows(text: str) -> bytes | None:
@@ -595,12 +908,10 @@ class RealTTSClient:
         self,
         *,
         preferred_engine: str,
-        edge_voice: str,
         piper_voice: str,
         speed: float,
     ) -> None:
         self.preferred_engine = preferred_engine
-        self.edge_voice = edge_voice
         self.piper_voice = piper_voice
         self.speed = speed
 
@@ -635,14 +946,12 @@ class RealTTSClient:
         # override only applies to the preferred engine (the registry pairs a
         # voice with its engine); fallback engines use their own default voice.
         preferred = (engine or self.preferred_engine or "").strip().lower()
+        failures: list[str] = []
         for eng in self._engine_order(preferred):
             v = voice if (voice and eng == preferred) else None
             used: str | None = None
             try:
-                if eng == "edge":
-                    used = v or self.edge_voice
-                    out = _synth_edge_sync(text, used, self.speed)
-                elif eng == "piper":
+                if eng == "piper":
                     used = v or self.piper_voice
                     out = _synth_piper_sync(text, used, self.speed)
                 elif eng == "system":
@@ -653,12 +962,14 @@ class RealTTSClient:
                 # audio) so we fall through to the next engine rather than
                 # returning silence — the local-first safety net working.
                 if out and not _wav_is_silent(out):
-                    return SynthResult(wav=out, engine=eng, voice=used)
+                    return SynthResult(wav=out, engine=eng, voice=used, failures=tuple(failures))
+                failures.append(f"{eng}: no audio")
             except Exception as e:
                 log.warning("TTS engine %s failed: %s", eng, e)
+                failures.append(engine_failure_words(eng, e))
         # If every engine fails, return an empty WAV so callers don't crash.
         log.error("all TTS engines failed for text len=%d", len(text))
-        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None)
+        return SynthResult(wav=_pcm_to_wav_bytes(b"", 16_000), engine="", voice=None, failures=tuple(failures))
 
 
 _client: TTSClient | None = None
@@ -673,7 +984,6 @@ def get_tts_client() -> TTSClient:
     else:
         _client = RealTTSClient(
             preferred_engine=settings.tts_engine,
-            edge_voice=settings.tts_edge_voice,
             piper_voice=settings.tts_piper_voice,
             speed=settings.tts_speed,
         )

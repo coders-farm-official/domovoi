@@ -93,14 +93,27 @@ def _bool(v: Any) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
+def _dbm(v: Any) -> float | int | None:
+    n = _num(v)
+    return n if n is not None and -120 <= n <= 0 else None
+
+
 def _wifi(v: Any) -> dict[str, Any] | None:
     if not isinstance(v, dict):
         return None
-    return {
+    out = {
         "rx_mbits": _num(v.get("rx_mbits")),
         "tx_mbits": _num(v.get("tx_mbits")),
         "ssid": _str(v.get("ssid"), 64),
     }
+    # 2026-10-12: the received signal, and "ap" when the radio is hosting
+    # the setup hotspot instead of being on the house network. Only kept
+    # when sent, so an older satellite's record reads as it always did.
+    if "signal_dbm" in v:
+        out["signal_dbm"] = _dbm(v.get("signal_dbm"))
+    if "mode" in v:
+        out["mode"] = _str(v.get("mode"), 16)
+    return out
 
 
 def _nm(v: Any) -> dict[str, Any] | None:
@@ -118,6 +131,59 @@ def _counts(v: Any) -> dict[str, int] | None:
         if n is not None:
             out[k] = n
     return out or None
+
+
+def _battery(v: Any) -> dict[str, Any] | None:
+    """A spare device's battery (S0): ``percent`` 0-100, ``charging`` and
+    ``on_power``. A Pi has none and sends none."""
+    if not isinstance(v, dict):
+        return None
+    pct = _num(v.get("percent"))
+    if pct is not None and not 0 <= pct <= 100:
+        pct = None
+    out = {"percent": pct, "charging": _bool(v.get("charging")), "on_power": _bool(v.get("on_power"))}
+    return out if any(x is not None for x in out.values()) else None
+
+
+#: The states a satellite's boot-time network step can report
+#: (satellite/net_settings.py STEP_STATES).
+NET_STEP_STATES = frozenset(
+    {"applied", "unchanged", "skipped", "failed", "not_run", "not_installed", "running"}
+)
+
+
+def _net_step(v: Any) -> dict[str, Any] | None:
+    """What root's boot-time network step did this boot: a known ``state``
+    and a short reason. Anything else (an unknown state) is not kept."""
+    if not isinstance(v, dict):
+        return None
+    state = v.get("state")
+    if state not in NET_STEP_STATES:
+        return None
+    version = _int(v.get("version"))
+    out = {
+        "state": state,
+        "detail": _str(v.get("detail"), 240) or "",
+        "when": _str(v.get("when"), 16),
+        "at": _num(v.get("at")),
+        # A small step counter: anything else is not a version, and a
+        # client decoding it as a 32-bit number must never be handed one.
+        "version": version if version is not None and 0 <= version <= 10_000 else None,
+    }
+    # How the unit that sets the name before the network stands (disabled
+    # or masked by the operator, not installed on a hand-built card, failed
+    # this boot); absent when there is nothing to say.
+    if "early" in v:
+        out["early"] = _str(v.get("early"), 200)
+    return out
+
+
+def _hostname(v: Any) -> str | None:
+    """A host name as a DNS label would have it; anything else is dropped
+    rather than drawn."""
+    if not isinstance(v, str) or len(v) > 64:
+        return None
+    return v if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", v) else None
 
 
 def _flags(v: Any) -> list[str]:
@@ -142,6 +208,19 @@ SAMPLE_FIELDS: dict[str, Any] = {
     "send_q": _int, "wake_loop_age_s": _num, "idle": _bool,
     "ws": lambda v: _str(v, 8), "ws_down_for_s": _num, "reconnects": _int,
     "wifi": _wifi, "log_ring": _counts, "log_spool": _counts,
+    # Spare-device satellites (S0, 2026-10-12): a laptop's or a phone's
+    # battery, and "the mic is on but the OS hands it silence" (Android's
+    # mic privacy toggle records zeros). No Pi sends either.
+    "battery": _battery, "mic_blocked": _bool,
+    # 2026-10-12: why the satellite needs a reboot (upgraded, and the
+    # network settings root applies at boot are not in place yet); absent
+    # or null when it does not.
+    "reboot_needed": lambda v: _str(v, 200),
+    # 2026-10-12 (follow-up): what that boot-time step did this boot
+    # (`{state, detail, when, at, version}`) and the unit's host name now.
+    # Only kept when sent: an older satellite's record reads as before.
+    "net_step": _net_step,
+    "hostname": _hostname,
 }
 
 
@@ -307,9 +386,25 @@ def format_health_line(room: str, s: dict[str, Any]) -> str:
         f"hwm={_mb(s.get('hwm_kb'))}MB cpu={s.get('cpu_pct')}% "
         f"temp={s.get('soc_temp_c')}C "
         f"throttled={hex(throttled) if isinstance(throttled, int) else None} "
-        f"wifi_rx={wifi.get('rx_mbits')} mic_fps={s.get('mic_fps')} "
+        f"wifi_rx={wifi.get('rx_mbits')} signal={wifi.get('signal_dbm')}dBm "
+        f"mic_fps={s.get('mic_fps')} "
         f"fds={s.get('fds')} up={s.get('uptime_s')}s reconnects={s.get('reconnects')}"
+        + _spare_device_tail(s)
     )
+
+
+def _spare_device_tail(s: dict[str, Any]) -> str:
+    """Battery and a blocked mic on the journal line, only when the sample
+    carries them (a Pi's line is unchanged)."""
+    tail = ""
+    battery = s.get("battery")
+    if isinstance(battery, dict):
+        state = "charging" if battery.get("charging") else (
+            "on power" if battery.get("on_power") else "on battery")
+        tail += f" battery={battery.get('percent')}% {state}"
+    if s.get("mic_blocked"):
+        tail += " mic=BLOCKED"
+    return tail
 
 
 def outage_summary(report: dict[str, Any], last_n: int = 3) -> str:

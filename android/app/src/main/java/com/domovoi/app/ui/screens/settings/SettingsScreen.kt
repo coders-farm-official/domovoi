@@ -21,6 +21,7 @@ import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,27 +39,48 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.PageHeader
+import com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCard
+import com.domovoi.app.ui.screens.satellites.SatellitesScreen
+import com.domovoi.app.ui.shell.LocalSettingsTabRequest
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * Settings — the settings that belong to this phone, split into tabs.
+ * Settings — the settings that belong to this phone, split into tabs, and
+ * the rooms' satellites (the web's Settings → Satellites, since 2026-10-11).
  *
  * Server administration (the dashboard's Greetings / Voices / Wake Words /
  * Models / Configuration tabs in web/static/settings.jsx) is deliberately
  * NOT mirrored here: those panels need the dashboard's admin session, which
  * this app does not have, so they could never apply a change correctly.
  * The "Server settings" tab says so and hands off to the dashboard instead.
+ *
+ * [key] is how a link names a tab (ui/shell/PhoneBar.kt LocalOpenSettingsTab;
+ * Route.Satellites opens "satellites").
  */
-internal enum class SettingsTab(val label: String, val sub: String) {
-    Connection("Connection", "Which server this app talks to, and who's listening."),
-    Server("Server settings", "Greetings, voices, wake words, models and configuration are managed on the dashboard."),
-    About("About", "What Domovoi is, a link to the user manual, and this phone's problem reports."),
+internal enum class SettingsTab(val key: String, val label: String, val sub: String) {
+    Connection("connection", "Connection", "Which server this app talks to, and who's listening."),
+    PhoneBar("phonebar", "Phone bar", "The tabs along the bottom of this phone, left to right."),
+    Voice("voice", "Voice", "How this phone speaks: your Domovoi's voice, downloaded once, or the phone's own."),
+    Satellites("satellites", "Satellites", "The Pi in each room: status, announcements, and each room's details."),
+    Server("server", "Server settings", "Greetings, voices, wake words, models and configuration are managed on the dashboard."),
+    About("about", "About", "What Domovoi is, a link to the user manual, and this phone's problem reports.");
+
+    companion object {
+        fun named(key: String?): SettingsTab? = entries.firstOrNull { it.key == key }
+    }
 }
 
 @Composable
 fun SettingsScreen(navigate: (Route) -> Unit) {
-    var tab by remember { mutableStateOf(SettingsTab.Connection) }
+    // A tab a link asked for (Home's rooms → Satellites, Home's "edit the
+    // bar"): opened on it, and taken, so coming back later starts as usual.
+    val request = LocalSettingsTabRequest.current
+    var tab by remember { mutableStateOf(SettingsTab.named(request.tab) ?: SettingsTab.Connection) }
+    LaunchedEffect(request.tab) {
+        SettingsTab.named(request.tab)?.let { tab = it }
+        if (request.tab != null) request.take()
+    }
 
     Column(Modifier.fillMaxSize()) {
         PageHeader(
@@ -85,6 +107,9 @@ fun SettingsScreen(navigate: (Route) -> Unit) {
         }
         when (tab) {
             SettingsTab.Connection -> ConnectionPanel()
+            SettingsTab.PhoneBar -> PhoneBarPanel()
+            SettingsTab.Voice -> VoicePanel()
+            SettingsTab.Satellites -> SatellitesScreen(embedded = true)
             SettingsTab.Server -> ServerSettingsPanel()
             SettingsTab.About -> AboutPanel(navigate)
         }
@@ -119,7 +144,8 @@ private fun ServerSettingsPanel() {
                     Text(
                         "Greetings, voices, wake words, models and configuration are managed " +
                             "on the Domovoi dashboard, so changes are handled properly. This app " +
-                            "keeps only the settings that belong to this phone — Connection and About.",
+                            "keeps only the settings that belong to this phone — its connection, its " +
+                            "bar, the voice it speaks with, and About.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Domovoi.colors.fgMuted,
                     )
@@ -214,7 +240,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                             append(
                                 ": speech, understanding, local voices, the music library, timers and " +
                                     "intercom all work with no internet. Only a few features (web search, " +
-                                    "cloud voices, some plugins) need the network, and they degrade " +
+                                    "some plugins) need the network, and they degrade " +
                                     "gracefully instead of breaking.",
                             )
                         },
@@ -238,5 +264,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
             }
         }
         item { ProblemReportsCard() }
+        item { AssistantBenchmarkCard() }
+        item { LicencesCard() }
     }
 }

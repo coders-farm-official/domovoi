@@ -164,6 +164,10 @@ class FakeNM:
                 rows.append(f"{_esc(self.ssid)}:{self.security}")
             return self._ok(cmd, "\n".join(rows) + "\n", text=text)
 
+        if "NAME,UUID" in cmd:
+            rows = [f"{_esc(str(p['name']))}:{u}" for u, p in self.profiles.items()]
+            return self._ok(cmd, "".join(r + "\n" for r in rows), text=text)
+
         if "UUID,TYPE" in cmd:
             rows = [f"{u}:802-11-wireless" for u in self.profiles]
             return self._ok(cmd, "".join(r + "\n" for r in rows), text=text)
@@ -283,7 +287,7 @@ def test_a_blind_join_names_the_security_type_and_works(blind):
     assert ok is True and err is None
     assert len(nm.adds) == 1
     assert _km(nm.adds[0]) == "wpa-psk"
-    assert nm.connected == SSID
+    assert nm.connected == pm._HOME_CONNECTION
     # And the inference form is gone for good.
     assert not any(c[1:4] == ["device", "wifi", "connect"] for c in nm.calls)
 
@@ -393,10 +397,15 @@ def test_the_profile_is_pinned_to_the_ssid_and_the_radio(blind):
     add = nm.adds[0]
     assert add["type"] == "wifi"
     assert add["ssid"] == SSID
-    assert add["con-name"] == SSID
+    # Named for its role, not the network (2026-10-12): the client's
+    # recovery brings it back BY THIS NAME through one exact sudoers line,
+    # never with "whatever NetworkManager picks".
+    assert add["con-name"] == pm._HOME_CONNECTION == "domovoi-home"
     assert add["ifname"] == pm._WIFI_IFACE
     assert add["connection.autoconnect"] == "yes"
     assert add["wifi-sec.psk"] == PSK
+    # Wi-Fi power saving off, persisted in the profile from the start.
+    assert add["802-11-wireless.powersave"] == "2"
 
 
 def test_an_ssid_with_a_colon_is_read_back_correctly(blind):
@@ -706,3 +715,33 @@ def test_an_unparseable_add_with_an_ambiguous_listing_refuses_to_guess(blind):
     assert "could not be identified" in (err or "")
     assert not [c for c in nm.calls if c[1:3] == ["connection", "up"]]
     assert PSK not in (err or "")
+
+
+# ─── one profile answers to the home name ─────────────────────────────────
+
+
+def test_moving_to_a_new_network_leaves_one_home_profile(blind):
+    """A re-provision onto a different network: the previous network's
+    `domovoi-home` matches no ssid, so the delete pass keeps it — and two
+    profiles with the home name make `nmcli connection up id domovoi-home`
+    (the client's recovery) a coin toss. Once the new one is up, the old
+    one goes; a profile with any other name stays."""
+    nm = FakeNM(visible_after_scans=999)
+    old_home = nm._store(pm._HOME_CONNECTION, "OldNet", "wpa-psk", hidden=False, psk="x")
+    keep = nm._store("Neighbour", "Neighbour", "wpa-psk", hidden=False, psk="x")
+    ok, err = _join(nm)
+    assert ok, err
+    assert old_home in nm.deleted
+    assert keep not in nm.deleted
+    homes = [u for u, p in nm.profiles.items() if p["name"] == pm._HOME_CONNECTION]
+    assert homes == [nm.last_added_uuid]
+
+
+def test_a_failed_move_keeps_the_previous_home_profile(blind):
+    """Until the new network is actually joined, the old one is all the
+    device has."""
+    nm = FakeNM(visible_after_scans=999, accepts=())
+    old_home = nm._store(pm._HOME_CONNECTION, "OldNet", "wpa-psk", hidden=False, psk="x")
+    ok, _ = _join(nm)
+    assert not ok
+    assert old_home in nm.profiles

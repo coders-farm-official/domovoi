@@ -37,6 +37,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,7 +61,6 @@ internal class MusicUi {
     var source by mutableStateOf("all")
     var sort by mutableStateOf("added_desc")
     var favoritedOnly by mutableStateOf(false)
-    var page by mutableIntStateOf(0)
     val selectedIds = mutableStateListOf<Long>()
     var bulkPid by mutableStateOf<Long?>(null)
 
@@ -75,6 +76,30 @@ internal class MusicUi {
     val seenSources = mutableStateListOf<String>()
 
     var uploading by mutableStateOf(false)
+
+    companion object {
+        /**
+         * Where the page is — tab, search, filters — kept when the
+         * workspace goes away and comes back (a spell in the background
+         * drops to local media and back; the "your device" switch keeps
+         * this side alive, but not through that). The library list loads as
+         * it scrolls now, so there is no page number to keep; the scroll
+         * position is the LazyColumn's own saved state. Selections and open
+         * drawers are not kept.
+         */
+        val Saver: Saver<MusicUi, Any> = listSaver(
+            save = { listOf(it.tab, it.q, it.source, it.sort, it.favoritedOnly) },
+            restore = { saved ->
+                MusicUi().apply {
+                    tab = saved[0] as Int
+                    q = saved[1] as String
+                    source = saved[2] as String
+                    sort = saved[3] as String
+                    favoritedOnly = saved[4] as Boolean
+                }
+            },
+        )
+    }
 }
 
 @Composable

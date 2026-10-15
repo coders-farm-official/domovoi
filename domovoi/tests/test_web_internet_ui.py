@@ -5,8 +5,9 @@
   the change announced to the rest of the page), a locked answer, the
   feature chips and "follow the answer again", the restart badge, the
   SearXNG hint and the Microsoft-voices note.
-* ``SettingsPage`` opens on the tab ``openSettingsTab`` asked for
-  (sessionStorage), and switches when asked while on screen.
+* ``SettingsPage`` opens on the tab its address names
+  (``#settings/internet``, what ``openSettingsTab`` writes), and switches
+  when the address changes while it is on screen.
 * Greyed, never hidden, under ``never``: Configuration's fields that need
   the internet and the Edge choice, the Internet group shown as one line,
   Version's check / pull, the Voices page's Edge controls, Wake Words'
@@ -63,6 +64,9 @@ window.dispatchEvent = (e) => {
   return true;
 };
 CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
+// replaceState moves the address in place, as in a browser (no hashchange).
+window.history = { replaceState: (s, t, url) => { window.location.hash = url; } };
+if (__HASH) window.location.hash = __HASH;
 Auth = {
   status: { setup_complete: true, authenticated: true },
   subscribe: () => () => {},
@@ -90,8 +94,9 @@ window.__settle = async (h, n = 4) => { for (let i = 0; i < n; i++) { await h.se
 """
 
 
-def _setup(access: str = "", ss: dict | None = None) -> str:
-    return (f"const __ACCESS = {json.dumps(access)}; const __SS = {json.dumps(ss or {})};\n"
+def _setup(access: str = "", ss: dict | None = None, hash: str = "") -> str:
+    return (f"const __ACCESS = {json.dumps(access)}; const __SS = {json.dumps(ss or {})};"
+            f" const __HASH = {json.dumps(hash)};\n"
             + SETUP)
 
 
@@ -146,7 +151,7 @@ SCENARIOS["panel_unanswered_save"] = {
       const before = { status: w.__byClass(h, 'pill').map((e) => w.__deep(e)),
                        radios: w.__radios(h), save: w.__button(h, 'Save'),
                        privacy: w.__byClass(h, 'internet-privacy').map((e) => w.__deep(e)),
-                       edge: w.__byClass(h, 'internet-edge-note').map((e) => w.__deep(e)),
+                       edge: w.__byClass(h, 'internet-edge-note').length,
                        hint: w.__byClass(h, 'internet-searxng-hint').length };
       await h.change((e) => e.type === 'input' && e.props.type === 'radio' && e.props.value === 'sometimes', true);
       const picked = { radios: w.__radios(h), save: w.__button(h, 'Save'),
@@ -218,14 +223,15 @@ SCENARIOS["panel_signed_out"] = {
 SCENARIOS["settings_deep_link"] = {
     "files": [COMPONENTS, SETTINGS],
     "component": "(window.__tabs = SETTINGS_TABS, window.__open = openSettingsTab, SettingsPage)",
-    "setup": _setup("", {"domovoi.settings.tab": "internet"}),
+    "setup": _setup("", hash="#settings/internet"),
     "api": {"GET /api/config/internet": doc(""), "GET /api/greetings": []},
     "script": r"""
       const w = h.global('window');
       h.render(); await w.__settle(h);
       const first = { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
-                      stored: w.__ss.get('domovoi.settings.tab') || null };
+                      hash: w.location.hash };
       w.__open('greetings');
+      w.dispatchEvent({ type: 'hashchange' });
       await w.__settle(h);
       const second = { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
                        hash: w.location.hash, stored: w.__ss.get('domovoi.settings.tab') || null };
@@ -235,13 +241,13 @@ SCENARIOS["settings_deep_link"] = {
 
 SCENARIOS["settings_default_tab"] = {
     "files": [COMPONENTS, SETTINGS], "component": "SettingsPage",
-    "setup": _setup("", {"domovoi.settings.tab": "nonsense"}),
+    "setup": _setup("", hash="#settings/nonsense"),
     "api": {"GET /api/greetings": []},
     "script": r"""
       const w = h.global('window');
       h.render(); await w.__settle(h);
       return { onInternet: !!h.find({ text: 'Will this Domovoi have internet?' }),
-               stored: w.__ss.get('domovoi.settings.tab') || null };
+               hash: w.location.hash };
     """,
 }
 
@@ -263,8 +269,10 @@ def _config_fields(answer: str) -> dict:
                choice_labels={"always": "Yes, always", "sometimes": "Sometimes",
                               "never": "No, keep everything in the house"}),
         _field("bot_name", "Bot name", "Identity", "str", "Domovoi"),
+        # A choice that needs the internet (no real field has one since the
+        # Microsoft Edge voices were dropped; the page still greys one).
         _field("tts_engine", "TTS engine", "Voice & speech", "choice", "piper",
-               choices=["piper", "edge", "system"], needs_internet_choices=["edge"]),
+               choices=["piper", "cloud", "system"], needs_internet_choices=["cloud"]),
         _field("music_alias_fetch_enabled", "Look up other names on MusicBrainz", "Library", "bool",
                answer == "always", needs_internet=True, internet_profile=True,
                follows_internet=bool(answer)),
@@ -301,7 +309,6 @@ for answer in ("never", "always", ""):
         "script": CONFIG_SCRIPT,
     }
 
-EDGE = {"id": 1, "name": "Aria", "engine": "edge", "model_ref": "en-US-AriaNeural", "is_default": False}
 PIPER = {"id": 2, "name": "Amy", "engine": "piper", "model_ref": "amy.onnx", "is_default": True}
 PIPER2 = {"id": 3, "name": "Ryan", "engine": "piper", "model_ref": "ryan.onnx", "is_default": False}
 
@@ -322,7 +329,7 @@ for answer in ("never", "always"):
     SCENARIOS[f"voices_{answer}"] = {
         "files": [COMPONENTS, SETTINGS], "component": "VoicesPanel",
         "setup": _setup(answer),
-        "api": {"GET /api/voices": [EDGE, PIPER, PIPER2],
+        "api": {"GET /api/voices": [PIPER, PIPER2],
                 "GET /api/config": {"bot_name": "x", "internet_access": answer}},
         "script": f"const __NEEDS = {json.dumps(NEEDS)};" + VOICES_SCRIPT,
     }
@@ -531,7 +538,7 @@ def test_an_unanswered_box_says_so_and_offers_the_three_answers(driven) -> None:
     assert not any(r["checked"] for r in b["radios"])
     assert b["save"]["disabled"] is True                       # nothing picked yet
     assert b["privacy"] == [PRIVACY]
-    assert b["edge"] == ["Microsoft voices stay your choice on every answer (Settings → Voices)."]
+    assert b["edge"] == 0          # no Microsoft voices to mention any more
     assert b["hint"] == 0
 
 
@@ -615,12 +622,14 @@ def test_a_signed_out_read_offers_the_sign_in(driven) -> None:
 
 def test_settings_opens_on_the_tab_it_was_sent_to(driven) -> None:
     o = driven["settings_deep_link"]
-    assert o["first"] == {"onInternet": True, "stored": None}       # read once, then cleared
+    assert o["first"] == {"onInternet": True, "hash": "#settings/internet"}
     assert o["second"]["onInternet"] is False                       # switched while on screen
-    assert o["second"]["hash"] == "settings"
+    assert o["second"]["hash"] == "settings/greetings"              # the tab's address
+    assert o["second"]["stored"] is None                            # nothing rides storage
     tabs = o["tabs"]
     assert "internet" in tabs and tabs.index("internet") == tabs.index("config") - 1
-    assert driven["settings_default_tab"] == {"onInternet": False, "stored": None}
+    # A tab Settings doesn't have: the default tab, and the address says so.
+    assert driven["settings_default_tab"] == {"onInternet": False, "hash": "#settings"}
 
 
 # ─── Greyed, not hidden ───────────────────────────────────────────────────
@@ -636,8 +645,8 @@ def test_configuration_greys_what_needs_the_internet_under_never(driven) -> None
     assert boxes and all(i["disabled"] and i["title"] == NEEDS for i in boxes)   # alias fetch + topic news
     text_inputs = [i for i in o["inputs"] if i["type"] == "input" and i["kind"] == "text"]
     assert text_inputs and not any(i["disabled"] for i in text_inputs)           # bot name stays
-    edge = next(x for x in o["options"] if x["value"] == "edge")
-    assert edge["disabled"] is True and edge["text"] == "edge · needs internet"
+    cloud = next(x for x in o["options"] if x["value"] == "cloud")
+    assert cloud["disabled"] is True and cloud["text"] == "cloud · needs internet"
     assert next(x for x in o["options"] if x["value"] == "piper")["disabled"] is False
     assert o["notes"] >= 2
     assert o["line"] == ["Internet: No, keep everything in the house · change it in Settings → Internet"]
@@ -659,19 +668,19 @@ def test_configuration_greys_nothing_when_the_internet_is_allowed(driven) -> Non
     assert unset["follows"] == 0
 
 
-def test_voices_grey_the_microsoft_controls_under_never(driven) -> None:
-    o = driven["voices_never"]
-    assert o["register"] == {"disabled": True, "title": NEEDS}
-    assert o["upload"]["disabled"] is False                                      # local voices stay
-    assert all(o["textInputs"][:2])                                              # the Edge name + id
-    assert {"disabled": True, "title": NEEDS} in o["plays"]                      # Aria's sample
-    assert {"disabled": False, "title": "Play a sample"} in o["plays"]           # Amy / Ryan
-    assert o["makeDefault"] == [{"disabled": True, "title": NEEDS},              # Aria
-                                {"disabled": False, "title": None}]              # Ryan
-    a = driven["voices_always"]
-    assert a["register"] == {"disabled": False, "title": None}
-    assert not any(p["disabled"] for p in a["plays"])
-    assert a["notes"] == 0
+@pytest.mark.parametrize("answer", ["never", "always"])
+def test_the_voices_page_is_the_same_on_every_answer(driven, answer) -> None:
+    """Every voice is local since the Microsoft Edge voices were dropped
+    (2026-10-12): no "Add a cloud voice", nothing greyed for the internet."""
+    o = driven[f"voices_{answer}"]
+    assert o["register"] is None                                                 # no cloud voice to add
+    # the upload is greyed only until a name and both files are chosen, and
+    # says that, never the internet
+    assert o["upload"] == {"disabled": True, "title": "Choose a name, the model, the config first"}
+    assert not any(o["textInputs"])
+    assert o["plays"] == [{"disabled": False, "title": "Play a sample"}] * 2     # Amy, Ryan
+    assert o["makeDefault"] == [{"disabled": False, "title": None}]              # Ryan
+    assert o["notes"] == 0
 
 
 def test_wake_word_training_is_greyed_under_never(driven) -> None:
@@ -707,7 +716,9 @@ def test_decide_later_closes_without_saving(driven) -> None:
 def test_the_step_is_not_offered_when_already_answered_or_on_a_plain_login(driven) -> None:
     o = driven["first_run_already_answered"]
     assert o["step"]["titles"] == []
-    assert [c["p"] for c in o["calls"]] == ["/api/config"]          # it looked, and kept quiet
+    # It looked, and kept quiet. (/api/capabilities is the setup form's own
+    # read: which kind of server, for where the setup code is.)
+    assert [c["p"] for c in o["calls"]] == ["/api/capabilities", "/api/config"]
     login = driven["login_never_asks"]
     assert login["auth"]["login"] == "correct horse battery"
     assert login["step"]["titles"] == []
@@ -728,8 +739,7 @@ sessionStorage = {
 HOME_SCRIPT = (
     "const before = w.__snap(h);"
     "const row = h.find((e) => e.props && e.props['data-key'] === 'internet');"
-    "if (row) await h.click((e) => e.props && e.props['data-key'] === 'internet');"
-    "return { before, hash: w.location.hash, tab: w.__ss.get('domovoi.settings.tab') || null };"
+    "return { before, onClick: row ? typeof row.props.onClick : null };"
 )
 
 
@@ -779,9 +789,9 @@ def test_home_asks_an_admin_while_the_answer_is_unset(home_driven) -> None:
     rows = _internet_rows(o)
     assert len(rows) == 1
     assert rows[0]["text"] == "tell Domovoi whether this box has internet"   # lower case, like its siblings
-    assert rows[0]["href"] == "#settings"
-    # clicking it opens Settings on the Internet tab
-    assert o["hash"] == "settings" and o["tab"] == "internet"
+    # The Internet tab's own address: a plain link opens it.
+    assert rows[0]["href"] == "#settings/internet"
+    assert o["onClick"] == "undefined"
 
 
 def test_home_does_not_ask_when_answered_or_on_an_older_server(home_driven) -> None:

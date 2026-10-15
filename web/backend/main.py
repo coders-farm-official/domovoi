@@ -63,6 +63,7 @@ from web.backend.api import satellite_media as satellite_media_api
 from web.backend.api import satellites as satellites_api
 from web.backend.api import stats as stats_api
 from web.backend.api import videos as videos_api
+from web.backend.api import voice as voice_api
 from web.backend.api import voices as voices_api
 from web.backend.api import wake_words as wake_words_api
 from web.backend.static_cache import (
@@ -376,6 +377,7 @@ app.include_router(config_api.router)
 app.include_router(playlists_api.router)
 app.include_router(greetings_api.router)
 app.include_router(voices_api.router)
+app.include_router(voice_api.router)
 app.include_router(wake_words_api.router)
 app.include_router(captures_api.router)
 app.include_router(documents_api.router)

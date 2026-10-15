@@ -436,6 +436,17 @@ SCENARIOS["rooms"] = scenario(
     " posts: w.__fetches.filter((f) => f.method === 'POST').map((f) => ({ path: f.path, body: f.body })) };",
     ls=PAIRED_LS,
 )
+# A STOPPED room's player keeps its last song loaded, and the open read
+# still names it: state "stop", song set (the live box on 2026-10-11:
+# basement and garage, both stopped, each with a song). Quiet, not playing.
+SCENARIOS["room_stopped"] = scenario(
+    house(**{"GET /api/satellites": [
+        room("kitchen", state="play"),
+        room("garage", state="stop", s=song("Stimulate", "garage artist"), elapsed=0),
+        room("basement", state="stop", s=song("Stare At The Sun", "basement artist"), elapsed=0),
+    ]}),
+    SNAP, ls=PAIRED_LS,
+)
 # A read taken after the song ran out (the next song's read not in yet).
 SCENARIOS["room_overrun"] = scenario(
     house(**{"GET /api/satellites": [room("kitchen", state="play", elapsed=300)]}),
@@ -965,8 +976,9 @@ def test_unpaired_sees_the_house_and_a_way_to_pair(driven) -> None:
     assert "couldn't check" not in snap["text"]
     # The pair link is the only thing that opens the prompt.
     assert out["pairAfterClick"] is True
-    # The queue button opens Music's Room queue tab on that room.
-    assert out["hash"] == "music"
+    # The queue button opens Music's Room queue tab (its own address since
+    # 2026-10-12) on that room.
+    assert out["hash"] == "music/queue"
     assert out["queueRoom"] == "kitchen"
 
 
@@ -1149,6 +1161,21 @@ def test_rooms_order_state_and_transport(driven) -> None:
     assert "quiet" in _room(snap, "office")["text"]
 
 
+def test_a_stopped_room_is_quiet_not_playing_its_last_song(driven) -> None:
+    snap = driven["room_stopped"]
+    for rid, title in (("garage", "Stimulate"), ("basement", "Stare At The Sun")):
+        r = _room(snap, rid)
+        assert "quiet" in r["text"], r
+        assert title not in r["text"] and "0:00" not in r["text"] and "playing" not in r["text"], r
+    # No transport on a stopped room (Music starts things), and it ranks
+    # with the quiet rooms, after the one that plays.
+    assert not {t for t in _titles(snap) if t.endswith(("garage", "basement"))}
+    assert [r["room"] for r in snap["rooms"]] == ["kitchen", "basement", "garage"]
+    assert "1 playing" in snap["line"]
+    # The playing room is untouched.
+    assert "Creep" in _room(snap, "kitchen")["text"]
+
+
 def test_a_rooms_count_stops_at_the_songs_end(driven) -> None:
     # 300s into a 238s song: the bar is full and the count reads the length,
     # never "5:00 / 3:58".
@@ -1329,10 +1356,12 @@ def test_today_shows_six_and_a_phone_three(driven) -> None:
 
 def test_the_phone_launcher_lists_every_page_off_the_strip_with_badges(driven) -> None:
     tiles = {t["href"]: t["text"] for t in driven["phone_launcher"]["tiles"]}
-    for r in ("podcasts", "audiobooks", "videos", "news", "people", "files", "plugins",
+    for r in ("podcasts", "audiobooks", "calendar", "news", "people", "files", "plugins",
               "radio", "settings", "manual"):
         assert f"#{r}" in tiles, r
-    for r in ("home", "music", "satellites", "calendar", "chat"):
+    # The default phone bar (home · music · videos · chat) is not on the
+    # grid, and Satellites is a Settings tab, not a page of its own.
+    for r in ("home", "music", "videos", "chat", "satellites"):
         assert f"#{r}" not in tiles, r
     assert tiles["#radio"] == "Radio3"               # the plugin's own badge
     assert tiles["#people"] == "People4"             # App's counts, handed down

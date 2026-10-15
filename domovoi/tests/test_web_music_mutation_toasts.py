@@ -202,7 +202,7 @@ SAME_ROOM_TWO_PLAYS = (
 )
 # Select the three library tracks and add them to the playlist in one go.
 BULK_ADD = (
-    "await h.change({ type: 'input', title: 'select all on this page' }, true);"
+    "await h.change({ type: 'input', title: 'loaded track' }, true);"
     " await h.change({ type: 'select', value: '' }, '2');"
     " return tap(h.find({ type: 'button', text: 'add 3' }));"
 )

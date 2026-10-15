@@ -34,8 +34,9 @@
 #   venv         the venv and the three hash-checked installs from
 #                requirements-linux-py314.lock (LINUX_HOST.md "Install")
 #   env          domovoi/.env: python -m domovoi.env_bootstrap [--internet],
-#                then the hardware tier's keys, the WSL keys and the media
-#                paths, through the repo's own .env writer. A key is
+#                then the hardware tier's keys (its vision model included),
+#                the WSL keys and the media paths, through the repo's own
+#                .env writer. A key is
 #                written only when it is absent or still holds what this
 #                script last wrote there (kept in
 #                /var/lib/domovoi-provision/env-written); one the household
@@ -46,13 +47,16 @@
 #                hands NVIDIA cards through) and on the CPU without one; no
 #                CUDA_VISIBLE_DEVICES pin. The GPUs it found go in the final
 #                line ("gpu"); the tier stays a question of memory alone
-#   models       the tier's two Ollama models, each checked against the
-#                manifest digest after the pull            (--skip-models: no)
+#   models       the tier's two Ollama models and its vision model (pictures
+#                in chat, about 1.9 GB; --no-vision-model: not pulled), each
+#                checked against the manifest digest after the pull
+#                                                          (--skip-models: no)
 #   whisper      the Whisper model at the manifest's Hugging Face revision,
 #                model.bin checked against its SHA-256; the small files
 #                beside it (config.json, tokenizer.json, vocabulary.*) come
 #                from that revision but are not hashed  (--skip-models: no)
-#   piper        the configured Piper voice, checked against PIPER_PINS
+#   piper        the three Piper voices (SHIPPED_VOICES), each checked against
+#                PIPER_PINS; a configured voice outside them is left to the core
 #   images       the database images the compose file pins, and docker build of
 #                domovoi-mpd exactly as the core builds it
 #   searxng      the search helper, started for always/sometimes, off for never
@@ -95,7 +99,8 @@
 # percent never goes down; progress lines of a download add "bytes" and
 # "bytes_total" (null when the size is unknown). Every run ends with exactly
 # one line that has "step":"finish", "final":true and "result" (ok, failed,
-# rerun_after_restart, dry_run, usage_error, busy or help),
+# rerun_after_restart, dry_run, usage_error, busy, help, or stopped: a run
+# given --stop-before STEP that got there, exit 0, STEP not run),
 # "restart_required" (WSL: /etc/wsl.conf changed and takes effect only after
 # `wsl --terminate <distro>`; this script never restarts the distro itself),
 # "exit_code", "failed_step", "message" (why, for anything but ok) and
@@ -107,7 +112,8 @@
 # object in /var/lib/domovoi-provision/result.json (a refused one leaves
 # that file to the run that holds the lock).
 #
-# Exit codes: 0 done (or dry run, or --help), 1 a step failed (or not
+# Exit codes: 0 done (or dry run, --help, or stopped before the step
+# --stop-before named), 1 a step failed (or not
 # root), 2 bad usage, 3 WSL without systemd as PID 1: /etc/wsl.conf was
 # written, terminate the distro and run this again, 4 another run of this
 # script holds the run lock (busy): wait for it, then run this again.
@@ -420,10 +426,12 @@ LAN_IP=""
 MEDIA_ARGS=()
 WSL_OPT=auto
 SKIP_MODELS=0
+PULL_VISION=1
 DRY_RUN=0
 HEALTH_TIMEOUT=900
 ALLOWED_SIGNERS=""
 KEEP_DOWNLOADS=0
+STOP_BEFORE=""
 
 usage() {
   cat <<'EOF'
@@ -467,11 +475,21 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         in Settings or by hand is kept, with a warning.
   --wsl, --no-wsl       force WSL mode on or off (default: detected from the
                         kernel, the rule domovoi/host_kind.py uses)
+  --no-vision-model     don't pull the tier's vision model, which reads
+                        pictures in chat (about 1.9 GB). It is still the one
+                        configured: chat then says it isn't installed, and
+                        an admin can install it later on the dashboard
+                        (Settings, Models)
   --skip-models         no Ollama pulls and no Whisper download (tests)
   --allowed-signers F   install F as /etc/domovoi/allowed_signers first, so
                         HEAD and every later update must verify against it
   --health-timeout SEC  how long the first start may take (default: 900)
   --keep-downloads      keep the Ollama tarball in /var/cache/domovoi-provision
+  --stop-before STEP    run the steps before STEP (one of the step ids at the
+                        top of this file, apt to update-unit) and stop there,
+                        exit 0, result "stopped". The Windows installer stops
+                        before "start" to check the PC's ports, then runs
+                        this again without it
   --dry-run             say what each step would do; change nothing
   -h, --help            this text
 
@@ -496,7 +514,7 @@ while [ $# -gt 0 ]; do
     --*=*) val=${opt#*=}; opt=${opt%%=*}; has_val=1 ;;
   esac
   case $opt in
-    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers)
+    --repo-url|--ref|--track-branch|--checkout-dir|--user|--internet|--tier|--timezone|--lan-ip|--media|--health-timeout|--allowed-signers|--stop-before)
       if [ "$has_val" = 0 ]; then
         [ $# -ge 2 ] || usage_error "$opt needs a value"
         val=$2
@@ -518,14 +536,16 @@ while [ $# -gt 0 ]; do
         --media) MEDIA_ARGS+=("$val") ;;
         --health-timeout) HEALTH_TIMEOUT=$val ;;
         --allowed-signers) ALLOWED_SIGNERS=$val ;;
+        --stop-before) STOP_BEFORE=$val ;;
       esac
       ;;
-    --wsl|--no-wsl|--skip-models|--dry-run|--keep-downloads|-h|--help)
+    --wsl|--no-wsl|--skip-models|--no-vision-model|--dry-run|--keep-downloads|-h|--help)
       [ "$has_val" = 0 ] || usage_error "$opt takes no value"
       case $opt in
         --wsl) WSL_OPT=yes ;;
         --no-wsl) WSL_OPT=no ;;
         --skip-models) SKIP_MODELS=1 ;;
+        --no-vision-model) PULL_VISION=0 ;;
         --dry-run) DRY_RUN=1 ;;
         --keep-downloads) KEEP_DOWNLOADS=1 ;;
         -h|--help) usage; final_line help 0 "Usage printed; nothing was done"; exit 0 ;;
@@ -535,6 +555,14 @@ while [ $# -gt 0 ]; do
     *) usage_error "unknown option: $1" ;;
   esac
 done
+if [ -n "$STOP_BEFORE" ]; then
+  # A step that has a "before" inside the run: not preflight (nothing runs
+  # before it) and not finish (that is the end anyway).
+  case " ${STEP_IDS[*]:1:${#STEP_IDS[@]}-2} " in
+    *" $STOP_BEFORE "*) ;;
+    *) usage_error "--stop-before takes a step id from apt to update-unit, not: $STOP_BEFORE" ;;
+  esac
+fi
 
 # ─── Small helpers ───────────────────────────────────────────────────────
 
@@ -568,7 +596,12 @@ sed_repl() { printf '%s' "$1" | sed 's/[#&\\]/\\&/g'; }
 # terminal, which under systemd it never is; an older checkout still put
 # it in the journal. So any line naming it still goes, and anything shaped
 # like a code is hidden wherever it appears.
-scrub_log() { LC_ALL=C sed -E -e '/setup[ _-]?code/Id' -e 's/[A-Za-z]+(-[A-Za-z]+){7,}/[hidden]/g'; }
+# Journal lines for people: no line about the setup code, nothing shaped
+# like one, and no password in a URL (scheme://user:password@host).
+scrub_log() {
+  LC_ALL=C sed -E -e '/setup[ _-]?code/Id' -e 's/[A-Za-z]+(-[A-Za-z]+){7,}/[hidden]/g' \
+    -e 's#(://[^:/@[:space:]]+:)[^@/[:space:]]+@#\1[hidden]@#g'
+}
 
 # Run a command as the service user with a clean environment. runuser
 # calls initgroups, so a group added moments ago (docker) is live.
@@ -800,7 +833,9 @@ MANIFEST_KEYS=(manifest_version docker_key_url docker_key_fpr docker_repo_url do
   whisper_model whisper_repo whisper_revision whisper_model_bin_sha256 whisper_model_bin_bytes
   tier_standard_min_mem_mib
   tier_floor_tool_model tier_floor_tool_digest tier_floor_qa_model tier_floor_qa_digest
-  tier_standard_tool_model tier_standard_tool_digest tier_standard_qa_model tier_standard_qa_digest)
+  tier_floor_vision_model tier_floor_vision_digest
+  tier_standard_tool_model tier_standard_tool_digest tier_standard_qa_model tier_standard_qa_digest
+  tier_standard_vision_model tier_standard_vision_digest)
 MANIFEST_FILE=""
 
 load_manifest() {
@@ -832,13 +867,15 @@ load_manifest() {
   [[ ${M[whisper_revision]} =~ ^[0-9a-f]{40}$ ]] || die "$file: whisper_revision is not a commit SHA"
   [[ ${M[whisper_repo]} =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "$file: whisper_repo is not owner/name"
   [[ ${M[whisper_model]} =~ ^[A-Za-z0-9._-]+$ ]] || die "$file: whisper_model is not a model name"
-  for k in whisper_model_bin_sha256 tier_floor_tool_digest tier_floor_qa_digest tier_standard_tool_digest tier_standard_qa_digest; do
+  for k in whisper_model_bin_sha256 tier_floor_tool_digest tier_floor_qa_digest tier_floor_vision_digest \
+      tier_standard_tool_digest tier_standard_qa_digest tier_standard_vision_digest; do
     [[ ${M[$k]} =~ ^[0-9a-f]{64}$ ]] || die "$file: $k is not a SHA-256"
   done
   for k in whisper_model_bin_bytes tier_standard_min_mem_mib; do
     [[ ${M[$k]} =~ ^[0-9]+$ ]] || die "$file: $k is not a number"
   done
-  for k in tier_floor_tool_model tier_floor_qa_model tier_standard_tool_model tier_standard_qa_model; do
+  for k in tier_floor_tool_model tier_floor_qa_model tier_floor_vision_model \
+      tier_standard_tool_model tier_standard_qa_model tier_standard_vision_model; do
     [[ ${M[$k]} =~ ^[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._-]+$ ]] || die "$file: $k is not an exact model:tag"
   done
   MANIFEST_FILE=$file
@@ -872,6 +909,8 @@ tier_tool() { printf '%s' "${M[tier_${TIER_EFF}_tool_model]}"; }
 tier_tool_digest() { printf '%s' "${M[tier_${TIER_EFF}_tool_digest]}"; }
 tier_qa() { printf '%s' "${M[tier_${TIER_EFF}_qa_model]}"; }
 tier_qa_digest() { printf '%s' "${M[tier_${TIER_EFF}_qa_digest]}"; }
+tier_vision() { printf '%s' "${M[tier_${TIER_EFF}_vision_model]}"; }
+tier_vision_digest() { printf '%s' "${M[tier_${TIER_EFF}_vision_digest]}"; }
 
 # Read the manifest from the checkout (or, in a dry run before the clone,
 # the copy beside this script) and settle the tier.
@@ -1014,9 +1053,11 @@ do_preflight() {
 # curl, gnupg and ca-certificates (Docker's repository), zstd (the Ollama
 # tarball; also in the doc's Ollama steps), tzdata (zone files for
 # --timezone; WSL also needs them to follow Windows' zone), sudo (the
-# dashboard's restart and update grants).
+# dashboard's restart and update grants). Not espeak-ng (GPL): Domovoi's
+# voices no longer need it, and the OS last-resort voice is the owner's
+# choice (docs/LINUX_HOST.md).
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools espeak-ng
+  git ffmpeg mpg123 libchromaprint-tools
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {
@@ -1554,7 +1595,7 @@ PY_IMPORT_CHECK='#provision:import-check
 import importlib, sys
 mods = ["fastapi", "uvicorn", "sqlalchemy", "asyncpg", "pydantic_settings", "ollama",
         "mpd", "argon2", "PIL", "psutil", "httpx", "faster_whisper", "ctranslate2",
-        "piper", "edge_tts", "miniaudio", "lameenc", "mutagen", "acoustid",
+        "onnxruntime", "domovoi.phonemizer", "lameenc", "mutagen", "acoustid",
         "feedparser", "librosa", "torch", "resemblyzer", "domovoi.config"]
 bad = []
 for m in mods:
@@ -1604,7 +1645,7 @@ do_venv() {
     die "pip install of the build tools from $LOCK_NAME failed"
   fi
   rm -f "$reqs"
-  emit_frac 100 "Installing the locked packages (CPU torch, Whisper, Piper, ...)"
+  emit_frac 100 "Installing the locked packages (CPU torch, Whisper, ONNX Runtime, ...)"
   pip_svc install --require-hashes --no-build-isolation -r "$LOCK_NAME" || die "pip install -r $LOCK_NAME failed"
   emit_frac 900 "Installing Domovoi"
   pip_svc install --no-deps --no-build-isolation -e . || die "pip install -e . failed"
@@ -1627,6 +1668,9 @@ env_keys() {
   echo "OLLAMA_MODEL=$(tier_qa)"
   echo "OLLAMA_TOOL_MODEL=$(tier_tool)"
   echo "OLLAMA_TOOL_THINK=false"
+  # Written whether it is pulled or not (--no-vision-model): chat then
+  # names it as the one to install.
+  echo "OLLAMA_VISION_MODEL=$(tier_vision)"
   if [ "$WSL" = 1 ]; then
     # WSL sees no removable drives, so USB adoption has nothing to scan.
     echo "SATELLITE_ADOPTION_ENABLED=false"
@@ -1641,7 +1685,7 @@ env_keys() {
 # this script creates has the template's value of each recorded as the
 # script's own, so a later run with another option still replaces it.
 ENV_MANAGED_KEYS=(WHISPER_MODEL WHISPER_DEVICE WHISPER_COMPUTE_TYPE OLLAMA_URL OLLAMA_MODEL
-  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
+  OLLAMA_TOOL_MODEL OLLAMA_TOOL_THINK OLLAMA_VISION_MODEL SATELLITE_ADOPTION_ENABLED MPD_HTTP_BASE
   MUSIC_DIR PICTURES_DIR DOCUMENTS_DIR AUDIOBOOKS_DIR PODCASTS_DIR VIDEOS_DIR)
 
 # What domovoi/.env assigns now to the keys in PROVISION_ENV_NAMES, as
@@ -2015,9 +2059,14 @@ pull_model() {
   [ "$ok" = 1 ]
 }
 
+# The tier's models to pull, "TAG DIGEST" per line: the QA model, the
+# router and (unless --no-vision-model) the vision model, each once.
 model_pairs() {
   printf '%s %s\n' "$(tier_qa)" "$(tier_qa_digest)"
   if [ "$(tier_tool)" != "$(tier_qa)" ]; then printf '%s %s\n' "$(tier_tool)" "$(tier_tool_digest)"; fi
+  if [ "$PULL_VISION" = 1 ] && [ "$(tier_vision)" != "$(tier_qa)" ] && [ "$(tier_vision)" != "$(tier_tool)" ]; then
+    printf '%s %s\n' "$(tier_vision)" "$(tier_vision_digest)"
+  fi
 }
 
 skip_models() { if [ "$SKIP_MODELS" = 1 ]; then echo "--skip-models: no Ollama models pulled"; return 0; fi; return 1; }
@@ -2026,10 +2075,18 @@ check_models() {
   local tag want
   while read -r tag want; do [ "$(model_digest "$tag")" = "$want" ] || return 1; done < <(model_pairs)
 }
-plan_models() { model_pairs | sed 's/^/ollama pull /'; }
+plan_models() {
+  model_pairs | sed 's/^/ollama pull /'
+  if [ "$PULL_VISION" = 0 ]; then echo "(--no-vision-model: $(tier_vision) is not pulled)"; fi
+}
 do_models() {
   local tag want got i=0 n
   n=$(model_pairs | grep -c .)
+  if [ "$PULL_VISION" = 1 ]; then
+    log "the vision model $(tier_vision) reads pictures in chat (about 1.9 GB; --no-vision-model leaves it out)"
+  else
+    log "--no-vision-model: $(tier_vision) is not pulled; chat can't read pictures until it is installed (dashboard: Settings, Models)"
+  fi
   while read -r tag want; do
     got=$(model_digest "$tag") || got=""
     if [ "$got" = "$want" ]; then
@@ -2093,12 +2150,13 @@ do_whisper() {
 PY_PIPER_INFO='#provision:piper-info
 from domovoi.config import settings
 from domovoi.clients import tts
-voice = settings.tts_piper_voice
-pin = tts.PIPER_PINS.get(voice)
-print(voice)
 print(settings.voice_models_dir)
-print(pin[0] if pin else "")
-print(pin[1] if pin else 0)'
+wanted = [(settings.tts_piper_voice or "").strip()] + [v.model_ref for v in tts.SHIPPED_VOICES]
+for voice in dict.fromkeys(v for v in wanted if v and "\n" not in v):
+    pin = tts.PIPER_PINS.get(voice)
+    print(voice)
+    print(pin[0] if pin else "-")
+    print(pin[1] if pin else 0)'
 
 # Fetch ahead, whatever the internet answer (PLAN 4.8): provisioning is
 # online by definition, so the egress gate is held open for this one call.
@@ -2112,36 +2170,65 @@ d.mkdir(parents=True, exist_ok=True)
 with egress.override_policy("always"):
     print(tts._piper_download(sys.argv[1], d))'
 
-PIPER_VOICE="" PIPER_DIR="" PIPER_SHA="" PIPER_SIZE=0
+# piper_info: PIPER_DIR, and per voice (the configured one first, then the
+# three Domovoi offers) PIPER_VOICES / PIPER_SHAS ("-": no pin) / PIPER_SIZES.
+# One value per line, three lines a voice, so a name with spaces (the path
+# of an uploaded .onnx) stays whole; an empty name is skipped, and a size
+# that isn't a number counts as 0.
+PIPER_DIR="" PIPER_VOICES=() PIPER_SHAS=() PIPER_SIZES=()
 piper_info() {
-  local out
+  local out i size
+  local -a lines
   out=$(svc_py -c "$PY_PIPER_INFO") || return 1
-  PIPER_VOICE=$(sed -n 1p <<<"$out")
-  PIPER_DIR=$(sed -n 2p <<<"$out")
-  PIPER_SHA=$(sed -n 3p <<<"$out")
-  PIPER_SIZE=$(sed -n 4p <<<"$out")
+  mapfile -t lines <<<"$out"
+  PIPER_DIR=${lines[0]:-}
+  PIPER_VOICES=() PIPER_SHAS=() PIPER_SIZES=()
+  for ((i = 1; i + 2 < ${#lines[@]} + 1; i += 3)); do
+    [ -n "${lines[$i]}" ] || continue
+    size=${lines[$((i + 2))]:-0}
+    [[ $size =~ ^[0-9]+$ ]] || size=0
+    PIPER_VOICES+=("${lines[$i]}") PIPER_SHAS+=("${lines[$((i + 1))]:--}") PIPER_SIZES+=("$size")
+  done
+  [ -n "$PIPER_DIR" ] && [ ${#PIPER_VOICES[@]} -gt 0 ]
 }
-inputs_piper() { piper_info || return 1; printf '%s\n' "$PIPER_VOICE" "$PIPER_DIR" "$PIPER_SHA"; }
+inputs_piper() { piper_info || return 1; printf '%s\n' "$PIPER_DIR" "${PIPER_VOICES[@]}" "${PIPER_SHAS[@]}"; }
+piper_voice_ok() {  # piper_voice_ok I: voice I is on disk and matches its pin
+  sha_ok "$ROOT$PIPER_DIR/${PIPER_VOICES[$1]}.onnx" "${PIPER_SHAS[$1]}" \
+    && [ -f "$ROOT$PIPER_DIR/${PIPER_VOICES[$1]}.onnx.json" ]
+}
 check_piper() {
+  local i
   piper_info || return 1
-  [ -n "$PIPER_SHA" ] || return 0
-  sha_ok "$ROOT$PIPER_DIR/$PIPER_VOICE.onnx" "$PIPER_SHA" && [ -f "$ROOT$PIPER_DIR/$PIPER_VOICE.onnx.json" ]
+  for i in "${!PIPER_VOICES[@]}"; do
+    [ "${PIPER_SHAS[$i]}" = - ] && continue
+    piper_voice_ok "$i" || return 1
+  done
 }
 do_piper() {
+  local i v total=0 done_bytes=0 got=()
   piper_info || die "could not read the Piper voice setting"
-  if [ -z "$PIPER_SHA" ]; then
-    warn "the Piper voice '$PIPER_VOICE' has no pin in PIPER_PINS; the core fetches it on first use, checked against Hugging Face's published digest"
-    STEP_DONE_MSG="Voice $PIPER_VOICE left to the core"
-    return 0
+  for i in "${!PIPER_VOICES[@]}"; do total=$((total + PIPER_SIZES[i])); done
+  for i in "${!PIPER_VOICES[@]}"; do
+    v=${PIPER_VOICES[$i]}
+    if [ "${PIPER_SHAS[$i]}" = - ]; then
+      warn "the Piper voice '$v' has no pin in PIPER_PINS; the core fetches it on first use, checked against Hugging Face's published digest"
+      continue
+    fi
+    if ! piper_voice_ok "$i"; then
+      start_watch "$ROOT$PIPER_DIR/.$v.onnx.part" "${PIPER_SIZES[$i]}" "Downloading the voice $v"
+      svc_py -c "$PY_PIPER_DOWNLOAD" "$v" "$PIPER_DIR" >/dev/null || { stop_watch; die "the Piper voice download failed ($v)"; }
+      stop_watch
+    fi
+    sha_ok "$ROOT$PIPER_DIR/$v.onnx" "${PIPER_SHAS[$i]}" || die "$v.onnx does not match its pin ${PIPER_SHAS[$i]}"
+    done_bytes=$((done_bytes + PIPER_SIZES[i]))
+    emit_bytes "$done_bytes" "$total" "Downloaded the voice $v"
+    got+=("$v")
+  done
+  if [ ${#got[@]} -eq 0 ]; then
+    STEP_DONE_MSG="Voice ${PIPER_VOICES[0]} left to the core"
+  else
+    STEP_DONE_MSG="Voices ${got[*]}"
   fi
-  if ! check_piper; then
-    start_watch "$ROOT$PIPER_DIR/.$PIPER_VOICE.onnx.part" "$PIPER_SIZE" "Downloading the voice $PIPER_VOICE"
-    svc_py -c "$PY_PIPER_DOWNLOAD" "$PIPER_VOICE" "$PIPER_DIR" >/dev/null || { stop_watch; die "the Piper voice download failed"; }
-    stop_watch
-  fi
-  sha_ok "$ROOT$PIPER_DIR/$PIPER_VOICE.onnx" "$PIPER_SHA" || die "$PIPER_VOICE.onnx does not match its pin $PIPER_SHA"
-  emit_bytes "$PIPER_SIZE" "$PIPER_SIZE" "Downloaded the voice $PIPER_VOICE"
-  STEP_DONE_MSG="Voice $PIPER_VOICE"
 }
 
 # ─── images ──────────────────────────────────────────────────────────────
@@ -2431,6 +2518,20 @@ all_active() {
 }
 healthy() { curl -fsS -o /dev/null --max-time 5 "$CORE_HEALTH_URL" && curl -fsS -o /dev/null --max-time 5 "$WEB_HEALTH_URL"; }
 
+# start_diagnostics: when the start fails, what systemd says about the
+# three units and their last 200 journal lines, into this script's own
+# output (the Windows installer keeps it in provision.log), so the log
+# names the real cause (a port already taken, a migration that failed)
+# rather than just "systemctl start failed". Without the setup code the
+# core's first boot prints, and without a password in a URL (scrub_log).
+start_diagnostics() {
+  log "systemctl status ${SHIPPED_UNITS[*]}:"
+  systemctl status --no-pager --full --lines=0 "${SHIPPED_UNITS[@]}" 2>&1 | scrub_log | sed 's/^/    /' || true
+  log "the last 200 lines of journalctl -u domovoi-db -u domovoi-core -u domovoi-web:"
+  journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200 -o short-iso 2>&1 \
+    | scrub_log | sed 's/^/    /' || true
+}
+
 # wait_http URL TIMEOUT LABEL UNIT FROM TO: wait for URL, with progress
 # lines from FROM to TO permille of the step as the time runs out (the
 # core's wait, then the dashboard's, each in its own part of the step).
@@ -2444,9 +2545,7 @@ wait_http() {
     fi
     now=$(date +%s)
     if [ $((now - t0)) -ge "$timeout" ]; then
-      # The unit's last lines, without the setup code the core's first boot
-      # prints (scrub_log).
-      journalctl -u "$unit" --no-pager -n 40 -o short-iso 2>/dev/null | scrub_log | sed 's/^/    /' || true
+      start_diagnostics
       die "$label did not answer within ${timeout}s ($url; journalctl -u $unit)"
     fi
     if [ $((now - last)) -ge 30 ]; then
@@ -2491,7 +2590,10 @@ do_start() {
     systemctl restart "${restart[@]}"
   fi
   # The documented start, which is a no-op for what already runs.
-  systemctl start "${SHIPPED_UNITS[@]}" || die "systemctl start ${SHIPPED_UNITS[*]} failed (journalctl -u domovoi-db -u domovoi-core)"
+  if ! systemctl start "${SHIPPED_UNITS[@]}"; then
+    start_diagnostics
+    die "systemctl start ${SHIPPED_UNITS[*]} failed (its status and the units' last 200 journal lines are in the output above; journalctl -u domovoi-db -u domovoi-core -u domovoi-web)"
+  fi
   rm -f "$UNITS_CHANGED_FILE"
   wait_http "$CORE_HEALTH_URL" "$HEALTH_TIMEOUT" "the core (/v1/health)" domovoi-core.service 0 800
   wait_http "$WEB_HEALTH_URL" 300 "the dashboard (/api/health)" domovoi-web.service 800 990
@@ -2673,6 +2775,15 @@ fi
 
 for step in "${STEP_IDS[@]:1}"; do
   [ "$step" != finish ] || break
+  if [ "$step" = "$STOP_BEFORE" ]; then
+    # --stop-before: everything up to here is done; the caller runs this
+    # again without it (the Windows installer checks the PC's ports in
+    # between). result.json says "stopped", so no one reads it as ok.
+    log "stopping before the $step step (--stop-before $step)"
+    compute_restart_required
+    final_line stopped 0 "Stopped before: ${STEP_TITLE[$step]} (--stop-before $step)"
+    exit 0
+  fi
   run_step "$step"
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;

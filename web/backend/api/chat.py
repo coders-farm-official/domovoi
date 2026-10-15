@@ -12,11 +12,24 @@ events per token chunk, one final ``done`` event carrying the persisted
 message). The full assistant row is written when the stream ends, so an
 interrupted stream loses nothing but the tail. Vision: a message carrying
 image uploads is answered by ``ollama_vision_model`` instead of the QA
-model; images ride base64 in the Ollama chat payload.
+model; images ride base64 in the Ollama chat payload. A message with
+images whose vision model isn't installed (or isn't set) is answered at
+once with a plain refusal and no Ollama call (:func:`send_message`).
+
+Failures (:func:`_failure`): whatever stopped a reply — the model missing,
+Ollama unreachable or too slow, any other error it reported — reaches the
+user as a plain sentence with a machine-readable code (``event: error``
+``{detail, code, model}``, kept on the row as ``error`` plus
+``stats.error_code``). The exception itself goes to the server log only:
+its text names internal hosts, ports and library help URLs.
 
 Uploads land in ``~/.domovoi/chat_uploads/<token><ext>`` (token = uuid hex,
 server-generated — the client never names files here) and are referenced
-from ``chat_messages.images`` as ``[{token, name}]``.
+from ``chat_messages.images`` as ``[{token, name}]``. The model gets each
+picture upright and at most 1280 px on its long edge (:func:`_vision_bytes`),
+from a copy kept beside the upload as ``<token>-1280.jpg|.png``; a call
+that carries pictures also sends ``think: false`` and the vision context
+window (``ollama_vision_num_ctx``).
 
 Thread/message writes are DEVICE tier (REV-1): a valid ``X-Device-Token``
 or an admin Bearer, with the pre-setup LAN grace kept. Thread history
@@ -33,6 +46,15 @@ anything anybody said. Mutations fire
 ``chat_changed`` NOTIFY → the ``chat.changed`` WS event so a second open
 dashboard's thread list stays fresh.
 
+Voice turns (V025): the app's chat mic sends a recording to
+``POST /threads/{id}/voice``, which this process hands to the core's
+``POST /v1/phone/voice`` (domovoi/phone_voice.py) with the caller's
+credentials — the core answers it like a satellite turn and writes both
+rows itself, ``source = 'voice'``, the user row carrying who voice
+identification heard (``speaker_person_id`` / ``speaker_confidence``).
+Every row read out says its ``source``; a voice row adds the speaker's
+name and whether the match was clear (``speaker_confident``).
+
 Message details (V017): an assistant row keeps ``stats`` — Ollama's token
 counts and durations for the reply, the server's own first-token and wall
 times, how much of the thread was sent as context and which model setting
@@ -45,24 +67,31 @@ when it is a well-formed id (``devices.valid_device_id``) — and reads join
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+import anyio
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as PathParam, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from domovoi.admin_auth import require_device, require_device_read
 from domovoi.clients import ollama as ollama_client
 from domovoi.config import settings as core_settings
+from domovoi.voice_identifier import speaker_is_confident
 from web.backend.api.devices import valid_device_id
 from web.backend.db import session_scope
+from web.backend.domovoi_client import auth_forward_headers, domovoi_url
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +107,14 @@ _MAX_IMAGES_PER_MESSAGE = 4
 # How much history rides along to the model per turn (messages, not tokens —
 # local models have modest contexts; the UI shows everything from the DB).
 _HISTORY_LIMIT = 30
+# The longest edge a picture reaches the model with. A CPU benchmark of
+# vision models (2026-10-11/12, owner-approved 2026-10-12) found a 12 MP
+# phone photo sent as it is fills a 4096-token context on its own (the
+# reply stopped after ~60 tokens) and can take minutes to read on a CPU. At
+# 1280 px a picture is ~1.1k tokens, and the default model still read the
+# screenshots, receipts and charts in the test.
+_VISION_MAX_EDGE = 1280
+_EXIF_ORIENTATION = 0x0112
 
 _TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -202,13 +239,17 @@ async def delete_thread(thread_id: int) -> dict[str, Any]:
         for img in images or []:
             token = img.get("token")
             if token and token not in still_used and _TOKEN_RE.match(token):
-                for p in UPLOADS_DIR.glob(f"{token}.*"):
+                # The upload, and the copy the model was sent (_vision_bytes).
+                for p in [*UPLOADS_DIR.glob(f"{token}.*"), *UPLOADS_DIR.glob(f"{token}-*")]:
                     p.unlink(missing_ok=True)
     return {"deleted": thread_id}
 
 
 # ─── Messages ───────────────────────────────────────────────────────────────
-_MSG_COLUMNS = "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id"
+_MSG_COLUMNS = (
+    "m.id, m.role, m.content, m.images, m.model, m.error, m.created_at, m.stats, m.device_id, "
+    "m.source, m.speaker_person_id, m.speaker_confidence"
+)
 
 
 def _msg_dict(r: Any) -> dict[str, Any]:
@@ -216,7 +257,144 @@ def _msg_dict(r: Any) -> dict[str, Any]:
     d["created_at"] = d["created_at"].isoformat()
     if isinstance(d.get("stats"), str):
         d["stats"] = json.loads(d["stats"])
+    if d.get("speaker_confidence") is not None:
+        d["speaker_confidence"] = round(float(d["speaker_confidence"]), 4)
+    # The same judgement the core made when the turn came in
+    # (domovoi/phone_voice.py), so a message reads back drawn as it arrived.
+    d["speaker_confident"] = d.get("speaker_person_id") is not None and speaker_is_confident(
+        d.get("speaker_confidence")
+    )
+    stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
+    if d.get("role") == "assistant" and d.get("error") and not stats.get("error_code"):
+        # A row from before the plain answers kept the exception's own
+        # text ("Client error '404 Not Found' for url 'http://localhost:
+        # 11434/api/chat' ..."). Read it out as a plain answer too; the
+        # row itself is left as it was.
+        role = stats.get("model_role") or (
+            "vision" if d.get("model") and d.get("model") == core_settings.ollama_vision_model else "chat"
+        )
+        code, d["error"] = _legacy_failure(str(d["error"]), d.get("model") or "", role)
+        d["stats"] = {**stats, "error_code": code}
     return d
+
+
+# ─── Plain answers for what stopped a reply ─────────────────────────────────
+# The codes the clients key their own wording on (web chat_details.js,
+# Android ChatErrors.kt). Kept on the assistant row as ``stats.error_code``.
+ERR_VISION_MODEL_MISSING = "vision_model_missing"  # pictures, and no vision model to read them
+ERR_MODEL_MISSING = "model_missing"                # the model for a text turn isn't installed
+ERR_VISION_UNSUPPORTED = "vision_unsupported"      # the vision model can't take pictures
+ERR_MODEL_MEMORY = "model_memory"                  # not enough memory to load the model
+ERR_UNREACHABLE = "model_unreachable"              # Ollama down, or the connection dropped
+ERR_TIMEOUT = "model_timeout"                      # Ollama took too long to take the request
+ERR_MODEL = "model_error"                          # anything else Ollama reported
+ERR_EMPTY = "empty_reply"                          # the model answered with nothing
+
+_SETTINGS_MODELS = "Settings → Models"
+
+
+def vision_missing_text(model: str) -> str:
+    """Why a message with pictures can't be answered here. Worded the same
+    in both clients, which say it before a picture is even attached."""
+    if not (model or "").strip():
+        return (
+            "Pictures need a vision model, and none is set on this Domovoi. "
+            f"An admin can pick one in {_SETTINGS_MODELS}."
+        )
+    return (
+        f"Pictures need the vision model {model}, which isn't installed on this "
+        f"Domovoi. An admin can install it in {_SETTINGS_MODELS}, or pick another "
+        "vision model there."
+    )
+
+
+def _missing_text(model: str, role: str) -> tuple[str, str]:
+    if role == "vision":
+        return ERR_VISION_MODEL_MISSING, vision_missing_text(model)
+    if not (model or "").strip():
+        return ERR_MODEL_MISSING, (
+            f"No chat model is set on this Domovoi. An admin can pick one in {_SETTINGS_MODELS}."
+        )
+    return ERR_MODEL_MISSING, (
+        f"The model {model} isn't installed on this Domovoi. An admin can install it "
+        f"in {_SETTINGS_MODELS}, or pick another model there."
+    )
+
+
+def _plain(code: str, model: str, role: str) -> tuple[str, str]:
+    """(code, the sentence the user reads) for a failure class."""
+    if code in (ERR_MODEL_MISSING, ERR_VISION_MODEL_MISSING):
+        return _missing_text(model, role)
+    name = f"model {model}" if model else "model"
+    return code, {
+        ERR_VISION_UNSUPPORTED: (
+            f"The vision {name} can't read pictures. An admin can pick one that "
+            f"does in {_SETTINGS_MODELS}."
+        ),
+        ERR_MODEL_MEMORY: (
+            f"The {name} needs more memory than this Domovoi has free right now. Try again "
+            f"in a few minutes; if it keeps happening, an admin can pick a smaller model "
+            f"in {_SETTINGS_MODELS}."
+        ),
+        ERR_UNREACHABLE: (
+            "Domovoi couldn't reach its language model. It may be restarting; "
+            "try again in a minute."
+        ),
+        ERR_TIMEOUT: (
+            "The language model took too long to respond. It may still be loading; "
+            "try again in a minute."
+        ),
+        ERR_EMPTY: "The model returned an empty answer. Try again, or ask it another way.",
+    }.get(code, (
+        "The language model couldn't answer this message. Try again; if it keeps "
+        "happening, an admin can find the reason in the server log."
+    ))
+
+
+def _failure(exc: BaseException, model: str, role: str) -> tuple[str, str]:
+    """(code, plain sentence) for whatever stopped a reply. Never the
+    exception's text: that is for the log."""
+    if isinstance(exc, ollama_client.OllamaChatError):
+        said = exc.detail.lower()
+        if exc.status == 404 or "not found" in said:
+            code = ERR_MODEL_MISSING
+        elif "image input" in said or "multimodal" in said or (
+            "not support" in said and ("image" in said or "vision" in said)
+        ):
+            code = ERR_VISION_UNSUPPORTED
+        elif "memory" in said:
+            code = ERR_MODEL_MEMORY
+        else:
+            code = ERR_MODEL
+    elif isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        code = ERR_UNREACHABLE
+    elif isinstance(exc, httpx.TimeoutException):
+        code = ERR_TIMEOUT
+    elif isinstance(exc, (httpx.TransportError, OSError)):
+        # The connection broke mid-reply (Ollama stopped, or crashed).
+        code = ERR_UNREACHABLE
+    else:
+        code = ERR_MODEL
+    return _plain(code, model, role)
+
+
+def _legacy_failure(text: str, model: str, role: str) -> tuple[str, str]:
+    """(code, plain sentence) for an error kept as raw text by an older
+    server, read from the words alone."""
+    said = text.lower()
+    if "returned nothing" in said:
+        code = ERR_EMPTY
+    elif "404" in said or "not found" in said:
+        code = ERR_MODEL_MISSING
+    elif "memory" in said:
+        code = ERR_MODEL_MEMORY
+    elif "timed out" in said or "timeout" in said:
+        code = ERR_TIMEOUT
+    elif "connect" in said:
+        code = ERR_UNREACHABLE
+    else:
+        code = ERR_MODEL
+    return _plain(code, model, role)
 
 
 def _ms(ns: Any) -> float | None:
@@ -231,10 +409,15 @@ def _reply_stats(
     context_sent: int,
     context_in_thread: int,
     model_role: str,
+    num_ctx: int | None = None,
 ) -> dict[str, Any]:
     """The ``chat_messages.stats`` object for one reply (keys: V017).
     ``ollama`` is what :func:`ollama_client.chat_stream` reported, possibly
-    nothing at all if the stream failed; absent figures are left out."""
+    nothing at all if the stream failed; absent figures are left out.
+    ``num_ctx`` is the context window the call asked for (default: the
+    Q&A one; 0 or None: none was sent)."""
+    if num_ctx is None:
+        num_ctx = core_settings.ollama_num_ctx
     out: dict[str, Any] = {
         "prompt_tokens": ollama.get("prompt_eval_count"),
         "output_tokens": ollama.get("eval_count"),
@@ -248,7 +431,7 @@ def _reply_stats(
         "context_sent": context_sent,
         "context_in_thread": context_in_thread,
         "context_limit": _HISTORY_LIMIT,
-        "num_ctx": core_settings.ollama_num_ctx or None,
+        "num_ctx": num_ctx or None,
         "model_role": model_role,
     }
     tokens, gen_ns = ollama.get("eval_count"), ollama.get("eval_duration")
@@ -269,9 +452,10 @@ async def list_messages(thread_id: int) -> dict[str, Any]:
             await s.execute(
                 text(
                     """
-                    SELECT {cols}, d.name AS device_name
+                    SELECT {cols}, d.name AS device_name, p.name AS speaker_name
                       FROM chat_messages m
                       LEFT JOIN devices d ON d.device_id = m.device_id
+                      LEFT JOIN people p ON p.id = m.speaker_person_id
                      WHERE m.thread_id = :id ORDER BY m.id
                     """.format(cols=_MSG_COLUMNS)
                 ),
@@ -298,9 +482,79 @@ def _upload_path(token: str) -> Path | None:
     return None
 
 
-async def _history_for_model(thread_id: int) -> list[dict[str, Any]]:
+def _vision_copy_path(src: Path) -> Path:
+    """Where the copy of an upload the model is sent lives: beside it, as
+    ``<token>-1280.jpg`` for a JPEG and ``<token>-1280.png`` for anything
+    else (lossless, so the text in a screenshot stays sharp). The ``-``
+    keeps it out of :func:`_upload_path`'s ``<token>.*``."""
+    ext = ".jpg" if src.suffix.lower() in (".jpg", ".jpeg") else ".png"
+    return src.with_name(f"{src.stem}-{_VISION_MAX_EDGE}{ext}")
+
+
+def _vision_bytes(src: Path) -> bytes:
+    """The picture ``src`` as the model gets it: upright (a phone photo's
+    EXIF orientation applied, which Ollama ignores) and at most
+    ``_VISION_MAX_EDGE`` px on its long edge, from the copy beside the
+    upload, made on first use. A picture that is already both is sent as
+    it was uploaded, with no copy. One Pillow can't read is sent as it is,
+    as before. Sync — run it in a worker thread. Raises ``OSError`` only
+    when the upload itself can't be read."""
+    copy = _vision_copy_path(src)
+    if copy.is_file():
+        try:
+            return copy.read_bytes()
+        except OSError:
+            pass
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(src) as im:
+            upright = im.getexif().get(_EXIF_ORIENTATION, 1) in (1, None)
+            if upright and max(im.size) <= _VISION_MAX_EDGE:
+                return src.read_bytes()
+            out = ImageOps.exif_transpose(im)
+        jpeg = copy.suffix == ".jpg"
+        if jpeg and out.mode not in ("RGB", "L"):
+            out = out.convert("RGB")
+        elif out.mode not in ("RGB", "RGBA", "L", "LA"):
+            # Palette and other modes: resampled as RGB(A), not nearest-pixel.
+            alpha = "transparency" in out.info or out.mode in ("PA", "RGBa", "La")
+            out = out.convert("RGBA" if alpha else "RGB")
+        out.thumbnail((_VISION_MAX_EDGE, _VISION_MAX_EDGE), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        # No EXIF in the copy: it is upright now, and the rest is not the
+        # model's business.
+        if jpeg:
+            out.save(buf, "JPEG", quality=90)
+        else:
+            out.save(buf, "PNG")
+        data = buf.getvalue()
+    except Exception as e:  # noqa: BLE001 — any decode failure: send it as it is
+        log.warning("chat: picture %s not shrunk for the model (%s: %s); sending it as it is",
+                    src.name, type(e).__name__, e)
+        return src.read_bytes()
+    part = copy.with_name(f"{copy.name}.{uuid.uuid4().hex[:8]}.part")
+    try:
+        part.write_bytes(data)
+        os.replace(part, copy)
+    except OSError as e:
+        log.warning("chat: could not keep the model's copy of %s (%s); it is made again next time",
+                    src.name, e)
+        with contextlib.suppress(OSError):
+            part.unlink(missing_ok=True)
+    return data
+
+
+async def _history_for_model(thread_id: int, with_images: bool = True) -> list[dict[str, Any]]:
     """The last N persisted turns in Ollama chat shape, images inlined as
-    base64 (vision context survives across turns within the window)."""
+    base64 (vision context survives across turns within the window), each
+    upright and shrunk to the model's size (:func:`_vision_bytes`).
+
+    ``with_images=False`` leaves the pictures out — for a turn answered by
+    the text model, which can't read them: Ollama refuses a request that
+    hands a text-only model an image (400, "Multimodal data provided, but
+    model does not support multimodal requests." on 0.34), so one picture
+    early in a thread would otherwise break every text question after it."""
     async with session_scope() as s:
         rows = (
             await s.execute(
@@ -318,13 +572,14 @@ async def _history_for_model(thread_id: int) -> list[dict[str, Any]]:
     for role, content, images in reversed(rows):
         msg: dict[str, Any] = {"role": role, "content": content}
         b64s = []
-        for img in images or []:
+        for img in (images or []) if with_images else []:
             p = _upload_path(img.get("token", ""))
             if p is not None:
                 try:
-                    b64s.append(base64.b64encode(p.read_bytes()).decode())
+                    data = await anyio.to_thread.run_sync(_vision_bytes, p)
                 except OSError:
                     continue
+                b64s.append(base64.b64encode(data).decode())
         if b64s:
             msg["images"] = b64s
         out.append(msg)
@@ -338,7 +593,14 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
 
       ``event: delta``  data: {"text": "..."}
       ``event: done``   data: {<the persisted assistant message row>}
-      ``event: error``  data: {"detail": "..."}    (also persisted on the row)
+      ``event: error``  data: {"detail": "...", "code": "...", "model": "..."}
+                        (also persisted on the row: ``error``, ``stats.error_code``)
+
+    A message with pictures whose vision model isn't installed — or none
+    is set — gets its answer up front: the user turn is kept, the reply is
+    the refusal (``vision_model_missing``) and Ollama is never asked. When
+    Ollama can't be asked whether the model is there, the send goes ahead
+    and a failure is reported as it happens.
     """
     images = [
         {"token": i.get("token", ""), "name": str(i.get("name", ""))[:200]}
@@ -385,7 +647,28 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         await _notify_chat(s, "message")
         await s.commit()
 
-    history = await _history_for_model(thread_id)
+    refusal: tuple[str, str] | None = None
+    if model_role == "vision":
+        if not model.strip():
+            refusal = _missing_text(model, model_role)
+        else:
+            tags = await ollama_client.tags_or_none()
+            if tags is not None and not ollama_client.model_installed(model, tags):
+                refusal = _missing_text(model, model_role)
+
+    # The text model can't read pictures, so a text turn leaves the
+    # thread's earlier ones out (see _history_for_model).
+    history = [] if refusal else await _history_for_model(
+        thread_id, with_images=model_role != "chat",
+    )
+    # A call that carries pictures: no reasoning before the answer (only
+    # the answer is streamed, so the reader would wait in silence), and the
+    # vision context window, which four pictures need.
+    vision_call = any(m.get("images") for m in history)
+    num_ctx = (core_settings.ollama_vision_num_ctx if vision_call else 0) or core_settings.ollama_num_ctx
+    stream_knobs: dict[str, Any] = (
+        {"think": False, "num_ctx": core_settings.ollama_vision_num_ctx} if vision_call else {}
+    )
     async with session_scope() as s:
         in_thread = (
             await s.execute(
@@ -397,30 +680,49 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
     async def sse() -> AsyncIterator[str]:
         chunks: list[str] = []
         error: str | None = None
+        code: str | None = None
         ollama_stats: dict[str, Any] = {}
         started = time.monotonic()
         first_token_ms: float | None = None
-        try:
-            async for delta in ollama_client.chat_stream(history, model=model, stats=ollama_stats):
-                if first_token_ms is None:
-                    first_token_ms = (time.monotonic() - started) * 1000
-                chunks.append(delta)
-                yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
-        except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
-            log.warning("chat stream failed (thread %s, model %s): %s", thread_id, model, e)
-            error = str(e)[:500]
+        if refusal is not None:
+            code, error = refusal
+            log.info("chat refused up front (thread %s, model %r): %s", thread_id, model, code)
+        else:
+            try:
+                async for delta in ollama_client.chat_stream(
+                    history, model=model, stats=ollama_stats, **stream_knobs,
+                ):
+                    if first_token_ms is None:
+                        first_token_ms = (time.monotonic() - started) * 1000
+                    chunks.append(delta)
+                    yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+            except Exception as e:  # noqa: BLE001 — surfaced as an SSE error event
+                code, error = _failure(e, model, model_role)
+                # The detail is for whoever reads the log; the user gets
+                # the plain sentence (it would name hosts, ports, URLs).
+                log.warning(
+                    "chat stream failed (thread %s, model %s, %s): %s: %s",
+                    thread_id, model, code, type(e).__name__, str(e)[:500],
+                )
 
         content = "".join(chunks)
         if not content and error is None:
-            error = "the model returned nothing"
-        stats = _reply_stats(
-            ollama_stats,
-            first_token_ms=first_token_ms,
-            wall_ms=(time.monotonic() - started) * 1000,
-            context_sent=len(history),
-            context_in_thread=int(in_thread),
-            model_role=model_role,
-        )
+            code, error = _plain(ERR_EMPTY, model, model_role)
+        if refusal is not None:
+            # No reply was attempted, so there are no reply figures.
+            stats: dict[str, Any] = {"model_role": model_role}
+        else:
+            stats = _reply_stats(
+                ollama_stats,
+                first_token_ms=first_token_ms,
+                wall_ms=(time.monotonic() - started) * 1000,
+                context_sent=len(history),
+                context_in_thread=int(in_thread),
+                model_role=model_role,
+                num_ctx=num_ctx,
+            )
+        if code is not None:
+            stats["error_code"] = code
         async with session_scope() as s:
             row = (
                 await s.execute(
@@ -428,7 +730,7 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
                         """
                         INSERT INTO chat_messages AS m (thread_id, role, content, model, error, stats)
                         VALUES (:t, 'assistant', :c, :m, :e, CAST(:st AS JSONB))
-                        RETURNING {cols}, NULL::text AS device_name
+                        RETURNING {cols}, NULL::text AS device_name, NULL::text AS speaker_name
                         """.format(cols=_MSG_COLUMNS)
                     ),
                     {"t": thread_id, "c": content, "m": model, "e": error, "st": json.dumps(stats)},
@@ -441,7 +743,8 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
             await _notify_chat(s, "message")
             await s.commit()
         if error is not None:
-            yield f"event: error\ndata: {json.dumps({'detail': error})}\n\n"
+            payload = {"detail": error, "code": code, "model": model}
+            yield f"event: error\ndata: {json.dumps(payload)}\n\n"
         yield f"event: done\ndata: {json.dumps(_msg_dict(row))}\n\n"
 
     return StreamingResponse(
@@ -449,6 +752,81 @@ async def send_message(thread_id: int, body: SendBody) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ─── Voice turns (the app's chat mic) ───────────────────────────────────────
+# How long the hop to the core may take: speech-to-text, the router (a cold
+# language model is ~54 s on an all-CPU host) and text-to-speech.
+_VOICE_TIMEOUT_SEC = 180.0
+# The longest recording the core takes (phone_voice.MAX_CLIP_SEC at 16 kHz
+# PCM16), plus room for a WAV header; read no further than this.
+_VOICE_MAX_BYTES = 30 * 32000 + 4096
+
+
+def _core_client() -> httpx.AsyncClient:
+    """The client for the hop to the core (a seam: the tests hand the real
+    core app in its place)."""
+    return httpx.AsyncClient(timeout=_VOICE_TIMEOUT_SEC)
+
+
+@router.post("/threads/{thread_id}/voice", dependencies=DEVICE)
+async def send_voice(
+    request: Request,
+    # chat_threads.id is a BIGINT (422 past it, never a database overflow).
+    thread_id: int = PathParam(..., ge=1, le=2**63 - 1),
+    audio: UploadFile = File(..., description="16 kHz mono PCM16, raw or as a WAV file"),
+    phone_id: str = Form(..., max_length=64),
+    player: Optional[str] = Form(None, max_length=2048),
+    # False: the phone speaks the reply itself, so the core renders none.
+    speak: bool = Form(True),
+):
+    """One push-to-talk turn from the app's chat mic, answered in this
+    thread: forwarded with the caller's credentials to the core's
+    ``POST /v1/phone/voice`` (domovoi/phone_voice.py), which transcribes
+    it, identifies the speaker, routes it like a satellite turn, speaks
+    the reply and writes both rows. The core's answer (transcript, reply,
+    base64 WAV, speaker, device actions, the two rows) or refusal comes
+    back as it was given; 502 / 504 when the core can't be reached or took
+    too long.
+
+    The body is capped before it is parsed by the process-wide transport
+    guard (domovoi/transport_guard.py: 1 MiB for a route not listed there,
+    on a declared Content-Length and on a streamed overrun alike), which
+    leaves room for the longest recording (30 s, 960 kB) and its form."""
+    data = await audio.read(_VOICE_MAX_BYTES + 1)
+    if len(data) > _VOICE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="a voice turn is at most 30 seconds")
+    form = {"phone_id": phone_id, "thread_id": str(thread_id)}
+    if player:
+        form["player"] = player
+    if not speak:
+        form["speak"] = "false"
+    files = {
+        "audio": (
+            audio.filename or "turn.pcm", data, audio.content_type or "application/octet-stream",
+        ),
+    }
+    url = f"{domovoi_url().rstrip('/')}/v1/phone/voice"
+    try:
+        async with _core_client() as client:
+            r = await client.post(url, data=form, files=files, headers=auth_forward_headers(request))
+    except httpx.TimeoutException:
+        log.warning("chat voice: the core took longer than %.0f s (thread %s)", _VOICE_TIMEOUT_SEC, thread_id)
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Domovoi took too long to answer. Try again.", "code": "core_timeout"},
+        )
+    except Exception as e:  # noqa: BLE001 — the core is down or restarting
+        log.warning("chat voice: the core is unreachable: %s: %s", type(e).__name__, e)
+        return JSONResponse(
+            status_code=502,
+            content={"detail": "Domovoi's voice service isn't answering.", "code": "core_unreachable"},
+        )
+    try:
+        payload = r.json()
+    except ValueError:
+        payload = {"detail": r.text[:500]}
+    return JSONResponse(status_code=r.status_code, content=payload)
 
 
 # ─── Uploads ────────────────────────────────────────────────────────────────
@@ -492,12 +870,17 @@ async def get_upload(token: str):
 @router.get("/models")
 async def chat_models() -> dict[str, Any]:
     """Installed Ollama models + the configured defaults, for the composer's
-    model picker."""
-    tags = await ollama_client.list_models()
+    model picker. ``vision_installed`` says whether a picture can be
+    answered: false when the vision model isn't installed (or none is
+    set), null when Ollama couldn't be asked — the clients explain the
+    first before a picture is attached, and leave the second to the send."""
+    tags = await ollama_client.tags_or_none()
+    vision = core_settings.ollama_vision_model
     return {
         "installed": sorted(
-            {m.get("name") or m.get("model") for m in tags if (m.get("name") or m.get("model"))}
+            {m.get("name") or m.get("model") for m in tags or [] if (m.get("name") or m.get("model"))}
         ),
         "default_model": core_settings.ollama_model,
-        "vision_model": core_settings.ollama_vision_model,
+        "vision_model": vision,
+        "vision_installed": None if tags is None else ollama_client.model_installed(vision, tags),
     }

@@ -1,0 +1,4 @@
+# SHA-256 of the built-in voice sample clips (scripts/voice_clips/make_clips.py): ONNX Runtime 1.28.0, seed 20261012, opusenc 24 kbit/s VBR, serial 1.
+2feeb22bb50fa502f2bec8a5e9f692df4030bc4056c6bf8fdced1be2ee6457ea  en_US-kristin-medium.ogg
+49994b7623759483f1b3f33323d2d39b63865b3a1386bc4ece7d6f150b6054a2  en_US-ljspeech-medium.ogg
+58c46ac8a55692e0795eb10d4681be6993e69128027933c75fb93abf0d7fe2a7  en_US-norman-medium.ogg

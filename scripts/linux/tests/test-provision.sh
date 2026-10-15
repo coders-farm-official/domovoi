@@ -25,7 +25,10 @@
 #     pull-wrong-digest is set) and the two health URLs (up while the unit
 #     is active);
 #   * systemctl keeps is-active state per unit (start, restart, enable
-#     --now); docker keeps built images and the search helper's state;
+#     --now) and a failed mark (daemon-reload fails a running timer or
+#     path unit whose unit file is a mask, as systemd does, and says so in
+#     the state's journal file; reset-failed or a start clears it); docker
+#     keeps built images and the search helper's state;
 #   * the venv's python answers the script's tagged snippets
 #     (#provision:...): env-write applies PROVISION_ENV_KEYS to the
 #     checkout's domovoi/.env, piper-info / piper-download and
@@ -33,12 +36,16 @@
 #     manifest pins (whisper-content and piper-content override them);
 #     `-m pip install -r` fails when pip-fail is set.
 #
-# Usage: bash scripts/linux/tests/test-provision.sh   (ONLY=<regex> runs some)
+# Usage: bash scripts/linux/tests/test-provision.sh [--case NAME|GLOB]... [--list]
+# (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
+# runs this in a pinned Linux container, much faster than Git Bash.)
 # Exit status is non-zero if any case failed.
 
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$HERE/case-filter.sh"
+harness_parse_args "$@"
 SCRIPT=$(cd "$HERE/.." && pwd)/provision.sh
 REAL_REPO=$(cd "$HERE/../../.." && pwd)
 WORK=$(mktemp -d)
@@ -317,7 +324,7 @@ case $url in
     echo '{"status":"pulling aaaa","digest":"sha256:aaaa","total":1000,"completed":500}'
     echo '{"status":"pulling aaaa","digest":"sha256:aaaa","total":1000,"completed":1000}'
     echo '{"status":"verifying sha256 digest"}'
-    dg=$(grep "^$tag " "$SHIM_STATE/registry" | cut -d' ' -f2)
+    dg=$(grep "^$tag " "$SHIM_STATE/registry" | head -n 1 | cut -d' ' -f2)
     [ ! -f "$SHIM_STATE/pull-wrong-digest" ] || dg=0000000000000000000000000000000000000000000000000000000000000000
     grep -v "^$tag " "$SHIM_STATE/ollama-models" >"$SHIM_STATE/om.new"; echo "$tag $dg" >>"$SHIM_STATE/om.new"
     mv "$SHIM_STATE/om.new" "$SHIM_STATE/ollama-models"
@@ -334,7 +341,7 @@ SH
   cat >"$bin/systemctl" <<'SH'
 #!/usr/bin/env bash
 echo "systemctl $*" >>"$SHIM_STATE/calls.log"
-mkdir -p "$SHIM_STATE/active" "$SHIM_STATE/enabled"
+mkdir -p "$SHIM_STATE/active" "$SHIM_STATE/enabled" "$SHIM_STATE/failed"
 quiet=0 now=0 args=()
 for a in "$@"; do
   case $a in --quiet|-q) quiet=1 ;; --now) now=1 ;; --*) ;; *) args+=("$a") ;; esac
@@ -351,11 +358,36 @@ case $cmd in
   enable) for u in "${units[@]}"; do touch "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || touch "$SHIM_STATE/active/$u"; done ;;
   disable) for u in "${units[@]}"; do rm -f "$SHIM_STATE/enabled/$u"; [ "$now" = 0 ] || rm -f "$SHIM_STATE/active/$u"; done ;;
   start|restart)
+    # start-fail: every start fails; with unit names in it, only theirs.
     for u in "${units[@]}"; do
-      if [ -f "$SHIM_STATE/start-fail" ]; then echo "Job for $u failed" >&2; exit 1; fi
-      touch "$SHIM_STATE/active/$u"
+      if [ -f "$SHIM_STATE/start-fail" ] && { [ ! -s "$SHIM_STATE/start-fail" ] || grep -qx -- "$u" "$SHIM_STATE/start-fail"; }; then
+        echo "Job for $u failed because the control process exited with error code." >&2; touch "$SHIM_STATE/failed/$u"; exit 1
+      fi
+      touch "$SHIM_STATE/active/$u"; rm -f "$SHIM_STATE/failed/$u"
     done ;;
+  status)
+    for u in "${units[@]}"; do
+      st=inactive; [ ! -f "$SHIM_STATE/active/$u" ] || st=active; [ ! -f "$SHIM_STATE/failed/$u" ] || st=failed
+      printf '%s\n' "x $u - fixture unit" "     Active: $st (fixture)"
+    done
+    exit 3 ;;
   stop) for u in "${units[@]}"; do rm -f "$SHIM_STATE/active/$u"; done ;;
+  daemon-reload)
+    # A running timer or path unit whose unit file is now a mask has
+    # nothing left to trigger: the reload fails it ("Unit to trigger
+    # vanished"), and only reset-failed (or a start) clears that; a stop
+    # does not. A running service just keeps running.
+    for f in "$SHIM_STATE/active/"*.timer "$SHIM_STATE/active/"*.path; do
+      [ -e "$f" ] || continue
+      u=${f##*/}
+      if [ "$("$SHIM_REAL_READLINK" "$SHIM_ROOT/etc/systemd/system/$u" 2>/dev/null)" = /dev/null ]; then
+        rm -f "$f"; touch "$SHIM_STATE/failed/$u"
+        echo "$u: Unit to trigger vanished." >>"$SHIM_STATE/journal"
+      fi
+    done ;;
+  reset-failed)
+    if [ "${#units[@]}" -eq 0 ]; then rm -f "$SHIM_STATE/failed/"*
+    else for u in "${units[@]}"; do rm -f "$SHIM_STATE/failed/$u"; done; fi ;;
 esac
 exit 0
 SH
@@ -541,6 +573,7 @@ SH
   # A unit's journal: the case's text, if it set one.
   cat >"$bin/journalctl" <<'SH'
 #!/usr/bin/env bash
+echo "journalctl $*" >>"$SHIM_STATE/calls.log"
 [ ! -f "$SHIM_STATE/journal" ] || cat "$SHIM_STATE/journal"
 exit 0
 SH
@@ -634,10 +667,16 @@ if [ "${1-}" = -c ]; then
       done <<<"$PROVISION_ENV_KEYS"
       exit 0 ;;
     "#provision:piper-info")
-      echo en_US-lessac-medium
       echo "$HOME/.domovoi/piper_voices"
-      cat "$SHIM_STATE/piper-pin"
-      echo 16
+      # piper-configured: what the core's settings name first, printed the
+      # way the real snippet prints an unpinned voice (an empty name is
+      # what a stray blank line would look like).
+      if [ -f "$SHIM_STATE/piper-configured" ]; then
+        cat "$SHIM_STATE/piper-configured"; echo -; echo 0
+      fi
+      for v in en_US-norman-medium en_US-kristin-medium en_US-ljspeech-medium; do
+        echo "$v"; cat "$SHIM_STATE/piper-pin"; echo 16
+      done
       exit 0 ;;
     "#provision:piper-download")
       d=$SHIM_ROOT$4; mkdir -p "$d"
@@ -701,9 +740,9 @@ new_case() {
   printf '%s' "$PIPER_CONTENT" >"$STATE/piper-content"
   sha_of_text "$PIPER_CONTENT" >"$STATE/piper-pin"
   # What the registry serves for each tag: the manifest's digests.
-  sed -n 's/^tier_[a-z]*_\(tool\|qa\)_model=\(.*\)$/\2/p' "$ORIGIN/scripts/linux/provision-manifest.conf" >"$CASE/tags"
+  sed -n 's/^tier_[a-z]*_\(tool\|qa\|vision\)_model=\(.*\)$/\2/p' "$ORIGIN/scripts/linux/provision-manifest.conf" >"$CASE/tags"
   : >"$STATE/registry"
-  for t in floor_tool floor_qa standard_tool standard_qa; do
+  for t in floor_tool floor_qa floor_vision standard_tool standard_qa standard_vision; do
     printf '%s %s\n' "$(sed -n "s/^tier_${t}_model=//p" "$ORIGIN/scripts/linux/provision-manifest.conf")" \
       "$(sed -n "s/^tier_${t}_digest=//p" "$ORIGIN/scripts/linux/provision-manifest.conf")" >>"$STATE/registry"
   done
@@ -725,6 +764,13 @@ wsl_args=(--internet always)
 
 called() { grep -qF -- "$1" "$STATE/calls.log"; }
 not_called() { ! grep -qF -- "$1" "$STATE/calls.log"; }
+# before A B: the first call matching A precedes the first matching B.
+before() {
+  local a b
+  a=$(grep -nF -- "$1" "$STATE/calls.log" | head -n 1 | cut -d: -f1)
+  b=$(grep -nF -- "$2" "$STATE/calls.log" | head -n 1 | cut -d: -f1)
+  [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ] || { echo "      [$1] does not come before [$2]"; return 1; }
+}
 said() { grep -qF -- "$1" "$CASE/output.log"; }
 not_said() { ! grep -qF -- "$1" "$CASE/output.log"; }
 eq() { [ "$1" = "$2" ] || { echo "      expected [$2], got [$1]"; return 1; }; }
@@ -821,6 +867,19 @@ case_help_and_usage_errors() {
   end_case
 }
 
+# The install's import check names only what the release installs: the
+# Microsoft Edge voices' edge-tts and its MP3 decoder miniaudio were
+# dropped on 2026-10-12, so a fresh venv without them must pass it.
+case_import_check_names_no_dropped_package() {
+  new_case import_check_names_no_dropped_package
+  local mods
+  mods=$(sed -n "/^PY_IMPORT_CHECK='#provision:import-check/,/^bad = \[\]/p" "$SCRIPT")
+  check "found the import check" grep -qF '"onnxruntime"' <<<"$mods"
+  check "no edge_tts" eq "$(grep -c 'edge_tts' <<<"$mods")" 0
+  check "no miniaudio" eq "$(grep -c 'miniaudio' <<<"$mods")" 0
+  end_case
+}
+
 case_harness_vars_need_each_other() {
   new_case harness_vars_need_each_other
   RC=0
@@ -857,6 +916,8 @@ case_dry_run_changes_nothing() {
   check "plans the fstab line" said 'C:/Users/Public/Domovoi/My\040Music /srv/media/music drvfs metadata,uid=1000,gid=1000,umask=022,fmask=133,noatime,nofail 0 0'
   check "plans MUSIC_DIR (manifest beside the script)" said "MUSIC_DIR=/srv/media/music"
   check "plans the standard tier from 64 GB" said "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
+  check "plans the vision model" said "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
+  check "plans its pull, by digest" said "ollama pull qwen3-vl:2b-instruct-q4_K_M ea422f1e73652a95479954d8572d3c8c6022f628ce2d38a1a04aae1b7f2d5300"
   check "plans MPD_HTTP_BASE" said "MPD_HTTP_BASE=http://192.168.1.50"
   check "plan lines for every step but the preflight" eq "$(grep -c '"state":"plan"' "$CASE/progress.jsonl")" 19
   check "the preflight runs for real" eq "$(state_of preflight)" done
@@ -949,6 +1010,7 @@ case_full_run_wsl() {
   check ".env: internet answer" has_line "$envf" "INTERNET_ACCESS=always"
   check ".env: tier tool model" has_line "$envf" "OLLAMA_TOOL_MODEL=qwen3:8b-q4_K_M"
   check ".env: QA model" has_line "$envf" "OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M"
+  check ".env: vision model" has_line "$envf" "OLLAMA_VISION_MODEL=qwen3-vl:2b-instruct-q4_K_M"
   check ".env: Whisper on cpu/int8" has_line "$envf" "WHISPER_COMPUTE_TYPE=int8"
   check ".env: the template's Whisper replaced" eq "$(grep -c '^WHISPER_MODEL=' "$envf")" 1
   check ".env: Ollama by IPv4" has_line "$envf" "OLLAMA_URL=http://127.0.0.1:11434"
@@ -967,10 +1029,14 @@ case_full_run_wsl() {
   check "ollama.service is the doc's" has_line "$ROOT/etc/systemd/system/ollama.service" "ExecStart=/usr/local/bin/ollama serve"
   check "pulled the QA model" called '"model":"llama3.2:3b-instruct-q4_K_M"'
   check "pulled the router" called '"model":"qwen3:8b-q4_K_M"'
+  check "pulled the vision model" called '"model":"qwen3-vl:2b-instruct-q4_K_M"'
+  check "its digest checked" said "qwen3-vl:2b-instruct-q4_K_M pulled, digest matches the pin"
   check "download progress lines" grep -q '"step":"models".*"state":"progress".*"bytes":' "$CASE/progress.jsonl"
   check "Ollama download bytes" grep -q '"step":"ollama".*"bytes":' "$CASE/progress.jsonl"
   check "Whisper at the pinned revision" test -f "$ROOT/home/domovoi/.cache/huggingface/hub/models--Systran--faster-whisper-small.en/snapshots/d1d751a5f8271d482d14ca55d9e2deeebbae577f/model.bin"
-  check "Piper voice" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-lessac-medium.onnx"
+  check "Piper voice" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
+  check "and the other two" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
+  check "no espeak-ng installed" not_called "espeak-ng"
   # images, search helper
   check "database images pulled as compose pins them" called "docker compose pull postgres flyway"
   check "MPD image built as the core does" called "docker build --progress=plain -t domovoi-mpd:latest -f $CHECKOUT/domovoi/Dockerfile.mpd $CHECKOUT/domovoi"
@@ -1133,6 +1199,36 @@ case_whisper_sha_mismatch_stops() {
   end_case
 }
 
+# The configured voice is the path of an uploaded model, with a space in it:
+# one value per line keeps it whole, it is left to the core (no pin), and
+# the three shipped voices are still fetched and checked.
+case_piper_unpinned_voice_with_a_space() {
+  new_case piper_unpinned_voice_with_a_space
+  printf '%s\n' "/srv/my voices/mine.onnx" >"$STATE/piper-configured"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "piper done" eq "$(state_of piper)" done
+  check "the whole path named" said "the Piper voice '/srv/my voices/mine.onnx' has no pin"
+  check "Norman fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
+  check "Linda fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-ljspeech-medium.onnx"
+  check "nothing fetched for the path" not_called "/srv/my voices/mine.onnx /home"
+  end_case
+}
+
+# An empty configured voice is no voice at all: skipped, not a voice named
+# "-" with pin "0", and the three shipped voices are fetched.
+case_piper_empty_configured_voice() {
+  new_case piper_empty_configured_voice
+  printf '\n' >"$STATE/piper-configured"
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "piper done" eq "$(state_of piper)" done
+  check "no warning about a nameless voice" not_said "the Piper voice '' has no pin"
+  check "no voice named -" not_said "the Piper voice '-'"
+  check "Kristin fetched" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-kristin-medium.onnx"
+  end_case
+}
+
 case_piper_sha_mismatch_stops() {
   new_case piper_sha_mismatch_stops
   printf 'tampered' >"$STATE/piper-content"
@@ -1268,7 +1364,7 @@ case_internet_never_keeps_searxng_off() {
   check "models skipped" eq "$(state_of models)" skip
   check "whisper skipped" eq "$(state_of whisper)" skip
   check "no pull" not_called "/api/pull"
-  check "the voice is still fetched ahead" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-lessac-medium.onnx"
+  check "the voice is still fetched ahead" test -f "$ROOT/home/domovoi/.domovoi/piper_voices/en_US-norman-medium.onnx"
   # No internet quiets Ubuntu's own jobs (owner decision 2026-10-11).
   local u
   for u in "${NEVER_UNITS[@]}"; do check "$u masked (never)" masked "$u"; done
@@ -1481,6 +1577,55 @@ case_os_jobs_opt_out_is_honoured() {
   run_prov --internet never --skip-models
   check "opted in again: os-jobs done" eq "$(state_of os-jobs)" done
   check "opted in again: apt-daily masked" masked apt-daily.timer
+  end_case
+}
+
+# Real WSL run 2026-10-11: masking timers that were running left
+# apt-daily, apt-daily-upgrade and motd-news "failed" ("Unit to trigger
+# vanished") and the box "degraded" until the next start, after the first
+# provision and after each switch to never. os-jobs.sh stops a running
+# timer or path unit after its mask and before systemd reloads, and clears
+# the failed mark of every unit it changed (reset-failed), never by
+# stopping the shutdown helper. (A helper that stops after the reload, or
+# not at all, or never resets, fails this case.)
+case_os_jobs_never_leaves_the_box_degraded() {
+  new_case os_jobs_never_leaves_the_box_degraded
+  mkdir -p "$STATE/active" "$STATE/failed"
+  local u running=(apt-daily.timer apt-daily-upgrade.timer motd-news.timer apport-autoreport.path)
+  for u in "${running[@]}" unattended-upgrades.service snapd.snap-repair.timer snapd.socket; do touch "$STATE/active/$u"; done
+  # Failed before this run (a reload somebody else ran, say): masked now,
+  # it would stay listed failed until the next boot.
+  touch "$STATE/failed/ua-timer.timer"
+  run_prov --internet never --skip-models
+  check "never: exit 0" eq "$RC" 0
+  check "never: os-jobs done" eq "$(state_of os-jobs)" done
+  for u in "${running[@]}"; do
+    check "never: $u masked" masked "$u"
+    check "never: $u stopped" test ! -e "$STATE/active/$u"
+  done
+  check "never: no unit failed at a reload" eq "$(cat "$STATE/journal" 2>/dev/null)" ""
+  check "never: nothing left failed (not degraded)" eq "$(ls -A "$STATE/failed")" ""
+  for u in "${NEVER_UNITS[@]}"; do
+    [ "$u" = snapd.snap-repair.timer ] || check "never: $u's failed mark cleared" called "systemctl reset-failed $u"
+  done
+  check "never: WSL's units' too" called "systemctl reset-failed snapd.snap-repair.timer"
+  check "never: the shutdown helper left running" test -e "$STATE/active/unattended-upgrades.service"
+  check "never: and never stopped" not_called "systemctl stop unattended-upgrades.service"
+  # The household answers Yes in Settings later (the .env writer), then the
+  # box re-applies its configuration. An older helper left two of the
+  # timers failed: an enabled one, which starts again, and a disabled one.
+  touch "$STATE/enabled/apt-daily.timer" "$STATE/failed/apt-daily.timer" "$STATE/failed/motd-news.timer"
+  sed -i 's/^INTERNET_ACCESS=.*/INTERNET_ACCESS=always/' "$CHECKOUT/domovoi/.env"
+  run_prov --internet never --skip-models
+  check "always: exit 0" eq "$RC" 0
+  check "always: os-jobs done" eq "$(state_of os-jobs)" done
+  check "always: nothing left failed" eq "$(ls -A "$STATE/failed")" ""
+  check "always: cleared before it starts" before "systemctl reset-failed apt-daily.timer" "systemctl start apt-daily.timer"
+  check "always: the disabled one's cleared too" called "systemctl reset-failed motd-news.timer"
+  check "always: the enabled timer runs again" test -e "$STATE/active/apt-daily.timer"
+  run_prov --internet never --skip-models
+  check "again: os-jobs skipped" eq "$(state_of os-jobs)" skip
+  check "again: nothing reset" not_called "systemctl reset-failed"
   end_case
 }
 
@@ -1766,6 +1911,91 @@ case_setup_code_kept_out_of_the_journal_it_prints() {
   end_case
 }
 
+# Windows installer fixes 2026-10-12, item 3: a failed start leaves the
+# real cause in the log (provision.log on Windows): systemd's status of the
+# three units and their last 200 journal lines, without the setup code or
+# a password in a URL.
+case_failed_start_logs_status_and_journal() {
+  new_case failed_start_logs_status_and_journal
+  echo domovoi-db.service >"$STATE/start-fail"
+  printf '%s\n' "Oct 12 docker[90]: Error starting userland proxy: listen tcp4 127.0.0.1:6432: bind: address already in use" \
+    "Oct 12 domovoi-core[71]:  Setup code: acorn-apple-arrow-autumn-badge-baker-basil-beach" \
+    "Oct 12 domovoi-core[71]: connecting to postgresql://domovoi:s3cret-Pass@127.0.0.1:6432/domovoi" \
+    "Oct 12 domovoi-web[72]: an ordinary line" >"$STATE/journal"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "start failed" eq "$(state_of start)" fail
+  check "final names the step" eq "$(final_field failed_step)" '"start"'
+  check "systemd's status of all three" called "systemctl status --no-pager --full --lines=0 domovoi-db.service domovoi-core.service domovoi-web.service"
+  check "the status is printed" said "x domovoi-db.service - fixture unit"
+  check "it says the unit failed" said "Active: failed (fixture)"
+  check "200 journal lines of all three" called "journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200"
+  check "the cause is in the output" said "bind: address already in use"
+  check "the ordinary line too" said "an ordinary line"
+  check "no setup code" not_said "acorn-apple-arrow"
+  check "no Setup code line" not_said "Setup code:"
+  check "no password" not_said "s3cret-Pass"
+  check "the URL without it" said "postgresql://domovoi:[hidden]@127.0.0.1:6432/domovoi"
+  check "the message points at it" said "the units' last 200 journal lines are in the output above"
+  check "one final line" progress_ok
+  check "no marker" no_marker start
+  end_case
+}
+
+# A health wait that runs out logs the same, for all three units.
+case_unhealthy_start_logs_all_three_units() {
+  new_case unhealthy_start_logs_all_three_units
+  touch "$STATE/core-unhealthy"
+  printf '%s\n' "Oct 12 domovoi-core[71]: alembic: migration failed" >"$STATE/journal"
+  run_prov "${wsl_args[@]}" --skip-models --health-timeout 10
+  check "exit 1" eq "$RC" 1
+  check "status of all three" called "systemctl status --no-pager --full --lines=0 domovoi-db.service domovoi-core.service domovoi-web.service"
+  check "journal of all three" called "journalctl -u domovoi-db.service -u domovoi-core.service -u domovoi-web.service --no-pager -n 200"
+  check "the cause is in the output" said "migration failed"
+  end_case
+}
+
+# Item 2: --stop-before start runs everything before the start step and
+# stops (exit 0, result "stopped"), so the Windows installer can check the
+# PC's ports; the next run without it starts Domovoi.
+case_stop_before_start() {
+  new_case stop_before_start
+  run_prov "${wsl_args[@]}" --skip-models --stop-before start
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "result stopped" eq "$(final_field result)" '"stopped"'
+  check "exit_code 0" eq "$(final_field exit_code)" 0
+  check "says where it stopped" said "Stopped before: Starting Domovoi (--stop-before start)"
+  check "the step before ran" marker timezone
+  check "start did not run" no_marker start
+  check "start never reported" eq "$(state_of start)" ""
+  check "no unit started" not_called "systemctl start domovoi-db.service"
+  check "result.json says stopped" grep -q '"result":"stopped"' "$ROOT/var/lib/domovoi-provision/result.json"
+  run_prov "${wsl_args[@]}" --skip-models
+  check "second run exit 0" eq "$RC" 0
+  check "result ok" eq "$(final_field result)" '"ok"'
+  check "the steps before are skipped" eq "$(state_of timezone)" skip
+  check "start ran" eq "$(state_of start)" done
+  check "units started" called "systemctl start domovoi-db.service domovoi-core.service domovoi-web.service"
+  end_case
+}
+
+case_stop_before_takes_a_step_inside_the_run() {
+  new_case stop_before_takes_a_step_inside_the_run
+  local bad
+  for bad in preflight finish bogus; do
+    run_prov "${wsl_args[@]}" --stop-before "$bad"
+    check "--stop-before $bad: 2" eq "$RC" 2
+    check "says which ($bad)" said "--stop-before takes a step id from apt to update-unit, not: $bad"
+  done
+  run_prov "${wsl_args[@]}" --stop-before ""
+  check "--stop-before with nothing: 2" eq "$RC" 2
+  check "nothing ran" not_called "apt-get"
+  run_prov --help
+  check "--help names it" said "--stop-before STEP"
+  end_case
+}
+
 # Finding 9: every way out ends with exactly one final line.
 case_every_exit_has_one_final_line() {
   new_case every_exit_has_one_final_line
@@ -1830,10 +2060,81 @@ case_bare_metal_media_paths() {
   end_case
 }
 
-build_origin
+# Owner decision 2026-10-12: the tier's vision model (pictures in chat) is
+# written to .env and pulled, unless --no-vision-model; it is written all
+# the same then, so chat names the model to install.
+case_vision_model_pull_is_optional() {
+  new_case vision_model_pull_is_optional
+  local envf=$CHECKOUT/domovoi/.env vision=qwen3-vl:2b-instruct-q4_K_M
+  run_prov "${wsl_args[@]}" --no-vision-model=yes
+  check "--no-vision-model takes no value: 2" eq "$RC" 2
+  run_prov --dry-run "${wsl_args[@]}" --no-vision-model
+  check "dry run exit 0" eq "$RC" 0
+  check "dry run: still written" said "OLLAMA_VISION_MODEL=$vision"
+  check "dry run: says it is not pulled" said "(--no-vision-model: $vision is not pulled)"
+  check "dry run: no pull planned" not_said "ollama pull $vision"
+  run_prov "${wsl_args[@]}" --no-vision-model
+  check "exit 0" eq "$RC" 0
+  check "progress format" progress_ok
+  check "the vision model not pulled" not_called "\"model\":\"$vision\""
+  check "the voice models pulled" called '"model":"llama3.2:3b-instruct-q4_K_M"'
+  check "said so" said "--no-vision-model: $vision is not pulled"
+  check ".env names it all the same" has_line "$envf" "OLLAMA_VISION_MODEL=$vision"
+  # The same box, run again without the option: the vision model alone is
+  # pulled, and nothing else changes.
+  run_prov "${wsl_args[@]}"
+  check "second run exit 0" eq "$RC" 0
+  check "models re-ran" eq "$(state_of models)" done
+  check "env skipped: .env already right" eq "$(state_of env)" skip
+  check "the vision model pulled" called "\"model\":\"$vision\""
+  check "the voice models not pulled again" not_called '"model":"llama3.2:3b-instruct-q4_K_M"'
+  check "said its size" said "reads pictures in chat (about 1.9 GB"
+  check "its digest checked against the pin" said "$vision pulled, digest matches the pin"
+  check "nothing restarted" not_called "systemctl restart"
+  end_case
+}
+
+# The vision model follows the household-settings rule like every model
+# key: written when absent or still the script's, kept when the household
+# set it, on a box this script set up before it wrote the key as well.
+case_vision_model_respects_the_household() {
+  new_case vision_model_respects_the_household
+  local envf=$CHECKOUT/domovoi/.env rec=$ROOT/var/lib/domovoi-provision/env-written
+  local vision=qwen3-vl:2b-instruct-q4_K_M marker=$ROOT/var/lib/domovoi-provision/steps/env
+  run_prov "${wsl_args[@]}" --skip-models
+  check "first run exit 0" eq "$RC" 0
+  check "written" has_line "$envf" "OLLAMA_VISION_MODEL=$vision"
+  check "recorded as the script's" has_line "$rec" "OLLAMA_VISION_MODEL=$vision"
+  # A box with a GPU: the household picks the GPU model in Settings.
+  sed -i 's/^OLLAMA_VISION_MODEL=.*/OLLAMA_VISION_MODEL=qwen2.5vl:7b/' "$envf"
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.70
+  check "exit 0" eq "$RC" 0
+  check "env re-ran" eq "$(state_of env)" done
+  check "the household's vision model kept" has_line "$envf" "OLLAMA_VISION_MODEL=qwen2.5vl:7b"
+  check "said it kept it" said "OLLAMA_VISION_MODEL holds a value this script did not write"
+  # A box set up before the script wrote the key: no record of it, and the
+  # env step's inputs differ from its marker. Absent: the tier's is written.
+  sed -i '/^OLLAMA_VISION_MODEL=/d' "$envf" "$rec"
+  echo stale >"$marker"
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.70
+  check "upgrade exit 0" eq "$RC" 0
+  check "absent: written" has_line "$envf" "OLLAMA_VISION_MODEL=$vision"
+  check "absent: recorded" has_line "$rec" "OLLAMA_VISION_MODEL=$vision"
+  # The same, where the household had set one by hand: it stays theirs.
+  sed -i 's/^OLLAMA_VISION_MODEL=.*/OLLAMA_VISION_MODEL=llava:13b/' "$envf"
+  sed -i '/^OLLAMA_VISION_MODEL=/d' "$rec"
+  echo stale >"$marker"
+  run_prov "${wsl_args[@]}" --skip-models --lan-ip 192.168.1.70
+  check "upgrade with the household's value exit 0" eq "$RC" 0
+  check "the household's value kept" has_line "$envf" "OLLAMA_VISION_MODEL=llava:13b"
+  check "said so again" said "OLLAMA_VISION_MODEL holds a value this script did not write"
+  check "not recorded as the script's" eq "$(grep -c '^OLLAMA_VISION_MODEL=' "$rec")" 0
+  end_case
+}
 
 CASES=(
   case_help_and_usage_errors
+  case_import_check_names_no_dropped_package
   case_harness_vars_need_each_other
   case_not_root_refuses
   case_dry_run_changes_nothing
@@ -1845,6 +2146,8 @@ CASES=(
   case_ollama_sha_mismatch_stops
   case_whisper_sha_mismatch_stops
   case_piper_sha_mismatch_stops
+  case_piper_unpinned_voice_with_a_space
+  case_piper_empty_configured_voice
   case_model_digest_mismatch_stops
   case_docker_key_mismatch_stops
   case_manifest_missing_key_stops
@@ -1870,6 +2173,10 @@ CASES=(
   case_media_missing_on_a_rerun_warns
   case_docker_is_not_held
   case_setup_code_kept_out_of_the_journal_it_prints
+  case_failed_start_logs_status_and_journal
+  case_unhealthy_start_logs_all_three_units
+  case_stop_before_start
+  case_stop_before_takes_a_step_inside_the_run
   case_every_exit_has_one_final_line
   case_children_do_not_hold_the_lock
   case_wsl_conf_restart_note_comes_first
@@ -1880,12 +2187,19 @@ CASES=(
   case_cpu_only_box_reports_no_gpu
   case_update_defaults_opt_into_the_lock
   case_os_jobs_opt_out_is_honoured
+  case_os_jobs_never_leaves_the_box_degraded
+  case_vision_model_pull_is_optional
+  case_vision_model_respects_the_household
 )
 
-for c in "${CASES[@]}"; do
-  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+# --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
+# runs them all. The origin every case clones is built once, and only when
+# something is going to run.
+harness_select
+if [ ${#SELECTED_CASES[@]} -gt 0 ]; then build_origin; fi
+for c in ${SELECTED_CASES[@]+"${SELECTED_CASES[@]}"}; do
   "$c"
 done
 
-echo "provision harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
+echo "provision harness: $PASSED passed, $FAILED failed, $SKIPPED skipped$(harness_selection_note)"
 [ "$FAILED" -eq 0 ]

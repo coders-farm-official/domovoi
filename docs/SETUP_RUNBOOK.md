@@ -49,9 +49,11 @@ kitchen" several times a day for years.
 
 **Where the server lives.** It needs to be always-on, on wired Ethernet if
 at all possible, and physically somewhere fan noise doesn't matter.
-Satellites reconnect by hostname or IP, so give the server a **DHCP
-reservation on your router right now** — before anything points at it.
-Moving the server's IP later means touching every Pi.
+Satellites look for the server by name first (`domovoi.local`, or the
+name the server tells them), then at the address that worked last time,
+and follow it if its address changes — so a **DHCP reservation** for the
+server is a convenience, not a requirement. If you make one, make it on
+the router, not as a static address on the box.
 
 **How much disk your media will want.** Domovoi itself is ~15–20 GB with
 all default models (less if you're following [CPU_HOST.md](CPU_HOST.md) and
@@ -385,7 +387,7 @@ There are two routes.
 
 Flash stock **Raspberry Pi OS Lite (64-bit)** with any tool, no
 pre-configuration. Put the card back in the server. Dashboard →
-**Satellites → prepare satellite media**. It writes a first-boot overlay
+**Settings → Satellites → prepare satellite media**. It writes a first-boot overlay
 and an offline payload (wheels, packages, the satellite code from this
 machine, plugin payloads) to the card. The payload comes from the
 server's caches, which the server fills while it has internet (**Refresh
@@ -393,8 +395,8 @@ caches**; [INTERNET.md](INTERNET.md#before-you-disconnect) has the order).
 If a cache is incomplete the build warns, and the Pi fetches the rest over
 its own connection; its second boot also runs `apt` online to settle
 package dependencies, and tries again on later boots if it can't. Boot the
-Pi, plug it into the server's USB port, and adopt it from the Satellites
-page — name and Wi-Fi, done.
+Pi, plug it into the server's USB port, and adopt it from Settings →
+Satellites — name and Wi-Fi, done.
 
 > ⚠️ **Be aware:** this flow is code-complete but has **not yet been
 > validated on real hardware** —
@@ -453,7 +455,9 @@ And two that apply to any board:
 - **Underpowered PSU is the #1 cause of mystery flakiness.** 2.5 A
   minimum. Check `vcgencmd get_throttled` — anything but `0x0` means the
   Pi has browned out.
-- **Give every satellite a DHCP reservation** ([PROVISIONING §7](../satellite/PROVISIONING.md)).
+- **A DHCP reservation per satellite is optional** ([PROVISIONING §7](../satellite/PROVISIONING.md)):
+  each one is named `domovoi-<room>` on the network (router list and
+  mDNS). Never give a satellite a static address on the Pi itself.
 
 ### Point it at the server
 
@@ -465,7 +469,7 @@ domovoi_url = "ws://<your-server>:6370"
 
 Use whatever name resolves reliably on your LAN. On first connection the
 core automatically provisions that room's MPD container and the room
-appears on the dashboard's Satellites page.
+appears in the dashboard's Settings → Satellites.
 
 ---
 

@@ -4,20 +4,31 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.alerts.IncidentAlerts
+import com.domovoi.app.assistant.AssistantBench
+import com.domovoi.app.assistant.AssistantController
+import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.alerts.TimerAlerts
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
+import com.domovoi.app.net.DeviceAuthInterceptor
 import com.domovoi.app.net.DeviceDownloads
 import com.domovoi.app.net.Discovery
 import com.domovoi.app.net.IdentityGate
 import com.domovoi.app.net.NetworkWatch
+import com.domovoi.app.net.PhoneUploads
 import com.domovoi.app.net.StateBus
 import com.domovoi.app.player.LyricsRepository
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.player.ServerScope
+import com.domovoi.app.voice.PhoneVoice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 /** Process-wide singletons. Deliberately no DI framework — one small graph. */
 class AppContainer(context: Context) {
@@ -69,9 +80,68 @@ class AppContainer(context: Context) {
      *  navigates there and clears it. */
     val pendingRoute = MutableStateFlow<String?>(null)
 
+    /** Phone files on their way to the server ("Your device" → upload),
+     *  by row; they run in [scope], so leaving the page doesn't stop one. */
+    val uploads = PhoneUploads()
+
     /** App-lifetime scope for fire-and-forget work that must outlive a
      *  composable (e.g. the video position save on player dispose). */
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    init {
+        // What the phone queued from a server belongs to that server
+        // (player/ServerScope.kt): the player hears which server the app
+        // talks to — by its pinned identity, else its address — now, and on
+        // every change, and clears the old one's media on a move to another.
+        player.serverChanged(ServerScope.of(prefs.serverUrl.value, prefs.pinForServer(prefs.serverUrl.value)))
+        scope.launch {
+            combine(prefs.serverUrl, prefs.identityPins) { url, pins ->
+                ServerScope.of(url, IdentityGate.pinKey(url)?.let { pins[it] })
+            }.distinctUntilChanged().collect { player.serverChanged(it) }
+        }
+    }
+
+    /** The on-device assistant's benchmark (Settings → About; M0 of the
+     *  phone assistant). Built on first use. Its only network use is the
+     *  model download the user starts, on a copy of the app's client WITHOUT
+     *  the household token (the models come from public hosts): the same
+     *  redirect and cleartext rules, no device token. */
+    private val benchLazy: Lazy<AssistantBench> = lazy {
+        AssistantBench(context, modelDownloader, phoneVoice, beforeLlmLoad = { if (assistantLazy.isInitialized()) assistant.unload() })
+    }
+    val assistantBench: AssistantBench by benchLazy
+
+    /** The on-device assistant (assistant/AssistantController.kt): its model
+     *  download, the language model in memory and the on-phone
+     *  conversations. Built on first use. It never touches the network; the
+     *  download job does, through [modelDownloader]. It and the benchmark
+     *  each free the other's copy of the model before loading their own. */
+    private val assistantLazy: Lazy<AssistantController> = lazy {
+        AssistantController.forApp(
+            context,
+            beforeLoad = { if (benchLazy.isInitialized()) assistantBench.releaseModel() },
+            // The phone's own voice for spoken replies (Settings -> Voice),
+            // opened without asking any server.
+            phoneVoice = { phoneVoice.openOnPhone() },
+        )
+    }
+    val assistant: AssistantController by assistantLazy
+
+    /** The phone's own voice (Settings → Voice): Domovoi's Piper voice
+     *  through the Kotlin phonemizer once downloaded, the server's "say it
+     *  like" list from `GET /api/voice` (cached per server), Android's
+     *  TextToSpeech until then. Built on first use. */
+    val phoneVoice: PhoneVoice by lazy { PhoneVoice(context, api, prefs) }
+
+    /** The model download's client, used by the download job
+     *  (assistant/ModelDownloadWork.kt). */
+    val modelDownloader: ModelDownloader by lazy {
+        val modelHttp = api.http.newBuilder()
+            .apply { interceptors().removeAll { it is DeviceAuthInterceptor } }
+            .pingInterval(0, TimeUnit.SECONDS)
+            .build()
+        ModelDownloader(modelHttp)
+    }
 }
 
 val LocalApp = staticCompositionLocalOf<AppContainer> {

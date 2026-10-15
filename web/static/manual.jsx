@@ -32,7 +32,7 @@ const UM_NODES = {
   domovoi: { glyph: '▚', name: 'domovoi', role: 'the brain — routes every request', tech: 'fastapi · on domovoi · 20 handlers', dot: 'live', hub: true },
   whisper:      { glyph: '◟', name: 'whisper',      role: 'turns your speech into text',      tech: 'faster-whisper · cuda' },
   ollama:       { glyph: '◍', name: 'ollama',       role: 'understands & answers',            tech: 'llama3.2 · qwen2.5' },
-  tts:          { glyph: '◠', name: 'tts',          role: 'gives Domovoi his voice',          tech: 'edge → piper → system' },
+  tts:          { glyph: '◠', name: 'tts',          role: 'gives Domovoi his voice',          tech: 'piper → system' },
   postgres:     { glyph: '▤', name: 'postgres',     role: 'remembers everything',             tech: 'postgres 16 · flyway' },
   mpd:          { glyph: '♪', name: 'mpd',          role: 'plays music, per room',            tech: 'one container / room' },
   workers:      { glyph: '⚙', name: 'workers',      role: 'background jobs',                  tech: 'core loops · plugin workers' },
@@ -54,14 +54,14 @@ const UM_TITLES = {
 /* node-scoped how-to: what you can DO with this part, and how to DIAGNOSE it. */
 const UM_HOWTO = {
   satellites: {
-    act: ['Add one: flash the Pi and drop in its config — it shows up here once it connects.',
+    act: ['Add one: flash the Pi and drop in its config — it shows up in Settings → Satellites once it connects.',
           'Change its voice or wake word in Settings, then push to the room.',
           'Set playback volume per room from the Music page.'],
     diag: ['No response? Check the wake loop is running and the mic board matches its trained model.',
            'Choppy audio? Check wi-fi rx rate (iw dev wlan0 link); reassociate if stuck at 1 Mbit/s.',
            "No sound? Make sure nothing else is holding the Pi's single audio card."] },
   web: {
-    act: ['Switch pages from the left nav — each surface manages one area.',
+    act: ['Switch pages from the left nav (on a phone, the bar along the bottom; pick its tabs in Settings → Phone bar) — each surface manages one area.',
           'Change domovoi settings under the gear → Configuration.',
           'Check versions / pull updates under Configuration → Version.'],
     diag: ['Stale data? Hard-refresh (Ctrl+Shift+R).',
@@ -73,19 +73,20 @@ const UM_HOWTO = {
     diag: ['Nothing responds? Confirm the process is up and Postgres is reachable.',
            'Bad routing? Make sure both Ollama models are installed and loaded.'] },
   whisper: {
-    act: ['Switch the speech-to-text model or pre-download a size from the Models page.',
+    act: ['Switch the speech-to-text model or pre-download a size from Settings → Models.',
           'Prefer large-v3 for accuracy; a smaller size if VRAM is tight.'],
     diag: ['Slow or garbled? Confirm it is on CUDA (float16), not the CPU.',
-           'First use slow? The model may be cold-downloading — pre-stage it on the Models page.'] },
+           'First use slow? The model may be cold-downloading — pre-stage it in Settings → Models.'] },
   ollama: {
-    act: ['Switch the Q&A or tool-routing model, or pull a new one, from the Models page.',
+    act: ['Switch the Q&A or tool-routing model, or pull a new one, from Settings → Models.',
           'Two models by design: a fast one answers, a stronger one routes tools.'],
     diag: ['LLM commands failing? Check the Ollama server is reachable and the model is installed.',
            "See what's loaded in VRAM right now on the hardware panel."] },
   tts: {
-    act: ['Pick or upload a voice under Settings → Voices and set a default.',
-          'Register an Edge cloud voice by id, or upload a local Piper .onnx.'],
-    diag: ['No voice? Play a sample — the engine falls back edge → piper → system.',
+    act: ['Pick Domovoi’s voice (Kristin, the default, Norman or Linda) under Settings → Voices.',
+          'A word said wrong? Add it under “Say it like” there: Siobhan = shiv-AWN.',
+          'Or upload a local Piper .onnx of your own.'],
+    diag: ['No voice? Play a sample — the engine falls back piper → system.',
            'Wrong voice? Confirm the intended one is set as default.'] },
   postgres: {
     act: ['Mostly hands-off — schema changes are Flyway migrations applied on deploy.'],
@@ -191,7 +192,7 @@ const UM_TECH = [
   { id: 'domovoi', k: 'domovoi', v: <>FastAPI · Python 3.11+ · native on Windows 11 for CUDA · intent router → 20 handlers · 11 background workers</> },
   { id: 'whisper', k: 'whisper', v: <>faster-whisper <span className="mono">large-v3</span> on CUDA (float16), via CTranslate2</> },
   { id: 'ollama', k: 'ollama', v: <><span className="mono">llama3.2:3b</span> answers questions · <span className="mono">qwen2.5:14b</span> routes tool calls (stronger schema adherence)</> },
-  { id: 'tts', k: 'tts', v: <>engine chain: edge-tts (cloud neural) → Piper (local) → system voice · voices configurable per satellite</> },
+  { id: 'tts', k: 'tts', v: <>engine chain: Piper (local neural) → system voice · voices configurable per satellite</> },
   { id: 'postgres', k: 'postgres', v: <>PostgreSQL 16 (the only Dockerized piece) · Flyway migrations · <span className="mono">LISTEN/NOTIFY</span> live state bus</> },
   { id: 'mpd', k: 'mpd', v: <>Music Player Daemon — one lazily-spawned container per room · media-provider plugins fetch tracks into the library</> },
   { id: 'workers', k: 'workers', v: <>timer watcher, acquisition queue, library index/enrich, memory extractor, plus whatever workers your plugins register</> },
@@ -445,11 +446,12 @@ const UserManualPage = () => {
 
   const faqItems = [
     ["Why is it called Domovoi?", 'A domovoi is a household guardian spirit from Slavic folklore, often taking the shape of a cat — hence the mascot. The name you say out loud to wake it is configurable.'],
-    ['Does it work without internet?', "Yes — it's local-first. Speech-to-text, understanding, local voices, the music library, timers, intercom and more all run offline. Only web search, media-provider plugins and cloud voices need the network, and they degrade gracefully instead of breaking."],
+    ['Does it work without internet?', "Yes — it's local-first. Speech-to-text, understanding, local voices, the music library, timers, intercom and more all run offline. Only web search and media-provider plugins need the network, and they degrade gracefully instead of breaking."],
     ['How do I add features?', 'Install plugins from the Plugins page — upload a zip or point at a GitHub repo. Plugins can add voice commands, background workers, dashboard pages and Android screens. Only install plugins from publishers you trust: they run with full access to your server.'],
     ['Is my data private?', 'Everything runs on your own hardware. There’s no cloud account and nothing leaves the house unless a network feature asks for it.'],
     ['Can I change the wake word?', 'Yes. Record a handful of clips on a satellite and train a custom model — Settings → Wake Words. (Training is Linux-only, so it runs off-box.)'],
-    ['Can I add my own voice?', <>Upload a Piper <span className="mono">.onnx</span> model for a fully-local voice, or register a Microsoft Edge neural voice — Settings → Voices.</>],
+    ['Can I add my own voice?', <>Pick one of the three public-domain voices, upload a Piper <span className="mono">.onnx</span> trained on English phonemes (American “en-us”, what most voices people train use, or British “en”) — Settings → Voices.</>],
+    ['It says a name wrong. Can I fix it?', <>Yes: Settings → Voices → <b>Say it like</b>. Type the word and how it sounds, the stressed part in capitals (Siobhan = shiv-AWN), and press play to hear it first.</>],
     ['Why two different LLMs?', 'A small fast model handles open questions; a stronger model routes tool calls, where strict schema adherence matters more than speed.'],
     ['How do rooms play different music?', 'Each room gets its own music daemon, so the kitchen and the garage can play completely independent tracks at the same time.'],
   ];

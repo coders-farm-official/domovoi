@@ -39,8 +39,8 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "listens for your command. A spoken greeting (\"Yes?\") or a short "
         "chime plays to the end first, and anything said over it is not "
         "heard — so it cannot answer its own greeting. The greeting adds "
-        "its length before listening starts (about 1 s with a Piper voice, "
-        "about 1.8 s with an Edge voice); the chime about half a second; "
+        "its length before listening starts (about 1 s with a Piper "
+        "voice); the chime about half a second; "
         "light only, nothing. The greeting is skipped when music was "
         "playing; the chime is not. Works on every board — no echo "
         "cancellation needed.",

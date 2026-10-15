@@ -215,7 +215,6 @@ const useAdminSignedIn = () => {
 const INTERNET_OFF_MESSAGE = 'internet access is turned off for this box (Settings → Internet)';
 const NEEDS_INTERNET_TEXT = 'needs internet · Settings → Internet';
 const INTERNET_CHANGED_EVENT = 'domovoi:internet-changed';   // window CustomEvent, detail {access}
-const SETTINGS_TAB_EVENT = 'domovoi:settings-tab';           // window CustomEvent, detail {tab}
 const INTERNET_ANSWERS = ['always', 'sometimes', 'never'];
 const INTERNET_POLICY_REFRESH_MS = 60 * 1000;
 
@@ -291,13 +290,126 @@ const announceInternetChange = (access) => {
   catch { /* no CustomEvent (old browser, test sandbox) — the set() above is enough */ }
 };
 
-/* Open Settings on a tab. The shell maps one hash to one page (#settings),
- * so the tab rides sessionStorage; a Settings page already on screen
- * hears SETTINGS_TAB_EVENT instead. */
+/* ── Addresses: a hash route per page, and per tab ───────────────────
+ *
+ * #<page> opens a page on its default tab, as it always has. Since
+ * 2026-10-12 a tab has an address too, #<page>/<tab>: #settings/configuration,
+ * #music/queue, #calendar/week. Clicking a tab writes its address as a new
+ * history entry (Back goes to the tab before), opening an address selects
+ * its tab, and a tab the page doesn't have opens the page's default tab
+ * (the address is corrected to #<page>). A tab is named by its `slug` (the
+ * words in the address) or its `id` (the name in the code); the id is
+ * rewritten to the slug in place.
+ *
+ * A segment after the tab is a marker for that tab. The one there is:
+ * #settings/configuration/setup (SETUP_ROUTE), which the Windows installer's
+ * "Open Domovoi" opens. Configuration always shows the first-run admin
+ * setup on an unclaimed box; the marker only adds a short "already set up"
+ * note on a claimed one. Addresses are hash segments only: no query
+ * strings, no key=value pairs.
+ *
+ * The shell (index.html) shows the page named by the first segment; the
+ * page's tabs follow the rest through useRouteTab. */
+const SETUP_ROUTE = 'settings/configuration/setup';
+
+// '#Settings/configuration/' → ['settings', 'configuration']
+const routeParts = (route) => {
+  let s = String(route == null ? '' : route).trim();
+  if (s.charAt(0) === '#') s = s.slice(1);
+  return s.split('/').map((p) => p.trim().toLowerCase()).filter(Boolean);
+};
+
+// The page a route opens: its first segment ('' for none).
+const routePage = (route) => routeParts(route)[0] || '';
+
+// The address bar's route, without the '#'.
+const currentRoute = () => {
+  try { return String((window.location && window.location.hash) || '').replace(/^#/, ''); } catch { return ''; }
+};
+
+/* Pages that became a Settings tab, by their old route → the tab. Since
+ * 2026-10-11 Satellites lives in Settings; the old #satellites (a
+ * bookmark, a link in the docs, Home's room cards and problem rows, which
+ * keep it because it also works in a new tab) still lands there. */
+const SETTINGS_TAB_ROUTES = { satellites: 'satellites' };
+
+/* The route an address means, tidied: no '#', no empty segments, lower
+ * case; an old route of a Settings tab (#satellites, and anything after
+ * it) is that tab's address, #settings/<tab>. Pure: nothing is written. */
+const resolveRoute = (route) => {
+  const parts = routeParts(route);
+  const tab = parts.length ? SETTINGS_TAB_ROUTES[parts[0]] : null;
+  return (tab ? ['settings', tab, ...parts.slice(1)] : parts).join('/');
+};
+
+/* The route the shell shows for `route` (resolveRoute). When that is not
+ * what the address bar says (an old #satellites), the address is replaced,
+ * not pushed, so Back doesn't bounce off the old one. */
+const settingsTabRoute = (route) => {
+  const to = resolveRoute(route);
+  if (to !== routeParts(route).join('/')) {
+    try { window.history.replaceState(null, '', `#${to}`); } catch { /* the old hash stays; the page is still right */ }
+  }
+  return to;
+};
+
+// A tab's words in the address: its slug, else its id.
+const tabSlug = (tabs, id) => {
+  const t = (tabs || []).find((x) => x.id === id);
+  return (t && (t.slug || t.id)) || id;
+};
+
+/* What `route` says about `page`'s tabs ([{id, slug?}]): the tab (the
+ * fallback when it names none or one the page doesn't have), the markers
+ * after it, and the address to show instead when it isn't the canonical
+ * one (an id for a slug, an unknown tab), else null. */
+const readRouteTab = (route, page, tabs, fallback) => {
+  const parts = routeParts(resolveRoute(route));
+  if (parts[0] !== page || parts.length < 2) return { tab: fallback, rest: [], fix: null };
+  const hit = (tabs || []).find((t) => (t.slug || t.id) === parts[1] || t.id === parts[1]);
+  if (!hit) return { tab: fallback, rest: [], fix: page };
+  const slug = hit.slug || hit.id;
+  const fix = slug === parts[1] ? null : [page, slug, ...parts.slice(2)].join('/');
+  return { tab: hit.id, rest: parts.slice(2), fix };
+};
+
+/* A page's tabs, kept in the address (#<page>/<tab>). Returns
+ * [tab, setTab, rest]: setTab writes the tab's address as a new history
+ * entry; Back, Forward and a link to another tab of this page move the tab
+ * here; `rest` holds the markers after the tab (['setup']). An address for
+ * another page leaves the tab alone (the page is on its way out). */
+const useRouteTab = (page, tabs, fallback) => {
+  const tabsRef = React.useRef(tabs);
+  tabsRef.current = tabs;
+  const [at, setAt] = useState(() => readRouteTab(currentRoute(), page, tabs, fallback));
+  useEffect(() => {
+    const follow = () => {
+      const route = currentRoute();
+      if (routePage(resolveRoute(route)) !== page) return;
+      setAt(readRouteTab(route, page, tabsRef.current, fallback));
+    };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, [page, fallback]);
+  // An id where the slug goes, or a tab this page doesn't have: say what is
+  // showing, in place (no new history entry).
+  useEffect(() => {
+    if (at.fix == null || routePage(currentRoute()) !== page) return;
+    try { window.history.replaceState(null, '', `#${at.fix}`); } catch { /* the address stays as typed */ }
+  }, [at.fix, page]);
+  const setTab = React.useCallback((id) => {
+    setAt({ tab: id, rest: [], fix: null });
+    const to = `${page}/${tabSlug(tabsRef.current, id)}`;
+    try { if (currentRoute() !== to) window.location.hash = to; } catch { /* no location */ }
+  }, [page]);
+  return [at.tab, setTab, at.rest];
+};
+
+/* Open Settings on a tab (by its id or slug): its address. A Settings page
+ * already on screen follows the address (useRouteTab). */
+const settingsTabHref = (tab) => `#settings/${tab}`;
 const openSettingsTab = (tab) => {
-  try { sessionStorage.setItem('domovoi.settings.tab', tab); } catch { /* storage blocked */ }
-  try { window.dispatchEvent(new CustomEvent(SETTINGS_TAB_EVENT, { detail: { tab } })); } catch { /* no CustomEvent */ }
-  try { window.location.hash = 'settings'; } catch { /* no location */ }
+  try { window.location.hash = `settings/${tab}`; } catch { /* no location */ }
 };
 
 /* "needs internet · Settings → Internet", the link opening that tab. */
@@ -307,8 +419,7 @@ const NeedsInternetNote = ({ compact = false }) => (
                  fontSize: compact ? 11 : 12, color: 'var(--fg-muted)' }}>
     <Icon name="wifi-off" size={compact ? 12 : 13}/>
     <span>needs internet · </span>
-    <a href="#settings" className="needs-internet-link"
-       onClick={(e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab('internet'); }}>
+    <a href="#settings/internet" className="needs-internet-link">
       Settings → Internet
     </a>
   </span>
@@ -561,6 +672,22 @@ const fmtDur = (sec) => {
   return `${m}:${s.toString().padStart(2,'0')}`;
 };
 
+/* Spare-device satellites (S0, 2026-10-12). `s.supports` is what a
+ * connected device declared it can do (domovoi/satellite_abilities.py);
+ * null means it sent no list — every Pi — and then everything is offered,
+ * exactly as before. Shared here because the Satellites tab and the Wake
+ * words tab both ask. */
+const satCan = (s, ability) => !s || !Array.isArray(s.supports) || s.supports.includes(ability);
+const SAT_BOARD_LABELS = { linux_pc: 'Linux PC', android_room: 'Android room' };
+/* The board badge: the spare-device kinds by name, any other board only
+ * when the device declared a list. A Pi (adopted board, no list) gets
+ * none, as before. */
+const satBoardLabel = (s) => {
+  if (!s || !s.board) return null;
+  if (SAT_BOARD_LABELS[s.board]) return SAT_BOARD_LABELS[s.board];
+  return Array.isArray(s.supports) ? s.board : null;
+};
+
 /* ---- Toast (page-level helper) ----------------------------- */
 /*
  * Stacked: every fire() gets its OWN toast box with its OWN removal
@@ -568,15 +695,33 @@ const fmtDur = (sec) => {
  * each other — toast A's cleanup timer would clear replacement toast B
  * after a few hundred ms, so long error details vanished unread.
  * Longer messages linger longer (up to 12 s); click a toast to dismiss.
+ *
+ * An error that must be read can STAY: fire(msg, { stay: true }) gives a
+ * toast with no timer, an error dot and its own close button, and only
+ * that button (or the page) removes it: a tap on its text doesn't, so it
+ * can be read, or selected, on a phone. `detail` is a second, muted line;
+ * `actions` ([{ label, onClick, title }]) are buttons under it, each of
+ * which closes the toast; `key` names it, so a later toast with the same
+ * key replaces it and the third return value, dismissKey(key), removes it
+ * (a page clears an action's error when that action is tried again). The
+ * Models page's pulls, deletes and switches use it (2026-10-13: an error
+ * there vanished on its own before it could be read).
  */
 const useToast = () => {
   const [items, setItems] = React.useState([]);
   const nextId = React.useRef(0);
   const dismiss = (id) => setItems((cur) => cur.filter((t) => t.id !== id));
-  const fire = (msg) => {
+  const dismissKey = React.useCallback(
+    (key) => setItems((cur) => cur.filter((t) => t.key !== key)), []);
+  const fire = (msg, opts) => {
+    const o = opts && typeof opts === 'object' ? opts : {};
     const id = ++nextId.current;
     const text = String(msg);
-    setItems((cur) => [...cur, { id, text }]);
+    const item = { id, text, key: o.key || null, stay: !!o.stay,
+                   detail: o.detail ? String(o.detail) : null,
+                   actions: Array.isArray(o.actions) ? o.actions : null };
+    setItems((cur) => [...cur.filter((t) => !item.key || t.key !== item.key), item]);
+    if (item.stay) return;
     const ttl = Math.min(12000, 2400 + text.length * 35);
     setTimeout(() => dismiss(id), ttl);
   };
@@ -595,10 +740,30 @@ const useToast = () => {
    * on a phone and stay until dismissed: the answer to a press must never
    * sit under them. */
   const node = items.length > 0 && (
-    <div style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
+    <div className="toast-stack"
+         style={{ position: 'fixed', bottom: 'calc(var(--dock-bottom, 0px) + var(--player-h, 0px) + 24px)', left: '50%', transform: 'translateX(-50%)',
                   display: 'flex', flexDirection: 'column-reverse', alignItems: 'center',
                   gap: 8, zIndex: 111, maxWidth: 'min(90vw, 560px)' }}>
-      {items.map((t) => (
+      {items.map((t) => (t.stay ? (
+        <div key={t.id} className="toast toast-stay" role="alert">
+          <div className="toast-stay-row">
+            <span className="toast-stay-dot"><StatusDot tone="err"/></span>
+            <div className="toast-stay-body">
+              <div className="toast-stay-text">{t.text}</div>
+              {t.detail && <div className="toast-stay-detail">{t.detail}</div>}
+            </div>
+            <IconButton name="x" title="dismiss" aria-label="dismiss" onClick={() => dismiss(t.id)}/>
+          </div>
+          {t.actions && t.actions.length > 0 && (
+            <div className="toast-stay-actions">
+              {t.actions.map((a, i) => (
+                <Button key={i} variant={i === 0 ? 'primary' : 'secondary'} title={a.title}
+                        onClick={() => { dismiss(t.id); a.onClick(); }}>{a.label}</Button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
         <div key={t.id} onClick={() => dismiss(t.id)} title="dismiss"
              style={{ background: 'var(--overlay)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
                       boxShadow: 'var(--shadow-md), var(--inner-highlight)', padding: '10px 14px',
@@ -607,10 +772,10 @@ const useToast = () => {
           <StatusDot tone="brand" live/>
           <span style={{ overflowWrap: 'anywhere' }}>{t.text}</span>
         </div>
-      ))}
+      )))}
     </div>
   );
-  return [fire, node];
+  return [fire, node, dismissKey];
 };
 
 /* ---- The dashboard's one restart ------------------------------ */
@@ -1139,16 +1304,19 @@ const NavItem = ({ icon, label, badge, active, onClick }) => (
  * (design §5.2, echoed in /api/plugins/manifest) so plugin authors can
  * slot pages deliberately. `countKey` reads useSidebarCounts.
  *
- * `primary` marks the five tabs the phone strip keeps (760px and below):
- * home · music · satellites · calendar · chat, left to right (`strip`,
- * the strip's own order — the sidebar keeps the published one). Everything
- * else is one tap away on Home's "everything" grid. The desktop sidebar
- * shows every item EXCEPT home: there the brand row is the link to it
- * (`brandLink`). */
+ * The phone strip (760px and below) is this device's phone bar
+ * (PHONE_BAR_DEFAULT, home · music · videos · chat, unless someone here
+ * picked others in Settings → Phone bar); everything else is one tap away on
+ * Home's "everything" grid. The desktop sidebar shows every item EXCEPT
+ * home: there the brand row is the link to it (`brandLink`).
+ *
+ * Satellites is not here: since 2026-10-11 it is a Settings tab
+ * (Settings → Satellites), and the old #satellites still lands on it
+ * (SETTINGS_TAB_ROUTES below). */
 const CORE_NAV_ITEMS = [
-  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, primary: true, strip: 1, brandLink: true },
-  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8, primary: true, strip: 5 },
-  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music', primary: true, strip: 2 },
+  { route: 'home',       icon: 'house',       label: 'Home',       order: 1, brandLink: true },
+  { route: 'chat',       icon: 'message-square', label: 'Chat',    order: 8 },
+  { route: 'music',      icon: 'music',       label: 'Music',      order: 10, countKey: 'music' },
   { route: 'podcasts',   icon: 'podcast',     label: 'Podcasts',   order: 12 },
   { route: 'audiobooks', icon: 'book-open',   label: 'Audiobooks', order: 14 },
   { route: 'videos',     icon: 'film',        label: 'Videos',     order: 15 },
@@ -1156,8 +1324,7 @@ const CORE_NAV_ITEMS = [
   // page slots there (nav_order 16 in its manifest) when installed.
   { route: 'news',       icon: 'newspaper',   label: 'News',       order: 18 },
   { route: 'people',     icon: 'users',       label: 'People',     order: 20, countKey: 'people' },
-  { route: 'satellites', icon: 'radio-tower', label: 'Satellites', order: 30, countKey: 'satellites', primary: true, strip: 3 },
-  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar', primary: true, strip: 4 },
+  { route: 'calendar',   icon: 'calendar',    label: 'Calendar',   order: 40, countKey: 'calendar' },
   { route: 'files',      icon: 'folder',      label: 'Files',      order: 45 },
   { route: 'plugins',    icon: 'blocks',      label: 'Plugins',    order: 95 },
 ];
@@ -1207,11 +1374,11 @@ const useSharedScreen = () => {
 
 /* Every nav destination, core and plugin, in sidebar order. Core items
  * carry `core: true` and their CORE_NAV_ITEMS fields; plugin pages carry
- * `core: false`, their `slug`, `iconSrc` (the manifest's nav_icon) and
- * never `primary`. Interleaved by nav order; equal values sort core-first,
- * then plugin slug (design §5.2). The Sidebar draws it, and Home's
- * "everything" grid draws the non-primary part of the same list, so the
- * two can't disagree about what exists. */
+ * `core: false`, their `slug` and `iconSrc` (the manifest's nav_icon).
+ * Interleaved by nav order; equal values sort core-first, then plugin slug
+ * (design §5.2). The Sidebar draws it, and Home's "everything" grid draws
+ * the part of the same list that is not on the phone bar, so the two
+ * can't disagree about what exists. */
 const buildNavItems = (manifest) => {
   const items = CORE_NAV_ITEMS.map((it) => ({ ...it, core: true, slug: '' }));
   (manifest?.plugins || []).forEach((p) => (p.pages || []).forEach((pg) => {
@@ -1232,6 +1399,120 @@ const buildNavItems = (manifest) => {
 // SHARED_SCREEN_HIDDEN pages.
 const navItemsFor = (manifest, { shared = false } = {}) =>
   buildNavItems(manifest).filter((it) => !(shared && SHARED_SCREEN_HIDDEN.has(it.route)));
+
+/* ---- the phone bar ----------------------------------------------------
+ * The tabs along the bottom of a phone-width screen (760px and below).
+ * home · music · videos · chat unless someone on THIS device picked others
+ * in Settings → Phone bar: Home always first, at most five, at
+ * least two, any page a launcher may show (navItemsFor — so plugin pages
+ * too, and on a shared screen never the personal ones, whatever was saved).
+ * Kept in this browser's localStorage: a per-device convenience, so a
+ * browser that can't keep it (a private window, blocked storage) keeps it
+ * for the visit and starts from the default next time. */
+const PHONE_BAR_DEFAULT = ['home', 'music', 'videos', 'chat'];
+const PHONE_BAR_MAX = 5;
+const PHONE_BAR_MIN = 2;
+const PHONE_BAR_KEY = 'domovoi-phone-bar';
+
+const PhoneBarStore = (() => {
+  let memory = null;       // this visit's bar when storage can't keep it
+  let unkept = false;      // a write failed: memory is the truth until reload
+  const subs = new Set();
+  const notify = () => subs.forEach((fn) => { try { fn(); } catch { /* one bad subscriber */ } });
+  const get = () => {
+    if (unkept) return memory;
+    try {
+      const raw = localStorage.getItem(PHONE_BAR_KEY);
+      if (raw == null) return null;
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v.filter((r) => typeof r === 'string') : null;
+    } catch { return memory; }
+  };
+  // `routes` null = back to the default. True when the browser kept it.
+  const set = (routes) => {
+    const list = Array.isArray(routes) ? routes.filter((r) => typeof r === 'string') : null;
+    memory = list;
+    let kept = true;
+    try {
+      if (list == null) localStorage.removeItem(PHONE_BAR_KEY);
+      else localStorage.setItem(PHONE_BAR_KEY, JSON.stringify(list));
+      unkept = false;
+    } catch { kept = false; unkept = true; }
+    notify();
+    return kept;
+  };
+  let listening = false;
+  return {
+    get,
+    set,
+    subscribe(fn) {
+      subs.add(fn);
+      // Another tab of this browser changed it.
+      if (!listening) {
+        listening = true;
+        try {
+          window.addEventListener('storage', (e) => { if (!e || e.key === PHONE_BAR_KEY || e.key == null) notify(); });
+        } catch { /* no window events */ }
+      }
+      return () => { subs.delete(fn); };
+    },
+  };
+})();
+
+/* This device's saved phone bar (a list of routes), or null for the
+ * default; re-renders when it changes. */
+const usePhoneBar = () => {
+  const [bar, setBar] = React.useState(() => PhoneBarStore.get());
+  React.useEffect(() => {
+    const sync = () => setBar(PhoneBarStore.get());
+    const off = PhoneBarStore.subscribe(sync);
+    sync();
+    return off;
+  }, []);
+  return bar;
+};
+
+/* The routes the phone bar shows, left to right, from `items` (what
+ * navItemsFor offers this screen) and the saved list (null = default):
+ * Home first, then the saved pages that exist here, at most
+ * PHONE_BAR_MAX. A saved bar left with fewer than PHONE_BAR_MIN (its
+ * pages gone: a plugin removed, the screen made shared) falls back to the
+ * default. */
+const phoneBarRoutes = (items, saved) => {
+  const offered = new Set((items || []).map((it) => it.route));
+  const pick = (list) => {
+    const out = ['home'];
+    (list || []).forEach((r) => {
+      if (out.length < PHONE_BAR_MAX && r !== 'home' && offered.has(r) && !out.includes(r)) out.push(r);
+    });
+    return out;
+  };
+  const mine = Array.isArray(saved) ? pick(saved) : null;
+  return mine && mine.length >= PHONE_BAR_MIN ? mine : pick(PHONE_BAR_DEFAULT);
+};
+
+/* One edit to the bar `current` (phoneBarRoutes' answer): 'add' a page at
+ * the right end, 'remove' one, or move one 'left' / 'right'. Home never
+ * moves or goes, and the limits hold: an edit past them is no edit. */
+const phoneBarEdit = (current, op, route) => {
+  const rest = (current || []).filter((r) => r !== 'home');
+  const i = rest.indexOf(route);
+  const size = rest.length + 1;
+  if (op === 'add' && route !== 'home' && i < 0 && size < PHONE_BAR_MAX) {
+    rest.push(route);
+  } else if (op === 'remove' && i >= 0 && size > PHONE_BAR_MIN) {
+    rest.splice(i, 1);
+  } else if ((op === 'left' || op === 'right') && i >= 0) {
+    const j = op === 'left' ? i - 1 : i + 1;
+    if (j < 0 || j >= rest.length) return current;
+    const moved = rest[i];
+    rest[i] = rest[j];
+    rest[j] = moved;
+  } else {
+    return current;
+  }
+  return ['home', ...rest];
+};
 
 /* Poll each plugin page's declared badge endpoint on a shared, jittered
  * 30 s cadence (design §5.3 badge contract): open GET returning JSON;
@@ -1279,28 +1560,30 @@ const PluginNavIcon = ({ src }) => src
          style={{ width: 16, height: 16, flexShrink: 0 }}/>
   : <Icon name="puzzle" className="ico" size={16}/>;
 
-/* One nav row's classes. `primary` keeps the row in the phone strip;
- * `brand-link` hides it in the desktop sidebar, where the brand row is
- * that link; `more-active` lights the home tab on a phone while a page
- * that lives on Home's "everything" grid is open, the way the Android
- * app's home tab does (styles.css only honours it at 760px and below). */
+/* One nav row's classes. `primary` keeps the row in the phone strip (it is
+ * on this device's phone bar); `brand-link` hides it in the desktop
+ * sidebar, where the brand row is that link; `more-active` lights the home
+ * tab on a phone while a page that lives on Home's "everything" grid is
+ * open, the way the Android app's home tab does (styles.css only honours
+ * it at 760px and below). */
 const navItemClass = (it, route, primaryRoutes) => [
   'nav-item',
   route === it.route ? 'active' : '',
-  it.primary ? 'primary' : '',
+  primaryRoutes.has(it.route) ? 'primary' : '',
   it.brandLink ? 'brand-link' : '',
   it.brandLink && route !== it.route && !primaryRoutes.has(route) ? 'more-active' : '',
 ].filter(Boolean).join(' ');
 
 /* `badges` is App's one usePluginBadges result; a Sidebar rendered without
  * it polls for itself. On a shared screen the personal pages drop off the
- * sidebar and the strip alike (navItemsFor), and the strip keeps four tabs. */
+ * sidebar and the strip alike (navItemsFor), whatever the phone bar says. */
 const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const shared = useSharedScreen();
   const items = navItemsFor(manifest, { shared });
-  const primaryRoutes = new Set(items.filter((it) => it.primary).map((it) => it.route));
+  const strip = phoneBarRoutes(items, usePhoneBar());
+  const primaryRoutes = new Set(strip);
   return (
     <aside className="sidebar">
       {/* The way home on a desktop. An anchor, not an onClick div, so it
@@ -1322,7 +1605,7 @@ const Sidebar = ({ route, setRoute, counts, manifest, badges: given }) => {
                  className={navItemClass(it, route, primaryRoutes)}
                  // The phone strip's left-to-right order (styles.css reads
                  // it only at 760px and below).
-                 style={it.strip ? { '--strip-order': it.strip } : undefined}
+                 style={primaryRoutes.has(it.route) ? { '--strip-order': strip.indexOf(it.route) + 1 } : undefined}
                  onClick={() => setRoute(it.route)}>
               {it.core
                 ? <Icon name={it.icon} className="ico" size={16}/>
@@ -1397,7 +1680,7 @@ const _cfgInput = {
 const ConfigField = ({ f, value, onChange, internetOff = false }) => {
   // Under INTERNET_ACCESS=never a field that needs the internet is greyed —
   // never hidden — with "needs internet"; so is each choice that does
-  // (tts_engine's "edge"), unless it is the value already set.
+  // (a field's needs_internet_choices), unless it is the value already set.
   const greyed = !!internetOff && !!f.needs_internet;
   const greyChoices = internetOff ? (f.needs_internet_choices || []) : [];
   const greyTitle = greyed ? NEEDS_INTERNET_TEXT : undefined;
@@ -1730,6 +2013,103 @@ const loginErrorText = (e) => {
   return String((e && e.message) || e);
 };
 
+/* What kind of machine the Domovoi server is (GET /api/capabilities
+ * host_kind: linux | wsl | windows | darwin, domovoi/host_kind.py), or null
+ * until known and from a server too old to say. Asked once per page load
+ * and shared; a failed ask is tried again by the next component that wants
+ * it. "wsl" is the Linux system the Windows installer sets up. */
+const HostKindStore = (() => {
+  let kind = null;
+  let asking = null;
+  const subs = new Set();
+  const tell = () => subs.forEach((fn) => { try { fn(kind); } catch { /* one bad subscriber */ } });
+  return {
+    get: () => kind,
+    ask() {
+      if (kind || asking) return asking || Promise.resolve(kind);
+      asking = Promise.resolve()
+        .then(() => apiGet('/api/capabilities', { quiet: true }))
+        .then((caps) => { kind = (caps && typeof caps.host_kind === 'string' && caps.host_kind) || null; })
+        .catch(() => { /* unknown: the words cover both kinds of server */ })
+        .then(() => { asking = null; tell(); return kind; });
+      return asking;
+    },
+    subscribe(fn) { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+})();
+
+const useHostKind = (wanted = true) => {
+  const [kind, setKind] = useState(HostKindStore.get());
+  useEffect(() => {
+    if (!wanted) return undefined;
+    const un = HostKindStore.subscribe(setKind);
+    HostKindStore.ask();
+    return un;
+  }, [wanted]);
+  return kind;
+};
+
+/* Where the setup code is, for the first-run admin setup (the Admin card
+ * and the dialog). A Windows install (the installer's WSL system) never
+ * shows anyone ~/.domovoi: its installer shows the code on its last page,
+ * and running the installer again writes a fresh one (docs/WINDOWS_HOST.md).
+ * Unknown: both, so neither kind of owner is sent somewhere that isn't. */
+const SetupCodeWhere = ({ kind }) => {
+  if (kind === 'wsl') {
+    return (
+      <span className="setup-code-text">
+        Paste the setup code from the last page of Domovoi’s Windows
+        installer and choose an admin password. Lost the code, or is it more
+        than a day old? Run the installer again: it shows a fresh one.
+      </span>
+    );
+  }
+  if (kind) {
+    return (
+      <span className="setup-code-text">
+        Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
+        the Domovoi server (the core also prints it when it runs in a
+        terminal) and choose an admin password.
+      </span>
+    );
+  }
+  return (
+    <span className="setup-code-text">
+      Enter the setup code and choose an admin password. On Windows the
+      Domovoi installer showed the code on its last page; on a Linux server
+      it is in <code>~/.domovoi/setup-code.txt</code> (the core also prints
+      it when it runs in a terminal).
+    </span>
+  );
+};
+
+/* Put the caret in a dialog's first field: focus it and place the caret at
+ * the end of whatever it holds. Only ever an input — never the dialog box
+ * or the backdrop, which take the focus (and on a phone, the keyboard)
+ * somewhere no keystroke lands. */
+const focusFirstField = (el) => {
+  if (!el || typeof el.focus !== 'function') return;
+  try { el.focus({ preventScroll: true }); } catch { try { el.focus(); } catch { return; } }
+  try {
+    const end = String(el.value == null ? '' : el.value).length;
+    if (typeof el.setSelectionRange === 'function') el.setSelectionRange(end, end);
+  } catch { /* a field type without a caret position */ }
+};
+
+/* The auth dialogs' first field, focused the moment it is on screen: in
+ * the layout pass that puts it there, so a dialog a tap opens (AuthModalHost
+ * renders it inside that tap, below) focuses inside the tap too — what a
+ * phone needs to raise its keyboard on the field. `which` names the field
+ * that should have it ('setup', 'login', ...): when it changes, the new
+ * first field takes the focus. A dialog that opens on its own (a refused
+ * request, the installer's setup address) focuses the field all the same;
+ * a phone may then want one tap on it for the keyboard. */
+const useFirstFieldFocus = (which) => {
+  const ref = React.useRef(null);
+  React.useLayoutEffect(() => { focusFirstField(ref.current); }, [which]);
+  return ref;
+};
+
 const LoginModal = ({ onClose }) => {
   const [status, setStatus] = useState(Auth.status);
   const [code, setCode] = useState('');
@@ -1759,11 +2139,16 @@ const LoginModal = ({ onClose }) => {
   }, []);
 
   const needsSetup = status && status.setup_complete === false;
+  const hostKind = useHostKind(!!needsSetup);
   // Auth.logout() on a tab that holds only the cookie (the page was
   // reloaded): the server ends a session only for a Bearer, so the
   // password is asked for once, and this modal says why.
   let signingOut = false;
   try { signingOut = !needsSetup && Auth.loginReason === 'sign-out'; } catch { /* older Auth */ }
+  // The first field of the form on screen: the setup code on an unclaimed
+  // box, the password otherwise. Once the status read says which, the
+  // caret is there.
+  const firstField = useFirstFieldFocus(needsSetup ? 'setup' : 'login');
 
   const submit = async () => {
     if (busyRef.current) return;
@@ -1805,14 +2190,12 @@ const LoginModal = ({ onClose }) => {
         <div className="cal-modal-body">
           {needsSetup ? (
             <>
-              <div className="hint">
-                Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
-                the Domovoi server (the core also prints it when it runs in a
-                terminal) and choose an admin password.
+              <div className="hint setup-code-where">
+                <SetupCodeWhere kind={hostKind}/>
               </div>
               <div className="field">
                 <label>setup code</label>
-                <input className="cal-inp" value={code} autoFocus
+                <input className="cal-inp" value={code} ref={firstField}
                        placeholder="eight-words-separated-by-dashes"
                        onChange={(e) => setCode(e.target.value)}/>
               </div>
@@ -1831,7 +2214,7 @@ const LoginModal = ({ onClose }) => {
           ) : (
             <div className="field">
               <label>admin password</label>
-              <input className="cal-inp" type="password" value={password} autoFocus
+              <input className="cal-inp" type="password" value={password} ref={firstField}
                      onChange={(e) => setPassword(e.target.value)}
                      onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
             </div>
@@ -1883,6 +2266,7 @@ const LoginModal = ({ onClose }) => {
 const PairModal = ({ onClose }) => {
   const [value, setValue] = useState('');
   const [err, setErr] = useState(null);
+  const tokenField = useFirstFieldFocus('pair');
 
   const submit = () => {
     setErr(null);
@@ -1922,7 +2306,7 @@ const PairModal = ({ onClose }) => {
           </div>
           <div className="field">
             <label>household token</label>
-            <input className="cal-inp mono" value={value} autoFocus
+            <input className="cal-inp mono" value={value} ref={tokenField}
                    placeholder="household token"
                    onChange={(e) => setValue(e.target.value)}
                    onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}/>
@@ -2056,7 +2440,29 @@ const AuthModalHost = () => {
   const [, force] = React.useReducer((x) => x + 1, 0);
   // subscribeModal: every change, plus the login modal coming down the
   // moment a sign-in succeeds (auth.js signedIn).
-  useEffect(() => (Auth.subscribeModal ? Auth.subscribeModal(force) : Auth.subscribe(force)), []);
+  //
+  // A dialog that is OPENING renders at once (flushSync), inside the call
+  // that opened it: "sign in" calls Auth.openModal() from its click, so the
+  // modal, and the focus its first field takes (useFirstFieldFocus), land
+  // inside that click handler, the surest place for a phone to treat the
+  // focus as the tap's and raise its keyboard on the field. Left to React's
+  // own schedule they landed after the handler had returned (2026-10-13:
+  // on a phone the keyboard came up without the caret in the field; not
+  // reproduced in an emulated phone, where both ways focus the field).
+  // Every other change re-renders as before.
+  useEffect(() => {
+    let shown = { login: !!Auth.modalOpen, pair: !!Auth.pairModalOpen };
+    const onChange = () => {
+      const now = { login: !!Auth.modalOpen, pair: !!Auth.pairModalOpen };
+      const opening = (now.login && !shown.login) || (now.pair && !shown.pair);
+      shown = now;
+      if (opening && typeof ReactDOM !== 'undefined' && typeof ReactDOM.flushSync === 'function') {
+        try { ReactDOM.flushSync(force); return; } catch { /* rendering already: the normal path */ }
+      }
+      force();
+    };
+    return Auth.subscribeModal ? Auth.subscribeModal(onChange) : Auth.subscribe(onChange);
+  }, []);
   useEffect(() => InternetAsk.subscribe(force), []);
   // Keyed on the opening: a prompt that comes back is a fresh form, never
   // the last one's typed password and error.
@@ -2670,7 +3076,12 @@ Object.assign(window, {
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, usePluginBadges,
   SHARED_SCREEN_HIDDEN, useSharedScreen,
+  PHONE_BAR_DEFAULT, PHONE_BAR_MAX, PHONE_BAR_MIN, PhoneBarStore, usePhoneBar, phoneBarRoutes, phoneBarEdit,
+  SETTINGS_TAB_ROUTES, settingsTabRoute, resolveRoute, routeParts, routePage, currentRoute,
+  readRouteTab, useRouteTab, tabSlug, settingsTabHref, openSettingsTab, SETUP_ROUTE,
+  SetupCodeWhere, useHostKind,
   relTime, fmtDur, webHref, LoginModal, PairModal, AuthModalHost,
+  satCan, satBoardLabel, SAT_BOARD_LABELS,
   DeleteConfirmDialog, useDeleteConfirm, TrustServerPrompt, WriteBlockedNotice,
   CaptureChip, useAdminSignedIn,
   TimerFireAlerts,

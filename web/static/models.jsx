@@ -3,9 +3,11 @@
  * One page, top-down:
  *   1. Hardware panel   — per-GPU VRAM/util/temp + CPU/RAM/disk. The
  *                         denominator for every fit badge.
- *   2. Active models    — Q&A / tool-routing / speech-to-text role slots,
- *                         each with the current model + a switch picker
- *                         (restart badge where the tier needs it).
+ *   2. Active models    — Q&A / tool-routing / vision / speech-to-text role
+ *                         slots, each with the current model + a switch
+ *                         picker (restart badge where the tier needs it), and
+ *                         for an Ollama role whether the model is installed,
+ *                         with an inline Install (the catalog's pull job).
  *   3. Installed        — on-disk Ollama models, loaded-in-VRAM marker, delete.
  *   4. Browse & install — curated catalog cards (fit badge + install) and a
  *                         pull-by-name box; installs run as background jobs
@@ -284,72 +286,170 @@ const activeMessage = (data, error) => {
   return `couldn't load active models (${error.status || 'no response'}): ${detail}`;
 };
 
-const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch }) => {
-  const [pick, setPick] = React.useState(r.model || '');
-  React.useEffect(() => { setPick(r.model || ''); }, [r.model]);
+/* A model name the way Ollama compares them (domovoi/clients/ollama.py
+ * _model_key): case aside, and a bare name means ":latest". Two spellings
+ * of one model are one choice. */
+const _ollamaKey = (name) => {
+  const n = String(name || '').trim().toLowerCase();
+  return !n || n.includes(':') ? n : `${n}:latest`;
+};
 
-  const options = r.role === 'stt'
+/* One role slot. `r` is a row of GET /api/models/active: the model (and
+ * where it was read from, `model_source`), whether it is `installed`, and
+ * for the chat's roles whether the chat needs a restart to use it. `job` is
+ * the latest pull of this model (the same model_jobs the catalog's Install
+ * starts), so an install begun here or on a catalog card shows its progress
+ * on the row. */
+const ActiveRow = ({ r, installed, whisperNames, hw, catalogByName, onSwitch, onInstall,
+                     job, internetOff, sttLoaded }) => {
+  const isStt = r.role === 'stt';
+  const current = r.model || '';
+  const [pick, setPick] = React.useState(current);
+  React.useEffect(() => { setPick(current); }, [current]);
+
+  const sameKey = isStt ? (n) => n : _ollamaKey;
+  const options = isStt
     ? whisperNames
     : installed.map((m) => m.name);
-  // Always include the current model even if it isn't in the option source
-  // (e.g. active-but-not-installed, or a whisper size not in the catalog).
-  const opts = Array.from(new Set([r.model, ...options].filter(Boolean)));
+  // The current model heads the list even if it isn't in the option source
+  // (e.g. active-but-not-installed, or a whisper size not in the catalog);
+  // one entry per model.
+  const seen = new Set();
+  const opts = [current, ...options].filter((o) => {
+    if (!o || seen.has(sameKey(o))) return false;
+    seen.add(sameKey(o));
+    return true;
+  });
 
   const est = (() => {
     const c = catalogByName[r.model];
     if (c) return c.est_vram_gb;
-    if (r.role !== 'stt') {
+    if (!isStt) {
       const inst = installed.find((m) => m.name === r.model);
       return inst ? _gb(inst.size_bytes) : null;
     }
     return null;
   })();
 
-  const changed = pick && pick !== r.model;
+  // Switch stays off until the picker names a different model from the
+  // current one. With the current model unknown nothing is preselected, so
+  // it waits for a deliberate pick.
+  const changed = !!pick && sameKey(pick) !== sameKey(current);
+
+  // Installed or not, for an Ollama role (STT downloads on first load —
+  // there is nothing to install ahead of the restart).
+  const pulling = !!job && (job.status === 'pending' || job.status === 'running');
+  const failed = !!job && job.status === 'failed';
+  const blocked = internetOff && !_modelsLanRegistryRef(r.model);
+  const missing = !isStt && !!r.model && r.installed === false && !pulling;
+  let status = null;
+  if (!isStt && r.model) {
+    if (pulling) status = <Pill tone="live" live>{job.pct != null ? `installing ${job.pct}%` : 'installing…'}</Pill>;
+    else if (r.installed === false) status = <Pill tone="warn">not installed</Pill>;
+    else if (r.installed === true) {
+      status = (
+        <span title={r.chat_restart_required ? 'installed in Ollama' : 'installed — this role uses it now'}>
+          <Pill tone="ok">{r.chat_restart_required ? 'installed' : 'ready'}</Pill>
+        </span>
+      );
+    }
+  } else if (isStt && r.installed === false && sttLoaded !== r.model) {
+    // (The model the core is transcribing with is on ITS disk, whatever
+    // this process's cache check says.)
+    status = (
+      <span className="stt-role-not-cached"
+            title="not in this host's model cache: Whisper downloads it when it loads, at the next restart">
+        <Pill tone="warn">not downloaded</Pill>
+      </span>
+    );
+  }
+  const chatRestart = !isStt && !!r.chat_restart_required && r.installed !== false && !pulling;
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
+    <div className="model-role-row"
+         style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
                   borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
       <div style={{ minWidth: 130 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>{ROLE_LABEL[r.role]}</div>
         <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{ROLE_SUB[r.role]}</div>
       </div>
-      <div style={{ flex: 1, minWidth: 160, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="mono" style={{ fontSize: 13, fontWeight: 500 }}>{r.model || '—'}</span>
+      <div style={{ flex: 1, minWidth: 160, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {r.model
+          ? <span className="mono model-role-current" style={{ fontSize: 13, fontWeight: 500, overflowWrap: 'anywhere' }}
+                  title={r.model_source === 'startup'
+                    ? 'as the Domovoi server loaded it at startup — sign in again to see a change saved since'
+                    : undefined}>{r.model}</span>
+          : <span className="model-role-current" style={{ fontSize: 13, color: 'var(--fg-muted)' }}
+                  title={r.model_source === 'config' ? 'no model is set for this role'
+                    : "the Domovoi server didn't say which model this is"}>
+              {r.model_source === 'config' ? 'not set' : 'unknown'}
+            </span>}
         {est != null && <FitBadge estGb={Math.round(est * 10) / 10} hw={hw}/>}
+        {status}
+        {chatRestart && (
+          <span title={`The dashboard's chat still uses ${r.chat_model || 'no model'} for this until the Domovoi server restarts.`}>
+            <Pill tone="warn">restart for chat</Pill>
+          </span>
+        )}
         {r.tier === 'restart' && <Pill tone="warn">restart to apply</Pill>}
+        {missing && (
+          <Button variant="primary" icon="download" disabled={blocked}
+                  title={blocked ? NEEDS_INTERNET_TEXT : `download ${r.model} into Ollama`}
+                  onClick={() => onInstall(r.model)}>Install</Button>
+        )}
+        {missing && blocked && <NeedsInternetNote compact/>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <select value={pick} onChange={(e) => setPick(e.target.value)}
+                aria-label={`${ROLE_LABEL[r.role]} model`}
                 style={{ font: 'inherit', fontSize: 13, height: 30, padding: '0 8px',
                          borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                          background: 'var(--card)', color: 'var(--fg)', maxWidth: 220 }}>
+          {!current && <option value="" disabled>choose a model</option>}
           {opts.map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
         <Button variant={changed ? 'primary' : 'secondary'} icon="check"
                 disabled={!changed} onClick={() => onSwitch(r, pick)}>Switch</Button>
       </div>
+      {pulling && (
+        <div style={{ flexBasis: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {_bar(job.pct, 'brand')}
+          <div style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{job.status_text || 'starting…'}</div>
+        </div>
+      )}
+      {failed && r.installed === false && (
+        <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--err)' }}>
+          install failed{job.error ? `: ${job.error}` : ''}
+        </div>
+      )}
     </div>
   );
 };
 
 /* ---- installed list ------------------------------------------- */
 
+/* The name and the meta chips sit on one line on a wide screen; on a phone
+ * (styles.css, .model-inst-*) the name takes its own line and wraps, and
+ * the chips go under it — at 375 px one line left the name a single
+ * letter. */
 const InstalledRow = ({ m, hw, onDelete }) => {
   const gb = _gb(m.size_bytes);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
+    <div className="model-inst-row"
+         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px',
                   borderBottom: '1px solid var(--border-soft)' }}>
-      <span className="mono" style={{ fontSize: 13, fontWeight: 500, flex: 1, minWidth: 0,
-                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <span className="mono model-inst-name" style={{ fontSize: 13, fontWeight: 500 }} title={m.name}>
         {m.name}
       </span>
-      {m.loaded && <Pill tone="live" live>loaded</Pill>}
-      {m.quant && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.quant}</span>}
-      <span className="mono" style={{ fontSize: 12, color: 'var(--fg-muted)', width: 74, textAlign: 'right' }}>
-        {_fmtGb(gb)}
+      <span className="model-inst-meta" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {m.loaded && <Pill tone="live" live>loaded</Pill>}
+        {m.quant && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.quant}</span>}
+        <span className="mono model-inst-size" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+          {_fmtGb(gb)}
+        </span>
+        {gb != null && <FitBadge estGb={Math.round(gb * 10) / 10} hw={hw}/>}
+        <IconButton name="trash-2" title="delete from disk" onClick={() => onDelete(m)}/>
       </span>
-      {gb != null && <FitBadge estGb={Math.round(gb * 10) / 10} hw={hw}/>}
-      <IconButton name="trash-2" title="delete from disk" onClick={() => onDelete(m)}/>
     </div>
   );
 };
@@ -398,6 +498,8 @@ const CatalogCard = ({ m, hw, installedNames, pulling, onInstall, internetOff })
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {m.params && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.params}</span>}
         {m.quant && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>{m.quant}</span>}
+        {m.license && <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}
+                            title="The licence the model's publisher gives">{m.license}</span>}
         <FitBadge estGb={m.est_vram_gb} hw={hw}/>
       </div>
       <div style={{ marginTop: 2 }}>
@@ -476,6 +578,96 @@ const _modelsLanRegistryRef = (ref) => {
   return !head.includes('.');
 };
 
+/* ---- "did you mean" for a pull of a name that doesn't exist ------ */
+/* Ollama answers a pull of a name its registry doesn't have with an error
+ * line, "pull model manifest: file does not exist" (a newer one or a
+ * private registry: "not found", "manifest unknown", a 404), and an
+ * unusable name with "invalid model name". Only those get suggestions: a
+ * network error or a full disk says nothing about the name. */
+const _PULL_NAME_MISSING = /file does not exist|not found|manifest unknown|invalid model name|\b404\b/i;
+
+/* A model reference the way Ollama reads it: case aside, the default
+ * registry's prefix dropped, a bare name meaning ":latest". */
+const _pullParts = (name) => {
+  let n = String(name || '').trim().toLowerCase();
+  for (const p of ['registry.ollama.ai/library/', 'registry.ollama.ai/', 'library/']) {
+    if (n.startsWith(p)) { n = n.slice(p.length); break; }
+  }
+  const colon = n.indexOf(':', n.lastIndexOf('/') + 1);
+  return colon < 0 ? { repo: n, tag: 'latest' } : { repo: n.slice(0, colon), tag: n.slice(colon + 1) };
+};
+
+/* Characters a person mistypes for one another: 1, l and i; 0 and o.
+ * (qwen3-v1:2b for qwen3-vl:2b, 2026-10-13.) */
+const _pullLookAlike = (s) => s.replace(/[1i]/g, 'l').replace(/0/g, 'o');
+
+/* Edits (insert, delete, replace, swap two neighbours) between a and b,
+ * or limit + 1 as soon as it's sure to be more than `limit`. */
+const _pullEdits = (a, b, limit) => {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let prev2 = null;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2] + 1);
+      }
+      cur.push(v);
+      if (v < best) best = v;
+    }
+    if (best > limit) return limit + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[b.length];
+};
+
+/* Up to three names close to `typed`, from `known` ({ name, installed }:
+ * the catalog's and what Ollama already has — names the page already
+ * read, no lookup of its own), best first. Close is: the same name once
+ * look-alikes are folded; a small edit distance (1 for a short name, 2
+ * otherwise); or the same model (by that distance) with a tag that starts
+ * with the one typed ("2b" → "2b-instruct-q4_K_M"), or any of its tags
+ * when none was typed. Never the typed name itself, and never one in
+ * `missing` (names already refused the same way here). */
+const pullSuggestions = (typed, known, missing) => {
+  const t = _pullParts(typed);
+  const tKey = `${t.repo}:${t.tag}`;
+  const tFull = _pullLookAlike(tKey);
+  const tRepo = _pullLookAlike(t.repo);
+  const fullLimit = tFull.length <= 8 ? 1 : 2;
+  const repoLimit = tRepo.length <= 6 ? 1 : 2;
+  const best = new Map();   // key → { name, installed, score }
+  for (const k of known || []) {
+    const c = _pullParts(k.name);
+    const cKey = `${c.repo}:${c.tag}`;
+    if (!c.repo || cKey === tKey || (missing && missing.has(cKey))) continue;
+    let score = null;
+    const full = _pullEdits(tFull, _pullLookAlike(cKey), fullLimit);
+    if (full <= fullLimit) score = full;
+    else {
+      const repo = _pullEdits(tRepo, _pullLookAlike(c.repo), repoLimit);
+      if (repo <= repoLimit) {
+        if (t.tag !== 'latest' && c.tag.startsWith(`${t.tag}-`)) score = repo + 1;
+        else if (t.tag === 'latest') score = repo + 2;
+      }
+    }
+    if (score == null) continue;
+    const prev = best.get(cKey);
+    if (!prev || score < prev.score || (score === prev.score && k.installed && !prev.installed)) {
+      best.set(cKey, { name: k.name, installed: !!(k.installed || (prev && prev.installed)), score });
+    } else if (k.installed) prev.installed = true;
+  }
+  return Array.from(best.values())
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name))
+    .slice(0, 3)
+    .map(({ name, installed }) => ({ name, installed }));
+};
+
 /* (Image-generation model management lives on the Image Generation
  * plugin's own Images page — install the plugin from the Plugins page.) */
 
@@ -495,7 +687,7 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
       </span>
     )}
     <Button variant="secondary" icon="external-link"
-            onClick={() => { window.location.hash = '#settings'; }}>Manage</Button>
+            onClick={() => { openSettingsTab(tab); }}>Manage</Button>
   </div>
 );
 
@@ -507,7 +699,11 @@ const FoldedSummary = ({ icon, title, sub, count, countLabel, tab }) => (
  * returns a bare fragment — the Settings shell supplies the .page wrapper and
  * the page header. */
 const ModelsPanel = () => {
-  const [fire, node] = useToast();
+  // Errors here stay until they are dismissed or the action is tried
+  // again (useToast's `stay`, keyed per action and model); what went
+  // right still fades on its own (2026-10-13: a failed pull's error was
+  // gone before it could be read on a phone).
+  const [fire, node, dismissToast] = useToast();
   // Installing a model pulls it from the Ollama registry: greyed while the
   // box is set to stay off the internet (Settings → Internet).
   // The internet answer, read once for the page (the GET /api/config the
@@ -527,8 +723,8 @@ const ModelsPanel = () => {
   // admin sign-in (CORE-6). Re-read on every sign-in and sign-out.
   const { data: activeData, error: activeError, refresh: refreshActive } =
     useApiObject('/api/models/active', { refetchOnAuth: true });
-  const { items: jobs } = useApiList('/api/models/jobs', { eventTypes: ['model_jobs.changed'],
-    pickItems: (d) => (d && d.jobs) || [] });
+  const { items: jobs, refresh: refreshJobs } = useApiList('/api/models/jobs',
+    { eventTypes: ['model_jobs.changed'], pickItems: (d) => (d && d.jobs) || [] });
   // Open, numbers only. Fetched once per visit — a turn's timings don't
   // move while you look at the page.
   const { data: speechTimings, error: speechTimingsError, loading: speechTimingsLoading } =
@@ -568,16 +764,118 @@ const ModelsPanel = () => {
   // Models with a live/recent pull job, so catalog cards show "installing…".
   const pulling = new Set(jobs.filter((j) => j.status === 'pending' || j.status === 'running')
     .map((j) => j.model));
+  // The latest pull of a role's model (jobs come newest first), for the
+  // row's own progress.
+  const jobFor = (model) => (model
+    ? jobs.find((j) => _ollamaKey(j.model) === _ollamaKey(model)) || null : null);
+  // A finished pull changes a row's `installed`: read the roles again.
+  const doneJobs = jobs.filter((j) => j.status === 'done').map((j) => j.id).join(',');
+  React.useEffect(() => { if (doneJobs) refreshActive(); }, [doneJobs, refreshActive]);
 
-  const guard = async (fn, okMsg) => {
+  // One page action: `verb` names it in an error ("Delete llama3.2:3b
+  // failed: …"), `key` ties its error to it, so trying it again clears
+  // the last one. okMsg (or what it returns) is the answer that fades; an
+  // { error } object from it is a refusal the server answered with, and
+  // stays. Behind a sign-in or pairing prompt the prompt is the message
+  // (mutationErrorText, data.js).
+  const guard = async (fn, okMsg, { verb, key }) => {
+    if (key) dismissToast(key);
     try {
       const r = await fn();
-      if (okMsg) fire(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+      const msg = typeof okMsg === 'function' ? okMsg(r) : okMsg;
+      if (msg && typeof msg === 'object') fire(msg.error, { stay: true, key });
+      else if (msg) fire(msg);
       return r;
     } catch (e) {
-      fire(isInternetOffError(e) ? INTERNET_OFF_MESSAGE : `failed: ${e.message || e}`);
+      const text = isInternetOffError(e) ? INTERNET_OFF_MESSAGE : mutationErrorText(e, verb, { kept: false });
+      if (text) fire(text, { stay: true, key });
     }
   };
+
+  // The names this page knows to be real (the catalog's, and what Ollama
+  // already has): what a "did you mean" may offer.
+  const knownModels = [
+    ...installed.map((m) => ({ name: m.name, installed: true })),
+    ...catOllama.map((m) => ({ name: m.name, installed: installedNames.has(m.name) })),
+  ];
+  // Names a pull here was refused as not existing: never suggested again.
+  const missingNames = React.useRef(new Set());
+
+  // A pull that ended badly, said until dismissed or tried again. A name
+  // the registry doesn't have gets the close matches the page knows: one
+  // press installs one; one already installed is only named (pulling it
+  // again could be refused the same way, e.g. a model made on this box).
+  const reportPullFailure = (j) => {
+    const key = `pull:${_ollamaKey(j.model)}`;
+    const err = String(j.error || 'no reason given');
+    if (j.status === 'cancelled') {
+      fire(`Install ${j.model} stopped: ${err}`, { stay: true, key });
+      return;
+    }
+    if (!_PULL_NAME_MISSING.test(err)) {
+      fire(`Install ${j.model} failed: ${err}`, { stay: true, key });
+      return;
+    }
+    const p = _pullParts(j.model);
+    missingNames.current.add(`${p.repo}:${p.tag}`);
+    const sugg = pullSuggestions(j.model, knownModels, missingNames.current);
+    const pullable = sugg.filter((s) => !s.installed && !(internetOff && !_modelsLanRegistryRef(s.name)));
+    let hint = '';
+    if (sugg.length === 1) {
+      hint = `Did you mean ${sugg[0].name}?${sugg[0].installed ? " It's already installed." : ''}`;
+    } else if (sugg.length > 1) {
+      hint = `Did you mean ${sugg.map((s) => (s.installed ? `${s.name} (installed)` : s.name)).join(', ')}?`;
+    }
+    fire(`Install ${j.model} failed: there is no model by that name`, {
+      stay: true, key,
+      detail: [hint, `Ollama: ${err}`].filter(Boolean).join('\n'),
+      actions: pullable.map((s) => ({
+        label: `install ${s.name}`,
+        title: `download ${s.name} into Ollama`,
+        onClick: () => install(s.name),
+      })),
+    });
+  };
+
+  // The pulls started here, by job id, until each one ends: how a failure
+  // that comes seconds later (Ollama answers a pull of an unknown name
+  // with an error line, not an HTTP error) still reaches the person who
+  // pressed Install, after the job list's 30 s window has dropped it.
+  const [watching, setWatching] = React.useState({});
+  const watchingAny = Object.keys(watching).length > 0;
+  React.useEffect(() => {
+    const ids = Object.keys(watching);
+    if (!ids.length) return;
+    const next = { ...watching };
+    let changed = false;
+    for (const id of ids) {
+      const w = watching[id];
+      const j = jobs.find((x) => String(x.id) === id);
+      if (!j) {
+        // Off the list: it ended unseen over 30 s ago, or the list was
+        // read before the job existed (give that a minute).
+        if (w.seen || Date.now() - w.since > 60000) { delete next[id]; changed = true; }
+        continue;
+      }
+      if (j.status === 'pending' || j.status === 'running') {
+        if (!w.seen) { next[id] = { ...w, seen: true }; changed = true; }
+        continue;
+      }
+      delete next[id];
+      changed = true;
+      if (j.status === 'failed' || (j.status === 'cancelled' && j.error)) reportPullFailure(j);
+      else if (j.status === 'done') fire(`installed ${j.model}`);
+    }
+    if (changed) setWatching(next);
+  }, [jobs, watching]);
+  // The job list follows model_jobs events; while a pull started here is
+  // open it is also re-read every few seconds, so a dropped event socket
+  // (a phone waking up) can't hide how it ended.
+  React.useEffect(() => {
+    if (!watchingAny) return undefined;
+    const t = setInterval(() => { refreshJobs(); }, 3000);
+    return () => clearInterval(t);
+  }, [watchingAny, refreshJobs]);
 
   // `compute` (STT catalog rows only) goes with the model, so a row that
   // says int8 really runs int8. The core refuses a pair the device can't
@@ -596,16 +894,24 @@ const ModelsPanel = () => {
         // The model can be saved while its compute type is refused (e.g. a
         // core too old to know whisper_compute_type) — say which half landed.
         const why = rejected.map(([k, v]) => `${k} (${v})`).join('; ');
-        return restart ? `saved ${model}, but not: ${why}` : `not saved: ${why}`;
+        return { error: restart ? `saved ${model}, but not: ${why}` : `not saved: ${why}` };
       }
       return restart ? `saved — restart the Domovoi server to apply ${model}` : `switched to ${model}`;
-    });
+    }, { verb: `Switch to ${model}`, key: `switch:${r.role}` });
 
+  // The job the server answers with is watched until it ends (above).
   const install = (name) =>
-    guard(async () => { await apiPost('/api/models/pull', { model: name }); }, `pulling ${name}…`);
+    guard(async () => {
+      const res = await apiPost('/api/models/pull', { model: name });
+      const job = res && res.job;
+      if (job && job.id != null) {
+        setWatching((w) => ({ ...w, [job.id]: { model: job.model || name, since: Date.now(), seen: false } }));
+      }
+    }, `pulling ${name}…`, { verb: `Install ${name}`, key: `pull:${_ollamaKey(name)}` });
 
   const cancel = (j) =>
-    guard(async () => { await apiPost(`/api/models/pull/${j.id}/cancel`, {}); }, 'pull cancelled');
+    guard(async () => { await apiPost(`/api/models/pull/${j.id}/cancel`, {}); }, 'pull cancelled',
+          { verb: `Cancel ${j.model}`, key: `cancel:${j.id}` });
 
   // The shared delete confirm (F-009) instead of window.confirm, so every
   // Settings delete asks the same way.
@@ -613,7 +919,8 @@ const ModelsPanel = () => {
     guard(async () => {
       await apiDelete(`/api/models/${encodeURIComponent(m.name)}`);
       await refreshInstalled();
-    }, `deleted ${m.name}`));
+      refreshActive();   // a role's model may be the one that went
+    }, `deleted ${m.name}`, { verb: `Delete ${m.name}`, key: `delete:${m.name}` }));
   const del = (m) => delConfirm.request(m, {
     title: `Delete ${m.name} from disk?`,
     body: <div>The model files are removed from this machine. It can be pulled again from the catalog later.</div>,
@@ -640,7 +947,10 @@ const ModelsPanel = () => {
             </div>
           : roles.map((r) => (
               <ActiveRow key={r.role} r={r} installed={installed} whisperNames={whisperNames}
-                         hw={hw} catalogByName={catalogByName} onSwitch={switchModel}/>
+                         hw={hw} catalogByName={catalogByName} onSwitch={switchModel}
+                         onInstall={install} job={r.role === 'stt' ? null : jobFor(r.model)}
+                         internetOff={internetOff}
+                         sttLoaded={hwData && hwData.stt && hwData.stt.loaded ? hwData.stt.loaded.model : null}/>
             ))}
       </Card>
 

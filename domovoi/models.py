@@ -29,6 +29,17 @@ MAX_CONFIG_CHANGES = 500
 WAKE_PHRASE_PATTERN = r"^[A-Za-z0-9 ,.'-]+$"
 MAX_WAKE_PHRASE_CHARS = 120
 
+# A phone's turns are logged under ``phone-<device id>`` like any room
+# (the chat mic, domovoi/phone_voice.py; the drop-in socket names its
+# caller the same way). Such an id is never a satellite's room: nothing
+# may resolve it to a room's music player or speak into it.
+PHONE_ROOM_PREFIX = "phone-"
+
+
+def is_phone_room(room_id: str | None) -> bool:
+    """Whether ``room_id`` names a phone rather than a satellite's room."""
+    return bool(room_id) and str(room_id).startswith(PHONE_ROOM_PREFIX)
+
 
 class Intent(BaseModel):
     transcript: str = Field(..., max_length=MAX_TRANSCRIPT_CHARS)
@@ -116,6 +127,34 @@ class Context(BaseModel):
     # never sends a second turn, so a handler must not park a question
     # ("did you mean X?") for it and should do its best without asking.
     answerable: bool = True
+    # "phone" for a push-to-talk turn from the app's chat mic
+    # (domovoi/phone_voice.py); None for a satellite, /v1/intent and the
+    # dashboard. A phone is its own device (owner decisions 2026-10-08):
+    # media asked for by voice plays ON the phone (Response.device_actions),
+    # timers and reminders go house-wide as if set with no room
+    # (``satellite_room_id``), and a satellite's own settings (Wi-Fi, its
+    # voice) are refused politely (Handler.satellite_only). It is also what
+    # lets a turn add to a person's PHONE voice samples (V026,
+    # handlers/voice_profile.py ``phone_chat_mic``). A future "phone as a
+    # satellite" mode must NOT set it: that mode may not create or extend
+    # phone profiles (owner decision 2026-10-12).
+    device_kind: str | None = None
+    # What the phone's own player is doing, as the app reported it with the
+    # turn: {"title", "artist", "kind", "playing"} — any key may be missing.
+    # Read by "what's playing" on a phone turn. Empty everywhere else.
+    device_player: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def from_phone(self) -> bool:
+        """This turn came from the app's chat mic, not a room."""
+        return self.device_kind == "phone"
+
+    @property
+    def satellite_room_id(self) -> str | None:
+        """The room whose satellite took this turn — None for a phone turn,
+        which the handlers that keep things per room (timers, reminders)
+        then treat as a turn with no room: house-wide."""
+        return None if self.from_phone else self.room_id
 
 
 class Response(BaseModel):
@@ -207,6 +246,15 @@ class Response(BaseModel):
     # the room for paused. A voice turn says ``text`` as it always did.
     # Never serialized.
     failure: str | None = Field(default=None, exclude=True)
+    # What the phone itself should do for a phone turn (Context.from_phone):
+    # the media a satellite would have played in its room, played on the
+    # phone with the app's own player, and the transport and volume
+    # commands for that player. Each is a dict with a "type" — "play"
+    # (with "items", a list of {"kind", "id", "title", "artist", "album"}),
+    # "pause", "resume", "stop", "next", "previous", or "volume" (with
+    # "change": "up" | "down" | "set" and, for "set", "percent"). Empty on
+    # every other turn; the phone endpoint hands them to the app as-is.
+    device_actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ConnectivityState(BaseModel):

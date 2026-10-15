@@ -4,8 +4,9 @@ Three sources, all queried in parallel and degraded individually if the
 underlying tool isn't available:
 
 * ``nvidia-smi`` for GPU load + VRAM use + temperature. Native binary
-  on Domovoi's Windows install — gracefully no-ops on a CPU-only host or
-  if nvidia-smi isn't on PATH.
+  on Domovoi's Windows install; inside WSL, the driver's copy in
+  /usr/lib/wsl/lib — gracefully no-ops on a CPU-only host or
+  if nvidia-smi is in neither place.
 * Ollama's ``GET /api/ps`` for currently-loaded models (RAM-resident,
   i.e. actually using VRAM right now — different from ``/api/tags``
   which just lists what's installed on disk).
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -63,17 +65,37 @@ class _GpuSnapshot:
     temp_c: int
 
 
+# Inside WSL the Windows NVIDIA driver ships nvidia-smi in /usr/lib/wsl/lib,
+# and WSL puts that directory on PATH only for processes started through
+# wsl.exe (WSL 3.0.1 src/linux/init/config.cpp, ConfigCreateEnvironmentBlock).
+# A systemd service such as domovoi-core.service gets systemd's PATH without
+# it, so the Windows installer's distro reported no GPUs while Ollama ran on
+# both. NVIDIA's "CUDA on WSL" guide gives this same path for nvidia-smi.
+_WSL_NVIDIA_SMI = "/usr/lib/wsl/lib/nvidia-smi"
+
+
+def _nvidia_smi_path() -> str | None:
+    """``nvidia-smi`` on PATH, else WSL's copy when it is there, else None."""
+    found = shutil.which("nvidia-smi")
+    if found is not None:
+        return found
+    if os.path.isfile(_WSL_NVIDIA_SMI) and os.access(_WSL_NVIDIA_SMI, os.X_OK):
+        return _WSL_NVIDIA_SMI
+    return None
+
+
 async def _query_gpus() -> list[_GpuSnapshot]:
     """Run ``nvidia-smi`` in CSV mode. Empty list on any failure.
 
     Output format (no header, no units):
       ``<name>, <gpu_util>, <mem_used>, <mem_total>, <temp>``
     """
-    if shutil.which("nvidia-smi") is None:
+    exe = _nvidia_smi_path()
+    if exe is None:
         return []
     try:
         proc = await asyncio.create_subprocess_exec(
-            "nvidia-smi",
+            exe,
             "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
             "--format=csv,noheader,nounits",
             stdout=asyncio.subprocess.PIPE,

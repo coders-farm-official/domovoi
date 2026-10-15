@@ -264,7 +264,7 @@ of §1.4:
 | Process | Routes |
 |---|---|
 | core | `POST /v1/admin/library/enrich`; the radio plugin's `POST /v1/plugins/radio/fcc-import` and `POST /v1/plugins/radio/stations/{id}/resolve-simulcast` |
-| web | `GET /api/podcasts/discover`; `POST /api/podcasts/subscriptions` with a `query` (subscribing by feed URL is allowed: it only stores the URL); `POST /api/podcasts/poll`; `POST /api/news/topics/{id}/feeds`; `POST /api/news/feeds/{id}/validate`; `POST /api/news/poll`; `POST /api/models/pull` (unless the model names a registry on the house network); `POST /api/satellites/media/cache/refresh`; `POST /api/voices/edge`; `GET /api/voices/{id}/sample` for an Edge voice; the radio plugin's `GET /api/plugins/radio/search`, `POST …/stations/{id}/resolve-simulcast`, `POST …/fcc-import`, `POST …/play` for an internet station, and `GET …/stations/{id}/stream` for one |
+| web | `GET /api/podcasts/discover`; `POST /api/podcasts/subscriptions` with a `query` (subscribing by feed URL is allowed: it only stores the URL); `POST /api/podcasts/poll`; `POST /api/news/topics/{id}/feeds`; `POST /api/news/feeds/{id}/validate`; `POST /api/news/poll`; `POST /api/models/pull` (unless the model names a registry on the house network); `POST /api/satellites/media/cache/refresh`; the radio plugin's `GET /api/plugins/radio/search`, `POST …/stations/{id}/resolve-simulcast`, `POST …/fcc-import`, `POST …/play` for an internet station, and `GET …/stations/{id}/stream` for one |
 
 Others report it in their own shape: `POST /v1/admin/version/check` →
 `{"behind": 0, "ahead": 0, "upstream": false, "upstream_sha": null, "error": "internet access is turned off for this box (Settings → Internet)"}`
@@ -275,6 +275,60 @@ its Python packages are already present; otherwise the same code, with
 "needs the internet to download its Python packages" and
 `details.missing`). Voice replies say "I'm set to stay off the internet,
 so …".
+
+### 1.7 Paging (the files-like lists)
+
+Every list behind the Music, Videos, Files, Audiobooks and Podcasts pages
+pages the same way (`web/backend/api/paging.py`), so no client ever has to
+take a whole list at once and every sort, filter and search covers the
+whole list on the server:
+
+| Request | Meaning |
+|---|---|
+| `limit` | Page size. Default **50**, max **200** (`422` above it or below 1). |
+| `cursor` | Opaque, from the previous answer's `next_cursor`. A keyset position (the last row's sort key), so a row added or removed between two pages neither repeats a row nor skips one. A cursor cut for a different `sort` is `400` ("start again from page one"); a garbled one is `400`. |
+| `offset` | Also accepted (rows to skip). Stable only while the list doesn't change; use `cursor`. |
+
+The answer adds `total` (rows matching the active filters, not the page),
+`limit`, `has_more`, `next_cursor` (`null` on the last page) and, for an
+offset request, `offset`. Clients start again from page one whenever a
+filter, search or sort changes.
+
+**Old clients.** A request that sends none of `limit` / `cursor` /
+`offset` is treated as a client built before paging (the Android app
+installed before 2026-10-11): `GET /api/videos/list` and
+`GET /api/files/browse` answer with every entry as before (Videos at
+most 2,000 per library, the bound such a client was built against) plus
+`total` and `has_more: false`;
+`GET /api/audiobooks`, `GET /api/podcasts/subscriptions` and
+`GET /api/podcasts/subscriptions/{id}/episodes` answer with the bare JSON
+array they always did. `GET /api/music/library` was always paged (default
+50) and still takes `offset`.
+
+**Filesystem lists are cached.** Videos and Files have no index: the
+server keeps each library walk / folder listing between requests
+(`listing_cache.py`) and checks, on every request, the mtime of each
+folder it read (~0.5 ms for 100 folders). A file added, removed or renamed
+anywhere it read, a write through this server into the library (upload,
+delete, move, import, a document save), `refresh=true`, or five minutes'
+age re-reads it (a listing that read more than 2,000 folders re-checks
+them at most every 2 s). Memory: a budget of 256 MB estimated at ~600 B a
+row plus ~200 B a row per sorted view; past it the least recently used
+idle listings go, and a listing read in the last two minutes is never
+evicted for room — one library bigger than the whole budget stays cached
+while it is being scrolled instead of being re-walked per page.
+
+**No count caps.** A library is walked whole (owner decision 2026-10-12).
+The one remaining limit is time: a walk still running after 2 minutes
+stops, keeps what it found, and the answer says `truncated: true`,
+`truncated_reason: "time"`. Measured on synthetic trees (Windows dev box,
+other agents' test runs also loading it): 10,000 videos ~0.1 s cold (was
+~2 s), a 10,000-entry folder ~0.13 s (was ~6 s); 50,000 videos in 500
+folders ~1.0–1.5 s for the cold first page and ~50 ms for each later page
+or a search's page (end to end through the app, ~28 MB cached), a
+50,000-entry folder ~1.0–1.2 s cold and ~45 ms later (~38 MB). The walk,
+the sort and a search's scan run in worker threads, never on the event
+loop.
 
 ---
 
@@ -290,6 +344,7 @@ so …".
 | `GET /v1/connectivity` | Open | — | `{online, last_checked_at, last_online_at, target, policy, reason}` — the internet-connectivity probe the offline-first router consults. `policy` is the internet answer (`""` \| `always` \| `sometimes` \| `never`); `reason` is `connected`, `offline` (the probe's dial failed) or `turned_off` (the answer is `never`: the probe doesn't dial, and `online` is `false`). |
 | `GET /v1/handlers` | Open | — | List of `HandlerInfo`: `{name, requires_network, tool_schema, fast_path_count, priority_band, origin, display, example_phrases}`. `origin` is `"core"` or a plugin slug. Powers the dashboard's manual page. |
 | `POST /v1/intent` | **Device (`X-Device-Token` or Bearer)** | `{transcript, room_id?, session_id?, synthesize?}` | Routes a text utterance through the full intent pipeline. Returns the `Response` JSON (`{text, session_id, matched_handler, matched_path, online, data, music_action, music_stream_url, ...}`); with `synthesize: true` returns `audio/wav` bytes instead, with the text and metadata in `X-Response-Text`, `X-Session-Id`, `X-Matched-Handler`, `X-Matched-Path`, `X-Online` headers. |
+| `POST /v1/phone/voice` | **Device (`X-Device-Token` or Bearer), no pre-setup grace** | multipart: `audio` (16 kHz mono PCM16, raw or a WAV of that format, at most 30 s), `phone_id` (the app's device id), `thread_id`, `player` (optional JSON: the phone player's `{title, artist, kind, playing}`), `speak` (optional, default `true`; `false` when the phone speaks the reply itself in its own voice pick: no text-to-speech here and `audio` is `null`) | One push-to-talk turn from the app's chat mic, answered like a satellite turn: speech-to-text, voice identification, the router satellites use, text-to-speech. A leading wake phrase ("Hey Domovoi, …", however speech-to-text spells the name) is taken off before routing, as a satellite's transcript never holds one; `transcript` and the thread keep what was said. Never registers a satellite session (no room's Pi is evicted); logged under `phone-<phone_id>`. Writes both turns into chat thread `thread_id` (`source: "voice"`, the speaker on the user row) and fires `chat_changed`. Answers `{heard, reason, transcript, reply, audio: {mime: "audio/wav", b64} \| null, speaker: {person_id, name, confidence, confident} \| null, expect_followup, actions, matched_handler, matched_path, session_id, room_id, messages: [user row, assistant row], error}`. `heard: false` (`reason` `too_short` under 0.3 s, `blank` when nothing was said) writes nothing. `actions` is what the phone itself should do — `play` (with `items`), `pause`, `resume`, `stop`, `next`, `previous`, `volume` — because a phone is its own device: media plays on it, timers and reminders set from it are house-wide, a satellite's settings (Wi-Fi, its voice) are refused aloud, and it is never handed a room's music player. The routing session is kept per phone and thread, so a question Domovoi asks is answered by the next press (`expect_followup: true`; "yes" resumes it). Voice identification matches each person's phone samples when they have any, else their satellite samples, and never learns from a phone turn; "my name is X" for an X who exists asks "Add this phone's voice to X?", and a "yes" as the very next press (within 60 s; any other turn drops the question) adds the clip to X's phone samples (at most `VOICE_PROFILE_PHONE_SAMPLE_CAP`, default 3, oldest dropped) instead of enrolling a second X; with two people of that name it refuses rather than guess; a new name enrols into the phone set (V026). An enrolment question is answered only where it was asked: a "yes" from anywhere but the same phone's chat mic (say, `/v1/intent` with the phone's `session_id`) is refused. A failed turn is still written, with `error: {detail, code: "turn_failed"}`. `404` unknown thread, `409` the phone's previous turn is still running, `400` an unreadable WAV, `413` over 30 s, `415` a WAV of another format, `422` a malformed `phone_id` or a `thread_id` outside 1..2^63-1, `500` (`save_failed`) when the answered turn could not be written, `503` speech recognition not running, `501` before first-run admin setup (as the drop-in socket). The app reaches it through `POST /api/chat/threads/{id}/voice`. See `domovoi/phone_voice.py`. |
 
 ### 2.2 File-sync channels (pulled by satellites)
 
@@ -360,21 +415,21 @@ posture; the specifically dangerous ones carry the Bearer gate.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, satellite_health, domovoi_version, home_problems_visibility, music_alias_fetch, lyrics, lyrics_index}`. `satellite_health` (2026-10-09) is a per-room DIGEST — `{received_at, seq, outage_reported_at}`, when the latest health sample and the last outage report arrived — never the sample or the report themselves, which are device read (`GET /v1/admin/satellite/{room_id}/health`) because they say whether a turn or call is open, the SSID and the gateway. `home_problems_visibility` is the LIVE value of that one setting, which the web's `GET /api/config` reads from here (a config save changes only the core's copy). `music_alias_fetch` is the opt-in MusicBrainz "also called" lookup's STATUS only — `{enabled, state, last_tick_at, last_request_at, last_error, rate_limited_until, artists_total, artists_due}` (`state`: `off` \| `offline` \| `rate_limited` \| `running` \| `idle` \| `done` \| `error`; `last_error` an error type or a short code) — never an artist name or an alias; `GET /api/music/aliases/status` adds the database counts. `lyrics` is the lyrics workers' STATUS only (§3.5c) — `{scan: {state, last_tick_at, last_pass_at, tracks, unscanned, read_last_pass, last_error}, fetch: {enabled, write_lrc, state, last_tick_at, last_request_at, due, rate_limited_until, paused_until, last_error}}` (`fetch.state`: `off` \| `internet_off` \| `offline` \| `rate_limited` \| `paused` \| `running` \| `idle` \| `done` \| `error`), and `lyrics_index` the lyric-search index's — `{state, pending, indexed, last_tick_at, last_error, search_enabled}` (`search_enabled` the live "Find songs by their words" setting); never a title or a lyric. `GET /api/music/lyrics/status` adds the database counts. |
+| `GET /v1/admin/snapshot` | Open | — | Process-state snapshot for the dashboard's poll loop: `{active_rooms, resumable_music, wifi_status, now_playing, current_playlist, active_dropins, satellite_full_duplex, satellite_sat_type, satellite_mic_enabled, satellite_supports, satellite_board, satellite_display, satellite_voice, satellite_volume, satellite_synced_sha, satellite_upgrades, satellite_health, domovoi_version, home_problems_visibility, music_alias_fetch, lyrics, lyrics_index}`. `satellite_health` (2026-10-09) is a per-room DIGEST — `{received_at, seq, outage_reported_at}`, when the latest health sample and the last outage report arrived — never the sample or the report themselves, which are device read (`GET /v1/admin/satellite/{room_id}/health`) because they say whether a turn or call is open, the SSID and the gateway. `satellite_supports` / `satellite_board` (2026-10-12) list, per connected room, the abilities its `hello` declared and the board it named — only for a device that sent them, so a Pi is absent from both. `satellite_upgrades` (2026-10-13) is, per room, a satellite code upgrade under way or finished within the last 10 minutes — `{state, expected_sha, from_sha, back_sha, started_at, deadline_at, finished_at}`, `state` one of `running` \| `done` \| `rolled_back` \| `no_news` (domovoi/satellite_upgrades.py); in memory only. `home_problems_visibility` is the LIVE value of that one setting, which the web's `GET /api/config` reads from here (a config save changes only the core's copy). `music_alias_fetch` is the opt-in MusicBrainz "also called" lookup's STATUS only — `{enabled, state, last_tick_at, last_request_at, last_error, rate_limited_until, artists_total, artists_due}` (`state`: `off` \| `offline` \| `rate_limited` \| `running` \| `idle` \| `done` \| `error`; `last_error` an error type or a short code) — never an artist name or an alias; `GET /api/music/aliases/status` adds the database counts. `lyrics` is the lyrics workers' STATUS only (§3.5c) — `{scan: {state, last_tick_at, last_pass_at, tracks, unscanned, read_last_pass, last_error}, fetch: {enabled, write_lrc, state, last_tick_at, last_request_at, due, rate_limited_until, paused_until, last_error}}` (`fetch.state`: `off` \| `internet_off` \| `offline` \| `rate_limited` \| `paused` \| `running` \| `idle` \| `done` \| `error`), and `lyrics_index` the lyric-search index's — `{state, pending, indexed, last_tick_at, last_error, search_enabled}` (`search_enabled` the live "Find songs by their words" setting); never a title or a lyric. `GET /api/music/lyrics/status` adds the database counts. |
 | `POST /v1/admin/announce` | **Device (`X-Device-Token` or Bearer)** | `{room_id?, message}` (1–500 chars) | Speak `message` on one satellite, or all when `room_id` is null. `{"announced_to": [rooms]}`; `503` if nothing is connected, `404` for an unknown room. |
 | `POST /v1/admin/dropin/start` | **Admin, security tier** | `{initiator_room, target_room}` | Open a two-way drop-in between two connected, AEC-capable rooms — a live microphone bridge nobody in either room was asked about, so it takes an admin Bearer, and answers `501` before setup (no pre-setup grace for a live microphone). `400` same room, `404` room offline, `409` disabled / no AEC / already in a call. Under `DROPIN_ACCEPT_MODE=ring` it returns `{"status": "ringing"}` and opens nothing until the target room answers. |
 | `POST /v1/admin/dropin/end` | **Device (`X-Device-Token` or Bearer)** | `{room_id}` | Hang up whatever call the room is in. `404` when not in a call. |
-| `POST /v1/admin/satellite/restart` | **Admin (Bearer)** | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
+| `POST /v1/admin/satellite/restart` | **Admin (Bearer)** | `{room_id}` | Ask a connected satellite to restart its own service. `503`/`404`/`502` as above. `409` when the device's `hello` declared `supports` without `restart` (spare-device satellites, see docs/uml/satellite-protocol.md "Declared abilities"); a Pi never gets it. Writes an `intents_log` audit row. |
 | `POST /v1/admin/satellite/set-volume` | **Device (`X-Device-Token` or Bearer)** | `{room_id, level}` (0–100) | Set the satellite's master hardware output volume (scales both TTS and music). |
-| `POST /v1/admin/satellite/display` | **Admin (Bearer)** | `{room_id, action}` (`on` \| `off` \| `restart_kiosk`) | Drive a **video** satellite's screen (panel power via its configured mechanism, or a kiosk-browser restart). `409` when the room isn't a video satellite; `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
-| `POST /v1/admin/satellite/upgrade` | **Admin, security tier**; `423` while the container guard's freeze is on | `{room_id}` | Tell a satellite to mirror `/v1/satellite-code`, verify sha256s, self-restart, and roll back if it doesn't reconnect in time. Returns `{requested, room_id, expected_sha}`. |
+| `POST /v1/admin/satellite/display` | **Admin (Bearer)** | `{room_id, action}` (`on` \| `off` \| `restart_kiosk`) | Drive a **video** satellite's screen (panel power via its configured mechanism, or a kiosk-browser restart). `409` when the room isn't a video satellite, or when the device's `hello` declared `supports` without `display` (spare-device satellites, see docs/uml/satellite-protocol.md "Declared abilities"); a Pi never gets it. `503`/`404`/`502` as above. Writes an `intents_log` audit row. |
+| `POST /v1/admin/satellite/upgrade` | **Admin, security tier**; `423` while the container guard's freeze is on | `{room_id}` | Tell a satellite to mirror `/v1/satellite-code`, verify sha256s, self-restart, and roll back if it doesn't reconnect in time. Returns `{requested, room_id, expected_sha, upgrade}`, `upgrade` being the room's new record (the snapshot's `satellite_upgrades` entry). One at a time per room: from the request until the satellite says `hello` again (`done` on `expected_sha`, `rolled_back` on another) or its window ends (`no_news`, twice `SATELLITE_UPGRADE_RECONNECT_TIMEOUT_SEC` plus two minutes), a second request is `409` ("already upgrading"), since a second `upgrade` frame mid-sync would start a second sync over the first; a frame that never went out (`502`) leaves no record. `409` also when the device's `hello` declared `supports` without `code_sync` (spare-device satellites, see docs/uml/satellite-protocol.md "Declared abilities"); a Pi never gets it. A device that declared `code_sync` but not `plugin_payloads` gets `"plugin_payloads": false` in its `upgrade` frame. |
 | `POST /v1/admin/satellites/{room_id}/pairing/preseed` | **Admin, security tier** | `{sat_type?, room_label?, hardware?, board?, mac?, force?}` | USB adoption: mint the room's pairing token (sha256 stored; RAW token returned once, never logged) + upsert the inventory row. `409` already paired unless `force` (rotates). |
 | `DELETE /v1/admin/satellites/{room_id}/pairing` | **Admin, security tier** | — | Delete the room's pairing row so the NEXT `hello` for that room re-pairs. Returns `{room_id, reset}` (`reset: false` when there was nothing to clear). |
 | `DELETE /v1/admin/satellites/{room_id}` | **Admin, security tier** | — | Remove a never-connected satellite (inventory + preseeded pairing). `409` when the room is provisioned (has an MPD instance). |
 | `POST /v1/admin/satellites/{room_id}/label` | **Device (`X-Device-Token` or Bearer)** | `{room_label}` (null clears) | Set the satellite's display room label (grouping tag; cosmetic, daily-tier). |
-| `GET /v1/admin/satellite/{room_id}/config` | **Device read** | — | Editable satellite config: the schema joined with the values the Pi reported, `{room_id, reported, fields:[{name, label, group, section, tier, type, min, max, choices, choice_labels, unit, help, value}]}`. `choice_labels` (null unless set) maps each choice to the words the dashboard shows for it (`wake.ack_mode`: `greeting` → "Spoken greeting, then listen"); the value saved is still the choice. `value` is null for a setting the Pi did not report (a satellite older than the setting). `supported`: whether this satellite has the setting at all — a satellite reports every setting it has (null when unset), so `false` is one missing from its report (its code predates it; the dashboard shows "needs a satellite upgrade" instead of an input), null until it has reported. `404` when the room isn't connected. |
-| `POST /v1/admin/satellite/{room_id}/config` | **Admin (Bearer)** | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. A setting the satellite's report doesn't have (`supported: false` above) is rejected ("upgrade it first") rather than sent: an older Pi would write it, restart, and ignore it. |
-| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | The satellite's logs, two of them since 2026-10-09. `text`/`bytes`/`buffered_bytes`/`truncated`/`chunks` are the tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`), exactly as before; `live` repeats them as one object (`null` while the room is offline); `retained` is the tail (up to `max_bytes`) of the log the core keeps on disk for the room — the lines the satellite pushed (`log_push`), including what it spooled while disconnected, each prefixed with the server's receive time and `[offline]` for spooled lines — `{text, bytes, file_bytes, rotated_bytes, max_bytes, updated_at, truncated}`, or `null` when nothing is retained (a satellite on older code); `last_outage` is the room's last `prev_health` report (below) or `null`; `connected` says which. Gated like a config read: both logs hold what the room said (the satellite logs each transcript). An **offline** room answers `200` with `live: null` and whatever is retained — that is what retaining is for — and `404` only when the core holds nothing for it at all; `503` disconnected mid-transfer, `504` stopped answering, `502` when the answer comes to more than `max_bytes` allows for (the reassembly buffer is capped per request, so a session cannot answer one pull with frames for as long as the timeout permits). |
+| `GET /v1/admin/satellite/{room_id}/config` | **Device read** | — | Editable satellite config: the schema joined with the values the Pi reported, `{room_id, reported, fields:[{name, label, group, section, tier, type, min, max, choices, choice_labels, unit, help, value}]}`. `choice_labels` (null unless set) maps each choice to the words the dashboard shows for it (`wake.ack_mode`: `greeting` → "Spoken greeting, then listen"); the value saved is still the choice. `value` is null for a setting the Pi did not report (a satellite older than the setting). `supported`: whether this satellite has the setting at all — a satellite reports every setting it has (null when unset), so `false` is one missing from its report (its code predates it; the dashboard shows "needs a satellite upgrade" instead of an input), null until it has reported. `404` when the room isn't connected. `409` when the device's `hello` declared `supports` without `config` (spare-device satellites, see docs/uml/satellite-protocol.md "Declared abilities"); a Pi never gets it. A device that declared a list without `wifi`, `mic_gain`, `leds`, `display` or `sounds` is not shown that section's settings. |
+| `POST /v1/admin/satellite/{room_id}/config` | **Admin (Bearer)** | `{"changes": {field: value}}` | Validate and push config edits; the Pi rewrites its `config.toml` and restarts. Returns `{sent, rejected, restarting}`. A setting the satellite's report doesn't have (`supported: false` above) is rejected ("upgrade it first") rather than sent: an older Pi would write it, restart, and ignore it. `409` when the device's `hello` declared `supports` without `config` (spare-device satellites, see docs/uml/satellite-protocol.md "Declared abilities"); a Pi never gets it. A setting in a section the device didn't declare is rejected ("it didn't declare 'leds'"). |
+| `GET /v1/admin/satellite/{room_id}/logs` | **Admin read (Bearer or cookie)** | `?max_bytes=` (1 KB–10 MB, default 10 MB) | The satellite's logs, two of them since 2026-10-09. `text`/`bytes`/`buffered_bytes`/`truncated`/`chunks` are the tail of the satellite's in-RAM log ring, pulled live over its WS (`get_logs` → chunked `logs_chunk`), exactly as before; `live` repeats them as one object (`null` while the room is offline); `retained` is the tail (up to `max_bytes`) of the log the core keeps on disk for the room — the lines the satellite pushed (`log_push`), including what it spooled while disconnected, each prefixed with the server's receive time and `[offline]` for spooled lines — `{text, bytes, file_bytes, rotated_bytes, max_bytes, updated_at, truncated}`, or `null` when nothing is retained (a satellite on older code); `last_outage` is the room's last `prev_health` report (below) or `null`; `connected` says which. Gated like a config read: both logs hold what the room said (the satellite logs each transcript). An **offline** room answers `200` with `live: null` and whatever is retained — that is what retaining is for — and `404` only when the core holds nothing for it at all; `503` disconnected mid-transfer, `504` stopped answering, `502` when the answer comes to more than `max_bytes` allows for (the reassembly buffer is capped per request, so a session cannot answer one pull with frames for as long as the timeout permits). A connected device whose `hello` declared `supports` without `logs` is answered like an offline room, plus `live_supported: false`: no `get_logs` goes to it. |
 | `GET /v1/admin/satellite/{room_id}/health` | **Device read** | — | The room's health (2026-10-09): `{room_id, connected, latest, last_outage, outages, history}`. `latest` is the newest `health` sample the satellite sent (`{received_at, sample}` — memory, fds, CPU, load, free memory, SoC temperature and throttle flags, uptime and boot id, mic frames/s, the wake loop's heartbeat age, queue depths, the WebSocket state and reconnect count, the Wi-Fi link and NetworkManager state, gateway and core reachability; numbers and short strings, never speech), kept by the core across the room disconnecting and, with V022, read back from the database after a core restart; `last_outage` is the record the satellite's previous process life left behind and sent in its `hello` (`{reported_at, prev_boot_id, report}` — the report holds its last sample, `offline_diag` (one entry per failed connect while it was disconnected: the failure class, whether the gateway and the core answered, the link), the self-check `actions` it took and `last_exit_reason`); `outages` the last five such reports; `history` a 24 h summary (`samples`, `from`/`to`, min/max/last of `rss_kb`, `cpu_pct`, `soc_temp_c`, `mic_fps`, `fds`, `mem_avail_kb`, `throttled_any`, `reconnects`), `null` without V022. `200` with nulls for a room nothing is known about. Device read because every field is about the hardware and the link, like the reported config (REV-11). |
 
 ### 2.6 Admin: version, config, chat, hardware
@@ -418,10 +473,12 @@ dashboard reads the incidents itself and proxies these.
 |---|---|---|---|
 | `POST /v1/admin/sounds/regenerate` | **Admin (Bearer)** | — | Kick a background re-render of all voices' greeting/canned clips, then notify satellites to re-sync. Returns `{"started": true}` immediately. |
 | `POST /v1/admin/sounds/setup-clips` | **Admin (Bearer)** | — | Render the satellite's setup phrase set in the household's default voice, synchronously (sixteen short lines, seconds), for media prep to copy onto a prepared card. The web process cannot import the TTS clients, so its prepare job calls this with the operator's credentials forwarded. Returns `{written, problems}`. |
-| `POST /v1/admin/voices/sample` | **Device (`X-Device-Token` or Bearer)** | `{"name": "<voice>"}` | Live-synthesize a sample line in a registered voice; returns `audio/wav` with the text in `X-Sample-Text`. `404` for an unknown voice. |
-| `POST /v1/admin/wake/record/start` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Tell a connected satellite to record positive training clips (fresh take: clip dir + count reset). `404` room/word unknown, `409` mid drop-in or wrong status, `502` send failure. |
+| `POST /v1/admin/voices/sample` | **Device (`X-Device-Token` or Bearer)** | `{"name": "<voice>"}` | Live-synthesize a sample line in a registered voice; returns `audio/wav` with the text in `X-Sample-Text`. `404` for an unknown voice; `409` when the voice's own engine gave nothing and another would answer, the detail saying why in words (`"Eric can't speak right now: Microsoft's voice service answered HTTP 403"`). |
+| `POST /v1/admin/pronunciations/reload` | **Admin (Bearer)** | — | Load the "say it like" list from the database (V027, over the shipped defaults) into the text-to-phoneme converter, then re-render in the background the clips whose words it changes. `{"reloaded": true, "left_out": [<entries it could not use>]}`. The web backend calls it after an edit. |
+| `POST /v1/admin/voice/say-like` | **Device (`X-Device-Token` or Bearer)** | `{"word", "say_like", "voice"?}` | Say `word` as `say_like` asks, unsaved, in `voice` (one of the three) or the server's voice: `audio/wav`, the phonemes in `X-Phonemes` (URL-encoded, sentences joined by ` \| `). `400` with the reason for an entry the converter can't use or an unknown voice; `502` when the voice can't speak. |
+| `POST /v1/admin/wake/record/start` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Tell a connected satellite to record positive training clips (fresh take: clip dir + count reset). `404` room/word unknown, `409` mid drop-in or wrong status, or (before anything is reset) a device that declared `supports` without `wake_clips`, `502` send failure. |
 | `POST /v1/admin/wake/record/stop` | **Admin (Bearer)** | `{room_id}` | Stop an in-progress recording; the Pi resumes its wake loop. |
-| `POST /v1/admin/wake/push` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Push a trained model: the Pi writes the slug to its wake sidecar, syncs from `/v1/wake-models`, and restarts. `409` when not trained yet. |
+| `POST /v1/admin/wake/push` | **Admin (Bearer)** | `{room_id, wake_word_id}` | Push a trained model: the Pi writes the slug to its wake sidecar, syncs from `/v1/wake-models`, and restarts. `409` when not trained yet, or for a device that declared `supports` without `wake_models`. |
 | `POST /v1/admin/wake/score` | **Admin (Bearer)** | `{wake_word_id}` | Offline-score recorded clips against the trained model (per-clip max score + silence baseline). `409` no model, `501` when openWakeWord isn't installed. |
 
 ### 2.8 Admin: music and library
@@ -525,7 +582,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Response / purpose |
 |---|---|---|
-| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where the Satellites page explains that USB adoption and writing a card aren't available. |
+| `GET /api/capabilities` | Open | The live capability map (proxied view of the core registry) the sidebar's "+ add" affordances gate on. Also `host_kind` — `linux`, `wsl`, `windows` or `darwin` (`DOMOVOI_HOST_KIND` overrides the detection); `wsl` is a Windows install, where Settings → Satellites explains that USB adoption and writing a card aren't available. |
 | `GET /api/capabilities/manual` | Open | Handler metadata + example phrases for the "What can I say?" manual page (from core `GET /v1/handlers`). |
 
 ### 3.4 Acquisitions
@@ -538,7 +595,7 @@ household device token instead of a caller's credential.
 
 | Method & path | Auth | Request | Response / purpose |
 |---|---|---|---|
-| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&offset=0` | Paged library listing. Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. `q` matches title, artist, album and that same relative path, so nothing above the music library is searchable either. |
+| `GET /api/music/library` | Open | `?q=&source=&favorited=&sort=added_desc&limit=50&cursor=` (or `&offset=`) | Paged library listing (§1.7): `{total, items, limit, has_more, next_cursor, offset?}`; sorts `added_desc` (default), `added_asc`, `title`, `artist`, `duration` (NULL titles / artists / durations last). Each track's `file_path` is relative to the music library (`Artist/Album/01 Song.mp3`, `uploads/song.mp3`; a row outside it shows its file name alone), never the absolute server path (WEB-16) — the same in every read that answers with a track, playlists included. `q` matches title, artist, album and that same relative path, so nothing above the music library is searchable either. |
 | `GET /api/music/library/stats` | Open | — | Library totals for the Stats card. |
 | `GET /api/music/library/{track_id}` | Open | — | One track. |
 | `PATCH /api/music/library/{track_id}` | **Device** | `TrackPatch` (title/artist/favorited/...) | Edit track metadata. |
@@ -790,8 +847,8 @@ Person-centric views over the voice-profile / memory tables.
 | `GET /api/people/{person_id}/sessions` | **Device read** · `?limit=20` | Recent conversation sessions. |
 | `GET /api/people/{person_id}/conversations` | **Device read** · `?limit=50` | Recent conversation turns. |
 | `GET /api/people/{person_id}/notes` | **Device read** | Notes mentioning them. |
-| `GET /api/people/{person_id}/profiles` | — | Their voice profiles (embeddings metadata). |
-| `DELETE /api/people/{person_id}/profiles/{profile_id}` | **Admin** | Drop one voice profile. |
+| `GET /api/people/{person_id}/profiles` | — | Their voice samples (metadata only, never an embedding), newest first: `id, person_id, model, enrolled_at, room_id, sample_seconds, source`. `source` is `satellite` (heard by a room's satellite: what satellites match) or `phone` (said into the app's chat mic, filed under `phone-<device id>`: what a phone turn matches first; satellites never use them), V026. The dashboard's People page lists the two sets apart. |
+| `DELETE /api/people/{person_id}/profiles/{profile_id}` | **Admin** | Drop one voice sample, either set. |
 | `GET /api/people/{person_id}/memories` | **Device read** · `?status=` | Extracted memories (pending ones included). |
 | `POST /api/people/{person_id}/memories` | `MemoryCreate` | Add a memory manually. |
 | `PATCH /api/people/{person_id}/memories/{memory_id}` | `MemoryPatch` | Edit/confirm/reject a memory. |
@@ -871,7 +928,7 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 
 | Method & path | Auth | Request | Purpose |
 |---|---|---|---|
-| `GET /api/satellites` | **Device read** | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Every paired device can see that a room records; what it recorded is admin-only. Each row also carries `timers_own_only`: the room's "Only reminders for this device" setting (`false` without V018). |
+| `GET /api/satellites` | **Device read** | — | All known rooms with presence, wifi, volume, active voice, synced code SHA, full-duplex capability, and `capture_commands` / `capture_since`: whether the room is recording commands (§3.12a) — an admin opted it in and an admin credential exists, exactly what the core acts on — and since when. Every paired device can see that a room records; what it recorded is admin-only. Each row also carries `timers_own_only`: the room's "Only reminders for this device" setting (`false` without V018); `board`, the hardware kind (`linux_pc`, `android_room`, or the board USB adoption recorded for a Pi; kept for offline rooms); and `supports`, what the connected device declared it can do (`null` for a device that sent no list — every Pi — and for an offline room); and `upgrade`, a code upgrade under way or just finished (the core snapshot's `satellite_upgrades` entry, else `null`): the dashboard and the app keep the room's Upgrade button locked while its `state` is `running`. |
 | `GET /api/satellites/{room_id}` | **Device read** | — | One room (the kiosk's label and idle mode). |
 | `GET /api/satellites/{room_id}/sessions` | **Device read** | `?limit=20` | Recent sessions in this room, each with the `person_id` who spoke. |
 | `GET /api/satellites/{room_id}/conversations` | **Device read** | `?limit=50` | Recent turns in this room. Each carries `utterance_trigger` (`wake_word`/`barge_in`/`followup`/`push_to_talk`; null before V011). |
@@ -909,7 +966,7 @@ down (rule F1): `deliveries: []`, `acked_at` / `acked_by` / `settled_at` null.
 | `POST /api/satellites/{room_id}/volume` | **Device** | `{level}` | Proxy → core set-volume. |
 | `POST /api/satellites/{room_id}/display` | **Admin (Bearer)** | `{action}` (`on` \| `off` \| `restart_kiosk`) | Proxy → core satellite display (video satellites only; `409` otherwise). |
 | `POST /api/satellites/{room_id}/restart` | **Admin (Bearer)** | — | Proxy → core satellite restart. |
-| `POST /api/satellites/{room_id}/upgrade` | **Admin, security tier** | — | Proxy → core satellite code sync + self-restart; the core applies the same gate (credentials forwarded). |
+| `POST /api/satellites/{room_id}/upgrade` | **Admin, security tier** | — | Proxy → core satellite code sync + self-restart; the core applies the same gate (credentials forwarded). `409` while an upgrade of the room is already running (the row's `upgrade.state` says `running`). |
 | `POST /api/satellites/{room_id}/pairing/reset` | **Admin, security tier** | — | Proxy → core `DELETE /v1/admin/satellites/{room_id}/pairing`; the core applies the same gate. |
 | `GET /api/satellites/{room_id}/config` | **Device read** | — | Proxy → core per-satellite editable config (the same tier at both hops; the caller's credential is forwarded). |
 | `PATCH /api/satellites/{room_id}/config` | **Admin (Bearer)** | `{"changes": {...}}` | Proxy → core config push (Pi rewrites `config.toml`, restarts). |
@@ -992,12 +1049,35 @@ file on the server. Mutations trigger the core's background clip re-render
 | `POST /api/greetings` | `GreetingCreate` | Add a greeting line. |
 | `PATCH /api/greetings/{greeting_id}` | `GreetingPatch` | Edit / enable / disable. |
 | `DELETE /api/greetings/{greeting_id}` | — | Delete. |
-| `GET /api/voices` | — | The voice registry (engine, model ref, default flag). |
-| `GET /api/voices/{voice_id}/sample` | — | WAV sample — proxies the core's live TTS (`/v1/admin/voices/sample`); the web process has no TTS of its own. `409` for an Edge voice under `never`, before the core is asked (§1.6). |
-| `POST /api/voices/edge` | `EdgeVoiceCreate` | Register a cloud (edge) voice. `201`. `409` under `never`. |
-| `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice. `201`. Both files are streamed to disk under a byte budget — the model at 200 MB, the config at 4 MB — and an upload over either one is answered `413` while it is still arriving, leaving nothing on disk. A request whose declared `Content-Length` is over 210 MB is refused before its body is read at all. |
+| `GET /api/voices` | — | The voice registry (engine, model ref, default flag), and per row `sample`: what its play button plays (`"voice"` live, `"clip"` a shipped voice's built-in clip before it is downloaded, `null` nothing: no button) and `problem`: why a Piper voice can't speak here, in words (a voice trained on espeak phonemes other than English `"en"` / `"en-us"`; rooms set to it speak with the system voice), else `null`. |
+| `GET /api/voices/{voice_id}/sample` | — | WAV sample — proxies the core's live TTS (`/v1/admin/voices/sample`); the web process has no TTS of its own. A shipped voice not downloaded yet answers its built-in clip (`audio/ogg`, Opus). `409` for a leftover Microsoft Edge row (the core removes them at boot), for a Piper voice that can't speak here (with the reason), and from the core when another voice would have answered. Every refusal from the core passes through with its status and its own `detail` (a `4xx`; anything else is a `502` whose detail names it): the page shows that sentence, never a bare "502 Bad Gateway". A catalogue voice registered but not downloaded yet (an install's kept Cori) is fetched on its first sample, waiting up to 120 s. |
+| `POST /api/voices/piper` | multipart (`.onnx` + config) | Upload a local piper voice: trained on espeak's English phonemes, American (`"en-us"`) or British (`"en"`), as its config's `espeak.voice` says. `201` with the row (its `problem` says why another phoneme set can't speak here; it is kept). Both files are streamed to disk under a byte budget — the model at 200 MB, the config at 4 MB — and an upload over either one is answered `413` while it is still arriving, leaving nothing on disk. A request whose declared `Content-Length` is over 210 MB is refused before its body is read at all. |
 | `PATCH /api/voices/{voice_id}` | `VoicePatch` | Rename / set default. |
 | `DELETE /api/voices/{voice_id}` | — | Remove a voice. `204`. |
+
+### 3.11a Domovoi's voice and the "say it like" list
+
+Domovoi speaks with one of three public-domain Piper voices, fed by its own
+text-to-phoneme converter (`domovoi/phonemizer`), and an owner can tell the
+converter how to say a word. The phone runs the same converter and voices
+and reads the server's choice and list here (`web/backend/api/voice.py`;
+the data model in `domovoi/voice_settings.py`; the "say it like" format in
+`domovoi/phonemizer/README.md`). Reads are **Device** (`X-Device-Token` or
+an admin Bearer); changes are **Admin (Bearer)**. Every write answers with
+the `GET /api/voice` body, then asks the core to reload the list
+(`/v1/admin/pronunciations/reload`) or re-render the clips
+(`/v1/admin/sounds/regenerate`), best-effort.
+
+| Method & path | Auth | Request | Purpose |
+|---|---|---|---|
+| `GET /api/voice` | Device | — | `{"voices": [{"id", "name", "sex", "sample_rate", "size_bytes", "sha256"}], "server_voice": "<id>", "pronunciations": [{"word", "say_like"}], "updated_at": "<UTC, ISO 8601, Z>"}`. `voices`: the three (`en_US-norman-medium` Norman, `en_US-kristin-medium` Kristin, `en_US-ljspeech-medium` Linda), each `.onnx` with its size and SHA-256 at rhasspy/piper-voices revision `c10ece1a…`. `server_voice`: the voice registry's default when it is one of the three, else `TTS_PIPER_VOICE`. `pronunciations`: the effective list (the shipped entries with the owner's changes and removals applied), in order. `updated_at` moves whenever the list or the server's voice changes. |
+| `GET /api/voice/samples` | Device | — | `{"samples": {"<id>": "voice" \| "clip" \| null}}`: what each of the three voices' play button plays: synthesized live (the voice is on this server), its built-in clip (not downloaded yet), or nothing (no button). |
+| `GET /api/voice/sample/{voice_id}` | Device | — | A sample in one of the three voices: a sentence synthesized live, `audio/wav` (proxies `/v1/admin/voices/sample`), when the voice is on this server; else its built-in clip, `audio/ogg` (Opus, `domovoi/voice_clips/`, "Hi, I'm Norman. This is how Domovoi sounds."). `X-Sample-Source` says which. `404` for another id. |
+| `PUT /api/voice/server` | Admin | `{"voice": "<id>"}` | Make one of the three the server's voice: the registry's default (rooms without a voice of their own speak in it); clips re-render. `400` for another id. |
+| `POST /api/voice/pronunciations` | Admin | `{"word", "say_like"}` | Add a word, or change how a listed one is said (matched without regard to case or accents). `400` with the reason when the converter can't use it; `409` past 500 words of the owner's own (the shipped words don't count). |
+| `DELETE /api/voice/pronunciations/{word}` | Admin | — | Take a word off the list: the owner's own word is deleted; a shipped one stays off until added again or the defaults are put back. `404` when it isn't listed. |
+| `POST /api/voice/pronunciations/defaults` | Admin | — | Put the shipped entries back: the owner's changes to them are deleted, so the defaults of the release the box runs apply (later releases' too); the owner's own words stay. |
+| `POST /api/voice/pronunciations/preview` | Device | `{"word", "say_like", "voice"?}` | Hear an entry before saving it: `audio/wav` from `/v1/admin/voice/say-like`, phonemes in `X-Phonemes`. `400` for an unusable entry or unknown voice; a refusal from the core passes through with its own `detail`, as for the samples. |
 
 ### 3.12 Wake words
 
@@ -1115,7 +1195,7 @@ directory zip and an import copy, even from a library rooted above it.
 | Method & path | Request | Purpose |
 |---|---|---|
 | `GET /api/files/libraries` | — | The library registry: `{ "libraries": [ … ] }`, ordered core, plugin, removable. Each record carries `id, label, kind (core\|plugin\|removable), icon, kind_icon, owner, editable, importable, doc_editing, reindex_kind, present` — `root_path` is stripped. |
-| `GET /api/files/browse` | `?library_id=&path=&device_id=` | One directory level (dirs-first, then name). Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason }`; each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
+| `GET /api/files/browse` | `?library_id=&path=&device_id=&q=&kind=&sort=&limit=&cursor=&refresh=` | One directory level, folders first under every `sort` (`name` default · `newest` · `oldest` · `largest`), paged (§1.7). `q` is a case-insensitive substring of the name and `kind` keeps one entry kind (`folder` = folders only), both over the whole folder. Returns `{ library_id, path, editable, importable, doc_editing, breadcrumb:[…], entries:[…], writable, blocked_reason, total, folder_total, limit, has_more, next_cursor }` (`total` counts the matches, `folder_total` the folder; no paging params → every entry, as before); the listing is cached between pages and re-read when the folder changes (§1.7); each entry is `{ name, rel, is_dir, size, mtime, kind (folder\|audio\|doc-office\|doc-text\|image\|pdf\|other), locked_by }` (`locked_by` non-null only for `core:documents`). `device_id` is optional and only affects `writable` / `blocked_reason` — `editable` is the library's property, `writable` is the calling device's. `400` traversal · `404` missing dir / unknown library · `410` ejected removable. |
 | `GET /api/files/download` | `?library_id=&path=` | Serve a file as an attachment (audio via Range/`206`) or a directory as a streamed zip (`{name}.zip`, 5000-member cap). A **directory** additionally needs an **admin session** (`401` without). `404` missing · `413` cap · `400` traversal. |
 | `POST /api/files/upload` | multipart: `library_id`, `path`, `device_id`, `files[]` · `X-Requested-With` | Upload into the browsed directory. `200 {saved, skipped, reindex_triggered}`. `401` no device token, or a **removable** target without an admin session (Documents is device tier like any other core library) · `403` non-editable, device blocked, **or the preflight-forcing header missing** · `404` bad dest · `400` none saved · `422` no `device_id`. Each name is sanitized to a bare basename, deduped, and re-containment-checked before write. |
 | `POST /api/files/delete` | **Admin (mutation)** · `{ library_id, paths:[…], recursive:false }` | Delete files; folders need `recursive:true` (bounded, symlink-confined). Refuses to delete a library root. `200 {deleted, failed, reindex_triggered}`. `401` no admin session · `403` non-editable. For `core:documents`, releases any editor lock on a deleted path. |
@@ -1247,18 +1327,18 @@ workers; audio is served by this process.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/podcasts/subscriptions` | — | Subscribed feeds. Each row's `artwork` is a path on this server (`/api/podcasts/subscriptions/{id}/artwork?v=…`) or `null`, never the publisher's URL: the server downloads each show's artwork itself, so clients load nothing from outside the house. |
+| `GET /api/podcasts/subscriptions` | `?q=&sort=title\|newest&limit=&cursor=` | Subscribed feeds, paged (§1.7: `{items, total, …}`; the bare array when no paging param is sent). `q` matches title, author and feed URL. Each row's `artwork` is a path on this server (`/api/podcasts/subscriptions/{id}/artwork?v=…`) or `null`, never the publisher's URL: the server downloads each show's artwork itself, so clients load nothing from outside the house. |
 | `POST /api/podcasts/subscriptions` | `SubscribeRequest` (`feed_url` or `query`, `keep_n` 1–50, default 5) | **Device.** Subscribe to a feed URL, or by `query` (a directory search). `keep_n` is how many of the newest episodes stay downloaded; outside 1–50 is `422` (each episode is a download of up to 512 MB). `400` for a URL the server won't fetch. Under `never` subscribing by `query` is `409`; a feed URL is stored and fetched once the internet is allowed. |
 | `GET /api/podcasts/subscriptions/{sub_id}/artwork` | — | Open, like episode audio (an `<img>` can't send headers). The show's artwork as the server stored it (JPEG, PNG, WebP or GIF, at most 5 MB), `Cache-Control: max-age=86400`; `404` when it isn't downloaded. |
 | `GET /api/podcasts/discover/artwork/{key}` | — | Open. Artwork for a Discover result, by a key the server minted for that result; a key it didn't mint is `404` without any fetch, so a client can never make the server fetch a URL of its choosing. |
 | `DELETE /api/podcasts/subscriptions/{sub_id}` | — | Unsubscribe. |
-| `GET /api/podcasts/subscriptions/{sub_id}/episodes` | — | Episodes for one subscription. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
+| `GET /api/podcasts/subscriptions/{sub_id}/episodes` | `?q=&downloaded=&sort=newest\|oldest&limit=&cursor=` | Episodes for one subscription, paged (§1.7; the bare array when no paging param is sent), undated episodes last. `q` matches the title; `downloaded=true` keeps the ones with a file here. Each row includes `has_file` and `file_ext` (e.g. `".mp3"`, or `null` when not downloaded) instead of the private server path. |
 | `GET /api/podcasts/discover` | `?q=` (required) | **Device.** Search a podcast directory (the server fetches Apple's search, so a caller without the household token or an admin Bearer is `401` before anything leaves the house). Hits whose feed URL would be refused are left out. A hit's `artwork` is a server path (`/api/podcasts/discover/artwork/{key}`) or `null`. `409` under `never`. |
 | `POST /api/podcasts/poll` | — | **Device.** Poll feeds now (instead of waiting for the worker). `409` under `never`. |
 | `GET /api/podcasts/episodes/{episode_id}/audio` | `?download=` | Stream a downloaded episode. `?download=1` serves it as an attachment named from the episode title plus its on-disk extension. |
 | `GET /api/podcasts/positions/{episode_id}` | `?device_id=&person_id=` | Resume position. |
 | `POST /api/podcasts/positions/{episode_id}` | `PositionSave` | Save position. |
-| `GET /api/audiobooks` | — | Indexed books (also `/api/audiobooks/`). Each row includes `is_folder` and `file_ext` (single-file books; `null` for folder books, which download as a zip) instead of the private server path. |
+| `GET /api/audiobooks` | `?q=&sort=title\|author\|newest&limit=&cursor=` | Indexed books (also `/api/audiobooks/`), paged (§1.7: `{items, total, …}`; the bare array when no paging param is sent). `q` matches title, author and narrator. Each row includes `is_folder` and `file_ext` (single-file books; `null` for folder books, which download as a zip) instead of the private server path. |
 | `GET /api/audiobooks/{book_id}` | — | One book (files/chapters), with `is_folder` / `file_ext` as above. |
 | `POST /api/audiobooks/reindex` | — | Re-walk the audiobooks dir. |
 | `GET /api/audiobooks/{book_id}/audio` | `?file=&download=` | Stream a book file (`?file=` selects a chapter for folder books). `?download=1` serves it as an attachment — a single chapter for folder books, the whole file for single-file books. |
@@ -1285,7 +1365,7 @@ fire the `video_positions.changed` WS event.
 
 | Method & path | Request | Purpose |
 |---|---|---|
-| `GET /api/videos/list` | — | Every video across every present library (bounded walk; hidden dirs skipped). |
+| `GET /api/videos/list` | `?q=&library_id=&sort=&limit=&cursor=&refresh=` | Videos across every present library (each walked whole — no count cap; hidden dirs skipped), paged (§1.7) as `{videos, total, limit, has_more, next_cursor, libraries, truncated, truncated_reason}`. `sort`: `library` (default: library, then path) · `name` · `newest` · `oldest` · `largest`. `q` is a case-insensitive substring of the name or path; `library_id` keeps one library. `libraries` is `[{library_id, library_label, total}]` — the matches per library with `q` applied — for section headers; `truncated` says the list is short of the disk: `truncated_reason` `"time"` (a walk ran past its 2-minute budget) or `"unpaged"` (no paging params: every match, as before, at most 2,000 per library — the bound clients from before paging were built against). The walk is cached between pages (§1.7). |
 | `GET /api/videos/stream` | `?library_id=&path=&download=` | Range/206 playback with the container's native MIME. `.mkv` serves as `x-matroska` — Chromium-family browsers and ExoPlayer play it; others fall back to `?download=1` (attachment). |
 | `GET /api/videos/poster` | `?library_id=&path=` | Cached ffmpeg-extracted poster frame (`video_posters_dir`); `204` when no frame could be extracted. |
 | `GET /api/videos/position` | `?library_id=&path=&device_id=&person_id=` | Resume position (`{position_sec, duration_sec}`). |
@@ -1324,7 +1404,19 @@ Claude-desktop-style threaded text chat answered by the local Ollama
 mode (Letta, per-room sessions); `chat_threads.letta_agent_id` is the
 parked bridge for backing a thread with a stateful agent later. A message
 carrying image uploads is answered by `ollama_vision_model` (the Vision
-role slot on the Models page) instead of the Q&A model. Mutations fire the
+role slot on the Models page) instead of the Q&A model. When that model is
+not installed, or none is set, such a message is answered at once with the
+`vision_model_missing` refusal and Ollama is never asked; when Ollama can't
+be asked what is installed, the send goes ahead. A text turn sends the
+thread's earlier pictures to no one: they ride along only to the vision
+model, because Ollama refuses a request that hands a text-only model an
+image. Each picture goes to the model upright (EXIF orientation applied)
+and at most 1280 px on its long edge, from a copy kept beside the upload
+(`<token>-1280.jpg` or `.png`; a picture already that small and upright
+goes as it is); the upload itself, which `GET /api/chat/uploads/{token}`
+serves, is unchanged. A call that carries pictures also sends
+`think: false` (a refusal of the flag is retried once without it) and
+`ollama_vision_num_ctx` as its context window. Mutations fire the
 `chat.changed` WS event.
 
 Reads are **Device read** — the thread list (titles and snippets are message
@@ -1339,12 +1431,13 @@ upload — is **Device** tier.
 | `GET /api/chat/threads` | `?archived=` | Thread list, newest first, with message counts + last snippet. |
 | `POST /api/chat/threads` | `ThreadCreate` | New thread (first user message titles it). |
 | `PATCH /api/chat/threads/{id}` | `ThreadPatch` | Rename / archive. |
-| `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files are removed. |
-| `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time). |
-| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` on model failure). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
+| `DELETE /api/chat/threads/{id}` | — | Delete thread + messages; unreferenced upload files (and the model's copies of them) are removed. |
+| `GET /api/chat/threads/{id}/messages` | — | Full transcript. Each message: `id, role, content, images, model, error, created_at`, plus `stats` (replies) and `device_id` / `device_name` (the sender's install, name looked up at read time), and `source` (`typed`, or `voice` for both rows of a turn spoken into the app's chat mic). A voice user row also carries `speaker_person_id`, `speaker_name` (looked up at read time; null once the person is forgotten), `speaker_confidence` (the voice match score) and `speaker_confident` (the score clears the bar voice identification learns from; the app draws a softer marker below it). |
+| `POST /api/chat/threads/{id}/messages` | `SendBody` | Persist the user turn and stream the reply as **SSE** (`delta` events per chunk, one final `done` with the persisted row, `error` `{detail, code, model}` when there is no reply or it broke off — see the codes below). `SendBody.device_id` (optional) records the sending install; self-asserted, and kept only when it is a well-formed device id (anything else is stored as none). |
+| `POST /api/chat/threads/{id}/voice` | multipart `audio`, `phone_id`, `player?`, `speak?` | A push-to-talk turn from the app's chat mic, answered into this thread: forwarded with the caller's credentials to the core's `POST /v1/phone/voice` (§2.1), whose answer or refusal comes back as it was given. `413` over 30 s of audio, `502` (`core_unreachable`) when the core isn't answering, `504` (`core_timeout`) after 180 s. |
 | `POST /api/chat/uploads` | multipart `file` | Stage an image (20 MB cap, image types only) → `{token, name}`. |
 | `GET /api/chat/uploads/{token}` | — | Serve a chat image inline. |
-| `GET /api/chat/models` | Open | Installed Ollama models + configured default/vision models for the composer. |
+| `GET /api/chat/models` | Open | `{installed, default_model, vision_model, vision_installed}`: the installed Ollama models and the configured defaults. `vision_installed` is `false` when a picture would be refused (the vision model isn't installed, or none is set), `null` when Ollama couldn't be asked; the clients explain the first before a picture is attached. |
 
 A reply's `stats` (V017) is an object whose keys are all optional:
 `prompt_tokens`, `output_tokens`, `tokens_per_sec`; `total_ms`, `load_ms`,
@@ -1353,8 +1446,35 @@ means the model had to be loaded first); `first_token_ms`, `wall_ms`
 (measured by the server); `done_reason` (`stop`, or `length` when the reply
 was cut off); `context_sent`, `context_in_thread`, `context_limit` (messages
 sent to the model against those in the thread — fewer sent means older ones
-fell out of what it saw); `num_ctx`; and `model_role` (`chat`, `vision` when
-images were attached, `override` when the request named a model).
+fell out of what it saw); `num_ctx` (the context window the call asked
+for: `ollama_vision_num_ctx` when it carried pictures); `model_role`
+(`chat`, `vision` when images were attached, `override` when the request
+named a model, `voice` for a spoken turn's reply); and
+`error_code` when the reply has an `error`. A spoken turn's reply keeps
+`matched_handler`, `matched_path` and its stage times instead of Ollama's:
+`audio_ms` (the recording), `stt_ms`, `stt_window_s`, `identify_ms`,
+`route_ms`, `tts_ms`, `wall_ms`; its one error code is `turn_failed` (the
+turn itself failed; the reason is in the core's log).
+
+A failed reply never carries the exception's own text (it named internal
+hosts, ports and library help URLs); that goes to the web process's log.
+`error` is a plain sentence, and `code` / `stats.error_code` says which:
+
+| Code | When |
+|---|---|
+| `vision_model_missing` | Pictures, and the vision model isn't installed or none is set (answered up front) — or Ollama said it is not found. |
+| `model_missing` | The model for a text turn isn't installed (Ollama `404`). |
+| `vision_unsupported` | The vision model can't take pictures (it is a text-only model). |
+| `model_memory` | Not enough free memory to load the model. |
+| `model_unreachable` | Ollama could not be reached, or the connection broke mid-reply. |
+| `model_timeout` | Ollama took too long to take the request. |
+| `model_error` | Anything else Ollama reported. |
+| `empty_reply` | The model answered with nothing. |
+
+The first four are fixed in Settings → Models; both clients word
+`vision_model_missing` themselves and link an admin there. A row written
+before the codes existed is read out the same way (the code worked out from
+its text); the row itself is not changed.
 
 ### 3.19 Models (LLM management)
 
@@ -1372,7 +1492,7 @@ conversational one and the tool-routing one — switchable independently.
 |---|---|---|
 | `GET /api/models/catalog` | — | The curated model catalog with size/VRAM hints. Each `whisper` row also carries `cached` (true / false / null): whether that model is already in this host's Hugging Face cache, so the page can grey a size that can't load under `INTERNET_ACCESS=never`. |
 | `GET /api/models/installed` | — | Models present in Ollama. |
-| `GET /api/models/active` | — | Which models are active for each role. The `stt` row also carries `device` and `compute_type` (the Whisper pair). |
+| `GET /api/models/active` | — | Which models are active for each role. The `stt` row also carries `device` and `compute_type` (the Whisper pair). Every row says `installed` (in Ollama's list for an Ollama role, in the model cache for `stt`; null when that can't be told) and `model_source`: `config` (the live config), `startup` (a cookie-only read leaves the Whisper fields out of the config, so the `stt` row takes what the core loaded at boot from `/v1/admin/hardware`) or null (unknown). The `qa` and `vision` rows add `chat_model` and `chat_restart_required`: the dashboard's chat reads those models when the dashboard starts, so a model saved since then reaches the chat after a restart. |
 | `POST /api/models/active` | `SetActiveBody` | Switch the active model for a role. For `stt`, an optional `compute_type` is written as `whisper_compute_type` in the same config write (checked against the device; `400` on any other role). |
 | `GET /api/models/hardware` | — | Proxy → core `GET /v1/admin/hardware` (GPU/CPU/RAM/disk fit badges). |
 | `DELETE /api/models/{name}` | — | **Admin (Bearer).** Remove an installed model. |

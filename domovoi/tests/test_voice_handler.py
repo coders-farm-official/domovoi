@@ -88,7 +88,7 @@ async def seeded(db_session):
     await db_session.execute(text("DELETE FROM voices"))
     repo = VoicesRepository(db_session)
     await repo.create(name="Lessac", engine="piper", model_ref="en_US-lessac-medium", is_default=True)
-    await repo.create(name="Aria", engine="edge", model_ref="en-US-AriaNeural")
+    await repo.create(name="Aria", engine="piper", model_ref="aria-v1")
     await repo.create(name="Ryan", engine="piper", model_ref="ryan-v1")
     return db_session
 
@@ -136,12 +136,13 @@ async def test_switch_sets_override_and_pi_action(seeded):
 
 @requires_db
 @pytest.mark.asyncio
-async def test_switch_edge_voice_offline_degrades(seeded):
-    # Aria is an Edge (cloud) voice; offline → no switch, graceful message.
+async def test_every_voice_switches_offline_too(seeded):
+    # Every voice is local (the Edge cloud voices were dropped): offline is
+    # no reason to refuse a switch or a sample.
     r = await VoiceHandler()._switch_response("aria", _ctx(online=False), seeded)
-    assert r.pi_action is None
-    assert r.voice_override is None
-    assert "offline" in r.text.lower()
+    assert r.pi_action == "set_voice" and r.voice_override == "Aria"
+    s = await VoiceHandler()._sample_response("aria", _ctx(online=False), seeded)
+    assert s.voice_override == "Aria"
 
 
 @requires_db

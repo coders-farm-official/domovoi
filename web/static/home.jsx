@@ -11,7 +11,8 @@
  *   rooms            one row per room: pause / resume / stop / play
  *   announce         say something in every room
  *   today            today's and tomorrow's events
- *   everything       every page that is not one of the strip's five tabs
+ *   everything       every page that is not on this phone's bar (and a
+ *                    link to pick the bar's tabs)
  *
  * On a desktop the same sections sit in two columns (styles.css, "Home").
  *
@@ -333,7 +334,8 @@ const HomeHooks = (() => {
  * never even made for anyone else). When the core or the database is
  * down that is the only story: every rule that reads through them would
  * just repeat it, so they wait. Home never fixes anything itself — each
- * row links to the page that does. */
+ * row links to the page that does (#satellites is Settings → Satellites:
+ * the shell opens that tab, components.jsx settingsTabRoute). */
 const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
                              approvals, pending, version, hardware, config, guard }) => {
   const rows = [];
@@ -362,10 +364,10 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
   if (!dbDown && !coreDown) {
     const stt = health && health.stt;
     if (stt === 'unavailable') {
-      add({ key: 'stt', tone: 'err', scope: 'open', href: '#settings',
+      add({ key: 'stt', tone: 'err', scope: 'open', href: '#settings/models',
             text: "speech recognition is off · the rooms can't understand anyone" });
     } else if (stt === 'fallback') {
-      add({ key: 'stt', tone: 'warn', scope: 'open', href: '#settings',
+      add({ key: 'stt', tone: 'warn', scope: 'open', href: '#settings/models',
             text: 'speech recognition is on its slower fallback model' });
     }
 
@@ -453,15 +455,15 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
       const last = version.last_update;
       const st = last && last.status;
       if (st === 'failed' || st === 'rollback_failed') {
-        add({ key: 'update', tone: 'err', scope: 'admin', href: '#settings', at: last.finished_at,
+        add({ key: 'update', tone: 'err', scope: 'admin', href: '#settings/configuration', at: last.finished_at,
               text: 'the last update failed' });
       } else if (st === 'rolled_back' || (version.bad_sha && st !== 'ok')) {
-        add({ key: 'update', tone: 'warn', scope: 'admin', href: '#settings', at: last && last.finished_at,
+        add({ key: 'update', tone: 'warn', scope: 'admin', href: '#settings/configuration', at: last && last.finished_at,
               text: 'the last update was rolled back' });
       }
       const restartWaiting = pendingRestart(version);
       if (restartWaiting.code) {
-        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#settings',
+        add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#settings/configuration',
               text: "a restart is pending · the pulled code isn't running yet" });
       } else if (restartWaiting.plugins.length) {
         add({ key: 'restart', tone: 'warn', scope: 'admin', href: '#plugins',
@@ -474,14 +476,14 @@ const HomeAttentionRows = ({ viewer, health, rooms, plugins, pluginErrors, acq,
     // until an admin answers, it behaves as it always has. '' is the
     // unanswered answer; a server from before the question sends nothing.
     if (config && config.internet_access === '') {
-      add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings', tab: 'internet',
+      add({ key: 'internet', tone: 'warn', scope: 'admin', href: '#settings/internet',
             text: 'tell Domovoi whether this box has internet' });
     }
     const disk = hardware && hardware.disk;
     if (disk && typeof disk.percent === 'number' && disk.percent >= HOME_DISK_WARN) {
       // The core measures $HOME, so it is the home disk, not "the" disk.
       add({ key: 'disk', tone: disk.percent >= HOME_DISK_ERR ? 'err' : 'warn', scope: 'admin',
-            href: '#settings', text: `home disk is ${Math.round(disk.percent)}% full` });
+            href: '#settings/models', text: `home disk is ${Math.round(disk.percent)}% full` });
     }
   }
 
@@ -662,11 +664,10 @@ const HomeAttention = ({ view, viewer, shared, checking, failed, refused, checke
               </div>
             );
           }
-          // A row may name a Settings tab (`tab`): the shell maps one hash to
-          // one page, so the tab rides openSettingsTab (sessionStorage).
+          // A row's href may be a Settings tab's own address
+          // (#settings/configuration): a plain link opens it.
           return (
-            <a key={r.key} className={cls} data-key={r.key} href={r.href}
-               onClick={r.tab ? (e) => { if (e && e.preventDefault) e.preventDefault(); openSettingsTab(r.tab); } : undefined}>
+            <a key={r.key} className={cls} data-key={r.key} href={r.href}>
               {body}
             </a>
           );
@@ -760,16 +761,28 @@ const HomeRoomRank = (s) => {
   return 4;
 };
 
+/* What a room is playing, or null. Only a room that is playing or paused
+ * has a song: a STOPPED room's player keeps the last song loaded, and the
+ * now-playing read still names it (state "stop", song set), which made a
+ * room nobody was listening to look like it was playing that song at 0:00
+ * here while Music and Settings → Satellites said nothing (2026-10-11).
+ * A stopped room is quiet, as everywhere else. */
+const HomeRoomSong = (s) => {
+  const np = s && s.now_playing;
+  if (!s || s.status !== 'online' || !np || !np.song) return null;
+  return np.state === 'play' || np.state === 'pause' ? np.song : null;
+};
+
 /* One room. Not SatCard: that is a single <button>, and a button can't
- * hold the transport buttons. The left part is a link to Satellites; the
- * buttons sit apart on the right edge, in thumb reach on a phone, while
- * something is playing or paused. A quiet room has none: starting
- * something in a room belongs to the Music page, which picks the room and
- * the track together. */
+ * hold the transport buttons. The left part is a link to Settings →
+ * Satellites (#satellites, which opens that tab); the buttons sit apart on
+ * the right edge, in thumb reach on a phone, while something is playing or
+ * paused. A quiet room has none: starting something in a room belongs to
+ * the Music page, which picks the room and the track together. */
 const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) => {
   const online = s.status === 'online';
   const np = s.now_playing;
-  const song = online && np && np.song ? np.song : null;
+  const song = HomeRoomSong(s);
   const playing = !!song && np.state === 'play';
   const paused = !!song && np.state === 'pause';
   const dur = song && song.duration_sec ? song.duration_sec : 0;
@@ -779,8 +792,10 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
   const ran = song ? (np.elapsed_sec || 0) + (playing && !stale ? sinceFetchSec : 0) : 0;
   const elapsed = dur ? Math.min(ran, dur) : ran;
   const progress = dur ? Math.min(100, (elapsed / dur) * 100) : 0;
-  const rx = s.wifi && s.wifi.rx_mbits;
-  const weakWifi = online && rx != null && window.wifiTone && window.wifiTone(rx) === 'err';
+  // satellites.jsx owns the rule: by signal (dBm) when the satellite
+  // reports one, by rate for an older one; an idle link's beacon rate is
+  // never "weak" on its own.
+  const weakWifi = online && !!s.wifi && !!window.wifiTone && window.wifiTone(s.wifi) === 'err';
   const kioskDead = online && s.sat_type === 'video' && s.display && s.display.kiosk_alive === false;
   const canAct = online && !stale && !busy;
 
@@ -851,7 +866,7 @@ const HomeRoomRow = ({ s, stale, sinceFetchSec, nextTimerLeft, busy, onAct }) =>
 
   return (
     <div className={`home-room${online && !stale ? '' : ' dim'}`} data-room={s.room_id}>
-      <a className="home-room-main" href="#satellites" title={`${s.room_id} on the satellites page`}>
+      <a className="home-room-main" href="#satellites" title={`${s.room_id} in Settings → Satellites`}>
         <div className="home-room-top">
           <StatusDot tone={online ? 'ok' : s.status === 'waiting' ? 'warn' : 'idle'} live={online && !stale}/>
           <span className="home-room-name">{s.room_id}</span>
@@ -1128,25 +1143,31 @@ const HomeFirstRun = ({ manual }) => (
 
 /* ---- everything (phones) -------------------------------------------- */
 
-/* Every page that is not one of the phone strip's five tabs — plugin
- * pages included, with their badges — plus Settings and the manual. The
- * phone's "more" menu. `counts` and `badges` are App's one
- * useSidebarCounts and usePluginBadges results, handed down rather than
- * fetched again (a grid rendered without `badges` polls for itself). A
- * shared screen leaves the same pages off as the sidebar and the strip
- * (navItemsFor). On a desktop the sidebar already lists everything and
- * this is not mounted. */
+/* Every page that is not on this phone's bar (components.jsx
+ * phoneBarRoutes) — plugin pages included, with their badges — plus
+ * Settings and the manual. The phone's "more" menu, and the way to the
+ * bar's editor (Settings → Phone bar). `counts` and `badges` are
+ * App's one useSidebarCounts and usePluginBadges results, handed down
+ * rather than fetched again (a grid rendered without `badges` polls for
+ * itself). A shared screen leaves the same pages off as the sidebar and the
+ * strip (navItemsFor). On a desktop the sidebar already lists everything
+ * and this is not mounted. */
 const HomeEverything = ({ counts, badges: given, shared }) => {
   const manifest = window.DomovoiPluginManifest || { plugins: [] };
   const own = usePluginBadges(given ? null : manifest);
   const badges = given || own;
   const c = counts || {};
-  const tiles = navItemsFor(manifest, { shared })
-    .filter((it) => !it.primary)
-    .concat(HOME_EXTRA_TILES);
+  const items = navItemsFor(manifest, { shared });
+  const onBar = new Set(phoneBarRoutes(items, usePhoneBar()));
+  const tiles = items.filter((it) => !onBar.has(it.route)).concat(HOME_EXTRA_TILES);
+  const edit = (
+    <a href="#settings/phone-bar" className="home-link home-bar-edit">
+      edit the bar
+    </a>
+  );
   return (
     <div className="home-sec home-sec-everything">
-      <Card title="everything">
+      <Card title="everything" action={edit}>
         <div className="home-grid">
           {tiles.map((it) => {
             const badge = it.core ? (it.countKey ? c[it.countKey] : null) : badges[it.route];
@@ -1283,7 +1304,8 @@ const HomePage = ({ counts, badges }) => {
   const rooms = (Array.isArray(sats.data) ? sats.data : []).map((s) => {
     const w = wifiNow && wifiNow[s.room_id];
     if (!w || typeof w !== 'object') return s;
-    return { ...s, wifi: { ...(s.wifi || {}), rx_mbits: w.rx_mbits, tx_mbits: w.tx_mbits } };
+    return { ...s, wifi: { ...(s.wifi || {}), rx_mbits: w.rx_mbits, tx_mbits: w.tx_mbits,
+                           signal_dbm: w.signal_dbm, mode: w.mode } };
   });
   const cancelled = React.useRef(new Set());
   const { active, done, now } = HomeHooks.useTimers(timers.data, cancelled);

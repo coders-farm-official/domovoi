@@ -444,6 +444,7 @@ def test_the_clock_is_taken_from_the_server_once_wifi_is_up(home, monkeypatch, t
     to ask."""
     helper = tmp_path / "domovoi-sync-time"
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    helper.chmod(0o755)  # the X_OK check: Linux wants the bit, Windows never asks
     monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(helper))
     calls: list[list[str]] = []
 
@@ -472,6 +473,7 @@ def test_the_clock_is_taken_from_the_server_once_wifi_is_up(home, monkeypatch, t
 def test_a_failed_join_never_asks_the_server_for_the_time(home, monkeypatch, tmp_path):
     helper = tmp_path / "domovoi-sync-time"
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    helper.chmod(0o755)  # the X_OK check: Linux wants the bit, Windows never asks
     monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(helper))
     calls: list[list[str]] = []
 
@@ -508,6 +510,7 @@ def test_a_hand_built_unit_without_the_helper_provisions_as_before(home, monkeyp
 def test_the_verdict_is_logged_and_a_broken_helper_never_strands_a_provision(monkeypatch, tmp_path, caplog):
     helper = tmp_path / "domovoi-sync-time"
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    helper.chmod(0o755)  # the X_OK check: Linux wants the bit, Windows never asks
     monkeypatch.setattr(pm, "SYNC_TIME_HELPER", str(helper))
 
     def boom(cmd, **kw):
@@ -538,3 +541,31 @@ def test_the_verdict_is_logged_and_a_broken_helper_never_strands_a_provision(mon
         verdict = pm.sync_time_with_server("ws://x:6370", run=good)
     assert verdict.startswith("tz America/New_York (unchanged)")
     assert "time sync: tz America/New_York" in caplog.text
+
+
+def test_a_new_card_gets_the_network_settings_before_its_first_reboot(home, monkeypatch):
+    """No setup hotspot profile, Wi-Fi power saving off, the room's host
+    name: applied at the end of setup (satellite/net_settings.py), so a new
+    card has them by default — and before the reboot, so the first boot as
+    a satellite already answers to domovoi-<room>."""
+    backend = FakeBackend()
+    _install_provision_on_first_read(backend)
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (True, None))
+    seen = []
+
+    def after_setup(room_id, when):
+        seen.append((room_id, when, backend.rebooted))
+
+    assert pm.run(backend, poll_sec=0, max_loops=10, after_setup=after_setup) == 0
+    assert seen == [("den", "setup", False)]
+    assert backend.rebooted is True
+
+
+def test_a_failed_join_applies_nothing(home, monkeypatch):
+    backend = FakeBackend()
+    _install_provision_on_first_read(backend)
+    monkeypatch.setattr(pm, "apply_wifi", lambda *a, **k: (False, "nope"))
+    seen = []
+    pm.run(backend, poll_sec=0, wifi_attempts=1, max_loops=1,
+           after_setup=lambda *a: seen.append(a))
+    assert seen == []

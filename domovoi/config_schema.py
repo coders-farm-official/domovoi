@@ -37,10 +37,11 @@ Sections:
                    paths, STT device) that can break the Domovoi server or
                    need manual reconciliation if set wrong.
 
-Deliberately EXCLUDED: ``tts_edge_voice`` / ``tts_piper_voice``. The
+Deliberately EXCLUDED: ``tts_piper_voice``. The
 voice a satellite actually speaks is resolved from the Voices registry
-table (managed on the Voices page), not from these settings — editing
-them here would be a silent no-op in normal operation.
+table (managed on the Voices page; "Domovoi's voice" there picks among the
+three Piper voices), not from these settings — editing them here would be
+a silent no-op in normal operation.
 
 Also deliberately EXCLUDED, and for a different reason: the two keys
 that decide who may talk to this box and what it may reach out to —
@@ -267,6 +268,17 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "str", tier="reapply",
     ),
     FieldSpec(
+        "ollama_vision_num_ctx", "Vision context window", "Models",
+        "The context window (in tokens) Ollama gives the text chat when a "
+        "message carries pictures. Each picture takes about 1,100 tokens, so "
+        "four in one message need more than Ollama's usual 4096. 0 uses the "
+        "Q&A context window (do that when one model is both the vision and "
+        "the Q&A model, or Ollama reloads it between the two). Uses more "
+        "memory while the vision model is loaded. The text chat picks it up "
+        "when the dashboard restarts.",
+        "int", tier="restart", min=0, max=262144,
+    ),
+    FieldSpec(
         "ollama_keep_alive", "Keep models loaded for", "Models",
         "How long Ollama keeps a model in memory after its last request. "
         "Ollama's own default is only 5 minutes, so on a CPU host the models "
@@ -308,15 +320,13 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     # ─── Voice & speech ────────────────────────────────────────────────
     FieldSpec(
         "tts_engine", "TTS engine", "Voice & speech",
-        "Preferred text-to-speech engine. 'piper' (the default) = fully "
-        "local neural voices, nothing leaves your network. 'edge' = "
-        "Microsoft's cloud voices — nicer sounding and free of CPU cost, "
-        "but the TEXT OF EVERY SPOKEN RESPONSE is sent to Microsoft, so "
-        "choose it deliberately. 'system' = the OS's own synthesizer "
-        "(espeak-ng on Linux, SAPI on Windows), robotic but always there. "
-        "Falls through the chain if the preferred one fails.",
-        "choice", tier="reapply", choices=["piper", "edge", "system"],
-        needs_internet_choices=("edge",),
+        "Preferred text-to-speech engine. 'piper' (the default) = "
+        "Domovoi's local neural voices, nothing leaves your network. "
+        "'system' = the OS's own synthesizer (SAPI on Windows, say on "
+        "macOS, espeak-ng on Linux when you installed it), robotic. "
+        "Falls through to the other if the preferred one fails. (The "
+        "Microsoft Edge online voices were dropped in October 2026.)",
+        "choice", tier="reapply", choices=["piper", "system"],
     ),
     FieldSpec(
         "tts_speed", "Speaking rate", "Voice & speech",
@@ -848,7 +858,7 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
-        "(the plug-in-and-adopt flow on the Satellites page). Turn off to "
+        "(the plug-in-and-adopt flow in Settings → Satellites). Turn off to "
         "stop scanning removable drives entirely.",
         "bool", tier="hot",
     ),

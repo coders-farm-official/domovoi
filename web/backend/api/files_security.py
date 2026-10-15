@@ -278,28 +278,77 @@ def safe_join(root: Path, rel: str | None) -> Path:
     return target
 
 
-def private_path_check() -> Callable[[Path], bool]:
+def private_path_check() -> Callable[..., bool]:
     """What :func:`safe_join` refuses by location rather than by spelling —
     the config dir's non-media contents and the command recordings — as a
     predicate for the tree walks (a directory zip, a copy, a listing),
     which meet paths safe_join never saw: the children of a folder it DID
-    allow. Built once per walk, not per entry."""
-    allowed = _allowed_under_config()
-    return lambda p: _is_sensitive(p, allowed) or _is_command_captures(p)
+    allow. Built once per walk, not per entry.
+
+    Everything that doesn't change between entries — the config dir, the
+    media dirs allowed under it, the recordings dir — is resolved HERE,
+    once. Per entry it is one ``resolve()`` of the path asked about, or
+    none when the caller says the path is already real (``resolved=True``;
+    the listings hand it the realpath they just checked against the root).
+    The answers are :func:`_is_sensitive` / :func:`_is_command_captures`'s
+    exactly; the old per-entry form re-resolved all four fixed directories
+    for every child, which made a 10,000-entry folder take seconds
+    (measured 2026-10-11, pagination)."""
+    # Compared as normcased strings: ``PurePath.relative_to`` (what
+    # ``_is_within`` uses) costs ~0.1 ms a call on Windows, four calls an
+    # entry. A normcased prefix test on two resolved absolute paths is the
+    # same question — case-blind on Windows exactly as relative_to is there.
+    cd = _norm(CONFIG_DIR.expanduser().resolve(strict=False))
+    allowed = [_norm(a.expanduser().resolve(strict=False)) for a in _allowed_under_config()]
+    cap = _command_captures_root()
+    captures = _norm(cap) if cap is not None else None
+
+    def check(p: Path, resolved: bool = False) -> bool:
+        pr = _norm(p if resolved else p.expanduser().resolve(strict=False))
+        if _within_norm(pr, cd) and not any(_within_norm(pr, a) for a in allowed):
+            return True
+        return captures is not None and _within_norm(pr, captures)
+
+    return check
+
+
+def _norm(p: Path) -> str:
+    return os.path.normcase(str(p))
+
+
+def _within_norm(path: str, parent: str) -> bool:
+    """``path`` is ``parent`` or inside it; both normcased absolute paths."""
+    if path == parent:
+        return True
+    sep = os.sep
+    return path.startswith(parent if parent.endswith(sep) else parent + sep)
+
+
+def _command_captures_root() -> Path | None:
+    """``COMMAND_CAPTURES_DIR`` resolved, or None when it guards nothing (unset
+    or relative) — the fixed half of :func:`_is_command_captures`."""
+    raw = getattr(core_settings, "command_captures_dir", None)
+    if not raw:
+        return None
+    try:
+        configured = Path(str(raw)).expanduser()
+        if not configured.is_absolute():
+            return None
+        return configured.resolve(strict=False)
+    except (ValueError, OSError):
+        return None
 
 
 def _is_command_captures(p: Path) -> bool:
     """True when ``p`` is, or sits inside, ``COMMAND_CAPTURES_DIR``. A
     relative setting names no fixed place (the core refuses to record into
-    one), so it guards nothing here either."""
-    raw = getattr(core_settings, "command_captures_dir", None)
-    if not raw:
+    one), so it guards nothing here either. The setting is read in one
+    place, :func:`_command_captures_root`, for this check and the walks'."""
+    root = _command_captures_root()
+    if root is None:
         return False
     try:
-        configured = Path(str(raw)).expanduser()
-        if not configured.is_absolute():
-            return False
-        p.expanduser().resolve(strict=False).relative_to(configured.resolve(strict=False))
+        p.expanduser().resolve(strict=False).relative_to(root)
     except (ValueError, OSError):
         return False
     return True

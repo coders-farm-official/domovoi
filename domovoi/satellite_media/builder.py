@@ -263,12 +263,12 @@ async def build(
             readme += [
                 "3. Create domovoi/ap.json (below), then boot the device. It",
                 "   raises its own Wi-Fi setup network: set it up from a phone,",
-                "   then approve it on the dashboard's Satellites page.",
+                "   then approve it in the dashboard's Settings -> Satellites.",
             ]
         else:
             readme += [
                 "3. Boot the device, then plug it into the Domovoi server's USB",
-                "   port and adopt it from the dashboard's Satellites page.",
+                "   port and adopt it from the dashboard's Settings -> Satellites.",
             ]
         readme += [
             "",

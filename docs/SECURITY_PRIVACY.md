@@ -234,6 +234,29 @@ opening a call (`POST /v1/admin/dropin/start`) answers `501` with the
 security tier. Nothing needed to finish setting a box up listens to a
 room (CORE-14).
 
+**The chat mic.** A push-to-talk turn from the app's chat screen
+(`POST /v1/phone/voice`, reached through the dashboard's
+`POST /api/chat/threads/{id}/voice` on the server the phone is paired
+with) carries a recording of someone in the house and is answered as any
+room's turn, so it takes the same rule as the drop-in socket: the
+household token or an admin Bearer, and **no pre-setup grace** (`501`
+before an admin exists). The recording is kept only in memory for the
+turn — transcribed, matched against the household's voice profiles, then
+dropped; the transcript and the reply are written into the chat thread
+(with who voice identification heard), and the turn is logged like a
+room's under `phone-<device id>`. A phone turn never adds a voice sample
+by itself: a room's satellite saves one after a run of confident matches
+(`domovoi/voice_identifier.py`), but a phone id is self-asserted and new
+on every reinstall, so phones only match. A person's phone-mic samples
+are a set of their own (V026): satellites never match them, so a phone
+cannot move the voice every satellite matches against. They are added
+only on purpose: "my name is X" said into the chat mic, for an X who
+exists, asks "Add this phone's voice to X?" and a "yes" adds that clip to
+X's phone samples (at most three by default, the oldest dropped) rather
+than enrolling a second X; a new name enrols into the phone set. Only the
+chat mic does this. An admin sees and deletes phone samples apart from
+satellite samples on the People page.
+
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
 microphone as soon as a call is placed, `confirm` asks first when the call
@@ -927,6 +950,15 @@ Everything that executes code or rewrites configuration. Details next.
 
 ### What the server publishes to the LAN
 
+The core also tells each satellite that has finished its handshake the
+name this host answers to on the LAN (`server_names` in `ready`:
+`<hostname>.local`), so the satellite can find it again by name when its
+address moves; a satellite announces itself as `domovoi-<room>.local`
+over mDNS (avahi on Pi OS), which is also its host name and what the
+router lists. Neither is new exposure: avahi publishes both host names on
+any stock install, and a name is only ever a hint the identity check
+settles (see *Server identity*).
+
 Only three kinds of port face the LAN: the core (`6370`), the dashboard
 (`6369`) and each room's MPD **stream** port (`8050`, `8051`, …) that the
 satellites fetch audio from. Everything else the stack runs — Postgres
@@ -1276,11 +1308,11 @@ All of it on hardware you own. Locations, verified against the code:
 | **Media directories on the server** | Your music (`~/Music` by default) and documents (`~/Documents` by default), plus flat podcast and audiobook directories under the config dir (`~/.domovoi/podcasts` and `~/.domovoi/audiobooks` by default; all paths configurable). |
 | **`domovoi/.env` in the repo checkout** | Settings changed from the dashboard's Settings page, persisted as plain text — **including secrets** (e.g. `ACOUSTID_API_KEY`). Protect it like `~/.domovoi/plugins/`. |
 | **Postgres: guests** (V023 `guests_seen`, `guest_bans`, `room_queue_items.guest_*`, 2026-10-10) | `guests_seen`: one row per (self-asserted browser id, source address) that a GUEST (no household credential) changed the music from — the id, the address, the user agent, the room, the last action, first and last seen. Written by the core each time it lets a guest act; at most 10 rows per address (newest kept), and a row not seen for 30 days is deleted by the core's hourly `guests_seen_pruner` worker. `guest_bans`: the admin's bans (an id and/or an address, an optional note), kept until lifted. `room_queue_items.guest_device_id` / `guest_source`: which guest queued an entry, gone with the entry's provenance row. All three are read only by an admin (`GET /api/music/guests`, `/api/music/guest-bans`, the admin's queue read); a guest never sees them. No transcript, no recording. |
-| **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
+| **Postgres: satellite health** (V022 `satellite_health`, `satellite_outages`, 2026-10-09) | One row per health sample a satellite sends (about one a minute: its memory, fds, CPU, temperature and throttle flags, uptime, mic frames/s, queue depths, link rate and SSID, NetworkManager state, whether its gateway and this core answered; a spare laptop or phone may add its battery level and charging state and whether its mic is blocked), pruned to 24 h per room; and the last 20 outage reports per room (what the satellite's previous process life wrote down before it died: its last sample, the failed connects it saw, the self-check actions it took, why it exited). Numbers and short strings — never a transcript, a recording or a person. Household data on the device-read tier (`GET /v1/admin/satellite/{room}/health`): a paired device learns the room's SSID, uptime, whether a turn or call is open right now, and whether anyone has been reconnecting it, nothing more. The Open `/v1/admin/snapshot` carries only when the latest sample and report arrived, never their content. Written only from a session whose `hello` matched the room's pairing token. |
 | **`~/.domovoi/satellite-logs/` on the server** (`satellite_logs_dir`, 2026-10-09) | The log lines each satellite pushes (`log_push`): what it spooled while it was disconnected and the last 30 s of its ring every 30 s, one file per room (`<room>.log`, 1 MB plus one `.log.1` rotation; a room id that is not plain letters, digits, `.`, `_`, `-` — or a Windows device name — gets a hash of the full id in its file name, so the name never leaves the directory and two rooms never share a file), each line prefixed with the server's receive time, and written only from the room's own token-authenticated session. **The same content as the Pi's ring** — a `heard: <transcript>` line for every utterance and the text of every reply and announcement — so it is served only through the admin-read logs route, like the live ring, and nothing else reads the directory. Delete a room's file to forget it. |
 | **`~/.domovoi/` on each Pi** | `config.toml`, synced sound clips, synced wake models, small state sidecars (`voice`, `wake`, last-synced version, and the `pairing_token` WS-auth secret — mode 0600), a tarball backup of the previous satellite code kept for upgrade rollback, and since 2026-10-09 two small diagnostic files: `last-health.json` (the satellite's last health sample, the failed connects it saw while disconnected, the self-check actions it took and why it exited — written every 10 minutes and before anything it does to itself; carried to the core in its next `hello` and deleted once acknowledged) `log-spool.txt` (a 256 KB ring file of the log lines written while disconnected — transcripts included, as in the ring — pushed to the core on reconnect and cleared), and `self-restarts.json` (when the client last exited or rebooted itself for a self-check, and why: the restart budget, at most 3 an hour). Both stay on the SD card only while the unit is away from its core. |
 | **RAM on each Pi** (not on disk) | The satellite's last 10 MB of its own log output, which **includes a `heard: <transcript>` line for every utterance** and the text of every reply and announcement it spoke — since 2026-09-30 that is **every room's timers and reminders** it announced, a reminder's words included (see [Timers and reminders](#timers-and-reminders-house-wide)) — so it holds recent spoken content. Kept in memory only (a log ring is the write pattern that kills SD cards) and lost on restart. Readable through the dashboard's per-satellite **Logs** tab, gated at the same admin-read tier as a config read for exactly that reason. Journald on the Pi keeps its own durable copy, subject to your `systemd` retention. |
-| **The Android app's private storage** (on each phone; excluded from cloud backup and device-to-device transfer by `dataExtractionRules`) | The saved servers and the household token for each, the timer alerts' alarm mirror (a reminder's words included, see [Timers and reminders](#timers-and-reminders-house-wide)), and since 2026-09-30 the app's own **problem log** (`files/diagnostics/`): the last 10 crashes, "not responding" closes and main-thread freezes on that phone, each with a trimmed stack trace and Android's description of the exit. A stack can carry an exception message, which may name the server's address. The log is never uploaded and never shown on the lock screen; the owner reads, copies, shares or clears it under Settings → About → Problem reports. |
+| **The Android app's private storage** (on each phone; excluded from cloud backup and device-to-device transfer by `dataExtractionRules`) | The saved servers and the household token for each, the timer alerts' alarm mirror (a reminder's words included, see [Timers and reminders](#timers-and-reminders-house-wide)), and since 2026-09-30 the app's own **problem log** (`files/diagnostics/`): the last 10 crashes, "not responding" closes and main-thread freezes on that phone, each with a trimmed stack trace and Android's description of the exit. A stack can carry an exception message, which may name the server's address. The log is never uploaded and never shown on the lock screen; the owner reads, copies, shares or clears it under Settings → About → Problem reports. Since 2026-10-13, on a phone that uses the **on-device assistant**: its language model (`files/models/`, about 2.4 GB, downloaded once from a pinned upstream URL and checked against its SHA-256 before use; "delete model" in the assistant frees it), the **conversations with it** (`files/assistant/`, one JSON file per conversation holding every question and reply as typed or, for a spoken question, as transcribed, with each reply's timing; the audio itself is never written anywhere), and its few choices (`shared_prefs/assistant.xml`: CPU or GPU, Wi-Fi only, whether typed replies are read aloud, which conversation is on screen). The conversations are never uploaded and never sent to a Domovoi server (and the server's chat history never comes to the phone); the model reads only the conversation it is in. The owner deletes one, or all with "clear all conversations", in the assistant; uninstalling removes everything. |
 
 Nothing is stored anywhere else. Backup story = back up Postgres, the
 directory trees above, and `domovoi/.env` — see the
@@ -1296,7 +1328,7 @@ is `domovoi/command_captures.py`, `web/backend/api/captures.py` and V016.
 
 | | |
 |---|---|
-| **Off by default** | For every room, including rooms added later. A room records only while it has a row in `command_capture_rooms`, and only an admin can add one (the dashboard's Satellites drawer → *command recordings*, which asks for confirmation). The core also records nothing while no admin credential exists, so `--reset-admin` pauses every room until the server is claimed again. There is no configuration switch that turns it on. |
+| **Off by default** | For every room, including rooms added later. A room records only while it has a row in `command_capture_rooms`, and only an admin can add one (the room's drawer in the dashboard's Settings → Satellites → *command recordings*, which asks for confirmation). The core also records nothing while no admin credential exists, so `--reset-admin` pauses every room until the server is claimed again. There is no configuration switch that turns it on. |
 | **What is kept** | For each **wake-word or follow-up command** that reached the router: the full capture exactly as the satellite streamed it, up to where the core ended it early when it did (`<id>.wav`, 16 kHz mono), and a sidecar (`<id>.json`) with the room, time, trigger, length, why the capture ended (`server_endpoint` for an early commit, `no_speech_after_greeting` for an older satellite's capture that waited out the greeting's reply wait) and its frame counts, the room's listen settings, the final transcript, the handler and path it routed to, the stage timings, and later an admin's label. No person, session or voice embedding. |
 | **What is never kept** | Wake-word **training clips** (their own pipeline, never routed). **Chat-mode** turns (open conversation, not commands; the design never ends those early). **Barge-ins** (the capture opens while the satellite is still talking, so it carries the reply's own audio). **Push-to-talk** (a button ends it, not silence). Any command captured **during a drop-in call**, judged over the whole capture: a call live when it opened, one that started while it was open, or one hung up before it closed (the speaker was playing the other room, whose people never opted in). A blank capture, a self-echo, a turn that was only the wake greeting coming back through the mic, or a turn whose speech-to-text is down. |
 | **Where** | `COMMAND_CAPTURES_DIR`, default `~/.domovoi/captures/<room>/` on the Domovoi server; files `0600` in `0700` directories on Linux. **No web file route serves it**: the only reader is the admin API below. The core refuses to write at all (and the dashboard refuses to turn a room on) when the directory is inside, or around, a media library, the sounds / wake-model / wake-clip channels, the plugin directory, the repo, the home or config directory itself, and when the setting is not an absolute path (the core writes and the dashboard deletes, each from its own working directory). The Files surface refuses any path into `~/.domovoi` except its media subdirectories, even through a library rooted above it, and any path into `COMMAND_CAPTURES_DIR` wherever it points (a removable drive or a plugin's library root included); a folder listing, a folder zip and an import copy leave both out of what they walk. |
@@ -1379,7 +1411,6 @@ outbound traffic, each with its own off switch:
 | Traffic | When | Off switch |
 |---|---|---|
 | **Connectivity probe** — a TCP connection with no payload to `CONNECTIVITY_PROBE_TARGET` (`1.1.1.1:443`) | Every 30 s | Under `never` it doesn't dial. Otherwise keep it on an internet address: it is how the core knows the line is down. |
-| **Edge TTS** — response text is sent to Microsoft's cloud TTS service | **Only if you opt in.** The default engine is `piper` (`tts_engine = "piper"`), which is fully local, so out of the box replies are spoken on your hardware. Edge is never a fallback for Piper (`piper → system`), and an Edge voice is registered only when you choose Edge or the extra voices (`seed_voice_catalog`). A registered Edge voice's fixed clips (the network notice, the voice sample, the wake greetings) are rendered by Microsoft once each, and only while the internet is up; offline, Piper renders stand-ins. Switch to `edge` and every spoken response's text — which often echoes what you asked — transits a cloud service. | Leave `tts_engine` at `"piper"`. If you switch to `edge` for the nicer voices, know that this is the one thing the default config deliberately avoids. Under `never` Edge is not used at all. |
 | **Piper voice download** — one-time fetch of a voice model from Hugging Face. The voices Domovoi offers come from a pinned revision and are checked against pinned SHA-256 digests; any other standard voice name is checked against the digests Hugging Face publishes for it. Nothing that fails the check is kept, the body is capped, and every redirect is re-checked | First use of a Piper voice you don't have locally | Pre-place the `.onnx` in `~/.domovoi/piper_voices/`; after that, nothing to fetch. |
 | **Fast-lane model download** — one-time fetch of the streaming recognizer's model (103 MB) from the sherpa-onnx project's GitHub releases, checked against a pinned SHA-256 | Only if you set `fastlane_mode` to `shadow` (off by default) and the model isn't in `~/.domovoi/models/fastlane/` yet | Leave `fastlane_mode` off, or run `python -m domovoi.fast_lane fetch` once on a connected machine and copy `~/.domovoi/models/fastlane/` across. |
 | **Whisper model download** — the configured model (and its CPU fallback) from Hugging Face | Only when the model isn't on disk yet: every load tries the local cache first | Download the models while online; under `never` the core also sets `HF_HUB_OFFLINE=1` for itself. |
@@ -1401,7 +1432,7 @@ outbound traffic, each with its own off switch:
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
 
-Turn off Edge TTS, news, and the enricher, leave the MusicBrainz alias
+Turn off news and the enricher, leave the MusicBrainz alias
 lookup off, skip provider plugins, and
 Domovoi's steady-state outbound traffic is **zero**, apart from the
 connectivity probe (a TCP connection with no payload to
@@ -1431,7 +1462,7 @@ network:
   podcast feeds and episodes, podcast artwork, radio streams, ICY polls,
   add-by-URL, a model registry;
 - the paths that never went through that check: SearXNG searches (the
-  container is local, the engines it asks are not), Microsoft Edge speech,
+  container is local, the engines it asks are not),
   Piper and Whisper downloads (`HF_HUB_OFFLINE=1` is set for the core),
   the fast-lane model, the wake-word trainer's data, the library enricher
   (AcoustID, Shazam, MusicBrainz), the MusicBrainz name lookup, the
@@ -1533,7 +1564,7 @@ its own by editing one line.
 
 | Moment | Check |
 |---|---|
-| discovery sweep | a host is only a candidate if it signs a nonce this probe just invented — and the `host:port` the probe dialed — with the key that hashes to the pinned fingerprint |
+| finding the server (its name, then the last-known address, then the sweep) | a host is only a candidate if it signs a nonce this probe just invented — and the `host:port` the probe dialed — with the key that hashes to the pinned fingerprint. A name (`domovoi.local`, or one the core listed in its `ready`) is resolved **on the satellite** and only the addresses it resolves to are dialled and challenged, so the proof binds to an address and a name answered by an impostor over mDNS gets nowhere; a unit with nothing pinned and an address someone typed never looks a name up at all |
 | before each connect | the same challenge, again — an address written down months ago can be answered by something else today |
 | code upgrade | `/v1/satellite-code/manifest.sig`, verified before a single body is fetched; a bad signature writes nothing, and so does a list whose serial is behind the last one this device accepted |
 | plugin payloads | `/v1/satellite-plugins/manifest.sig`, same rule — these are the files whose `post_install` runs as root. The verified envelope is saved beside the mirror, and the root helper verifies it again itself (see below) before it stages or runs anything |
@@ -1780,7 +1811,7 @@ it up from its next code sync, then parks).
 
 **The hello gate.** Pairing is checked on the `hello` frame, so the server
 does nothing for a room until an accepted `hello` has arrived: no MPD
-container or `mpd_rooms` row, no entry on the Satellites page, no `ready`.
+container or `mpd_rooms` row, no entry in Settings → Satellites, no `ready`.
 A socket that opens `/v1/stream/<room>` and then says nothing is closed
 after `SATELLITE_HELLO_TIMEOUT_SEC` (default 5 s) with nothing created; one
 that sends any other frame first is refused the same way. Without this,
@@ -1848,7 +1879,7 @@ a **boot-time** gate and the edges matter:
 **Re-pairing.** Re-flashing a Pi, swapping the device, or moving a room to
 new hardware gives that room a new token that won't match — so the device is
 refused until you clear the old pairing. **Reset pairing** from the dashboard
-(Satellites → room → Overview → Reset pairing) deletes the room's pairing row
+(Settings → Satellites → room → Overview → Reset pairing) deletes the room's pairing row
 so the next connect re-pairs: under strict pairing it parks for approval by
 the new device's code like any first pairing. That reset is on the
 **security tier** (Bearer-only, `require_admin_security`, `501` before
@@ -1907,8 +1938,11 @@ design and named honestly. Treat "installed a plugin with
 from media prep, the account the client runs as (`domovoi`) is **not in the
 `sudo` group**, Pi OS's `010_pi-nopasswd` drop-in is masked by the
 bootstrap, and its root access is exactly the lines in
-`/etc/sudoers.d/domovoi-satellite`: `wpa_cli … reassociate`, `nmcli device
-connect wlan0`, `systemctl --no-block restart` of its own two units,
+`/etc/sudoers.d/domovoi-satellite`: `wpa_cli … reassociate`, `nmcli
+connection up id domovoi-home` (the house network's profile, by name, since
+2026-10-12; cards prepared before then have `nmcli device connect wlan0`
+instead, which the client runs only where it cannot raise the setup
+hotspot), `systemctl --no-block restart` of its own two units,
 `domovoi-apply-payload`, `domovoi-sync-time` and `xvf_host`. Every one of
 those targets is a root-owned path the account cannot edit, and every
 script root runs on the device (stage 1, stage 2 as
@@ -1937,10 +1971,53 @@ into `config.toml` is ignored when the pin exists), and the payload helper
 verifies the signed list against that pin itself before it stages or runs
 anything, so the account cannot route root code to itself by choosing the
 server either — see *Root checks the list itself* under Server identity.
-And `domovoi-provisioning.service` (root, every boot until the unit is
-adopted, a no-op afterwards) still starts `python -m
-satellite.provisioning_mode` from the account's own venv and code tree;
-moving that onto a root-owned copy is the remaining item. The console
+And `domovoi-provisioning.service` (root, every boot) still starts
+`python -m satellite.provisioning_mode` from the account's own venv and
+code tree; moving that onto a root-owned copy is the remaining item. Since
+2026-10-12 that root path does real work on every provisioned boot, not
+only until adoption: it applies three network settings
+(`satellite/net_settings.py`) — it deletes the `domovoi-setup` hotspot
+profile (by that name only), turns Wi-Fi power saving off on the house
+profile and the radio, and sets the host name to `domovoi-<room>` (with
+`/etc/hosts`' `127.0.1.1` line, restarting avahi when it runs; a name it
+did not set itself is left alone), keeps root's server-address record
+(`/etc/domovoi/server.url`) with a server that moved — only after the new
+address, read from the satellite user's `config.toml`, signs a fresh
+challenge for itself with the root-owned identity pin, checked by root —
+then records what it changed in `/var/lib/domovoi/net-settings.json`,
+root's own directory. Root writes nothing into the satellite user's home
+for this, and the files it does hand that user at adoption are chowned
+without following a link (a planted link is refused): a reviewer showed
+the first version overwriting and chowning a root helper through one. The
+clock helper on a card prepared since then follows a moved server the same
+way, checking the signature itself before it updates its record. This is how a
+satellite prepared before those settings gets them: the satellite upgrade
+replaces the code this root service runs, and the next boot applies it.
+The owner accepted that on 2026-10-12, knowing it widens what the
+root-runs-updatable-code path carries; the step touches nothing beyond
+those three settings and the record, and the record is the satellite
+user's to read, not an input to root. The account can still edit the code
+this service runs, exactly as before — the same remaining item. Later that
+day the same path gained two more actions, so the router learns the new name
+at the first boot instead of the second. First, it installs
+`domovoi-hostname.service` (root, a oneshot ordered before NetworkManager),
+which does **not** run the account's code: it runs
+`/usr/bin/python3 -I /usr/local/lib/domovoi/set-hostname`, a self-contained,
+root-owned (`root:root 0755`) helper that imports nothing from the code
+tree, cannot see `/home` (`ProtectHome=yes`), and reads only two root-owned
+records: `/var/lib/domovoi/hostname-target` (the name the boot step last
+confirmed, validated as a host name) and `hostname-set`. It never reads
+`config.toml`. The boot step writes the helper and the unit from text it
+carries, atomically and without following a link: the same accepted
+path, nothing the account did not already control. Media prep writes the
+same text on a new card. The unit is enabled once; after that an operator's
+`systemctl disable` or `mask` is left alone. On a hand-built unit, the
+manual `sudo python -m satellite.net_settings` installs no boot unit unless
+it is given `--install-early-unit`, so such a unit still runs nothing at
+boot as root that it did not run before. Second, after a rename it made
+itself, the boot step asks DHCP once more under the new name
+(`nmcli device modify wlan0 ipv4.dhcp-hostname …`). That changes only the
+active connection, and nothing is saved. The console
 login media prep prints on the label is this same account: it gives an
 operator a shell and the logs, not root. Root on a shipped unit means the
 card in another machine, or a re-flash — and these guarantees hold only
@@ -2094,8 +2171,26 @@ controllers and Android Auto, and takes no media item from any of them
 player fetch a URL of its choosing. The app also opts out of device
 backups (`allowBackup="false"`, `dataExtractionRules`), so nothing it stores
 — server address, device id, the pinned server identity and the sealed
-pairing token — is copied to a cloud or `adb` backup or moved in a
-device-to-device transfer.
+pairing token, and the on-device assistant's model and conversations — is
+copied to a cloud or `adb` backup or moved in a device-to-device transfer.
+
+The **on-device assistant** (android/README.md, "On-device assistant") makes
+one kind of network request: the model download its owner starts, over
+HTTPS to a URL pinned to one Hugging Face commit, through the app's client
+without the household token (the redirect rules above apply), Wi-Fi only
+unless the owner allows mobile data, and the file is used only once its
+SHA-256 matches the one compiled into the app. Asking it something sends
+nothing anywhere: a unit test holds that only the downloader in its code
+names an HTTP client, and that LiteRT-LM's and sherpa-onnx's Java layers
+name no networking class; the M0 runs measured 0 bytes in and out while it
+answered. Asking it by voice adds the **microphone**: it opens only on a
+tap of the assistant's mic (the permission is asked then), one owner at a
+time (`audio/MicArbiter.kt`), and closes at the end of speech, on stop, or
+when the assistant leaves the screen; the audio stays in memory and is
+dropped once transcribed on the phone, and only the transcript is kept, as
+the question. Its spoken replies come from the phone's own voice, opened
+without asking the server for anything. Debug builds alone can be fed test
+audio in place of the microphone, from the app's private storage.
 
 ---
 

@@ -45,9 +45,8 @@ dependencies = [
     # (no dep). Small, pure-wheel on Windows; in core so the hardware
     # endpoint imports cleanly. Degrades gracefully if somehow absent.
     "psutil>=5.9",
-    # domovoi/clients/tts.py uses requests for the edge-TTS reachability
-    # probe; small and pure-Python, so it lives in core rather than an
-    # extra (the TTS fallback chain must import without real-clients).
+    # requests: small and pure-Python, so it lives in core rather than an
+    # extra (the satellite sync clients and the feed paths use it).
     "requests>=2.32",
     # Direct floor on the HTTP library requests builds on (requests' own
     # floor is lower): 2.8.0 fixes the streaming-decompression and
@@ -91,12 +90,20 @@ domovoi = "domovoi.plugins_runtime.cli:main"
 # Install with: pip install -e ".[real-clients]"  (or ".[dev,real-clients]").
 real-clients = [
     "faster-whisper>=1.0",
-    "edge-tts>=6.1",
-    "miniaudio>=1.61",
-    # 1.3 is the floor, not 1.2: clients/tts.py imports SynthesisConfig
-    # (new in 1.3) alongside PiperVoice, and on an older piper that import
-    # fails, so every Piper render quietly falls through to the next engine.
-    "piper-tts>=1.3",
+    # No edge-tts (LGPL-3.0) or miniaudio (its MP3 decoding) since
+    # 2026-10-12: the Microsoft Edge online voices were dropped, and the
+    # update unit uninstalls edge-tts from existing venvs
+    # (scripts/linux/apply-update.sh, RETIRED_PACKAGES).
+    # The Piper voices run directly on ONNX Runtime (MIT), fed by Domovoi's
+    # own text-to-phoneme converter (domovoi/phonemizer, which also runs
+    # its small out-of-dictionary model on it). Not piper-tts: since 1.3 it
+    # is GPL-3.0 and carries espeak-ng (GPL-3.0); the update unit uninstalls
+    # it from existing venvs (scripts/linux/apply-update.sh). 1.28 is the
+    # floor, not 1.20 (which runs it): the out-of-dictionary model's near
+    # ties come out the same on 1.28 and newer, the phone's runtime, and
+    # can differ on 1.24 (domovoi/phonemizer/README.md, the golden fixture).
+    "onnxruntime>=1.28",
+    "numpy>=1.26",
     # Encode rendered TTS clips (WAV from the engine router) to MP3 so the
     # Pi can play them via mpg123. Per-voice greeting/canned clip renderer
     # (canned_sounds.py). Small pure-wheel dep with Windows wheels.
@@ -154,19 +161,15 @@ cuda = [
 ]
 # The streaming fast lane (domovoi/fast_lane.py, fastlane_mode=shadow): a
 # small streaming recognizer that follows each command while it is spoken.
-# Its own extra, not core and not real-clients: it is off by default, and
-# an install without it runs exactly as before (shadow mode then logs once
-# that the lane is unavailable). sherpa-onnx publishes binary wheels for
-# CPython 3.8-3.14 on manylinux x86_64/aarch64, Windows and macOS, and
-# carries its own onnxruntime; 1.13.8 is the first release checked on
-# cp314. The model (a 103 MB download, 137 MB unpacked) arrives on first
+# Off by default, and an install without it runs exactly as before (shadow
+# mode then logs once that the lane is unavailable). It runs on sherpa-onnx,
+# which this project no longer installs: the sherpa-onnx wheels on PyPI
+# (and sherpa-onnx-core under them) compile in espeak-ng, GPL-3.0, for
+# their own text to speech (checked 2026-10-12 on 1.13.8). An owner who
+# wants the lane installs a sherpa-onnx built with SHERPA_ONNX_ENABLE_TTS=OFF
+# (docs/CPU_HOST.md, "The fast lane"), or the PyPI wheel knowing what it
+# carries. The model (a 103 MB download, 137 MB unpacked) arrives on first
 # enable, from a pinned URL checked against a pinned SHA-256.
-#
-#   pip install -e ".[fastlane]"
-fastlane = [
-    "sherpa-onnx>=1.13.8,<2",
-    "numpy>=1.26",
-]
 # VoiceProfileHandler runtime deps. Split into a separate extra because
 # Resemblyzer's `webrtcvad>=2.0.10` pin has no Windows binary wheels and
 # pip would try to build it from source (needs MSVC). We don't use the
@@ -229,12 +232,20 @@ signing = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # `pytest -n N` (pytest-xdist, MIT; its execnet is MIT too): the suite
+    # on N worker processes, each on its own copy of the test database
+    # (domovoi/tests/xdist_db.py). requirements.lock pins the exact version.
+    "pytest-xdist>=3.8",
     "httpx>=0.27",
     # The suite imports these directly (library enricher + identify-chain
     # tests exercise the real modules with stubbed I/O), so a plain
     # `pip install -e ".[dev]"` must be enough to run pytest.
     "numpy>=1.26",
     "pyacoustid>=1.3",
+    # The phonemizer's golden fixture runs its out-of-dictionary model
+    # (domovoi/tests/test_phonemizer_golden.py), on the runtime a server and
+    # the phone run (the real-clients floor, below).
+    "onnxruntime>=1.28",
 ]
 
 [build-system]
@@ -251,4 +262,6 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["domovoi/tests", "plugins/radio/tests", "satellite/tests"]
 markers = [
     "spoken_gate: the spoken-name resolver on the frozen held-out audit set (opt-in, DOMOVOI_SPOKEN_GATE_DIR); it measures and never tunes",
+    "bash_harness: runs a whole scripts/linux/tests harness under the host's bash (minutes to an hour on Git Bash); deselected under pytest -n, where scripts/dev/run-linux-harness.sh runs them instead",
+    "xdist_group(name): under pytest -n, tests of one group run on one worker, one at a time (they share something outside the process: Postgres roles, a fixed temp file); see domovoi/tests/conftest.py",
 ]

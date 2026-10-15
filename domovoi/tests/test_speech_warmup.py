@@ -111,31 +111,23 @@ def test_a_missing_resemblyzer_degrades_to_no_embedding(monkeypatch) -> None:
 
 @pytest.fixture
 def fake_piper(monkeypatch, tmp_path):
-    """A `piper` whose PiperVoice.load counts loads and the thread they
-    ran on; the voice renders a short tone."""
+    """A ``tts.PiperVoice`` that counts loads and the thread they ran on;
+    the voice renders a short tone."""
     seen: dict = {"loads": [], "synth": 0}
 
-    class _Chunk:
-        sample_rate = 22_050
-        audio_int16_bytes = np.full(2205, 500, dtype=np.int16).tobytes()
-
     class PiperVoice:
-        @staticmethod
-        def load(path):
-            seen["loads"].append((path, threading.get_ident()))
+        sample_rate = 22_050
+
+        def __init__(self, path):
+            seen["loads"].append((str(path), threading.get_ident()))
             time.sleep(0.2)
-            return PiperVoice()
 
-        def synthesize(self, text, syn_config=None):
+        def synthesize_pcm(self, sentences, speed):
             seen["synth"] += 1
-            yield _Chunk()
+            return np.full(2205, 500, dtype=np.int16).tobytes()
 
-    class SynthesisConfig:
-        def __init__(self, length_scale=1.0) -> None:
-            self.length_scale = length_scale
-
-    monkeypatch.setitem(sys.modules, "piper", types.SimpleNamespace(
-        PiperVoice=PiperVoice, SynthesisConfig=SynthesisConfig))
+    monkeypatch.setattr(tts_mod, "PiperVoice", PiperVoice)
+    monkeypatch.setattr(tts_mod, "_phonemize", lambda text, dialect="en": ["ˈəʊkˈeɪ."])
     monkeypatch.setattr(tts_mod, "_piper_voice_cache", {})
     monkeypatch.setattr(tts_mod, "_piper_voice_path", lambda ref: tmp_path / f"{ref}.onnx")
     monkeypatch.setattr(speech_warmup, "_voice_tasks", {})
@@ -144,13 +136,13 @@ def fake_piper(monkeypatch, tmp_path):
 
 def test_a_voice_loads_once_between_a_preload_and_a_racing_reply(fake_piper) -> None:
     threads = [
-        threading.Thread(target=tts_mod.preload_piper_voice_sync, args=("en_US-amy-medium",)),
-        threading.Thread(target=tts_mod._synth_piper_sync, args=("hi", "en_US-amy-medium", 1.0)),
+        threading.Thread(target=tts_mod.preload_piper_voice_sync, args=("en_US-ljspeech-medium",)),
+        threading.Thread(target=tts_mod._synth_piper_sync, args=("hi", "en_US-ljspeech-medium", 1.0)),
     ]
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert len(fake_piper["loads"]) == 1
-    assert tts_mod.piper_voice_loaded("en_US-amy-medium")
+    assert tts_mod.piper_voice_loaded("en_US-ljspeech-medium")
     assert fake_piper["synth"] == 2
 
 
@@ -163,7 +155,7 @@ def real_mode(monkeypatch, fake_piper, fake_resemblyzer):
     monkeypatch.setattr(settings, "use_stubs", False)
     emb = RealVoiceEmbedder()
     monkeypatch.setattr(voice_embedder, "_client", emb)
-    registry: dict = {None: ("piper", "en_US-lessac-medium")}
+    registry: dict = {None: ("piper", "en_US-norman-medium")}
 
     async def _resolve(name):
         return registry.get(name, registry[None])
@@ -182,25 +174,25 @@ def test_the_boot_warm_up_loads_the_encoder_and_the_default_voice_off_the_loop(r
     assert real_mode.embedder._encoder is not None
     assert loop_thread not in real_mode.encoder["built_on"]
     (path, load_thread), = real_mode.piper["loads"]
-    assert path.endswith("en_US-lessac-medium.onnx") and load_thread != loop_thread
+    assert path.endswith("en_US-norman-medium.onnx") and load_thread != loop_thread
 
 
 def test_a_room_s_own_voice_is_warmed_once(real_mode) -> None:
-    real_mode.registry["Ryan"] = ("piper", "en_US-ryan-high")
+    real_mode.registry["Kristin"] = ("piper", "en_US-kristin-medium")
 
     async def _connects():
         # Two satellites report the same voice at once, then one again.
-        await asyncio.gather(speech_warmup.warm_room_voice("Ryan"),
-                             speech_warmup.warm_room_voice("Ryan"))
-        return await speech_warmup.warm_room_voice("Ryan")
+        await asyncio.gather(speech_warmup.warm_room_voice("Kristin"),
+                             speech_warmup.warm_room_voice("Kristin"))
+        return await speech_warmup.warm_room_voice("Kristin")
 
     assert asyncio.run(_connects()) is True
     (path, _thread), = real_mode.piper["loads"]
-    assert path.endswith("en_US-ryan-high.onnx")
+    assert path.endswith("en_US-kristin-medium.onnx")
 
 
-def test_a_cloud_voice_is_not_preloaded(real_mode) -> None:
-    real_mode.registry[None] = ("edge", "en-US-AriaNeural")
+def test_a_non_piper_voice_is_not_preloaded(real_mode) -> None:
+    real_mode.registry[None] = ("system", "")
     assert asyncio.run(speech_warmup.warm_room_voice(None)) is False
     assert real_mode.piper["loads"] == []
 

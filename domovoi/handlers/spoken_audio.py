@@ -411,6 +411,26 @@ class SpokenAudioHandler(Handler):
         item_type: str, item_id: int, title: str, file_path: str,
         chapters: Any, duration: int | None, resume: bool, resume_sec: int | None = None,
     ) -> Response:
+        if ctx.from_phone:
+            # A phone plays the book or episode itself, from the dashboard's
+            # own audio route, and resumes it where this phone's listener
+            # left off (the app reads that position, as its Audiobooks and
+            # Podcasts screens do). No room's player, no MPD path needed.
+            await self._remember(ctx, session, {
+                "item_type": item_type, "item_id": item_id, "title": title,
+                "chapters": chapters, "duration_sec": duration, "uri": None,
+            })
+            kind = "book" if item_type == sa.ITEM_AUDIOBOOK else "episode"
+            item: dict[str, Any] = {"kind": kind, "id": int(item_id), "title": title}
+            if duration:
+                item["duration_sec"] = int(duration)
+            return Response(
+                text=f"Playing {title}.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+                data={"item_type": item_type, "item_id": item_id, "played_on": "phone"},
+                device_actions=[{"type": "play", "items": [item], "resume": True}],
+            )
         uri = sa.mpd_uri_for(item_type, file_path)
         if uri is None:
             return self._reply(

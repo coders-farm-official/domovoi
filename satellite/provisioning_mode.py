@@ -10,9 +10,12 @@ reboots — the normal client then connects and everything server-side
 (MPD, pairing case-2 match) is already in place.
 
 Run as ``python -m satellite.provisioning_mode`` from
-``domovoi-provisioning.service`` (Before=domovoi-satellite.service; the
-unit is a no-op exit 0 on every provisioned boot). Root required:
-configfs, mkfs, nmcli, timedatectl, reboot.
+``domovoi-provisioning.service`` (Before=domovoi-satellite.service). On a
+provisioned boot it does one thing and exits 0: checks the network
+settings in satellite/net_settings.py (no setup hotspot profile, Wi-Fi
+power saving off, the room's host name) and applies whichever is missing,
+saying what it changed. Root required: configfs, mkfs, nmcli, hostnamectl,
+timedatectl, reboot.
 
 Deliberately imports ONLY stdlib + ``provisioning_protocol`` +
 ``config_writer`` — it must run on a bare image with none of the audio
@@ -276,6 +279,15 @@ _WIFI_RETRY_PAUSE_SEC = 2.0
 # One radio, always wlan0 — the wpa_supplicant path below has said so since
 # the beginning, and `nmcli connection add` wants the interface named.
 _WIFI_IFACE = "wlan0"
+# The house network's profile is named this rather than after the network
+# (2026-10-12), so the client's recovery can bring it back BY NAME through
+# one exact sudoers line (`nmcli connection up id domovoi-home`) instead of
+# `nmcli device connect wlan0`, which lets NetworkManager pick any profile,
+# the setup hotspot included. See satellite/wifi_profiles.py.
+_HOME_CONNECTION = "domovoi-home"
+# Wi-Fi power saving off, persisted in the profile (NetworkManager's
+# 802-11-wireless.powersave: 2 = disable). See satellite/net_settings.py.
+_POWERSAVE_OFF = "2"
 
 # The two `wifi-sec.key-mgmt` values a home network with a passphrase can
 # want. `wpa-psk` covers WPA2 and WPA2/WPA3 mixed; `sae` is WPA3-only.
@@ -481,6 +493,30 @@ def _wifi_profiles_for_ssid(nmcli: str, ssid: str, run) -> list[str]:
     return matches
 
 
+def _delete_other_home_profiles(nmcli: str, keep_uuid: str, run) -> None:
+    """Delete every profile named the home name except ``keep_uuid``."""
+    try:
+        r = run(
+            [nmcli, "-t", "-f", "NAME,UUID", "connection", "show"],
+            capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if r.returncode != 0:
+        return
+    out = r.stdout or ""
+    if isinstance(out, bytes):
+        out = out.decode("utf-8", "replace")
+    others = []
+    for ln in out.splitlines():
+        row = _split_terse(ln.strip())
+        if len(row) >= 2 and row[0] == _HOME_CONNECTION and row[1] and row[1] != keep_uuid:
+            others.append(row[1])
+    if others:
+        log.info("removing %d earlier %s profile(s)", len(others), _HOME_CONNECTION)
+        _delete_wifi_profiles(nmcli, others, run)
+
+
 def _delete_wifi_profiles(nmcli: str, uuids: list[str], run) -> None:
     """Best-effort removal. A profile we could not delete is reported by the
     join that follows, in nmcli's words, not guessed at here."""
@@ -533,8 +569,9 @@ def _nmcli_join(
         )
         add = [
             nmcli, "connection", "add", "type", "wifi",
-            "con-name", ssid, "ifname", _WIFI_IFACE, "ssid", ssid,
+            "con-name", _HOME_CONNECTION, "ifname", _WIFI_IFACE, "ssid", ssid,
             "connection.autoconnect", "yes",
+            "802-11-wireless.powersave", _POWERSAVE_OFF,
             "wifi-sec.key-mgmt", km,
             "wifi-sec.psk", psk,
         ]
@@ -599,6 +636,11 @@ def _nmcli_join(
                 f"wifi join failed for {ssid!r}: NetworkManager is not answering"
             )
         if r.returncode == 0:
+            # One profile answers to the home name: a re-provision onto a
+            # different network leaves the previous network's profile
+            # behind (it matched no ssid above), and `connection up id`
+            # with two of them is a coin toss.
+            _delete_other_home_profiles(nmcli, uuid, run)
             return True, None
         # Keep nmcli's own words. Reporting every failure as "wrong
         # password?" hid a scan-cache problem behind a message that sent
@@ -835,9 +877,22 @@ def give_to_satellite_user(path: Path) -> bool:
     chown = getattr(os, "chown", None)
     if chown is None:          # Windows dev host — no ownership to hand over
         return False
+    # Never through a link. These paths are in the satellite user's home,
+    # and root following a link planted there hands that user whatever it
+    # points at (a reviewer had root chown a root helper to uid 1000 that
+    # way, 2026-10-12). A link is refused outright, and the chown itself
+    # does not follow one either, so a swap in between changes only the
+    # link.
+    path = Path(path)
+    if path.is_symlink():
+        log.warning("not handing %s to the satellite user: it is a symbolic link", path)
+        return False
     try:
         st = Path.home().stat()
-        chown(path, st.st_uid, st.st_gid)
+        if chown in os.supports_follow_symlinks:
+            chown(path, st.st_uid, st.st_gid, follow_symlinks=False)
+        else:
+            chown(path, st.st_uid, st.st_gid)
         return True
     except OSError as e:
         log.warning(
@@ -881,9 +936,14 @@ def resolve_auto_url(configured: str) -> str | None:
     from satellite import discovery, server_identity
 
     expected, source = server_identity.pinned_fingerprint()
-    url = discovery.resolve_url(
-        proto.AUTO_DISCOVER_URL, expected_fingerprint=expected
+    # The core's name first (domovoi.local), then the subnet sweep: the
+    # same order the client uses (discovery.locate), every candidate held
+    # to the pinned fingerprint.
+    found = discovery.locate(
+        names=discovery.server_names(), last_known=None,
+        expected_fingerprint=expected,
     )
+    url = found.url if found is not None else None
     if url is None:
         log.error(
             "joined Wi-Fi but found no Domovoi server on this network%s. "
@@ -901,8 +961,8 @@ def resolve_auto_url(configured: str) -> str | None:
         return None
     give_to_satellite_user(server_identity.PENDING_SERVER_SIDECAR)
     log.info(
-        "discovered the Domovoi server at %s — pending approval on the "
-        "dashboard", url,
+        "discovered the Domovoi server at %s (%s) — pending approval on the "
+        "dashboard", url, found.detail if found is not None else "",
     )
     return url
 
@@ -953,10 +1013,13 @@ def apply_provision(
     wifi_attempts: int,
     wifi_join_timeout: float,
     run=subprocess.run,
+    before_join=None,
 ) -> tuple[bool, str | None]:
     """Write config + pairing token, join Wi-Fi, clean up. (ok, error).
     The credentials are cleared from the transport BEFORE any possible
-    re-expose, so they never ride a setup volume twice."""
+    re-expose, so they never ride a setup volume twice. ``before_join``
+    (room_id) runs just before the Wi-Fi join: :func:`run` passes
+    :func:`name_before_join`."""
     # 1. Config from the example, comment-preserving.
     example = EXAMPLE_CONFIG.read_text(encoding="utf-8")
     changes: dict[str, Any] = {
@@ -1034,6 +1097,12 @@ def apply_provision(
 
     # 4. Credentials unreadable BEFORE any re-expose.
     transport.clear_provision()
+
+    # 4b. The room's host name, before the join: the router names a device
+    #     after the host name in its first DHCP request, and keeps that
+    #     name until the device next connects.
+    if before_join is not None:
+        before_join(payload["room_id"])
 
     # 5. Wi-Fi — the step that can fail on a typo'd PSK.
     wifi = payload["wifi"]
@@ -1317,11 +1386,14 @@ def run(
     wifi_attempts: int = 3,
     wifi_join_timeout: float = 75.0,
     max_loops: int | None = None,
+    after_setup=None,
 ) -> int:
     """The provisioning state machine. Returns an exit code (0 = nothing to
     do or provisioned successfully). ``max_loops`` bounds the poll loop for
     tests; None = poll until provisioned or killed. ``image`` resolves to
     the module's IMAGE_FILE at CALL time (monkeypatch-friendly).
+    ``after_setup(room_id, when)`` runs once setup has succeeded, before the
+    reboot (default :func:`apply_network_settings`).
 
     The first argument is a :class:`Transport`. A bare
     :class:`GadgetBackend` is still accepted and wrapped, so existing
@@ -1379,6 +1451,7 @@ def run(
             transport=transport,
             wifi_attempts=wifi_attempts,
             wifi_join_timeout=wifi_join_timeout,
+            before_join=name_before_join,
         )
         if ok:
             _write_state({"phase": "done"})
@@ -1386,6 +1459,11 @@ def run(
             # reboot that follows it.
             setup_status("on-network")
             transport.dispose()
+            # The network settings every satellite carries from now on (no
+            # setup hotspot profile, power saving off, the room's host
+            # name), applied before the first boot as a satellite so a new
+            # card has them by default. Every later boot re-checks them.
+            (after_setup or apply_network_settings)(payload["room_id"], "setup")
             log.info("provisioned as %r — rebooting", payload["room_id"])
             transport.reboot()
             return 0
@@ -1446,6 +1524,47 @@ def _poll_for_provision(
             return None
 
 
+def name_before_join(room_id: str | None) -> None:
+    """The room's host name (satellite/net_settings.py), set before setup
+    joins the house Wi-Fi, so the router's very first DHCP request from
+    this unit already carries it. Root on a satellite only, like
+    :func:`apply_network_settings`; never raises."""
+    geteuid = getattr(os, "geteuid", None)
+    if sys.platform != "linux" or geteuid is None or geteuid() != 0:
+        return
+    try:
+        from satellite import net_settings
+
+        net_settings.set_hostname(room_id, subprocess.run, net_settings.Report(),
+                                  restart_avahi=False)
+    except Exception as e:  # noqa: BLE001 — setup goes on with the old name
+        log.warning("host name before joining the Wi-Fi: %s", e)
+
+
+def apply_network_settings(room_id: str | None, when: str) -> dict[str, Any] | None:
+    """satellite/net_settings.py, as root on the satellite itself — and
+    nowhere else: on a developer's machine or in a test this is a no-op, so
+    nothing here can rename a laptop or delete its Wi-Fi profiles. Never
+    raises."""
+    geteuid = getattr(os, "geteuid", None)
+    if sys.platform != "linux" or geteuid is None or geteuid() != 0:
+        log.info("network settings: not root on a satellite; skipped")
+        return None
+    try:
+        from satellite import net_settings
+
+        # At boot, root's record of the server's address also follows a
+        # move the client made — after root checks the new address itself
+        # (net_settings.refresh_server_pin). At setup it was just written.
+        return net_settings.apply(
+            room_id, when=when,
+            server_pin=net_settings.refresh_server_pin if when == "boot" else None,
+        )
+    except Exception as e:  # noqa: BLE001 — never take setup or boot down
+        log.warning("network settings could not be applied: %s", e)
+        return None
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -1454,6 +1573,14 @@ def main() -> int:
     if sys.platform != "linux":
         log.error("provisioning mode only runs on the satellite itself")
         return 2
+    if is_provisioned():
+        # Every provisioned boot: the network settings, checked and applied
+        # where missing (satellite/net_settings.py). This is how a satellite
+        # set up before they existed gets them — the upgrade brings this
+        # code, the next boot runs it.
+        from satellite import net_settings
+
+        apply_network_settings(net_settings.read_room_id(CONFIG_PATH), "boot")
     return run()
 
 

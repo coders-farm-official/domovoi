@@ -167,28 +167,57 @@ const GreetingsPanel = () => {
 /*
  * Each satellite speaks in one registered voice; the server renders
  * that room's responses + greeting clips in it. Manage the registry here:
- * register a cloud (Edge) voice by id, upload a local Piper model
- * (.onnx + .onnx.json), set the default, rename, delete. Every mutation
- * pings the server to re-render clips and push them to satellites.
+ * upload a local Piper model (.onnx + .onnx.json), set the default,
+ * rename, delete. Every mutation pings the server to re-render clips and
+ * push them to satellites. (The Microsoft Edge cloud voices were dropped
+ * on 2026-10-12.)
  *
  * Data:
- *   GET    /api/voices            · the registry
- *   POST   /api/voices/edge       · register an Edge voice {name, voice_id, set_default}
+ *   GET    /api/voices            · the registry (each row's `sample` and `problem`)
  *   POST   /api/voices/piper      · upload a Piper model (multipart)
  *   PATCH  /api/voices/{id}       · rename / set default
  *   DELETE /api/voices/{id}       · remove (refuses the default)
  */
 
-const _voiceFieldStyle = {
-  font: 'inherit', fontSize: 13, padding: '7px 10px', borderRadius: 'var(--r-sm)',
-  border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)',
+// The Voices page's fields are the dashboard's own (`cal-inp`: the card
+// colour, the theme's border, the brand focus ring, light and dark); these
+// styles only lay them out.
+const _voiceFieldLayout = { minWidth: 0, boxSizing: 'border-box', maxWidth: '100%' };
+
+// A file picker in the dashboard's style, not the browser's raw "Choose
+// File" button: a themed button opens the hidden input, and the chosen
+// file's name (or "no file chosen") sits beside it.
+const VoiceFilePick = ({ label, accept, file, onPick, disabled = false }) => {
+  const ref = React.useRef(null);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', minWidth: 0 }}>
+      <input ref={ref} type="file" accept={accept} hidden aria-label={label}
+             onChange={(e) => {
+               onPick((e.target.files && e.target.files[0]) || null);
+               e.target.value = '';   // picking the same file again still counts
+             }}/>
+      <Button type="button" icon="file" disabled={disabled}
+              onClick={() => ref.current && ref.current.click()}>{label}</Button>
+      <span title={file ? file.name : undefined}
+            style={{ fontSize: 12, color: file ? 'var(--fg)' : 'var(--fg-muted)', minWidth: 0, maxWidth: '100%',
+                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 120px' }}>
+        {file ? file.name : 'no file chosen'}
+      </span>
+    </div>
+  );
 };
 
-const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, internetOff = false }) => {
+// A play button plays the voice it names, or is not shown (owner,
+// 2026-10-12). The server says what each voice can play: "voice" (it
+// speaks live), "clip" (a shipped voice not downloaded yet: its built-in
+// Ogg Opus clip, which this browser must be able to play) or null.
+const VOICE_CLIP_PLAYABLE = (() => {
+  try { return !!new Audio().canPlayType('audio/ogg; codecs=opus'); } catch { return false; }
+})();
+const voiceSamplePlayable = (source) => source === 'voice' || (source === 'clip' && VOICE_CLIP_PLAYABLE);
+
+const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete }) => {
   const [editing, setEditing] = React.useState(false);
-  // A Microsoft (Edge) voice speaks through the internet: under "No" its
-  // sample and "make default" are greyed, never hidden (Settings → Internet).
-  const cloudOff = internetOff && v.engine === 'edge';
   const [name, setName] = React.useState(v.name);
 
   const save = () => {
@@ -198,31 +227,42 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, inter
     setEditing(false);
   };
 
+  // A voice that can't speak here keeps no play button (the system voice
+  // would answer), and says why instead. A Microsoft Edge row left from an
+  // older release goes when the server restarts: no "make default" for it.
+  const playable = v.sample === undefined || voiceSamplePlayable(v.sample);
+  const dropped = v.engine === 'edge';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
-                  borderBottom: '1px solid var(--border-soft)' }}>
-      <IconButton name={sampling ? 'loader' : 'play'}
-                  title={cloudOff ? NEEDS_INTERNET_TEXT : (sampling ? 'Synthesizing…' : 'Play a sample')}
-                  disabled={sampling || cloudOff} onClick={() => onPlay(v)}/>
+                  borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+      {playable
+        ? <IconButton name={sampling ? 'loader' : 'play'}
+                      title={sampling ? 'Synthesizing…' : 'Play a sample'}
+                      disabled={sampling} onClick={() => onPlay(v)}/>
+        : <span style={{ width: 28, flex: 'none' }} aria-hidden="true"/>}
       {editing ? (
-        <input value={name} onChange={(e) => setName(e.target.value)} autoFocus
-               onKeyDown={(e) => e.key === 'Enter' && save()}
-               style={{ ..._voiceFieldStyle, flex: 1 }}/>
+        <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} autoFocus
+               aria-label="Voice name" onKeyDown={(e) => e.key === 'Enter' && save()}
+               style={{ ..._voiceFieldLayout, flex: 1, minWidth: 120 }}/>
       ) : (
-        <div style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{v.name}</div>
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
+          {v.problem && (
+            <div style={{ fontSize: 12, color: 'var(--warn)' }}>
+              Can’t speak here: {v.problem}. {dropped
+                ? 'It goes when the server restarts; rooms set to it speak in the default voice.'
+                : 'Rooms set to it speak with the system voice.'}
+            </div>
+          )}
+        </div>
       )}
-      <Pill tone={v.engine === 'piper' ? 'idle' : 'live'}>
-        {v.engine === 'piper' ? 'local' : 'cloud'}
-      </Pill>
       <span style={{ fontSize: 12, color: 'var(--fg-muted)', maxWidth: 200,
                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {v.model_ref}
       </span>
-      {cloudOff && <NeedsInternetNote compact/>}
       {v.is_default
         ? <Pill tone="live">default</Pill>
-        : <Button variant="ghost" onClick={() => onSetDefault(v)} disabled={cloudOff}
-                  title={cloudOff ? NEEDS_INTERNET_TEXT : undefined}>make default</Button>}
+        : !dropped && <Button variant="ghost" onClick={() => onSetDefault(v)}>make default</Button>}
       {editing
         ? <Button variant="primary" onClick={save}>Save</Button>
         : <IconButton name="pencil" title="rename" onClick={() => setEditing(true)}/>}
@@ -231,50 +271,25 @@ const VoiceRow = ({ v, sampling, onPlay, onRename, onSetDefault, onDelete, inter
   );
 };
 
-const RegisterEdge = ({ onAdd, internetOff = false }) => {
-  const [name, setName] = React.useState('');
-  const [voiceId, setVoiceId] = React.useState('');
-  const submit = (e) => {
-    e?.preventDefault?.();
-    if (internetOff) return;
-    const n = name.trim(); const id = voiceId.trim();
-    if (!n || !id) return;
-    onAdd(n, id);
-    setName(''); setVoiceId('');
-  };
-  return (
-    <form onSubmit={submit}
-          style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Aria)"
-             disabled={internetOff} style={{ ..._voiceFieldStyle, width: 160 }}/>
-      <input value={voiceId} onChange={(e) => setVoiceId(e.target.value)}
-             placeholder="Edge voice id (e.g. en-US-AriaNeural)" disabled={internetOff}
-             style={{ ..._voiceFieldStyle, flex: 1, minWidth: 220 }}/>
-      <Button variant="primary" icon="cloud" type="submit" disabled={internetOff}
-              title={internetOff ? NEEDS_INTERNET_TEXT : undefined}>Register</Button>
-      {internetOff && <NeedsInternetNote compact/>}
-    </form>
-  );
-};
-
 const UploadPiper = ({ onUpload }) => {
   const [name, setName] = React.useState('');
-  const onnxRef = React.useRef(null);
-  const jsonRef = React.useRef(null);
+  const [onnx, setOnnx] = React.useState(null);
+  const [json, setJson] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  // "Upload voice" can only work with a name and both files: until then it
+  // is greyed and says what is missing.
+  const missing = [!name.trim() && 'a name', !onnx && 'the model', !json && 'the config'].filter(Boolean);
 
   const submit = async (e) => {
     e?.preventDefault?.();
     const n = name.trim();
-    const onnx = onnxRef.current?.files?.[0];
-    const json = jsonRef.current?.files?.[0];
     if (!n || !onnx || !json) return;
     setBusy(true);
     try {
       await onUpload(n, onnx, json);
       setName('');
-      if (onnxRef.current) onnxRef.current.value = '';
-      if (jsonRef.current) jsonRef.current.value = '';
+      setOnnx(null);
+      setJson(null);
     } finally {
       setBusy(false);
     }
@@ -282,19 +297,14 @@ const UploadPiper = ({ onUpload }) => {
 
   return (
     <form onSubmit={submit}
-          style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 14px' }}>
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
-             style={{ ..._voiceFieldStyle, width: 200 }}/>
-      <label style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        Model (.onnx)
-        <input ref={onnxRef} type="file" accept=".onnx" style={{ display: 'block', marginTop: 4 }}/>
-      </label>
-      <label style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-        Config (.onnx.json)
-        <input ref={jsonRef} type="file" accept=".json" style={{ display: 'block', marginTop: 4 }}/>
-      </label>
+          style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '10px 14px' }}>
+      <input className="cal-inp" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Ryan)"
+             aria-label="Name" style={{ ..._voiceFieldLayout, width: 240 }}/>
+      <VoiceFilePick label="Model (.onnx)" accept=".onnx" file={onnx} onPick={setOnnx} disabled={busy}/>
+      <VoiceFilePick label="Config (.onnx.json)" accept=".json" file={json} onPick={setJson} disabled={busy}/>
       <div>
-        <Button variant="primary" icon="upload" type="submit" disabled={busy}>
+        <Button variant="primary" icon="upload" type="submit" disabled={busy || missing.length > 0}
+                title={missing.length ? `Choose ${missing.join(', ')} first` : undefined}>
           {busy ? 'Uploading…' : 'Upload voice'}
         </Button>
       </div>
@@ -302,11 +312,205 @@ const UploadPiper = ({ onUpload }) => {
   );
 };
 
+/*
+ * Domovoi's own voice (above the registry): which of the three public-
+ * domain voices the server speaks with, and the "say it like" list that
+ * tells the text-to-phoneme converter how to say a word. The phone reads
+ * the same thing (GET /api/voice) so it sounds the same.
+ *
+ * Data:
+ *   GET    /api/voice                          · voices, server_voice, pronunciations (device tier)
+ *   GET    /api/voice/sample/{id}              · a sample in one voice (device tier)
+ *   PUT    /api/voice/server                   · {voice} (admin)
+ *   POST   /api/voice/pronunciations           · {word, say_like} (admin)
+ *   DELETE /api/voice/pronunciations/{word}    · (admin)
+ *   POST   /api/voice/pronunciations/defaults  · put the shipped entries back (admin)
+ *   POST   /api/voice/pronunciations/preview   · {word, say_like, voice?} → WAV (device tier)
+ */
+
+const SAY_LIKE_HELP = 'Write it the way it sounds, in plain letters, the syllables split by hyphens and the '
+  + 'stressed one in CAPITALS: Domovoi = DOH-moe-voy, Kamron = KAM-ren, Siobhan = shiv-AWN, Nguyen = win. '
+  + 'The other syllables are said lightly. Sounds as dictionaries spell them: uh (but), ay (say), ee (see), '
+  + 'oh (go), oo (too), ow (now), zh (measure). Advanced: the voice’s own phonemes between slashes, /wɪn/ '
+  + '(hover a play button you have heard to see them).';
+
+const VoiceSettingsCards = ({ fire }) => {
+  const { data, loading, error, refresh } = useApiObject('/api/voice');
+  // What each voice's play button can play (live, its clip, or nothing).
+  const { data: sampleInfo } = useApiObject('/api/voice/samples', { quiet: true });
+  const admin = useAdminSignedIn();
+  const [current, setCurrent] = React.useState(null);
+  const [busy, setBusy] = React.useState(null);      // what is playing / saving
+  const [word, setWord] = React.useState('');
+  const [sayLike, setSayLike] = React.useState('');
+  // The voice's phonemes of each word heard here (lower-cased word -> the
+  // string): advanced detail, on the play buttons' hover, not in the toast.
+  const [heard, setHeard] = React.useState({});
+  const audioRef = React.useRef(null);
+  const view = current || data;
+
+  React.useEffect(() => { setCurrent(null); }, [data]);
+
+  const stopAudio = () => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+  };
+  React.useEffect(() => stopAudio, []);
+
+  // Play a WAV the server synthesizes; `key` marks which button is busy.
+  // `say`: a "say it like" preview, toasted in plain words ("Kamron →
+  // KAM-ren"), its phonemes kept for the button's hover.
+  const playFrom = async (key, path, opts, say) => {
+    stopAudio();
+    setBusy(key);
+    try {
+      const r = await apiFetchRaw(path, opts || {});
+      const phon = r.headers.get('X-Phonemes');
+      if (say) {
+        fire(`🔊 ${say.word} → ${say.sayLike}`);
+        if (phon) setHeard((h) => ({ ...h, [say.word.toLowerCase()]: decodeURIComponent(phon) }));
+      }
+      const said = r.headers.get('X-Sample-Text');
+      if (said) fire(`🔊 ${decodeURIComponent(said)}`);
+      const url = URL.createObjectURL(await r.blob());
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      const done = () => { setBusy(null); URL.revokeObjectURL(url); };
+      audio.onended = done;
+      audio.onerror = () => { fire('playback failed'); done(); };
+      await audio.play();
+    } catch (e) {
+      reportMutationFailure(fire, 'Play', e);
+      setBusy(null);
+    }
+  };
+
+  const save = async (key, fn, okMsg) => {
+    setBusy(key);
+    try {
+      const next = await fn();
+      if (next) setCurrent(next);
+      if (okMsg) fire(okMsg);
+      return true;
+    } catch (e) {
+      reportMutationFailure(fire, 'Save', e, { kept: true });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pickVoice = (v) => save(`use:${v.id}`,
+    () => apiFetch('/api/voice/server', { method: 'PUT', body: JSON.stringify({ voice: v.id }) }),
+    `${v.name} is now the server's voice; the clips re-render in it`);
+  const preview = (w, s) => playFrom(`say:${w}`, '/api/voice/pronunciations/preview', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ word: w, say_like: s }),
+  }, { word: w, sayLike: s });
+  // "Hear it", with the voice's phonemes on hover once it has been heard.
+  const hearTitle = (w, base) => {
+    const ph = heard[(w || '').toLowerCase()];
+    return ph ? `${base} (the voice’s phonemes: /${ph.replace(/[.!?]$/, '')}/)` : base;
+  };
+  const addEntry = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const w = word.trim(); const s = sayLike.trim();
+    if (!w || !s) return;
+    const ok = await save('add', () => apiPost('/api/voice/pronunciations', { word: w, say_like: s }),
+      `${w} = ${s} saved`);
+    if (ok) { setWord(''); setSayLike(''); }
+  };
+  const removeEntry = (p) => save(`del:${p.word}`,
+    () => apiDelete(`/api/voice/pronunciations/${encodeURIComponent(p.word)}`),
+    `${p.word} is left to the converter again`);
+  const restoreDefaults = () => save('defaults',
+    () => apiPost('/api/voice/pronunciations/defaults', {}), 'the shipped entries are back');
+
+  if (loading && !view) return null;
+  if (!view) {
+    return (
+      <Card title="Domovoi's voice" sub="Could not load the voice settings.">
+        <div style={{ padding: '10px 14px', fontSize: 13 }}>
+          {error ? apiErrorText(error, 160) : 'No answer.'}{' '}
+          <Button variant="ghost" onClick={refresh}>Try again</Button>
+        </div>
+      </Card>
+    );
+  }
+  const lock = admin ? undefined : 'Sign in as an admin to change this';
+
+  return (
+    <React.Fragment>
+      <Card title="Domovoi's voice"
+            sub="The voice the server speaks in (rooms that picked their own keep it). All three are public domain and run on this server.">
+        {view.voices.map((v) => {
+          const inUse = v.id === view.server_voice;
+          return (
+            <div key={v.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
+                                     borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+              {voiceSamplePlayable(sampleInfo?.samples?.[v.id])
+                ? <IconButton name={busy === `play:${v.id}` ? 'loader' : 'play'}
+                              title={sampleInfo.samples[v.id] === 'clip'
+                                ? 'Play a sample (a short built-in clip: the voice isn’t downloaded yet)'
+                                : 'Play a sample'}
+                              disabled={!!busy} onClick={() => playFrom(`play:${v.id}`, `/api/voice/sample/${v.id}`)}/>
+                : <span style={{ width: 28, flex: 'none' }} aria-hidden="true"/>}
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{v.name}</div>
+                <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{v.sex} · {v.id}</div>
+              </div>
+              {inUse
+                ? <Pill tone="live">in use</Pill>
+                : <Button variant="ghost" disabled={!admin || !!busy} title={lock}
+                          onClick={() => pickVoice(v)}>use this voice</Button>}
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card title="Say it like"
+            sub="How Domovoi says the words it gets wrong: names, brands, the house's own words."
+            action={admin && <Button variant="ghost" disabled={!!busy} onClick={restoreDefaults}
+                                     title="Domovoi, Domo and Nguyen as shipped">put back the defaults</Button>}>
+        {view.pronunciations.length === 0 && (
+          <div style={{ padding: '10px 14px', fontSize: 13, color: 'var(--fg-muted)' }}>
+            Nothing on the list: the converter decides every word.
+          </div>
+        )}
+        {view.pronunciations.map((p) => (
+          <div key={p.word} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px',
+                                     borderBottom: '1px solid var(--border-soft)', flexWrap: 'wrap' }}>
+            <IconButton name={busy === `say:${p.word}` ? 'loader' : 'play'} title={hearTitle(p.word, 'Hear it')}
+                        disabled={!!busy} onClick={() => preview(p.word, p.say_like)}/>
+            <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontWeight: 500 }}>{p.word}</div>
+            <div style={{ flex: 1, minWidth: 100, fontSize: 14, fontFamily: 'var(--font-mono, monospace)' }}>{p.say_like}</div>
+            {admin && <IconButton name="trash-2" title="take it off the list" disabled={!!busy}
+                                  onClick={() => removeEntry(p)}/>}
+          </div>
+        ))}
+        <form onSubmit={addEntry}
+              style={{ display: 'flex', gap: 8, padding: '10px 14px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input className="cal-inp" value={word} onChange={(e) => setWord(e.target.value)} placeholder="Word (e.g. Kamron)"
+                 aria-label="Word" maxLength={48} style={{ ..._voiceFieldLayout, flex: '1 1 140px' }}/>
+          <input className="cal-inp" value={sayLike} onChange={(e) => setSayLike(e.target.value)}
+                 placeholder="Say it like (e.g. KAM-ren)" aria-label="Say it like" maxLength={100}
+                 style={{ ..._voiceFieldLayout, flex: '3 1 180px' }}/>
+          {/* type="button": a plain button in this form would also submit
+              it, saving the entry the owner only meant to hear. */}
+          <IconButton type="button" name={busy === `say:${word.trim()}` ? 'loader' : 'play'}
+                      title={hearTitle(word.trim(), 'Hear it before saving')}
+                      disabled={!!busy || !word.trim() || !sayLike.trim()}
+                      onClick={() => preview(word.trim(), sayLike.trim())}/>
+          <Button variant="primary" type="submit" disabled={!admin || !!busy || !word.trim() || !sayLike.trim()}
+                  title={lock}>Save</Button>
+        </form>
+        <div style={{ padding: '0 14px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>{SAY_LIKE_HELP}</div>
+      </Card>
+    </React.Fragment>
+  );
+};
+
 const VoicesPanel = () => {
   const { items, loading, refresh } = useApiList('/api/voices');
-  // Microsoft voices need the internet: greyed under "No" (Settings → Internet).
-  const { data: cfg } = useApiObject('/api/config');
-  const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
   const [samplingId, setSamplingId] = React.useState(null);
   const audioRef = React.useRef(null);
@@ -317,14 +521,10 @@ const VoicesPanel = () => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     setSamplingId(v.id);
     try {
-      const r = await fetch(`/api/voices/${v.id}/sample`);
-      if (!r.ok) {
-        // A Microsoft voice under "No": the server's own sentence, not a status line.
-        let body = '';
-        try { body = await r.text(); } catch { /* no body */ }
-        if (r.status === 409 && body.includes(INTERNET_OFF_MESSAGE)) throw new Error(INTERNET_OFF_MESSAGE);
-        throw new Error(`${r.status} ${r.statusText}`);
-      }
+      // With the browser's credential: the server's synthesis is on the
+      // household device tier, and a bare fetch carries only the cookie,
+      // which that tier refuses (every Piper sample came back 502).
+      const r = await apiFetchRaw(`/api/voices/${v.id}/sample`);
       const said = r.headers.get('X-Sample-Text');
       if (said) fire(`🔊 ${decodeURIComponent(said)}`);
       const url = URL.createObjectURL(await r.blob());
@@ -335,7 +535,9 @@ const VoicesPanel = () => {
       audio.onerror = () => { fire('sample playback failed'); done(); };
       await audio.play();
     } catch (e) {
-      fire(`sample failed: ${e.message || e}`);
+      // The server's own sentence (why the voice can't speak right now);
+      // quiet when the pair / sign-in prompt owns it.
+      reportMutationFailure(fire, 'Play', e);
       setSamplingId(null);
     }
   };
@@ -350,15 +552,19 @@ const VoicesPanel = () => {
     }
   };
 
-  const addEdge = (name, voiceId) =>
-    guard(() => apiPost('/api/voices/edge', { name, voice_id: voiceId }), 'voice registered');
-
   const uploadPiper = (name, onnx, json) => {
     const fd = new FormData();
     fd.append('name', name);
     fd.append('onnx', onnx);
     fd.append('config', json);
-    return guard(() => apiUpload('/api/voices/piper', fd), 'voice uploaded');
+    // Uploaded either way; one Domovoi can't speak says why, once, here.
+    return guard(async () => {
+      const v = await apiUpload('/api/voices/piper', fd);
+      fire(v && v.problem
+        ? `${v.name} is uploaded but can’t speak here: ${v.problem}. Rooms set to it speak with the system voice.`
+        : 'voice uploaded');
+      return v;
+    }, null);
   };
 
   const rename = (v, name) =>
@@ -370,32 +576,26 @@ const VoicesPanel = () => {
     guard(() => apiDelete(`/api/voices/${v.id}`), 'voice removed'));
   const remove = (v) => del.request(v, {
     title: `Delete the voice “${v.name}”?`,
-    body: v.engine === 'piper'
-      ? <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Satellites using it fall back to the default voice.</div>
-      : <div>Satellites using it fall back to the default voice. Register the id again to bring it back.</div>,
+    body: <div>The uploaded Piper model and its config are removed — upload them again to get the voice back. Satellites using it fall back to the default voice.</div>,
   });
 
   return (
     <React.Fragment>
-      <Card title="Add a cloud voice"
-            sub="Register a Microsoft Edge neural voice by its id. Needs network to speak.">
-        <RegisterEdge onAdd={addEdge} internetOff={internetOff}/>
-      </Card>
+      <VoiceSettingsCards fire={fire}/>
 
       <Card title="Upload a local voice"
-            sub="A Piper model (.onnx) and its config (.onnx.json). Fully offline once uploaded.">
+            sub="A Piper model (.onnx) and its config (.onnx.json), trained on espeak’s English phonemes: American (“en-us”, what most Piper voices people train use) or British (“en”). Its config says which; Domovoi’s converter writes both. Fully offline once uploaded.">
         <UploadPiper onUpload={uploadPiper}/>
       </Card>
 
       {loading ? null : items.length === 0 ? (
-        <Empty title="No voices yet" sub="Add a cloud voice or upload a Piper model above."/>
+        <Empty title="No voices yet" sub="Upload a Piper model above."/>
       ) : (
         <Card title={`Registered (${items.length})`}
               sub="The default is used by any satellite that hasn't picked its own.">
           {items.map((v) => (
             <VoiceRow key={v.id} v={v} sampling={samplingId === v.id} onPlay={playSample}
-                      onRename={rename} onSetDefault={setDefault} onDelete={remove}
-                      internetOff={internetOff}/>
+                      onRename={rename} onSetDefault={setDefault} onDelete={remove}/>
           ))}
         </Card>
       )}
@@ -469,18 +669,48 @@ const VoicesPanel = () => {
  * Advanced section, and any change asks for the password again. The card
  * used to say "signed in" for both and offer only "sign out", which is
  * how the owner signed out, signed in, reloaded, and never saw Advanced.
+ *
+ * On an unclaimed box, arriving here (the tab, or its address
+ * #settings/configuration) opens the first-run admin setup by itself, once
+ * per arrival, as soon as a fresh status read says the box is unclaimed:
+ * the setup code field has the focus, so a new owner pastes and goes.
+ * `setupAsked` is the installer's address, #settings/configuration/setup
+ * (SETUP_ROUTE): on a box already claimed before it arrived it says so in
+ * one line, and nothing opens. After a claim made here the marker leaves
+ * the address (replaced in place), so a reload doesn't call the box
+ * claimed "already".
  */
-const AdminSection = () => {
+const AdminSection = ({ setupAsked = false }) => {
   const [, force] = React.useReducer((x) => x + 1, 0);
+  // The first fresh answer this arrival got: 'unclaimed' | 'claimed' | null.
+  const [arrived, setArrived] = React.useState(null);
   React.useEffect(() => {
+    let alive = true;
     const un = Auth.subscribe(force);
-    Auth.refreshStatus();
-    return un;
+    Promise.resolve(Auth.refreshStatus ? Auth.refreshStatus() : Auth.status).then((s) => {
+      if (!alive || !s) return;
+      const unclaimed = s.setup_complete === false;
+      setArrived(unclaimed ? 'unclaimed' : 'claimed');
+      if (unclaimed && !Auth.modalOpen) Auth.openModal();
+    }, () => { /* unreachable: the card says "checking…" and offers the button */ });
+    return () => { alive = false; un(); };
   }, []);
   const st = Auth.status;
   const needsSetup = st && st.setup_complete === false;
+  const hostKind = useHostKind(!!needsSetup);
   const live = Auth.isLoggedIn();
   const viewOnly = !live && !!(st && st.authenticated);
+  // Claimed here, on the installer's address: drop its marker in place.
+  const claimedHere = arrived === 'unclaimed' && !!st && st.setup_complete !== false;
+  React.useEffect(() => {
+    if (!claimedHere || !setupAsked) return;
+    try {
+      if (routeParts(currentRoute()).join('/') === SETUP_ROUTE) {
+        window.history.replaceState(null, '', '#settings/configuration');
+      }
+    } catch { /* the marker stays; it only adds a note on the next visit */ }
+  }, [claimedHere, setupAsked]);
+  const alreadySetUp = setupAsked && arrived === 'claimed' && !needsSetup;
   // Not returned: a view-only tab's sign-out waits on the password prompt.
   const signOut = () => { Auth.logout(); };
   return (
@@ -498,10 +728,15 @@ const AdminSection = () => {
                 ? <Pill tone="warn">signed in (view only after reload)</Pill>
                 : <Pill tone="idle">signed out</Pill>}
         {needsSetup && (
-          <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            Enter the setup code from <code>~/.domovoi/setup-code.txt</code> on
-            the Domovoi server (the core also prints it when it runs in a
-            terminal) and choose an admin password.
+          <span className="setup-code-where" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            <SetupCodeWhere kind={hostKind}/>
+          </span>
+        )}
+        {alreadySetUp && (
+          <span className="admin-already-set-up" style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {live
+              ? 'This Domovoi’s admin account is already set up, and you’re signed in.'
+              : 'This Domovoi’s admin account is already set up: sign in with its password.'}
           </span>
         )}
         {viewOnly && (
@@ -877,7 +1112,7 @@ const configLoadMessage = (error) => {
   return `couldn't load configuration (${error.status || 'no response'}): ${apiErrorText(error)}`;
 };
 
-const ConfigPanel = () => {
+const ConfigPanel = ({ setupAsked = false }) => {
   // What comes back depends on WHO asks (CORE-6): the advanced section
   // and the unmasked secrets only for a live admin Bearer, the common
   // section with secrets masked for the cookie a reload keeps. So this
@@ -961,7 +1196,7 @@ const ConfigPanel = () => {
       <span>{(internetField.value && (internetField.choice_labels || {})[internetField.value])
              || internetField.value || 'not answered'}</span>
       <span style={{ color: 'var(--fg-muted)' }}> · change it in </span>
-      <a href="#settings" className="home-link" onClick={(e) => { e.preventDefault(); openSettingsTab('internet'); }}>
+      <a href="#settings/internet" className="home-link">
         Settings → Internet
       </a>
     </div>
@@ -971,7 +1206,7 @@ const ConfigPanel = () => {
 
   return (
     <React.Fragment>
-    <AdminSection/>
+    <AdminSection setupAsked={setupAsked}/>
     <VersionSection/>
     <Card title="Domovoi configuration"
           sub="Live-editable settings. Some changes apply instantly; those marked “restart” need a Domovoi server restart.">
@@ -1344,9 +1579,6 @@ const InternetPanel = () => {
               in the house.
             </div>
           )}
-          <div className="internet-edge-note" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
-            Microsoft voices stay your choice on every answer (Settings → Voices).
-          </div>
           {result && result.error && (
             <div style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>{result.error}</div>
           )}
@@ -1667,6 +1899,10 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
   // The chosen room defaults to the first online one if none picked yet.
   const roomFor = room || (rooms[0] && rooms[0].room_id) || '';
   const haveRooms = rooms.length > 0;
+  // What the chosen room's device declared (S0): a Pi takes both.
+  const chosen = rooms.find((r) => r.room_id === roomFor);
+  const canRecordHere = satCan(chosen, 'wake_clips');
+  const canPushHere = satCan(chosen, 'wake_models');
   const canTrain = w.status === 'recording' && w.clip_count >= minClips;
   const canPush = w.status === 'ready';
   const capturing = (recActive || capLive) && w.status === 'recording';
@@ -1737,7 +1973,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <RoomSelect value={roomFor} onChange={setRoom} rooms={rooms}/>
         <Button variant="secondary" icon="mic"
-                disabled={!haveRooms || w.status !== 'recording' || capturing}
+                disabled={!haveRooms || w.status !== 'recording' || capturing || !canRecordHere}
+                title={canRecordHere ? undefined : "this room's device doesn't record wake-word clips"}
                 onClick={startRec}>Record</Button>
         <Button variant="ghost" icon="square" disabled={!haveRooms}
                 onClick={stopRec}>Stop</Button>
@@ -1746,7 +1983,8 @@ const WakeRow = ({ w, rooms, minClips = WAKE_MIN_CLIPS, fire, onRecordStart, onR
                 title={internetOff ? NEEDS_INTERNET_TEXT : undefined}
                 onClick={() => onTrain(w)}>Train</Button>
         {internetOff && <NeedsInternetNote compact/>}
-        <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush}
+        <Button variant="secondary" icon="upload" disabled={!haveRooms || !canPush || !canPushHere}
+                title={canPushHere ? undefined : "this room's device doesn't take wake-word models"}
                 onClick={() => onPush(w, roomFor)}>Push to room</Button>
         {canPush && !w.is_default &&
           <Button variant="ghost" onClick={() => onSetDefault(w)}>make default</Button>}
@@ -1808,7 +2046,10 @@ const WakeWordsPanel = () => {
   const internetOff = internetOffIn(cfg);
   const [fire, node] = useToast();
 
-  const rooms = (sats || []).filter((s) => s.status === 'online');
+  // A spare device that declared neither clip recording nor wake models
+  // (S0, satCan) has nothing here; a Pi always qualifies.
+  const rooms = (sats || []).filter((s) => s.status === 'online'
+    && (satCan(s, 'wake_clips') || satCan(s, 'wake_models')));
 
   const guard = async (fn, okMsg) => {
     try {
@@ -1936,7 +2177,7 @@ const AboutPanel = () => (
       <div>
         It's <strong style={{ color: 'var(--fg)' }}>local-first</strong>: speech, understanding, local
         voices, the music library, timers and intercom all work with no internet. Only a few features
-        (web search, media-provider plugins, cloud voices) need the network, and they degrade gracefully instead of
+        (web search, media-provider plugins) need the network, and they degrade gracefully instead of
         breaking.
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
@@ -2757,6 +2998,101 @@ const HouseholdTokenCard = ({ fire }) => {
   );
 };
 
+/* This device's phone bar: the tabs along the bottom when this browser is
+ * phone-width (components.jsx PhoneBarStore / phoneBarRoutes). Kept in
+ * this browser only, so it needs no sign-in and touches nothing on the
+ * server — which is why it is a tab of its own (Settings → Phone bar)
+ * rather than a card under Devices, whose other cards ask an admin to
+ * sign in. Home's "everything" grid links here. Offers what a launcher
+ * may show on this screen (navItemsFor): plugin pages too, and on a shared
+ * screen never the personal pages, whatever was saved. */
+const PhoneBarCard = ({ fire }) => {
+  const shared = useSharedScreen();
+  const manifest = window.DomovoiPluginManifest || { plugins: [] };
+  const items = navItemsFor(manifest, { shared });
+  const saved = usePhoneBar();
+  const bar = phoneBarRoutes(items, saved);
+  const byRoute = {};
+  items.forEach((it) => { byRoute[it.route] = it; });
+  const [unkept, setUnkept] = React.useState(false);
+  const label = (r) => (byRoute[r] && byRoute[r].label) || r;
+  const save = (next) => {
+    if (next === bar) return;
+    setUnkept(!PhoneBarStore.set(next));
+  };
+  const reset = () => {
+    setUnkept(!PhoneBarStore.set(null));
+    fire('phone bar back to home · music · videos · chat');
+  };
+  const glyph = (it) => (it && !it.core ? <PluginNavIcon src={it.iconSrc}/> : <Icon name={(it && it.icon) || 'puzzle'} size={16}/>);
+  const spare = items.filter((it) => !bar.includes(it.route));
+  const full = bar.length >= PHONE_BAR_MAX;
+  return (
+    <Card title="Phone bar"
+          sub={`The tabs along the bottom of this browser at phone width, left to right. Home is always first; ${PHONE_BAR_MIN} to ${PHONE_BAR_MAX} tabs. Everything else is on Home's “everything” grid.`}>
+      <div className="phone-bar-edit" style={{ padding: '8px 16px 4px' }}>
+        {bar.map((r, i) => (
+          <div key={r} className="phone-bar-row" data-route={r}
+               style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 44,
+                        borderTop: i ? '1px solid var(--border-soft)' : 'none' }}>
+            <span className="mono" style={{ width: 16, fontSize: 11, color: 'var(--fg-faint)' }}>{i + 1}</span>
+            {glyph(byRoute[r])}
+            <span style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{label(r)}</span>
+            {r === 'home' ? (
+              <span style={{ fontSize: 11, color: 'var(--fg-faint)' }}>always first</span>
+            ) : (
+              <>
+                <IconButton name="chevron-up" title={`move ${label(r)} left`} disabled={i <= 1}
+                            onClick={() => save(phoneBarEdit(bar, 'left', r))}/>
+                <IconButton name="chevron-down" title={`move ${label(r)} right`} disabled={i >= bar.length - 1}
+                            onClick={() => save(phoneBarEdit(bar, 'right', r))}/>
+                <IconButton name="x" title={`take ${label(r)} off the bar`} disabled={bar.length <= PHONE_BAR_MIN}
+                            onClick={() => save(phoneBarEdit(bar, 'remove', r))}/>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {spare.length > 0 && (
+        <div style={{ padding: '6px 16px 12px' }}>
+          <div className="label" style={{ marginBottom: 6 }}>
+            {full ? `the bar is full (${PHONE_BAR_MAX}) · take one off to add another` : 'add to the bar'}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {spare.map((it) => (
+              <Button key={it.route} variant="secondary" icon="plus" disabled={full}
+                      title={`add ${it.label} to the bar`}
+                      onClick={() => save(phoneBarEdit(bar, 'add', it.route))}>
+                {it.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ padding: '0 16px 14px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span className="mono phone-bar-preview" style={{ flex: 1, minWidth: 0, fontSize: 11, color: 'var(--fg-muted)' }}>
+          {bar.map((r) => label(r).toLowerCase()).join(' · ')}
+        </span>
+        <Button variant="ghost" icon="rotate-ccw" disabled={saved == null} onClick={reset}>
+          default
+        </Button>
+      </div>
+      <div style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
+        {unkept
+          ? 'This browser can’t keep it (private window or blocked storage): it lasts until you reload.'
+          : 'Kept in this browser only — another phone keeps its own.'}
+        {shared && ' A shared screen leaves people, chat, files and news off, whatever the bar says.'}
+      </div>
+    </Card>
+  );
+};
+
+// Settings → Phone bar.
+const PhoneBarPanel = () => {
+  const [fire, toastNode] = useToast();
+  return <><PhoneBarCard fire={fire}/>{toastNode}</>;
+};
+
 const DevicesPanel = () => {
   const [fire, toastNode] = useToast();
   // ONE devices list for the whole tab. Each card used to fetch its own,
@@ -2779,11 +3115,12 @@ const DevicesPanel = () => {
 /* ============================================================ */
 /* Recordings — opt-in command recordings, reviewed by an admin */
 /* ============================================================ */
-/* Rooms an admin opted in (Satellites drawer → command recordings) keep
- * each wake-word or follow-up command, audio plus transcript, for tuning
- * when Domovoi stops listening. Here an admin plays them back, says
- * whether the capture ended at the right moment, and deletes them. Every
- * call is the server's security tier (admin only, 501 before setup). */
+/* Rooms an admin opted in (Settings → Satellites, the room's drawer →
+ * command recordings) keep each wake-word or follow-up command, audio
+ * plus transcript, for tuning when Domovoi stops listening. Here an admin
+ * plays them back, says whether the capture ended at the right moment,
+ * and deletes them. Every call is the server's security tier (admin only,
+ * 501 before setup). */
 
 const CAPTURE_LABEL_ORDER = ['cut_off', 'fine', 'waited_too_long'];
 
@@ -2890,7 +3227,7 @@ const CapturesPanel = () => {
     <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--fg-muted)' }}>{text}</div>
   );
   const sub = 'What opted-in rooms said to Domovoi, kept to tune when it stops listening. '
-    + 'Turn a room on or off in its Satellites drawer.';
+    + 'Turn a room on or off in its drawer under Settings → Satellites.';
 
   if (!admin) {
     return <Card title="Command recordings" sub={sub}>{note('Admins only. Sign in to review recordings.')}</Card>;
@@ -2952,7 +3289,7 @@ const CapturesPanel = () => {
         </div>
         {shown.length === 0 ? (
           <Empty title={all.length ? 'nothing matches' : 'nothing recorded yet'}
-                 sub={all.length ? undefined : 'turn recording on for a room in its satellites drawer'}/>
+                 sub={all.length ? undefined : 'turn recording on for a room in its drawer, under Settings → Satellites'}/>
         ) : shown.map((c) => (
           <CaptureRow key={c.id} c={c} labels={labels} playing={playing === c.id}
                       busy={busy === c.id} onPlay={play} onLabel={setLabel}
@@ -2972,58 +3309,45 @@ const CapturesPanel = () => {
 /* Settings shell                                               */
 /* ============================================================ */
 
+// Each tab's address is #settings/<slug> (the id where there is no slug;
+// the id opens the tab too). useRouteTab, components.jsx. The slugs are
+// public: bookmarks, the docs and the Windows installer's "Open Domovoi"
+// (#settings/configuration/setup) use them, so a slug is never renamed.
 const SETTINGS_TABS = [
   { id: 'about', label: 'About' },            // informational intro / manual link
   { id: 'greetings', label: 'Greetings' },
   { id: 'voices', label: 'Voices' },
-  { id: 'wakewords', label: 'Wake Words' },
+  { id: 'wakewords', slug: 'wake-words', label: 'Wake Words' },
   { id: 'recordings', label: 'Recordings' },  // opt-in command recordings (admins)
   { id: 'devices', label: 'Devices' },        // device names + queue / files access
+  { id: 'phonebar', slug: 'phone-bar', label: 'Phone bar' },  // this browser's phone tabs (no sign-in: kept in the browser)
+  { id: 'satellites', label: 'Satellites' },  // the rooms' Pis (was a nav route, #satellites still opens it)
   { id: 'models', label: 'Models' },          // model-management hub (was a nav route)
   { id: 'internet', label: 'Internet' },      // the INTERNET_ACCESS answer (its one home)
-  { id: 'config', label: 'Configuration' },   // last tab, by request
+  { id: 'config', slug: 'configuration', label: 'Configuration' },   // last tab, by request
 ];
+const SETTINGS_DEFAULT_TAB = 'greetings';
 
 const SETTINGS_SUB = {
   about: 'What Domovoi is — and a link to the user manual.',
   greetings: 'Lines a satellite says when it hears the wake word, before it listens.',
-  voices: 'The TTS voice registry — each satellite speaks in one.',
+  voices: 'Domovoi’s voice, how it says words, and the voice registry — each satellite speaks in one.',
   wakewords: 'Train + manage custom wake words; record clips on a satellite.',
   recordings: 'Commands kept from opted-in rooms to tune when Domovoi stops listening — admins only.',
   devices: 'Name this device, the household token, shared screens, and who may edit a room’s play queue.',
+  phonebar: 'The tabs along the bottom of this browser at phone width — kept in this browser only.',
+  satellites: 'The Pi in each room: status, approvals and adoption, announcements, and each room’s drawer.',
   models: "What's active in each role, install more, and the host hardware readout.",
   internet: 'Will this Domovoi have internet? It sets the defaults of the online extras.',
   config: 'Editable domovoi configuration.',
 };
 
-// openSettingsTab (components.jsx) leaves the tab to open here: the shell
-// maps one hash to one page, so a deep link rides sessionStorage, read
-// once (and cleared) when the page mounts.
-const settingsStartTab = () => {
-  try {
-    const want = sessionStorage.getItem('domovoi.settings.tab');
-    if (want) {
-      sessionStorage.removeItem('domovoi.settings.tab');
-      if (SETTINGS_TABS.some((t) => t.id === want)) return want;
-    }
-  } catch { /* storage blocked */ }
-  return 'greetings';
-};
-
 const SettingsPage = () => {
-  const [tab, setTab] = React.useState(settingsStartTab);
-  // A link pressed while this page is already on screen (the
-  // Configuration tab's "Settings → Internet", a "needs internet" note).
-  React.useEffect(() => {
-    const onTab = (e) => {
-      const want = e && e.detail && e.detail.tab;
-      if (!want || !SETTINGS_TABS.some((t) => t.id === want)) return;
-      try { sessionStorage.removeItem('domovoi.settings.tab'); } catch { /* storage blocked */ }
-      setTab(want);
-    };
-    window.addEventListener(SETTINGS_TAB_EVENT, onTab);
-    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onTab);
-  }, []);
+  // The tab is the address's (#settings/<tab>): clicking one writes it, a
+  // link to one (the Configuration tab's "Settings → Internet", a "needs
+  // internet" note, Home's rows) opens it, also while this page is on
+  // screen, and Back goes to the tab before.
+  const [tab, setTab, marks] = useRouteTab('settings', SETTINGS_TABS, SETTINGS_DEFAULT_TAB);
 
   return (
     <div className="page">
@@ -3035,9 +3359,11 @@ const SettingsPage = () => {
       {tab === 'wakewords' && <WakeWordsPanel/>}
       {tab === 'recordings' && <CapturesPanel/>}
       {tab === 'devices' && <DevicesPanel/>}
+      {tab === 'phonebar' && <PhoneBarPanel/>}
+      {tab === 'satellites' && <SatellitesPanel/>}
       {tab === 'models' && <ModelsPanel/>}
       {tab === 'internet' && <InternetPanel/>}
-      {tab === 'config' && <ConfigPanel/>}
+      {tab === 'config' && <ConfigPanel setupAsked={marks[0] === 'setup'}/>}
     </div>
   );
 };

@@ -94,9 +94,15 @@ class TrackPatch(BaseModel):
 class LibraryPage(BaseModel):
     """One page of ``library_tracks`` plus the unbounded count that
     matches the active filters. ``total`` reflects ``q``/``source``;
-    it's what pagination math and the "X results" caption read."""
+    it's what the "showing N of M" caption reads. The paging fields are
+    the shared contract (web/backend/api/paging.py): ``next_cursor`` is
+    null on the last page; ``offset`` is echoed for an offset request."""
     total: int
     items: list[Track]
+    limit: int | None = None
+    offset: int | None = None
+    has_more: bool = False
+    next_cursor: str | None = None
 
 
 class LibraryStats(BaseModel):
@@ -303,6 +309,11 @@ class VoiceProfile(BaseModel):
     enrolled_at: datetime
     room_id: str | None = None
     sample_seconds: float | None = None
+    # Which set the sample is in (V026): "satellite" (heard by a room's
+    # satellite) or "phone" (said into the app's chat mic). Satellites
+    # match only satellite samples; a phone turn matches phone samples
+    # first.
+    source: str = "satellite"
 
 
 # ─── Profile personalization ─────────────────────────────────────
@@ -412,6 +423,12 @@ class WifiStatus(BaseModel):
     rx_mbits: float | None = None
     tx_mbits: float | None = None
     ssid: str | None = None
+    # 2026-10-12: received signal strength at the satellite (dBm, -120..0),
+    # the dashboard's main Wi-Fi indicator; null from an older satellite,
+    # which keeps the rate display. `mode` is "ap" when the radio is
+    # hosting the setup hotspot instead of being on the house network.
+    signal_dbm: float | None = None
+    mode: str | None = None
 
 
 class MpdPorts(BaseModel):
@@ -429,6 +446,26 @@ class SatelliteDisplay(BaseModel):
     kiosk_alive: bool | None = None
     brightness: int | None = None
     idle_mode: str | None = None
+
+
+class SatelliteUpgrade(BaseModel):
+    """A code upgrade the Domovoi server asked this satellite for, from the
+    request until a while after it ended (domovoi/satellite_upgrades.py).
+    ``state``: ``running`` (asked, not back yet: the Upgrade button stays
+    locked), ``done`` (back on ``expected_sha``), ``rolled_back`` (back on
+    another version, ``back_sha``: the new code did not stay up) or
+    ``no_news`` (never came back with an answer by ``deadline_at``; a sync
+    that fails before the restart leaves the satellite on its old code
+    without a word, and its log says why). Kept a plain str so a new state
+    never breaks deserialization."""
+
+    state: str
+    expected_sha: str | None = None
+    from_sha: str | None = None
+    back_sha: str | None = None
+    started_at: datetime | None = None
+    deadline_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 class SatellitePairing(BaseModel):
@@ -508,6 +545,21 @@ class Satellite(BaseModel):
     # by the room they came from. Open like the rest of the row: it says
     # how a room behaves, not what anybody said. False when V018 is missing.
     timers_own_only: bool = False
+    # Spare-device satellites (S0, 2026-10-12). ``board``: the hardware kind
+    # the device named in its hello ("linux_pc", "android_room"), kept in the
+    # inventory row so an offline device still shows it; USB adoption writes
+    # a Pi's (e.g. "raspberry_pi_zero_2_w"). Null when nothing named one.
+    # ``supports``: the abilities the CONNECTED device declared in its hello
+    # (domovoi/satellite_abilities.py) — the dashboard offers only those
+    # actions. Null for a device that sent no list (every Pi: everything, as
+    # before) and for an offline room.
+    board: str | None = None
+    supports: list[str] | None = None
+    # A code upgrade under way or just finished (SatelliteUpgrade), from the
+    # Domovoi server snapshot; null when there is none. While ``state`` is
+    # ``running`` the dashboard and the app keep the room's Upgrade button
+    # locked, across a reload, and the server refuses a second one (409).
+    upgrade: SatelliteUpgrade | None = None
 
 
 # ─── Notes / Timers ───────────────────────────────────────────────────────

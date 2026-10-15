@@ -434,6 +434,25 @@ class PeopleRepository:
             return None
         return int(result[0]), result[1], result[2]
 
+    async def find_by_name(self, name: str) -> list[tuple[int, str]]:
+        """Everyone called ``name`` (case and surrounding space aside), as
+        ``(id, name)``, oldest row first — at most two, which is enough to
+        tell "nobody", "this person" and "more than one" apart. A caller
+        that finds more than one must not pick (a parent and child can
+        share a name)."""
+        rows = await self.s.execute(
+            text(
+                """
+                SELECT id, name FROM people
+                 WHERE lower(btrim(name)) = lower(btrim(:name))
+                 ORDER BY id
+                 LIMIT 2
+                """
+            ),
+            {"name": name},
+        )
+        return [(int(r[0]), r[1]) for r in rows.all()]
+
     async def list_recently_seen(
         self, since: datetime
     ) -> list[tuple[int, datetime | None]]:
@@ -965,9 +984,16 @@ class VoiceProfilesRepository:
     (enrollment, plus at most one learned sample per room). The
     identifier scores a person against the centroid of their rows —
     see ``voice_identifier._person_scores``.
+
+    Two sets per person (V026, ``source``): ``satellite`` rows, heard by
+    a room's satellite, and ``phone`` rows, said into the app's chat mic.
+    :meth:`all_for_model` is the satellites' matching set and holds no
+    phone row; a phone turn reads both (:meth:`phone_matching_rows`).
     """
 
     EMBEDDING_MODEL_TAG = "resemblyzer-v1"
+    SATELLITE = "satellite"
+    PHONE = "phone"
 
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
@@ -980,14 +1006,15 @@ class VoiceProfilesRepository:
         model: str,
         room_id: str | None,
         sample_seconds: float | None,
+        source: str = SATELLITE,
     ) -> int:
         row = await self.s.execute(
             text(
                 """
                 INSERT INTO voice_profiles
-                    (person_id, embedding, model, room_id, sample_seconds)
+                    (person_id, embedding, model, room_id, sample_seconds, source)
                 VALUES
-                    (:person_id, :embedding, :model, :room_id, :sample_seconds)
+                    (:person_id, :embedding, :model, :room_id, :sample_seconds, :source)
                 RETURNING id
                 """
             ),
@@ -997,15 +1024,52 @@ class VoiceProfilesRepository:
                 "model": model,
                 "room_id": room_id,
                 "sample_seconds": sample_seconds,
+                "source": source,
             },
         )
         return int(row.scalar_one())
+
+    async def add_phone_sample(
+        self,
+        *,
+        person_id: int,
+        embedding: bytes,
+        model: str,
+        room_id: str | None,
+        cap: int,
+    ) -> tuple[int, int]:
+        """Add one of ``person_id``'s phone samples, keeping at most
+        ``cap`` of them: the oldest go first. Returns (the new row's id,
+        how many old phone samples were dropped). Their satellite samples
+        are never touched."""
+        new_id = await self.add(
+            person_id=person_id, embedding=embedding, model=model,
+            room_id=room_id, sample_seconds=None, source=self.PHONE,
+        )
+        dropped = await self.s.execute(
+            text(
+                """
+                DELETE FROM voice_profiles
+                 WHERE person_id = :pid AND source = 'phone'
+                   AND id NOT IN (
+                       SELECT id FROM voice_profiles
+                        WHERE person_id = :pid AND source = 'phone'
+                        ORDER BY enrolled_at DESC, id DESC
+                        LIMIT :keep
+                   )
+                """
+            ),
+            {"pid": person_id, "keep": max(1, int(cap))},
+        )
+        return new_id, int(dropped.rowcount or 0)
 
     async def all_for_model(
         self, model: str
     ) -> list[tuple[int, int, bytes, str | None]]:
         """Return ``(profile_id, person_id, embedding_bytes, room_id)``
-        for every profile matching ``model``.
+        for every SATELLITE profile matching ``model`` — what a satellite's
+        turn is matched against. Phone samples are never in it, so they
+        cannot move a satellite centroid.
 
         Pulls every row on every match call. At household scale (a few
         dozen samples max) this is microseconds; if it ever becomes hot
@@ -1016,13 +1080,34 @@ class VoiceProfilesRepository:
                 """
                 SELECT id, person_id, embedding, room_id
                 FROM voice_profiles
-                WHERE model = :model
+                WHERE model = :model AND source = 'satellite'
                 """
             ),
             {"model": model},
         )
         return [
             (int(r[0]), int(r[1]), bytes(r[2]), r[3]) for r in result.all()
+        ]
+
+    async def phone_matching_rows(
+        self, model: str
+    ) -> list[tuple[int, int, bytes, str | None, str]]:
+        """Every profile matching ``model``, both sets, as
+        ``(profile_id, person_id, embedding_bytes, room_id, source)`` — a
+        phone turn picks per person which set to score
+        (``voice_identifier.phone_matching_samples``)."""
+        result = await self.s.execute(
+            text(
+                """
+                SELECT id, person_id, embedding, room_id, source
+                FROM voice_profiles
+                WHERE model = :model
+                """
+            ),
+            {"model": model},
+        )
+        return [
+            (int(r[0]), int(r[1]), bytes(r[2]), r[3], str(r[4])) for r in result.all()
         ]
 
 
@@ -1462,9 +1547,10 @@ class ClientGreetingsRepository:
 class VoicesRepository:
     """The voice registry (table ``voices``). Each row is a
     user-selectable TTS voice: a spoken ``name``, the ``engine`` that
-    renders it (``piper``|``edge``), and a ``model_ref`` locating the
-    model (an uploaded ``.onnx`` path or a bare HF name for Piper, the
-    Edge voice id for Edge). Exactly one row is ``is_default`` — the voice
+    renders it (``piper``; the Microsoft Edge rows of older releases are
+    removed at boot, domovoi/voice_catalog.py), and a ``model_ref``
+    locating the model (an uploaded ``.onnx`` path or a bare HF name).
+    Exactly one row is ``is_default`` — the voice
     a satellite uses until it reports its own selection.
 
     Backs the streaming voice resolver, the per-voice clip renderer, the
@@ -1568,6 +1654,11 @@ class VoicesRepository:
         )
         return True
 
+    async def clear_default(self) -> None:
+        """Leave no default (the caller sets another one in the same
+        transaction): what lets :meth:`delete` take out a former default."""
+        await self.s.execute(text("UPDATE voices SET is_default = FALSE WHERE is_default"))
+
     async def update(
         self,
         voice_id: int,
@@ -1613,6 +1704,70 @@ class VoicesRepository:
         )
         r = row.first()
         return self._row(r) if r else None
+
+
+class PronunciationsRepository:
+    """The owner's changes to the "say it like" list (table
+    ``pronunciations``, V027): one row per word, keyed by the converter's
+    normalized form. ``say_like`` None marks a shipped default the owner
+    removed. ``pronunciations_changed`` holds when the list last changed
+    (:meth:`touch` after every change, deletions included). The effective
+    list (defaults + these rows) is built by :mod:`domovoi.voice_settings`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.s = session
+
+    async def all(self) -> list[dict]:
+        row = await self.s.execute(
+            text("SELECT key, word, say_like, updated_at FROM pronunciations ORDER BY lower(word), key")
+        )
+        return [
+            {"key": r[0], "word": r[1], "say_like": r[2], "updated_at": r[3]} for r in row.all()
+        ]
+
+    async def put(self, *, key: str, word: str, say_like: str | None) -> None:
+        """Insert or replace the row for ``key``; None removes the word
+        from the effective list (a default) or keeps it out."""
+        await self.s.execute(
+            text(
+                """
+                INSERT INTO pronunciations (key, word, say_like, updated_at)
+                VALUES (:key, :word, :say_like, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET word = EXCLUDED.word, say_like = EXCLUDED.say_like, updated_at = NOW()
+                """
+            ),
+            {"key": key, "word": word, "say_like": say_like},
+        )
+
+    async def delete(self, keys) -> int:
+        """Delete the rows of ``keys``; how many went."""
+        keys = list(keys)
+        if not keys:
+            return 0
+        row = await self.s.execute(
+            text("DELETE FROM pronunciations WHERE key = ANY(:keys)"), {"keys": keys}
+        )
+        return int(row.rowcount or 0)
+
+    async def count(self) -> int:
+        row = await self.s.execute(text("SELECT COUNT(*) FROM pronunciations"))
+        return int(row.scalar_one())
+
+    async def touch(self) -> None:
+        """Record that the list changed, now."""
+        await self.s.execute(
+            text(
+                """
+                INSERT INTO pronunciations_changed (id, changed_at) VALUES (1, NOW())
+                ON CONFLICT (id) DO UPDATE SET changed_at = NOW()
+                """
+            )
+        )
+
+    async def last_change(self):
+        row = await self.s.execute(text("SELECT changed_at FROM pronunciations_changed WHERE id = 1"))
+        return row.scalar()
 
 
 class WakeWordsRepository:
@@ -2196,7 +2351,7 @@ class SatelliteApprovalRepository:
             await self.s.execute(
                 text(
                     "DELETE FROM satellite_approvals WHERE room_id = :r "
-                    "RETURNING token_hash"
+                    "RETURNING token_hash, board, sat_type"
                 ),
                 {"r": room_id},
             )
@@ -2214,6 +2369,24 @@ class SatelliteApprovalRepository:
             ),
             {"r": room_id, "h": row.token_hash},
         )
+        if row.board:
+            # The board the parked hello named (S0): kept on approval, so the
+            # dashboard names the device kind before its next hello. Only a
+            # request that carried one writes anything — no Pi sends a board,
+            # so an approved Pi's inventory row is left exactly as it was.
+            await self.s.execute(
+                text(
+                    "INSERT INTO satellites (room_id, sat_type, board, adopted_via) "
+                    "VALUES (:r, :t, :b, 'hello') "
+                    "ON CONFLICT (room_id) DO UPDATE SET "
+                    "board = EXCLUDED.board, updated_at = now()"
+                ),
+                {
+                    "r": room_id,
+                    "t": row.sat_type if row.sat_type in ("voice", "video") else "voice",
+                    "b": row.board,
+                },
+            )
         return "approved"
 
     async def reject(self, room_id: str) -> bool:
@@ -2298,6 +2471,23 @@ class SatellitesRepository:
                 "sat_type = EXCLUDED.sat_type, updated_at = now()"
             ),
             {"r": room_id, "t": sat_type},
+        )
+
+    async def upsert_board(self, room_id: str, board: str) -> None:
+        """Self-registration of the board slug an accepted `hello` named
+        (S0, spare-device satellites). Same rule as :meth:`upsert_type`:
+        only for a hello that carried one, so a hello without it never
+        clears what USB adoption or an earlier hello stored. The caller
+        bounds the value (``satellite_abilities.clean_board``)."""
+        await self.s.execute(
+            text(
+                "INSERT INTO satellites (room_id, board, adopted_via) "
+                "VALUES (:r, :b, 'hello') "
+                "ON CONFLICT (room_id) DO UPDATE SET "
+                "board = EXCLUDED.board, updated_at = now() "
+                "WHERE satellites.board IS DISTINCT FROM EXCLUDED.board"
+            ),
+            {"r": room_id, "b": board},
         )
 
     async def set_room_label(self, room_id: str, room_label: str | None) -> None:

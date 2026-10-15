@@ -6,6 +6,10 @@
  * (fetch + ReadableStream — the assistant bubble fills in live). Attach up
  * to 4 images per message; a message with images is answered by the vision
  * model (server-side switch), surfaced with a small pill in the composer.
+ * When that model isn't installed (/api/chat/models `vision_installed:
+ * false`) the paperclip says so instead of opening the picker, and a
+ * reply's error reads as a plain sentence (ChatDetails.errorView), with
+ * Settings → Models one press away for an admin.
  *
  * Design notes: the cat glyph marks assistant-attributed lines (one of its
  * three sanctioned homes); user bubbles sit right-aligned on the card
@@ -38,6 +42,8 @@ const chatSendStream = async (threadId, body, onDelta) => {
   let buf = '';
   let done = null;
   let errorDetail = null;
+  let errorCode = null;
+  let errorModel = null;
   for (;;) {
     const { value, done: eof } = await reader.read();
     if (eof) break;
@@ -57,11 +63,57 @@ const chatSendStream = async (threadId, body, onDelta) => {
       try { payload = JSON.parse(data); } catch { continue; }
       if (event === 'delta') onDelta(payload.text || '');
       else if (event === 'done') done = payload;
-      else if (event === 'error') errorDetail = payload.detail || 'model error';
+      else if (event === 'error') {
+        errorDetail = payload.detail || 'model error';
+        errorCode = payload.code || null;
+        errorModel = payload.model || null;
+      }
     }
   }
-  return { done, errorDetail };
+  return { done, errorDetail, errorCode, errorModel };
 };
+
+/* "open Settings → Models", for an admin, where a model is the fix. */
+const ChatModelsLink = () => (
+  <a href="#settings/models" className="chat-note-link">
+    open Settings → Models
+  </a>
+);
+
+/* A reply that failed: the plain sentence (with a code) as a note, the
+ * link for an admin when a model is the fix; an error the server never
+ * coded (the browser's own, "Failed to fetch") stays a small red line. */
+const ChatReplyError = ({ m, admin }) => {
+  const err = ChatDetails.errorView(m);
+  if (!err) return null;
+  if (!err.code) {
+    return (
+      <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>{err.text}</div>
+    );
+  }
+  return (
+    <div className="chat-note" role="note">
+      <div>{err.text}</div>
+      {err.models && admin && <ChatModelsLink/>}
+    </div>
+  );
+};
+
+/* The composer's note when a picture can't be read here: why, what chat
+ * takes, and Settings → Models for an admin. */
+const ChatPictureNote = ({ model, admin, onClose }) => (
+  <div className="chat-note info" role="note">
+    <div className="chat-note-row">
+      <Icon name="image-off" size={14}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div>{ChatDetails.visionMissingText(model)}</div>
+        <div className="chat-note-sub">{ChatDetails.ACCEPTS}</div>
+        {admin && <ChatModelsLink/>}
+      </div>
+      <IconButton name="x" title="close" onClick={onClose}/>
+    </div>
+  </div>
+);
 
 /* ─── Thread list rail ──────────────────────────────────────────────────── */
 
@@ -195,7 +247,7 @@ const ChatDetailsDialog = ({ m, threadId, onCopy, onClose }) => {
 // A touch held this long opens the menu (iOS fires no contextmenu event).
 const CHAT_LONG_PRESS_MS = 500;
 
-const ChatMessage = ({ m, threadId, onCopy }) => {
+const ChatMessage = ({ m, threadId, onCopy, admin }) => {
   const isUser = m.role === 'user';
   const [menuAt, setMenuAt] = React.useState(null);
   const [details, setDetails] = React.useState(false);
@@ -237,6 +289,8 @@ const ChatMessage = ({ m, threadId, onCopy }) => {
 
   const stamp = ChatDetails.stamp(m.created_at);
   const line = [stamp, !isUser && !m.pending ? m.model : null].filter(Boolean).join(' · ');
+  // Who Domovoi heard, on a message said into the app's chat mic.
+  const speaker = !m.pending ? ChatDetails.speakerMark(m) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column',
@@ -268,12 +322,16 @@ const ChatMessage = ({ m, threadId, onCopy }) => {
                style={{ fontSize: 13, lineHeight: 1.6, overflowWrap: 'break-word', minWidth: 0 }}>
             <div className="chat-md" dangerouslySetInnerHTML={{ __html: window.chatMarkdownHtml(m.content || '') }}/>
             {m.pending && <span className="mono" style={{ color: 'var(--fg-faint)' }}>▍</span>}
-            {m.error && (
-              <div className="mono" style={{ fontSize: 11, color: 'var(--err)', marginTop: 4 }}>
-                {m.error}
-              </div>
-            )}
+            <ChatReplyError m={m} admin={admin}/>
           </div>
+        </div>
+      )}
+      {speaker && (
+        <div className={`chat-speaker${speaker.soft ? ' soft' : ''}`}
+             title={speaker.description} aria-label={speaker.description}>
+          <Icon name="mic" size={11}/>
+          {speaker.name && <Avatar name={speaker.name}/>}
+          <span>{speaker.label}</span>
         </div>
       )}
       {!m.pending && (
@@ -299,21 +357,76 @@ const ChatMessage = ({ m, threadId, onCopy }) => {
 
 /* ─── Page ──────────────────────────────────────────────────────────────── */
 
+/* Below this page width the chat list and the conversation take turns
+ * instead of sitting side by side (styles.css .chat-page.narrow): the
+ * 250 px list plus its 16 px gap would leave the conversation under
+ * 400 px. A phone, a Fold's inner screen beside the sidebar (604 px) and
+ * a phone on its side (532 px at 812) are all narrow. */
+const CHAT_TWO_PANE_MIN = 666;
+
+/* The page's width before it has one to measure (the first render): the
+ * shell's 16 px phone padding at 760 px and below, else the 232 px sidebar
+ * and 24 px padding. Measured for real before the first paint. */
+const chatGuessNarrow = () => {
+  const w = window.innerWidth || 1280;
+  return (w <= 760 ? w - 32 : w - 232 - 48) < CHAT_TWO_PANE_MIN;
+};
+
+/* true while `ref`'s element is narrower than CHAT_TWO_PANE_MIN. */
+const useChatNarrow = (ref) => {
+  const [narrow, setNarrow] = React.useState(chatGuessNarrow);
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const w = el.getBoundingClientRect().width;
+      if (w > 0) setNarrow(w < CHAT_TWO_PANE_MIN);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return narrow;
+};
+
 const ChatPage = () => {
   const [fire, toastNode] = useToast();
   const copyMessage = async (text) => fire((await chatCopyText(text || '')) ? 'copied' : 'copy failed');
   const { items: threads, error: threadsError, refresh: refreshThreads } =
     useApiList('/api/chat/threads', { pickItems: (x) => x.threads, eventTypes: ['chat.changed'] });
-  const { data: modelsInfo } = useApiObject('/api/chat/models');
+  const { data: modelsInfo, refresh: refreshModels } = useApiObject('/api/chat/models');
+  const admin = useAdminSignedIn();
+  // Pictures can't be read here (the vision model isn't installed): the
+  // paperclip opens this note instead of the picker.
+  const visionMissing = ChatDetails.visionMissing(modelsInfo);
+  const [pictureNote, setPictureNote] = React.useState(false);
 
   const [threadId, setThreadId] = React.useState(null);
   const [messages, setMessages] = React.useState([]);
   const [draft, setDraft] = React.useState('');
   const [attachments, setAttachments] = React.useState([]); // [{token, name}]
   const [sending, setSending] = React.useState(false);
-  const [railOpen, setRailOpen] = React.useState(true);
+  const pageRef = React.useRef(null);
+  const narrow = useChatNarrow(pageRef);
+  // Narrow: the list or the conversation, and a chat page opens on the
+  // conversation (the "ask anything" state and the composer) with the
+  // list one press away. Wide: the list beside it, as before.
+  const [railOpen, setRailOpen] = React.useState(() => !chatGuessNarrow());
+  const wasNarrow = React.useRef(narrow);
+  React.useEffect(() => {
+    // Crossing the line (a Fold opened or closed, a phone turned): the
+    // list goes beside the conversation, or out of its way.
+    if (wasNarrow.current !== narrow) setRailOpen(!narrow);
+    wasNarrow.current = narrow;
+  }, [narrow]);
   const scrollRef = React.useRef(null);
   const fileRef = React.useRef(null);
+  const inputRef = React.useRef(null);
 
   // A thread's messages are read on the device tier: on a browser that is
   // not paired yet the read is refused, apiGet opens the pair modal, and
@@ -335,13 +448,10 @@ const ChatPage = () => {
   }, [threadId]);
   useRetryAfterCredential(messagesRefusal, reloadMessages);
 
-  // On a phone the rail and the conversation can't share the width (the
-  // conversation was left ~140px), so opening a chat hides the rail; the
-  // panel button brings it back.
+  // Narrow, the list and the conversation take turns (useChatNarrow), so
+  // opening a chat puts the list away; the panel button brings it back.
   const hideRailOnPhone = () => {
-    if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches) {
-      setRailOpen(false);
-    }
+    if (narrow) setRailOpen(false);
   };
   const selectThread = (t) => {
     setThreadId(t.id);
@@ -349,10 +459,37 @@ const ChatPage = () => {
     hideRailOnPhone();
   };
 
+  // The thread keeps its newest line in view: on a new message, and when
+  // the thread itself gets shorter or taller (the keyboard coming up, the
+  // composer growing a line, a phone turning) while the reader was at the
+  // bottom. Scrolled up to read, it stays where it is.
+  const atBottom = React.useRef(true);
+  const onThreadScroll = (e) => {
+    const el = e.currentTarget;
+    atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
   React.useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    atBottom.current = true;
   }, [messages]);
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    atBottom.current = true;   // a thread that just came back opens at its end
+    const ro = new ResizeObserver(() => { if (atBottom.current) el.scrollTop = el.scrollHeight; });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [narrow, railOpen]);
+
+  // Narrow, the composer is one row and its text grows with what is typed,
+  // to five lines (styles.css caps it at 140 px and it scrolls past that).
+  React.useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = '';
+    if (narrow) el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [draft, narrow, railOpen]);
 
   const newThread = async () => {
     try {
@@ -381,7 +518,7 @@ const ChatPage = () => {
         const up = await apiUpload('/api/chat/uploads', form);
         setAttachments((cur) => [...cur, up]);
       } catch (e) {
-        fire(e.status === 415 ? 'unsupported image type' : 'upload failed');
+        fire(e.status === 415 ? 'chat takes PNG, JPEG, GIF, WebP or BMP pictures' : 'upload failed');
       }
     }
   };
@@ -410,15 +547,20 @@ const ChatPage = () => {
     try {
       // device_id: which install sent it, for the message's details (V017).
       const body = { content, images, device_id: DeviceIdentity.id() };
-      const { done, errorDetail } = await chatSendStream(id, body, (delta) => {
+      const { done, errorDetail, errorCode, errorModel } = await chatSendStream(id, body, (delta) => {
         setMessages((cur) => cur.map((m) =>
           m.id === 'pending' ? { ...m, content: m.content + delta } : m));
       });
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending'
-          ? (done || { ...m, pending: false, error: errorDetail })
+          ? (done || { ...m, pending: false, error: errorDetail, error_code: errorCode,
+                       model: errorModel || m.model })
           : m));
       refreshThreads();
+      // Refused for want of the vision model: re-read what's installed, so
+      // the paperclip explains it next time instead of opening the picker.
+      const code = (done && done.stats && done.stats.error_code) || errorCode;
+      if (code === 'vision_model_missing') refreshModels();
     } catch (e) {
       setMessages((cur) => cur.map((m) =>
         m.id === 'pending' ? { ...m, pending: false, error: String(e.message || e) } : m));
@@ -430,20 +572,66 @@ const ChatPage = () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  const visionPill = attachments.length > 0 && modelsInfo && (
+  const visionPill = attachments.length > 0 && modelsInfo && !visionMissing && (
     <Pill tone="idle">answers with {modelsInfo.vision_model}</Pill>
   );
 
+  // The paperclip: the picker, or — when a picture would be refused —
+  // the note saying why (and a fresh read, in case an admin has since
+  // installed the model; the note goes once the read says so).
+  const pickPictures = () => {
+    if (visionMissing) {
+      setPictureNote(true);
+      refreshModels();
+      return;
+    }
+    setPictureNote(false);
+    if (fileRef.current) fileRef.current.click();
+  };
+  const showPictureNote = visionMissing && (pictureNote || attachments.length > 0);
+
+  // Narrow: the list fills the page while it is open, the conversation
+  // otherwise. Wide: the conversation always, the list beside it.
+  const showPane = !narrow || !railOpen;
+
+  const textarea = (
+    <textarea ref={inputRef} className="chat-input" value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown} rows={narrow ? 1 : 2} aria-label="message"
+              placeholder={narrow ? 'message the domovoi…'
+                : 'message the domovoi… (Enter to send, Shift+Enter for a new line)'}/>
+  );
+  const clip = (
+    <IconButton name="paperclip"
+                title={visionMissing
+                  ? "attach pictures — the vision model isn't installed"
+                  : 'attach pictures (up to 4)'}
+                aria-label="attach pictures"
+                onClick={pickPictures}/>
+  );
+  const sendButton = (
+    <Button variant="primary" icon="send" className="btn btn-primary chat-send" onClick={send}
+            disabled={sending || !draft.trim()} aria-label={sending ? 'thinking…' : 'send'}
+            title={narrow ? (sending ? 'thinking…' : 'send') : undefined}>
+      <span className="chat-send-label">{sending ? 'thinking…' : 'send'}</span>
+    </Button>
+  );
+
   return (
-    <div style={{ display: 'flex', gap: 16, height: 'calc(var(--app-h) - var(--topbar-h) - 48px)',
-                  minHeight: 380 }}>
+    <div ref={pageRef} className={`chat-page${narrow ? ' narrow' : ''}`}>
       {/* thread rail */}
       {railOpen && (
-        <div style={{ width: 250, flexShrink: 0, display: 'flex', flexDirection: 'column',
-                      gap: 8, minHeight: 0 }}>
-          <Button variant="primary" icon="plus" onClick={newThread}>new chat</Button>
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex',
-                        flexDirection: 'column', gap: 2 }}>
+        <div className="chat-rail">
+          {narrow && (
+            <div className="chat-rail-head">
+              <span style={{ flex: 1 }}>chats</span>
+              <IconButton name="panel-left-close" title="back to the conversation"
+                          aria-label="back to the conversation" onClick={() => setRailOpen(false)}/>
+            </div>
+          )}
+          <Button variant="primary" icon="plus" className="btn btn-primary chat-new"
+                  onClick={newThread}>new chat</Button>
+          <div className="chat-rail-list">
             {threads.length === 0
               ? <div style={{ fontSize: 12, color: 'var(--fg-faint)', padding: 8 }}>
                   {threadsError && threadsError.deviceTokenRequired
@@ -459,35 +647,37 @@ const ChatPage = () => {
       )}
 
       {/* conversation pane */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {showPane && (
+      <div className="chat-pane">
+        <div className="chat-head">
           <IconButton name={railOpen ? 'panel-left-close' : 'panel-left-open'}
                       title={railOpen ? 'hide chats' : 'show chats'}
+                      aria-label={railOpen ? 'hide chats' : 'show chats'}
                       onClick={() => setRailOpen(!railOpen)}/>
-          <div style={{ fontSize: 14, fontWeight: 600, flex: 1, minWidth: 0,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div className="chat-head-title">
             {(threads.find((t) => t.id === threadId) || {}).title || 'new chat'}
           </div>
           {modelsInfo && (
-            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-              {modelsInfo.default_model}
-            </span>
+            <span className="mono chat-head-model">{modelsInfo.default_model}</span>
           )}
         </div>
 
-        <div ref={scrollRef}
-             style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex',
-                      flexDirection: 'column', gap: 14, padding: '4px 2px' }}>
+        <div ref={scrollRef} className="chat-thread" onScroll={onThreadScroll}>
           {threadId == null && messages.length === 0 ? (
             <Empty glyph="sleeping" title="ask anything"
-                   sub="chats run on your own hardware — attach an image and the vision model reads it"/>
-          ) : messages.map((m) => <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage}/>)}
+                   sub="chats run on your own hardware — attach an image and the vision model reads it"
+                   action={narrow && threads.length > 0
+                     ? <Button icon="panel-left-open" onClick={() => setRailOpen(true)}>
+                         your chats ({threads.length})
+                       </Button>
+                     : null}/>
+          ) : messages.map((m) => (
+            <ChatMessage key={m.id} m={m} threadId={threadId} onCopy={copyMessage} admin={admin}/>
+          ))}
         </div>
 
         {/* composer */}
-        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--r-md)',
-                      background: 'var(--card)', boxShadow: 'var(--inner-highlight)',
-                      padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="chat-composer">
           {attachments.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               {attachments.map((a) => (
@@ -503,25 +693,27 @@ const ChatPage = () => {
               {visionPill}
             </div>
           )}
-          <textarea value={draft} onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={onKeyDown} rows={2}
-                    placeholder="message the domovoi… (Enter to send, Shift+Enter for a new line)"
-                    style={{ font: 'inherit', fontSize: 13, lineHeight: 1.5, resize: 'none',
-                             border: 'none', outline: 'none', background: 'transparent',
-                             color: 'var(--fg)' }}/>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input ref={fileRef} type="file" accept="image/*" multiple hidden
-                   onChange={(e) => { attach(e.target.files); e.target.value = ''; }}/>
-            <IconButton name="paperclip" title="attach images (up to 4)"
-                        onClick={() => fileRef.current && fileRef.current.click()}/>
-            <div style={{ flex: 1 }}/>
-            <Button variant="primary" icon="send" onClick={send}
-                    disabled={sending || !draft.trim()}>
-              {sending ? 'thinking…' : 'send'}
-            </Button>
-          </div>
+          {showPictureNote && (
+            <ChatPictureNote model={modelsInfo.vision_model} admin={admin}
+                             onClose={() => setPictureNote(false)}/>
+          )}
+          <input ref={fileRef} type="file" accept="image/*" multiple hidden
+                 onChange={(e) => { attach(e.target.files); e.target.value = ''; }}/>
+          {narrow ? (
+            <div className="chat-composer-row">{clip}{textarea}{sendButton}</div>
+          ) : (
+            <React.Fragment>
+              {textarea}
+              <div className="chat-composer-row">
+                {clip}
+                <div style={{ flex: 1 }}/>
+                {sendButton}
+              </div>
+            </React.Fragment>
+          )}
         </div>
       </div>
+      )}
       {toastNode}
     </div>
   );

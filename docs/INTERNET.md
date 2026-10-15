@@ -107,9 +107,6 @@ which and can hand a setting back to the answer
 
 - **Topic news every morning** (`NEWS_AUTO_FETCH`, Settings → Configuration
   → News) stays each household's own opt-in, off by default.
-- **Microsoft Edge voices** stay your choice (`TTS_ENGINE=edge`, Settings →
-  Voices). They are never used as a stand-in for the local voice, and
-  under **No** they aren't used at all.
 - **Your voice never leaves the box.** Whisper always loads its model from
   the server's own disk first; a model downloads only when it isn't there
   yet, and never under **No**.
@@ -172,7 +169,7 @@ stays yours to do:
    *Why:* "play 97.5 FM" finds the station in your market rather than any
    97.5 in the country.
 
-4. **Fill the satellite media cache.** Satellites → *prepare satellite
+4. **Fill the satellite media cache.** Settings → Satellites → *prepare satellite
    media* → **Refresh caches** (admin sign-in; the wheel fetch can take
    minutes). The wake-word models come from pinned URLs and are checked
    against pinned digests; the server no longer needs the `openwakeword`
@@ -221,10 +218,9 @@ stays yours to do:
 
 **Worth knowing, but not turned on by any answer:**
 
-- **Microsoft Edge voices** (Settings → Voices, or `TTS_ENGINE=edge`):
-  nicer voices, but the text of every reply goes to Microsoft.
-- **Extra voices** (`SEED_VOICE_CATALOG=true`): 9 more Piper voices (about
-  0.7 GB) and 19 Microsoft Edge voices registered at startup.
+- **Extra voices** (`SEED_VOICE_CATALOG=true`): the other two of Domovoi's
+  three Piper voices (about 130 MB, downloaded on first use unless the
+  provisioning fetched them).
 - **Topic news every morning** (`NEWS_AUTO_FETCH`).
 - **A custom wake word.** The trainer downloads about 8 GB of training
   data the first time. See [`scripts/wake_word/README.md`](../scripts/wake_word/README.md).
@@ -366,7 +362,6 @@ your router, it would tell Domovoi the internet is up when it isn't.
   step.
 - Synced lyrics from LRCLIB. Lyrics in `.lrc` files and in the songs' own
   tags still show, and so do the ones LRCLIB sent before.
-- Microsoft Edge voices: Piper speaks instead.
 - Downloading models, voices and wake-word training data; installing
   plugins from GitHub (a plugin zip whose Python packages are already
   installed still installs).
@@ -508,10 +503,9 @@ allowed, they send short text:
   the FCC import (radio plugin); short clips of a favorited internet
   station's audio to Shazam to name the song.
 
-And only if you choose them: the text of every reply to Microsoft for an
-Edge voice (and, for a registered Edge voice, its fixed greeting clips,
-rendered once while the internet is up), and downloads an admin starts
-(models, plugins, updates, the satellite cache).
+And only if you choose them: downloads an admin starts (models, plugins,
+updates, the satellite cache). No voice sends anything: they are all local
+(the Microsoft Edge online voices were dropped in October 2026).
 
 The full list, with every off switch: [FAQ → What touches the internet](FAQ.md#what-touches-the-internet-and-how-do-i-turn-each-thing-off)
 and [Security & privacy → What leaves your network](SECURITY_PRIVACY.md#what-leaves-your-network--and-how-to-turn-each-thing-off).

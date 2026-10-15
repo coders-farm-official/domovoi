@@ -25,14 +25,19 @@ Related: [FAQ — Can it run without a GPU?](FAQ.md#can-it-run-without-a-gpu) ·
 | `whisper_cpu_threads` | `0` (one per physical core; ignored on `cuda`) | `0` — unchanged |
 | `ollama_tool_model` | `qwen2.5:14b` | **`qwen2.5:7b`** |
 | `ollama_model` | `llama3.2:3b` | `llama3.2:3b` — unchanged, already small |
+| `ollama_vision_model` (pictures in chat) | **`qwen2.5vl:7b`** — pick it in **Models** | `qwen3-vl:2b-instruct-q4_K_M` — the default, already the CPU pick |
 | `tts_engine` | `piper` | `piper` — unchanged, but read the note below |
 | Chat mode (Letta) | opt-in | **leave off** |
 
 All of these are dashboard settings — gear → **Advanced** for the Whisper
-ones, **Models** for the Ollama three. The Whisper settings are
-restart-tier (the model loads once at boot). The Ollama model settings are
-hot — they take effect on the next turn with no restart, which makes them
-cheap to experiment with. Try a model, say something, try another.
+ones, **Models** for the Ollama ones. The vision model is the one row where
+the default is already the CPU host's: it answers chat messages with
+pictures, and `qwen2.5vl:7b` takes minutes per picture without a GPU. The
+Whisper settings are restart-tier (the model loads once at boot). The
+Ollama model settings are hot — they take effect on the next turn with no
+restart, which makes them cheap to experiment with. Try a model, say
+something, try another. (The vision model reaches the dashboard's chat when
+the dashboard restarts.)
 
 **Forgot to change them?** The core still starts. When the configured
 Whisper can't load — `cuda` on a machine with no NVIDIA GPU is the usual
@@ -318,26 +323,19 @@ split.
 
 ### TTS: the one place local-first costs you something
 
-`tts_engine` defaults to `piper`, which renders every spoken response
-locally — on this box, that means on the same CPU already doing Whisper
-and the language models. Edge, by contrast, arrives over the network
-already rendered and costs zero local compute.
+`tts_engine` is `piper`, which renders every spoken response locally —
+on this box, that means on the same CPU already doing Whisper and the
+language models. (There is no online voice to offload it to: the
+Microsoft Edge voices were dropped in October 2026.)
 
-So this is the one setting where the local-first default and the
-CPU-host advice genuinely pull in opposite directions, and it's worth
-being clear-eyed rather than pretending otherwise.
-
-**Start on Piper anyway.** It's fast — a `medium` voice renders a
+**It is rarely the bottleneck.** Piper is fast — a `medium` voice renders a
 typical one- or two-sentence reply in well under a second on eight modern
 cores — and it runs after the answer is already decided, so it lands at
 the tail of the turn rather than in the middle of it. For most households
 it simply isn't the bottleneck.
 
-Reach for `edge` if you measure otherwise, or if you want the nicer
-voices badly enough. Just do it knowingly: it sends **the text of every
-spoken response** to Microsoft, which is the single thing the default
-config is built to avoid. See
-[SECURITY_PRIVACY.md](SECURITY_PRIVACY.md).
+If you measure otherwise, the `system` engine is cheaper still, at the
+cost of a robotic voice.
 
 Piper's voice model downloads from Hugging Face once, on first render.
 After that it is fully offline — which also makes it the rung that keeps
@@ -366,7 +364,7 @@ encoder's load stalled every room while it ran:
 ```bash
 journalctl -u domovoi-core | grep "speech warm-up"
 # speech warm-up: voice encoder ready in 0.7 s
-# speech warm-up: Piper voice en_US-lessac-medium ready in 0.5 s
+# speech warm-up: Piper voice en_US-kristin-medium ready in 0.5 s
 ```
 
 Ollama's model loads are the exception: they are boot cost only if the
@@ -554,10 +552,16 @@ For now it only runs in **shadow mode**: it writes down what it would
 have done and whether Whisper agreed, and every reply is exactly what it
 would have been without it. Those records decide whether it may ever act.
 
-Turn it on:
+Turn it on. Domovoi does not install the recognizer, sherpa-onnx, since
+2026-10: its wheels on PyPI (and `sherpa-onnx-core` under them) compile in
+espeak-ng, GPL-3.0, for their own text to speech, and Domovoi's own
+dependencies are permissive only. Build sherpa-onnx with
+`SHERPA_ONNX_ENABLE_TTS=OFF` (the Android app's copy is built that way:
+`android/native/sherpa-onnx/README.md`), or install the PyPI wheel
+knowing what it carries:
 
 ```bash
-pip install -e ".[fastlane]"              # sherpa-onnx; not part of any other extra
+pip install "sherpa-onnx>=1.13.8,<2"      # the PyPI wheel: includes espeak-ng (GPL-3.0)
 python -m domovoi.fast_lane fetch         # optional: the 103 MB model now
 ```
 
@@ -568,7 +572,7 @@ once. The model downloads on first enable into
 releases, checked against a pinned SHA-256 (and its files again on every
 load). It is NVIDIA NeMo's
 `stt_en_fastconformer_hybrid_large_streaming_80ms` (CC-BY-4.0) in
-sherpa-onnx's int8 export. Without the extra, shadow mode logs once that
+sherpa-onnx's int8 export. Without sherpa-onnx, shadow mode logs once that
 the lane is unavailable and nothing else changes.
 
 What it commits on, and after how much quiet:
@@ -709,7 +713,10 @@ at 32k tokens `llama3.2:3b` alone is ~6 GB and `qwen3:8b` ~10 GB, so leave
 `ollama_num_ctx` / `ollama_tool_num_ctx` (and the server's
 `OLLAMA_CONTEXT_LENGTH`) at 4–8k on a 24 GB box. And a third model — the
 dashboard's vision model, or Letta's — needs its own room: loading it is
-what makes Ollama unload a voice model whatever `keep_alive` says.
+what makes Ollama unload a voice model whatever `keep_alive` says. The
+default vision model, `qwen3-vl:2b-instruct-q4_K_M`, took ~3.2 GB while
+loaded in a test at a 4096-token window; the 8192 that chat gives a
+message with pictures (`ollama_vision_num_ctx`) adds a few hundred MB.
 
 If the box has less than 16 GB, run one Ollama model: point
 `ollama_model` and `ollama_tool_model` at the *same* small model and

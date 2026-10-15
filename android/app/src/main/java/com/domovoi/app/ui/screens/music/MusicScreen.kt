@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Refresh
@@ -22,11 +23,13 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -34,15 +37,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.Paging
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.rememberApi
+import com.domovoi.app.net.toPage
 import com.domovoi.app.player.CastPlanner
 import com.domovoi.app.player.PlayItem
 import com.domovoi.app.player.PlayKind
 import com.domovoi.app.player.PlayerController
+import com.domovoi.app.ui.components.LoadMoreNearEnd
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.PageHeader
 import com.domovoi.app.ui.components.PromptDialog
+import com.domovoi.app.ui.components.rememberPager
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -60,8 +67,6 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
-
-private const val PAGE_SIZE = 12
 
 /**
  * The rooms the cast menu and the "play in room" pickers offer: the ones the
@@ -82,7 +87,7 @@ fun MusicScreen() {
     val toast = LocalToast.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val ui = remember { MusicUi() }
+    val ui = rememberSaveable(saver = MusicUi.Saver) { MusicUi() }
 
     // ── Data ──────────────────────────────────────────────────────────
     var qDebounced by remember { mutableStateOf("") }
@@ -90,11 +95,12 @@ fun MusicScreen() {
         delay(250)
         qDebounced = ui.q
     }
-    val libPath = remember(qDebounced, ui.source, ui.sort, ui.favoritedOnly, ui.page) {
+    // The library loads as it scrolls (net/Paging.kt): one page of 50 at a
+    // time, with the search, filters and sort applied by the server to the
+    // whole library. Any change to them is a new list from page one.
+    val libPath = remember(qDebounced, ui.source, ui.sort, ui.favoritedOnly) {
         buildString {
             append("/api/music/library?sort=").append(ui.sort)
-            append("&limit=").append(PAGE_SIZE)
-            append("&offset=").append(ui.page * PAGE_SIZE)
             if (qDebounced.isNotBlank()) {
                 append("&q=").append(URLEncoder.encode(qDebounced, "UTF-8"))
             }
@@ -102,9 +108,12 @@ fun MusicScreen() {
             if (ui.favoritedOnly) append("&favorited=true")
         }
     }
-    val lib = rememberApi(libPath, eventTypes = setOf("library.indexer.changed")) {
-        it.api.get(libPath).decode<LibraryPage>()
-    }
+    val libPager = rememberPager<LibraryTrack>(
+        libPath, keyOf = { it.id }, eventTypes = setOf("library.indexer.changed"),
+    ) { a, req -> a.api.get(Paging.path(libPath, req)).toPage<LibraryTrack>(loadedBefore = req.offset) }
+    val lib by libPager.state.collectAsState()
+    // A new list starts with nothing selected.
+    LaunchedEffect(libPath) { ui.selectedIds.clear() }
     val stats = rememberApi(eventTypes = setOf("library.indexer.changed")) {
         it.api.get("/api/music/library/stats").decode<LibraryStats>()
     }
@@ -117,18 +126,11 @@ fun MusicScreen() {
 
     // Accumulate the distinct sources seen across fetched pages — the
     // source filter is data-driven (open enum), never hardcoded.
-    LaunchedEffect(lib.data) {
-        lib.data?.items.orEmpty()
+    LaunchedEffect(lib.items) {
+        lib.items
             .mapNotNull { it.source }
             .distinct()
             .forEach { if (it !in ui.seenSources) ui.seenSources.add(it) }
-    }
-
-    // Clamp the page back when the filtered total shrinks under the offset.
-    val total = lib.data?.total ?: 0
-    val pages = maxOf(1, (total + PAGE_SIZE - 1) / PAGE_SIZE)
-    LaunchedEffect(total, pages) {
-        if (total > 0 && ui.page >= pages) ui.page = pages - 1
     }
 
     // 1s local tick so elapsed time advances between WS pushes; the server
@@ -206,7 +208,7 @@ fun MusicScreen() {
                     else -> "favorited $label"
                 }
                 toast(msg)
-                if (r.kind == "library" && !r.alreadyFavorited) lib.refresh()
+                if (r.kind == "library" && !r.alreadyFavorited) libPager.reload()
                 nowPlaying.refresh()
             }.onFailure { toast("favorite failed: ${it.message}") }
         }
@@ -220,7 +222,11 @@ fun MusicScreen() {
                     put("favorited", !t.favorited)
                 })
             }.onSuccess {
-                lib.refresh()
+                // The loaded row changes in place (no re-read of every page
+                // scrolled through); under "favorites only" an unfavorited
+                // track leaves the list.
+                if (t.favorited && ui.favoritedOnly) libPager.remove(t.id)
+                else libPager.update(t.id) { it.copy(favorited = !t.favorited) }
                 nowPlaying.refresh()
             }.onFailure { toast("favorite failed: ${it.message}") }
         }
@@ -348,9 +354,13 @@ fun MusicScreen() {
     } else null
 
     // ── Layout ────────────────────────────────────────────────────────
+    val listState = rememberLazyListState()
+    // The next page of tracks as the Library tab nears its end.
+    if (ui.tab == 0) LoadMoreNearEnd(listState, libPager)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -425,8 +435,8 @@ fun MusicScreen() {
                 0 -> libraryTab(
                     ui = ui,
                     lib = lib,
+                    pager = libPager,
                     libraryTotal = libraryTotal,
-                    pages = pages,
                     realPlaylists = realPlaylists,
                     onSelect = { ui.detailTrack = it },
                     onToggleFavorite = onToggleFavorite,
@@ -458,7 +468,7 @@ fun MusicScreen() {
                 onClose = { ui.detailTrack = null },
                 onBrowserPlay = onBrowserPlay,
                 onQueueTrack = onQueueTrack,
-                refreshLib = lib.refresh,
+                refreshLib = { libPager.reload() },
                 refreshStats = stats.refresh,
                 refreshNP = nowPlaying.refresh,
             )
@@ -478,7 +488,7 @@ fun MusicScreen() {
                 track = t,
                 onClose = { ui.addTrack = null },
                 onMutated = {
-                    lib.refresh()
+                    libPager.reload()
                     playlists.refresh()
                     nowPlaying.refresh()
                 },

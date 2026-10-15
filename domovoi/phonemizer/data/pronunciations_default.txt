@@ -1,0 +1,13 @@
+# Domovoi's default "say it like" list. Settings -> Voice starts from these;
+# an owner can change or remove them. Format (docs in ../README.md):
+#
+#   Word = say it like
+#
+# The right side is plain English spelling, read back through the same
+# converter. Separate syllables with hyphens or spaces; write the stressed
+# one in CAPITALS (with no capitals, the first syllable takes the stress).
+# Advanced: /dˈəʊməʊvɔɪ/ between slashes is used as the voice's own
+# phoneme string, unchanged.
+Domovoi = DOH-moe-voy
+Domo = DOH-moe
+Nguyen = win

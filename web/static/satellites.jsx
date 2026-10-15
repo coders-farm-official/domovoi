@@ -1,4 +1,6 @@
-/* Satellites page — per-room Pi grid + drill-in detail drawer + broadcast composer.
+/* Satellites — per-room Pi grid + drill-in detail drawer + broadcast composer.
+ * Since 2026-10-11 a Settings tab (Settings → Satellites, SatellitesPanel);
+ * the old #satellites opens that tab (components.jsx settingsTabRoute).
  *
  * Data sources:
  *   * GET /api/satellites                                     — grid roster
@@ -30,7 +32,39 @@
  */
 
 /* ---- helpers ---------------------------------------------- */
-const wifiTone = (rx) => rx == null ? 'idle' : rx < 5 ? 'err' : rx < 15 ? 'warn' : 'ok';
+// Wi-Fi, by SIGNAL since 2026-10-12: the received signal at the satellite
+// (dBm) is what says whether its link is good. At or above -60 dBm good,
+// -60 to -70 fair, below -70 weak (a 2.4 GHz link wants about -67 for
+// steady real-time audio). Same bands as the voice answer
+// (domovoi/handlers/wifi.py SIGNAL_GOOD_DBM / SIGNAL_FAIR_DBM).
+const WIFI_SIGNAL_GOOD_DBM = -60;
+const WIFI_SIGNAL_FAIR_DBM = -70;
+const wifiSignalTone = (dbm) => dbm == null ? 'idle' : dbm >= WIFI_SIGNAL_GOOD_DBM ? 'ok' : dbm >= WIFI_SIGNAL_FAIR_DBM ? 'warn' : 'err';
+const wifiSignalWord = (dbm) => ({ ok: 'good', warn: 'fair', err: 'weak', idle: '' }[wifiSignalTone(dbm)]);
+// The rate is `iw`'s LAST frame, and an idle link's last frame is a beacon
+// at 1 Mbit/s: by itself it is never a verdict. It colours only a
+// satellite too old to report a signal, exactly as before.
+const wifiRateTone = (rx) => rx == null ? 'idle' : rx < 5 ? 'err' : rx < 15 ? 'warn' : 'ok';
+// The tone of a link: given the room's `wifi` object, by signal when it has
+// one (and red while the radio hosts the setup hotspot), else by rate. A
+// bare number is a rate (the older call form, kept for window.wifiTone).
+const wifiTone = (w) => {
+  if (w != null && typeof w === 'object') {
+    if (w.mode === 'ap') return 'err';
+    if (w.signal_dbm != null) return wifiSignalTone(w.signal_dbm);
+    return wifiRateTone(w.rx_mbits);
+  }
+  return wifiRateTone(w);
+};
+// What the link reads as, main + secondary: "-52 dBm" + "72 Mbit/s" for a
+// satellite that reports a signal, the rate alone for one that does not.
+const wifiLinkText = (w) => {
+  if (!w) return { main: '—', sub: null };
+  if (w.mode === 'ap') return { main: 'setup hotspot', sub: 'not on the house Wi-Fi' };
+  const rate = w.rx_mbits != null ? `${w.rx_mbits.toFixed(0)} Mbit/s` : null;
+  if (w.signal_dbm != null) return { main: `${Math.round(w.signal_dbm)} dBm`, sub: rate };
+  return { main: rate || '—', sub: null };
+};
 const wifiColor = (tone) => ({ ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--err)', idle: 'var(--fg-faint)' }[tone]);
 
 const fmtRemaining = (sec) => {
@@ -55,8 +89,9 @@ const SatCard = ({ s, onOpen, tick }) => {
   const songDur = np?.song?.duration_sec ?? 0;
   const elapsed = playing ? (np.elapsed_sec ?? 0) + tick : 0;
   const progress = playing && songDur ? Math.min(100, (elapsed / songDur) * 100) : 0;
-  const wTone = wifiTone(s.wifi?.rx_mbits);
+  const wTone = wifiTone(s.wifi);
   const wCol  = wifiColor(wTone);
+  const wText = wifiLinkText(s.wifi);
 
   return (
     <button onClick={() => onOpen(s)}
@@ -76,6 +111,11 @@ const SatCard = ({ s, onOpen, tick }) => {
                       color: online ? 'var(--fg)' : 'var(--fg-muted)' }}>
           {s.room_id}
         </div>
+        {satBoardLabel(s) && (
+          <span className="sat-board-badge" title={`board: ${s.board}`}>
+            <Icon name={s.board === 'android_room' ? 'smartphone' : 'laptop'} size={12}/> {satBoardLabel(s)}
+          </span>
+        )}
         {s.sat_type === 'video' && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4,
                          fontSize: 11, color: 'var(--fg-muted)', background: 'var(--sunken)',
@@ -118,11 +158,15 @@ const SatCard = ({ s, onOpen, tick }) => {
 
       <div style={{ borderTop: '1px solid var(--border-soft)', padding: '10px 16px',
                     display: 'flex', alignItems: 'center', gap: 10, background: 'var(--sunken)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: wCol }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: wCol, minWidth: 0 }}
+             title={s.wifi && s.wifi.signal_dbm != null ? `signal ${wifiSignalWord(s.wifi.signal_dbm)} (good at -60 dBm or more, weak below -70)` : undefined}>
           <Icon name="wifi" size={13}/>
-          <span className="mono" style={{ fontSize: 12, color: 'var(--fg)' }}>
-            {s.wifi?.rx_mbits != null ? `${s.wifi.rx_mbits.toFixed(0)} Mbit/s` : '—'}
+          <span className="mono" style={{ fontSize: 12, color: s.wifi && s.wifi.mode === 'ap' ? wCol : 'var(--fg)' }}>
+            {wText.main}
           </span>
+          {wText.sub && (
+            <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', whiteSpace: 'nowrap' }}>· {wText.sub}</span>
+          )}
         </div>
         <span style={{ flex: 1 }}/>
         <span className="mono" style={{ fontSize: 11, color: online ? 'var(--ok)' : 'var(--fg-faint)' }}>
@@ -278,7 +322,7 @@ const SatLastOutage = ({ outage }) => {
                 <td className="mono">{e.failure || '—'}</td>
                 <td className="mono">{e.gateway_ok == null ? '?' : e.gateway_ok ? 'answers' : 'silent'}</td>
                 <td className="mono">{e.core_ok == null ? '?' : e.core_ok ? 'up' : 'down'}</td>
-                <td className="mono">{e.nm_state && e.nm_state.state ? e.nm_state.state : (e.wifi && e.wifi.rx_mbits != null ? `${e.wifi.rx_mbits} Mbit/s` : '—')}</td>
+                <td className="mono">{e.nm_state && e.nm_state.state ? e.nm_state.state : (e.wifi ? wifiLinkText(e.wifi).main : '—')}</td>
                 <td className="mono">{e.action || '—'}</td>
               </tr>
             ))}
@@ -286,6 +330,33 @@ const SatLastOutage = ({ outage }) => {
         </table>
       )}
       {r.truncated && <div style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 4 }}>the record was larger than the core keeps; the oldest entries were dropped</div>}
+    </div>
+  );
+};
+
+// What root's boot-time network step did on this boot (satellite/net_settings.py
+// `assess`: the setup hotspot profile gone, Wi-Fi power saving off, the host
+// name domovoi-<room> set before the Wi-Fi joins), with the reason, and the
+// host name the router should be showing. A satellite older than this sends
+// neither and the card reads exactly as before.
+const SAT_NET_STEP = {
+  applied: { tone: 'ok', word: 'applied' },
+  unchanged: { tone: 'ok', word: 'nothing to change' },
+  skipped: { tone: 'warn', word: 'skipped' },
+  failed: { tone: 'err', word: 'failed' },
+  not_run: { tone: 'warn', word: 'not run' },
+  not_installed: { tone: 'idle', word: 'not installed' },
+  running: { tone: 'idle', word: 'running' },
+};
+const SatNetStep = ({ step, hostname }) => {
+  const m = (step && SAT_NET_STEP[step.state]) || null;
+  return (
+    <div className="sat-net-step" style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginTop: 10, fontSize: 12 }}>
+      <div className="label">boot network step</div>
+      {m && <Pill tone={m.tone}>{m.word}</Pill>}
+      {hostname && <span className="mono" style={{ fontSize: 11.5 }}>host name {hostname}</span>}
+      {m && step.detail && <span style={{ color: 'var(--fg-muted)', flexBasis: '100%', overflowWrap: 'anywhere' }}>{step.detail}</span>}
+      {step && step.early && <span className="sat-net-step-early" style={{ color: 'var(--fg-muted)', flexBasis: '100%', overflowWrap: 'anywhere' }}>{step.early}</span>}
     </div>
   );
 };
@@ -319,11 +390,25 @@ const SatHealthCard = ({ room, online }) => {
         <div className="label">health</div>
         {s && <Pill tone={satHealthAgeTone(ageSec)}>{ageSec == null ? 'sample' : ageSec < 90 ? 'live' : `last sample ${relTime(latest.received_at)}`}</Pill>}
         {s && !online && <Pill tone="idle">kept from before it went offline</Pill>}
+        {s && s.reboot_needed &&
+          <Pill tone="warn" title={s.reboot_needed}>reboot needed</Pill>}
+        {s && s.wifi && s.wifi.mode === 'ap' &&
+          <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the satellite is bringing the house network back">setup hotspot on</Pill>}
+        {s && s.mic_blocked === true &&
+          <Pill tone="err" title="the device's microphone is switched off in its own settings (a phone's mic privacy toggle): it hears only silence">mic blocked</Pill>}
         {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
         {s && s.throttled_flags && s.throttled_flags.length > throttle.length && throttle.length === 0 &&
           <Pill tone="warn" title={s.throttled_flags.join(', ')}>throttled earlier this boot</Pill>}
         {hist && <span className="mono" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--fg-faint)' }}>{hist.samples} samples in 24 h</span>}
       </div>
+      {s && s.reboot_needed && (
+        <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>
+          {s.net_step && s.net_step.state === 'failed'
+            ? 'Its network settings did not all apply at this boot (below); a reboot tries again.'
+            : `Upgraded, but not rebooted yet: its network settings (no setup hotspot, Wi-Fi power saving off, host name domovoi-${room} set before the Wi-Fi joins) are applied at boot.`}
+          {' '}Unplug it for a few seconds and plug it back in.
+        </div>
+      )}
       {error && !s && <div style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 6 }}>couldn’t read health: {error}</div>}
       {!error && !s && data && (
         <div style={{ fontSize: 12, color: 'var(--fg-faint)', marginTop: 6 }}>
@@ -343,9 +428,11 @@ const SatHealthCard = ({ room, online }) => {
                          tone={satHealthTempTone(s.soc_temp_c)}/>
           <SatHealthStat label="uptime" value={satHealthUptime(s.uptime_s)}
                          sub={`process ${satHealthUptime(s.proc_uptime_s)} · ${s.reconnects == null ? '—' : s.reconnects} reconnects`}/>
-          <SatHealthStat label="wi-fi" value={s.wifi && s.wifi.rx_mbits != null ? `${s.wifi.rx_mbits.toFixed(0)} Mbit/s` : '—'}
-                         sub={s.nm_state && s.nm_state.state ? `NetworkManager: ${s.nm_state.state}` : (s.wifi && s.wifi.ssid ? s.wifi.ssid : 'no link data')}
-                         tone={s.wifi && s.wifi.rx_mbits != null ? wifiTone(s.wifi.rx_mbits) : 'idle'}/>
+          <SatHealthStat label="wi-fi" value={wifiLinkText(s.wifi).main}
+                         sub={[s.wifi && s.wifi.signal_dbm != null ? wifiLinkText(s.wifi).sub : null,
+                               s.nm_state && s.nm_state.state ? `NetworkManager: ${s.nm_state.state}` : (s.wifi && s.wifi.ssid ? s.wifi.ssid : 'no link data')]
+                               .filter(Boolean).join(' · ')}
+                         tone={s.wifi ? wifiTone(s.wifi) : 'idle'}/>
           <SatHealthStat label="microphone" value={s.mic_expected === false ? 'off' : s.mic_fps == null ? '—' : `${s.mic_fps.toFixed(1)} fps`}
                          sub={s.wake_loop_age_s == null ? 'wake loop not armed' : `wake loop ${s.wake_loop_age_s.toFixed(1)}s ago · queue ${s.mic_q == null ? '—' : s.mic_q}`}
                          tone={s.mic_expected === false ? 'idle' : s.mic_fps == null ? 'idle' : s.mic_fps > 20 ? 'ok' : s.mic_fps > 0 ? 'warn' : 'err'}/>
@@ -355,8 +442,14 @@ const SatHealthCard = ({ room, online }) => {
           <SatHealthStat label="handles" value={s.fds == null ? '—' : `${s.fds} fds`}
                          sub={`${s.threads == null ? '—' : s.threads} threads · ${s.mem_avail_kb == null ? '—' : satHealthMb(s.mem_avail_kb)} free`}
                          tone={s.fds == null ? 'idle' : s.fds > 400 ? 'warn' : 'ok'}/>
+          {s.battery && (
+            <SatHealthStat label="battery" value={s.battery.percent == null ? '—' : `${s.battery.percent.toFixed(0)}%`}
+                           sub={s.battery.charging ? 'charging' : s.battery.on_power ? 'on power' : s.battery.on_power === false ? 'on battery' : 'power unknown'}
+                           tone={s.battery.percent == null ? 'idle' : (s.battery.on_power === false && s.battery.percent < 20) ? 'err' : s.battery.on_power === false ? 'warn' : 'ok'}/>
+          )}
         </div>
       )}
+      {s && (s.net_step || s.hostname) && <SatNetStep step={s.net_step} hostname={s.hostname}/>}
       {s && (
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 8 }}>
           sampled {satHealthWhen(latest.received_at)}
@@ -637,11 +730,80 @@ const SatTimerScopeControl = ({ s, fire, refresh }) => {
   );
 };
 
+/* ---- A satellite upgrade under way -------------------------------
+ * The Domovoi server keeps a record per room from an upgrade request until
+ * the satellite says hello again (domovoi/satellite_upgrades.py, the list
+ * row's `upgrade`): `running`, then `done` (back on the new code),
+ * `rolled_back` (back on its old code: the new code didn't stay up) or
+ * `no_news` (never came back with an answer; a sync that fails before the
+ * restart leaves it online on its old code without a word). The Upgrade
+ * button locks on `running` the way Settings → Version locks on
+ * restart_in_progress: across a reload and in every tab, and the server
+ * refuses a second request meanwhile (409).
+ *
+ * satUpgradePresses holds THIS page's presses, room → { at, expected,
+ * serverStartedMs }, kept while the drawer is closed and opened again: the
+ * button locks the moment the server says yes, before any list carries the
+ * record. A record started at or after the press's own is the press's. A
+ * server that keeps no records (an older core) ends the press when the
+ * satellite reports the expected version, or after SAT_UPGRADE_WAIT_MS. */
+const satUpgradePresses = new Map();
+const SAT_UPGRADE_WAIT_MS = 6 * 60 * 1000;
+const SAT_UPGRADE_FINISHED = ['done', 'rolled_back', 'no_news'];
+
+const satUpgradeView = (s, press, now = Date.now()) => {
+  const rec = s && s.upgrade && typeof s.upgrade === 'object' && typeof s.upgrade.state === 'string'
+    ? s.upgrade : null;
+  const recMs = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
+  const of = (state, r, expected, startedMs) => ({ state, running: state === 'running', rec: r, expected, startedMs });
+  if (press) {
+    const ours = !!rec && Number.isFinite(recMs) && press.serverStartedMs != null
+      && recMs >= press.serverStartedMs - 1000;
+    if (ours) return of(rec.state, rec, rec.expected_sha || press.expected, recMs);
+    if (press.outcome) {
+      return rec && rec.state === 'running'
+        ? of('running', rec, rec.expected_sha, Number.isFinite(recMs) ? recMs : null)
+        : of(press.outcome, null, press.expected, press.at);
+    }
+    // No record to wait for (a server that keeps none): the satellite's own
+    // version says it.
+    if (press.serverStartedMs == null && press.expected
+        && s.status === 'online' && s.version === press.expected) {
+      return of('done', null, press.expected, press.at);
+    }
+    // Never a word, and no record (or one long gone): stop waiting.
+    if (now - press.at > SAT_UPGRADE_WAIT_MS) return of('no_news', null, press.expected, press.at);
+    return of('running', null, press.expected, press.at);
+  }
+  if (rec) return of(rec.state, rec, rec.expected_sha, Number.isFinite(recMs) ? recMs : null);
+  return of(null, null, null, null);
+};
+
+// "1:05"
+const satUpgradeClock = (ms) => {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+};
+
+// How an upgrade ended, in a sentence (the toast) or a line (the drawer).
+const satUpgradeOutcome = (room, v, { line = false } = {}) => {
+  const to = v.expected || 'the new code';
+  if (v.state === 'done') return line ? `upgraded to ${to}` : `${room} upgraded — now on ${to}`;
+  const back = v.rec && v.rec.back_sha;
+  if (v.state === 'rolled_back') {
+    return `${line ? 'came back' : `${room} came back`} on its old code${back ? ` (${back})` : ''}: the new code didn’t stay up, so it rolled back — its Logs tab says why`;
+  }
+  if (v.state === 'no_news') {
+    return `${line ? 'didn’t' : `${room} didn’t`} come back on ${to} in time — if it still shows its old version, the sync failed before the restart; its Logs tab says why`;
+  }
+  return '';
+};
+
 const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   const waiting = s.status === 'waiting';
   const [msg, setMsg] = React.useState('');
   const [peer, setPeer] = React.useState('');
-  const wTone = wifiTone(s.wifi?.rx_mbits);
+  const wTone = wifiTone(s.wifi);
   const np = s.now_playing;
   const playing = np?.state === 'play' && np.song;
   const songDur = np?.song?.duration_sec ?? 0;
@@ -660,6 +822,54 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   // known-equal version disables it. Without the bootstrap case, a hand-updated
   // Pi (which reports no version yet) could never trigger its first UI upgrade.
   const upToDate = !!(coreSha && s.version && s.version === coreSha);
+  // What this device declared (S0). A Pi sends no list: all true, as before.
+  const canRestart = satCan(s, 'restart');
+  const canUpgrade = satCan(s, 'code_sync');
+  const canAnnounce = satCan(s, 'announce_after_session_end');
+  const notOffered = satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device';
+
+  // The upgrade under way, if any (satUpgradeView above): this page's
+  // press, or the server's record — what a reload or another tab sees.
+  const [press, setPress] = React.useState(() => satUpgradePresses.get(s.room_id) || null);
+  React.useEffect(() => { setPress(satUpgradePresses.get(s.room_id) || null); }, [s.room_id]);
+  // The press in flight: the confirm said yes, the server hasn't answered
+  // (a sign-in prompt may stand in between).
+  const [asking, setAsking] = React.useState(false);
+  const [upgradeErr, setUpgradeErr] = React.useState(null);
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  const upView = satUpgradeView(s, press, nowMs);
+  const upgrading = upView.running;
+  // While it runs: the clock, and a fresh list every few seconds — the
+  // satellite drops off and comes back, and that answer ends the wait.
+  const refreshRef = React.useRef(refresh);
+  refreshRef.current = refresh;
+  React.useEffect(() => {
+    if (!upgrading) return undefined;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    const poll = setInterval(() => {
+      try { if (refreshRef.current) refreshRef.current(); } catch { /* the next tick */ }
+    }, 3000);
+    return () => { clearInterval(tick); clearInterval(poll); };
+  }, [upgrading]);
+  // The wait is over: say how it went, once, and forget the press (the
+  // server's record, when there is one, keeps saying it for a while).
+  const lastUpState = React.useRef(upView.state);
+  React.useEffect(() => {
+    const was = lastUpState.current;
+    lastUpState.current = upView.state;
+    if (was !== 'running' || !SAT_UPGRADE_FINISHED.includes(upView.state)) return;
+    fire(satUpgradeOutcome(s.room_id, upView));
+    if (!press) return;
+    if (upView.rec) {
+      satUpgradePresses.delete(s.room_id);
+      setPress(null);
+    } else {
+      // No record says it (an older server): the press keeps the outcome.
+      const settled = { ...press, outcome: upView.state };
+      satUpgradePresses.set(s.room_id, settled);
+      setPress(settled);
+    }
+  }, [upView.state]);
 
   const sendAnnounce = async () => {
     if (!msg.trim()) {
@@ -688,6 +898,7 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   };
 
   const restartSat = async () => {
+    if (upgrading) { fire(`${s.room_id} is upgrading — it restarts itself when the new code is in`); return; }
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     if (!window.confirm(`Restart the ${s.room_id} satellite? It'll drop offline for a few seconds while the service bounces.`)) return;
     try {
@@ -699,18 +910,38 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
   };
 
   const upgradeSat = async () => {
+    if (upgrading || asking) return;
     if (s.status !== 'online') { fire(`${s.room_id} is offline`); return; }
     if (!window.confirm(
       `Upgrade the ${s.room_id} satellite to ${coreSha || 'the latest domovoi code'}?\n\n` +
       `It pulls the new satellite code from the Domovoi server, backs up its current ` +
       `tree, and restarts — dropping offline for a few seconds. If the new code won't ` +
-      `start, it rolls back automatically.`
+      `start, it rolls back automatically.\n\n` +
+      `Some updates finish at the next boot: if its health card then says ` +
+      `"reboot needed", unplug it for a few seconds and plug it back in.`
     )) return;
+    setUpgradeErr(null);
+    setAsking(true);
     try {
-      await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
+      const res = await apiPost(`/api/satellites/${s.room_id}/upgrade`, {});
+      // Locked from here until the satellite is back (satUpgradeView).
+      const rec = res && res.upgrade;
+      const startedMs = rec && rec.started_at ? Date.parse(rec.started_at) : NaN;
+      const p = { at: Date.now(), expected: (res && res.expected_sha) || coreSha || null,
+                  serverStartedMs: Number.isFinite(startedMs) ? startedMs : null };
+      satUpgradePresses.set(s.room_id, p);
+      setPress(p);
+      setNowMs(Date.now());
       fire(`upgrading ${s.room_id}…`);
+      try { refresh && refresh(); } catch { /* the poll catches up */ }
     } catch (e) {
-      reportMutationFailure(fire, 'upgrade', e);
+      // Refused, failed or cancelled: the button stays offered, and says why.
+      const msg = reportMutationFailure(fire, 'upgrade', e);
+      if (msg) setUpgradeErr(msg);
+      // 409: one is already under way (another tab, the app): the list says so.
+      if (e && e.status === 409) { try { refresh && refresh(); } catch { /* next poll */ } }
+    } finally {
+      setAsking(false);
     }
   };
 
@@ -773,7 +1004,23 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
         </div>
         <div style={{ padding: '14px 16px' }}>
           <div className="label">wi-fi</div>
-          {s.wifi && s.wifi.rx_mbits != null ? (
+          {s.wifi && s.wifi.mode === 'ap' ? (
+            <>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor('err') }}>setup hotspot</div>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>hosting its setup network, not on the house Wi-Fi</div>
+            </>
+          ) : s.wifi && s.wifi.signal_dbm != null ? (
+            <>
+              <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor(wTone) }}>
+                {Math.round(s.wifi.signal_dbm)} dBm
+                <span style={{ fontSize: 11, fontWeight: 400 }}> {wifiSignalWord(s.wifi.signal_dbm)}</span>
+              </div>
+              <div className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>
+                {s.wifi.ssid || '—'}
+                {s.wifi.rx_mbits != null && ` · ${s.wifi.rx_mbits.toFixed(1)}${s.wifi.tx_mbits != null ? ` / ${s.wifi.tx_mbits.toFixed(1)}` : ''} Mbit/s`}
+              </div>
+            </>
+          ) : s.wifi && s.wifi.rx_mbits != null ? (
             <>
               <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 2, color: wifiColor(wTone) }}>
                 {s.wifi.rx_mbits.toFixed(1)}
@@ -842,6 +1089,14 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             <div className="mono" style={{ color: 'var(--fg-muted)' }}>{s.hardware}</div>
           </>
         )}
+        {satBoardLabel(s) && (
+          <>
+            <div className="label">board</div>
+            <div className="mono" style={{ color: 'var(--fg-muted)' }}>
+              {satBoardLabel(s)}{satBoardLabel(s) !== s.board ? ` · ${s.board}` : ''}
+            </div>
+          </>
+        )}
         <div className="label">voice</div>
         <div className="mono" style={{ color: s.voice ? 'var(--fg)' : 'var(--fg-faint)' }}>{s.voice || 'registry default'}</div>
         <div className="label">version</div>
@@ -891,19 +1146,22 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
 
       <VolumeControl s={s} fire={fire}/>
 
-      {s.sat_type === 'video' && <VideoControls s={s} fire={fire}/>}
+      {s.sat_type === 'video' && satCan(s, 'display') && <VideoControls s={s} fire={fire}/>}
 
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6 }}>announce to {s.room_id}</div>
+        {!canAnnounce && (
+          <div className="mono sat-not-offered">{notOffered} doesn't take announcements — timers and reminders aren't spoken there</div>
+        )}
         <div style={{ display: 'flex', gap: 8 }}>
           <input value={msg} onChange={e => setMsg(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') sendAnnounce(); }}
                  placeholder={`speak through the ${s.room_id} satellite…`}
-                 disabled={s.status !== 'online'}
+                 disabled={s.status !== 'online' || !canAnnounce}
                  style={{ flex: 1, font: 'inherit', fontSize: 13, height: 32, padding: '0 10px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
-          <Button variant="primary" icon="send" disabled={!msg.trim() || s.status !== 'online'} onClick={sendAnnounce}>
+          <Button variant="primary" icon="send" disabled={!msg.trim() || s.status !== 'online' || !canAnnounce} onClick={sendAnnounce}>
             send
           </Button>
         </div>
@@ -951,15 +1209,20 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
       <div style={{ padding: 16, background: 'var(--sunken)', borderTop: '1px solid var(--border-soft)' }}>
         <div className="label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
           maintenance
-          {needsUpgrade && <Pill tone="warn">needs upgrade</Pill>}
+          {needsUpgrade && canUpgrade && <Pill tone="warn">needs upgrade</Pill>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Button icon="refresh-cw" disabled={s.status !== 'online'} onClick={restartSat}>
+          {/* Nothing else restarts it mid-upgrade: a restart during the sync
+              would leave a half-copied tree with no rollback armed. */}
+          <Button icon="refresh-cw" disabled={upgrading || s.status !== 'online' || !canRestart} onClick={restartSat}
+                  title={upgrading ? 'it restarts itself when the new code is in' : undefined}>
             Restart satellite
           </Button>
-          <Button variant={needsUpgrade ? 'primary' : 'secondary'} icon="download-cloud"
-                  disabled={s.status !== 'online' || upToDate} onClick={upgradeSat}>
-            Upgrade satellite
+          <Button variant={needsUpgrade && canUpgrade ? 'primary' : 'secondary'} icon="download-cloud"
+                  disabled={upgrading || asking || s.status !== 'online' || upToDate || !canUpgrade}
+                  title={upgrading ? 'an upgrade is under way — this unlocks when the satellite is back' : undefined}
+                  onClick={upgradeSat}>
+            {upgrading || asking ? 'Upgrading…' : 'Upgrade satellite'}
           </Button>
           <Button icon="shield-off" disabled={!(s.pairing && s.pairing.paired)} onClick={resetPairing}>
             Reset pairing
@@ -1008,9 +1271,43 @@ const OverviewBody = ({ s, sats, fire, onClose, refresh }) => {
             </Button>
           )}
         </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
-          restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
-        </div>
+        {upgrading && (
+          <div className="sat-upgrade-progress" style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 8 }}>
+            {s.status === 'online'
+              ? `Syncing its code${upView.expected ? ` to ${upView.expected}` : ''} from the Domovoi server…`
+              : 'Restarting into the new code…'}
+            {upView.startedMs != null && (
+              <span className="mono" style={{ marginLeft: 6, color: 'var(--fg-faint)' }}>
+                {satUpgradeClock(nowMs - upView.startedMs)}
+              </span>
+            )}
+            <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 2 }}>
+              It drops offline while it restarts. This unlocks when it is back on the new
+              code, usually within a couple of minutes.
+            </div>
+          </div>
+        )}
+        {!upgrading && SAT_UPGRADE_FINISHED.includes(upView.state) && (
+          <div className="sat-upgrade-result" data-state={upView.state}
+               style={{ fontSize: 12, marginTop: 8,
+                        color: upView.state === 'done' ? 'var(--ok)' : 'var(--warn)' }}>
+            {satUpgradeOutcome(s.room_id, upView, { line: true })}
+          </div>
+        )}
+        {upgradeErr && !upgrading && (
+          <div className="sat-upgrade-error" style={{ fontSize: 12, color: 'var(--err)', marginTop: 8 }}>
+            {upgradeErr}
+          </div>
+        )}
+        {canRestart && canUpgrade ? (
+          <div className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 6 }}>
+            restart bounces domovoi-satellite.service · upgrade syncs satellite code to {coreSha || 'the Domovoi server'} then restarts · reset pairing lets a re-flashed / new device re-pair as this room
+          </div>
+        ) : (
+          <div className="mono sat-not-offered" style={{ marginTop: 6 }}>
+            {notOffered} {!canRestart && !canUpgrade ? 'restarts and updates itself' : !canRestart ? 'restarts itself' : 'updates itself'} — it didn't offer {[!canRestart && 'restart', !canUpgrade && 'code sync'].filter(Boolean).join(' or ')} · reset pairing lets a new device re-pair as this room
+          </div>
+        )}
       </div>
     </>
   );
@@ -1452,6 +1749,9 @@ const RoomLogsBody = ({ room, online }) => {
   const live = data && (data.live !== undefined ? data.live : { text: data.text, bytes: data.bytes,
                                                                 buffered_bytes: data.buffered_bytes, truncated: data.truncated });
   const retained = data && data.retained;
+  // A connected device that declared no live log (S0) answers like an
+  // offline one, with `live_supported: false`.
+  const liveOffered = !(data && data.live_supported === false);
   const showRetained = view === 'retained' && !!retained;
   const text = showRetained ? (retained.text || '') : ((live && live.text) || '');
   const preStyle = {
@@ -1469,7 +1769,7 @@ const RoomLogsBody = ({ room, online }) => {
         <Button icon="rotate-cw" onClick={load}>Refresh</Button>
         <Tabs padX={0} value={showRetained ? 'retained' : 'live'} onChange={setView} tabs={[
           { id: 'retained', label: `retained on the server${retained ? ` · ${fmtBytes(retained.bytes)}` : ' · none'}` },
-          { id: 'live', label: `live ring${live ? ` · ${fmtBytes(live.bytes)}` : online ? '' : ' · offline'}` },
+          { id: 'live', label: `live ring${live ? ` · ${fmtBytes(live.bytes)}` : liveOffered ? (online ? '' : ' · offline') : ' · not offered'}` },
         ]}/>
         {showRetained && retained.truncated &&
           <Pill tone="idle">last {fmtBytes(retained.bytes)} of {fmtBytes(retained.file_bytes)} on disk</Pill>}
@@ -1481,7 +1781,10 @@ const RoomLogsBody = ({ room, online }) => {
             : 'in memory on the Pi · lost on restart'}
         </span>
       </div>
-      {!showRetained && !live
+      {!showRetained && !live && !liveOffered
+        ? <Empty glyph="sleeping" title="this device doesn't offer a live log"
+                 sub="it didn't declare one in its hello — the retained log is what it pushed"/>
+      : !showRetained && !live
         ? <Empty glyph="sleeping" title="the live ring needs the satellite online"
                  sub={retained ? 'the retained log above is what it pushed before it went offline' : 'the buffer lives in its own process'}/>
         : text === ''
@@ -1540,7 +1843,10 @@ const SatDrawer = ({ s, sats, onClose, fire, refresh }) => {
           {tab === 'notes'         && <RoomNotesBody room={s.room_id}/>}
           {tab === 'timers'        && <RoomTimersBody room={s.room_id} fire={fire}/>}
           {tab === 'logs'          && <RoomLogsBody room={s.room_id} online={s.status === 'online'}/>}
-          {tab === 'settings'      && <RoomSettingsBody room={s.room_id} fire={fire}/>}
+          {tab === 'settings'      && (satCan(s, 'config')
+            ? <RoomSettingsBody room={s.room_id} fire={fire}/>
+            : <Empty glyph="sleeping" title="settings stay on the device"
+                     sub={`${satBoardLabel(s) ? `this ${satBoardLabel(s)}` : 'this device'} didn't offer remote settings — change them on the device itself`}/>)}
         </div>
       </aside>
     </>
@@ -1627,7 +1933,7 @@ const Broadcast = ({ onlineCount, fire, compact = false }) => {
           <input value={msg} onChange={e => setMsg(e.target.value)}
                  onKeyDown={e => { if (e.key === 'Enter') send(); }}
                  placeholder="dinner's ready" disabled={onlineCount === 0}
-                 style={{ flex: 1, font: 'inherit', fontSize: 14, height: 38, padding: '0 12px',
+                 style={{ flex: 1, minWidth: 0, font: 'inherit', fontSize: 14, height: 38, padding: '0 12px',
                           borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
                           background: 'var(--card)', color: 'var(--fg)', boxShadow: 'var(--inner-highlight)' }}/>
           <Button variant="primary" icon="megaphone" disabled={!msg.trim() || onlineCount === 0} onClick={send}>
@@ -1865,7 +2171,7 @@ const ApprovalCard = ({ a, busy, error, onApprove, onReject, onClearError }) => 
         <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontWeight: 600 }}>{a.room_id}</div>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-            {a.board || 'unknown board'}
+            {(a.board && (SAT_BOARD_LABELS[a.board] || a.board)) || 'unknown board'}
             {a.mac ? ` · ${a.mac.slice(-8)}` : ''}
             {' · '}{a.sat_type || 'voice'}
             {/* How many times the DEVICE has re-announced itself, which is
@@ -1958,7 +2264,12 @@ const PendingSatCard = ({ p, adopted, onAdopt }) => {
   );
 };
 
-const SatellitesPage = () => {
+/* The satellites view. `embedded` is how Settings → Satellites shows it
+ * (SatellitesPanel): under the Settings header, with the roster's counts
+ * as its first line. Without it, the same view as a page of its own, which
+ * the shell no longer routes to (#satellites opens the Settings tab). Every
+ * read, action and auth tier is the same either way. */
+const SatellitesPage = ({ embedded = false } = {}) => {
   const [openRoom, setOpenRoom] = React.useState(null);
   const [tick, setTick] = React.useState(0);
   const [fire, toastNode] = useToast();
@@ -2044,15 +2355,11 @@ const SatellitesPage = () => {
     </div>
   );
 
-  return (
-    <div className="page">
-      <PageHeader
-        title="Satellites"
-        sub={`${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`}
-      />
-
+  const summary = `${onlineCount} online · ${offlineCount} offline${waitingCount ? ` · ${waitingCount} waiting` : ''} · ${sats.length} known`;
+  const body = (
+    <>
       {approvals.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">waiting for approval</div>
           {approvals.map(a => (
             <ApprovalCard key={a.room_id} a={a} busy={approvalBusy === a.room_id}
@@ -2066,7 +2373,7 @@ const SatellitesPage = () => {
       )}
 
       {pending.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="label">plugged in — ready to adopt</div>
           {pending.map(p => (
             <PendingSatCard key={p.pending_id} p={p}
@@ -2118,11 +2425,29 @@ const SatellitesPage = () => {
                     fire={fire}/>
       )}
       {toastNode}
+    </>
+  );
+  if (embedded) {
+    return (
+      <div className="sat-panel">
+        <div className="sat-panel-summary mono">{summary}</div>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <div className="page">
+      <PageHeader title="Satellites" sub={summary}/>
+      {body}
     </div>
   );
 };
 
+// Settings → Satellites (settings.jsx).
+const SatellitesPanel = () => <SatellitesPage embedded/>;
+
 window.SatellitesPage = SatellitesPage;
+window.SatellitesPanel = SatellitesPanel;
 // Home (home.jsx) shows the same rooms, timers and broadcast. It reads
 // these from window instead of declaring its own: every page script
 // shares one Babel scope, and a second top-level `const wifiTone` would

@@ -1,0 +1,7 @@
+sherpa-onnx v1.13.8, commit 11afbd009a7f8c08f4bcf2fc1b265d0df4670fbf, text to speech OFF, speaker diarization OFF
+NDK 29.0.14206865 (android-ndk-r29-linux.zip, sha256 4abbbcdc842f3d4879206e9695d52709603e52dd68d3c1fff04b3b5e7a308ecf)
+clang Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349)
+ONNX Runtime 1.28.0, https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.28.0/onnxruntime-android-1.28.0.aar (sha256 f351a0638696f54b35184290dbc001d66daae17281ad0b548d2c70347d53b8a9)
+android-26, ABIs arm64-v8a x86_64 armeabi-v7a x86
+apt snapshot 20261001T000000Z: cmake=3.28.3-1build7 ninja-build=1.11.1-2 git=1:2.43.0-1ubuntu7.3 curl=8.5.0-2ubuntu10.15 unzip=6.0-28ubuntu4.1
+fetched by sherpa-onnx's CMake: eigen json kaldi_decoder kaldi_native_fbank kaldifst kissfft openfst simple-sentencepiece 

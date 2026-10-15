@@ -53,10 +53,11 @@ Buy one full kit first, get it working end-to-end, then provision the rest.
 A **video satellite** adds a screen: it plays music like any satellite and
 renders a fullscreen now-playing page (cover art, progress, touch
 transport) in a kiosk browser, with its controls in a type-gated block on
-the dashboard's Satellites drawer. Reference hardware is the **Radxa Zero
-3W** (RK3566, ≥2 GB RAM recommended) with an HDMI screen or DSI touch
-panel; voice is optional per device (`[mic] enabled`) — the default video
-build has no mic and adds one later by plugging in a supported board.
+the room's drawer in the dashboard's Settings → Satellites. Reference
+hardware is the **Radxa Zero 3W** (RK3566, ≥2 GB RAM recommended) with an
+HDMI screen or DSI touch panel; voice is optional per device (`[mic]
+enabled`) — the default video build has no mic and adds one later by
+plugging in a supported board.
 Setup: [satellite/VIDEO_SATELLITE.md](../satellite/VIDEO_SATELLITE.md).
 
 ## The shipped path — the satellite's own setup Wi-Fi
@@ -88,18 +89,26 @@ Two details that are load-bearing rather than cosmetic:
   can never enumerate. USB-adopted units get the overlay and now remove it
   themselves once adoption succeeds.
 
-The server address is found automatically: the satellite sweeps its own /24
-for `/v1/health` at first start and saves what answers. Deliberately not
-mDNS — multicast over Wi-Fi is exactly what fails at 3 a.m. Type an address
-into the portal to skip discovery: `ws://192.168.1.20:6370` or
+The server address is found automatically, in this order: the server's
+name (`domovoi.local`, and any name the server has told the satellite
+since), then the address that worked last time, then — only as a last
+resort — a sweep of the satellite's own /24 for `/v1/health`. Every
+candidate must sign a fresh challenge for the exact address dialled with
+the server key the card was prepared with, so a name cannot redirect a
+satellite to another machine, and mDNS is never load-bearing: a name that
+does not resolve (multicast over Wi-Fi is what fails at 3 a.m.) falls
+through to the next step. What worked is saved, and the search runs again
+when the server stays unreachable, so a server that moves to a new address
+keeps its satellites. Type an address into the portal to start from it instead of a sweep: `ws://192.168.1.20:6370` or
 `ws://domovoi.local:6370` (a bare host gets `ws://` and the port). The
 portal accepts a `ws://` or `wss://` address on a private range (RFC 1918)
 or a `.local` name and nothing else, refuses a form body over 8 KB without
 reading it, and shows the address it resolved on the confirmation page so a
 typo is visible before the setup network closes.
 
-Choose the route when you prepare the card: **Satellites → prepare satellite
-media → wi-fi setup portal** (the default) or **usb adoption**.
+Choose the route when you prepare the card: **Settings → Satellites →
+prepare satellite media → wi-fi setup portal** (the default) or **usb
+adoption**.
 
 On a Windows install, where Domovoi runs inside WSL, the portal and the zip
 download are the only choices. WSL can't see USB drives or SD cards, so USB
@@ -110,11 +119,11 @@ says why. Unzip the overlay onto the card yourself (below).
 
 Skip most of the manual steps below: flash **stock Raspberry Pi OS Lite
 (64-bit)** with any tool (no pre-configure needed), re-insert the card
-into the Domovoi server, and use **Satellites → prepare satellite media**.
+into the Domovoi server, and use **Settings → Satellites → prepare satellite media**.
 The dashboard writes a first-boot overlay + a fully-offline payload (all
 Python wheels, packages, the satellite code from this machine, and any
 plugin payloads) onto the card's boot partition. Then: boot the device,
-plug it into the server's USB port, and adopt it from the Satellites page
+plug it into the server's USB port, and adopt it from Settings → Satellites
 (name + Wi-Fi — done). Everything below remains the manual path — still
 the reference for custom setups and debugging.
 
@@ -278,9 +287,11 @@ Three finishing moves, all from PROVISIONING.md:
      and Pi OS boots in Europe/London.
    - *(XVF3800 only)* a further entry for the `xvf_host` LED binary
      ([Appendix §E](../satellite/PROVISIONING.md)).
-3. **DHCP reservation** ([§7](../satellite/PROVISIONING.md)) and a
-   physical label (hostname, room, IP, board + HAT version). Future you
-   says thanks.
+3. A physical label (hostname, room, board + HAT version). Future you
+   says thanks. A **DHCP reservation** on the router is optional
+   ([§7](../satellite/PROVISIONING.md)): the satellite is `domovoi-<room>`
+   on the network and finds the server by name; never set a static
+   address on the Pi itself.
 
 Everyday operation is plain systemd:
 
@@ -309,8 +320,8 @@ it's the real reference. The map:
 | `[playback]`, `[music]` | TTS pre-buffering, TTS make-up gain (important on the XVF3800's quiet line-level jack), and the ALSA device + priming handshake for music streaming. |
 | `[leds]`, `[wifi]`, `[log]` | LED backend/brightness, the Wi-Fi self-heal watchdog, log level. |
 
-Most settings can also be edited from the dashboard: **Satellites → (your
-room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
+Most settings can also be edited from the dashboard: **Settings → Satellites →
+(your room) → Settings**. Saving there rewrites the Pi's `config.toml` in place —
 preserving your comments, keeping a `.bak` — and restarts the satellite to
 apply (that's what the self-restart sudoers entry is for).
 
@@ -322,7 +333,7 @@ also on the dashboard as **Wake acknowledgement** in its Wake word settings:
 
 | Mode | What you hear | Added before listening starts |
 |---|---|---|
-| `greeting` (default) | A short spoken line from the greeting bank ("Yes?", "What's up?") in the room's voice | The clip's length plus 0.2 s: about **1.2 s** with a Piper voice (1.7 s for the longer lines), about **2 s** with an Edge voice |
+| `greeting` (default) | A short spoken line from the greeting bank ("Yes?", "What's up?") in the room's voice | The clip's length plus 0.2 s: about **1.2 s** with a Piper voice (1.7 s for the longer lines) |
 | `chime` | A 0.24 s two-note chime, made on the satellite | About **0.5 s** |
 | `none` | Nothing — the LED alone | Nothing |
 
@@ -335,10 +346,9 @@ on a HAT as well as on the XVF3800. A player still going after 4 s (1.5 s
 for the chime) is stopped and listening starts anyway.
 
 Measured on the shipped greeting bank as rendered (2,184 clips, 28 voices):
-Piper clips run a median 1.0 s (90th percentile 1.5 s); Edge clips a median
-1.8 s (90th percentile 2.3 s), of which about 0.85 s is silence at the end of
-the clip. The longest, a funny line in an Edge voice, is 4.1 s; the cap
-stops it inside that trailing silence. If the wait matters in a room,
+Piper clips run a median 1.0 s (90th percentile 1.5 s). (The Microsoft
+Edge voices of that measurement, a median 1.8 s with 0.85 s of trailing
+silence, were dropped in October 2026.) If the wait matters in a room,
 `chime` keeps an audible acknowledgement at under half the cost.
 
 When music was playing, the spoken greeting is skipped — the music stopping
@@ -412,7 +422,7 @@ trusted. You never scp `.onnx` files around.
 
 ## Self-upgrade
 
-You also never scp *code* around. From the dashboard's Satellites page (or
+You also never scp *code* around. From the dashboard's Settings → Satellites (or
 `POST /v1/admin/satellite/upgrade` — admin-gated, since it makes a Pi
 execute freshly-synced code; see
 [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#what-the-admin-password-actually-gates)),

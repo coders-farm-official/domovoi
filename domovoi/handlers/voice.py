@@ -1,7 +1,7 @@
 """Voice handler — list / sample / switch the satellite's TTS voice.
 
 The core keeps a voice registry (``voices`` table): Piper
-local models and optional Edge cloud voices, each a spoken ``name``. Every
+local models, each a spoken ``name``. Every
 satellite speaks in one of them (reported via ``voice_status``; see
 ``streaming``). This handler is the voice-command surface for it:
 
@@ -19,10 +19,8 @@ satellite speaks in one of them (reported via ``voice_status``; see
    so the satellite persists the selection, re-reports it, and re-syncs
    that voice's clips.
 
-``requires_network="no"`` — routing is fully local. Sampling/switching an
-*Edge* voice does need network, so those paths check ``ctx.online`` and
-degrade gracefully ("that's a cloud voice and I'm offline") rather than
-producing silence.
+``requires_network="no"`` — routing and every voice are local (the
+Microsoft Edge cloud voices were dropped on 2026-10-12).
 """
 
 from __future__ import annotations
@@ -33,10 +31,15 @@ import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from domovoi import egress
 from domovoi.db.repositories import VoicesRepository
-from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.handlers.base import (
+    FastPath,
+    Handler,
+    HandlerDisplay,
+    satellite_setting_refusal,
+)
 from domovoi.models import Context, Intent, Response
+from domovoi.satellite_abilities import room_allows
 
 log = logging.getLogger(__name__)
 
@@ -86,14 +89,6 @@ _SWITCH_RE = re.compile(
     r"|sound like (.+)"
     r")$"
 )
-
-
-def _offline_phrase() -> str:
-    """How a cloud-voice refusal says why: "I'm set to stay off the
-    internet" under INTERNET_ACCESS=never; today's words otherwise."""
-    if egress.internet_turned_off():
-        return egress.spoken_offline_phrase()
-    return "I'm offline right now"
 
 
 def _clean_name(raw: str) -> str:
@@ -222,12 +217,6 @@ class VoiceHandler(Handler):
         voice = await self._lookup(name, session)
         if voice is None:
             return await self._unknown_voice(name, ctx, session)
-        if voice["engine"] == "edge" and not ctx.online:
-            return self._r(
-                f"{voice['name']} is a cloud voice and {_offline_phrase()}, "
-                f"so I can't play it.",
-                ctx,
-            )
         # voice_override makes the streaming layer synthesize THIS reply in
         # the sampled voice — the user hears it directly, no clip needed.
         return self._r(
@@ -237,15 +226,18 @@ class VoiceHandler(Handler):
         )
 
     async def _switch_response(self, name: str, ctx: Context, session: AsyncSession) -> Response:
+        if ctx.from_phone:
+            # The voice a satellite speaks in is kept on that satellite
+            # (pi_action set_voice); a phone has none to switch. Listing,
+            # "what voice" and a sample still work from a phone.
+            return satellite_setting_refusal(self.name, ctx)
+        if not room_allows(ctx.app, ctx.room_id, "voice"):
+            # Its hello declared what it can do (`supports`) without
+            # "voice": it can't keep a voice choice, so don't claim one.
+            return self._r("This room's device can't change its voice.", ctx)
         voice = await self._lookup(name, session)
         if voice is None:
             return await self._unknown_voice(name, ctx, session)
-        if voice["engine"] == "edge" and not ctx.online:
-            return self._r(
-                f"{voice['name']} is a cloud voice and {_offline_phrase()}, "
-                f"so I can't switch to it. Try a local voice.",
-                ctx,
-            )
         # Confirmation is spoken in the NEW voice (voice_override) so the
         # user hears the change immediately; pi_action persists it Pi-side
         # and re-reports it for subsequent turns.

@@ -123,7 +123,59 @@ const ChatDetails = (() => {
     return out;
   };
 
-  return { stamp, rows, lengthLine };
+  /* ── pictures, and the plain answers for a reply that failed ──────────
+   * Worded like web/backend/api/chat.py (vision_missing_text) and the
+   * Android app's ChatErrors.kt. */
+
+  // What the paperclip takes (the upload's own allowlist, chat.py).
+  const ACCEPTS = 'Chat takes text and pictures: PNG, JPEG, GIF, WebP or BMP, '
+    + 'up to 4 a message. No other files.';
+
+  const visionMissingText = (model) => (String(model || '').trim()
+    ? `Pictures need the vision model ${model}, which isn't installed on this Domovoi. `
+      + 'An admin can install it in Settings → Models, or pick another vision model there.'
+    : 'Pictures need a vision model, and none is set on this Domovoi. '
+      + 'An admin can pick one in Settings → Models.');
+
+  /* Is a picture sure to be refused? Only when the server said so
+   * (/api/chat/models `vision_installed: false`); not knowing — Ollama
+   * down, the read not back yet — leaves it to the send. */
+  const visionMissing = (info) => !!info && info.vision_installed === false;
+
+  // Codes whose answer is a model to install or pick: an admin's job,
+  // in Settings → Models.
+  const MODEL_CODES = ['vision_model_missing', 'model_missing', 'vision_unsupported', 'model_memory'];
+
+  /* How a reply's error reads: {text, code, models} — `models` true when
+   * Settings → Models is where it gets fixed. Null when there is none.
+   * The code is the row's `stats.error_code` (or a live stream's). */
+  const errorView = (m) => {
+    if (!m || !m.error) return null;
+    const code = (m.stats && m.stats.error_code) || m.error_code || null;
+    const text = code === 'vision_model_missing' ? visionMissingText(m.model || '') : String(m.error);
+    return { text, code, models: MODEL_CODES.includes(code) };
+  };
+
+  /* Who Domovoi heard on a message said into the app's chat mic (V025),
+   * worded as the app's SpeakerMarker.kt: the name at full strength for a
+   * clear match, "maybe <name>" drawn softer for a weak one, "voice not
+   * recognized" for nobody. Null for anything typed and for replies. The
+   * app also softens a match that isn't its owner; a browser has none. */
+  const speakerMark = (m) => {
+    if (!m || m.source !== 'voice' || m.role !== 'user') return null;
+    if (m.speaker_person_id == null) {
+      return { label: 'voice not recognized', name: null, soft: true,
+               description: "spoken; Domovoi didn't recognize the voice" };
+    }
+    const who = (m.speaker_name || '').trim() || 'someone it knows';
+    if (!m.speaker_confident) {
+      return { label: `maybe ${who}`, name: who, soft: true,
+               description: `spoken; Domovoi thinks it was ${who}, but isn't sure` };
+    }
+    return { label: who, name: who, soft: false, description: `spoken by ${who}` };
+  };
+
+  return { stamp, rows, lengthLine, ACCEPTS, visionMissingText, visionMissing, errorView, speakerMark };
 })();
 
 window.ChatDetails = ChatDetails;

@@ -12,9 +12,17 @@
    shell sat under it, and the phone's tab strip (home · music · …) was
    not on screen at all in Chrome on Android (2026-10-10, a guest could
    not find Music). 100dvh follows the bar. Full-height drawers and the
-   chat page use the same variable. */
-:root { --app-h: 100vh; }
-@supports (height: 100dvh) { :root { --app-h: 100dvh; } }
+   chat page use the same variable.
+   The on-screen keyboard: index.html's viewport asks for
+   interactive-widget=resizes-content, so in Chrome on Android (and the
+   other browsers that honour it) the keyboard shrinks the layout viewport
+   and 100dvh with it, and everything bottom-anchored (the chat composer,
+   the tab strip) sits above the keyboard. A browser that lays the
+   keyboard over the page instead (Safari on iOS) leaves 100dvh alone;
+   there index.html's visualViewport watcher sets --kb-h to the covered
+   height while a text field has the focus (2026-10-13). */
+:root { --app-h: calc(100vh - var(--kb-h, 0px)); }
+@supports (height: 100dvh) { :root { --app-h: calc(100dvh - var(--kb-h, 0px)); } }
 
 .app {
   display: grid;
@@ -365,11 +373,12 @@ table.tbl .actions { text-align: right; }
 .empty .s { font-size: 11px; color: var(--fg-faint); font-family: var(--ff-mono); }
 
 /* Mobile -------------------------------------------------------- */
-/* The sidebar becomes a bottom strip of the five PRIMARY tabs — home,
-   music, satellites, calendar, chat (CORE_NAV_ITEMS `primary`, the
-   Android app's compact routes). Every other page, plugin pages
-   included, is on Home's "everything" grid; the strip used to squeeze
-   all of them into one 10px row with no overflow handling.
+/* The sidebar becomes a bottom strip of this device's phone bar — home,
+   music, videos, chat unless someone here picked others (components.jsx
+   phoneBarRoutes marks those rows `primary`; the Android app's bottom bar
+   does the same). Every other page, plugin pages included, is on Home's
+   "everything" grid; the strip used to squeeze all of them into one 10px
+   row with no overflow handling.
 
    The docked mini-player (player.jsx, position:fixed) sits ON TOP of the
    strip rather than over it: `--dock-bottom` lifts it by the strip's
@@ -399,9 +408,9 @@ table.tbl .actions { text-align: right; }
   .sidebar .nav-wrap { flex: 1; display: flex; min-width: 0; }
   .sidebar .nav { flex-direction: row; flex: 1; gap: 0; justify-content: space-around; }
   .sidebar .nav-item { flex: 1; flex-direction: column; gap: 2px; height: 44px; font-size: 10px; padding: 4px 0; justify-content: center; min-width: 0; }
-  /* The strip reads home · music · satellites · calendar · chat, whatever
-     the sidebar's published nav order (components.jsx sets --strip-order
-     on the five primary items). */
+  /* The strip reads in the phone bar's order (home · music · videos · chat
+     by default), whatever the sidebar's published nav order: components.jsx
+     sets --strip-order on the items that are on the bar (2 to 5). */
   .sidebar .nav-item.primary { order: var(--strip-order, 9); }
   .sidebar .nav-item:not(.primary) { display: none; }
   .sidebar .nav-item.brand-link { display: flex; }
@@ -736,6 +745,34 @@ button.lyr-line:hover { background: var(--brand-soft); }
      get there, so the queue tab is at least a screen tall on a phone. */
   .music-tabs-queue { min-height: calc(var(--app-h) - var(--topbar-h) - var(--phone-nav-h) - 16px); }
   .music-tabs-queue > .card { min-height: inherit; }
+}
+
+/* --- Files page rows (files.jsx BrowserRow, DocRow) ---
+   Checkbox, icon, name over size · age, then the actions (Open or Edit,
+   Download, Import, Delete). On a desktop everything sits on one line. On
+   a phone a folder's three actions (305px of a 313px row at 375px) ran
+   past the card and left the name 0px wide, so there, as in the Room
+   queue, they take a line of their own under the name (a fourth wraps),
+   each a 44px target, and the name gets two lines before its ellipsis. */
+.files-row {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 12px; align-items: center; padding: 11px 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.files-row-main { min-width: 0; }
+.files-row-name {
+  font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.files-row-acts { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+@media (max-width: 760px) {
+  .files-row { grid-template-columns: auto auto minmax(0, 1fr); row-gap: 8px; }
+  .files-row-name {
+    white-space: normal; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .files-row-acts { grid-column: 1 / -1; flex-wrap: wrap; gap: 8px; }
+  .files-row-acts .btn { height: 44px; }
 }
 
 /* ================================================================
@@ -1408,6 +1445,87 @@ a.home-att-row:hover { background: var(--brand-soft); }
   .sat-timer-scope input[type="checkbox"] { width: 20px; height: 20px; }
 }
 
+/* The chat page (chat.jsx). It is exactly as tall as the part of .main
+   the screen shows, so the composer sits at the bottom of what the
+   browser shows: above the phone's tab strip (that is .main's own grid
+   row), above the docked player (--player-h, html.mp-docked), above the
+   on-screen keyboard (--app-h), and below the container guard's banner
+   when one shows. .main's bottom padding comes down to its top padding on
+   this page, so nothing is left for .main to scroll: a short thread no
+   longer moves the whole page under a drag (it used to give 64 px, the
+   88 px player allowance less 24), and on a phone the send button is not
+   under the tab strip (it was: 100dvh - 52 - 48 and .main's 16 px top
+   padding came to 72 px past .main's bottom, 2026-10-13).
+   `.narrow` (chat.jsx, by the page's own width: under 666 px, so a 250 px
+   rail would leave the conversation under 400) shows the conversation OR
+   the chat list, never both side by side, and puts the composer on one
+   row: the old two-pane layout left a 77 px strip at 375 px. */
+.chat-page {
+  display: flex; gap: 16px; min-height: 200px;
+  height: calc(var(--app-h) - var(--topbar-h) - 48px - var(--player-h, 0px) - var(--guard-banner-h, 0px));
+}
+.main:has(> .chat-page) { padding-bottom: calc(24px + var(--player-h, 0px)); }
+.chat-rail { width: 250px; flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.chat-rail-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.chat-rail-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 2px; }
+.chat-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.chat-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.chat-head-title { font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-head-model { font-size: 11px; color: var(--fg-faint); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The thread: overscroll stays in it (no pull-to-refresh mid-reply). */
+.chat-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 14px; padding: 4px 2px; }
+.chat-composer {
+  flex: none; border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--card); box-shadow: var(--inner-highlight);
+  padding: 10px; display: flex; flex-direction: column; gap: 8px;
+}
+.chat-composer-row { display: flex; align-items: center; gap: 8px; }
+.chat-input {
+  font: inherit; font-size: 13px; line-height: 1.5; resize: none; border: none; outline: none;
+  background: transparent; color: var(--fg); min-width: 0;
+}
+.chat-page.narrow { gap: 0; }
+.chat-page.narrow .chat-rail { width: auto; flex: 1; min-width: 0; }
+.chat-page.narrow .btn-icon { width: 44px; height: 44px; }
+.chat-page.narrow .chat-composer { padding: 4px; }
+.chat-page.narrow .chat-composer-row { align-items: flex-end; gap: 4px; }
+/* One row: paperclip · the text (it grows to five lines, chat.jsx) · send. */
+.chat-page.narrow .chat-input { flex: 1; padding: 10px 0; max-height: 140px; overflow-y: auto; }
+.chat-page.narrow .chat-send { width: 44px; height: 44px; padding: 0; justify-content: center; flex: none; }
+.chat-page.narrow .chat-send-label { display: none; }
+.chat-page.narrow .chat-new { height: 44px; justify-content: center; }
+@media (max-width: 760px) {
+  .chat-page {
+    height: calc(var(--app-h) - var(--topbar-h) - var(--phone-nav-h) - 32px - var(--player-h, 0px) - var(--guard-banner-h, 0px));
+  }
+  .main:has(> .chat-page) { padding-bottom: calc(16px + var(--player-h, 0px)); }
+  /* 16px: Safari on iOS zooms the page into any smaller text field. */
+  .chat-input { font-size: 16px; }
+}
+
+/* A toast that stays (components.jsx useToast, fire(msg, { stay: true })):
+   an error to read, closed by its own button. */
+.toast-stay {
+  width: min(90vw, 560px); background: var(--overlay); border: 1px solid var(--border);
+  border-left: 3px solid var(--err); border-radius: var(--r-md);
+  box-shadow: var(--shadow-md), var(--inner-highlight);
+  padding: 8px 6px 8px 12px; font-size: 13px; color: var(--fg);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast-stay-row { display: flex; align-items: flex-start; gap: 8px; }
+.toast-stay-dot { flex: none; padding-top: 7px; }
+.toast-stay-body { flex: 1; min-width: 0; padding-top: 4px; line-height: 1.45; }
+.toast-stay-text { overflow-wrap: anywhere; user-select: text; }
+.toast-stay-detail { margin-top: 4px; font-size: 12px; color: var(--fg-muted); overflow-wrap: anywhere; white-space: pre-line; user-select: text; }
+.toast-stay-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 6px 2px 18px; }
+.toast-stay-actions .btn { max-width: 100%; }
+@media (max-width: 760px) {
+  .toast-stay .btn-icon { width: 44px; height: 44px; }
+  .toast-stay-dot { padding-top: 14px; }
+  .toast-stay-body { padding-top: 11px; }
+  .toast-stay-actions .btn { height: 44px; }
+}
+
 /* Chat replies rendered as Markdown (chat_markdown.js) */
 .chat-md > :first-child { margin-top: 0; }
 .chat-md > :last-child { margin-bottom: 0; }
@@ -1433,6 +1551,10 @@ a.home-att-row:hover { background: var(--brand-soft); }
 /* Chat message stamp, actions menu and details (chat.jsx, chat_details.js) */
 .chat-stamp { display: flex; align-items: center; gap: 4px; min-height: 22px; margin-top: -2px; padding-left: 24px; font-size: 10px; color: var(--fg-faint); }
 .chat-stamp.mine { padding-left: 0; }
+/* Who Domovoi heard on a spoken message (the app's chat mic): softer for a weak match. */
+.chat-speaker { display: flex; align-items: center; gap: 4px; margin-top: -1px; padding-right: 8px; max-width: 100%; white-space: nowrap; font-size: 10px; color: var(--fg-muted); }
+.chat-speaker.soft { opacity: 0.55; color: var(--fg-faint); }
+.chat-speaker .ava { width: 14px; height: 14px; font-size: 8px; border: 0; }
 .chat-more { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--fg-faint); cursor: pointer; opacity: 0.55; }
 .chat-more:hover, .chat-more:focus-visible { opacity: 1; background: var(--sunken); color: var(--fg); }
 .chat-menu { position: fixed; z-index: 95; min-width: 150px; padding: 4px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-md), var(--inner-highlight); }
@@ -1447,9 +1569,51 @@ a.home-att-row:hover { background: var(--brand-soft); }
 .chat-details-rows dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
 .chat-details-rows dd.err { color: var(--err); }
 .chat-details-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-soft); }
+/* A plain answer instead of a reply (a reply's error with a code), and the
+ * composer's note on why a picture can't be read here. */
+.chat-note { margin-top: 4px; padding: 8px 10px; font-size: 12px; line-height: 1.5; color: var(--fg); background: var(--err-soft); border-left: 2px solid var(--err); border-radius: var(--r-sm); }
+.chat-note.info { background: var(--sunken); border-left-color: var(--border-strong); }
+.chat-note-row { display: flex; align-items: flex-start; gap: 8px; }
+.chat-note-sub { margin-top: 4px; color: var(--fg-muted); }
+.chat-note-link { display: inline-block; margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--fg); text-decoration: underline; text-decoration-color: var(--brand); text-underline-offset: 2px; }
 @media (max-width: 760px) {
   .chat-more { width: 36px; height: 36px; }
   .chat-menu-item { min-height: 44px; }
   .chat-details-bg { align-items: flex-end; padding: 0; }
   .chat-details { width: 100%; border-radius: var(--r-lg) var(--r-lg) 0 0; padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Settings → Satellites (satellites.jsx SatellitesPanel): the roster's
+   counts, where the old Satellites page had them in its header. The panel
+   is one child of the Settings `.page`, so it stacks its own sections
+   (approvals, the cards, Broadcast, satellite media) with the page's gap:
+   without it they sat flush against each other (2026-10-12). */
+.sat-panel { display: flex; flex-direction: column; gap: 20px; }
+.sat-panel-summary { font-size: 12px; color: var(--fg-muted); margin: 0; }
+/* Spare-device satellites (S0): the board badge on a card (a Linux PC, an
+   Android room; never on a Pi) and the one-line reason under an action a
+   device didn't offer. */
+.sat-board-badge {
+  display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+  font-size: 11px; color: var(--fg-muted); background: var(--sunken);
+  border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 7px;
+}
+.sat-not-offered { font-size: 11px; color: var(--fg-faint); margin-bottom: 6px; }
+/* Settings → Phone bar (settings.jsx PhoneBarCard). */
+@media (max-width: 760px) {
+  .phone-bar-edit .btn-icon { width: 44px; height: 44px; }
+}
+
+/* Settings → Models, the Installed list (models.jsx InstalledRow): name and
+   chips on one line on a wide screen; on a phone the name gets its own line
+   and wraps, the chips go under it and the delete button stays at the
+   right edge. */
+.model-inst-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-inst-size { width: 74px; text-align: right; }
+@media (max-width: 760px) {
+  .model-inst-row { flex-wrap: wrap; row-gap: 2px; }
+  .model-inst-name { flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .model-inst-meta { flex: 1 1 100%; flex-wrap: wrap; }
+  .model-inst-meta > :last-child { margin-left: auto; }
+  .model-inst-size { width: auto; }
 }

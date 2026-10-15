@@ -108,6 +108,9 @@ DEVICE_TIER = [
     ("PATCH", "/api/chat/threads/{thread_id}"),
     ("DELETE", "/api/chat/threads/{thread_id}"),
     ("POST", "/api/chat/threads/{thread_id}/messages"),
+    # a voice turn from the app's chat mic; the core hop takes the same
+    # credential again, with no pre-setup grace (test_phone_voice.py)
+    ("POST", "/api/chat/threads/{thread_id}/voice"),
     ("POST", "/api/chat/uploads"),
     # news
     ("POST", "/api/news/people/{person_id}/topics"),

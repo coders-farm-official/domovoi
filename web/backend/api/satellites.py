@@ -83,6 +83,7 @@ from web.backend.schemas import (
     SatelliteApproveRequest,
     SatelliteDisplay,
     SatellitePairing,
+    SatelliteUpgrade,
     Session,
     Timer,
     TimerAnnouncements,
@@ -1288,10 +1289,14 @@ async def _satellite_for(
 
     wifi: WifiStatus | None = None
     if isinstance(wifi_dict, dict):
+        dbm = _as_float(wifi_dict.get("signal_dbm"))
+        mode = wifi_dict.get("mode")
         wifi = WifiStatus(
             rx_mbits=_as_float(wifi_dict.get("rx_mbits")),
             tx_mbits=_as_float(wifi_dict.get("tx_mbits")),
             ssid=wifi_dict.get("ssid"),
+            signal_dbm=dbm if dbm is not None and -120 <= dbm <= 0 else None,
+            mode=mode[:16] if isinstance(mode, str) and mode else None,
         )
 
     # Drop-in (Feature 4): AEC capability + current call peer, both from the
@@ -1333,6 +1338,21 @@ async def _satellite_for(
     mic_enabled = bool(
         (snapshot.get("satellite_mic_enabled") or {}).get(room_id, True)
     )
+    # Spare devices (S0): the board the live hello named wins over the
+    # stored one (it is what is connected now); `supports` is live only.
+    board = (snapshot.get("satellite_board") or {}).get(room_id) or meta_row.get("board")
+    supports = (snapshot.get("satellite_supports") or {}).get(room_id) if online else None
+    if supports is not None and not isinstance(supports, list):
+        supports = None
+    # An upgrade the Domovoi server asked this room for (running, or how it
+    # just ended): what locks the Upgrade button, a page reload included.
+    upgrade_dict = (snapshot.get("satellite_upgrades") or {}).get(room_id)
+    upgrade: SatelliteUpgrade | None = None
+    if isinstance(upgrade_dict, dict) and isinstance(upgrade_dict.get("state"), str):
+        try:
+            upgrade = SatelliteUpgrade(**upgrade_dict)
+        except (TypeError, ValueError):
+            upgrade = None
     display_dict = (snapshot.get("satellite_display") or {}).get(room_id)
     display = (
         SatelliteDisplay(
@@ -1375,6 +1395,9 @@ async def _satellite_for(
         capture_since=(captures or {}).get(room_id),
         # "Only reminders for this device" (V018): what this room announces.
         timers_own_only=room_id in (own_only or {}),
+        board=board,
+        supports=[str(x) for x in supports] if supports is not None else None,
+        upgrade=upgrade,
     )
 
 

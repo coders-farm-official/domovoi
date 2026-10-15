@@ -3,13 +3,16 @@
  * §10.1) — this page stays generic: "Add music" enqueues rows in the
  * provider-agnostic media-acquisition queue, and the Jobs tab is a
  * small readout of that queue.
- * Now Playing strip · tabbed lower section · side drawer · search · pagination
+ * Now Playing strip · tabbed lower section · side drawer · search · load as you scroll
  *
  * Data sources:
- *   * GET /api/music/library                    — server-paginated track page.
- *                                                 Returns {total, items}. Library
- *                                                 tab drives q/source/sort/offset/
- *                                                 limit via URL; q is debounced.
+ *   * GET /api/music/library                    — one page of tracks at a time
+ *                                                 (data.js usePagedList: limit +
+ *                                                 cursor, {total, items, has_more,
+ *                                                 next_cursor}). The Library tab
+ *                                                 drives q/source/sort/favorited;
+ *                                                 q is debounced; every filter is
+ *                                                 the server's.
  *   * GET /api/music/library/stats              — whole-library aggregates for the
  *                                                 Stats tab and the tab badge,
  *                                                 computed server-side so we never
@@ -70,25 +73,17 @@ const RoomChips = ({ rooms, room, onPick }) => {
   );
 };
 
-/* Server-paginated library page. Encapsulates q/source/sort/page
- * state, debounces q so each keystroke doesn't fire a request, and
- * builds the URL the backend's /api/music/library expects. Mutating
- * a filter always resets to page 0 so the user doesn't end up on a
- * page that no longer exists. Page is clamped back to 0 in an effect
- * if the current offset falls off the end of the filtered total
- * (e.g. user deleted enough rows from page 4 that page 4 is empty). */
-const useLibraryPage = ({ pageSize = 12 } = {}) => {
-  const [q, setQRaw] = React.useState('');
-  const [source, setSourceRaw] = React.useState('all');
-  const [sort, setSortRaw] = React.useState('added_desc');
+/* The Library tab's list: one page of tracks at a time, loaded as the
+ * table scrolls (data.js usePagedList + PagedListFooter). Owns the
+ * q/source/sort/favorites state and debounces q; any change to them is a
+ * new list from page one, filtered and sorted by the server over the WHOLE
+ * library — never just the rows already loaded. */
+const useLibraryPage = ({ pageSize = 50 } = {}) => {
+  const [q, setQ] = React.useState('');
+  const [source, setSource] = React.useState('all');
+  const [sort, setSort] = React.useState('added_desc');
   const [favoritedOnly, setFavoritedOnlyRaw] = React.useState(false);
-  const [page, setPage] = React.useState(0);
-
-  const setQ      = React.useCallback((v) => { setQRaw(v);      setPage(0); }, []);
-  const setSource = React.useCallback((v) => { setSourceRaw(v); setPage(0); }, []);
-  const setSort   = React.useCallback((v) => { setSortRaw(v);   setPage(0); }, []);
-  const setFavoritedOnly = React.useCallback(
-    (v) => { setFavoritedOnlyRaw(!!v); setPage(0); }, []);
+  const setFavoritedOnly = React.useCallback((v) => setFavoritedOnlyRaw(!!v), []);
 
   const qDebounced = useDebouncedValue(q, 250);
 
@@ -98,26 +93,16 @@ const useLibraryPage = ({ pageSize = 12 } = {}) => {
     if (source && source !== 'all') params.set('source', source);
     if (favoritedOnly) params.set('favorited', 'true');
     params.set('sort', sort);
-    params.set('limit', String(pageSize));
-    params.set('offset', String(page * pageSize));
     return `/api/music/library?${params.toString()}`;
-  }, [qDebounced, source, favoritedOnly, sort, pageSize, page]);
+  }, [qDebounced, source, favoritedOnly, sort]);
 
-  const { data, loading, refresh } =
-    useApiObject(path, { eventTypes: ['library.indexer.changed'] });
-
-  const items = data?.items ?? [];
-  const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / pageSize));
-
-  React.useEffect(() => {
-    if (total > 0 && page >= pages) setPage(pages - 1);
-  }, [total, page, pages]);
+  const list = usePagedList(path, { pageSize, eventTypes: ['library.indexer.changed'] });
 
   return {
-    items, total, pages, loading, refresh,
-    q, source, sort, favoritedOnly, page, pageSize,
-    setQ, setSource, setSort, setFavoritedOnly, setPage,
+    list, items: list.items, total: list.total ?? 0, loading: list.loading,
+    refresh: list.reload,
+    q, source, sort, favoritedOnly,
+    setQ, setSource, setSort, setFavoritedOnly,
   };
 };
 
@@ -592,9 +577,9 @@ const Drawer = ({ track, rooms, onClose, onDelete, onEdit, onPlayInRoom, onQueue
 /* ---- Library tab ------------------------------------------ */
 const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavorite, onAddToPlaylist, playlists, onBulkAddToPlaylist, onBrowserPlay, onQueueTrack, onPlayNextTrack, fire }) => {
   const {
-    items, total, pages, loading,
-    q, source, sort, favoritedOnly, page,
-    setQ, setSource, setSort, setFavoritedOnly, setPage,
+    list, items, total, loading,
+    q, source, sort, favoritedOnly,
+    setQ, setSource, setSort, setFavoritedOnly,
   } = lib;
   const filtered = !!q || source !== 'all' || favoritedOnly;
 
@@ -603,8 +588,12 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
   const toggleSel = (id) => setSelected(prev => {
     const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
   });
+  // "Select all" means every LOADED row — what is on screen, never the
+  // rows further down that haven't been fetched. The checkbox says so.
   const allSelected = items.length > 0 && items.every(t => selected.has(t.id));
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(items.map(t => t.id)));
+  // A new list (search, filter, sort) starts with nothing selected.
+  React.useEffect(() => { setSelected(new Set()); }, [q, source, sort, favoritedOnly]);
   const realPlaylists = (playlists || []).filter(p => !p.is_virtual);
   const doBulkAdd = async () => {
     if (!bulkPid || selected.size === 0) return;
@@ -691,7 +680,8 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
       ) : (
         <table className="tbl lib-tbl">
           <thead><tr>
-            <th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={toggleAll} title="select all on this page"/></th>
+            <th style={{ width: 30 }}><input type="checkbox" checked={allSelected} onChange={toggleAll}
+                title={`select the ${items.length} loaded track${items.length === 1 ? '' : 's'} (rows further down load as you scroll)`}/></th>
             <th style={{ width: 40 }}></th>
             <th style={{ width: '100%' }}>track</th>
             <th>duration</th>
@@ -747,13 +737,11 @@ const LibraryTab = ({ lib, libraryTotal, sourceOptions, onSelect, onToggleFavori
         </table>
       )}
 
-      <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 8, borderTop: '1px solid var(--border-soft)' }}>
-        <span className="mono" style={{ fontSize: 11, color: 'var(--fg-muted)' }}>page {page + 1} of {pages}</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-          <IconButton name="chevron-left"  onClick={() => setPage(Math.max(0, page - 1))}/>
-          <IconButton name="chevron-right" onClick={() => setPage(Math.min(pages - 1, page + 1))}/>
+      {!showLoading && (
+        <div style={{ borderTop: '1px solid var(--border-soft)' }}>
+          <PagedListFooter list={list} noun="tracks"/>
         </div>
-      </div>
+      )}
     </>
   );
 };
@@ -1698,8 +1686,17 @@ const BucketStat = ({ label, buckets }) => {
 };
 
 /* ---- Page ------------------------------------------------- */
+// The lower section's tabs, by address: #music/<id> (useRouteTab,
+// components.jsx). The labels and counts are the page's `tabs` below.
+const MUSIC_PAGE_TABS = [
+  { id: 'library' }, { id: 'player' }, { id: 'queue' },
+  { id: 'playlists' }, { id: 'stats' }, { id: 'jobs' },
+];
+
 const MusicPage = () => {
-  const [tab, setTab] = React.useState('library');
+  // #music/queue opens Room queue, a tab click writes its address, Back
+  // goes to the tab before.
+  const [tab, setTab] = useRouteTab('music', MUSIC_PAGE_TABS, 'library');
   const [selected, setSelected] = React.useState(null);
   // Playlists tab state: which playlist row's drawer is open, and
   // which library track triggered the "+ add to playlist" drawer.
@@ -1915,10 +1912,12 @@ const MusicPage = () => {
     const next = !track.favorited;
     try {
       await apiPatch(`/api/music/library/${track.id}`, { favorited: next });
-      // Refresh both the library list (so the row's heart updates)
-      // and now-playing (so the NPCard's heart stays in sync if this
-      // track happens to be the one currently playing in some room).
-      lib.refresh();
+      // Patch the loaded row in place (a re-read would refetch every page
+      // scrolled through); under "favorites only" an unfavorited row
+      // leaves the list. Now-playing too, so the NPCard's heart stays in
+      // sync if this track is what some room is playing.
+      if (!next && lib.favoritedOnly) lib.list.removeItem(track.id);
+      else lib.list.updateItem(track.id, { favorited: next });
       refreshNP();
     } catch (e) {
       reportMutationFailure(fire, next ? 'favorite' : 'unfavorite', e);
@@ -1972,7 +1971,7 @@ const MusicPage = () => {
           : `removed "${track.title || 'track'}" from library (file kept; rescan will re-add)`,
       );
       setSelected(null);
-      lib.refresh();
+      lib.list.removeItem(track.id);
       refreshStats();
     } catch (e) {
       // The login modal owns a 401 (data.js) — no raw toast behind it (F-006).
@@ -1988,7 +1987,7 @@ const MusicPage = () => {
       const next = { ...track, ...(updated || changes) };
       fire(`updated "${next.title || 'track'}"`);
       setSelected(next);
-      lib.refresh();
+      lib.list.updateItem(track.id, next);
       refreshNP();
       return true;
     } catch (e) {

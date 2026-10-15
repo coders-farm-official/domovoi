@@ -1,0 +1,100 @@
+# Tests that fail on origin/main for a known reason. pytest labels each
+# failure in its summary as "known" (listed here) or "NEW" (not), and puts
+# both counts in its last line (domovoi/tests/known_failures.py). Listing a
+# test changes nothing else: it still fails, prints its traceback and makes
+# the run's exit status non-zero.
+#
+# Kept by whoever integrates a batch into main: add a test when main is
+# known to fail it (with why, and the first commit it was seen on), drop it
+# when the fix lands. The summary says "passed ... take it off" for an entry
+# that matched no failure in a run where the test passed.
+#
+# One [[failure]] table per test:
+#   test   = pytest node id as the summary prints it, relative to the repo
+#            root; "*" matches any run of characters, nothing else is special
+#   reason = why it fails, in a line
+#   since  = the commit of origin/main it was first recorded on
+
+[[failure]]
+test = "domovoi/tests/test_library_cover_art.py::test_same_tier_as_the_library_listing"
+reason = "route lookup trips on how this FastAPI version nests included routers (sometimes passes)"
+since = "eb4a497"
+
+[[failure]]
+test = "domovoi/tests/test_whisper_local_files.py::test_the_recorder_sees_the_per_load_revision_check"
+reason = "huggingface_hub is not installed in the dev venv"
+since = "eb4a497"
+
+[[failure]]
+test = "domovoi/tests/test_whisper_local_files.py::test_the_real_client_loads_a_cached_model_with_no_outbound_attempt"
+reason = "huggingface_hub is not installed in the dev venv"
+since = "eb4a497"
+
+[[failure]]
+test = "domovoi/tests/test_library_alias_fetch.py::test_searches_and_lookups_share_one_pace"
+reason = "flaky on Windows (about 1 run in 12): asks for >= 0.14 s between paced calls, but asyncio may fire a timer up to one 15.6 ms clock tick early"
+since = "eb4a497"
+
+# Seen once in two full -n 4 runs at integration/1012d (the run with the
+# Linux-harness containers beside it); all 15 tests of the module pass alone,
+# 5 runs out of 5, on fb62fa4 and on the batch's head.
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_call_full_lifecycle"
+reason = "flaky under load: _run_phone gives the handshake 400 x 10 ms, and the best-effort audit-row write before dropin_start can take longer on a busy box"
+since = "fb62fa4"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_second_phone_refused_while_room_busy"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "fb62fa4"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_disconnect_tears_down_call"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "fb62fa4"
+
+# Three more of the same module, seen in a full -n 4 run on 19e9e43
+# (wf/voice-page-fixes' builder, 2026-10-12) beside the three above.
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_call_in_auto_mode_still_opens_immediately"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_call_pi_side_hangup_ends_loop"
+reason = "flaky under load: same handshake budget as test_phone_call_full_lifecycle, then a 2 s wait_for on the session task"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_phone_dropin.py::test_phone_relay_failure_tears_down"
+reason = "flaky under load: the test polls 50 x 10 ms for the relay failure to tear both sides down, which a busy box can outlast"
+since = "19e9e43"
+
+# Back on the list (dropped at 1012 after 5 clean full runs): the same 5
+# failed in a full -n 4 run on 19e9e43 (wf/voice-page-fixes' builder,
+# 2026-10-12). Each nests a plugin router under an outer one, and the route
+# comes out named with the outer prefix ("/in/both", not "/both").
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_both_markers_one_router_down_are_still_a_conflict"
+reason = "a nested router's route is named with the outer prefix (/in/both): how this FastAPI version nests included routers, as test_same_tier_as_the_library_listing (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_core_load_refuses_a_marker_the_preview_cannot_see[nested-setattr-device]"
+reason = "a nested router's route is named with the outer prefix (/in/sneaky): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_marker_the_preview_cannot_see[nested-setattr-device]"
+reason = "a nested router's route is named with the outer prefix (/in/sneaky): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_core_refuses_a_websocket_route[nested-websocket]"
+reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"
+
+[[failure]]
+test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_websocket_route[nested-websocket]"
+reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
+since = "19e9e43"

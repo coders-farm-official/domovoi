@@ -243,14 +243,18 @@ async def list_notes_mentioning(person_id: int) -> list[VoiceNote]:
 
 @router.get("/{person_id}/profiles", response_model=list[VoiceProfile])
 async def list_profiles(person_id: int) -> list[VoiceProfile]:
+    """A person's voice samples (metadata only, never an embedding),
+    newest first, each with its ``source``: ``satellite`` or ``phone``
+    (V026). The dashboard's People page lists the two sets apart; an
+    admin deletes one with ``DELETE …/profiles/{profile_id}``."""
     async with session_scope() as s:
         rows = await s.execute(
             text(
                 """
-                SELECT id, person_id, model, enrolled_at, room_id, sample_seconds
+                SELECT id, person_id, model, enrolled_at, room_id, sample_seconds, source
                 FROM voice_profiles
                 WHERE person_id = :pid
-                ORDER BY enrolled_at DESC
+                ORDER BY enrolled_at DESC, id DESC
                 """
             ),
             {"pid": person_id},
@@ -263,6 +267,7 @@ async def list_profiles(person_id: int) -> list[VoiceProfile]:
                 enrolled_at=r[3],
                 room_id=r[4],
                 sample_seconds=r[5],
+                source=r[6],
             )
             for r in rows.all()
         ]

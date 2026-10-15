@@ -198,7 +198,7 @@ def test_server_error_is_not_an_auth_failure(outcomes):
 GUARDED_DELETE_TOASTS = {
     "files.jsx": 1,      # performDelete
     "music.jsx": 2,      # onDeleteTrack, onDeletePlaylist (reportMutationFailure)
-    "people.jsx": 2,     # deleteMemory, deleteFavorite
+    "people.jsx": 3,     # deleteMemory, deleteFavorite, onDeleteSample (voice samples)
     "calendar.jsx": 1,   # del
 }
 
@@ -225,10 +225,10 @@ RAW_TOASTS_LEFT = {
     "satellites.jsx": ["adopt failed"],                    # inline form error with its own 409/410 wording
     "satellite_media.jsx": ["couldn't load setup details"],  # a read, not a mutation
     "plugins.jsx": [],   # staging refusals: apiErrorText reads the coded {error: {message}}
-    # Verb-less guard() / act() wrappers (each call site needs a verb), and
-    # a sample fetch whose error is a bare status line, not a JSON body.
-    "settings.jsx": ["failed", "sample failed", "failed", "failed", "failed"],
-    "models.jsx": ["failed"],
+    # Verb-less guard() / act() wrappers (each call site needs a verb).
+    "settings.jsx": ["failed", "failed", "failed", "failed"],
+    # Its guard() names each action since 2026-10-13 (mutationErrorText).
+    "models.jsx": [],
 }
 
 

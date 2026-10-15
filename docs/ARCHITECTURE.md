@@ -164,15 +164,23 @@ prose:
    of their samples), yielding `person_id` + `presence_tier` in the turn's
    `Context`. Two people too close to tell apart name nobody, and only
    confident matches ever save a sample (`domovoi/voice_identifier.py`).
+   A person's samples come in two sets (V026): satellite samples, which
+   are all a satellite ever matches, and phone samples from the app's chat
+   mic, which a phone turn matches first (falling back to the satellite
+   set). Phone samples are only added on purpose ("my name is …" said into
+   the chat mic), never learned.
 4. **Chat-mode bypass.** If the session is in conversational chat mode, the
    turn skips the command router entirely and goes to the Letta agent (or ends
    the chat on an exit phrase). Command mode pays only one session-context
    read for this check.
 5. **Routing** (`domovoi/router.py`) — the stages below.
 6. **TTS.** The response text is split into sentences and synthesized through
-   the engine chain **piper → system** (**edge → piper → system** only when
-   Edge is the chosen engine and the internet answer isn't `never`; Edge is
-   never a fallback rung) — per-sentence fallback; a sentence rendered at a
+   the engine chain **piper → system** (both local; the Microsoft Edge
+   online voices were dropped in October 2026) — per-sentence fallback. The Piper rung runs the
+   voice's ONNX model directly, fed by Domovoi's own text-to-phoneme
+   converter (`domovoi/phonemizer`: CMUdict, rules, a small model for
+   unknown words and the owner's "say it like" list; no espeak-ng). A
+   sentence rendered at a
    different native rate is resampled to the announced rate. Sentence synthesis is pipelined so the Pi's playback buffer never
    drains between sentences.
 7. **Post-turn coordination.** `response_end` carries `expect_followup` /
@@ -751,8 +759,8 @@ preserving comments, writes a `.bak`, and self-restarts.
     hook, so plugins are covered without an edit;
   * the paths that never went through `net_safety` call it directly:
     `egress.require_destination(url)` for a URL,
-    `egress.require_internet("what")` for egress without one (Edge speech,
-    a SearXNG search, `git fetch`, a docker build, pip). The connectivity
+    `egress.require_internet("what")` for egress without one (a SearXNG
+    search, `git fetch`, a docker build, pip). The connectivity
     probe stops dialing (`reason: turned_off`), which closes every
     `ctx.online` path too.
 

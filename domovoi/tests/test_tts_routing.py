@@ -14,19 +14,14 @@ from domovoi.clients.tts import RealTTSClient
 
 def _client() -> RealTTSClient:
     return RealTTSClient(
-        preferred_engine="edge",
-        edge_voice="en-US-AriaNeural",
-        piper_voice="en_US-lessac-medium",
+        preferred_engine="piper",
+        piper_voice="en_US-kristin-medium",
         speed=1.0,
     )
 
 
 def _spy(monkeypatch):
     calls: list[tuple[str, str]] = []
-
-    def edge(text, voice, speed):
-        calls.append(("edge", voice))
-        return b"EDGE"
 
     def piper(text, voice, speed):
         calls.append(("piper", voice))
@@ -36,7 +31,6 @@ def _spy(monkeypatch):
         calls.append(("system", ""))
         return b"SYS"
 
-    monkeypatch.setattr(tts_mod, "_synth_edge_sync", edge)
     monkeypatch.setattr(tts_mod, "_synth_piper_sync", piper)
     monkeypatch.setattr(tts_mod, "_synth_system_sync", system)
     return calls
@@ -45,33 +39,28 @@ def _spy(monkeypatch):
 def test_default_uses_preferred_engine_and_global_voice(monkeypatch):
     calls = _spy(monkeypatch)
     out = _client()._synth_blocking("hi")
-    assert out == b"EDGE"
-    assert calls == [("edge", "en-US-AriaNeural")]
+    assert out == b"PIPER"
+    assert calls == [("piper", "en_US-kristin-medium")]
 
 
 def test_engine_and_voice_override(monkeypatch):
     calls = _spy(monkeypatch)
-    out = _client()._synth_blocking("hi", engine="piper", voice="en_US-ryan-high")
+    out = _client()._synth_blocking("hi", engine="piper", voice="en_US-ljspeech-medium")
     assert out == b"PIPER"
-    # Piper goes first because it's the per-call preferred engine, with the
-    # overridden voice.
-    assert calls[0] == ("piper", "en_US-ryan-high")
+    assert calls[0] == ("piper", "en_US-ljspeech-medium")
 
 
 def test_voice_override_only_applies_to_preferred_engine(monkeypatch):
     calls = _spy(monkeypatch)
-    # Edge preferred (with an Edge voice override) but its synth returns
-    # None → falls back to piper, which must use ITS OWN default voice, not
-    # the edge override. (Edge itself is never a fallback rung: B1, see
-    # test_tts_engine_order.py.)
-    monkeypatch.setattr(tts_mod, "_synth_edge_sync", lambda *a, **k: None)
-    out = _client()._synth_blocking("hi", engine="edge", voice="en-US-GuyNeural")
+    # System preferred (with a voice override) but it gives nothing: Piper
+    # falls back with ITS OWN default voice, not the override.
+    monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda *a, **k: None)
+    out = _client()._synth_blocking("hi", engine="system", voice="en_US-ljspeech-medium")
     assert out == b"PIPER"
-    assert ("piper", "en_US-lessac-medium") in calls
+    assert ("piper", "en_US-kristin-medium") in calls
 
 
 def test_all_engines_fail_returns_empty_wav(monkeypatch):
-    monkeypatch.setattr(tts_mod, "_synth_edge_sync", lambda *a, **k: None)
     monkeypatch.setattr(tts_mod, "_synth_piper_sync", lambda *a, **k: None)
     monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda *a, **k: None)
     out = _client()._synth_blocking("hi")
@@ -86,17 +75,16 @@ def test_zero_frame_wav_falls_through_to_next_engine(monkeypatch):
     empty = tts_mod._pcm_to_wav_bytes(b"", 22_050)              # header, 0 frames
     real = tts_mod._pcm_to_wav_bytes(b"\x00\x01" * 200, 22_050)  # has frames
     monkeypatch.setattr(tts_mod, "_synth_piper_sync", lambda *a, **k: empty)
-    monkeypatch.setattr(tts_mod, "_synth_edge_sync", lambda *a, **k: None)
     monkeypatch.setattr(tts_mod, "_synth_system_sync", lambda *a, **k: real)
     out = _client()._synth_blocking("hi", engine="piper")
-    assert out == real  # fell through the empty Piper render + the None edge
+    assert out == real  # fell through the empty Piper render
 
 
 def test_wav_is_silent_only_for_zero_frame_wav():
     assert tts_mod._wav_is_silent(tts_mod._pcm_to_wav_bytes(b"", 16_000)) is True
     assert tts_mod._wav_is_silent(tts_mod._pcm_to_wav_bytes(b"\x01\x02" * 50, 16_000)) is False
     # Non-WAV bytes (test markers / any raw format) get the benefit of the doubt.
-    assert tts_mod._wav_is_silent(b"EDGE") is False
+    assert tts_mod._wav_is_silent(b"PIPER") is False
 
 
 def test_piper_voice_path_resolves_uploaded_onnx(tmp_path, monkeypatch):
@@ -115,8 +103,8 @@ def test_piper_voice_path_resolves_bare_name_in_voices_dir(tmp_path, monkeypatch
 
 # ─── System engine: the floor of the chain, per platform ──────────────────
 # The `system` rung used to be Windows-only (pyttsx3/SAPI), which left a
-# Linux host with `edge → piper` and nothing beneath it. These cover the
-# POSIX synthesizer probe.
+# Linux host with nothing beneath Piper. These cover the POSIX synthesizer
+# probe.
 
 
 def _fake_which(available: set[str]):

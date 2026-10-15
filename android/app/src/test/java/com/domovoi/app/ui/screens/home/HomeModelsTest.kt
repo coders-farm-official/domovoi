@@ -436,6 +436,21 @@ class HomeModelsTest {
         assertEquals(1f, roomProgress(r, 999.0), 0f)
     }
 
+    @Test fun aStoppedRoomIsQuietNotPlayingItsLastSong() {
+        // The live box, 2026-10-11: basement and garage stopped, each with
+        // the last song still loaded and named by the read.
+        val stopped = room("basement", state = "stop", title = "Stare At The Sun")
+        assertNull(roomSong(stopped))
+        assertEquals(0.0, roomElapsedSec(stopped, stale = false, sinceReadSec = 30.0), 0.0)
+        assertEquals(2, roomRank(stopped))                       // with the quiet rooms
+        assertEquals("Song", roomSong(room("kitchen", state = "play"))?.title)
+        assertEquals("Song", roomSong(room("kitchen", state = "pause"))?.title)
+        assertNull(roomSong(room("kitchen", "offline", state = "play")))
+        // ...and the status line counts only the room that plays.
+        val line = statusLine(listOf(room("kitchen", state = "play"), stopped, room("garage", state = "stop")), false, emptyList())
+        assertTrue(line.contains("1 playing"))
+    }
+
     @Test fun theCountStopsAtTheSongsEnd() {
         // 10s in at the read, 200s long: a read 400s old is still 200s.
         val r = room("kitchen", state = "play")
@@ -453,6 +468,17 @@ class HomeModelsTest {
         assertTrue(weakWifi(merged[0]))
         assertFalse(weakWifi(rooms[0]))
         assertEquals(rooms, mergeWifi(rooms, null))
+    }
+
+    @Test fun aRoomThatReportsASignalIsJudgedBySignalNotRate() {
+        val idle = room("kitchen").copy(wifi = HomeWifi(rx_mbits = 1.0, tx_mbits = 72.0, signal_dbm = -52.0))
+        assertFalse("an idle link reads the 1 Mbit/s beacon rate; the signal is good", weakWifi(idle))
+        val far = room("den").copy(wifi = HomeWifi(rx_mbits = 65.0, tx_mbits = 72.0, signal_dbm = -78.0))
+        assertTrue(weakWifi(far))
+        val hotspot = room("attic").copy(wifi = HomeWifi(mode = "ap"))
+        assertTrue(weakWifi(hotspot))
+        val merged = mergeWifi(listOf(room("kitchen")), mapOf("kitchen" to HomeWifi(1.0, 72.0, -52.0, "managed")))
+        assertEquals(HomeWifi(1.0, 72.0, -52.0, "managed"), merged[0].wifi)
     }
 
     @Test fun wifiPushDecodesPerRoomAndSkipsJunk() {
@@ -520,17 +546,29 @@ class HomeModelsTest {
     }
 
     @Test fun everythingGridHidesPersonalScreensOnASharedScreen() {
+        // The default bar (home · music · videos · chat) is not on the grid;
+        // Calendar, off the bar since 2026-10-11, is. No Satellites: it is a
+        // Settings tab.
         val all = everythingTiles(Capabilities.EMPTY, shared = false)
         assertEquals(
-            listOf(Route.Podcasts, Route.Audiobooks, Route.Videos, Route.News, Route.People, Route.Files, Route.Settings, Route.Manual),
+            listOf(Route.Podcasts, Route.Audiobooks, Route.News, Route.People, Route.Calendar, Route.Files,
+                Route.Settings, Route.Manual),
             all,
         )
         assertEquals(
-            listOf(Route.Podcasts, Route.Audiobooks, Route.Videos, Route.Settings, Route.Manual),
+            listOf(Route.Podcasts, Route.Audiobooks, Route.Calendar, Route.Settings, Route.Manual),
             everythingTiles(Capabilities.EMPTY, shared = true),
         )
         val radio = Capabilities(plugins = listOf(CapabilityPlugin(slug = "radio", androidCapabilities = listOf(CAP_STATIONS))))
         assertTrue(Route.Stations in everythingTiles(radio, shared = true))
+    }
+
+    @Test fun theGridHoldsWhatThisPhonesBarDoesNot() {
+        val bar = listOf(Route.Home, Route.Calendar, Route.Files)
+        val tiles = everythingTiles(Capabilities.EMPTY, shared = false, bar = bar)
+        assertTrue(listOf(Route.Music, Route.Videos, Route.Chat).all { it in tiles })
+        assertTrue(bar.none { it in tiles })
+        assertFalse(Route.Satellites in tiles)
     }
 
     @Test fun dashboardLinksLandOnTheConnectedServer() {

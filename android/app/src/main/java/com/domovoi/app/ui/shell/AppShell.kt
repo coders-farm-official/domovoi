@@ -1,5 +1,7 @@
 package com.domovoi.app.ui.shell
 
+import android.os.SystemClock
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -81,6 +83,10 @@ import com.domovoi.app.ui.components.DomovoiGlyph
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.screens.ScreenRouter
+import com.domovoi.app.ui.screens.local.LocalSourceChoices
+import com.domovoi.app.ui.screens.local.SourceChoices
+import com.domovoi.app.ui.screens.settings.LocalSettingsButton
+import com.domovoi.app.ui.screens.settings.LocalSettingsScreen
 import com.domovoi.app.ui.screens.settings.PairingScreen
 import com.domovoi.app.ui.shell.player.DockedPlayer
 import com.domovoi.app.ui.theme.Domovoi
@@ -107,22 +113,34 @@ fun AppShell() {
     // right there — so while it is down the server is asked directly, and
     // any HTTP answer counts. Reset per server, so a switch gets a fresh
     // grace period rather than inheriting the old server's verdict.
+    //
+    // Only while the app is on screen ([Reachability]): a spell in the
+    // background — frozen behind the system folder picker, say — used to
+    // count against the grace by the wall clock, so one failed probe on the
+    // way back (a stale connection after the thaw) dropped a phone sitting
+    // next to a healthy server to local media. Asking now stops when the app
+    // leaves the screen and starts again, with a fresh probe, when it
+    // returns; a probe that straddles the trip is dropped with its coroutine.
+    val reach = remember(serverUrl) { Reachability() }
     var unreachable by remember(serverUrl) { mutableStateOf(false) }
-    LaunchedEffect(serverUrl, connected) {
+    val shellLifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(serverUrl, connected, shellLifecycle) {
         if (serverUrl.isBlank() || connected) {
+            reach.connected()
             unreachable = false
             return@LaunchedEffect
         }
-        var lastAnswer = System.currentTimeMillis()
-        while (true) {
-            val now = System.currentTimeMillis()
-            if (app.api.answers()) {
-                lastAnswer = now
-                unreachable = false
-            } else if (now - lastAnswer >= UNREACHABLE_GRACE_MS) {
-                unreachable = true
+        shellLifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            askWhileOnScreen(reach, probe = { app.api.answers() }, clock = SystemClock::elapsedRealtime) { now ->
+                if (now != unreachable) {
+                    Log.i(
+                        "AppShell",
+                        if (now) "server out of reach after ${UNREACHABLE_GRACE_MS / 1000} s of asking on screen; local media"
+                        else "server answered again; workspace",
+                    )
+                    unreachable = now
+                }
             }
-            delay(REACH_PROBE_EVERY_MS)
         }
     }
 
@@ -236,12 +254,29 @@ private fun ShellContent() {
         return
     }
     var route by rememberSaveable { mutableStateOf(StartRoute) }
+    // Which side of the "your device" switch each page last showed, for
+    // this server, across routes, rotation and a trip through local media.
+    val sourceChoices = rememberSaveable(saver = SourceChoices.Saver) { SourceChoices() }
     val backStack = remember { mutableStateListOf<Route>() }
-    val navigate: (Route) -> Unit = { r ->
+    val go: (Route) -> Unit = { r ->
         if (r != route) {
             backStack.add(route)
             route = r
         }
+    }
+    // A Settings tab asked for by a link (Home's rooms → Satellites, the
+    // grid's "edit the bar"): Settings opens on it and takes it, as the
+    // web's openSettingsTab does through sessionStorage.
+    var settingsTab by rememberSaveable { mutableStateOf<String?>(null) }
+    val openSettingsTab: (String) -> Unit = { tab ->
+        settingsTab = tab
+        go(Route.Settings)
+    }
+    val settingsRequest = remember(settingsTab) { SettingsTabRequest(settingsTab) { settingsTab = null } }
+    // A route that is a Settings tab (Satellites) opens Settings on it.
+    val navigate: (Route) -> Unit = { r ->
+        val tab = settingsTabFor(r)
+        if (tab != null) openSettingsTab(tab) else go(r)
     }
     BackHandler(enabled = backStack.isNotEmpty()) {
         route = backStack.removeAt(backStack.lastIndex)
@@ -323,7 +358,13 @@ private fun ShellContent() {
         }
     }
 
-    CompositionLocalProvider(LocalCapabilities provides caps, LocalSharedScreen provides shared) {
+    CompositionLocalProvider(
+        LocalCapabilities provides caps,
+        LocalSharedScreen provides shared,
+        LocalOpenSettingsTab provides openSettingsTab,
+        LocalSettingsTabRequest provides settingsRequest,
+        LocalSourceChoices provides sourceChoices,
+    ) {
         val counts = rememberSidebarCounts()
         val widthClass = currentWindowAdaptiveInfo().windowSizeClass.windowWidthSizeClass
 
@@ -475,15 +516,26 @@ private fun TopChrome(content: @Composable () -> Unit) {
 
 // ---------------------------------------------------------------------------
 // Offline/local mode: no domovoi configured, or the saved one is out of
-// reach ([unreachableServer] names it). Music + Videos are the only tabs,
-// backed by on-device media (MediaStore); "connect" opens the
+// reach ([unreachableServer] names it). Music, Videos and Files, backed by
+// the phone's own media (MediaStore) and folders, and the on-device
+// assistant where this install has it ([localTabs]); "connect" opens the
 // discovery/startup screen. Connecting flips prefs.serverUrl (or, for an
 // unreachable server, the live connection coming back), which recomposes
 // AppShell straight into the full workspace.
 // ---------------------------------------------------------------------------
 @Composable
 private fun OfflineShell(choice: ServerChoice) {
-    var tab by rememberSaveable { mutableStateOf(0) }   // 0 = music, 1 = videos, 2 = files
+    // Music, videos, files, and the on-device assistant where this install
+    // has it (localTabs); the index of the one showing.
+    val tabs = remember { localTabs() }
+    var tab by rememberSaveable { mutableStateOf(0) }
+    // This phone's own settings (problem reports, the on-device assistant
+    // benchmark): the top bar's gear opens them, with no server needed.
+    var settingsOpen by rememberSaveable { mutableStateOf(false) }
+    if (settingsOpen) {
+        LocalSettingsScreen(onBack = { settingsOpen = false })
+        return
+    }
     val openConnection = LocalOpenConnection.current
     // The banner is for a server that can't be used. Choosing "this phone"
     // with the server right there is not an outage, so it says nothing.
@@ -556,6 +608,8 @@ private fun OfflineShell(choice: ServerChoice) {
                             color = Domovoi.colors.fgMuted,
                         )
                     }
+                    Box(Modifier.width(6.dp))
+                    LocalSettingsButton { settingsOpen = true }
                 }
             }
             if (outOfReach != null) {
@@ -589,7 +643,7 @@ private fun OfflineShell(choice: ServerChoice) {
             BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
-                    listOf(Route.Music, Route.Videos, Route.Files).forEachIndexed { i, r ->
+                    tabs.forEachIndexed { i, r ->
                         NavigationBarItem(
                             selected = tab == i,
                             onClick = { tab = i },
@@ -609,25 +663,29 @@ private fun OfflineShell(choice: ServerChoice) {
         },
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
-            when (tab) {
-                0 -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
-                1 -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
-                else -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
+            when (tabs.getOrElse(tab) { Route.Music }) {
+                Route.Videos -> com.domovoi.app.ui.screens.local.LocalVideosScreen()
+                Route.Files -> com.domovoi.app.ui.screens.files.LocalFilesScreen()
+                Route.Assistant -> com.domovoi.app.ui.screens.assistant.AssistantScreen()
+                else -> com.domovoi.app.ui.screens.local.LocalMusicScreen()
             }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Compact: bottom bar (the web phone strip: home, music, satellites,
-// calendar, chat), mini player docked above it. Everything else is on
-// Home's "everything" grid, and while one of those screens is open the home
-// tab is the one lit, as on the web strip (and as the More tab was).
+// Compact: bottom bar (this phone's phone bar, PhoneBar.kt: home, music,
+// videos, chat unless picked otherwise in Settings → Phone bar), mini player
+// docked above it. Everything else is on Home's "everything" grid, and while
+// one of those screens is open the home tab is the one lit, as on the web
+// strip (and as the More tab was).
 // ---------------------------------------------------------------------------
 @Composable
 private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: SidebarCounts) {
     val caps = LocalCapabilities.current
     val shared = LocalSharedScreen.current
+    val savedBar by LocalApp.current.prefs.phoneBar.collectAsState()
+    val bar = PhoneBar.routes(PhoneBar.decode(savedBar), caps, shared)
     Scaffold(
         containerColor = Domovoi.colors.canvas,
         topBar = { TopChrome { Topbar(route, navigate) } },
@@ -635,9 +693,10 @@ private fun CompactShell(route: Route, navigate: (Route) -> Unit, counts: Sideba
             BottomChrome {
                 DockedPlayer()
                 NavigationBar(containerColor = Domovoi.colors.card, tonalElevation = 0.dp) {
-                    // A shared screen keeps four: Chat is one person's own.
-                    CompactRoutes.filter { it.visibleOn(caps, shared) }.forEach { r ->
-                        val selected = route == r || (r == Route.Home && route in EverythingRoutes)
+                    // A shared screen never shows a personal tab, whatever
+                    // the bar says (PhoneBar.routes filters with visibleOn).
+                    bar.forEach { r ->
+                        val selected = route == r || (r == Route.Home && route !in bar)
                         NavigationBarItem(
                             selected = selected,
                             onClick = { navigate(r) },

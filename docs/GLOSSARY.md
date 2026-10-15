@@ -74,7 +74,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **openWakeWord** — the on-satellite wake-word engine. Ships prebuilt models (`hey_jarvis` is Domovoi's default) and supports custom models trained from your own recorded clips.
 
-**Piper** — the local neural TTS engine — second link in the TTS chain and the fully-offline voice. Voice models download once or can be uploaded on the dashboard's Voices page.
+**Piper** — the local neural TTS engine — second link in the TTS chain and the fully-offline voice. Domovoi offers three public-domain Piper voices (Norman, Kristin, Linda), run on ONNX Runtime and fed by its own text-to-phoneme converter (`domovoi/phonemizer`, no espeak-ng). Voice models download once or can be uploaded on the dashboard's Voices page.
 
 **Plugin schema** — the private Postgres schema (`plugin_<slug>`) where a plugin keeps its tables, with its own migration ledger. Plugins never run DDL against core tables; a linter enforces the boundary.
 
@@ -86,7 +86,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **Realtime channel** — the live-update path from database to browser: a feature fires a Postgres NOTIFY on commit, the dashboard's listener maps it to a named channel (e.g. `radio.stations`) and pushes a fresh snapshot over WebSocket. Plugins declare theirs in the manifest.
 
-**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and the Satellites page address; each room owns one satellite and one *MPD* instance.
+**Room** — the logical unit of the household, identified by the stable `room_id` in a satellite's config. Rooms are what the intercom, drop-in, music playback, and Settings → Satellites address; each room owns one satellite and one *MPD* instance.
 
 **Room queue** — the play queue a room's speaker draws from. It lives in that room's *MPD* instance, not in the database, and it is SHARED: every household client sees the same list and can add to, reorder, or clear it (a *guest* only while the room is playing, and never clear). Domovoi annotates it rather than copying it — `room_queue_items` records which *device* added each entry, keyed by MPD's songid (stable across reorders, unlike a position), which is what the "added by" tag reads. Distinct from each client's own player queue, which never leaves that device.
 

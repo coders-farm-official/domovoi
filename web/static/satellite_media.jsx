@@ -1,4 +1,4 @@
-/* Prepare-satellite-media card (Satellites page, below Broadcast).
+/* Prepare-satellite-media card (Settings → Satellites, below Broadcast).
  * Flow (portal — the shipped path): flash stock OS, prepare here, boot the
  * device; it raises its own `Domovoi-Setup-<id>` network, the customer sets
  * it up from a phone and approves it on the dashboard. USB adoption instead
@@ -266,7 +266,7 @@ const PrepareMediaCard = ({ fire }) => {
   };
 
   return (
-    <div style={{ marginTop: 16, background: 'var(--card)', border: '1px solid var(--border)',
+    <div style={{ background: 'var(--card)', border: '1px solid var(--border)',
                   borderRadius: 'var(--r-md)', boxShadow: 'var(--inner-highlight)' }}>
       <button onClick={() => setOpen(o => !o)}
               style={{ font: 'inherit', width: '100%', textAlign: 'left', cursor: 'pointer',

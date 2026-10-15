@@ -79,7 +79,9 @@ def test_a_discovered_address_does_not_reach_the_config_file(config_file, monkey
     assert server_identity.read_pending_server()[0] == "ws://192.168.0.117:6370"
 
 
-def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_file):
+def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_file, monkeypatch):
+    """The pending address is the last-known one: asked first (after the
+    core's name), and when it answers as the server nothing is swept."""
     server_identity.write_pending_server("ws://192.168.0.117:6370")
     cfg = _cfg()
 
@@ -88,12 +90,25 @@ def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_fil
 
     from satellite import discovery
 
-    original = discovery.find_core
-    discovery.find_core = never
-    try:
-        assert client._resolve_server_url(cfg, config_file) is True
-    finally:
-        discovery.find_core = original
+    asked = []
+    monkeypatch.setattr(discovery, "probe", lambda host, **k: asked.append(host) or host == "192.168.0.117")
+    monkeypatch.setattr(discovery, "find_core", never)
+    assert client._resolve_server_url(cfg, config_file) is True
+    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert asked == ["192.168.0.117"]
+
+
+def test_a_pending_address_that_does_not_answer_is_still_used_when_nothing_else_does(config_file, monkeypatch):
+    """The core is down at boot: nothing verifies anywhere. The pending
+    address is still the best there is, exactly as before."""
+    server_identity.write_pending_server("ws://192.168.0.117:6370")
+    from satellite import discovery
+
+    monkeypatch.setattr(discovery, "probe", lambda host, **k: False)
+    monkeypatch.setattr(discovery, "find_core", lambda **k: None)
+    monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
+    cfg = _cfg()
+    assert client._resolve_server_url(cfg, config_file) is True
     assert cfg.domovoi_url == "ws://192.168.0.117:6370"
 
 

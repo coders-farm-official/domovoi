@@ -39,13 +39,17 @@
 #     reports searxng-running; a systemd-run shim (write_systemd_run) logs
 #     the detached start.
 #
-# Usage: bash scripts/linux/tests/test-apply-update.sh
+# Usage: bash scripts/linux/tests/test-apply-update.sh [--case NAME|GLOB]... [--list]
+# (case-filter.sh says how --case picks; scripts/dev/run-linux-harness.sh
+# runs this in a pinned Linux container, much faster than Git Bash.)
 # Exit status is non-zero if any case failed. Set HARNESS_PYTHON to a Python
 # interpreter to also check that every result file is valid JSON.
 
 set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$HERE/case-filter.sh"
+harness_parse_args "$@"
 SCRIPT=$HERE/../apply-update.sh
 WORK=$(mktemp -d)
 KEEP_WORK=${KEEP_WORK:-0}
@@ -375,6 +379,10 @@ if [ "${1-}" = -m ] && [ "${2-}" = pip ]; then
   for a in "$@"; do
     if [ "$a" = freeze ]; then
       printf 'requests==2.31.0\ntorch==2.14.0+cpu\nlocalthing @ file:///tmp/localthing.whl\n'
+    fi
+    if [ "$a" = uninstall ] && [ -f "$SHIM_STATE/pip-uninstall-output" ]; then
+      cat "$SHIM_STATE/pip-uninstall-output"
+      if [ -f "$SHIM_STATE/pip-uninstall-fails" ]; then exit 1; fi
     fi
     if [ "$a" = -r ]; then echo "pip-r-file: $(tr '\n' ' ' <"${!#}")" >>"$SHIM_STATE/calls.log"; fi
   done
@@ -732,6 +740,112 @@ case_mpd_changed() {
   check "rebuild while core is stopped" before "systemctl stop" "docker build"
   check "rebuild before core starts" before "docker build" "systemctl start domovoi-core.service"
   check "no pip" not_called "pip "
+  end_case
+}
+
+# A forward re-sync uninstalls what the release stopped using (piper-tts,
+# GPL); pip never would. A step only when something went, and never in a
+# rollback, whose older checkout still needs it.
+case_retired_packages_uninstalled() {
+  new_case retired_packages_uninstalled
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  printf 'Found existing installation: piper-tts 1.8.0\nUninstalling piper-tts-1.8.0:\n  Successfully uninstalled piper-tts-1.8.0\nWARNING: Skipping piper-phonemize as it is not installed.\n' \
+    >"$STATE/pip-uninstall-output"
+  write_root_shims "$CASE/rootbin"
+  run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "uninstalls the retired packages" called "pip --disable-pip-version-check --no-input uninstall -y piper-tts piper-phonemize"
+  check "after the re-sync" before "install -e" "uninstall -y piper-tts"
+  check "before the services start" before "uninstall -y piper-tts" "systemctl start domovoi-core.service"
+  check "as the service user" called "runuser -u tester -- $CASE/venv/bin/python -m pip --disable-pip-version-check --no-input uninstall"
+  check "the step names what went" grep -qF '"name": "drop-retired-packages", "status": "ok"' "$RESULT"
+  check "and only that" grep -qF '"detail": "uninstalled piper-tts-1.8.0 (no longer used)"' "$RESULT"
+  end_case
+}
+
+# edge-tts (LGPL) joined the list on 2026-10-12 when the Microsoft Edge
+# online voices were dropped: uninstalled with the others, the same way.
+case_retired_packages_include_edge_tts() {
+  new_case retired_packages_include_edge_tts
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps without edge-tts" >/dev/null
+  printf 'WARNING: Skipping piper-tts as it is not installed.\nWARNING: Skipping piper-phonemize as it is not installed.\nFound existing installation: edge-tts 7.2.8\nUninstalling edge-tts-7.2.8:\n  Successfully uninstalled edge-tts-7.2.8\n' \
+    >"$STATE/pip-uninstall-output"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "asks pip for all three" called "pip --disable-pip-version-check --no-input uninstall -y piper-tts piper-phonemize edge-tts"
+  check "after the re-sync" before "install -e" "uninstall -y piper-tts piper-phonemize edge-tts"
+  check "before the services start" before "uninstall -y piper-tts piper-phonemize edge-tts" "systemctl start domovoi-core.service"
+  check "the step names edge-tts" grep -qF '"detail": "uninstalled edge-tts-7.2.8 (no longer used)"' "$RESULT"
+  end_case
+}
+
+case_retired_packages_absent_leave_no_step() {
+  new_case retired_packages_absent_leave_no_step
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  printf 'WARNING: Skipping piper-tts as it is not installed.\n' >"$STATE/pip-uninstall-output"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "asked pip" called "uninstall -y piper-tts piper-phonemize"
+  check "no step when nothing went" eq "$(grep -c 'drop-retired-packages' "$RESULT")" 0
+  end_case
+}
+
+case_retired_packages_failure_is_a_warning() {
+  new_case retired_packages_failure_is_a_warning
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["onnxruntime"]\n' >"$REPO/pyproject.toml"
+  commit_all "B: deps" >/dev/null
+  printf 'ERROR: permission denied\n' >"$STATE/pip-uninstall-output"
+  : >"$STATE/pip-uninstall-fails"
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" grep -qF '"name": "drop-retired-packages", "status": "warn"' "$RESULT"
+  check "still starts" called "systemctl start domovoi-core.service"
+  end_case
+}
+
+# A re-sync that fails rolls back before anything is uninstalled: the
+# previous checkout still needs piper-tts, and nothing re-installs it then.
+case_retired_packages_untouched_when_the_sync_fails() {
+  new_case retired_packages_untouched_when_the_sync_fails
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]
+name = "domovoi"
+version = "1"
+dependencies = ["onnxruntime"]
+' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps")
+  echo "$sha_b" >"$STATE/pip-fail-when-head"
+  printf 'ERROR: no matching distribution
+' >"$STATE/pip-fail-output"
+  printf '  Successfully uninstalled piper-tts-1.8.0
+' >"$STATE/pip-uninstall-output"
+  run_update
+  check "the sync failed" eq "$(field error | grep -c 'failed at sync-deps')" 1
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "nothing uninstalled" not_called "uninstall -y piper-tts"
+  check "no such step" eq "$(grep -c 'drop-retired-packages' "$RESULT")" 0
+  end_case
+}
+
+case_retired_packages_kept_through_a_rollback() {
+  new_case retired_packages_kept_through_a_rollback
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "2"\n' >"$REPO/pyproject.toml"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: deps + broken code")
+  echo "$sha_b" >"$STATE/curl-fail-when-head"
+  printf '  Successfully uninstalled piper-tts-1.8.0\n' >"$STATE/pip-uninstall-output"
+  run_update
+  check "rolled back" eq "$(field status)" '"rolled_back"'
+  check "uninstalled once, on the way forward" eq "$(grep -c 'uninstall -y piper-tts' "$STATE/calls.log")" 1
+  check "the rollback re-syncs after it" again_after "uninstall -y piper-tts" "pip --disable-pip-version-check --no-input install -e"
   end_case
 }
 
@@ -1624,7 +1738,17 @@ case_os_jobs_follow_the_answer_on_restarts() {
   check "never: so is wsl-pro" os_not_masked wsl-pro.service
   check "never: written down" grep -qx apt-daily.timer "$OSROOT/var/lib/domovoi-os-jobs/masked"
   check "never: systemd told" called "systemctl daemon-reload"
-  check "never: the timer stopped" called "systemctl stop apt-daily.timer"
+  # Real WSL run 2026-10-11: a masked timer still running at the reload
+  # fails ("Unit to trigger vanished") and the box reports degraded. Each
+  # is stopped before the reload, and every unit masked has its failed
+  # mark cleared after it; the shutdown helper is left running.
+  for u in apt-daily.timer apt-daily-upgrade.timer motd-news.timer; do
+    check "never: $u stopped before systemd reloads" before "systemctl stop $u" "systemctl daemon-reload"
+  done
+  check "never: the shutdown helper left running" not_called "systemctl stop unattended-upgrades.service"
+  for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer; do
+    check "never: $u's failed mark cleared after the reload" before "systemctl daemon-reload" "systemctl reset-failed $u"
+  done
   check "never: after health" before "curl http://127.0.0.1:6369/api/health" "systemctl daemon-reload"
   # The household answers Yes in Settings, then presses Restart.
   echo always >"$STATE/internet-policy"
@@ -1634,11 +1758,13 @@ case_os_jobs_follow_the_answer_on_restarts() {
   check "always: it says what it unmasked" grep -qF 'unmasked apt-daily-upgrade.timer apt-daily.timer motd-news.timer unattended-upgrades.service' "$RESULT"
   for u in apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service motd-news.timer; do check "always: $u unmasked" os_not_masked "$u"; done
   check "always: nothing left written down" test ! -f "$OSROOT/var/lib/domovoi-os-jobs/masked"
+  check "always: failed marks cleared again" eq "$(grep -cxF "systemctl reset-failed apt-daily.timer" "$STATE/calls.log")" 2
   # Another restart: nothing to change, nothing recorded.
   run_update
   check "again: status ok" eq "$(field status)" '"ok"'
   check "again: no os-jobs step" eq "$(step_names)" "signature stop-services start-services health searxng"
   check "again: the journal says so" grep -qF "os-jobs: nothing to change (internet: always; WSL: no)" "$CASE/output.log"
+  check "again: nothing reset" eq "$(grep -cxF "systemctl reset-failed apt-daily.timer" "$STATE/calls.log")" 2
   end_case
 }
 
@@ -1652,6 +1778,10 @@ case_os_jobs_on_wsl_keep_snapd_off() {
   check "an ok step" step_is os-jobs ok
   for u in wsl-pro.service snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer; do check "$u masked (WSL)" os_masked "$u"; done
   check "disabled and stopped first" called "systemctl disable --now wsl-pro.service"
+  check "before systemd reloads" before "systemctl disable --now wsl-pro.service" "systemctl daemon-reload"
+  for u in wsl-pro.service snapd.service snapd.socket snapd.seeded.service snapd.snap-repair.timer; do
+    check "$u's failed mark cleared after the reload" before "systemctl daemon-reload" "systemctl reset-failed $u"
+  done
   check "the updaters run as shipped (sometimes)" os_not_masked apt-daily.timer
   end_case
 }
@@ -2582,6 +2712,12 @@ CASES=(
   case_noop_restart_brings_postgres_back
   case_noop_restart_a_baseline_row_is_not_a_migration
   case_deps_changed_as_root
+  case_retired_packages_uninstalled
+  case_retired_packages_include_edge_tts
+  case_retired_packages_absent_leave_no_step
+  case_retired_packages_failure_is_a_warning
+  case_retired_packages_kept_through_a_rollback
+  case_retired_packages_untouched_when_the_sync_fails
   case_mpd_changed
   case_mpd_conf_only
   case_migration_health_failure_rolls_back
@@ -2667,12 +2803,12 @@ CASES=(
   case_upstream_pin_that_matches_goes_on
 )
 
-# ONLY=<regex> runs the cases whose names match it (a quick look while
-# working on one); the suite runs them all.
-for c in "${CASES[@]}"; do
-  if [ -n "${ONLY:-}" ] && ! [[ $c =~ ${ONLY} ]]; then continue; fi
+# --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite
+# runs them all.
+harness_select
+for c in ${SELECTED_CASES[@]+"${SELECTED_CASES[@]}"}; do
   "$c"
 done
 
-echo "apply-update harness: $PASSED passed, $FAILED failed, $SKIPPED skipped"
+echo "apply-update harness: $PASSED passed, $FAILED failed, $SKIPPED skipped$(harness_selection_note)"
 [ "$FAILED" -eq 0 ]

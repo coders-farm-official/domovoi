@@ -58,6 +58,16 @@ const render = ({ file, component, props = {}, fnProps = [], apiObject = null, a
   for (const name of STUBS) sandbox[name] = { [name]: (p) => ({ type: name, props: p }) }[name];
   sandbox.useApiObject = () => ({ data: null, loading: false, error: null, refresh() {}, ...(apiObject || {}) });
   sandbox.useApiList = () => ({ items: [], loading: false, error: null, refresh() {}, setItems() {}, ...(apiList || {}) });
+  // A paged list (data.js usePagedList) renders the rows `apiList.items`
+  // gives it, as one loaded page; the footer is a leaf with its counts.
+  sandbox.usePagedList = () => {
+    const items = (apiList && apiList.items) || [];
+    return { items, total: items.length, hasMore: false, loading: false, error: null,
+             extra: null, loadMore() {}, reload() {}, retry() {}, updateItem() {},
+             removeItem() {}, pageSize: 50, ...((apiList && apiList.paged) || {}) };
+  };
+  sandbox.PagedListFooter = (p) => ({ type: 'PagedListFooter', props: p });
+  sandbox.fmtCount = (n) => (typeof n === 'number' ? n.toLocaleString() : '—');
   sandbox.useStateEvents = () => {};
   sandbox.useDebouncedValue = (v) => v;
   sandbox.stateBus = { subscribe: () => () => {} };

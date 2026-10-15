@@ -723,8 +723,13 @@ async def test_the_stt_role_carries_the_device_compute_pair(monkeypatch) -> None
     async def _get_admin(path, headers=None):
         return 200, {"fields": fields}
 
+    async def _no_ollama():
+        return None
+
     monkeypatch.setattr(models_api, "get_admin", _get_admin)
     monkeypatch.setattr(models_api, "auth_forward_headers", lambda _r: {})
+    # The rows also say what's installed; never ask a real Ollama here.
+    monkeypatch.setattr(models_api.ollama_client, "tags_or_none", _no_ollama)
     roles = {r["role"]: r for r in (await models_api.get_active(None))["roles"]}
     assert roles["stt"]["model"] == "large-v3"
     assert roles["stt"]["device"] == "cpu"

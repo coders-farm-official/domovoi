@@ -163,6 +163,14 @@ class FeedModelsTest {
         assertEquals(2, header.count)
     }
 
+    @Test fun aPagedGridsHeaderCountsTheServersTotalNotTheLoadedTiles() {
+        val headers = videoGridEntries(false, grouped, totals = mapOf("movies" to 1900))
+            .filterIsInstance<VideoGridEntry.Header>()
+        assertEquals(1900, headers.first { it.libraryId == "movies" }.count)
+        // A library the answer didn't total (an older server) counts what is loaded.
+        assertEquals(1, headers.first { it.libraryId == "home" }.count)
+    }
+
     @Test fun headerFallsBackToTheLibraryIdWithoutALabel() {
         val header = videoGridEntries(false, linkedMapOf("lib9" to listOf(row("lib9", "x.mp4"))))
             .filterIsInstance<VideoGridEntry.Header>().single()

@@ -1,0 +1,26 @@
+package com.domovoi.app.assistant
+
+/**
+ * The lines the benchmark's voice samples read, one by one: the shared set
+ * every candidate voice for the phone reads (the owner's
+ * voice-compare-sentences.txt of 2026-10-12), so this phone's own voice can
+ * be compared with the others line for line. Keep the text identical to
+ * that set.
+ */
+object VoiceSamples {
+    val LINES = listOf(
+        "Okay, I set a timer for 12 minutes.",
+        "Right now it's 72°F and partly cloudy, with rain likely after 4:30 PM.",
+        "Now playing \"Bohemian Rhapsody\" by Queen in the living room.",
+        "Your reminder for Tuesday, October 14th: call the dentist at 9 a.m.",
+        "Hey Domovoi! Sure, I'll turn that down.",
+        "Kamron asked me to remind you to take out the recycling.",
+        "Here's one: why did the scarecrow win an award? Because he was outstanding in his field.",
+        "The Wi-Fi password is on the fridge, next to the takeout menu.",
+        "Nguyen, Siobhan and Joaquin are all home.",
+        "That's \$14.99, about 20% off the usual price.",
+        "I read the book you said I should read, and I'd read it again.",
+        "Playing \$uicideboy\$, then Beyoncé, then AC/DC.",
+        "I couldn't reach the server, so I'm answering with this phone's own model.",
+    )
+}

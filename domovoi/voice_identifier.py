@@ -30,6 +30,15 @@ and router dispatch. Five jobs:
    prompt for identity. ``low`` (recent activity) means stay quiet;
    ``high`` (long idle) means an unknown voice deserves a direct ask.
 
+Two sample sets (V026, ``voice_profiles.source``). A satellite's turn
+(``samples="satellite"``, the default) is matched against satellite
+samples only, so a phone can never move a satellite centroid. A turn from
+the app's chat mic (``samples="phone"``, domovoi/phone_voice.py) scores
+each person against their phone samples when they have any, else against
+their satellite samples (:func:`phone_matching_samples`). A phone turn
+never learns (job 4 is satellite-only); phone samples are only added on
+purpose, by "my name is …" said into the chat mic (handlers/voice_profile.py).
+
 Every decision is logged at INFO with the best and runner-up scores, so
 a misrecognition can be read back from the journal.
 
@@ -167,6 +176,25 @@ def _person_scores(
     }
 
 
+#: ``identify(samples=...)``: which set a turn is matched against.
+SATELLITE_SAMPLES = "satellite"
+PHONE_SAMPLES = "phone"
+
+
+def phone_matching_samples(
+    rows: list[tuple[int, int, bytes, str | None, str]],
+) -> list[tuple[int, bytes]]:
+    """``(person_id, embedding_bytes)`` a phone turn is scored against,
+    from ``VoiceProfilesRepository.phone_matching_rows``: each person's
+    phone samples when they have any, else their satellite samples. Pure."""
+    with_phone = {person_id for _id, person_id, _blob, _room, source in rows if source == "phone"}
+    return [
+        (person_id, blob)
+        for _id, person_id, blob, _room, source in rows
+        if (source == "phone") == (person_id in with_phone)
+    ]
+
+
 def _decide(scores: dict[int, float]) -> _Decision:
     """Name the speaker, or decline to. Pure — settings in, verdict out.
 
@@ -203,6 +231,21 @@ def _decide(scores: dict[int, float]) -> _Decision:
         and best >= threshold + settings.voice_profile_drift_near_threshold_margin
     )
     return verdict(best_person, False, confident)
+
+
+def speaker_is_confident(score: float | None) -> bool:
+    """Whether a stored match score is one to show at full strength: the
+    bar a match has to clear to count as *confident* here (the threshold
+    plus ``drift_near_threshold_margin``, :func:`_decide`). The chat's
+    speaker marker (a phone's voice turns, domovoi/phone_voice.py) is drawn
+    softer below it. Judged from the score alone, so a message read back
+    later is drawn the way it was when it arrived."""
+    if score is None:
+        return False
+    return float(score) >= (
+        settings.voice_profile_match_threshold
+        + settings.voice_profile_drift_near_threshold_margin
+    )
 
 
 def _presence_tier_from_last_seen(last_seen) -> str:
@@ -286,6 +329,7 @@ async def identify(
     *,
     embedding: Any = _EMBED_HERE,
     room_id: str | None = None,
+    samples: str = SATELLITE_SAMPLES,
 ) -> IdentificationResult:
     """Embed + match + compute presence. Best-effort — failures degrade
     to ``person_id=None, presence_tier="high"`` so the core
@@ -298,7 +342,13 @@ async def identify(
 
     ``room_id``: the room the audio came from. Without one, nothing is
     learned (job 4).
+
+    ``samples``: :data:`SATELLITE_SAMPLES` (a satellite's turn: satellite
+    samples only) or :data:`PHONE_SAMPLES` (the app's chat mic: a person's
+    phone samples first, see the module docstring). A phone turn never
+    learns, whatever ``room_id`` says.
     """
+    phone = samples == PHONE_SAMPLES
     if embedding is _EMBED_HERE:
         embedding = await embed_voice(pcm_int16)
 
@@ -354,22 +404,28 @@ async def identify(
 
     try:
         async with session_scope() as s:
-            profiles = await VoiceProfilesRepository(s).all_for_model(
-                VoiceProfilesRepository.EMBEDDING_MODEL_TAG
-            )
+            if phone:
+                phone_rows = await VoiceProfilesRepository(s).phone_matching_rows(
+                    VoiceProfilesRepository.EMBEDDING_MODEL_TAG
+                )
+                profiles = []
+                matched_against = phone_matching_samples(phone_rows)
+            else:
+                profiles = await VoiceProfilesRepository(s).all_for_model(
+                    VoiceProfilesRepository.EMBEDDING_MODEL_TAG
+                )
+                matched_against = [
+                    (person_id, blob) for _id, person_id, blob, _room in profiles
+                ]
             last_seen = await PeopleRepository(s).latest_seen()
 
-        decision = _decide(
-            _person_scores(
-                embedding,
-                [(person_id, blob) for _id, person_id, blob, _room in profiles],
-            )
-        )
+        decision = _decide(_person_scores(embedding, matched_against))
         if decision.best_person is not None:
             log.info(
-                "voice identification room=%s: %s — best person_id=%d %.3f, "
+                "voice identification %s=%s: %s — best person_id=%d %.3f, "
                 "runner-up %s (threshold %.2f, margin %.2f)",
-                room_id, decision.outcome, decision.best_person, decision.best,
+                "phone" if phone else "room", room_id,
+                decision.outcome, decision.best_person, decision.best,
                 "none" if decision.runner_up is None
                 else f"person_id={decision.runner_up_person} {decision.runner_up:.3f}",
                 settings.voice_profile_match_threshold,
@@ -390,17 +446,20 @@ async def identify(
             except Exception as e:
                 log.warning("touch_last_seen failed: %s", e)
 
-            await _learn_room(
-                matched_person,
-                room_id,
-                embedding,
-                {
-                    room for _id, person_id, _blob, room in profiles
-                    if person_id == matched_person and room is not None
-                },
-                decision,
-            )
-        elif decision.best_person is not None and room_id is not None:
+            if not phone:
+                # Learning is a satellite's alone: a phone turn never
+                # saves a sample by itself, into either set.
+                await _learn_room(
+                    matched_person,
+                    room_id,
+                    embedding,
+                    {
+                        room for _id, person_id, _blob, room in profiles
+                        if person_id == matched_person and room is not None
+                    },
+                    decision,
+                )
+        elif decision.best_person is not None and room_id is not None and not phone:
             # Top candidate but not named: a run of confident matches
             # for them in this room is broken.
             _CONFIDENT_HITS.pop((decision.best_person, room_id), None)

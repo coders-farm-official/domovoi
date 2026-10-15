@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from domovoi.tests.test_apply_update_script import BASH, requires_bash
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +50,7 @@ def test_scripts_parse():
 
 
 @requires_bash
+@pytest.mark.bash_harness
 def test_provision_harness():
     # In the suite like test_apply_update_harness, the same way: Git Bash,
     # HARNESS_PYTHON, and a bound that is for a hang, not a measure of
@@ -95,6 +98,10 @@ def test_manifest_pins_are_well_formed():
             # An exact tag, never a bare name Ollama can retarget.
             assert re.fullmatch(r"[a-z0-9][a-z0-9._-]*:[A-Za-z0-9._-]+", value), key
             assert value not in ("qwen3:4b", "qwen3:8b", "llama3.2:3b"), key
+            # The bare qwen3-vl tags are the thinking builds (2026-10-12).
+            assert value not in ("qwen3-vl:2b", "qwen3-vl:4b"), key
+            if key.endswith("_vision_model"):
+                assert "-instruct" in value, key
 
 
 def test_nothing_the_repo_pins_is_copied_into_the_manifest():

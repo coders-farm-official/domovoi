@@ -80,7 +80,13 @@ globalThis.API_BASE = '';
 globalThis.withDeviceToken = (url) =>
   __paired ? `${url}${url.includes('?') ? '&' : '?'}device_token=phrase-of-eight` : url;
 globalThis.__audio = [];
-Audio = function (url) { __audio.push(url); return { play: () => Promise.resolve(), pause() {} }; };
+// Records what is PLAYED (an Audio made with a URL). A bare `new Audio()`
+// is a probe, such as settings.jsx asking at load whether this browser
+// plays Ogg Opus (the voices' built-in clips); it plays nothing.
+Audio = function (url) {
+  if (url !== undefined) __audio.push(url);
+  return { play: () => Promise.resolve(), pause() {}, canPlayType: () => '' };
+};
 globalThis.liveRelTime = () => 'now';
 """
 

@@ -70,11 +70,14 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Satellites page — per-room Pi grid + drill-in detail + broadcast composer.
- * Android analog of web/static/satellites.jsx.
+ * Satellites — per-room Pi grid + drill-in detail + broadcast composer.
+ * Android analog of web/static/satellites.jsx. Since 2026-10-11 a Settings
+ * tab (Settings → Satellites), [embedded] under the Settings header: the
+ * roster's counts become its first line instead of a page header of its
+ * own. Every read and action is the same either way.
  */
 @Composable
-fun SatellitesScreen() {
+fun SatellitesScreen(embedded: Boolean = false) {
     var openRoom by remember { mutableStateOf<String?>(null) }
 
     val satsState = rememberApi(
@@ -137,10 +140,12 @@ fun SatellitesScreen() {
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
-                    PageHeader(
-                        "Satellites",
-                        "$onlineCount online · $offlineCount offline · ${sats.size} provisioned",
-                    )
+                    val summary = "$onlineCount online · $offlineCount offline · ${sats.size} provisioned"
+                    if (embedded) {
+                        Text(summary, style = MaterialTheme.typography.bodyMedium, color = Domovoi.colors.fgMuted)
+                    } else {
+                        PageHeader("Satellites", summary)
+                    }
                 }
                 val err = satsState.error
                 when {
@@ -186,7 +191,8 @@ private fun SatCard(s: Satellite, extraSec: Double, onOpen: () -> Unit) {
     val songDur = np?.song?.duration_sec ?: 0.0
     val elapsed = if (playing) (np?.elapsed_sec ?: 0.0) + extraSec else 0.0
     val progress = if (playing && songDur > 0) (elapsed / songDur).coerceIn(0.0, 1.0) else 0.0
-    val wTone = wifiTone(s.wifi?.rx_mbits)
+    val wTone = wifiTone(s.wifi)
+    val (wMain, wSub) = wifiLinkText(s.wifi)
 
     DomovoiCard(
         modifier = Modifier
@@ -264,10 +270,17 @@ private fun SatCard(s: Satellite, extraSec: Double, onOpen: () -> Unit) {
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                s.wifi?.rx_mbits?.let { "%.0f Mbit/s".format(it) } ?: "—",
+                wMain,
                 style = MaterialTheme.typography.labelMedium,
-                color = Domovoi.colors.fg,
+                color = if (s.wifi?.mode == "ap") toneColor(wTone) else Domovoi.colors.fg,
             )
+            if (wSub != null) {
+                Text(
+                    " · $wSub",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Domovoi.colors.fgMuted,
+                )
+            }
             Spacer(Modifier.weight(1f))
             Text(
                 if (online) "active now" else relTime(s.last_connected_at),

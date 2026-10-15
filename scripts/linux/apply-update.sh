@@ -48,7 +48,11 @@
 #      lock existed, unless DOMOVOI_USE_LOCK=1; then from the hash-pinned
 #      requirements-linux-py314.lock when the checkout has one for the
 #      venv's Python, otherwise through the resolver as a `warn` step
-#      ("lock not applied: <why>", shown on the Version card).
+#      ("lock not applied: <why>", shown on the Version card). After a
+#      re-sync, packages a release stopped using are uninstalled
+#      (drop_retired_packages: piper-tts and piper-phonemize, GPL;
+#      edge-tts, LGPL), since pip never removes what nothing requires any
+#      more.
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
@@ -1408,6 +1412,39 @@ sync_deps_resolved() {
   (cd "$REPO_DIR" && pip_as install -e "$target")
 }
 
+# ─── Packages a release stopped using ────────────────────────────────────
+
+# pip never removes a package nothing requires any more, so a venv keeps
+# whatever an older pyproject pulled in. These are uninstalled after a
+# forward re-sync, never a rollback's (the previous checkout still needs
+# them, and its re-sync installs them again): piper-tts, GPL-3.0 since 1.3
+# with espeak-ng (GPL-3.0) inside, which Domovoi's own text-to-phoneme
+# converter and ONNX Runtime replaced in 2026-10 (domovoi/phonemizer), and
+# piper-phonemize, its older espeak-ng wrapper; edge-tts (LGPL-3.0), the
+# Microsoft Edge online voices, dropped on 2026-10-12. A step is recorded
+# only when something was removed; a failure is a `warn` and the update
+# stands (nothing imports them any more).
+RETIRED_PACKAGES=(piper-tts piper-phonemize edge-tts)
+drop_retired_packages() {
+  local t0 out rc=0 gone
+  t0=$(now_ms)
+  set +e
+  out=$(pip_as uninstall -y "${RETIRED_PACKAGES[@]}" 2>&1)
+  rc=$?
+  set -e
+  if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
+  if [ "$rc" -ne 0 ]; then
+    add_step drop-retired-packages warn "$t0" "$(trunc "$out" 300)"
+    log "could not uninstall ${RETIRED_PACKAGES[*]} (exit $rc); not fatal, nothing uses them"
+    return 0
+  fi
+  gone=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*Successfully uninstalled \([^[:space:]]*\).*$/\1/p' | tr '\n' ' ')
+  gone=${gone% }
+  [ -n "$gone" ] || return 0
+  add_step drop-retired-packages ok "$t0" "uninstalled $gone (no longer used)"
+  log "uninstalled $gone (no longer used)"
+}
+
 # ─────────────────────────────────────────────────────────────────────────
 
 snapshot_venv() {
@@ -1718,6 +1755,7 @@ full_update() {
   run_step stop-services stop_services || failed=stop-services
   if [ -z "$failed" ] && [ "$DEPS_CHANGED" = 1 ]; then
     run_step sync-deps sync_deps || failed=sync-deps
+    if [ -z "$failed" ]; then drop_retired_packages; fi
   fi
   if [ -z "$failed" ] && [ "$MPD_CHANGED" = 1 ]; then
     run_step rebuild-mpd rebuild_mpd || failed=rebuild-mpd

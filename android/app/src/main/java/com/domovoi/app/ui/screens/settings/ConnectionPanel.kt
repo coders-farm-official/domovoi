@@ -72,6 +72,9 @@ internal fun ConnectionPanel() {
     val serverUrl by app.prefs.serverUrl.collectAsState()
     val themeMode by app.prefs.themeMode.collectAsState()
     val listenerId by app.prefs.listenerPersonId.collectAsState()
+    val owners by app.prefs.owners.collectAsState()
+    // Per server: a person id belongs to the server that issued it.
+    val ownerId = ServerCredentials.ownerFor(owners, serverUrl)
     val connected by app.bus.connected.collectAsState()
     val deviceToken by app.prefs.deviceToken.collectAsState()
     val trusted by app.prefs.trustedServers.collectAsState()
@@ -101,6 +104,7 @@ internal fun ConnectionPanel() {
     // null == "me (this device)" — resume positions stay per-device.
     val listenerOptions: List<SettingsPerson?> = listOf(null) + people
     val selectedListener: SettingsPerson? = people.firstOrNull { it.id.toString() == listenerId }
+    val selectedOwner: SettingsPerson? = people.firstOrNull { it.id.toString() == ownerId }
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -310,6 +314,36 @@ internal fun ConnectionPanel() {
                     style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     color = Domovoi.colors.fg,
                 )
+            }
+        }
+
+        item {
+            PanelCard(
+                "This phone belongs to",
+                "Who usually talks to the domovoi from this phone's chat mic. Voice messages still " +
+                    "show who it heard; the marker is lighter when that's someone else.",
+            ) {
+                if (peopleState.error != null && peopleState.data == null) {
+                    Text(
+                        "couldn't load people: ${peopleState.error}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Domovoi.colors.err,
+                    )
+                } else {
+                    SettingsDropdown(
+                        selected = selectedOwner,
+                        options = listenerOptions,
+                        label = { it?.name ?: "nobody in particular" },
+                        onSelect = { person ->
+                            app.prefs.setOwnerPersonId(serverUrl, person?.id?.toString())
+                            toast(
+                                if (person == null) "this phone belongs to nobody in particular"
+                                else "this phone belongs to ${person.name}",
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         }
 

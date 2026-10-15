@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
 from domovoi.models import Context, Intent, Response
+from domovoi.satellite_abilities import room_allows
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +86,24 @@ def _format_rate(mbits: float) -> str:
     return f"{mbits:.1f} megabits per second"
 
 
+# Signal bands (received signal strength at the satellite, dBm), the same
+# ones the dashboard colours by (web/static/satellites.jsx wifiSignalTone):
+# at or above -60 good, -60 to -70 fair, below -70 weak. A typical 2.4 GHz
+# link wants about -67 dBm for steady real-time audio; below -70 it starts
+# losing frames and retrying, which is when a voice satellite drops out.
+SIGNAL_GOOD_DBM = -60
+SIGNAL_FAIR_DBM = -70
+
+
+def signal_quality(dbm: float) -> str:
+    """'good' / 'fair' / 'weak' for a received signal in dBm."""
+    if dbm >= SIGNAL_GOOD_DBM:
+        return "good"
+    if dbm >= SIGNAL_FAIR_DBM:
+        return "fair"
+    return "weak"
+
+
 # ─── Handler ──────────────────────────────────────────────────────────────
 
 
@@ -95,6 +114,9 @@ class WifiHandler(Handler):
     priority_band = 120
     display = HandlerDisplay(label="Wi-Fi", tone="device")
     requires_network = "no"
+    # The satellite's own link, from its own reports: nothing a phone turn
+    # can read or fix (Handler.satellite_only).
+    satellite_only = True
 
     tool_schema = {
         "name": "wifi",
@@ -163,6 +185,15 @@ class WifiHandler(Handler):
         # executes wpa_cli reassociate once playback has drained.
         # "OK, reconnecting now." sets user expectation that the bot
         # heard them and the WS may briefly drop in a moment.
+        if not room_allows(ctx.app, ctx.room_id, "wifi"):
+            # A device that declared what it can do (`supports`) without
+            # "wifi" keeps its own network (a laptop, a phone): saying
+            # "reconnecting" would be a promise nothing keeps. Pis pass.
+            return Response(
+                text="This room's device looks after its own Wi-Fi, so I can't reconnect it from here.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         return Response(
             text="OK, reconnecting now.",
             session_id=ctx.session_id,
@@ -190,6 +221,21 @@ class WifiHandler(Handler):
             )
         rx_mbits = status.get("rx_mbits")
         ssid = status.get("ssid")
+        dbm = status.get("signal_dbm")
+        if isinstance(dbm, (int, float)) and not isinstance(dbm, bool) and rx_mbits is not None:
+            # The signal says whether the link is good; the rate does not
+            # (an idle link reads the 1 Mbit/s beacon rate), so a satellite
+            # that reports a signal is answered by it.
+            quality = signal_quality(float(dbm))
+            where = f" to {ssid}" if ssid else ""
+            text = f"WiFi is connected{where} with a {quality} signal."
+            if quality == "weak":
+                text += " Moving the satellite or the router closer together would help."
+            return Response(
+                text=text,
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
         if rx_mbits is None:
             # A degraded Pi may have pushed a partial status (e.g., link
             # down). Surface what we can without crashing.

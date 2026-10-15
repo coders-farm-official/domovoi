@@ -4,6 +4,655 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-13 — Android: talk to Domovoi on the phone
+
+New Android build only; nothing changes on the server.
+
+* **The Assistant tab listens**: tap the mic, ask, and Domovoi answers on
+  the phone, in text and aloud, with no server and no internet (airplane
+  mode included). It stops listening when you stop talking; one tap stops
+  it talking. Replies to typed questions stay silent unless "read typed
+  replies aloud too" is on in its model settings.
+* **It speaks with the phone's voice from Settings → Voice** (Kristin
+  unless you picked another, once downloaded there), else the phone's own
+  text-to-speech voice.
+* **First-time setup now downloads 2.45 GB**: the language model plus the
+  speech files (44 MB: Moonshine speech to text and Silero end of speech,
+  both MIT). A phone set up for text only gets the speech files offered on
+  its first tap of the mic.
+* **The microphone opens only on that tap**, one app feature at a time,
+  and the audio is never kept: only the words, as the question.
+
+## 2026-10-13 — Android: Domovoi on the phone (text chat, no server needed)
+
+New Android build only; nothing changes on the server.
+
+* **An Assistant tab answers on the phone itself**, with no server and no
+  internet once its model is on the phone (airplane mode included). It is
+  a tab of local mode, beside Music, Videos and Files; with a server
+  connected it is on Home's grid, the drawer and the rail, and can be put
+  on the bottom bar from Settings → Phone bar. It always says "on this
+  phone": it is separate from Chat, which talks to the server, and the two
+  never share a conversation. Text only in this build; voice comes next.
+* **First use downloads the model once: 2.41 GB** (Gemma 4 E2B,
+  Apache-2.0), shown with the free space it needs before it starts. Wi-Fi
+  only unless "allow mobile data" is on; it carries on in the background,
+  resumes after a dropped connection or a restart, can be paused or
+  cancelled, and is checked against its SHA-256 before use. **Delete
+  model** in the assistant's model settings frees the space.
+* **Which phones:** the 64-bit app on a phone sold with 8 GB of memory or
+  more. Others see why it isn't available, and no download button; the
+  32-bit app has no assistant at all, as before. The model runs on the CPU;
+  the GPU is an opt-in in the model settings.
+* **Conversations are kept only on the phone** (outside backups, never sent
+  to a server), with delete and "clear all conversations". A shared screen
+  (the kitchen tablet) doesn't offer the assistant, as it doesn't offer
+  Chat.
+
+## 2026-10-12 — Android: 32-bit phones, and Android 8 fixes
+
+New Android build only; nothing changes on the server.
+
+* **The app installs on 32-bit phones again** (old and budget phones,
+  Android Go), from Android 8.0 up. Since the on-device assistant arrived
+  it installed on 64-bit phones only (`INSTALL_FAILED_NO_MATCHING_ABIS`).
+  A release now attaches one APK per processor type: **arm64-v8a** for
+  almost every phone, **armeabi-v7a** for 32-bit ones, x86_64 and x86 for
+  emulators. The 32-bit APKs have **no on-device assistant** (its engine
+  is 64-bit only): its card is simply not there, and everything else works
+  the same. Which APK, and what each Android version gets:
+  [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md).
+* **Android 8: the keyboard no longer opens by itself** over Music's
+  filter or Home's announce box at every start.
+* **Problem reports on Android 8 to 10 say what they record** (crashes and
+  freezes); "not responding" closes are recorded from Android 11.
+* Building: `./gradlew assembleDebug` still makes one APK for a phone and
+  the emulator; `-Pdomovoi.apkPerAbi` makes one per ABI, and an App Bundle
+  carries all four (android/README.md, "ABIs and APKs").
+
+## 2026-10-12 — Kristin is the house voice; the Microsoft Edge voices are gone
+
+Server, dashboard and Android update; no migration. What changes:
+
+* **The default voice is now Kristin** (it was Norman). A server still on
+  Norman moves to Kristin once, on its first start after the update, and
+  only once Kristin is on disk: it downloads her first (a box answered
+  **No** to the internet question keeps Norman until her files are there;
+  the provisioning already fetched all three voices). Nothing recorded
+  whether Norman was picked on purpose, so every server on Norman moves:
+  **pick Norman again in Settings → Voices if you prefer him**, and he
+  stays. A room that chose its own voice keeps it. The phone app speaks
+  Kristin when it knows no server voice.
+* **The Microsoft Edge online voices are dropped.** Microsoft's service had
+  started refusing them, every reply they spoke went to Microsoft, and
+  their library (edge-tts) is LGPL. The "Add a cloud voice" card is gone,
+  every registered cloud voice is removed on the update, and a room or a
+  default that was set to one speaks in the house voice, Kristin. The
+  speech chain is local only: Piper, then the system voice. An old
+  `TTS_ENGINE=edge` in `domovoi/.env` reads as `piper`, and a
+  `TTS_EDGE_VOICE` line is ignored.
+* **The update uninstalls edge-tts** (LGPL-3.0) from the server's Python
+  environment, after a successful re-sync and never during a rollback, the
+  way it removed piper-tts; its MP3 decoder `miniaudio` and their
+  dependencies (aiohttp and friends) leave the Linux lock too. This removes
+  an LGPL package from Domovoi's dependencies.
+
+## 2026-10-12 — Norman says short sentences right; Settings → Voices play buttons say why they can't play
+
+Server, dashboard and Android update; no migration, nothing to do but
+update (and update the app).
+
+* **Norman no longer babbles short sentences.** Norman (the default until
+  this batch) ran away on a short sentence said on its own: a "say it like" preview
+  ("Kamron.", "Domovoi."), a one-word reply ("Okay.", "Done."), the
+  "Hi, I'm Norman." of its own sample, came out as two to six seconds of
+  sound in no language. The phonemes were right; Kristin and Linda say the
+  same ones correctly. A voice is now checked once when it first says a
+  short sentence, and one that runs away (Norman) says its short sentences
+  after a lead-in sentence that is cut off again, so only the sentence is
+  heard. Longer sentences are said exactly as before. The phone does the
+  same, and Norman's built-in sample clip is re-made.
+* **"Say it like" reads respellings better.** A syllable no dictionary
+  knows goes by the usual respelling key (uh as in but, ay as in say, zh as
+  in measure: `SEER-shuh` was "SEER-shoo"), a light last "ren", "sel" or
+  "dem" is said like the end of "Cameron" (`Kamron = KAM-ren`), and a
+  respelling that runs together into a dictionary word with the same
+  stress (`CAM-er-on`) is read as that word. The preview toast says what
+  was previewed in words ("Kamron → KAM-ren"); the voice's phonemes are on
+  the play button's hover. An entry saved before may sound slightly
+  different: `NOO-yen` now ends like "Cameron" too; write `noo-YEN` for a
+  full "yen".
+* **Settings → Voices play buttons say why they can't play**, instead of
+  "sample failed: 502 Bad Gateway". A registered voice's sample is made by
+  the server on the household device tier, and the page now passes the
+  server's own sentence through ("Cori can't speak right now: ..."). (That
+  day Microsoft's service was refusing the Edge voices with HTTP 403; they
+  are gone now, see the entry above.) A
+  catalogue voice an install kept (Cori) downloads on its first sample,
+  as on its first reply. The upload form's file pickers and fields are
+  the dashboard's own controls now.
+
+## 2026-10-12 (later) — The router learns a satellite's new name after one reboot
+
+Server, dashboard, satellite and Android update; no migration. After the
+Wi-Fi fixes below, each satellite renamed itself `domovoi-<room>` at the
+first reboot. But it did so after it had already asked the router for its
+address as `raspberrypi`, so the router showed the new name only after a
+**second** reboot. On 2026-10-12, dining-room had been rebooted twice and
+showed its name; office, garage and basement had been rebooted once and
+did not. What changes:
+
+* **The name is set before the Wi-Fi joins.** A new unit,
+  `domovoi-hostname.service`, sets the host name on every boot before
+  NetworkManager starts. It runs a small root-owned helper, not the
+  satellite's own code. A new card gets it from media prep. An older card
+  installs it at its next boot after the satellite upgrade, once:
+  `systemctl disable` or `mask` turns it off for good. A hand-built
+  satellite gets it only if you ask for it (PROVISIONING.md §8.4). That same boot,
+  having renamed the unit, asks the router for its address once more under
+  the new name, so **one reboot is enough**. A new card is named before
+  setup even joins the house Wi-Fi.
+* **The Health card says what the boot step did.** It has a new **boot
+  network step** line: *applied* (what changed), *nothing to change*,
+  *skipped* (and why, e.g. a host name you chose yourself), *failed* (the
+  error), *not run* (and since when), *running*, or *not installed*. It
+  also shows the satellite's current **host name**, the one the router
+  should show. The Android app's satellite overview shows the same. A
+  satellite not yet upgraded shows neither.
+* **"Reboot needed" comes back once.** The boot step's version moved
+  from 1 to 2, so every upgraded satellite asks for one more reboot.
+  That reboot installs the unit that sets the name before the network
+  starts.
+
+**What to do:** update the server, upgrade each satellite (Settings →
+Satellites → the room → **Upgrade satellite**), then unplug each one for a
+few seconds once it says **reboot needed**. A satellite already renamed by
+an earlier reboot needs only that one. Check the router's client list
+afterwards, or the room's **boot network step** and **host name**.
+
+## 2026-10-12 — Every tab has its own address
+
+A dashboard-only change (reload open tabs once).
+
+* **The address bar follows the tabs.** Settings' tabs are
+  `#settings/about`, `greetings`, `voices`, `wake-words`, `recordings`,
+  `devices`, `phone-bar`, `satellites`, `models`, `internet` and
+  `configuration`; Music's are `#music/library`, `player`, `queue`,
+  `playlists`, `stats` and `jobs`; Calendar's views are `#calendar/month`,
+  `week` and `day`. Clicking a tab changes the address, Back goes to the
+  tab before, and a bookmark or link opens its tab. Old addresses keep
+  working: `#settings` is Settings on Greetings, `#satellites` is
+  `#settings/satellites`, and a tab a page doesn't have opens its first
+  one.
+* **`#settings/configuration/setup`** is where the Windows installer's
+  "Open Domovoi" goes. On a box nobody has claimed, Settings →
+  Configuration now opens the **first-run admin setup** by itself (at
+  this address and at `#settings/configuration`), with the setup code
+  field ready for a paste; on a claimed box it only says the admin
+  account is already set up.
+* **Where the setup code is** is now said for the kind of server: on a
+  Windows install, the installer's last page (run the installer again for
+  a fresh code); on a Linux server, `~/.domovoi/setup-code.txt`.
+
+## 2026-10-12 — Satellites stay on the Wi-Fi (upgrade each satellite, then reboot it once)
+
+Server, dashboard, satellite and Android update; no migration. The router
+kept counting the satellites as new devices and they kept dropping off the
+server. What changes:
+
+* **A server restart no longer knocks the satellites off the Wi-Fi.** A
+  satellite used to read the server's "connection refused" during a restart
+  as a dead network, and drop and rejoin the house Wi-Fi (a fresh DHCP
+  exchange every time, and again every 5 minutes while the server stayed
+  down). It now touches the Wi-Fi only when neither the server's machine
+  nor the router answers — plus, for a lossy link, once (at most once an
+  hour) after the server has been silent for 10 minutes while the router
+  answers.
+* **A satellite never falls back onto its own setup hotspot.** Wi-Fi
+  recovery brings back the house network's profile by name; the setup
+  hotspot's saved profile (`domovoi-setup`) is deleted once setup is over.
+  A satellite found hosting its setup network anyway says so (the room's
+  Health card: **setup hotspot on**), recovers, and reboots after 15
+  minutes if nothing else works.
+* **Wi-Fi power saving is off** on the satellites, and the server waits
+  20 s instead of 5 s for a satellite's keep-alive answer before dropping
+  it (`WS_PING_TIMEOUT_SEC`; a dead connection is still noticed within
+  about 30 s).
+* **Each satellite is named after its room**: host name `domovoi-<room>`,
+  in the router's client list instead of a row of `raspberrypi`, and
+  `domovoi-<room>.local` over mDNS. A host name you chose yourself is left
+  alone.
+* **A satellite finds the server by name first** (`domovoi.local`, or the
+  name the server tells it), then at the address that worked last time,
+  and sweeps the network only as a last resort; it saves what worked. So a
+  server whose router hands it a new address keeps its satellites. Every
+  candidate must prove it holds the server key the satellite is paired
+  with, so a name cannot hand a satellite to another machine. A DHCP
+  reservation on the router is now optional, for the server and the
+  satellites alike; never give a satellite a static address on the Pi
+  itself.
+* **The dashboard shows Wi-Fi by signal strength.** The number on each
+  satellite card is the signal at the satellite, in dBm, coloured green at
+  -60 dBm or better, amber from -60 to -70, red below -70 (move the
+  satellite or the router closer). The Mbit/s rate is shown next to it but
+  no longer colours anything: an idle link reads the 1 Mbit/s beacon rate,
+  which is why every idle satellite used to look red. A satellite that has
+  not been upgraded keeps the old display until it is. The Android app's
+  Satellites and Home screens follow the same rule. "How's your wifi?"
+  answers with the signal too.
+
+**What to do, in order:**
+
+1. Update the server (Settings → Version → Update) — it serves the new
+   satellite code.
+2. Upgrade each satellite: Settings → Satellites → the room → **Upgrade
+   satellite**. It restarts in a few seconds; from then on it leaves the
+   Wi-Fi alone through server restarts, never recovers onto its hotspot,
+   finds the server by name, and reports its signal.
+3. **Reboot each satellite once** (unplug it for a few seconds and plug it
+   back in). The upgrade restarts only the satellite program; the three
+   settings that need root (hotspot profile gone, power saving off, host
+   name) are applied at boot. Until it has rebooted (or while that step
+   reports an error), its Health card and the Android app say **reboot
+   needed**, with the reason. What the reboot changed is in the room's retained log
+   (`network settings (applied as root at boot): changed: …`).
+
+A newly prepared card has all of this from its first boot; nothing to do.
+A hand-built satellite without `domovoi-provisioning.service` applies the
+three settings with `sudo ~/satellite-venv/bin/python -m
+satellite.net_settings` (satellite/PROVISIONING.md §8.4).
+
+## 2026-10-12 — Your own American-English voices speak again
+
+* **An uploaded Piper voice trained on American English now speaks.**
+  Most voices people train (and most `en_US` voices) use espeak's
+  `"en-us"` phonemes; since the update below they fell through to the
+  robotic system voice. Domovoi's converter now writes that set too, picked
+  per voice from its `.onnx.json` (`"espeak": {"voice": "en-us"}`), so such
+  a voice sounds like itself again with nothing to do. A voice trained on
+  another set (not English) still can't speak and falls through to the
+  system voice, but Settings → Voices now says so beside it, and at upload.
+* **Play buttons play the voice they name.** A voice not downloaded yet
+  plays a short built-in clip of itself (web and phone); a voice with
+  neither shows no play button.
+* **The phone's own voice pick speaks the chat mic's replies.** With
+  Settings → Voice on a voice of its own (not "same as the server") and
+  that voice downloaded, the phone speaks each reply itself, with the
+  server's "say it like" list, and asks the server for no audio
+  (`speak=false` on the voice turn; an older app or server keeps today's
+  behaviour).
+
+## 2026-10-12 — A new voice, and words it says the way you tell it
+
+A server update (it adds migration **V027**; the update runs it, and its
+dependency change needs the internet once).
+
+* **Domovoi sounds different after this update.** It now speaks with one
+  of three public-domain voices: **Norman** (male, the new default),
+  **Kristin** or **Linda** (female). A server that spoke with the old
+  default (`en_US-lessac-medium`) or a voice of the old catalog built on
+  it (amy, ryan, kusal, joe, kathleen, alan, alba) moves to Norman at its
+  first start: `TTS_PIPER_VOICE` in `domovoi/.env` is rewritten, the old
+  voices leave the Voices list (a room that had picked one speaks in the
+  default), their model files are deleted from `~/.domovoi/piper_voices/`
+  (nothing outside that folder), and Norman is downloaded (63 MB, checked
+  against its pinned SHA-256). The greetings and clips re-render in it. A
+  server already set to one of the three keeps it, and so does one set to
+  the old catalog's Cori (public domain too, no longer offered); your own
+  uploaded voices stay (one trained on American-English "en-us"
+  phonemes, such as most `en_US` voices, fell through to the system voice
+  until the next entry above: the converter writes that set too now).
+* **To pick another:** Settings → Voices → **Domovoi's voice**, with a play
+  button for each. The phone app offers the same three, so the house and
+  the phone can sound alike.
+* **Say it like.** When a word comes out wrong, add it under Settings →
+  Voices → **Say it like**: the word and how it sounds in plain letters,
+  stressed syllable in capitals (`Siobhan` = `shiv-AWN`); play it before
+  you save. Three entries ship and can be changed or removed: Domovoi =
+  `DOH-moe-voy`, Domo = `DOH-moe`, Nguyen = `win`. The list is stored in
+  the database (V027) and read by the phone (`GET /api/voice`).
+* **Why:** the old voice engine, `piper-tts`, is GPL-3.0 and carries
+  espeak-ng (GPL-3.0), and the old voices' licences don't allow every use.
+  Domovoi now turns text into speech sounds with its own converter
+  (`domovoi/phonemizer`: CMUdict, BSD-style; the rest MIT) and runs the
+  voice on ONNX Runtime (MIT). The update **uninstalls `piper-tts`** from
+  the venv (a step on the Version card says so). If you install by hand,
+  `pip uninstall -y piper-tts piper-phonemize` after updating.
+* **`espeak-ng` is no longer installed** by the Linux provisioning; it was
+  only the robotic last-resort voice. A server that has it keeps it, and
+  uses it if the Piper voice is ever missing.
+* **The fast lane's `fastlane` extra is gone.** Its recognizer,
+  sherpa-onnx, compiles espeak-ng into its PyPI wheels. To keep trying the
+  lane, install sherpa-onnx yourself ([CPU_HOST.md](CPU_HOST.md#the-streaming-fast-lane));
+  a copy already in your venv stays.
+* Text with no Latin letters at all (another script) is answered with
+  "Sorry, I can't read that out loud." instead of silence.
+
+## 2026-10-12 — Satellites: ready for spare devices (nothing changes for a Pi)
+
+Server and dashboard update; no migration, no satellite upgrade needed.
+Groundwork for running satellites on spare Linux laptops and Android
+phones later. **Pi satellites behave exactly as before.**
+
+* **A satellite may now say what it can do.** Its hello can carry a
+  `supports` list and a `board` (`linux_pc`, `android_room`). The server
+  then sends it only what it listed, and the dashboard offers only those
+  actions. A satellite that sends no list (every Pi) gets everything, as
+  before. The names and what each one unlocks are in
+  docs/uml/satellite-protocol.md ("Declared abilities").
+* **Settings → Satellites shows a board badge** ("Linux PC", "Android
+  room") on such a device's card. Restart, Upgrade, the Settings tab, the
+  live log, announcements and wake-word recording are greyed with a short
+  reason when the device didn't offer them. Pi cards look the same as
+  before.
+* **The health block can show a battery and "mic blocked"** for devices
+  that report them. A Pi doesn't.
+* **The Settings → Satellites sections have their spacing back.** The
+  Broadcast card no longer touches the satellite cards above it.
+
+## 2026-10-12 — Phone voice profiles: "my name is …" from the chat mic
+
+A server update. It adds migration **V026** (the update runs it).
+
+* **Your voice on the phone is kept apart from your voice in the rooms.**
+  A phone's mic hears a voice very differently from a satellite's, so a
+  person now has phone samples next to their satellite samples.
+  Satellites only ever match satellite samples, so nothing said into a
+  phone changes how the rooms recognize anyone. The phone matches your
+  phone samples when you have any, otherwise your satellite ones as
+  before.
+* **Saying "my name is …" into the phone no longer makes a second you.**
+  If that name is already someone, Domovoi asks "Add this phone's voice
+  to …?"; "yes" on your very next press (within a minute) adds it, up to
+  three phone samples per person, the oldest dropped
+  (`VOICE_PROFILE_PHONE_SAMPLE_CAP`); "no", or saying anything else,
+  changes nothing. If two people share the name, it won't guess which one
+  you are and says so. A new name is enrolled as before, from the phone's
+  sample. The same goes for "this is …" introductions on the phone.
+* **Someone enrolled only from a phone is unknown to every satellite**:
+  their only samples are phone samples, which satellites never use. If
+  they then introduce themselves at a satellite ("my name is …"), the
+  satellite enrols a second person with the same name, as it does today
+  for any existing name (that duplicate-name gap on satellites is
+  unchanged in this release); an admin can delete the extra one on the
+  People page.
+* **People page:** a person's profile now lists their voice samples in two
+  groups, satellite and phone, each with a delete button (admin).
+* **The migration** files any sample a phone enrolled before this update
+  (stored under the phone's `phone-…` id) as a phone sample, so it stops
+  counting towards that person's room voice.
+
+## 2026-10-12 — Chat mic fixes: "Hey Domovoi, …" and "what's playing"
+
+A server update and a new Android build.
+
+* **Saying "Hey Domovoi" into the phone's mic no longer hides the
+  request.** A satellite's transcript starts after its wake word; the
+  phone's held it ("Hey Domovoit, play Suicide Boys."), which no command
+  matched, so the turn went to the language model with the name buried
+  in it, and a random song played. The server now takes a leading wake
+  phrase off before routing, however speech-to-text spells the name;
+  the chat keeps what was said. (Server.)
+* **"What's playing" from the phone answered that the playing song was
+  paused** — the mic pauses the phone's music while you hold the button,
+  and the turn reported it then. It now reports the player as it was
+  when you pressed. (App.)
+* **Connecting the app to a different Domovoi clears the phone's player.**
+  What was queued from the old server (its songs, stations, episodes,
+  books) stops and leaves the mini player, and a cast to one of its rooms
+  ends on the phone; nothing of it is asked of the new server. Servers are
+  told apart by the identity the app pinned, so the same Domovoi at a new
+  address, a reconnect, or switching between this phone and the server
+  keeps everything playing. Songs saved on the phone stay. (App.)
+* Not a bug: when a request picks one song, that song is the phone's
+  whole queue, so the mini player shows its play button once the song
+  ends. Music playing before a turn pauses while you hold the button,
+  comes back when you let go, and dips under the spoken reply.
+
+## 2026-10-12 — Android: an on-device assistant benchmark, and a bigger app
+
+New Android build only; nothing changes on the server.
+
+* **The app is much bigger: about 82 MB built for phones only
+  (`./gradlew assembleDebug -Pdomovoi.abis=arm64-v8a`), about 147 MB as
+  built by default** (which also carries the emulator's x86_64
+  libraries), up from about 25 MB. It now carries the speech-recognition
+  and language-model engines the coming on-device assistant needs
+  (sherpa-onnx, built here without its text to speech; ONNX Runtime;
+  LiteRT-LM), stored uncompressed. The phone's own voice is Android's
+  text-to-speech engine.
+* **Settings → About has an "On-device assistant benchmark" card**, which
+  measures how fast this phone runs the assistant's models. With no server
+  paired, the gear on the phone's own Music / Videos / Files screen reaches
+  it. Nothing is downloaded until you ask: "download all" fetches the
+  models (2.58 GB as the card counts it, about 2.8 billion bytes) from
+  their public hosts (never with the household token), on Wi-Fi only
+  unless you allow mobile data, in the background with a notification you
+  can pause or cancel. The assistant itself is not
+  in this build yet.
+
+## 2026-10-12 — Chat: talk to Domovoi from the app's chat screen
+
+New Android build and a server update (it adds migration **V025**; the
+update runs it). Update the server first: the new app's mic needs it.
+
+* **A mic in the chat composer.** With nothing typed, the send button is a
+  mic. It opens a big hold-to-talk button: press and hold to talk, let go
+  to send, slide your finger off the button to cancel; pressing again while
+  Domovoi is speaking stops the reply. The thread sits underneath showing
+  the latest exchange; scroll down into it for the whole chat, back up past
+  its top for the button again. The app asks for the microphone the first
+  time.
+* **Spoken turns are answered like a satellite's** — the same commands, the
+  same follow-ups ("did you mean …?" is answered by your next press, and
+  "yes" picks it up) — and both sides are saved into the thread, so voice
+  and typed messages scroll together. The reply is spoken on the phone.
+* **The phone is its own device.** Music, an artist, an album, "play
+  something", playlists, an audiobook or a podcast's latest episode asked
+  for by voice play **on the phone**, with its own player (a book or an
+  episode picks up where you left off); pause, next, volume and "what's
+  playing" act on it. Timers and reminders set from the phone are
+  house-wide, as from any room. Intercom ("tell the kitchen dinner's
+  ready") works. A satellite's own settings (its Wi-Fi, its voice) are
+  politely refused. Not yet from the phone: radio, chapters / skipping /
+  speed in a book, "add this song to …" (the phone says it can't yet), and
+  "drop in on …" (use a room's drop-in button).
+* **Who spoke.** Each spoken message carries a small marker naming who
+  Domovoi recognized, in the app and on the dashboard's chat, lighter when
+  it isn't sure (and, in the app, when it names someone other than the
+  phone's owner, set per server under Settings → Connection → **This
+  phone belongs to**). Voice profiles enrolled on a
+  satellite may not match a phone's mic as well, so the marker can say
+  "voice not recognized" for someone a satellite knows.
+* **For operators:** turns are logged under `phone-<device id>` like a
+  room. A recording stays in memory for the turn only. Before first-run
+  admin setup the phone's mic is refused (`501`), like the drop-in call.
+  New endpoints: `POST /v1/phone/voice` (core) and
+  `POST /api/chat/threads/{id}/voice` (dashboard); chat messages gain
+  `source` and the speaker fields (API_REFERENCE.md §2.1, §3.18).
+
+## 2026-10-12 — Chat: a vision model that suits a processor, and pictures shrunk for it
+
+A server update. To read pictures in chat, install the new default vision
+model (below) unless you already picked one.
+
+* **The default vision model is now `qwen3-vl:2b-instruct-q4_K_M`**
+  (Qwen3-VL 2B Instruct, Apache-2.0: a 1.9 GB download, ~3.2 GB in
+  memory), not `qwen2.5vl:7b`, which takes minutes per picture without a
+  GPU. It came out on top of a benchmark of ten vision models on a
+  processor alone: it reads screenshots, receipts and charts well, and it
+  started answering in about half a minute rather than minutes. **If you never
+  picked a vision model**, chat now names this one: install it in
+  Settings → Models (its card in the catalog, or pull it by name). If you
+  picked one, nothing changes. **On a box with an NVIDIA GPU**, pick
+  `qwen2.5vl:7b` there instead (the catalog calls it the GPU pick). Also in
+  the catalog now: `qwen3-vl:4b-instruct-q4_K_M` (better answers, ~1.5x
+  slower, for a box with 24 GB or more) and `gemma4:e2b-it-q4_K_M`
+  (quickest, but misreads small text at the size chat sends). The vision
+  cards show each model's licence. A model picked in the Vision row reaches
+  the dashboard's chat when the dashboard restarts.
+* **Pictures reach the model upright and at most 1280 px on the long
+  edge.** A full-size phone photo used to fill the model's whole context,
+  and the reply stopped after a sentence. The shrunk copy is kept beside
+  the upload (`~/.domovoi/chat_uploads/<token>-1280.jpg` or `.png`) and
+  goes with the thread; the thread still shows the picture as it was sent.
+* **A message with pictures gets a context window of its own:**
+  `ollama_vision_num_ctx` (Settings → Models, *Vision context window*,
+  default 8192), so four pictures in one message fit; at Ollama's usual
+  4096 it refused them. The dashboard's chat reads it when it restarts.
+  Those calls also send `think: false`, so a vision model that reasons
+  first by default answers straight away instead of in silence.
+* **`scripts/linux/provision.sh`** writes `OLLAMA_VISION_MODEL` with its
+  tier's pin (both tiers: the 2B above) the way it writes the other model
+  keys (a value the household set is kept), and pulls it: **+1.9 GB**.
+  `--no-vision-model` leaves the pull out.
+
+## 2026-10-11 — Ubuntu's jobs, switched off, no longer leave the box "degraded"
+
+A server update; nothing to do.
+
+* **`systemctl --failed` stays empty after `os-jobs.sh` masks Ubuntu's
+  background jobs.** Under **No**, timers that were running when they were
+  masked (`apt-daily`, `apt-daily-upgrade`, `motd-news`) showed as failed
+  ("Unit to trigger vanished") and the box reported "degraded" until the
+  next start. Each one is now stopped before systemd reloads, and every
+  unit the helper masks, disables or unmasks has its failed mark cleared,
+  marks an earlier version left included, at the next **Restart
+  Domovoi**. `unattended-upgrades.service` keeps running until the next
+  boot, as before, so an upgrade already under way is never cut short
+  (docs/LINUX_HOST.md, "Internet or not").
+
+## 2026-10-11 — Chat: pictures say what they need, and failures read in plain words
+
+New Android build and a server update; nothing else to do, unless you want
+chat to read pictures.
+
+* **Pictures need the vision model, and chat now says so.** A message with
+  pictures is answered by the vision model (Settings → Models, the Vision
+  row: `qwen2.5vl:7b` unless you picked another), which is not installed
+  by default. A picture used to come back with Ollama's raw error in red
+  ("Client error '404 Not Found' for url 'http://localhost:11434/api/chat'
+  …"). Now, on the dashboard and in the app, the paperclip explains instead
+  of opening the picker, and a picture sent anyway is answered at once with
+  "Pictures need the vision model qwen2.5vl:7b, which isn't installed on
+  this Domovoi. An admin can install it in Settings → Models, or pick
+  another vision model there." Ollama is not asked. A signed-in admin on
+  the dashboard gets a link to that tab; the app opens the dashboard's
+  Settings page. **To read pictures, install the vision model there.**
+* **Every chat failure reads as a plain sentence**: model not installed,
+  vision model that can't read pictures, not enough memory, Ollama
+  unreachable or too slow, anything else it reported, an empty answer. The
+  exception, with Ollama's address, goes to the web backend log only.
+  Replies saved before this update are read out the same way.
+* **Text questions after a picture work.** The thread's earlier pictures
+  went to the chat model with every later question, and Ollama refuses a
+  picture handed to a text-only model, so one picture broke the rest of the
+  chat. Pictures now go only to the vision model.
+* **For clients:** the send stream's `error` event is `{detail, code,
+  model}`; a reply row keeps the code as `stats.error_code`; `GET
+  /api/chat/models` adds `vision_installed` (`false`: a picture would be
+  refused; `null`: Ollama couldn't be asked). The codes are in
+  API_REFERENCE.md §3.18.
+
+## 2026-10-11 — Long lists load as you scroll
+
+New Android build; on the server, the usual update. Update the server
+first: the Android app already installed keeps working against it (it gets
+the answers it was built for), and the new app still works against a
+server that hasn't been updated (Music still pages there, by offset; the
+other lists arrive whole, as before).
+
+* **Music, Videos, Files, Audiobooks and Podcasts load a page at a time**,
+  on the dashboard and in the app. The first 50 rows show at once; the
+  next 50 load as you near the bottom, with "showing N of M" and a
+  **retry** when a page fails. Music's library loses its page arrows for
+  the same scrolling (web and app), and a page grew from 12 rows to 50.
+* **The app's video feed keeps going past the first page**: as you near
+  the end of what is loaded, the next page joins the feed.
+* **The phone's own lists page too** ("your device" and the offline app):
+  music, videos and photo albums are read a page at a time off the phone's
+  media index, and a picked folder builds its rows a page at a time.
+* **Every search, filter and sort runs on the server** and covers the
+  whole list. New: a search box on Audiobooks, Podcasts (shows, and the
+  episodes of one show) and in the Files list (this folder), on the web and
+  in the app, and sort choices on the web's Videos, Files and Audiobooks.
+* **Select all** on Music and Files selects the loaded rows; its tooltip
+  says how many.
+* **API:** every list behind those pages takes `limit` (default 50, max
+  200) and a `cursor` from the previous answer's `next_cursor`, and
+  answers with `total`, `has_more` and `next_cursor` (API_REFERENCE §1.7).
+  A client that sends no paging parameter gets the answer it always got:
+  the whole list for Videos, a Files folder, Audiobooks and Podcasts (the
+  bare array for those three), and Music's 50-row page with `offset`.
+* **Videos and Files listings are cached between pages** and re-read when
+  a folder changes, a write through the server lands, on **Rescan**, or
+  after five minutes. A cold read of a 10,000-entry folder fell from ~6 s
+  to ~0.13 s, and of 10,000 videos from ~2 s to ~0.1 s (Windows dev box);
+  later pages take ~25 ms.
+* **Videos reads every library whole.** The 2,000-videos and 2,000-folders
+  per library limits are gone. 50,000 videos show their first page in
+  ~1–1.5 s and every later page in ~50 ms. The one limit left is time: a
+  drive still being read after two minutes is listed as far as it got, and
+  the Videos page says so. An app from before this update still gets at
+  most 2,000 videos per library (the list it was built to hold).
+
+## 2026-10-11 — Android: "your device" on the Files, Music and Videos pages
+
+New Android build; nothing to do on the server.
+
+* **Files, Music and Videos have a switch at the top: the server, or
+  "your device".** "Your device" shows the phone's own folders and
+  photos, music and videos exactly as the app does with no server
+  connected; playing something there plays it on the phone. Switching back
+  shows the server's page where you left it, and each page remembers its
+  side until the app is closed.
+* **There, each row's Download is an Upload** that sends that file to the
+  server: a track to the Music library (indexed at once), a video to the
+  Videos library (Documents on a server without one), anything else
+  through the send-to-home sheet, where you pick the library and folder.
+  The row shows the progress; a toast says where it landed. The file
+  streams, so a long phone video uploads without running the app out of
+  memory.
+* **A device an admin blocked from changing files** (Settings → Devices)
+  sees why above the list and its Upload buttons refuse with the server's
+  reason; so does a read-only Music library. Uploads use the same doors
+  as the dashboard's (`/api/music/library/upload`, `/api/files/upload`), so
+  nothing changes in who may write where.
+* **A spell in the background no longer drops the app to local media.**
+  Coming back after ~30 s away (the system folder picker is enough) used
+  to land on the phone's media next to a healthy server, and the page you
+  were on lost its place. Only time the app spends on screen trying the
+  server now counts toward the 10 s fallback, with a fresh check on the
+  way back; out of the house the fallback works as before.
+
+## 2026-10-11 — Satellites moves into Settings, a phone bar you pick, and stopped rooms read quiet
+
+Dashboard and Android build; nothing to do on the server beyond the usual
+update.
+
+* **Satellites is a Settings tab now** (Settings → Satellites, next to
+  Devices; on Android, Settings → Satellites). It left the sidebar, the
+  phone's bottom bar, the Android rail and drawer and Home's "everything"
+  grid. Everything on it works as before, with the same sign-ins: the room
+  drawer, approvals, adoption, announcements, preparing satellite media.
+  Old links and bookmarks to `#satellites` open the tab, and so do Home's
+  room cards and problem rows. The satellites count badge is gone with
+  the sidebar row (Settings has none); the tab's first line counts the
+  rooms.
+* **The phone bar is home · music · videos · chat**, and each phone can
+  pick its own: Settings → **Phone bar** on the dashboard and in the app,
+  or "edit the bar" on Home's
+  "everything" grid. Home stays first; two to five tabs; plugin pages can
+  go there too. It is kept on that phone only (the browser's storage, the
+  app's settings): another phone, or a private window, keeps the default.
+  Calendar moved to the "everything" grid. A shared screen still leaves
+  people, chat, files and news off, whatever its bar says.
+* **A stopped room no longer looks like it is playing on Home.** A room's
+  player keeps the last song loaded after a stop, and Home showed that
+  song at 0:00 as if it were on; Music and Satellites already said
+  nothing. Home now shows a stopped room as quiet, on the dashboard and in
+  the app.
+
 ## 2026-10-11 — Android: the video feed stops when you leave, and phone videos go to Videos
 
 New Android build; nothing to do on the server beyond the usual update.

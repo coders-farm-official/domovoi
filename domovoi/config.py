@@ -96,8 +96,6 @@ def normalize_think_setting(value: object) -> str:
 #
 # Deliberately NOT here:
 #   * NEWS_AUTO_FETCH — topic news stays a personal opt-in on every answer;
-#   * TTS_ENGINE — Microsoft Edge voices are an informed opt-in, never a
-#     default (your voice never leaves the box);
 #   * SearXNG — a container, not a setting: started or stopped when the
 #     answer is saved.
 
@@ -268,7 +266,16 @@ class Settings(BaseSettings):
     ollama_num_ctx: int = 0
     ollama_tool_num_ctx: int = 0
 
-    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", mode="before")
+    # Context window for the text chat's calls that carry pictures (the
+    # vision model's). A picture costs ~1.1k tokens at the 1280 px long edge
+    # the chat shrinks it to, so four in one message (the chat's cap) don't
+    # fit Ollama's usual 4096: it refuses the request (HTTP 400 "exceeds the
+    # available context size", measured 2026-10-12). 0 = the same as
+    # ollama_num_ctx (use it when one model is both the vision and the Q&A
+    # model, or Ollama reloads it whenever the window changes).
+    ollama_vision_num_ctx: int = 8192
+
+    @field_validator("ollama_num_ctx", "ollama_tool_num_ctx", "ollama_vision_num_ctx", mode="before")
     @classmethod
     def _blank_num_ctx_is_unset(cls, value: object) -> object:
         """A blank ``OLLAMA_NUM_CTX=`` means "don't send it", the same as 0
@@ -280,7 +287,15 @@ class Settings(BaseSettings):
 
     # Vision-capable model for the text-chat surface: any chat message that
     # carries images is answered by this model instead of ollama_model.
-    ollama_vision_model: str = "qwen2.5vl:7b"
+    # The default suits a box without a GPU (owner decision 2026-10-12, from
+    # a CPU benchmark of ten vision models): Qwen3-VL 2B Instruct,
+    # Apache-2.0, a 1.9 GB download and ~3.2 GB in memory, and it reads
+    # screenshots, receipts and charts well at the 1280 px the chat sends.
+    # The exact -instruct tag, never a bare one: the bare qwen3-vl tags are
+    # the thinking builds. On a box with an NVIDIA GPU, pick qwen2.5vl:7b
+    # (Settings → Models, the Vision row; minutes per picture on a CPU).
+    # scripts/linux/provision.sh writes its tier's pin here and pulls it.
+    ollama_vision_model: str = "qwen3-vl:2b-instruct-q4_K_M"
     # Per-request read timeout (seconds) for Ollama. A stalled Ollama (model
     # still loading, GPU wedged) must not pin a user-facing voice turn open
     # forever — this bounds the wait so the turn fails gracefully instead.
@@ -409,14 +424,17 @@ class Settings(BaseSettings):
     # as we tell uvicorn how often to ping; the Pi client responds with
     # zero code changes.
     #
-    # 10s interval + 5s timeout means a dead WS surfaces as a
-    # disconnect within ~15s, which then trips the receiver loop's
+    # 10s interval + 20s timeout means a dead WS surfaces as a
+    # disconnect within ~30s, which then trips the receiver loop's
     # finally block and evicts the stale `active_sessions` entry.
-    # Tighten to 5/3 if the Pi's wifi is rough enough that 15s feels
-    # long; loosen if the ping traffic becomes annoying (it won't —
-    # one tiny frame every 10s is nothing).
+    # The timeout was 5s until 2026-10-12: one pong delayed past 5s (a
+    # Pi's radio dozing in power save, a busy AP, a retransmit or two)
+    # dropped a perfectly live satellite, which then reconnected — the
+    # churn the satellites' Wi-Fi fixes are about. 20s still reclaims a
+    # dead socket well inside a minute; the satellite pings us too
+    # (websockets' default 20s/20s), so either end notices.
     ws_ping_interval_sec: float = 10.0
-    ws_ping_timeout_sec: float = 5.0
+    ws_ping_timeout_sec: float = 20.0
 
     # How long a stop (SIGTERM from systemd, Ctrl+C) may take, in three
     # nested bounds (domovoi/lifecycle.py). A stop that used to be SIGKILLed
@@ -567,20 +585,32 @@ class Settings(BaseSettings):
         _log.warning("FASTLANE_MODE=%r is not off or shadow; the fast lane stays off", value)
         return "off"
 
-    # ─── TTS engine router (edge → piper → system) ─────────────────────
-    # Preferred engine; the router falls through edge → piper → system on
-    # per-engine failure regardless of where it starts.
-    #
-    # Defaults to `piper` (fully local) because local-first is the product
-    # promise, and `edge` sends the text of every spoken response to
-    # Microsoft — the one place the default config would otherwise leak what
-    # the household is being told. Edge remains a first-class choice for
-    # anyone who wants the nicer voices and is happy with that trade; it is
-    # opt-in rather than opt-out. Piper's voice model auto-downloads from
-    # Hugging Face once, on first render.
+    # ─── TTS engine router (piper → system) ────────────────────────────
+    # Preferred engine; the router falls through piper → system on
+    # per-engine failure (or system → piper when `system` is preferred).
+    # Every engine is local. The Microsoft Edge online voices were dropped
+    # on 2026-10-12: a TTS_ENGINE=edge left in an old .env reads as piper.
+    # Piper's voice model auto-downloads from Hugging Face once.
     tts_engine: str = "piper"                        # preferred engine
-    tts_edge_voice: str = "en-US-AriaNeural"
-    tts_piper_voice: str = "en_US-lessac-medium"
+    # One of the three public-domain voices Domovoi offers (SHIPPED_VOICES in
+    # domovoi/clients/tts.py): en_US-kristin-medium (the default since
+    # 2026-10-12), en_US-norman-medium, en_US-ljspeech-medium. An install
+    # still set to a voice Domovoi no longer offers, or still on Norman, the
+    # old default, moves at boot (domovoi/voice_migration.py).
+    tts_piper_voice: str = "en_US-kristin-medium"
+
+    @field_validator("tts_engine", mode="before")
+    @classmethod
+    def _tts_engine_known(cls, value: object) -> str:
+        """piper or system; the dropped edge (and anything unknown) is
+        piper, with a log line."""
+        text = str(value or "").strip().lower()
+        if text in ("piper", "system"):
+            return text
+        if text:
+            _log.warning("TTS_ENGINE=%r: Domovoi speaks with piper or system; using piper", value)
+        return "piper"
+
     tts_speed: float = 1.0
     # Wall-clock cap on the `system` engine's subprocess (espeak-ng / say on
     # non-Windows; the Windows SAPI path is in-process and unaffected). This
@@ -667,13 +697,13 @@ class Settings(BaseSettings):
     # address is the wrong one).
     satellite_adoption_enabled: bool = True
     satellite_adoption_advertise_url: str = "auto"
-    # On startup, pre-populate the voices registry with the curated catalog
-    # (domovoi/voice_catalog.py) of Edge cloud + Piper local voices, so
-    # they're available to list/sample/switch without manual registration.
+    # On startup, pre-populate the voices registry with the three
+    # public-domain Piper voices (domovoi/voice_catalog.py), so they're
+    # available to list/sample/switch without manual registration.
     # Idempotent by name. NOTE: the next boot after enabling this renders
-    # each registered voice's greeting clips — a slow, one-time, bandwidth-
-    # heavy boot (Piper models download, Edge clips synth). Turn off once
-    # you've curated the list so deleted voices don't reappear on reboot.
+    # each registered voice's greeting clips — a slow, one-time boot (the
+    # Piper models download). Turn off once you've curated the list so
+    # deleted voices don't reappear on reboot.
     # Follows INTERNET_ACCESS when not set by hand: off on every answer
     # (the default below is what an unanswered box keeps).
     seed_voice_catalog: bool = True
@@ -1127,6 +1157,15 @@ class Settings(BaseSettings):
     # overrides still apply.
     voice_profile_drift_near_threshold_margin: float = 0.05
     voice_profile_drift_reenroll_after: int = 3
+
+    # ─── Phone-mic voice samples (V026) ─────────────────────────────
+    # A person's samples from the app's chat mic are kept apart from
+    # their satellite samples (``voice_profiles.source = 'phone'``):
+    # satellites never match them, and a phone turn matches them first.
+    # They are only ever added on purpose ("my name is …" said into the
+    # chat mic, then "yes"), never learned passively. At most this many
+    # per person; adding one more drops their oldest phone sample.
+    voice_profile_phone_sample_cap: int = 3
 
     # ─── Third-party intro flow ────────────────────────────────────────
     # When a known speaker says "Domovoi, this is Alex," we park an

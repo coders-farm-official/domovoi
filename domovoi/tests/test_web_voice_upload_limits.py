@@ -23,7 +23,6 @@ from web.backend.api import voices as voices_api
 BROWSER = {"X-Requested-With": "XMLHttpRequest"}
 
 VOICE_MUTATIONS = (
-    ("POST", "/api/voices/edge"),
     ("POST", "/api/voices/piper"),
     ("PATCH", "/api/voices/1"),
     ("DELETE", "/api/voices/1"),
@@ -276,7 +275,7 @@ async def test_an_undeclared_oversize_is_cut_off_mid_body() -> None:
 
 def test_the_piper_upload_route_has_a_budget() -> None:
     assert mw.body_limit_for("/api/voices/piper") == 210 * mw.MB
-    assert mw.body_limit_for("/api/voices/edge") is None
+    assert mw.body_limit_for("/api/voices/1") is None
 
 
 def test_the_web_app_runs_the_body_limit_middleware() -> None:

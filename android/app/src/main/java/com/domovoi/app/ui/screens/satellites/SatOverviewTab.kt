@@ -31,9 +31,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.ApiException
 import com.domovoi.app.net.decode
 import com.domovoi.app.net.failureText
 import com.domovoi.app.net.rememberApi
@@ -73,6 +76,13 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
     val coreSha = versionState.data?.sha
     val needsUpgrade = coreSha != null && s.version != null && s.version != coreSha
     val upToDate = coreSha != null && s.version != null && s.version == coreSha
+    // Whether it was upgraded but not rebooted (the health sample says so).
+    // A read the caller may not make (or an older server) is just "no".
+    val healthState = rememberApi(s.room_id) {
+        runCatching { it.api.get("/api/satellites/${s.room_id}/health").decode<SatHealthDoc>() }.getOrNull()
+    }
+    val rebootReason = rebootNeeded(healthState.data)
+    val netStep = netStepLine(healthState.data)
 
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth()) {
@@ -94,7 +104,34 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
             Column(Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 14.dp)) {
                 SectionLabel("wi-fi")
                 val rx = s.wifi?.rx_mbits
-                if (rx != null) {
+                val dbm = s.wifi?.signal_dbm
+                if (s.wifi?.mode == "ap") {
+                    Text(
+                        "setup hotspot",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(Tone.Err),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        "hosting its setup network, not on the house Wi-Fi",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (dbm != null) {
+                    Text(
+                        "%d dBm %s".format(Math.round(dbm), wifiSignalWord(dbm)),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = toneColor(wifiSignalTone(dbm)),
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    Text(
+                        (s.wifi?.ssid ?: "—") + (rx?.let { " · %.1f Mbit/s".format(it) } ?: ""),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Domovoi.colors.fgMuted,
+                    )
+                } else if (rx != null) {
                     val tx = s.wifi?.tx_mbits
                     Text(
                         "%.1f".format(rx) + (tx?.let { " / %.1f".format(it) } ?: "") + " Mbit/s",
@@ -177,7 +214,7 @@ fun SatOverviewTab(s: Satellite, sats: List<Satellite>, onRefresh: () -> Unit = 
         HorizontalDivider(color = Domovoi.colors.borderSoft)
         DropInSection(s, sats)
         HorizontalDivider(color = Domovoi.colors.borderSoft)
-        MaintenanceSection(s, coreSha, needsUpgrade, upToDate)
+        MaintenanceSection(s, coreSha, needsUpgrade, upToDate, rebootReason, netStep, onRefresh)
     }
 }
 
@@ -536,6 +573,9 @@ private fun MaintenanceSection(
     coreSha: String?,
     needsUpgrade: Boolean,
     upToDate: Boolean,
+    rebootReason: String? = null,
+    netStep: NetStepLine? = null,
+    onRefresh: () -> Unit = {},
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -543,7 +583,53 @@ private fun MaintenanceSection(
     var confirmRestart by remember { mutableStateOf(false) }
     var confirmUpgrade by remember { mutableStateOf(false) }
 
+    // The upgrade under way, if any (SatUpgrade.kt): this app's press, or
+    // the server's record — what reopening this screen, or a dashboard, sees.
+    // The button stays locked from the server's yes until the satellite is
+    // back (web: satellites.jsx OverviewBody, the same states).
+    var press by remember(s.room_id) { mutableStateOf(SatUpgradePresses.get(s.room_id)) }
+    // The press in flight: the server hasn't answered yet.
+    var asking by remember(s.room_id) { mutableStateOf(false) }
+    var upgradeErr by remember(s.room_id) { mutableStateOf<String?>(null) }
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val upView = satUpgradeView(s, press, nowMs)
+    val upgrading = upView.running
+    // While it runs: the clock, and a fresh roster every few seconds — the
+    // satellite drops off and comes back, and that answer ends the wait.
+    val refresh by rememberUpdatedState(onRefresh)
+    LaunchedEffect(upgrading) {
+        if (!upgrading) return@LaunchedEffect
+        var ticks = 0
+        while (true) {
+            delay(1000)
+            nowMs = System.currentTimeMillis()
+            if (++ticks % 3 == 0) refresh()
+        }
+    }
+    // The wait is over: say how it went, once, and forget the press (the
+    // server's record, when there is one, keeps saying it for a while).
+    var lastUpState by remember(s.room_id) { mutableStateOf(upView.state) }
+    LaunchedEffect(upView.state) {
+        val was = lastUpState
+        lastUpState = upView.state
+        if (was != "running" || !upView.finished) return@LaunchedEffect
+        toast(satUpgradeOutcome(s.room_id, upView))
+        val p = press ?: return@LaunchedEffect
+        if (upView.rec != null) {
+            SatUpgradePresses.drop(s.room_id)
+            press = null
+        } else {
+            val settled = p.copy(outcome = upView.state)
+            SatUpgradePresses.put(s.room_id, settled)
+            press = settled
+        }
+    }
+
     fun restart() {
+        if (upgrading) {
+            toast("${s.room_id} is upgrading — it restarts itself when the new code is in")
+            return
+        }
         scope.launch {
             runCatching { app.api.post("/api/satellites/${s.room_id}/restart") }
                 .onSuccess { toast("restarting ${s.room_id}…") }
@@ -552,10 +638,31 @@ private fun MaintenanceSection(
     }
 
     fun upgrade() {
+        if (upgrading || asking) return
+        asking = true
+        upgradeErr = null
         scope.launch {
-            runCatching { app.api.post("/api/satellites/${s.room_id}/upgrade") }
-                .onSuccess { toast("upgrading ${s.room_id}…") }
-                .onFailure { toast("upgrade failed: ${it.message}") }
+            runCatching { requestSatUpgrade(app.api, s.room_id) }
+                .onSuccess { answered ->
+                    // Locked from here until the satellite is back.
+                    val p = if (answered.expected == null) answered.copy(expected = coreSha) else answered
+                    SatUpgradePresses.put(s.room_id, p)
+                    press = p
+                    nowMs = System.currentTimeMillis()
+                    toast("upgrading ${s.room_id}…")
+                    onRefresh()
+                }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    // Refused, failed or cancelled: the button stays offered,
+                    // and says why.
+                    val msg = failureText("upgrade", it)
+                    upgradeErr = msg
+                    toast(msg)
+                    // 409: one is already under way (a dashboard): the roster says so.
+                    if ((it as? ApiException)?.status == 409) onRefresh()
+                }
+            asking = false
         }
     }
 
@@ -566,29 +673,112 @@ private fun MaintenanceSection(
         ) {
             SectionLabel("maintenance")
             if (needsUpgrade) Pill("needs upgrade", Tone.Warn)
+            if (rebootReason != null) Pill("reboot needed", Tone.Warn)
+        }
+        if (rebootReason != null) {
+            Text(
+                (if (netStep?.word == "failed") "Its network settings did not all apply at this boot; a reboot tries again. "
+                else "Upgraded, but not rebooted yet: its network settings are applied at boot. ") +
+                    "Unplug it for a few seconds and plug it back in. ($rebootReason)",
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        // What root's boot-time network step did this boot, and the host
+        // name the router should show (absent from an older satellite).
+        if (netStep != null) {
+            Row(
+                Modifier.padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                SectionLabel("boot network step")
+                if (netStep.word.isNotEmpty()) Pill(netStep.word, netStep.tone)
+            }
+            if (netStep.hostname != null) {
+                Text(
+                    "host name ${netStep.hostname}",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (netStep.detail != null) {
+                Text(
+                    netStep.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            if (netStep.early != null) {
+                Text(
+                    netStep.early,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
         Row(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(onClick = { confirmRestart = true }, enabled = s.online) {
+            // Nothing else restarts it mid-upgrade: a restart during the sync
+            // would leave a half-copied tree with no rollback armed.
+            OutlinedButton(onClick = { confirmRestart = true }, enabled = s.online && !upgrading) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("restart")
             }
+            val upgradeEnabled = s.online && !upToDate && !upgrading && !asking
+            val upgradeLabel = if (upgrading || asking) "upgrading…" else "upgrade"
             if (needsUpgrade) {
-                Button(onClick = { confirmUpgrade = true }, enabled = s.online && !upToDate) {
+                Button(onClick = { confirmUpgrade = true }, enabled = upgradeEnabled) {
                     Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("upgrade")
+                    Text(upgradeLabel)
                 }
             } else {
-                OutlinedButton(onClick = { confirmUpgrade = true }, enabled = s.online && !upToDate) {
+                OutlinedButton(onClick = { confirmUpgrade = true }, enabled = upgradeEnabled) {
                     Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("upgrade")
+                    Text(upgradeLabel)
                 }
             }
+        }
+        if (upgrading) {
+            Text(
+                (if (s.online) "Syncing its code${upView.expected?.let { " to $it" } ?: ""} from the Domovoi server…"
+                else "Restarting into the new code…") +
+                    (upView.startedMs?.let { "  " + satUpgradeClock(nowMs - it) } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fgMuted,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                "It drops offline while it restarts. This unlocks when it is back on the new code, " +
+                    "usually within a couple of minutes.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Domovoi.colors.fgFaint,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        } else if (upView.finished) {
+            Text(
+                satUpgradeOutcome(s.room_id, upView, line = true),
+                style = MaterialTheme.typography.bodySmall,
+                color = toneColor(if (upView.state == "done") Tone.Ok else Tone.Warn),
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        val err = upgradeErr
+        if (err != null && !upgrading) {
+            Text(
+                err,
+                style = MaterialTheme.typography.bodySmall,
+                color = toneColor(Tone.Err),
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
         Text(
             "restart bounces domovoi-satellite.service · upgrade syncs satellite code to " +
@@ -613,7 +803,9 @@ private fun MaintenanceSection(
             title = "upgrade ${s.room_id}?",
             body = "Upgrades to ${coreSha ?: "the latest Domovoi code"}. It pulls the new " +
                 "satellite code from the server, backs up its current tree, and restarts — " +
-                "dropping offline for a few seconds. If the new code won't start, it rolls back automatically.",
+                "dropping offline for a few seconds. If the new code won't start, it rolls back automatically. " +
+                "Some updates finish at the next boot: if it then says \"reboot needed\", unplug it " +
+                "for a few seconds and plug it back in.",
             confirmLabel = "upgrade",
             onConfirm = { upgrade() },
             onDismiss = { confirmUpgrade = false },

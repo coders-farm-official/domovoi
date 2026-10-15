@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
@@ -59,12 +61,16 @@ class Prefs(
     private val kTheme = stringPreferencesKey("theme_mode")
     private val kDeviceId = stringPreferencesKey("client_id")
     private val kListener = stringPreferencesKey("listener_person")
+    private val kOwners = stringPreferencesKey("owner_people")
     private val kSharedScreens = stringPreferencesKey("shared_screens")
     private val kLyricsPanelOpen = booleanPreferencesKey("lyrics_panel_open")
     private val kLyricsSheetOpen = booleanPreferencesKey("lyrics_sheet_open")
     private val kLyricsRoomNudge = stringPreferencesKey("lyrics_room_nudge")
     private val kPreferLocal = booleanPreferencesKey("prefer_local")
     private val kPhoneFolders = stringPreferencesKey("phone_folders")
+    private val kPhoneBar = stringPreferencesKey("phone_bar")
+    private val kVoiceChoice = stringPreferencesKey("voice_choice")
+    private val kVoiceInfo = stringPreferencesKey("voice_server_info")
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl
@@ -93,6 +99,14 @@ class Prefs(
 
     private val _listenerPersonId = MutableStateFlow<String?>(null)
     val listenerPersonId: StateFlow<String?> = _listenerPersonId
+
+    /** "This phone belongs to", per server (normalised address -> that
+     *  server's `people.id`): who usually talks from this phone. Voice ID
+     *  still decides who spoke; a voice message's speaker marker is drawn
+     *  softer when it names someone else (ui/screens/chat/SpeakerMarker.kt).
+     *  Read with [ServerCredentials.ownerFor]; absent: nobody in particular. */
+    private val _owners = MutableStateFlow<Map<String, String>>(emptyMap())
+    val owners: StateFlow<Map<String, String>> = _owners
 
     /**
      * Each server's last answer to "is this install a shared screen?"
@@ -129,6 +143,21 @@ class Prefs(
     /** Folders added to the phone's Files tab (data/PhoneFolders.kt). */
     private val _phoneFolders = MutableStateFlow<List<PhoneFolder>>(emptyList())
     val phoneFolders: StateFlow<List<PhoneFolder>> = _phoneFolders
+
+    /** This phone's bottom-bar tabs as picked in Settings → Phone bar, as
+     *  ui/shell/PhoneBar.kt encodes them; null = never picked (the
+     *  default). The web keeps the same choice in localStorage. */
+    private val _phoneBar = MutableStateFlow<String?>(null)
+    val phoneBar: StateFlow<String?> = _phoneBar
+
+    /** The phone's voice (Settings → Voice): "server" (the default: the
+     *  server's voice) or a voice id (voice/PhoneVoice.kt). */
+    private val _voiceChoice = MutableStateFlow("server")
+    val voiceChoice: StateFlow<String> = _voiceChoice
+
+    /** Each server's last `GET /api/voice` answer (its voice and "say it
+     *  like" list), by normalised address, for when the phone is offline. */
+    private var voiceInfo: Map<String, String> = emptyMap()
 
     /** Stable per-install client id, e.g. "android-4f21" (web: "browser-xxxx"). */
     var deviceId: String = ""
@@ -174,12 +203,16 @@ class Prefs(
             trustDecided = ServerCredentials.decodeTrusted(p[kTrustDecided])
             _themeMode.value = runCatching { ThemeMode.valueOf(p[kTheme] ?: "System") }.getOrDefault(ThemeMode.System)
             _listenerPersonId.value = p[kListener]
+            _owners.value = ServerCredentials.decodeOwners(p[kOwners])
             _sharedScreens.value = ServerCredentials.decodeSharedAnswers(p[kSharedScreens])
             _lyricsPanelOpen.value = p[kLyricsPanelOpen] ?: true
             _lyricsSheetOpen.value = p[kLyricsSheetOpen] ?: false
             _lyricsRoomNudge.value = LyricsNudge.decode(p[kLyricsRoomNudge])
             _preferLocal.value = p[kPreferLocal] ?: false
             _phoneFolders.value = PhoneFolders.decode(p[kPhoneFolders])
+            _phoneBar.value = p[kPhoneBar]
+            _voiceChoice.value = p[kVoiceChoice] ?: "server"
+            voiceInfo = decodeVoiceInfo(p[kVoiceInfo])
             deviceId = p[kDeviceId] ?: ("android-" + Random.nextInt(0x10000).toString(16).padStart(4, '0')).also { id ->
                 scope.launch { context.dataStore.edit { it[kDeviceId] = id } }
             }
@@ -337,6 +370,7 @@ class Prefs(
             IdentityGate.pinKey(url)?.let { key -> if (key in trustDecided) setTrustDecided(trustDecided - key) }
         }
         setSharedAnswers(_sharedScreens.value - ServerCredentials.normalize(url))
+        setOwners(ServerCredentials.withOwner(_owners.value, url, null))
     }
 
     // ── Shared screen ──────────────────────────────────────────────────
@@ -391,6 +425,44 @@ class Prefs(
         scope.launch { context.dataStore.edit { it[kPhoneFolders] = PhoneFolders.encode(list) } }
     }
 
+    /** [encoded] null = back to the default bar. */
+    fun setPhoneBar(encoded: String?) {
+        if (_phoneBar.value == encoded) return
+        _phoneBar.value = encoded
+        scope.launch {
+            context.dataStore.edit { if (encoded == null) it.remove(kPhoneBar) else it[kPhoneBar] = encoded }
+        }
+    }
+
+    fun setVoiceChoice(choice: String) {
+        if (_voiceChoice.value == choice) return
+        _voiceChoice.value = choice
+        scope.launch { context.dataStore.edit { it[kVoiceChoice] = choice } }
+    }
+
+    /** The cached `/api/voice` answer of the server at [url], or null. */
+    fun voiceInfoFor(url: String): String? =
+        ServerCredentials.normalize(url).takeIf { it.isNotBlank() }?.let { voiceInfo[it] }
+
+    fun setVoiceInfo(url: String, json: String) {
+        val key = ServerCredentials.normalize(url)
+        if (key.isBlank() || voiceInfo[key] == json) return
+        val next = voiceInfo + (key to json)
+        voiceInfo = next
+        scope.launch { context.dataStore.edit { it[kVoiceInfo] = encodeVoiceInfo(next) } }
+    }
+
+    /** Who this phone belongs to on the server at [url]; null: nobody. */
+    fun setOwnerPersonId(url: String, id: String?) {
+        setOwners(ServerCredentials.withOwner(_owners.value, url, id))
+    }
+
+    private fun setOwners(next: Map<String, String>) {
+        if (next == _owners.value) return
+        _owners.value = next
+        scope.launch { context.dataStore.edit { it[kOwners] = ServerCredentials.encodeOwners(next) } }
+    }
+
     fun setListenerPersonId(id: String?) {
         _listenerPersonId.value = id
         scope.launch {
@@ -422,5 +494,12 @@ class Prefs(
 
     private companion object {
         const val TAG = "Prefs"
+
+        private val voiceInfoSerializer = MapSerializer(String.serializer(), String.serializer())
+
+        fun decodeVoiceInfo(raw: String?): Map<String, String> =
+            raw?.let { runCatching { Json.decodeFromString(voiceInfoSerializer, it) }.getOrNull() } ?: emptyMap()
+
+        fun encodeVoiceInfo(map: Map<String, String>): String = Json.encodeToString(voiceInfoSerializer, map)
     }
 }

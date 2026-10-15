@@ -66,6 +66,14 @@ data class FileBrowse(
      *  is told why in [blockedReason]. Defaults to true for older servers. */
     val writable: Boolean = true,
     @SerialName("blocked_reason") val blockedReason: String? = null,
+    /** Paging (web/backend/api/paging.py): [entries] is one page; [total]
+     *  counts the entries matching the filter, [folderTotal] the whole
+     *  folder. An older server answers with the whole folder and none of
+     *  these, which reads as one complete page. */
+    val total: Int? = null,
+    @SerialName("folder_total") val folderTotal: Int? = null,
+    @SerialName("has_more") val hasMore: Boolean = false,
+    @SerialName("next_cursor") val nextCursor: String? = null,
     /** The path each [breadcrumb] segment leads to, when it is not simply the
      *  segments joined by "/" (the phone's photo albums, listed by id). Never
      *  sent by the server. */
