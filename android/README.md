@@ -105,9 +105,10 @@ checkout names: per ABI the APK's file name, size and SHA-256, and the
 SHA-256 of the **release key's signing certificate**. Before it keeps or
 serves an APK it verifies the file's own v2/v3 signature and requires that
 certificate (`domovoi/android_app.py`, `domovoi/apk_signature.py`). It gets
-the files from this repo's GitHub release (an admin's button, or by itself
-when the code is made on an unmetered line), or from an admin's upload when
-internet access is off. `release` is `null` until the first release, and
+the files from this repo's GitHub release only when an admin presses
+**Download the app to this server** (on the spare-device card or Settings →
+Devices; never by itself), or from an admin's upload when internet access
+is off. `release` is `null` until the first release, and
 every page says "no app release yet".
 
 Publishing is the owner's job, on his own machine: the signing key never

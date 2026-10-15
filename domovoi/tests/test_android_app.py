@@ -156,6 +156,8 @@ def test_the_fetch_keeps_the_signed_pinned_apks_and_serves_them(tmp_path, cache,
     assert st["apks"][0]["path"] == "/v1/android-app/files/domovoi-9.9.9-arm64-v8a.apk"
     hosts = {s.split("/")[0] for s in github.seen}
     assert hosts == {"github.com", "release-assets.githubusercontent.com"}
+    total = sum(len(b) for b in GOOD.values())
+    assert (aa._job["bytes_done"], aa._job["bytes_todo"]) == (total, total), "the card's progress"
     # Already verified files are not downloaded again.
     github.seen.clear()
     with egress.override_policy("always"):
@@ -474,7 +476,7 @@ def test_a_32_bit_browser_gets_the_32_bit_app_first_and_firefox_the_plain_link()
 
 @pytest.mark.parametrize("app,words", [
     (_app_status(release=False), "no Domovoi app release yet"),
-    (_app_status(ready=(False, False)), "hasn’t got the app yet"),
+    (_app_status(ready=(False, False)), "isn’t on this server yet. Ask whoever runs Domovoi to press “Download the app to this server”"),
     (None, "Couldn’t ask this server"),
 ], ids=["no_release", "not_on_the_server", "server_error"])
 def test_without_an_app_to_offer_the_page_says_why_and_offers_nothing(app, words):

@@ -402,23 +402,19 @@ async def test_the_qr_is_a_join_link_the_app_parses_like_the_payload(core):
     assert core["posted"] == [], "no release: nothing to fetch"
 
 
-@pytest.mark.parametrize("policy,app,fetches", [
-    ("always", APP_MISSING, True),
-    ("", APP_MISSING, True),                                   # not answered: today's behaviour
-    ("sometimes", APP_MISSING, False),                         # slow or metered: the button
-    ("always", dict(APP_MISSING, internet_off=True), False),
-    ("always", dict(APP_MISSING, fetch=dict(IDLE, running=True)), False),
-    ("always", dict(APP_MISSING, fetch=dict(IDLE, ok=False, message="HTTP 404")), False),
-    ("always", APP_READY, False),
-])
-async def test_making_a_code_fetches_the_app_by_itself_only_on_an_unmetered_line(core, monkeypatch, policy, app, fetches):
+@pytest.mark.parametrize("policy", ["always", "", "sometimes", "never"])
+@pytest.mark.parametrize("app", [APP_MISSING, dict(APP_MISSING, fetch=dict(IDLE, ok=False, message="HTTP 404")),
+                                 APP_READY], ids=["missing", "failed_before", "ready"])
+async def test_making_a_code_never_downloads_the_app(core, monkeypatch, policy, app):
+    """Owner decision 2026-10-15: the server downloads the app only when an
+    admin presses the button, whatever Settings -> Internet says."""
     from domovoi import egress
 
     core["/v1/admin/android-app"] = (200, app)
     monkeypatch.setattr(egress, "policy", lambda: policy)
     got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Den"), Req())
-    assert (core["posted"] == ["/v1/admin/android-app/fetch"]) is fetches
-    assert got["android_app"]["fetch"]["running"] is (fetches or app["fetch"]["running"])
+    assert core["posted"] == []
+    assert got["android_app"] == app
 
 
 async def test_the_app_routes_go_to_the_core_with_the_right_tiers(monkeypatch):
@@ -521,7 +517,7 @@ const app = () => h.find((e) => String((e.props && e.props.className) || '').inc
 const out = { text: (phone ? w.__deep(phone) : '') + ' | ' + (app() ? w.__deep(app()) : ''),
               qr: w.__qrData.slice(), buttons: [] };
 out.buttons = app() ? h.findAll((e) => e.type === 'button' && h.ancestors(e).includes(app())).map(w.__deep) : [];
-if (w.__act === 'fetch') { await h.click(isBtn('get the app')); await w.__settle(h, 10); }
+if (w.__act === 'fetch') { await h.click(isBtn('Download the app to this server')); await w.__settle(h, 10); }
 if (w.__act === 'upload') {
   const input = h.find((e) => e.type === 'input' && e.props.type === 'file');
   await input.props.onChange({ target: { files: [{ name: 'domovoi-9.9.9-arm64-v8a.apk' }] } });
@@ -556,10 +552,12 @@ def phone(tmp_path_factory) -> dict:
         return {"files": FILES, "component": "SatellitesPanel", "api": api, "script": _PHONE_SCRIPT,
                 "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY + f"\nwindow.__act = {act!r};\n"}
 
-    def card(app):
+    def card(app, extra=None, guest=False):
+        auth = ("Auth = { status: {}, subscribe: () => () => {}, isLoggedIn: () => false, "
+                "headers: () => ({}), modalOpen: false };") if guest else ""
         return {"files": FILES, "component": "GetTheAppCard",
-                "api": {"GET /api/devices/android-app": app},
-                "setup": _SETUP + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY,
+                "api": {"GET /api/devices/android-app": app, **(extra or {})},
+                "setup": _SETUP + auth + qr_js + "\nwindow.qrcode = qrcode;\n" + _QR_SPY,
                 "script": "const w = h.global('window'); h.render(); await w.__settle(h); "
                           "return { text: h.text().join(' '), qr: w.__qrData.slice() };"}
 
@@ -568,14 +566,20 @@ def phone(tmp_path_factory) -> dict:
     return _drive({
         "none": scenario(APP_NONE),
         "missing": scenario(APP_MISSING, "fetch",
-                            {"POST /api/satellites/android-app/fetch": dict(APP_MISSING, fetch=dict(IDLE, running=True))}),
+                            {"POST /api/satellites/android-app/fetch": dict(
+                                APP_MISSING, fetch=dict(IDLE, running=True, bytes_done=31_000_000,
+                                                        bytes_todo=127_337_246))}),
+        "failed": scenario(dict(APP_MISSING, fetch=dict(IDLE, ok=False, message="domovoi-9.9.9-arm64-v8a.apk: HTTP 404")),
+                           "fetch", {"POST /api/satellites/android-app/fetch": {
+                               "__error": {"status": 423, "message": "paused by the container guard"}}}),
         "offline": scenario(dict(APP_MISSING, internet_off=True), "upload",
                             {"UPLOAD /api/satellites/android-app/upload": dict(
                                 APP_READY, accepted="domovoi-9.9.9-arm64-v8a.apk")}),
         "ready": scenario(APP_READY),
         "card_ready": card(ready_public),
         "card_none": card(dict(ready_public, release=None, apks=[], ready=False)),
-        "card_missing": card(dict(ready_public, ready=False)),
+        "card_missing": card(dict(ready_public, ready=False), {"GET /api/satellites/android-app": APP_MISSING}),
+        "card_missing_guest": card(dict(ready_public, ready=False), guest=True),
     }, tmp_path_factory.mktemp("spare-phone"))
 
 
@@ -591,18 +595,28 @@ def test_no_release_is_said_plainly_with_no_buttons(phone):
     assert r["buttons"] == [], "no dead buttons"
 
 
-def test_a_missing_app_offers_the_fetch_and_an_upload(phone):
+def test_a_missing_app_waits_for_the_download_button_then_shows_progress(phone):
     r = phone["missing"]
-    assert "doesn’t have Domovoi 9.9.9 yet" in r["text"] and "64-bit 79 MB" in r["text"] and "32-bit 48 MB" in r["text"]
-    assert any("get the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
-    assert any(c.get("path") == "/api/satellites/android-app/fetch" for c in r["calls"])
-    assert "Getting Domovoi 9.9.9 onto this server" in r["after"]
+    assert "The app isn’t on this server yet (Domovoi 9.9.9: 64-bit 79 MB, 32-bit 48 MB)" in r["text"]
+    assert any("Download the app to this server (about 127 MB)" in b for b in r["buttons"])
+    assert any("upload an APK" in b for b in r["buttons"])
+    assert [c.get("path") for c in r["calls"] if c.get("method") == "POST"].count(
+        "/api/satellites/android-app/fetch") == 1, "one download, and only on the press"
+    assert "Downloading Domovoi 9.9.9 to this server: 31 MB of 127 MB" in r["after"]
+
+
+def test_a_failed_download_stays_on_the_card_with_the_button(phone):
+    r = phone["failed"]
+    assert "The download failed: domovoi-9.9.9-arm64-v8a.apk: HTTP 404" in r["text"]
+    assert any("Download the app to this server" in b for b in r["buttons"])
+    # Pressing it again and being refused: the reason stays beside the button.
+    assert "paused by the container guard" in r["after"] and "The download failed" in r["after"]
 
 
 def test_with_internet_off_only_the_upload_is_offered_and_it_lands(phone):
     r = phone["offline"]
     assert "Internet access is off" in r["text"] and "domovoi-9.9.9-arm64-v8a.apk" in r["text"]
-    assert not any("get the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
+    assert not any("Download the app" in b for b in r["buttons"]) and any("upload an APK" in b for b in r["buttons"])
     assert any(c.get("method") == "UPLOAD" and c.get("path") == "/api/satellites/android-app/upload" for c in r["calls"])
     assert "This server hands out Domovoi 9.9.9" in r["after"]
 
@@ -618,4 +632,8 @@ def test_settings_devices_offers_the_app_to_household_phones(phone):
     assert "Get the Domovoi app" in r["text"] and "http://192.168.0.117:6370/join" in r["text"]
     assert r["qr"] == ["http://192.168.0.117:6370/join"]
     assert "No app release yet" in phone["card_none"]["text"] and phone["card_none"]["qr"] == []
-    assert "doesn’t have Domovoi 9.9.9 yet" in phone["card_missing"]["text"] and phone["card_missing"]["qr"] == []
+    admin = phone["card_missing"]
+    assert "Download the app to this server (about 127 MB)" in admin["text"] and admin["qr"] == []
+    guest = phone["card_missing_guest"]
+    assert "Ask whoever runs Domovoi to press “Download the app to this server”" in guest["text"]
+    assert "Download the app to this server (about" not in guest["text"], "no button a guest can't use"

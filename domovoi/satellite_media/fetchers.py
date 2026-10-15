@@ -517,11 +517,12 @@ def _oww_http_client():
     return egress.sync_client(timeout=httpx.Timeout(30.0, read=120.0))
 
 
-def _fetch_pinned(url: str, dest: Path, *, sha256: str, size: int) -> None:
+def _fetch_pinned(url: str, dest: Path, *, sha256: str, size: int, progress=None) -> None:
     """Download ``url`` to ``dest`` through net_safety (every hop to a
     public address), reading at most ``size`` bytes, and move it into
     place only when it is exactly ``size`` bytes with digest ``sha256``.
-    Raises ValueError otherwise; nothing partial is left behind."""
+    Raises ValueError otherwise; nothing partial is left behind.
+    ``progress``, when given, is called with each chunk's length."""
     part = dest.with_name(f".{dest.name}.part")
     h = hashlib.sha256()
     written = 0
@@ -538,6 +539,8 @@ def _fetch_pinned(url: str, dest: Path, *, sha256: str, size: int) -> None:
                             raise ValueError(f"larger than the pinned {size} bytes")
                         h.update(chunk)
                         f.write(chunk)
+                        if progress is not None:
+                            progress(len(chunk))
             finally:
                 response.close()
         if written != size:

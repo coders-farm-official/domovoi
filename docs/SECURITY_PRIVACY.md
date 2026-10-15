@@ -2767,10 +2767,10 @@ devices, so:
 * **Where it comes from:** only
   `https://github.com/coders-farm-official/domovoi/releases/download/<tag>/<file>`
   (the URL is fixed by the manifest's tag and file name), through the
-  outbound gate (public addresses only, each redirect vetted), on an admin's
-  word (`POST /v1/admin/android-app/fetch`, or by itself when the admin
-  makes a phone's code and Settings → Internet is "always" or unanswered);
-  refused under `INTERNET_ACCESS=never`. Or an admin's upload
+  outbound gate (public addresses only, each redirect vetted), only when an
+  admin presses **Download the app to this server**
+  (`POST /v1/admin/android-app/fetch`; nothing starts it by itself, owner
+  decision 2026-10-15); refused under `INTERNET_ACCESS=never`. Or an admin's upload
   (`POST /v1/admin/android-app/upload`), kept only if it is byte for byte
   one of the manifest's files and passes the same checks. Nothing partial is
   ever in place: a download or upload lands under a temporary name and is

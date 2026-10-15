@@ -118,8 +118,8 @@
     var ready64 = main64 && main64.ready;
     var ready32 = main32 && main32.ready;
     if (!ready64 && !ready32) {
-      stateLine('This Domovoi server hasn’t got the app yet. Whoever runs Domovoi can get it on the dashboard: ' +
-        'Settings → Satellites → add a spare device → get the app.' + already, true);
+      stateLine('The app isn’t on this server yet. Ask whoever runs Domovoi to press “Download the app ' +
+        'to this server” on the dashboard (Settings → Devices), then reload this page.' + already, true);
       return;
     }
     show('install-state', false);

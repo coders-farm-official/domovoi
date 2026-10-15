@@ -17,7 +17,8 @@ the first release exists, and then every page says so plainly.
 This module is the core's half, shaped like the Windows satellite's
 runtime (domovoi/satellite_windows.py):
 
-* :func:`fetch` — on an admin's word, each APK the manifest names is
+* :func:`fetch` — only when an admin presses the dashboard's button
+  (never by itself: owner decision 2026-10-15), each APK the manifest names is
   downloaded from that GitHub release only (the URL is fixed by the tag
   and file name; through the outbound gate, domovoi/net_safety.py) into
   ``~/.domovoi/satellite_media/cache/android_app/<versionCode>/`` and kept
@@ -367,7 +368,8 @@ def _place(src: Path, entry: dict[str, Any], manifest: dict[str, Any]) -> Path:
         src.unlink(missing_ok=True)
 
 
-_job: dict[str, Any] = {"running": False, "started_at": None, "finished_at": None, "ok": None, "message": None}
+_job: dict[str, Any] = {"running": False, "started_at": None, "finished_at": None, "ok": None, "message": None,
+                        "bytes_done": 0, "bytes_todo": 0}
 _job_lock = threading.Lock()
 
 
@@ -386,12 +388,19 @@ def fetch(manifest: dict[str, Any]) -> tuple[bool, str]:
     cert = manifest["release"]["cert_sha256"]
     failed: list[str] = []
     fetched = 0
-    for entry in _apks(manifest):
-        if _passes(dest / entry["file"], entry, cert):
-            continue
+    todo = [e for e in _apks(manifest) if not _passes(dest / e["file"], e, cert)]
+    with _job_lock:
+        _job.update(bytes_done=0, bytes_todo=sum(e["size"] for e in todo))
+
+    def progress(n: int) -> None:
+        with _job_lock:
+            _job["bytes_done"] += n
+
+    for entry in todo:
         part = dest / f".{entry['file']}.download"
         try:
-            fetchers._fetch_pinned(entry["url"], part, sha256=entry["sha256"], size=entry["size"])
+            fetchers._fetch_pinned(entry["url"], part, sha256=entry["sha256"], size=entry["size"],
+                                   progress=progress)
             _place(part, entry, manifest)
         except Exception as e:  # noqa: BLE001 — one file's failure, said and moved on
             log.warning("Android app: %s refused: %s", entry["file"], e)
@@ -410,7 +419,8 @@ def start_fetch(manifest: dict[str, Any]) -> bool:
     with _job_lock:
         if _job["running"]:
             return False
-        _job.update(running=True, started_at=time.time(), finished_at=None, ok=None, message=None)
+        _job.update(running=True, started_at=time.time(), finished_at=None, ok=None, message=None,
+                    bytes_done=0, bytes_todo=0)
 
     def run() -> None:
         try:

@@ -466,31 +466,13 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
 # join page. These routes are the dashboard's side of it.
 
 
-def _fetch_by_itself() -> bool:
-    """Whether the server may fetch the app without a click: only on an
-    unmetered connection (Settings → Internet "always", or not answered,
-    which is today's behaviour). "sometimes" (slow or metered) waits for the
-    admin's button; "never" fetches nothing at all."""
-    from domovoi import egress
-
-    return egress.policy() in ("always", "")
-
-
 async def _android_app_for_a_phone(request: Request) -> dict[str, Any] | None:
-    """The admin view of the app on the core, for the card's phone column;
-    making a phone's code starts the fetch by itself when the release's
-    files are missing and the connection allows it (_fetch_by_itself).
-    None from a core that doesn't say."""
+    """The admin view of the app on the core, for the card's phone column,
+    or None from a core that doesn't say. Read only: the server downloads
+    the app only when an admin presses the card's button (owner decision
+    2026-10-15), never because a code was made."""
     status, doc = await get_admin("/v1/admin/android-app", headers=auth_forward_headers(request))
-    if status != 200 or not isinstance(doc, dict):
-        return None
-    fetch = doc.get("fetch") or {}
-    if (doc.get("release") and doc.get("missing") and not doc.get("internet_off")
-            and not fetch.get("running") and fetch.get("ok") is not False and _fetch_by_itself()):
-        status, started = await post_admin("/v1/admin/android-app/fetch", headers=auth_forward_headers(request))
-        if status == 200 and isinstance(started, dict):
-            return started
-    return doc
+    return doc if status == 200 and isinstance(doc, dict) else None
 
 
 @router.get(
@@ -508,8 +490,9 @@ async def android_app_status(request: Request):
 
 @router.post(
     "/android-app/fetch",
-    # The server downloads the release's APKs from GitHub on an admin's
-    # word, each held to android/release.json and its signature.
+    # The server downloads the release's APKs from GitHub only on an
+    # admin's button press, each held to android/release.json and its
+    # signature; nothing else starts a download (owner decision 2026-10-15).
     dependencies=[Depends(require_admin_mutation)],
 )
 async def android_app_fetch(request: Request):
