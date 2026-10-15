@@ -4,6 +4,58 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-15 — A frozen core restarts itself, and the dashboard can restart it
+
+On 2026-10-14 the core froze: port 6370 open, nothing answering, every
+satellite offline, the phone app "core not answering", and the
+dashboard's Restart useless, because it asks the core. It stayed that way
+until a power cycle, which also erased the record (that box kept its
+journal in RAM). What changed:
+
+* **Two causes fixed.** The radio plugin decoded and fingerprinted audio
+  on the core's event loop (about 1.9 s of frozen core per 20 s test
+  track, more per real song; a decode that never returned froze it for
+  good). It now runs in a child process, below normal priority, killed
+  after `RADIO_FINGERPRINTER_TIMEOUT_SEC` (300 s; a sample 60 s), two at
+  a time; a track that runs out of time is skipped from then on. Loop lag
+  while fingerprinting went from 1.8 s to 0.02 s. And database connects
+  no longer wait for a free thread: a `localhost` database host is dialed
+  at 127.0.0.1, and speech, synthesis and plugin installs have thread
+  pools of their own (a Piper voice's first download no longer holds up
+  every other voice).
+* **The core watches itself** (`domovoi/loop_watchdog.py`): an event loop
+  stuck for 30 s, or three database probes without an answer, writes
+  every thread's stack to the journal and `~/.domovoi/logs/core-watchdog.log`
+  and exits (status 70) for systemd to start it again. Settings → Version
+  shows the last time (**last freeze**). Settings: `LOOP_WATCHDOG_*` in
+  `domovoi/.env.example`.
+* **Restart the core**, for an admin, on Settings → Version, the
+  Satellites page and Home, while the core doesn't answer: the dashboard
+  ends it and systemd starts it again. No sudoers change.
+* **Settings → Satellites says the core is down** instead of showing every
+  room "offline · 19d ago" (that date was when the room's music player was
+  first set up). Cards show when each room was last heard from
+  (`last_seen_at`, new on `/api/satellites`).
+* **The units** (`scripts/linux/units/`): the core is `Type=notify` with
+  `WatchdogSec=90` and `TimeoutStartSec=15min`; the dashboard no longer
+  waits for the core to start.
+
+**What an existing box gets on its next update** (Settings → Version,
+**Restart Domovoi** or **Restart to apply changes**, with the update
+unit): the new code (watchdog, fixes, button), a
+`domovoi-core.service.d/50-domovoi-restart.conf` drop-in if the core unit
+has no `Restart=on-failure` or `always` (a hand-written unit), and the
+journal kept on disk (`/etc/systemd/journald.conf.d/50-domovoi.conf`,
+at most 1 GB; `DOMOVOI_MANAGE_JOURNAL=0` in `/etc/default/domovoi-update`
+opts out). **What it needs by hand, and only if wanted:** the
+`Type=notify` + `WatchdogSec=` unit (systemd's own backstop for a core so
+stuck its watchdog thread can't run) comes only from installing the
+shipped unit (`docs/LINUX_HOST.md`, Make it an appliance) or re-running
+`provision.sh`; the Windows install gets it from its next Setup run.
+Without it the core's own watchdog and faulthandler still restart a
+frozen core. A box without the update unit restarts with the code but
+gets neither drop-in: add `Restart=on-failure` to the core unit yourself.
+
 ## 2026-10-13 — Android: talk to Domovoi on the phone
 
 New Android build only; nothing changes on the server.

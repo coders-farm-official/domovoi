@@ -8,6 +8,7 @@ Symptom → cause → fix, grouped by area. Start with [Which logs to check](#wh
 - [Music won't play](#music-wont-play)
 - [Acquisitions / downloads stuck](#acquisitions--downloads-stuck)
 - [Dashboard can't reach the core](#dashboard-cant-reach-the-core)
+- [Everything offline, dashboard up](#everything-offline-dashboard-up)
 - [Chat can't answer](#chat-cant-answer)
 - [Admin locked out](#admin-locked-out)
 - [GPU / CUDA issues](#gpu--cuda-issues)
@@ -154,6 +155,23 @@ The dashboard (port 6369) is a separate process that reads the shared Postgres a
 | Dashboard unreachable from another device on the LAN | Bind/firewall | The web backend binds `0.0.0.0:6369` by default (`WEB_HOST` / `WEB_PORT`); allow inbound 6369 in Windows Defender Firewall |
 | Dashboard up but every page errors | Postgres down | See [Docker issues](#docker-issues) — both processes need the `domovoi-postgres` container |
 
+## Everything offline, dashboard up
+
+Every satellite offline at once, the phone app saying the core isn't answering, voice commands dead, and yet the dashboard on port 6369 loads: the **core** (port 6370) has stopped answering. Its port may still take connections; nothing answers on it. The dashboard is a separate process, which is why it is still up, and it says so: Home has "the Domovoi server isn't answering", Settings → Satellites says "The server's core isn't answering, so satellites can't connect" (the cards say *can't connect* and when each room was last heard from, not *offline*), and Settings → Version says the same.
+
+That is what happened on 2026-10-14, for a day and a half, until a power cycle. Since 2026-10-15:
+
+1. **The core restarts itself.** Its loop watchdog notices a stuck event loop after 30 s, or a database it can't reach after three probes, writes every thread's stack to the journal and to `~/.domovoi/logs/core-watchdog.log`, and exits; systemd starts it again 5 s later. Satellites and the app reconnect by themselves. Settings → Version then shows **last freeze**: when, and why. ([LINUX_HOST.md, The loop watchdog](LINUX_HOST.md#the-loop-watchdog).)
+2. **If it hasn't come back after a minute or two**, sign in as admin and press **Restart the core** (Settings → Version, the Satellites page, or Home's row). The dashboard ends the frozen core and systemd starts it again; the button waits until the core answers. Where the dashboard can't do it (a core not run by systemd, a hand-written unit without `Restart=on-failure`, a core under another account), it says why and shows the command to run instead. The next update adds `Restart=on-failure` to a unit that lacks it.
+3. **Over SSH**, when nothing else works: `sudo systemctl restart domovoi-core`. On the Windows install: `Restart-Service DomovoiHost` from an administrator PowerShell.
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| The core keeps restarting (Version: **last freeze** keeps changing) | Something freezes it again each time | Read `~/.domovoi/logs/core-watchdog.log`: each report names the stuck thread and line (`(the event loop)` marks the loop's). A plugin's worker there points at that plugin: disable it and tell its author. Report anything in the core with that file attached |
+| **last freeze** says *database probes ... got no answer* | Postgres was stuck (not down: a down database is not counted) | `docker logs domovoi-postgres`, and the box's disk and memory |
+| **Restart the core** missing, with *Restart=no* | A hand-written core unit | Press **Restart Domovoi** once the core answers (the update run adds the drop-in), or add `Restart=on-failure` yourself |
+| After a power cycle, `journalctl -u domovoi-core` shows nothing before the reboot | The journal lived in RAM | Updates keep it on disk from now on ([LINUX_HOST.md](LINUX_HOST.md#the-loop-watchdog)); `core-watchdog.log` is on disk either way |
+
 ## Chat can't answer
 
 The Chat page (dashboard and Android app) talks to Ollama from the web process. When there is no reply, the message under it says why in plain words; the exception itself, with Ollama's address, is in the web backend log (`chat stream failed (thread …, model …, <code>)`). The codes are listed in [API_REFERENCE.md](API_REFERENCE.md), §3.18.
@@ -298,6 +316,7 @@ poaches it is the deterministic fix. Re-run the corpus after either.
 | Log | Where | What's in it |
 |---|---|---|
 | Core log | The `python -m domovoi.main` console (level via `LOG_LEVEL`) | The whole voice pipeline: routing, handlers, MPD provisioning, workers. Millisecond timestamps; snapshot/health polling spam is filtered out for you |
+| Core freezes | `~/.domovoi/logs/core-watchdog.log` (1 MB, one older copy); `core-faulthandler.log` beside it until the next start moves it in | Every time the core was ended for freezing: the reason, every thread's stack, the event loop's tasks. On disk, so it survives a power cycle ([Everything offline, dashboard up](#everything-offline-dashboard-up)) |
 | Per-plugin logs | `~/.domovoi/logs/plugin_<slug>.log` (5 MB × 3 rotation) | Everything a given plugin does. Also tailed live on that plugin's dashboard detail page. Crank one plugin to DEBUG without drowning the core: `LOG_LEVEL_PLUGIN_<SLUG>=DEBUG` |
 | Web backend log | The `python -m web.backend.main` console (`LOG_LEVEL`) | Dashboard API, realtime listeners, plugin web pages |
 | Satellite log | `journalctl -u domovoi-satellite -f` on the Pi (level via `[log]` in its config) | Wake word, capture, playback, Wi-Fi watcher, sync channels, and one `health:` line every ten minutes |

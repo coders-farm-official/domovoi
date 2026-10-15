@@ -102,6 +102,7 @@ of its own. The interesting ones:
 | `RADIO_SDR_STREAM_BASE` | `http://127.0.0.1` | host MPD dials for FM audio (see hardware notes) |
 | `RADIO_SDR_BIND_HOST` | empty | address the FM listener binds; empty = the stream base's host, never `0.0.0.0` |
 | `RADIO_FINGERPRINTER_ENABLED` | `true` | fingerprint library tracks for offline matching |
+| `RADIO_FINGERPRINTER_TIMEOUT_SEC` | `300` | the most one track's decode and hashing may take; it runs in a child process (never on the core's event loop), which is killed past this, and the track is marked and not tried again |
 
 ## Without the internet
 
