@@ -1,0 +1,22 @@
+# Domovoi room stick: install the satellite on the first boot
+# (domovoi/usb_stick/). Root, once; tries again (and says why on the
+# screen) until the household's server answers and proves it is the one
+# the stick was made by. Then never again (the installed marker).
+[Unit]
+Description=Domovoi room stick: set this computer up as a room
+Wants=network-online.target
+After=network-online.target domovoi-stick-boot-check.service
+ConditionPathExists=!/var/lib/domovoi-stick/installed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/domovoi-stick/firstboot.sh
+StandardInput=null
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TimeoutStartSec=infinity
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

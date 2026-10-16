@@ -101,6 +101,12 @@
 #      (warn). A healthy plain restart ends with it too, so an answer changed
 #      in Settings takes effect at the next Restart. DOMOVOI_MANAGE_OS_JOBS=0
 #      leaves the jobs alone.
+#  11b. Ubuntu packages a newer Domovoi needs that this box lacks
+#      (reconcile_added_packages: xorriso, for old computers' room sticks)
+#      are installed from Ubuntu's archive, --no-install-recommends, not
+#      held. Not under never; never fatal (a warn step); a step only when
+#      something was missing. A healthy plain restart ends with it too.
+#      DOMOVOI_MANAGE_PACKAGES=0 leaves them alone.
 #  12. The wake-word trainer image is rebuilt when it is out of date
 #      (reconcile_wake_trainer): only where it exists (a household that
 #      switched training on; DOMOVOI_WAKE_TRAINER_IMAGE, else
@@ -235,6 +241,14 @@ MANAGE_GPU_RUNTIME=${DOMOVOI_MANAGE_GPU_RUNTIME:-1}
 GPU_RUNTIME=$SCRIPT_DIR/gpu-runtime.sh
 # 1 once the GPU step restarted Docker in this run (domovoi-db then restarts).
 GPU_DOCKER_RESTARTED=0
+
+# Ubuntu packages a newer Domovoi needs that a box installed before them
+# lacks (provision.sh's apt step puts them on a new one): xorriso, the
+# program the core runs to make old computers' room sticks (2026-10-16,
+# domovoi/usb_stick/). DOMOVOI_MANAGE_PACKAGES=0 (or false/no/off) leaves
+# them to the administrator.
+MANAGE_PACKAGES=${DOMOVOI_MANAGE_PACKAGES:-1}
+ADDED_PACKAGES=(xorriso)
 
 # The wake-word trainer image (scripts/wake_word/docker), rebuilt when it is
 # out of date and only where a household built it (switched training on).
@@ -1726,6 +1740,50 @@ reconcile_os_jobs() {
   return 0
 }
 
+# The ADDED_PACKAGES that are missing, installed from Ubuntu's own archive
+# (apt checks them against Ubuntu's signed index), --no-install-recommends,
+# not held, at a healthy update or Restart, like os-jobs: first with the
+# package lists apt already has, then once more after apt-get update. Not
+# under never (a download: the journal says so, no step). It never fails
+# the run: a failure is a warn step (the Version card shows its detail);
+# a run with nothing missing adds nothing to the result.
+reconcile_added_packages() {
+  local p t0 out rc=0 policy
+  local -a missing=() apt=(apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -q)
+  case "$(printf '%s' "$MANAGE_PACKAGES" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "added system packages left to the administrator (DOMOVOI_MANAGE_PACKAGES=$MANAGE_PACKAGES)"; return 0 ;;
+  esac
+  for p in "${ADDED_PACKAGES[@]}"; do
+    dpkg-query -W -f='${Status}\n' "$p" 2>/dev/null | grep -q 'install ok installed' || missing+=("$p")
+  done
+  [ "${#missing[@]}" -gt 0 ] || return 0
+  policy=$(internet_policy 2>/dev/null || true)
+  if [ "$policy" = never ]; then
+    log "not installed while internet access is turned off: ${missing[*]} (USB sticks for old computers need xorriso)"
+    return 0
+  fi
+  t0=$(now_ms)
+  log "step added-packages: ${missing[*]}"
+  set +e
+  out=$(DEBIAN_FRONTEND=noninteractive "${apt[@]}" install -y --no-install-recommends "${missing[@]}" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    out=$({ DEBIAN_FRONTEND=noninteractive "${apt[@]}" update \
+      && DEBIAN_FRONTEND=noninteractive "${apt[@]}" install -y --no-install-recommends "${missing[@]}"; } 2>&1)
+    rc=$?
+  fi
+  set -e
+  if [ -n "$out" ]; then printf '%s\n' "$out" | tail -n 20 | sed 's/^/    /'; fi
+  if [ "$rc" -ne 0 ]; then
+    # The core shows this detail on the Version card: our words, not apt's.
+    add_step added-packages warn "$t0" "not installed: ${missing[*]} (apt-get failed, exit $rc; journalctl -u domovoi-update says why). USB sticks for old computers need xorriso"
+    log "step added-packages failed (exit $rc); not fatal, the run goes on"
+  else
+    add_step added-packages ok "$t0" "installed ${missing[*]}"
+  fi
+  return 0
+}
+
 # Where the dashboard's "Check the GPU and trainer again" leaves its flag
 # (gpu_runtime_retry_flag in domovoi/wake_trainer_setup.py): gpu-runtime-retry
 # in the core's wake_trainer dir, beside its wake_models dir (WAKE_MODELS_DIR
@@ -1977,6 +2035,7 @@ plain_restart() {
     APPLIED_OK=1
     run_soft_step searxng reconcile_searxng
     reconcile_os_jobs
+    reconcile_added_packages
     reconcile_wake_trainer || true
     finish ok
   else
@@ -2080,6 +2139,7 @@ full_update() {
     APPLIED_OK=1
     run_soft_step searxng reconcile_searxng
     reconcile_os_jobs
+    reconcile_added_packages
     reconcile_wake_trainer || true
     finish ok
     return

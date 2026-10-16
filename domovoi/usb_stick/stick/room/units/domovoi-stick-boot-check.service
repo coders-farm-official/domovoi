@@ -1,0 +1,17 @@
+# Domovoi room stick: what the firmware says about Secure Boot, every boot
+# (domovoi/usb_stick/stick/room/boot-check.sh). Root, reads /sys only,
+# writes /run/domovoi-stick/boot.json for the satellite's health report.
+[Unit]
+Description=Domovoi room stick: check Secure Boot
+Before=domovoi-satellite.service domovoi-stick-firstboot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/domovoi-stick/boot-check.sh
+RuntimeDirectory=domovoi-stick
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

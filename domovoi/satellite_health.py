@@ -202,6 +202,21 @@ def clean_notes(v: Any) -> list[str] | None:
     return out or None
 
 
+def _boot(v: Any) -> dict[str, Any] | None:
+    """A room-stick computer's Secure Boot state (satellite/client.py
+    `_stick_boot_facts`): ``firmware`` "uefi" or "bios" and five booleans;
+    anything else is dropped."""
+    if not isinstance(v, dict):
+        return None
+    out: dict[str, Any] = {}
+    if v.get("firmware") in ("uefi", "bios"):
+        out["firmware"] = v["firmware"]
+    for key in ("secure_boot", "ca_2023", "ca_2011", "loader_held", "stick"):
+        if isinstance(v.get(key), bool):
+            out[key] = v[key]
+    return out or None
+
+
 #: Every key a `health` sample may carry, with its coercer. Unknown keys
 #: are dropped: the shape is the core's to define, not the sender's.
 SAMPLE_FIELDS: dict[str, Any] = {
@@ -239,6 +254,11 @@ SAMPLE_FIELDS: dict[str, Any] = {
     # profile's default at load (an ALSA device name that is not a plain
     # one, say), e.g. "music device setting ignored: not a plain ALSA name".
     "settings_ignored": clean_notes,
+    # 2026-10-16: a computer set up from a room stick (domovoi/usb_stick/):
+    # Secure Boot on or off, whether its firmware has Microsoft's 2023 and
+    # 2011 certificates, whether the boot loader is frozen. The dashboard
+    # warns when Secure Boot is on and the 2023 certificate is missing.
+    "boot": _boot,
 }
 
 

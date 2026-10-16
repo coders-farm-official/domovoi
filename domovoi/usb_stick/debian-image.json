@@ -1,0 +1,24 @@
+{
+  "about": [
+    "The one upstream file a Domovoi room stick starts from (domovoi/usb_stick/): Debian's official amd64",
+    "netinst image, downloaded by the household's own server from Debian and used only if its size and",
+    "SHA-256 are these. Debian's files on the stick are left as they are; only Domovoi's own files are added.",
+    "Moving the pin: fetch SHA256SUMS and SHA256SUMS.sign from the release's iso-cd folder, check them with",
+    "gpgv against debian-role-keys.gpg (Debian CD signing key DF9B9C49EAA9298432589D76DA87E80D6294BE9B),",
+    "read the new image's size and SHA-256, check its shim's signatures (sbverify --list /EFI/boot/bootx64.efi:",
+    "a shim signed only with Microsoft's 2023 certificate does not start on PCs whose firmware only trusts",
+    "the 2011 one), and run the QEMU matrix (docs/SPARE_DEVICE_SATELLITES.md, Old computer)."
+  ],
+  "pin_version": 1,
+  "name": "debian-13.7.0-amd64-netinst.iso",
+  "version": "13.7.0",
+  "released": "2026-09-12",
+  "urls": [
+    "https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso",
+    "https://cdimage.debian.org/cdimage/archive/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso"
+  ],
+  "size": 792723456,
+  "sha256": "a7ef94ac2fb9a7fec454552abd629b7cc9d5155c886165a45649f5ce6167e355",
+  "signed_sums": "SHA256SUMS + SHA256SUMS.sign, good signature from the Debian CD signing key (DF9B9C49EAA9298432589D76DA87E80D6294BE9B), checked 2026-10-15",
+  "shim_signatures": ["Microsoft Corporation UEFI CA 2011", "Microsoft UEFI CA 2023"]
+}

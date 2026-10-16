@@ -533,7 +533,8 @@ _STEP_FIELDS = ("name", "status", "duration_sec")
 # (failed steps' output tails, the search helper's docker output) stays on
 # the box.
 _WARN_DETAIL_STEPS = frozenset(
-    {"sync-deps", "rollback-deps", "env-secrets", "os-jobs", "gpu-runtime", "wake-trainer"}
+    {"sync-deps", "rollback-deps", "env-secrets", "os-jobs", "gpu-runtime", "wake-trainer",
+     "added-packages"}
 )
 _WARN_DETAIL_MAX_CHARS = 300
 _ERROR_MAX_CHARS = 500

@@ -387,6 +387,44 @@ const SatNetStep = ({ step, hostname }) => {
   );
 };
 
+/* A computer set up from a room stick (2026-10-16, domovoi/usb_stick/):
+ * what its firmware said about Secure Boot at this boot (root's boot-check
+ * on the computer writes it; the satellite reports it). The stick freezes
+ * the boot loader it installed (owner decision 2026-10-15), so no update
+ * can swap in a shim this firmware won't start. When Secure Boot is on and
+ * the firmware lacks Microsoft's 2023 certificate the card says so plainly,
+ * with how to update the firmware by hand. Any other satellite sends no
+ * `boot` and shows nothing here. */
+const satNeeds2023 = (b) => !!(b && b.firmware === 'uefi' && b.secure_boot === true && b.ca_2023 === false);
+const SatBootSecurity = ({ boot }) => {
+  if (!boot || !boot.stick) return null;
+  const uefi = boot.firmware === 'uefi';
+  const words = [
+    uefi ? 'UEFI' : 'BIOS',
+    uefi ? (boot.secure_boot === true ? 'Secure Boot on' : boot.secure_boot === false ? 'Secure Boot off' : 'Secure Boot unknown') : null,
+    uefi && boot.ca_2023 != null ? (boot.ca_2023 ? 'firmware has the 2023 certificate' : 'no 2023 certificate') : null,
+    uefi && boot.loader_held ? 'boot loader frozen' : null,
+  ].filter(Boolean).join(' · ');
+  return (
+    <div className="sat-boot-security" style={{ marginTop: 10, fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <div className="label">boot</div>
+        <span className="mono" style={{ fontSize: 11.5 }}>{words}</span>
+      </div>
+      {satNeeds2023(boot) && (
+        <div role="note" className="sat-boot-2023" style={{ color: 'var(--warn)', lineHeight: 1.5, marginTop: 4 }}>
+          This computer's firmware doesn't have Microsoft's 2023 Secure Boot certificate. It keeps
+          starting as it is: its boot loader is frozen at the one the USB stick installed. Debian's newer
+          boot loaders are signed with the 2023 certificate only, though, so a newer stick won't start on
+          it with Secure Boot on. To fix it by hand: install the maker's latest BIOS/UEFI update for this
+          model from their support site (many have a bootable USB updater), or turn Secure Boot off in its
+          firmware settings.
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SatHealthCard = ({ room, online }) => {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -422,6 +460,8 @@ const SatHealthCard = ({ room, online }) => {
           <Pill tone="warn" title={s.settings_ignored.join('\n')}>settings ignored</Pill>}
         {s && s.wifi && s.wifi.mode === 'ap' &&
           <Pill tone="err" title="the radio is hosting the setup hotspot instead of being on the house Wi-Fi; the satellite is bringing the house network back">setup hotspot on</Pill>}
+        {s && satNeeds2023(s.boot) &&
+          <Pill tone="warn" title="Secure Boot is on and the firmware lacks Microsoft's 2023 certificate (below)">firmware needs the 2023 certificate</Pill>}
         {s && s.mic_blocked === true &&
           <Pill tone="err" title="the device's microphone is switched off in its own settings (a phone's mic privacy toggle): it hears only silence">mic blocked</Pill>}
         {throttle.length > 0 && <Pill tone="err">{throttle.join(', ').replace(/_/g, ' ')}</Pill>}
@@ -482,6 +522,7 @@ const SatHealthCard = ({ room, online }) => {
         </div>
       )}
       {s && (s.net_step || s.hostname) && <SatNetStep step={s.net_step} hostname={s.hostname}/>}
+      {s && s.boot && <SatBootSecurity boot={s.boot}/>}
       {s && (
         <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-faint)', marginTop: 8 }}>
           sampled {satHealthWhen(latest.received_at)}
@@ -2563,6 +2604,181 @@ const AppOnServer = ({ app: initial, onReady }) => {
   );
 };
 
+/* Old computer (USB stick), 2026-10-16 (domovoi/usb_stick/ on the core).
+ * An old 64-bit PC or laptop, or an Intel Mac, becomes this room from a USB
+ * stick the server makes: "Prepare the stick" downloads Debian's netinst
+ * from Debian the first time (pinned by size and SHA-256), then re-packs it
+ * with this room's code. The stick asks one question on the old computer
+ * (type ERASE, naming its disk) and nothing is erased before that. Written
+ * with Raspberry Pi Imager (its custom-list link opens it with this stick
+ * listed, nothing sent to Raspberry Pi) or USBImager. Refused up front with
+ * the reason (internet "never" without Debian's image here, the disk short,
+ * no xorriso on the server); a failure stays here until the next try. */
+const SPARE_STICK_BOOT_KEYS = [
+  ['Dell', 'F12'], ['HP', 'Esc, then F9'], ['Lenovo', 'F12 (some: the small Novo button)'],
+  ['Acer', 'F12 (turn on "F12 Boot Menu" in the firmware first)'], ['ASUS', 'Esc (desktops: F8)'],
+  ['Toshiba / Dynabook', 'F12'], ['MSI', 'F11'], ['Samsung', 'Esc or F10'], ['Sony VAIO', 'Assist button, or F11'],
+  ['Fujitsu', 'F12'], ['Gigabyte / ASRock', 'F12 / F11'], ['Intel NUC', 'F10'],
+  ['Intel Mac (2012-2017)', 'hold Option (Alt) from the start chime'],
+];
+const SpareStickStep = ({ n, icon, children }) => (
+  <li style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+    <span aria-hidden style={{ flex: 'none', width: 32, height: 32, borderRadius: 'var(--r-sm)', border: '1px solid var(--border)',
+                               display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)' }}>
+      <Icon name={icon} size={18}/>
+    </span>
+    <span style={{ fontSize: 12, lineHeight: 1.5, color: 'var(--fg-muted)' }}>
+      <span className="mono" style={{ color: 'var(--fg)', marginRight: 6 }}>{n}</span>{children}
+    </span>
+  </li>
+);
+const spareStickWhen = (epoch) => epoch ? relTime(new Date(epoch * 1000).toISOString()) : '—';
+const SpareUsbStick = ({ res, body, fire }) => {
+  const [st, setSt] = React.useState(res.usb_stick || null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  React.useEffect(() => { setSt(res.usb_stick || null); setError(null); }, [res]);
+  const refresh = async () => {
+    try { setSt(await apiGet('/api/satellites/usb-stick')); } catch (e) { setError(appOnServerMessage(e)); }
+  };
+  React.useEffect(() => { if (!res.usb_stick) refresh(); }, [res]);
+  const job = (st && st.job) || {};
+  const running = !!job.running;
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(async () => {
+      try { setSt(await apiGet('/api/satellites/usb-stick')); } catch (e) { /* keep the last */ }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [running]);
+  const prepare = async () => {
+    setBusy(true); setError(null);
+    try { setSt(await apiPost('/api/satellites/usb-stick', body)); }
+    catch (e) { setError(appOnServerMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const remove = async (id) => {
+    try { setSt(await apiDelete(`/api/satellites/usb-stick/${id}`)); fire('the stick’s image is gone from this server'); }
+    catch (e) { setError(appOnServerMessage(e)); }
+  };
+  const note = { fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 };
+  const deb = st && st.debian;
+  const builds = (st && st.builds) || [];
+  const mine = builds.find(b => b.room_id === res.room_id) || null;
+  const others = builds.filter(b => b.room_id !== res.room_id);
+  const failed = !running && job.ok === false && job.message && job.room_id === res.room_id;
+  const refusal = st && st.refusal && st.refusal.reason !== 'busy' ? st.refusal : null;
+  const pct = job.bytes_todo ? Math.min(100, Math.round(100 * (job.bytes_done || 0) / job.bytes_todo)) : 0;
+  const imagerLink = mine ? `rpi-imager://?repo=${encodeURIComponent(mine.os_list_url)}` : null;
+  return (
+    <div className="spare-usb-stick" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
+      <div className="label">old computer (usb stick)</div>
+      <div style={note}>
+        An old 64-bit PC or laptop, or an Intel Mac from 2012 to 2017, becomes this room: the stick
+        installs a fresh system on it (Debian) and the satellite, with no terminal and no password. It
+        <b> erases that computer’s disk</b>, and asks first, on the computer itself, naming the disk.
+      </div>
+      <ul className="spare-stick-needs" style={{ ...note, margin: 0, paddingLeft: 18 }}>
+        <li>A processor from about 2009 or newer (Intel Core i3/i5/i7 or later, AMD from about 2011). An older one is refused before anything is erased.</li>
+        <li>A network cable from your router to that computer while it sets up (or a USB network adapter). Wi-Fi on the stick comes later.</li>
+        <li>A USB stick of 2 GB or more (everything on it is replaced), and a disk of 8 GB or more in the computer.</li>
+      </ul>
+      {!st && !error && <div style={note}>asking the server about USB sticks…</div>}
+      {refusal && !running && <div role="alert" className="spare-stick-refusal" style={{ fontSize: 12, color: 'var(--warn)' }}>{refusal.message}</div>}
+      {running ? (
+        <div className="spare-stick-progress" style={note}>
+          <div>{job.stage === 'download'
+            ? `Downloading Debian ${deb ? deb.version : ''} from Debian: ${spareMb(job.bytes_done || 0)} of ${spareMb(job.bytes_todo)}…`
+            : `Making the stick for ${job.room || 'the room'}…`}</div>
+          <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={job.stage === 'download' ? pct : undefined}
+               style={{ height: 4, borderRadius: 2, background: 'var(--border)', marginTop: 4, overflow: 'hidden' }}>
+            <div style={{ width: job.stage === 'download' ? `${pct}%` : '100%', height: '100%', background: 'var(--brand)', opacity: job.stage === 'download' ? 1 : 0.5 }}/>
+          </div>
+        </div>
+      ) : st && !refusal && (
+        <div>
+          <Button icon="usb" variant={mine ? 'secondary' : 'primary'} disabled={busy} onClick={prepare}>
+            {busy ? 'starting…' : mine ? 'prepare it again' : 'Prepare the stick'}
+          </Button>
+          {deb && !deb.cached && (
+            <span style={{ ...note, marginLeft: 8 }}>
+              the first time, this server downloads Debian {deb.version} ({spareMb(deb.size)}) from Debian
+            </span>
+          )}
+        </div>
+      )}
+      {failed && <div role="alert" className="spare-stick-error" style={{ fontSize: 12, color: 'var(--err)' }}>Preparing the stick failed: {job.message}</div>}
+      {error && <div role="alert" className="spare-stick-error" style={{ fontSize: 12, color: 'var(--err)' }}>{error}</div>}
+      {mine && (
+        <div className="spare-stick-ready" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={note}>
+            The stick for <b>{mine.room}</b> is ready ({spareMb(mine.size)}, made {spareStickWhen(mine.made)}).
+            {' '}SHA-256 <span className="mono" style={{ wordBreak: 'break-all' }}>{mine.sha256.slice(0, 16)}…</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <a className="btn btn-primary" href={imagerLink}><Icon name="external-link" size={14}/>Open in Raspberry Pi Imager</a>
+            <a className="btn btn-secondary" href={mine.manifest_url} download><Icon name="file-down" size={14}/>the Imager file</a>
+            <a className="btn btn-secondary" href={mine.image_url} download><Icon name="download" size={14}/>download the image</a>
+            <Button icon="trash-2" variant="ghost" onClick={() => remove(mine.id)}>remove it from this server</Button>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+            Raspberry Pi Imager 2.0.3 or newer opens with this stick listed (“A computer”, then “Domovoi room
+            stick”) and checks every byte while it writes; nothing is sent to Raspberry Pi for a list like this
+            one. Don’t have it? <a href="https://www.raspberrypi.com/software/" target="_blank" rel="noopener noreferrer">Get Raspberry Pi Imager</a>,
+            then double-click the Imager file. Or write the image with{' '}
+            <a href="https://bztsrc.gitlab.io/usbimager/" target="_blank" rel="noopener noreferrer">USBImager</a>.
+          </div>
+          <ol className="spare-stick-steps" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <SpareStickStep n="1" icon="usb">Write it to a USB stick: in Raspberry Pi Imager choose “A computer”, “Domovoi room stick”, then your stick.</SpareStickStep>
+            <SpareStickStep n="2" icon="power">Plug the stick into the old computer and switch it on, holding its boot-menu key (below); pick the USB stick.</SpareStickStep>
+            <SpareStickStep n="3" icon="keyboard">It asks one question, naming the disk: type ERASE to make that computer “{mine.room}”. Anything else leaves it as it was.</SpareStickStep>
+            <SpareStickStep n="4" icon="monitor">About 10 to 30 minutes later its screen shows a six-digit code in large digits, and says it if a speaker works: type it above, under waiting for approval.</SpareStickStep>
+          </ol>
+        </div>
+      )}
+      <details className="spare-stick-keys">
+        <summary style={{ fontSize: 12, cursor: 'pointer' }}>boot-menu keys by maker</summary>
+        <table className="tbl" style={{ marginTop: 6, fontSize: 11.5 }}>
+          <tbody>{SPARE_STICK_BOOT_KEYS.map(([maker, key]) => <tr key={maker}><td>{maker}</td><td className="mono">{key}</td></tr>)}</tbody>
+        </table>
+        <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', marginTop: 4 }}>Common keys; a model can differ. If none works, the computer’s firmware settings (often F2 or Del) can put USB first, or turn off “Fast Boot”.</div>
+      </details>
+      <details className="spare-stick-secure-boot">
+        <summary style={{ fontSize: 12, cursor: 'pointer' }}>Secure Boot</summary>
+        <div style={{ ...note, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div>The stick starts with Secure Boot on: its boot loader is Debian’s, signed by Microsoft with both
+            its 2011 and its 2023 certificates{deb && deb.shim_signatures && deb.shim_signatures.length ? ` (${deb.shim_signatures.join(', ')})` : ''}.</div>
+          <div>If the computer refuses it (“Access Denied”, “Secure Boot violation”), its firmware has
+            Microsoft’s third-party certificate switched off (some Lenovo and Surface models since 2022): turn on
+            “Allow Microsoft 3rd Party UEFI CA” in its firmware settings, or turn Secure Boot off.</div>
+          <div style={{ color: 'var(--warn)' }}>Some older PCs’ firmware only has Microsoft’s 2011 certificate,
+            and Debian’s newer boot loaders are signed with the 2023 one only. So the room keeps the boot loader
+            the stick installed (it is frozen, never updated), and this page warns on that room’s health card
+            when its firmware lacks the 2023 certificate. To update the firmware by hand: install the maker’s
+            latest BIOS/UEFI update for that model from their support site (do it before wiping, from Windows,
+            if you can: Windows Update may also bring the certificate), or turn Secure Boot off.</div>
+        </div>
+      </details>
+      <div className="spare-stick-power" style={{ fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 }}>
+        A room runs day and night. An old desktop tower draws about 30 to 80 W: $50 to $130 a year at US
+        prices, more than a new Pi satellite costs. An old laptop (6 to 15 W, $10 to $25 a year) or a mini PC
+        is the better room if you have the choice.
+      </div>
+      {others.length > 0 && (
+        <div className="spare-stick-others" style={{ fontSize: 11.5, color: 'var(--fg-faint)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div>Other sticks on this server (about {spareMb(others[0].size)} each):</div>
+          {others.map(b => (
+            <div key={b.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span>{b.room} · made {spareStickWhen(b.made)}</span>
+              <Button icon="trash-2" variant="ghost" onClick={() => remove(b.id)}>remove</Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SpareDeviceCard = ({ fire }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
@@ -2610,7 +2826,7 @@ const SpareDeviceCard = ({ fire }) => {
         <Icon name="laptop" size={16}/>
         <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>add a spare device</span>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
-          a Linux or Windows laptop or PC, or a phone
+          a laptop or PC (Linux, Windows, or an old one from a USB stick), or a phone
         </span>
         <Icon name={open ? 'chevron-up' : 'chevron-down'} size={14}/>
       </button>
@@ -2685,6 +2901,8 @@ const SpareDeviceCard = ({ fire }) => {
                 </div>
               </div>
               {res.command_windows && <SpareWindows res={res} fire={fire}/>}
+              <SpareUsbStick res={res} fire={fire}
+                             body={editCore && core.trim() ? { room: res.room, core: core.trim() } : { room: res.room }}/>
             </>
           )}
         </div>

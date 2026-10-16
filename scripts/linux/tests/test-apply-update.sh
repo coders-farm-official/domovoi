@@ -739,12 +739,16 @@ run_update() {
   if [ -n "${MANAGE_GPU_RUNTIME:-}" ]; then gpu_env+=(DOMOVOI_MANAGE_GPU_RUNTIME="$MANAGE_GPU_RUNTIME"); fi
   if [ -n "${MANAGE_WAKE_TRAINER:-}" ]; then gpu_env+=(DOMOVOI_MANAGE_WAKE_TRAINER="$MANAGE_WAKE_TRAINER"); fi
   if [ -n "${WAKE_TRAINER_IMAGE:-}" ]; then gpu_env+=(DOMOVOI_WAKE_TRAINER_IMAGE="$WAKE_TRAINER_IMAGE"); fi
+  # Off unless a case asks (the added-packages cases): every other case
+  # would otherwise ask this machine's own dpkg-query and apt-get.
+  gpu_env+=(DOMOVOI_MANAGE_PACKAGES="${MANAGE_PACKAGES:-0}")
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
   RC=0
   env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
-    -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE PATH="$path" \
+    -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
+    -u DOMOVOI_MANAGE_PACKAGES PATH="$path" \
     DOMOVOI_REPO_DIR="$REPO" \
     DOMOVOI_PROVISION_ROOT="$OSROOT" DOMOVOI_PROVISION_TEST_HARNESS=1 \
     ${venv_env[@]+"${venv_env[@]}"} \
@@ -3025,6 +3029,93 @@ case_upstream_pin_that_matches_goes_on() {
 # restart bounces Postgres). Never fatal, never rolled back; a step only
 # when something changed or the helper failed.
 
+# ─── added system packages (xorriso for room sticks, 2026-10-16) ────────
+
+# A box installed before xorriso was in provision.sh's list: the next
+# healthy Restart installs it from Ubuntu's archive (no recommends, not
+# held) as a step of its own after the search helper and Ubuntu's jobs;
+# the Restart after that finds it and does nothing.
+case_added_packages_installed_on_a_restart() {
+  new_case added_packages_installed_on_a_restart
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_gpu_shims "$CASE/pkgbin"
+  : >"$STATE/dpkg"
+  echo always >"$STATE/internet-policy"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode restart" eq "$(field mode)" '"restart"'
+  check "a step of its own, after the search helper" eq "$(step_names)" "signature stop-services start-services health searxng added-packages"
+  check "an ok step" step_is added-packages ok
+  check "it says what it installed" grep -qF '"detail": "installed xorriso"' "$RESULT"
+  check "no recommends" called "apt-get -o Dpkg::Use-Pty=0 -o DPkg::Lock::Timeout=300 -q install -y --no-install-recommends xorriso"
+  check "installed after health" before "curl http://127.0.0.1:6369/api/health" "install -y --no-install-recommends xorriso"
+  check "with the lists apt had: no update" not_called "$APT_UPDATE"
+  check "not held" not_called "apt-mark"
+  check "installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  : >"$STATE/calls.log"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "again: status ok" eq "$(field status)" '"ok"'
+  check "again: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "again: no apt" not_called "apt-get"
+  end_case
+}
+
+# A real update installs it too, and under never nothing is downloaded:
+# no apt, no step, the journal says why.
+case_added_packages_on_an_update_and_never_under_never() {
+  new_case added_packages_on_an_update_and_never_under_never
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_gpu_shims "$CASE/pkgbin"
+  : >"$STATE/dpkg"
+  echo never >"$STATE/internet-policy"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "never: status ok" eq "$(field status)" '"ok"'
+  check "never: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "never: no apt" not_called "apt-get"
+  check "never: the journal says why" grep -qF "not installed while internet access is turned off: xorriso" "$CASE/output.log"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  echo sometimes >"$STATE/internet-policy"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "update: status ok" eq "$(field status)" '"ok"'
+  check "update: mode update" eq "$(field mode)" '"update"'
+  check "update: an ok step" step_is added-packages ok
+  check "update: after the plugins check and the search helper" eq "$(step_names)" "signature preflight backup stop-services migrate start-services health plugins searxng added-packages"
+  check "update: installed" grep -qx "xorriso=1" "$STATE/dpkg"
+  check "update: applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# apt fails (no network, a broken archive): a warn step in our words, after
+# one more try with fresh lists; the run stays ok and nothing rolls back.
+# DOMOVOI_MANAGE_PACKAGES=0 leaves the packages to the administrator.
+case_added_packages_failure_is_a_warning_and_opt_out_is_honoured() {
+  new_case added_packages_failure_is_a_warning_and_opt_out_is_honoured
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  write_gpu_shims "$CASE/pkgbin"
+  : >"$STATE/dpkg"
+  touch "$STATE/apt-fail"
+  echo always >"$STATE/internet-policy"
+  MANAGE_PACKAGES=1 run_update "$CASE/pkgbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a warn step" step_is added-packages warn
+  check "its detail is ours" grep -qF '"detail": "not installed: xorriso (apt-get failed, exit 100; journalctl -u domovoi-update says why). USB sticks for old computers need xorriso"' "$RESULT"
+  check "tried again with fresh lists" called "$APT_UPDATE"
+  check "no error on the run" eq "$(field error)" null
+  check "no rollback" not_called "reset --keep"
+  check "not installed" eq "$(grep -c '^xorriso=' "$STATE/dpkg")" 0
+  rm -f "$STATE/apt-fail"
+  : >"$STATE/calls.log"
+  MANAGE_PACKAGES=0 run_update "$CASE/pkgbin"
+  check "opt-out: status ok" eq "$(field status)" '"ok"'
+  check "opt-out: no step" eq "$(step_names)" "signature stop-services start-services health searxng"
+  check "opt-out: no apt" not_called "apt-get"
+  check "opt-out: the journal says so" grep -qF "added system packages left to the administrator (DOMOVOI_MANAGE_PACKAGES=0)" "$CASE/output.log"
+  end_case
+}
+
 case_gpu_runtime_installed_while_the_services_are_stopped() {
   new_case gpu_runtime_installed_while_the_services_are_stopped
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -3603,6 +3694,9 @@ CASES=(
   case_upstream_pin_mismatch_is_refused
   case_upstream_branch_pin_mismatch_is_refused
   case_upstream_pin_that_matches_goes_on
+  case_added_packages_installed_on_a_restart
+  case_added_packages_on_an_update_and_never_under_never
+  case_added_packages_failure_is_a_warning_and_opt_out_is_honoured
   case_gpu_runtime_installed_while_the_services_are_stopped
   case_gpu_runtime_under_never_downloads_nothing
   case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database

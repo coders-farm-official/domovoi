@@ -405,6 +405,33 @@ async def _room_in_use(room_id: str) -> str | None:
     return None
 
 
+async def _enrolment_for(body: SpareDeviceEnrolRequest, request: Request):
+    """``(payload, parsed, digest)`` for the room in ``body``: this core's
+    fingerprint (from its health answer), the address a device on the LAN
+    dials (``body.core`` or the advertised one), the satellite bundle's
+    digest. Or the response to send instead: 503 when the core is not
+    answering with its identity, 422 ``{reason, message}`` for a room name
+    or an address the payload can't carry."""
+    from satellite import enrolment
+
+    status, health = await get_admin("/v1/health", headers=auth_forward_headers(request))
+    identity = health.get("identity") if status == 200 and isinstance(health, dict) else None
+    fingerprint = identity.get("fingerprint") if isinstance(identity, dict) else None
+    if not fingerprint:
+        raise HTTPException(status_code=503, detail="the Domovoi server is not answering with its identity")
+    status, digest = await get_admin("/v1/satellite-code/bundle.sha256",
+                                     headers=auth_forward_headers(request))
+    if status != 200 or not isinstance(digest, dict) or not digest.get("sha256"):
+        return bridge_response(status if status != 200 else 503, digest)
+    core = (body.core or "").strip() or _advertised_core_http()
+    try:
+        payload = enrolment.build(core, fingerprint, body.room)
+        parsed = enrolment.parse(payload)
+    except enrolment.EnrolmentError as e:
+        raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
+    return payload, parsed, digest
+
+
 @router.post(
     "/enrolment",
     # An admin's: this is how a device is invited into the house (it is
@@ -424,21 +451,10 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
     the container guard holds the satellite channel."""
     from satellite import enrolment
 
-    status, health = await get_admin("/v1/health", headers=auth_forward_headers(request))
-    identity = health.get("identity") if status == 200 and isinstance(health, dict) else None
-    fingerprint = identity.get("fingerprint") if isinstance(identity, dict) else None
-    if not fingerprint:
-        raise HTTPException(status_code=503, detail="the Domovoi server is not answering with its identity")
-    status, digest = await get_admin("/v1/satellite-code/bundle.sha256",
-                                     headers=auth_forward_headers(request))
-    if status != 200 or not isinstance(digest, dict) or not digest.get("sha256"):
-        return bridge_response(status if status != 200 else 503, digest)
-    core = (body.core or "").strip() or _advertised_core_http()
-    try:
-        payload = enrolment.build(core, fingerprint, body.room)
-        parsed = enrolment.parse(payload)
-    except enrolment.EnrolmentError as e:
-        raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
+    made = await _enrolment_for(body, request)
+    if not isinstance(made, tuple):
+        return made
+    payload, parsed, digest = made
     return {
         "payload": payload,
         # What the QR code carries: the server's join page with the payload
@@ -456,6 +472,7 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "command_windows": install_command_windows(parsed.core, digest["sha256"], payload),
         "windows_runtime": await _windows_runtime(request),
         "android_app": await _android_app_for_a_phone(request),
+        "usb_stick": await _usb_stick_for_the_card(request),
         "conflict": await _room_in_use(parsed.room_id),
     }
 
@@ -561,6 +578,76 @@ async def windows_runtime_status(request: Request):
 async def windows_runtime_fetch(request: Request):
     """Start fetching the Windows satellite's runtime onto the core."""
     status, doc = await post_admin("/v1/admin/satellite-windows/fetch", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+# ─── old computers: the room stick (2026-10-16) ───────────────────────────
+# domovoi/usb_stick/ on the core: "Prepare the stick" downloads Debian's
+# netinst there the first time and re-packs it with the room's code; the
+# image, its Raspberry Pi Imager list and manifest are then served by the
+# core (/v1/usb-stick/<id>/...). These routes are the dashboard's side.
+
+
+async def _usb_stick_for_the_card(request: Request) -> dict[str, Any] | None:
+    """The core's room-stick status for the card's old-computer column, or
+    None from a core that doesn't say. Read only: a stick is prepared only
+    when an admin presses "Prepare the stick"."""
+    status, doc = await get_admin("/v1/admin/usb-stick", headers=auth_forward_headers(request))
+    return doc if status == 200 and isinstance(doc, dict) else None
+
+
+@router.get(
+    "/usb-stick",
+    # The card's: Debian's image, what this server can do now, the job and
+    # the finished sticks with their links. An admin's business.
+    dependencies=[Depends(require_admin_read)],
+)
+async def usb_stick_status(request: Request):
+    """``debian`` (cached or not), ``refusal`` (why a stick can't be
+    prepared now, or null), ``job`` (stage, progress, the last result,
+    which stays until the next try) and ``builds``."""
+    status, doc = await get_admin("/v1/admin/usb-stick", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post(
+    "/usb-stick",
+    # It downloads ~790 MB from Debian the first time and writes a ~790 MB
+    # image on the server, and the stick it makes erases a computer: an
+    # admin's write, like the enrolment code it carries.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def usb_stick_prepare(body: SpareDeviceEnrolRequest, request: Request):
+    """Prepare a room stick for ``room``: the same enrolment payload the
+    spare-device card shows, handed to the core, which builds the image in
+    the background. Answers at once (``started`` and the status) or 409
+    ``{reason, message}`` when it can't start (internet "never" without
+    Debian's image, short of disk, no xorriso, one already being made);
+    ``conflict`` says when the room is taken, as for the other devices."""
+    made = await _enrolment_for(body, request)
+    if not isinstance(made, tuple):
+        return made
+    payload, parsed, _digest = made
+    status, doc = await post_admin("/v1/admin/usb-stick/build", {"payload": payload},
+                                   timeout=120.0, headers=auth_forward_headers(request))
+    if status != 200 or not isinstance(doc, dict):
+        return bridge_response(status, doc)
+    return {**doc, "room": parsed.room, "room_id": parsed.room_id, "core": parsed.core,
+            "conflict": await _room_in_use(parsed.room_id)}
+
+
+@router.delete(
+    "/usb-stick/{build_id}",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def usb_stick_delete(build_id: str, request: Request):
+    """Remove a finished stick's image from the server (about 800 MB)."""
+    import re
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32}", build_id):
+        raise HTTPException(status_code=404, detail="no such stick")
+    status, doc = await delete_admin(f"/v1/admin/usb-stick/builds/{build_id}",
+                                     headers=auth_forward_headers(request))
     return bridge_response(status, doc) if status != 200 else doc
 
 

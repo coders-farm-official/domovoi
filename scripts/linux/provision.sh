@@ -1076,9 +1076,15 @@ do_preflight() {
 # --timezone; WSL also needs them to follow Windows' zone), sudo (the
 # dashboard's restart and update grants). Not espeak-ng (GPL): Domovoi's
 # voices no longer need it, and the OS last-resort voice is the owner's
-# choice (docs/LINUX_HOST.md).
+# choice (docs/LINUX_HOST.md). xorriso (GPL-3.0-or-later, libisoburn) is
+# the program the core runs to make old computers' room sticks
+# (domovoi/usb_stick/repack.py), the same footing as ffmpeg and mpg123: an
+# OS package run as a separate program, never bundled. Ubuntu 26.04's
+# build (1:1.5.6-1.1ubuntu4 when this was written) is the one tested; an
+# install from before it gets the same package from apply-update.sh
+# (scripts/linux/added-packages.txt).
 APT_PACKAGES=(python3 python3-venv python3-dev build-essential pkg-config libasound2-dev
-  git ffmpeg mpg123 libchromaprint-tools
+  git ffmpeg mpg123 libchromaprint-tools xorriso
   zstd ca-certificates curl gnupg tzdata sudo)
 
 pkgs_installed() {

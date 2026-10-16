@@ -63,6 +63,8 @@ def core(monkeypatch):
         "/v1/satellite-code/bundle.sha256": (200, {"sha256": SHA, "size": 812345, "files": 70}),
         "/v1/admin/satellite-windows": (200, WIN_RUNTIME),
         "/v1/admin/android-app": (200, APP_NONE),
+        "/v1/admin/usb-stick": (200, {"debian": {"version": "13.7.0", "cached": False}, "refusal": None,
+                                      "job": {"running": False}, "builds": []}),
     }
     posted: list[str] = []
     answers["posted"] = posted

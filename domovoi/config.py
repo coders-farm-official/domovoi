@@ -748,6 +748,13 @@ class Settings(BaseSettings):
     # address is the wrong one).
     satellite_adoption_enabled: bool = True
     satellite_adoption_advertise_url: str = "auto"
+    # Old computers (USB stick, domovoi/usb_stick/): whether a room stick
+    # made from now on may set the computer up over Wi-Fi (Debian's own
+    # "which network / password" questions in the installer). Off: the
+    # stick needs a network cable and says so before anything is erased
+    # (owner decision 2026-10-15: a cable first; Wi-Fi once a real laptop
+    # has passed the test). Read when a stick is prepared.
+    usb_stick_wifi: bool = False
     # On startup, pre-populate the voices registry with the three
     # public-domain Piper voices (domovoi/voice_catalog.py), so they're
     # available to list/sample/switch without manual registration.
