@@ -217,6 +217,8 @@ The Chat page (dashboard and Android app) talks to Ollama from the web process. 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | "Pictures need the vision model qwen3-vl:2b-instruct-q4_K_M, which isn't installed on this Domovoi." (also shown by the paperclip) | The vision model isn't pulled; it isn't by default (except by `scripts/linux/provision.sh`) | Settings → Models: install it, or switch the Vision row to a vision-capable model you have. See [FAQ: pictures in chat](FAQ.md#can-i-send-pictures-in-chat) |
+| "This photo is in HEIC format, which the chat can't read. Send it from the Domovoi app…" (dashboard) | A phone camera's HEIC photo; a browser can't convert it | Send it from the Android app, which converts it to a JPEG, or save it as a JPEG first. See [FAQ: pictures in chat](FAQ.md#can-i-send-pictures-in-chat) |
+| "This photo is in HEIC format, and this phone can't convert HEIC photos (that needs Android 9 or newer)." (app) | Android 8 has no HEIC decoder | Save the photo as a JPEG (or set the camera to JPEG) and send that |
 | "The vision model … can't read pictures." | The Vision row names a text-only model | Pick a vision-capable model for the Vision row in Settings → Models |
 | "The model … isn't installed on this Domovoi." | `OLLAMA_MODEL` (the chat model) isn't pulled | Install it, or pick an installed one, in Settings → Models |
 | "… needs more memory than this Domovoi has free right now." | Other models are loaded (the voice models stay loaded for `OLLAMA_KEEP_ALIVE`) | Try again once they unload, shorten the keep-alive, or pick a smaller model; see [CPU_HOST.md](CPU_HOST.md) |

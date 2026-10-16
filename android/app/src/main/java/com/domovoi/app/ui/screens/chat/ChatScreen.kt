@@ -2,6 +2,7 @@ package com.domovoi.app.ui.screens.chat
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -415,6 +416,9 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         it.api.get("/api/chat/models").decode<ChatModelsInfo>()
     }
     var pictureNote by remember { mutableStateOf(false) }
+    // Why a picked picture didn't reach the chat (photoFailureText), until
+    // it is closed or the next pick.
+    var uploadNote by remember { mutableStateOf<String?>(null) }
     // The hold-to-talk view (VoiceView.kt), over the conversation.
     var voiceOpen by remember { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(
@@ -551,17 +555,14 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                 runCatching {
                     val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                         ?: return@launch
-                    val mime = context.contentResolver.getType(uri) ?: "image/jpeg"
-                    val ext = when {
-                        mime.contains("png") -> "png"
-                        mime.contains("webp") -> "webp"
-                        mime.contains("gif") -> "gif"
-                        else -> "jpg"
-                    }
+                    // By its bytes, not the gallery's type: a HEIC photo (and
+                    // anything else the server can't read, or one over its
+                    // limits) goes as a JPEG made here (ChatPhotoPlan.kt).
+                    val photo = preparePhoto(bytes)
                     val form = MultipartBody.Builder().setType(MultipartBody.FORM)
                         .addFormDataPart(
-                            "file", "photo.$ext",
-                            bytes.toRequestBody(mime.toMediaType()),
+                            "file", photo.name,
+                            photo.bytes.toRequestBody(photo.mime.toMediaType()),
                         )
                         .build()
                     val up = app.api.upload("/api/chat/uploads", form).decode<ImageRef>()
@@ -569,8 +570,11 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                         // Uploads run in parallel: two picker rounds can race past the cap.
                         if (attachments.size < MAX_CHAT_IMAGES) attachments.add(up) else toast(CHAT_IMAGE_CAP_TOAST)
                     }
-                }.onFailure {
-                    withContext(Dispatchers.Main) { toast("upload failed") }
+                }.onFailure { e ->
+                    // Why, in words, where the photo would have been (a toast
+                    // is gone before a sentence like this is read).
+                    val text = photoFailureText(e, Build.VERSION.SDK_INT)
+                    withContext(Dispatchers.Main) { uploadNote = text }
                 }
             }
         }
@@ -677,6 +681,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
         if (visionMissing && (pictureNote || attachments.isNotEmpty())) {
             PictureNote(models.data?.vision_model, onClose = { pictureNote = false })
         }
+        uploadNote?.let { UploadNote(it, onClose = { uploadNote = null }) }
 
         Row(
             Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -690,7 +695,7 @@ private fun ConversationPane(thread: ThreadRow, onBack: () -> Unit) {
                     // installed it (the note goes once the read says so).
                     AttachAction.ExplainVision -> { pictureNote = true; models.refresh() }
                     AttachAction.AtCap -> toast(CHAT_IMAGE_CAP_TOAST)
-                    AttachAction.Pick -> { pictureNote = false; picker.launch("image/*") }
+                    AttachAction.Pick -> { pictureNote = false; uploadNote = null; picker.launch("image/*") }
                 }
             }) {
                 Icon(

@@ -158,6 +158,32 @@ internal fun ChatErrorNote(err: ChatErrorView) {
     }
 }
 
+/** The composer's note when a picked picture didn't reach the chat
+ *  ([photoFailureText]: couldn't be converted, refused, or failed to send). */
+@Composable
+internal fun UploadNote(text: String, onClose: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Domovoi.colors.sunken)
+            .padding(start = 10.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            Icons.Outlined.HideImage, contentDescription = null,
+            tint = Domovoi.colors.fgMuted, modifier = Modifier.padding(top = 2.dp).size(16.dp),
+        )
+        Text(
+            text, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fg,
+            modifier = Modifier.weight(1f).padding(top = 1.dp),
+        )
+        IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Outlined.Close, contentDescription = "close", tint = Domovoi.colors.fgMuted)
+        }
+    }
+}
+
 /** The composer's note when a picture can't be read here. */
 @Composable
 internal fun PictureNote(model: String?, onClose: () -> Unit) {

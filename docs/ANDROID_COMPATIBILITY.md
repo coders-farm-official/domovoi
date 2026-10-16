@@ -62,6 +62,7 @@ version from 8.0.
 | Music from the server on the phone, media notification | works | works | works | works | works | works |
 | Video feed (server and phone): pause on leaving, screen kept on | works | works | works | works | works | works |
 | Chat (text) | works | works | works | works | works | works |
+| Chat photos: HEIC / AVIF converted to JPEG before sending | degraded: JPEG, PNG, GIF, WebP and BMP only; a HEIC photo gets "this phone can't convert HEIC photos" | works; AVIF as 8 | as 9 | works | works | as the Android version |
 | Chat mic (hold to talk) | works; mic prompt Allow / Deny | works; Allow / Deny | works; "While using the app" / "Only this time" | as 11 | as 11 | works |
 | Chat mic haptics | degraded: plain key / long-press feedback | degraded: as 8 | works: confirm / reject | works | works | as the Android version |
 | Settings → Voice: the phone's own voice, sample clips | works | works | works | works | works | works (ONNX Runtime has 32-bit builds) |
