@@ -331,7 +331,9 @@ case $url in
     mv "$SHIM_STATE/om.new" "$SHIM_STATE/ollama-models"
     echo '{"status":"success"}' ;;
   http://127.0.0.1:6370/v1/health)
-    active domovoi-core.service && [ ! -f "$SHIM_STATE/core-unhealthy" ] || { echo "curl: (7)" >&2; exit 7; } ;;
+    # The core answers only with its database up (its health reads it).
+    active domovoi-core.service && active domovoi-db.service && [ ! -f "$SHIM_STATE/core-unhealthy" ] \
+      || { echo "curl: (7)" >&2; exit 7; } ;;
   http://127.0.0.1:6369/api/health)
     active domovoi-web.service || { echo "curl: (7)" >&2; exit 7; } ;;
   *) echo "curl shim: unexpected URL $url" >&2; exit 6 ;;
@@ -1625,6 +1627,17 @@ case_a_unit_that_fails_after_a_no_block_start_stops_the_wait() {
   end_case
 }
 
+case_the_database_failing_after_a_no_block_start_stops_the_wait() {
+  new_case the_database_failing_after_a_no_block_start_stops_the_wait
+  echo domovoi-db.service >"$STATE/start-then-fail"
+  local t0=$SECONDS
+  run_prov "${wsl_args[@]}" --skip-models
+  check "exit 1" eq "$RC" 1
+  check "at once, not after --health-timeout" bash -c '[ "$1" -lt 60 ]' _ "$((SECONDS - t0))"
+  check "names the database" said "the core (/v1/health) won't answer: domovoi-db.service failed"
+  end_case
+}
+
 # A core that failed before this run (the last provision's, say) keeps its
 # failed mark while its --no-block start waits for the database's: the
 # wait must not take that for this start failing. The mark is cleared
@@ -2285,6 +2298,7 @@ CASES=(
   case_journal_kept_on_disk
   case_starts_do_not_block_on_ready
   case_a_unit_that_fails_after_a_no_block_start_stops_the_wait
+  case_the_database_failing_after_a_no_block_start_stops_the_wait
   case_a_failed_mark_from_before_is_not_this_starts
   case_journal_opt_out_is_honoured
   case_os_jobs_opt_out_is_honoured
