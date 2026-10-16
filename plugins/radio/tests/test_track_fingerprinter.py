@@ -95,7 +95,8 @@ async def test_a_track_that_keeps_running_out_of_time_is_marked_and_skipped(
     monkeypatch.setattr(tf_mod, "fingerprint_file", fake_fp)
     worker = TrackFingerprinter(radio_sdk, clock=lambda: clock["t"])
     nexts = []
-    for i in range(tf_mod.TIMEOUTS_BEFORE_MARK - 1):
+    # At least once: a single timeout must never mark a track for good.
+    for i in range(max(1, tf_mod.TIMEOUTS_BEFORE_MARK - 1)):
         assert await worker.tick() == 0                     # timed out, not marked
         assert slow not in {r.library_track_id for r in await _fingerprint_rows(db_session)}
         nexts.append(await _insert_track(db_session, f"C:/music/next{i}.mp3"))

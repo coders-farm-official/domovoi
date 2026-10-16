@@ -236,10 +236,11 @@ def test_a_slow_voice_download_does_not_block_another_voice(monkeypatch) -> None
 
 async def test_replies_in_a_loaded_voice_never_wait_behind_a_download(monkeypatch, tmp_path) -> None:
     """Review 2026-10-15 (the reviewer's scratch test, through the real
-    synthesis chain): four replies in a voice still downloading must not
+    synthesis chain): replies in four voices still downloading must not
     take the speech pool's four threads. The chain stops for a voice that
-    isn't on disk, the voice is fetched once in the downloads pool, and a
-    reply in a loaded voice goes straight through (it waited 3.70 s)."""
+    isn't on disk, each voice is fetched once (two replies ask for each) in
+    the downloads pool, and a reply in a loaded voice goes straight through
+    (it waited 3.70 s; with the fetches in the "tts" pool, ~1.2 s)."""
     from domovoi.clients import tts as tts_mod
 
     downloaded: list[str] = []
@@ -251,7 +252,7 @@ async def test_replies_in_a_loaded_voice_never_wait_behind_a_download(monkeypatc
     def slow_fetch(voice: str):
         if voice in on_disk:                 # as the real one: no fetch once there
             return tmp_path / f"{voice}.onnx"
-        time.sleep(3.0)                      # a first download on a slow line
+        time.sleep(1.5)                      # a first download on a slow line
         downloaded.append(voice)
         on_disk.add(voice)
         return tmp_path / f"{voice}.onnx"
@@ -272,8 +273,9 @@ async def test_replies_in_a_loaded_voice_never_wait_behind_a_download(monkeypatc
     monkeypatch.setattr(tts_mod, "_synth_piper_sync", fake_synth)
     client = tts_mod.RealTTSClient(preferred_engine="piper", piper_voice="cached-voice", speed=1.0)
 
-    waiting = [asyncio.create_task(client.synthesize_detailed("hello", voice="slow-voice"))
-               for _ in range(4)]
+    voices = [f"slow-voice-{i}" for i in range(4)]
+    waiting = [asyncio.create_task(client.synthesize_detailed("hello", voice=v))
+               for v in voices for _ in range(2)]
     await asyncio.sleep(0.3)
     t0 = time.monotonic()
     quick = await client.synthesize_detailed("hello", voice="cached-voice")
@@ -281,8 +283,9 @@ async def test_replies_in_a_loaded_voice_never_wait_behind_a_download(monkeypatc
     slow = await asyncio.gather(*waiting)
     assert quick.engine == "piper" and quick.voice == "cached-voice"
     assert took < 0.5, f"a reply in a loaded voice waited {took:.2f} s behind a download"
-    assert [r.engine for r in slow] == ["piper"] * 4 and all(r.voice == "slow-voice" for r in slow)
-    assert downloaded == ["slow-voice"]      # fetched once for all four
+    assert [r.engine for r in slow] == ["piper"] * 8
+    assert [r.voice for r in slow] == [v for v in voices for _ in range(2)]
+    assert sorted(downloaded) == voices      # each fetched once, for both replies
     assert executors.POOL_SIZES["downloads"] >= 1
 
 

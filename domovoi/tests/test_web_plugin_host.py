@@ -693,3 +693,22 @@ async def test_the_plugin_list_carries_the_cores_worker_notes(monkeypatch) -> No
         server.close()
     monkeypatch.setenv("DOMOVOI_URL", "http://127.0.0.1:9")    # nothing listens
     assert await plugins_api._worker_notes() == {}
+
+
+@requires_db
+@pytest.mark.asyncio
+async def test_the_installed_list_shows_each_plugins_worker_notes(fake_plugin, monkeypatch) -> None:
+    """GET /api/plugins puts each plugin's notes on its own row, and an
+    empty list on every other (the Plugins page renders them)."""
+    from web.backend.api import plugins as plugins_api
+
+    async def notes():
+        return {_SLUG: [{"worker": "poller", "note": "paused for 1 h"}]}
+
+    monkeypatch.setattr(plugins_api, "_worker_notes", notes)
+    async with _web() as client:
+        r = await client.get("/api/plugins")
+    assert r.status_code == 200
+    rows = {p["slug"]: p for p in r.json()["plugins"]}
+    assert rows[_SLUG]["worker_notes"] == [{"worker": "poller", "note": "paused for 1 h"}]
+    assert all(p["worker_notes"] == [] for slug, p in rows.items() if slug != _SLUG)

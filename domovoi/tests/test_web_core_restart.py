@@ -247,6 +247,22 @@ async def test_a_silence_already_watched_counts(systemd, monkeypatch) -> None:
     assert time.monotonic() - t0 < 1.0
 
 
+def test_silence_is_counted_per_process(monkeypatch) -> None:
+    """The silence a press needs belongs to one main PID: a new process
+    starts its own count, an old one's is dropped (a PID comes round again
+    after enough starts, and must not inherit a silence it never had), and
+    any answer clears them all."""
+    monkeypatch.setattr(core_restart, "_SILENT_SINCE", {})
+    core_restart._note_probe(4242, False)
+    core_restart._SILENT_SINCE[4242] -= 100.0               # silent for 100 s
+    assert core_restart._note_probe(4242, False) >= 100.0
+    assert core_restart._note_probe(5151, False) < 1.0      # systemd's next core
+    assert core_restart._note_probe(4242, False) < 1.0      # the PID again, later: afresh
+    core_restart._SILENT_SINCE[4242] -= 50.0
+    assert core_restart._note_probe(0, True) == 0.0
+    assert core_restart._SILENT_SINCE == {}
+
+
 async def test_a_new_process_meanwhile_stops_the_press(systemd, monkeypatch) -> None:
     """systemd started another core while the press waited (its own
     watchdog did its job): nothing is ended."""
@@ -361,6 +377,12 @@ async def test_probe_any_answer_from_the_loop_is_alive(monkeypatch) -> None:
         "older core": ({"/v1/health": (200, b"{}", 0.0)}, Probe(alive=True, health=200)),
         "healthy": ({"/v1/alive": (200, b"{}", 0.0), "/v1/health": (200, b"{}", 0.0)},
                     Probe(alive=True, health=200)),
+        # The core's other 503 is not about the database: not named so.
+        "no handlers": ({"/v1/alive": (200, b"{}", 0.0),
+                         "/v1/health": (503, b'{"detail":"no handlers registered"}', 0.0)},
+                        Probe(alive=True, health=503, db_down=False)),
+        "server error": ({"/v1/alive": (200, b"{}", 0.0), "/v1/health": (500, b"oops", 0.0)},
+                         Probe(alive=True, health=500, db_down=False)),
     }
     for name, (routes, want) in cases.items():
         server, port = await _serve(_responder(routes))
