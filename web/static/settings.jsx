@@ -656,7 +656,7 @@ const VoicesPanel = () => {
  *   GET   /api/config              · web build (web_version)
  *   GET   /api/config/version      · domovoi git SHA → { sha, restart_mode, last_update, bad_sha, … }
  *   POST  /api/config/version/check· git fetch + count → { behind, ahead, upstream, upstream_sha, error,
- *                                    channel, upstream_version, latest_release }
+ *                                    channel, upstream_version, latest_release, tag_warning }
  *   POST  /api/config/version/pull · git pull --ff-only → { pulled, new_sha, error }
  *   POST  /api/config/version/channel · follow stable or main; HEAD never moves → { ok, changed, channel, error }
  *   POST  /api/config/version/restart · bounce core+web, or start the update unit → { ok, mode, units, error }
@@ -1279,6 +1279,13 @@ const VersionSection = () => {
       {mode === 'pull' && (
         <div className="mono" style={{ padding: '0 16px 14px', fontSize: 11, color: 'var(--fg-faint)' }}>
           Pull updates the host files only — this panel will then offer the restart that loads them.
+        </div>
+      )}
+      {status && status.tag_warning && mode !== 'busy' && (
+        // A release tag that moved upstream (or tags that didn't arrive):
+        // the labels may be off; the check and the pull work as ever.
+        <div className="version-tag-warning" style={{ padding: '0 16px 12px', fontSize: 12, color: 'var(--warn)' }}>
+          {status.tag_warning}
         </div>
       )}
       {stableWaiting && (

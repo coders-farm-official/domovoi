@@ -117,6 +117,10 @@ SCENARIOS = {
     "household": _scenario(_version(), _check(), NOTHING, setup=_HOUSEHOLD),
     "pinned_to_main": _scenario(_version(channel="main", channel_pin=["main"]), _check(channel="main")),
     "pinned_to_both": _scenario(_version(channel="main", channel_pin=["stable", "main"]), _check(channel="main")),
+    "tag_moved": _scenario(_version(), _check(behind=1, upstream_version="1.0.1", tag_warning=(
+        "a published release tag moved upstream (v1.0.0); this server keeps the copy it had, so a "
+        "version label may be off. Updates are not affected. Published tags never move: tell "
+        "Domovoi's maintainers")), CHECK),
     "stable_waiting": _scenario(_version(channel="main", channel_intended="stable", latest_release="1.0.0")),
     "stable_not_yet": _scenario(_version(channel="main", channel_intended="stable", latest_release=None)),
     "stable_waiting_household": _scenario(_version(channel="main", channel_intended="stable", latest_release="1.0.0"),
@@ -219,6 +223,14 @@ def test_a_channel_root_does_not_allow_is_not_offered(driven) -> None:
     assert b["channel"].endswith("set on the server")
     both = driven["pinned_to_both"]["before"]
     assert both["select"]["options"] == ["stable: releases only", "main: every change, as it lands"]
+
+
+def test_a_moved_tag_is_a_warning_beside_a_working_update(driven) -> None:
+    """rc2 review C1: the check still offers the pull; the moved tag is a
+    line about the labels."""
+    a = driven["tag_moved"]["after"]
+    assert "Pull the latest" in a["buttons"]
+    assert "a published release tag moved upstream (v1.0.0)" in a["text"]
 
 
 def test_an_install_from_before_the_first_release_is_told_when_it_is_out(driven) -> None:

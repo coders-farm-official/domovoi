@@ -68,8 +68,8 @@ async def test_git_fetch_still_runs_when_unanswered(monkeypatch) -> None:
         return subprocess.CompletedProcess(["git", *args], 0, "", "")
 
     monkeypatch.setattr(git_version, "_run", fake_run)
-    assert (await git_version.fetch()) == {"ok": True, "error": None}
-    assert calls == [("fetch", "--tags")]
+    assert (await git_version.fetch()) == {"ok": True, "error": None, "tag_warning": None}
+    assert calls == [("fetch", "--no-tags"), ("fetch", "--no-tags", "origin", "refs/tags/*:refs/tags/*")]
 
 
 # ─── plugin installer ─────────────────────────────────────────────────────
