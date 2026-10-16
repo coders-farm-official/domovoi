@@ -2747,11 +2747,16 @@ const SpareUsbStick = ({ res, body, fire }) => {
   const imagerLink = mine ? `rpi-imager://?repo=${encodeURIComponent(mine.os_list_url)}` : null;
   return (
     <div className="spare-usb-stick" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-soft)', paddingTop: 12 }}>
-      <div className="label">old computer (usb stick)</div>
+      <div className="spare-stick-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="label">old computer (usb stick)</div>
+        <PreviewTag/>
+      </div>
       <div style={note}>
         An old 64-bit PC or laptop, or an Intel Mac from 2012 to 2017, becomes this room: the stick
         installs a fresh system on it (Debian) and the satellite, with no terminal and no password. It
         <b> erases that computer’s disk</b>, and asks first, on the computer itself, naming the disk.
+        Like the other spare devices, the stick is a preview: so far it has been tried in virtual
+        machines; real computers are next.
       </div>
       <ul className="spare-stick-needs" style={{ ...note, margin: 0, paddingLeft: 18 }}>
         <li>A processor from about 2009 or newer (Intel Core i3/i5/i7 or later, AMD from about 2011). An older one is refused before anything is erased.</li>
@@ -2912,8 +2917,8 @@ const SpareDeviceCard = ({ fire }) => {
           <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
             Name the room the device will be. It joins like a Pi: it waits above for its
             approval code, and nothing in this command or code is a password. Spare computers
-            and phones as rooms are a preview: they work, but have been tried on fewer devices
-            than a Pi.
+            (old ones from a USB stick too) and phones as rooms are a preview: they work, but
+            have been tried on fewer devices than a Pi.
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}

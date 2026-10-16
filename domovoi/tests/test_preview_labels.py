@@ -36,6 +36,22 @@ def test_the_dashboard_s_spare_device_card_carries_the_preview_tag():
     assert "<PreviewTag/>" in header, "the tag sits in the card's header, beside its name"
 
 
+def test_the_usb_stick_for_old_computers_is_labelled_a_preview_too():
+    """The room stick (wf/usb-stick) is a spare device as a room: its column
+    on the card, its guide section and its release note say so."""
+    sats = _read("web/static/satellites.jsx")
+    column = sats.split("const SpareUsbStick = ", 1)[1].split("const SpareDeviceCard", 1)[0]
+    title = column.split('<div className="label">old computer (usb stick)</div>', 1)[1].split("</div>", 1)[0]
+    assert "<PreviewTag/>" in title, "the tag sits beside the column's name"
+    guide = _read("docs/SPARE_DEVICE_SATELLITES.md").split("## Old computers (USB stick)", 1)[1].split("\n## ", 1)[0]
+    assert "**The USB stick is a preview**" in guide
+    notes = _read("docs/RELEASE_NOTES.md").split("— Old computers become rooms from a USB stick", 1)[1]
+    assert "A **preview**" in notes.split("\n## ", 1)[0]
+    readme = _read("README.md")
+    previews = readme.split("**Previews**", 1)[1].split("\n**", 1)[0]
+    assert "USB stick" in previews
+
+
 def test_the_join_page_says_a_phone_room_is_a_preview():
     js = _read("domovoi/join_page/join.js")
     lede = next(line for line in js.splitlines() if "text('lede', 'It becomes the room" in line)

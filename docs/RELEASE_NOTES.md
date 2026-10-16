@@ -29,6 +29,11 @@ migration.
 
 ## 2026-10-16 — Old computers become rooms from a USB stick
 
+Server update (core, dashboard, the update unit's scripts; no migration).
+A **preview**, like the other spare devices as rooms, and labelled so on
+the card: so far it has been tried in virtual machines; real computers are
+next.
+
 * **Settings → Satellites → add a spare device → old computer (usb
   stick).** Name the room, press **Prepare the stick**: the server
   downloads Debian 13.7's installer image from Debian the first time

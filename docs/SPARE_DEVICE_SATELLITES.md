@@ -807,6 +807,11 @@ on top of it, the same headless install a Linux mini PC gets.
 photos) is gone for good. It asks first, on the computer itself, naming the
 disk, and nothing is touched until you type ERASE.
 
+**The USB stick is a preview**, like every spare device as a room (above),
+labelled so on the card's **old computer (usb stick)** column: so far it
+has been tried in virtual machines (BIOS, UEFI, Secure Boot); real
+computers are next.
+
 ### What it needs
 
 | | |
