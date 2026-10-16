@@ -3,7 +3,7 @@
 Everything Play asks for is ready in this folder; what is left is clicks
 in the Play Console, and the signing steps that only the key's owner does.
 Written 2026-10-15 for `wf/play-prep` (versionCode 26101501, versionName
-1.0.0). Play Console menu names move around; search the console for the
+1.0.0-rc1). Play Console menu names move around; search the console for the
 quoted name if a path differs.
 
 | File | What it is |
@@ -60,7 +60,7 @@ own phones.
    ```
    It asks for the keystore, alias and passwords (never stored or
    logged), builds `bundleRelease`, signs it with jarsigner, checks it, and
-   prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-1.0.0-26101501.aab`),
+   prints the `.aab` path (`android\app\build\outputs\bundle\release-signed\domovoi-1.0.0-rc1-26101501.aab`),
    its SHA-256 and the certificate's SHA-256. Bash: `bash android/scripts/play-bundle.sh`.
 
 ## 1. Create the app
@@ -114,8 +114,8 @@ signed differently and can never update each other.
 
 1. **Test and release → Testing → Internal testing → Testers**: create an
    email list (up to 100 people), add the household's Google accounts, save.
-2. **Create new release** → upload `domovoi-1.0.0-26101501.aab`.
-   Release name: `1.0.0 (26101501)`. Release notes (en-US):
+2. **Create new release** → upload `domovoi-1.0.0-rc1-26101501.aab`.
+   Release name: `1.0.0-rc1 (26101501)`. Release notes (en-US):
    > First Play release: the on-device assistant (64-bit phones with 8 GB
    > or more), local music, videos and files, room mode, and the companion
    > for your Domovoi server.
@@ -196,7 +196,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 ```
 It builds the arm64-v8a and armeabi-v7a APKs, signs them with **the same
 key**, checks them as a Domovoi server will, publishes the GitHub release
-`android-v1.0.0` with `gh`, and writes `android/release.json`; then commit
+`v1.0.0-rc1` with `gh` (a full release; `-Prerelease` marks it a pre-release), and writes `android/release.json`; then commit
 and push that file (`[skip ci]`). `-NoPublish` stops before GitHub. The
 APKs and the Play bundle must share one `versionCode` sequence: a later
 build raises `versionCode` (`YYMMDDNN`) in `android/app/build.gradle.kts`

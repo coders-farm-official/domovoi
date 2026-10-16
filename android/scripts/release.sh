@@ -14,6 +14,7 @@
 #   bash android/scripts/release.sh                  # build, sign, check, publish, write release.json
 #   bash android/scripts/release.sh --no-publish     # build, sign, check; stop before GitHub
 #   bash android/scripts/release.sh --skip-build     # sign what the last build left (after a failed signing)
+#   bash android/scripts/release.sh --prerelease     # mark the GitHub release a pre-release (off by default)
 #   bash android/scripts/release.sh --keystore ~/domovoi-release.jks --alias domovoi
 #
 # Needs: a JDK (JAVA_HOME or java on PATH), the Android SDK with
@@ -28,15 +29,17 @@ PACKAGE="com.domovoi.app"
 
 publish=1
 build=1
+prerelease=0
 keystore=""
 alias_name=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-publish) publish=0 ;;
     --skip-build) build=0 ;;
+    --prerelease) prerelease=1 ;;
     --keystore) keystore="${2:?--keystore needs a path}"; shift ;;
     --alias) alias_name="${2:?--alias needs a name}"; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 64 ;;
   esac
   shift
@@ -121,7 +124,9 @@ for abi in "${ABIS[@]}"; do
   if [ -z "$version_name" ]; then version_name="$vn"; version_code="$vc"; fi
   [ "$vn" = "$version_name" ] && [ "$vc" = "$version_code" ] || die "the APKs disagree on their version"
 done
-tag="android-v$version_name"
+# The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
+# tag_for, which the manifest's URLs are checked against.
+tag="v$version_name"
 say "Domovoi $version_name (versionCode $version_code), commit ${commit:0:12}"
 
 # versionCode is YYMMDDNN (android/app/build.gradle.kts): the build's date
@@ -250,8 +255,9 @@ notes="$signed/NOTES.md"
 say "publishing $tag on $REPO_SLUG…"
 assets=()
 for abi in "${ABIS[@]}"; do assets+=("$signed/domovoi-$version_name-$abi.apk"); done
+pre=(); [ "$prerelease" = 1 ] && pre=(--prerelease)
 gh release create "$tag" "${assets[@]}" "$signed/SHA256SUMS" --repo "$REPO_SLUG" --target "$commit" \
-  --title "Domovoi for Android $version_name" --notes-file "$notes" || die "gh release create failed"
+  --title "Domovoi for Android $version_name" --notes-file "$notes" ${pre[@]+"${pre[@]}"} || die "gh release create failed"
 
 say "checking the published files by their manifest URLs…"
 check_dir="$(mktemp -d)"

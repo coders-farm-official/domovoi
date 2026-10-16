@@ -166,7 +166,9 @@ uninstalls it once before the first release build goes on.
    them: `apksigner verify` (v2 present, one RSA signer, not a debug key,
    the same key as the last release), 16 KB page alignment, and the
    server's own check (`python -m domovoi.android_app check`). Then it
-   publishes the GitHub release `android-v<versionName>` on
+   publishes the GitHub release `v<versionName>` (the project-wide tag,
+   e.g. `v1.0.0-rc1`; a full release, or a pre-release with `-Prerelease` /
+   `--prerelease`) on
    `coders-farm-official/domovoi` with `gh` (the two APKs and `SHA256SUMS`,
    with the certificate's SHA-256 in the notes), downloads each file back by
    the URL the manifest names to prove it is there, and writes

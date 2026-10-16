@@ -1049,7 +1049,7 @@ async def download_github_zip(github_url: str) -> tuple[bytes, str]:
         raise InstallError("internet_off", egress.TURNED_OFF_REASON)
     owner, repo, ref = m.group(1), m.group(2), m.group(3)
     headers = {
-        "User-Agent": "domovoi/1.0.0 (+github.com/coders-farm-official/domovoi)"
+        "User-Agent": "domovoi/1.0.0rc1 (+github.com/coders-farm-official/domovoi)"
     }
     async with egress.async_client(follow_redirects=True, timeout=60) as client:
         if not ref:

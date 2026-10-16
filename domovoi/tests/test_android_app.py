@@ -123,7 +123,8 @@ def test_a_manifest_names_its_files_exactly(tmp_path):
     lambda d: d["release"].update(version_name="1.0; rm -rf"),
     lambda d: d["release"].update(version_code=0),
     lambda d: d["release"].update(version_code=True),
-    lambda d: d["release"].update(tag="v9.9.9"),
+    lambda d: d["release"].update(tag="android-v9.9.9"),   # the tag scheme before v<versionName>
+    lambda d: d["release"].update(tag="v9.9.8"),
     lambda d: d["release"].update(cert_sha256="AB" * 32),
     lambda d: d["release"].update(apks=[]),
     lambda d: d["release"]["apks"][0].update(abi="x86_64"),
@@ -131,7 +132,7 @@ def test_a_manifest_names_its_files_exactly(tmp_path):
     lambda d: d["release"]["apks"][0].update(file="../release.json"),
     lambda d: d["release"]["apks"][0].update(url="https://evil.example/domovoi-9.9.9-arm64-v8a.apk"),
     lambda d: d["release"]["apks"][0].update(
-        url="https://github.com/someone-else/domovoi/releases/download/android-v9.9.9/domovoi-9.9.9-arm64-v8a.apk"),
+        url="https://github.com/someone-else/domovoi/releases/download/v9.9.9/domovoi-9.9.9-arm64-v8a.apk"),
     lambda d: d["release"]["apks"][0].update(sha256="zz"),
     lambda d: d["release"]["apks"][0].update(size=0),
     lambda d: d["release"]["apks"][0].update(size=aa.MAX_APK_BYTES + 1),
@@ -448,7 +449,7 @@ def test_write_then_check_is_what_the_release_script_runs(tmp_path):
     m = aa.load_manifest(out)
     assert m["release"]["cert_sha256"] == RELEASE_CERT and m["release"]["commit"] == "b" * 40
     assert [e["url"] for e in m["release"]["apks"]] == [
-        f"https://github.com/coders-farm-official/domovoi/releases/download/android-v9.9.9/domovoi-9.9.9-{abi}.apk"
+        f"https://github.com/coders-farm-official/domovoi/releases/download/v9.9.9/domovoi-9.9.9-{abi}.apk"
         for abi in aa.ABIS]
     sums = (signed / "SHA256SUMS").read_text(encoding="ascii").splitlines()
     assert sums == [f"{e['sha256']}  {e['file']}" for e in m["release"]["apks"]]

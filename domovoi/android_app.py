@@ -94,7 +94,9 @@ def file_name(version_name: str, abi: str) -> str:
 
 
 def tag_for(version_name: str) -> str:
-    return f"android-v{version_name}"
+    """The GitHub release the APKs are attached to: the project-wide tag
+    ``v<versionName>`` (``v1.0.0-rc1``), owner decision 2026-10-15."""
+    return f"v{version_name}"
 
 
 def load_manifest(path: Path | None = None) -> dict[str, Any]:

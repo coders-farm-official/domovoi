@@ -26,6 +26,10 @@ android/release.json is not touched).
 .PARAMETER SkipBuild
 Sign what the last build left (after a failed signing).
 
+.PARAMETER Prerelease
+Mark the GitHub release a pre-release. Off by default: a version with a
+suffix (1.0.0-rc1) is published as a full release unless this is given.
+
 .PARAMETER Keystore
 The keystore file (asked for when not given).
 
@@ -46,6 +50,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 param(
     [switch]$NoPublish,
     [switch]$SkipBuild,
+    [switch]$Prerelease,
     [string]$Keystore,
     [string]$Alias,
     [System.Management.Automation.PSCredential]$KeystoreCredential,
@@ -173,7 +178,9 @@ foreach ($abi in $Abis) {
     if ($null -eq $versionName) { $versionName = $vn; $versionCode = $vc }
     if ($vn -ne $versionName -or $vc -ne $versionCode) { Die 'the APKs disagree on their version' }
 }
-$tag = "android-v$versionName"
+# The project-wide tag, v<versionName> (v1.0.0-rc1): domovoi.android_app's
+# tag_for, which the manifest's URLs are checked against.
+$tag = "v$versionName"
 Say "Domovoi $versionName (versionCode $versionCode), commit $($commit.Substring(0, 12))"
 
 # versionCode is YYMMDDNN (android\app\build.gradle.kts): the build's date
@@ -302,8 +309,10 @@ $notesFile = Join-Path $signed 'NOTES.md'
 
 Say "publishing $tag on $RepoSlug..."
 $assets = @($Abis | ForEach-Object { Join-Path $signed "domovoi-$versionName-$_.apk" }) + @(Join-Path $signed 'SHA256SUMS')
-$created = Invoke-Tool 'gh' (@('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $commit,
-    '--title', "Domovoi for Android $versionName", '--notes-file', $notesFile))
+$ghArgs = @('release', 'create', $tag) + $assets + @('--repo', $RepoSlug, '--target', $commit,
+    '--title', "Domovoi for Android $versionName", '--notes-file', $notesFile)
+if ($Prerelease) { $ghArgs += '--prerelease' }
+$created = Invoke-Tool 'gh' $ghArgs
 if ($null -eq $created) { $script:LastToolOutput | ForEach-Object { Write-Host "  $_" }; Die 'gh release create failed' }
 $created | ForEach-Object { Write-Host "  $_" }
 

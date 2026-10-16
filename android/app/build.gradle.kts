@@ -67,7 +67,7 @@ android {
         // one, and a phone refuses an update that goes down, so it only
         // ever goes up; release.ps1 and play-bundle.ps1 both read it here.
         versionCode = 26101501
-        versionName = "1.0.0"
+        versionName = "1.0.0-rc1"
         // The ABIs above. One APK per ABI filters by splits (below)
         // instead of here.
         if (!apkPerAbi) {
