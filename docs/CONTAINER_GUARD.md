@@ -297,6 +297,9 @@ these refuse with **HTTP 423** and a message naming the incident:
   satellite code and plugin payload channels the upgrades download from
   (so an upgrade started any other way gets nothing to install);
 * satellite media preparation, and its download cache refresh;
+* handing out the Android app: the APKs phones download from the join page
+  (`/v1/android-app/files/*`), and the admin's fetch and upload that fill
+  that cache;
 * pulling a Domovoi update, and a restart that would load code that isn't
   running yet (pulled code, or a staged plugin upgrade — on a Linux host
   with the update unit, that restart is the unit's trigger).

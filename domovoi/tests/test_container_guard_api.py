@@ -92,6 +92,7 @@ CORE_FROZEN = [
     ("POST", "/v1/plugins/someplugin/enable", None, "plugin_enable"),
     ("POST", "/v1/admin/satellite/upgrade", {"room_id": "kitchen"}, "satellite_upgrade"),
     ("POST", "/v1/admin/version/pull", None, "update_pull"),
+    ("POST", "/v1/admin/android-app/fetch", None, "android_app"),
 ]
 
 CHANNELS = [
@@ -101,6 +102,7 @@ CHANNELS = [
     "/v1/satellite-plugins/manifest",
     "/v1/satellite-plugins/manifest.sig",
     "/v1/satellite-plugins/radio/x.txt",
+    "/v1/android-app/files/domovoi-1.0.0-arm64-v8a.apk",
 ]
 
 

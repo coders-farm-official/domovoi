@@ -17,13 +17,21 @@ Android emulator; see [What was tested](#what-was-tested) for exactly how.
 
 ## Which APK to install
 
-A release attaches one APK per processor type. Each carries only its own
-native libraries.
+A build makes one APK per processor type (`-Pdomovoi.apkPerAbi`). Each
+carries only its own native libraries. A published release
+(`android/release.json`, android/README.md "Publishing a release") carries
+the two phones need, `domovoi-<version>-arm64-v8a.apk` and
+`domovoi-<version>-armeabi-v7a.apk`, and your Domovoi server's join page
+(the spare-device QR code, or Settings → Devices → get the Domovoi app)
+offers them as "the app" for most phones and "the 32-bit app" for older
+or cheaper ones. A browser on plain HTTP can't tell a phone's processor
+honestly, so the page puts the 64-bit one first unless the browser itself
+reports a 32-bit system (`armv7l`).
 
 | APK | For | On-device assistant |
 |---|---|---|
-| `app-arm64-v8a-*.apk` | 64-bit ARM phones and tablets: pick this one if unsure | yes |
-| `app-armeabi-v7a-*.apk` | 32-bit ARM phones (old, budget, Android Go) | no |
+| `app-arm64-v8a-*.apk` (a release's `domovoi-<version>-arm64-v8a.apk`) | 64-bit ARM phones and tablets: pick this one if unsure | yes |
+| `app-armeabi-v7a-*.apk` (a release's `domovoi-<version>-armeabi-v7a.apk`) | 32-bit ARM phones (old, budget, Android Go) | no |
 | `app-x86_64-*.apk` | x86_64 emulators, Chromebooks and tablets | yes |
 | `app-x86-*.apk` | 32-bit x86 (old emulator images, a few old tablets) | no |
 

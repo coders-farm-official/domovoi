@@ -2438,6 +2438,131 @@ const SpareWindows = ({ res, fire }) => {
   );
 };
 
+/* The Android app on this server (2026-10-15, domovoi/android_app.py), the
+ * admin's side, shared by Settings → Satellites → add a spare device and
+ * Settings → Devices → get the Domovoi app. The release android/release.json
+ * pins comes from the project's GitHub release ONLY when an admin presses
+ * "Download the app to this server" (owner decision 2026-10-15: never by
+ * itself), or as an APK an admin uploads (internet access off). The server
+ * keeps a file only when it is one the release names, signed by the release
+ * key. Progress while it downloads; a failure stays on the card until the
+ * next try. No release yet: said plainly, no buttons. `app` is the admin
+ * status (GET /api/satellites/android-app) when the caller has it; without
+ * it the component reads it. `onReady` runs once every file is here. */
+const appOnServerMessage = (e) => {
+  const d = e && e.detail && e.detail.detail;
+  return (d && typeof d === 'object' && typeof d.message === 'string') ? d.message : apiErrorText(e, 300);
+};
+const AppOnServer = ({ app: initial, onReady }) => {
+  const [app, setApp] = React.useState(initial || null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [kept, setKept] = React.useState(null);
+  const fileRef = React.useRef(null);
+  React.useEffect(() => { if (initial) setApp(initial); }, [initial]);
+  React.useEffect(() => {
+    if (initial) return undefined;
+    let alive = true;
+    apiGet('/api/satellites/android-app').then(r => { if (alive) setApp(r); })
+      .catch(e => { if (alive) setError(appOnServerMessage(e)); });
+    return () => { alive = false; };
+  }, []);
+  const running = !!(app && app.fetch && app.fetch.running);
+  React.useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(async () => {
+      try { setApp(await apiGet('/api/satellites/android-app')); } catch (e) { /* keep the last */ }
+    }, 2000);
+    return () => clearInterval(t);
+  }, [running]);
+  const ready = !!(app && app.ready);
+  React.useEffect(() => { if (ready && onReady) onReady(); }, [ready]);
+  const download = async () => {
+    setBusy(true); setError(null); setKept(null);
+    try { setApp(await apiPost('/api/satellites/android-app/fetch', {})); }
+    catch (e) { setError(appOnServerMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const upload = async (file) => {
+    if (!file) return;
+    setBusy(true); setError(null); setKept(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await apiUpload('/api/satellites/android-app/upload', fd);
+      setApp(r);
+      setKept(r.accepted);
+    } catch (e) {
+      setError(appOnServerMessage(e));
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+  const note = { fontSize: 11.5, color: 'var(--fg-faint)', lineHeight: 1.5 };
+  if (!app) {
+    return <div className="spare-app" style={note}>{error ? `Couldn’t ask the server about the Android app: ${error}` : 'asking the server about the Android app…'}</div>;
+  }
+  if (!app.release) {
+    return (
+      <div className="spare-app spare-app-none" role="note" style={note}>
+        No app release yet: the page tells the phone so. A phone that already has the Domovoi app
+        can still use this code in Domovoi Room.
+      </div>
+    );
+  }
+  const v = app.release.version_name;
+  const sizes = (app.apks || []).map(a => `${a.abi === 'armeabi-v7a' ? '32-bit' : '64-bit'} ${spareMb(a.size)}`).join(', ');
+  if (app.ready) {
+    return (
+      <div className="spare-app spare-app-ready" style={note}>
+        {kept ? <>Kept {kept}. </> : null}This server hands out Domovoi {v} ({sizes}).
+      </div>
+    );
+  }
+  const f = app.fetch || {};
+  const remaining = Math.max(0, (app.bytes_total || 0) - (app.bytes_cached || 0));
+  const failed = !running && f.ok === false && f.message;
+  const pct = f.bytes_todo ? Math.min(100, Math.round(100 * (f.bytes_done || 0) / f.bytes_todo)) : 0;
+  return (
+    <div className="spare-app spare-app-missing" style={{ ...note, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {running ? (
+        <div className="spare-app-progress">
+          <div>Downloading Domovoi {v} to this server: {spareMb(f.bytes_done || 0)} of {spareMb(f.bytes_todo || remaining)}…</div>
+          <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+               style={{ height: 4, borderRadius: 2, background: 'var(--border)', marginTop: 4, overflow: 'hidden' }}>
+            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--brand)' }}/>
+          </div>
+        </div>
+      ) : app.internet_off ? (
+        <div>Internet access is off here, so this server can’t download Domovoi {v}. Upload its APKs
+          ({(app.missing || []).join(', ')}) from the release on GitHub instead.</div>
+      ) : (
+        <div>The app isn’t on this server yet (Domovoi {v}: {sizes}); until it is, the page tells the
+          phone to ask you.</div>
+      )}
+      {failed && <div role="alert" className="spare-app-error" style={{ color: 'var(--err)' }}>The download failed: {f.message}</div>}
+      {error && <div role="alert" className="spare-app-error" style={{ color: 'var(--err)' }}>{error}</div>}
+      {kept && <div>Kept {kept}.</div>}
+      {!running && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {!app.internet_off && (
+            <Button icon="download" variant="primary" disabled={busy} onClick={download}>
+              {`Download the app to this server (about ${spareMb(remaining)})`}
+            </Button>
+          )}
+          <Button icon="upload" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>
+            {busy ? 'checking…' : 'upload an APK'}
+          </Button>
+          <input ref={fileRef} type="file" accept=".apk,application/vnd.android.package-archive" hidden
+                 aria-label="upload an APK of the release"
+                 onChange={e => upload(e.target.files && e.target.files[0])}/>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SpareDeviceCard = ({ fire }) => {
   const admin = useAdminSignedIn();
   const [open, setOpen] = React.useState(false);
@@ -2548,12 +2673,15 @@ const SpareDeviceCard = ({ fire }) => {
                     updating Domovoi.
                   </div>
                 </div>
-                <div style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div className="label">phone or tablet</div>
-                  <SpareQr text={res.payload}/>
-                  <div style={{ fontSize: 11.5, color: 'var(--fg-faint)', maxWidth: 216, lineHeight: 1.5 }}>
-                    In the Domovoi app: Settings → Satellites → Use this device as a room, then scan.
+                <div className="spare-phone" style={{ flex: '0 1 260px', minWidth: 216, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="label">phone or tablet (android 8 or newer)</div>
+                  <SpareQr text={res.join_url || res.payload}/>
+                  <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                    Scan it with the phone's camera: it opens a page on this server that installs the
+                    Domovoi app and starts it as this room. A phone that already has the app: open
+                    Domovoi Room and scan it there.
                   </div>
+                  <AppOnServer app={res.android_app}/>
                 </div>
               </div>
               {res.command_windows && <SpareWindows res={res} fire={fire}/>}

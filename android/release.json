@@ -1,0 +1,11 @@
+{
+  "manifest_version": 1,
+  "about": [
+    "The Android app release a Domovoi server hands to phones (domovoi/android_app.py, the join page).",
+    "Written by android/scripts/release.ps1 or release.sh when a release is signed and published on GitHub;",
+    "commit it with the release. Each APK is pinned by size and SHA-256, and the release key by its",
+    "signing certificate's SHA-256: the server serves an APK only when its own signature is that key's.",
+    "release is null until the first release exists. See android/README.md, 'Publishing a release'."
+  ],
+  "release": null
+}

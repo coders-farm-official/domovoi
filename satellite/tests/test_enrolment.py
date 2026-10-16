@@ -47,6 +47,20 @@ def test_the_builder_writes_exactly_the_fixture_s_payload(case):
     assert parsed.fp == case["fp"].strip()
 
 
+@pytest.mark.parametrize("case", FIXTURE["build_join"], ids=lambda c: c["join_link"][:40])
+def test_the_join_link_is_exactly_the_fixture_s_and_parses_like_its_payload(case):
+    assert en.join_link(case["payload"]) == case["join_link"]
+    assert en.parse(case["join_link"]) == en.parse(case["payload"])
+
+
+def test_a_join_link_is_built_only_for_a_payload_that_parses():
+    with pytest.raises(en.EnrolmentError) as e:
+        en.join_link("domovoi-room:1?core=http%3A%2F%2F8.8.8.8&fp=x&room=y")
+    assert e.value.reason == "not_home_network"
+    with pytest.raises(en.EnrolmentError):
+        en.join_link(FIXTURE["build_join"][0]["join_link"]), "a link is not wrapped twice"
+
+
 def test_the_reason_codes_are_the_fixture_s():
     assert tuple(FIXTURE["reasons"]) == en.REASONS
     used = {c["reason"] for c in FIXTURE["invalid"]}

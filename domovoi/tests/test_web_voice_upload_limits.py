@@ -280,3 +280,43 @@ def test_the_piper_upload_route_has_a_budget() -> None:
 
 def test_the_web_app_runs_the_body_limit_middleware() -> None:
     assert any(m.cls is mw.BodyLimitMiddleware for m in web_app.user_middleware)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_caller_s_upload_is_never_read(monkeypatch) -> None:
+    """Security review 2026-10-15: the form is parsed after the admin gate,
+    so a caller without an admin session gets 401 with the body unread
+    (it used to be parsed, and spooled to disk, before the gate ran)."""
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
+    read = 0
+
+    async def counting(scope, receive, send):
+        async def r():
+            nonlocal read
+            message = await receive()
+            if message.get("type") == "http.request":
+                read += len(message.get("body") or b"")
+            return message
+
+        await web_app(scope, r, send)
+
+    async with AsyncClient(transport=ASGITransport(app=counting), base_url="http://test", headers=BROWSER) as c:
+        r = await c.post("/api/voices/piper", data={"name": "X"},
+                         files={"onnx": ("v.onnx", b"z" * (3 * 1024 * 1024)), "config": ("v.onnx.json", b"{}")})
+    assert r.status_code == 401
+    assert read < 64 * 1024, f"{read} bytes read before the gate refused"
+
+
+@pytest.mark.asyncio
+async def test_the_piper_form_is_held_to_its_old_rules(tmp_path, monkeypatch) -> None:
+    install_fake_db(monkeypatch, admin=True, sessions={"admin-token"})
+    monkeypatch.setattr(voices_api, "_voices_dir", lambda: tmp_path)
+    files = {"onnx": ("v.onnx", b"m", "application/octet-stream"), "config": ("v.onnx.json", b"{}", "application/json")}
+    async with _web() as c:
+        for data, extra in (({}, files), ({"name": "x" * 81}, files), ({"name": "X", "set_default": "maybe"}, files),
+                            ({"name": "X"}, {"onnx": files["onnx"]})):
+            r = await c.post("/api/voices/piper", headers=bearer("admin-token"), data=data, files=extra)
+            assert r.status_code == 422, (data, r.text)
+        r = await c.post("/api/voices/piper", headers=bearer("admin-token"), json={"name": "X"})
+        assert r.status_code == 422
+    assert list(tmp_path.iterdir()) == []

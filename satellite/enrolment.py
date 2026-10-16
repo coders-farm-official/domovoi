@@ -24,6 +24,11 @@ pairing code, and what the payload adds is the pin — the device holds the
 core to ``fp`` from its very first connect instead of trusting the first
 server that answers.
 
+The QR code carries the payload inside a **join link**,
+``<core>/join#<payload>`` (:func:`join_link`), so a phone's own camera
+opens the server's join page (which hands out the Android app); the
+app's scanner and :func:`parse` take either form.
+
 The parser is strict and the same everywhere: this module, the Android
 room mode's Kotlin parser and the dashboard all test against
 ``docs/uml/spare-device-enrol-fixture.json``, which also pins the reason
@@ -42,6 +47,9 @@ from dataclasses import asdict, dataclass
 
 SCHEME = "domovoi-room"
 VERSION = "1"
+#: The server's join page, the path of the link the dashboard's QR code
+#: carries (:func:`join_link`).
+JOIN_PATH = "/join"
 
 #: The longest payload accepted (a QR at error-correction M holds ~2300
 #: bytes; the dashboard's are about 150).
@@ -324,14 +332,60 @@ def _encode(value: str) -> str:
 
 # ─── parse and build ──────────────────────────────────────────────────────
 
+def _ascii_lower(text: str) -> str:
+    """A-Z lower-cased, nothing else (Unicode case mapping differs between
+    runtimes; the Kotlin parser does the same)."""
+    return text.translate(_ASCII_LOWER)
+
+
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def parse(payload: str) -> Enrolment:
     """The :class:`Enrolment` a payload names, or raise
     :class:`EnrolmentError`. Unknown keys are ignored (a later version of
-    the dashboard may add optional ones); a key given twice is refused."""
+    the dashboard may add optional ones); a key given twice is refused.
+
+    Also takes the **join link** the dashboard's QR code carries,
+    ``<core>/join#<payload>`` (:func:`join_link`): the payload is its
+    fragment, and the part before must be exactly that payload's core
+    plus ``/join``."""
     if not isinstance(payload, str):
         raise EnrolmentError("not_enrolment", "the payload is not text")
     # A paste brings a newline or a space along; only those are trimmed.
     text = payload.strip(" \t\r\n")
+    if _ascii_lower(text[:8]).startswith(("http://", "https://")):
+        return _parse_join_link(text)
+    return _parse_payload(text)
+
+
+def _parse_join_link(text: str) -> Enrolment:
+    base, hash_, fragment = text.partition("#")
+    if not hash_ or not _ascii_lower(base).endswith(JOIN_PATH):
+        raise EnrolmentError(
+            "not_enrolment", "this link is not a Domovoi room code (<server>/join#domovoi-room:…)"
+        )
+    if len(base) > MAX_CORE_LEN + len(JOIN_PATH):
+        raise EnrolmentError("malformed", "the link's server address is too long")
+    enrolment = _parse_payload(fragment)
+    if _ascii_lower(base) != _ascii_lower(enrolment.core + JOIN_PATH):
+        raise EnrolmentError("malformed", "the link's server is not the one its room code names")
+    return enrolment
+
+
+def join_link(payload: str) -> str:
+    """The link the dashboard's QR code carries for ``payload``:
+    ``<core>/join#<payload>``. A phone's camera opens it in the browser,
+    where the server's join page (domovoi/main.py ``GET /join``) offers the
+    Domovoi app and then opens it as the room; the app's own scanner reads
+    the payload out of it (:func:`parse`). The payload is the fragment, so
+    no server ever logs it."""
+    text = payload.strip(" \t\r\n")
+    enrolment = _parse_payload(text)
+    return f"{enrolment.core}{JOIN_PATH}#{text}"
+
+
+def _parse_payload(text: str) -> Enrolment:
     head, colon, rest = text.partition(":")
     if not colon or head.lower() != SCHEME:
         raise EnrolmentError(

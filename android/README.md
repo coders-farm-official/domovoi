@@ -62,9 +62,10 @@ What a build carries (`app/build.gradle.kts`):
   loop and the emulator harness install the same file as before. All four
   ABIs in one APK would add about 60 MB of 32-bit libraries (stored
   uncompressed) that a 64-bit phone never loads.
-- **One APK per ABI** is what a GitHub release attaches; each carries only
-  its own ABI's libraries, and the armeabi-v7a and x86 ones carry no
-  LiteRT-LM. They share one `versionCode`, so a phone can move from one to
+- **One APK per ABI** is what a GitHub release attaches (the two phone
+  ABIs, arm64-v8a and armeabi-v7a: *Publishing a release*, below); each
+  carries only its own ABI's libraries, and the armeabi-v7a and x86 ones
+  carry no LiteRT-LM. They share one `versionCode`, so a phone can move from one to
   another with an ordinary update (same signing key).
 - An **App Bundle** (any `bundle*` task) carries all four ABIs unless
   `domovoi.abis` says otherwise, and keeps Play's default split by ABI
@@ -90,30 +91,86 @@ jar; the Gradle distribution the wrapper then downloads
 (`gradle-8.14.3-bin.zip` from services.gradle.org, over HTTPS) is not yet
 checked against a digest, because `gradle/wrapper/gradle-wrapper.properties`
 has no `distributionSha256Sum` (Gradle publishes the value beside the zip,
-as `gradle-8.14.3-bin.zip.sha256`). For a phone that keeps the app, build a
-release APK signed with a key you keep:
+as `gradle-8.14.3-bin.zip.sha256`). For a phone that keeps the app, use a
+release build signed with a key you keep: the next section.
+
+## Publishing a release (the app every Domovoi server hands out)
+
+A household gets the app from **its own Domovoi server**: the dashboard's
+"add a spare device" QR code opens `<server>:6370/join` on the phone, which
+downloads the APK from that server and opens the app as the room
+(Settings → Devices → "get the Domovoi app" is the same page without a
+room). The server hands out only what `android/release.json` in its
+checkout names: per ABI the APK's file name, size and SHA-256, and the
+SHA-256 of the **release key's signing certificate**. Before it keeps or
+serves an APK it verifies the file's own v2/v3 signature and requires that
+certificate (`domovoi/android_app.py`, `domovoi/apk_signature.py`). It gets
+the files from this repo's GitHub release only when an admin presses
+**Download the app to this server** (on the spare-device card or Settings →
+Devices; never by itself), or from an admin's upload when internet access
+is off. `release` is `null` until the first release, and
+every page says "no app release yet".
+
+Publishing is the owner's job, on his own machine: the signing key never
+goes into CI, a session or the repo.
+
+**Once: the release key.** RSA (the server checks RSA signatures only),
+kept outside the checkout (`.gitignore` refuses `*.jks`, `*.keystore` and
+`*.p12` in it anyway), backed up with its password:
 
 ```bash
-# Once: a release key, kept outside the checkout (.gitignore refuses
-# *.jks and *.keystore in it anyway).
 keytool -genkeypair -v -keystore ~/domovoi-release.jks -alias domovoi \
   -keyalg RSA -keysize 4096 -validity 10000
-
-# Every release:
-cd android
-./gradlew :app:assembleRelease   # app/build/outputs/apk/release/app-release-unsigned.apk
-BT=$ANDROID_HOME/build-tools/35.0.0
-"$BT/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk /tmp/app-release-aligned.apk
-"$BT/apksigner" sign --ks ~/domovoi-release.jks --ks-key-alias domovoi \
-  --out app-release.apk /tmp/app-release-aligned.apk
-"$BT/apksigner" verify --print-certs app-release.apk
-sha256sum app-release.apk        # publish this next to the APK
 ```
 
-Keep the key and its password safe and backed up: every later release has
-to be signed with the same key, or phones refuse the upgrade. A phone with
-a debug build installed uninstalls it once before the first release build
-goes on.
+Every later release must be signed with this key, or phones refuse the
+update (the script refuses too). A phone with a debug build installed
+uninstalls it once before the first release build goes on.
+
+**Every release:**
+
+1. Raise `versionCode` (and `versionName`) in `app/build.gradle.kts`,
+   commit, and push. The script refuses a `versionCode` that is not above
+   the last release's, and a commit that is not on GitHub (the release's
+   tag points at it).
+2. Run the script from a clean checkout (it says what it does as it goes):
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
+   ```
+
+   ```bash
+   bash android/scripts/release.sh          # Linux, macOS, Git Bash
+   ```
+
+   It builds `-Pdomovoi.apkPerAbi -Pdomovoi.abis=arm64-v8a,armeabi-v7a`,
+   asks for the keystore file, the alias and the passwords (typed, not
+   shown; never written anywhere: apksigner reads them from the script's
+   environment for that one call), signs
+   `domovoi-<versionName>-arm64-v8a.apk` and `-armeabi-v7a.apk`, and checks
+   them: `apksigner verify` (v2 present, one RSA signer, not a debug key,
+   the same key as the last release), 16 KB page alignment, and the
+   server's own check (`python -m domovoi.android_app check`). Then it
+   publishes the GitHub release `android-v<versionName>` on
+   `coders-farm-official/domovoi` with `gh` (the two APKs and `SHA256SUMS`,
+   with the certificate's SHA-256 in the notes), downloads each file back by
+   the URL the manifest names to prove it is there, and writes
+   `android/release.json`.
+3. Commit and push the manifest (the script prints the lines):
+   `git add android/release.json && git commit -m "android: release <v> [skip ci]" && git push`.
+   Each server starts handing out the release once it runs that commit.
+
+`-NoPublish` (`--no-publish`) stops after the checks, leaving the signed
+APKs, `SHA256SUMS` and the manifest it would commit in
+`app/build/outputs/apk/release-signed/`; `-SkipBuild` (`--skip-build`)
+signs what the last build left. Needs a JDK, the SDK's build-tools 35.0.0,
+Python 3.11+, git and `gh auth login` with permission to publish releases.
+
+**Before 2027:** Google's Android developer verification is to make apps
+from unregistered developers hard to install on certified phones, sideloaded
+ones included, from some date in 2027. Register the publisher and
+`com.domovoi.app` with this key's certificate SHA-256 (the `cert_sha256` in
+`release.json`) well before then.
 
 ## First run / offline-local mode
 

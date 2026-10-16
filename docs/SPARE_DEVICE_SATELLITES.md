@@ -33,7 +33,12 @@ doesn't wear out its battery.
    (`kids_room`), a **one-line install command** for Linux, another for
    Windows, and a **QR code** for a phone. All three carry the same short *enrolment code*:
    `domovoi-room:1?core=…&fp=…&room=…` — your server's address, its
-   fingerprint, and the room's name. **Nothing in it is a password.**
+   fingerprint, and the room's name. **Nothing in it is a password.** The
+   QR code wraps it in a link to your server's own join page
+   (`http://<server>:6370/join#domovoi-room:1?…`), so a phone's ordinary
+   camera can open it: the page hands the phone the Domovoi app and opens
+   it as the room (the code after `#` stays in the phone; no server sees
+   it).
 2. On the device, run the command (or scan the code).
 3. The device finds your server, checks it is *your* server (it must prove
    it holds the key behind the fingerprint), and asks to join. It shows a
@@ -318,33 +323,51 @@ Raspberry Pi satellite. It runs inside the normal Domovoi Android app as
 
 | | |
 |---|---|
-| A phone or tablet | Android 8.0 or later, 32-bit or 64-bit (use the armeabi-v7a APK on a 32-bit phone: [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)). About 1-2 GB of RAM is enough; room mode loads none of the on-device assistant's libraries. |
+| A phone or tablet | Android 8.0 or later, 32-bit or 64-bit (the join page offers the app for most phones first and the 32-bit one, for older or cheaper phones, under it: [ANDROID_COMPATIBILITY.md](ANDROID_COMPATIBILITY.md)). About 1-2 GB of RAM is enough; room mode loads none of the on-device assistant's libraries. |
+| The Domovoi app | From your own server: the QR code's page downloads it from there. The server gets the release named in its `android/release.json` from the project's GitHub release once, when you press **Download the app to this server** on the card (about 127 MB; it never downloads by itself, and until then the page tells the phone to ask you), or you **upload an APK** of that release on the card when internet access is off; it hands out a file only when it is exactly that release's, signed by the project's release key. Until the first app release is published, the card and the page say "no app release yet". |
 | Its charger | A room listens all day. Turn on the phone's battery-protection (charge limit) setting if it has one, and never use a phone whose battery has swollen. |
 | Your home Wi-Fi | Room mode uses Wi-Fi (or a wired dock) only, never mobile data: with no Wi-Fi it is offline. |
 | The server's wake-word models | The phone runs the same openWakeWord models as a Pi, fetched from your server. On the dashboard, **Settings → Satellites → prepare satellite media → Refresh caches** once (it downloads them; it needs the internet that one time). A Pi you prepared already did this. |
-| A room code | On the dashboard, **Settings → Satellites → add a spare device**: a QR code and a line of text that start `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
+| A room code | On the dashboard, **Settings → Satellites → add a spare device**: a QR code (a link to your server's join page with the code in it) and a line of text that starts `domovoi-room:1?…`. It names your server, the server's key and the room. It holds no secret. |
 
 ### Setting it up (about ten minutes)
 
-1. Install the Domovoi app on the spare phone (factory-reset it first if
-   you can: it becomes a shared device).
-2. Open **Domovoi Room** from the home screen. (On a phone that already
-   uses the app with your household: Settings → Satellites → **Use this
-   device as a room**.)
-3. Read the explainer to the end and press **Start room mode**. It says
+1. On the spare phone (factory-reset it first if you can: it becomes a
+   shared device), on your home Wi-Fi, **scan the QR code with the
+   phone's camera**. It opens a page on your Domovoi server.
+2. **Install the app** from that page: **download the app** (or, on an
+   older or cheaper 32-bit phone, the 32-bit one under it; if the phone
+   says *App not installed*, take the other). The first time, the browser
+   warns about this kind of file (**Download anyway**) and Android asks to
+   allow installs from it (**Settings → Allow from this source**, then
+   back); then **Install**. Play Protect may offer to scan the app: let
+   it. The page shows these steps in pictures. A phone that already has
+   the app skips this.
+3. Back on the page, press **open as this room**. It opens **Domovoi
+   Room** with the room code filled in. (Or open **Domovoi Room** from the
+   home screen and scan the code there; on a phone that already uses the
+   app with your household: Settings → Satellites → **Use this device as
+   a room**.)
+4. Read the explainer to the end and press **Start room mode**. It says
    what room mode means: always listening, a shared device, power and
    heat, Android's rules, what stops working, how to leave.
-4. Allow the **microphone** (and, on Android 13+, notifications).
-5. **Scan the room code** (the camera is asked for only now), or paste the
-   text. The phone shows the server's address and the start of its key:
-   compare the key with the dashboard's Settings → About. Change the room
-   name if you like, then press **Become this room**.
-6. The room screen shows **waiting for approval** and a six-digit code. On
+5. Allow the **microphone** (and, on Android 13+, notifications).
+6. The room code is already filled in when the page opened the app;
+   otherwise **scan the room code** (the camera is asked for only now), or
+   paste the text. The phone shows the server's address and the start of
+   its key: compare the key with the dashboard's Settings → About. Change
+   the room name if you like, then press **Become this room**.
+7. The room screen shows **waiting for approval** and a six-digit code. On
    the dashboard, Settings → Satellites shows an approval card for the
    room: type the code the phone shows and approve. Within about half a
    minute the phone says **Say "Hey Jarvis"** (press **check now** to skip
    the wait).
-7. Say "Hey Jarvis, what time is it?".
+8. Say "Hey Jarvis, what time is it?".
+
+A household phone (not a room) gets the app the same way: **Settings →
+Devices → get the Domovoi app** shows a QR code and a link to the same
+page without a room code; open it on the phone, install, then open
+Domovoi, which finds your server on the Wi-Fi.
 
 The wake word is the server's default, `hey_jarvis`; a wake word you train
 and push from the dashboard (Settings → Wake words) reaches the phone the

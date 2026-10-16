@@ -1,0 +1,86 @@
+/* The join page (domovoi/join_page/join.html). The dashboard's tokens
+   (web/static/colors_and_type.css) as plain hex, because an old phone's
+   browser may not know oklch(); system fonts, because this page is served
+   by the Domovoi server, which carries no web fonts. One accent: amber. */
+
+:root {
+  --canvas: #fcfaf6; --card: #ffffff; --sunken: #f5f3f0;
+  --fg: #181611; --fg-muted: #58554f; --fg-faint: #898681;
+  --border: #e6e4e1; --brand: #f2a618; --brand-fg: #281600;
+  --warn: #b86a00; --warn-soft: #fff1df; --err: #ea3c3f;
+  --r-sm: 6px; --r-md: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0d0c0a; --card: #161512; --sunken: #090806;
+    --fg: #f5f3f0; --fg-muted: #a7a49f; --fg-faint: #74716c;
+    --border: #2f2d2a; --brand: #f9ad26; --brand-fg: #1c0e00;
+    --warn: #ffa84a; --warn-soft: #2a1d0c; --err: #ff5f5b;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--canvas); color: var(--fg); }
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+  font-size: 15px; line-height: 1.5; -webkit-text-size-adjust: 100%;
+}
+[hidden] { display: none !important; }
+
+.top { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.glyph { width: 22px; height: 22px; color: var(--fg); }
+.wordmark { font-weight: 600; letter-spacing: 0.01em; }
+
+main { max-width: 560px; margin: 0 auto; padding: 18px 16px 40px; }
+h1 { font-size: 22px; line-height: 1.25; margin: 4px 0 8px; font-weight: 650; }
+h2 { font-size: 17px; margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+h3 { font-size: 14px; margin: 22px 0 2px; font-weight: 600; }
+p { margin: 8px 0; }
+.lede { color: var(--fg-muted); margin-bottom: 18px; }
+.small { font-size: 13.5px; color: var(--fg-muted); }
+.faint { color: var(--fg-faint); }
+b { font-weight: 600; color: var(--fg); }
+a { color: var(--fg); text-decoration-color: var(--brand); text-underline-offset: 2px; }
+
+.note { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--card); font-size: 14px; }
+.note.warn { border-color: var(--warn); background: var(--warn-soft); }
+
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.step { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 16px; }
+.num {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 26px; height: 26px; border-radius: 50%; font-size: 14px;
+  background: var(--brand); color: var(--brand-fg); font-weight: 700;
+}
+.room { overflow-wrap: anywhere; }
+.state { color: var(--fg-muted); font-size: 14px; }
+.state.warn { color: var(--fg); padding: 10px 12px; border-radius: var(--r-sm); border: 1px solid var(--warn); background: var(--warn-soft); }
+
+.button {
+  display: block; width: 100%; text-align: center; text-decoration: none;
+  min-height: 48px; padding: 13px 16px; border-radius: var(--r-sm);
+  font-size: 16px; font-weight: 600; border: 1px solid var(--border);
+  background: var(--sunken); color: var(--fg);
+}
+.button.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-fg); }
+.button:active { filter: brightness(0.92); }
+.button + .small { margin-top: 6px; }
+
+.pictures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+@media (min-width: 520px) { .pictures { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+figure { margin: 0; }
+figure svg { display: block; width: 100%; max-width: 150px; height: auto; margin: 0 auto 6px; }
+figcaption { font-size: 12.5px; color: var(--fg-muted); line-height: 1.4; }
+
+/* The pictures: a phone, its screen, a dialog, what to tap. */
+.phone { fill: var(--sunken); stroke: var(--border); stroke-width: 1.5; }
+.screen { fill: var(--canvas); }
+.dialog { fill: var(--card); stroke: var(--border); }
+.line { fill: var(--border); }
+.hit { fill: var(--brand); }
+.hit-text { fill: var(--brand-fg); font-size: 9px; font-weight: 700; font-family: inherit; }
+.ghost-text { fill: var(--fg-muted); font-size: 9px; font-family: inherit; }
+.dialog-text { fill: var(--fg); font-size: 9px; font-family: inherit; }
+.toggle-on { fill: var(--brand); }
+.knob { fill: #ffffff; }
+.app-dot { fill: var(--brand); }

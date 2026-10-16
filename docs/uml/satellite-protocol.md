@@ -232,11 +232,22 @@ an approval. The device holds the core to `fp` from its first connect
 and is still parked until someone types its approval code in the
 dashboard, exactly like a Pi.
 
+**The QR code carries it inside a join link** (2026-10-15):
+`<core>/join#<payload>`, e.g.
+`http://192.168.0.117:6370/join#domovoi-room:1?core=…`. A phone's own
+camera opens it in the browser, where the core's join page (`GET /join`)
+hands the phone the Android app and opens it as the room; the payload is
+the URL's fragment, which no browser sends to a server. Both parsers take
+either form: a text starting `http://` or `https://` is a join link, whose
+fragment is parsed as a payload and whose part before `#` must be exactly
+that payload's core plus `/join` (`malformed` otherwise; `not_enrolment`
+when there is no `#` or the path is not `/join`).
+
 The grammar, the reason codes a refusal carries (`not_enrolment`,
 `unsupported_version`, `malformed`, `missing_core`, `missing_fp`,
 `missing_room`, `bad_core`, `not_home_network`, `bad_fp`, `bad_room`) and
-83 worked cases
-(valid and invalid, with the room ids) are in
+99 worked cases
+(valid and invalid, with the room ids, join links included) are in
 [`spare-device-enrol-fixture.json`](spare-device-enrol-fixture.json). The
 Python parser (`satellite/tests/test_enrolment.py`) and the Android room
 mode's Kotlin parser are both tested against it. What the install command

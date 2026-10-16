@@ -441,6 +441,11 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         raise HTTPException(status_code=422, detail={"reason": e.reason, "message": str(e)}) from None
     return {
         "payload": payload,
+        # What the QR code carries: the server's join page with the payload
+        # as its fragment, so a phone's own camera opens a page that hands
+        # out the app (domovoi/main.py GET /join); the app's scanner reads
+        # the payload out of it.
+        "join_url": enrolment.join_link(payload),
         "room": parsed.room,
         "room_id": parsed.room_id,
         "core": parsed.core,
@@ -450,8 +455,88 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "command": install_command(parsed.core, digest["sha256"], payload),
         "command_windows": install_command_windows(parsed.core, digest["sha256"], payload),
         "windows_runtime": await _windows_runtime(request),
+        "android_app": await _android_app_for_a_phone(request),
         "conflict": await _room_in_use(parsed.room_id),
     }
+
+
+# ─── the Android app this server hands out (2026-10-15) ───────────────────
+# domovoi/android_app.py on the core: the release android/release.json pins,
+# fetched from GitHub or uploaded by an admin, served to phones from the
+# join page. These routes are the dashboard's side of it.
+
+
+async def _android_app_for_a_phone(request: Request) -> dict[str, Any] | None:
+    """The admin view of the app on the core, for the card's phone column,
+    or None from a core that doesn't say. Read only: the server downloads
+    the app only when an admin presses the card's button (owner decision
+    2026-10-15), never because a code was made."""
+    status, doc = await get_admin("/v1/admin/android-app", headers=auth_forward_headers(request))
+    return doc if status == 200 and isinstance(doc, dict) else None
+
+
+@router.get(
+    "/android-app",
+    # What this server holds of the app, the fetch's state: the admin card's.
+    dependencies=[Depends(require_admin_read)],
+)
+async def android_app_status(request: Request):
+    """The release the server hands out (``release`` null before the first),
+    per ABI whether it holds a checked copy, ``missing``, the sizes,
+    ``fetch`` and ``internet_off``."""
+    status, doc = await get_admin("/v1/admin/android-app", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post(
+    "/android-app/fetch",
+    # The server downloads the release's APKs from GitHub only on an
+    # admin's button press, each held to android/release.json and its
+    # signature; nothing else starts a download (owner decision 2026-10-15).
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def android_app_fetch(request: Request):
+    """Start fetching the app onto the core."""
+    status, doc = await post_admin("/v1/admin/android-app/fetch", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post(
+    "/android-app/upload",
+    # An admin hands the server one of the release's APKs (no internet, a
+    # slow line). Streamed through to the core, which keeps it only if it
+    # is one of the release's files, signed by the release key.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def android_app_upload(request: Request):
+    """Pass one APK (multipart ``file``) through to the core without
+    holding it here; the core's answer comes back verbatim (422 with the
+    reason when the file is not one the release names)."""
+    import httpx
+    from fastapi.responses import JSONResponse
+
+    from web.backend.domovoi_client import domovoi_url
+
+    content_type = request.headers.get("content-type") or ""
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise HTTPException(status_code=415, detail="send the APK as a file upload")
+    headers = auth_forward_headers(request)
+    headers["Content-Type"] = content_type
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit():
+        headers["Content-Length"] = declared
+    url = f"{domovoi_url().rstrip('/')}/v1/admin/android-app/upload"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=600.0, write=600.0)) as client:
+            r = await client.post(url, content=request.stream(), headers=headers)
+    except httpx.HTTPError as e:
+        log.warning("android app upload to the core failed: %s", e)
+        raise HTTPException(status_code=502, detail="the Domovoi server did not take the upload") from None
+    try:
+        payload: Any = r.json()
+    except ValueError:
+        payload = {"detail": r.text[:500]}
+    return JSONResponse(status_code=r.status_code, content=payload)
 
 
 @router.get(
