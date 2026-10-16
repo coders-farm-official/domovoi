@@ -33,6 +33,7 @@ from domovoi.tests.auth_testkit import (  # noqa: F401  (the _db fixture)
     _db,
     bearer,
     claim_admin,
+    claim_admin_with_cookie,
     web_client,
 )
 from domovoi.tests.conftest import requires_db
@@ -520,14 +521,15 @@ async def test_the_restart_is_the_security_tier_checked_by_the_web(_db, systemd)
     async with web_client() as c:
         r = await c.post("/api/config/core/restart")
         assert r.status_code == 501
-        token = await claim_admin(c)
+        # The browser cookie is its own secret since V028 (main 89ee037).
+        token, cookie = await claim_admin_with_cookie(c)
         c.cookies.clear()
         r = await c.post("/api/config/core/restart")
         assert r.status_code == 401
         r = await c.post("/api/config/core/restart", headers={
             "X-Requested-With": "domovoi-tests", **bearer("not-a-session")})
         assert r.status_code == 401
-        r = await c.post("/api/config/core/restart", cookies={COOKIE: token})
+        r = await c.post("/api/config/core/restart", cookies={COOKIE: cookie})
         assert r.status_code == 403
         assert systemd["ended"] == []
         r = await c.post("/api/config/core/restart", headers={
