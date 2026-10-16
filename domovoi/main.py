@@ -1488,6 +1488,60 @@ async def admin_satellite_windows_fetch() -> dict[str, Any]:
     return {"started": started, **(await asyncio.to_thread(satellite_windows.status, lock))}
 
 
+# ─── The Linux satellite's own Python (spare devices, 2026-10-15) ─────────
+# The relocatable CPython a Linux laptop's install command uses when the
+# computer's own python3 won't do (too old, missing, not Debian-family),
+# pinned per machine in satellite/locks/linux-python.txt and fetched into
+# this server's cache only when an admin asks (domovoi/satellite_linux.py).
+# Served openly on the LAN, like the Windows runtime: public files the
+# installer checks byte for byte against the lock in the bundle whose
+# digest the dashboard quoted.
+
+
+def _linux_lock() -> dict[str, Any]:
+    from domovoi import satellite_linux
+
+    try:
+        return satellite_linux.load_lock(SATELLITE_CODE_DIR / satellite_linux.LOCK_REL)
+    except satellite_linux.LockError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.get("/v1/satellite-linux/files/{name}")
+async def satellite_linux_file(name: str) -> FileResponse:
+    """The pinned Python for a Linux laptop, if the lock lists it and the
+    cached bytes are the pinned ones; 404 otherwise (the installer then
+    fetches the same pinned file upstream). 423 while the container guard's
+    freeze is on."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_linux
+
+    lock = _linux_lock()
+    path = await asyncio.to_thread(satellite_linux.cached_file, lock, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not cached on this server")
+    return FileResponse(path, media_type="application/octet-stream")
+
+
+@app.get("/v1/admin/satellite-linux", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_linux() -> dict[str, Any]:
+    """Whether this server holds the Linux satellite's Python, and the fetch's state."""
+    from domovoi import satellite_linux
+
+    return await asyncio.to_thread(satellite_linux.status, _linux_lock())
+
+
+@app.post("/v1/admin/satellite-linux/fetch", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_linux_fetch() -> dict[str, Any]:
+    """Start fetching the Linux satellite's Python (GitHub, ~65 MB for both
+    machines, every file held to its pin). Answers at once; poll the status."""
+    from domovoi import satellite_linux
+
+    lock = _linux_lock()
+    started = satellite_linux.start_fetch(lock)
+    return {"started": started, **(await asyncio.to_thread(satellite_linux.status, lock))}
+
+
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
 # A fourth file channel, parallel to /v1/sounds, /v1/satellite-code, and
 # /v1/wake-models — but for ENABLED plugins' [satellite] payloads (files a
