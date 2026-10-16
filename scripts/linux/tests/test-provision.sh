@@ -71,7 +71,8 @@ export GIT_COMMITTER_NAME=harness GIT_COMMITTER_EMAIL=harness@example.invalid
 SHIM_REAL_INSTALL=$(command -v install)
 SHIM_REAL_READLINK=$(command -v readlink)
 SHIM_REAL_GIT=$(command -v git)
-export SHIM_REAL_INSTALL SHIM_REAL_READLINK SHIM_REAL_GIT
+SHIM_REAL_TAR=$(command -v tar)
+export SHIM_REAL_INSTALL SHIM_REAL_READLINK SHIM_REAL_GIT SHIM_REAL_TAR
 
 # A remote's URL as git on Linux would print it (see the git shim).
 origin_url() {
@@ -664,9 +665,12 @@ echo "journalctl $*" >>"$SHIM_STATE/calls.log"
 exit 0
 SH
 
+  # Only Ollama's tarball (--zstd) is faked; anything else (the verified
+  # copy's git archive) is the real tar.
   cat >"$bin/tar" <<'SH'
 #!/usr/bin/env bash
 echo "tar $*" >>"$SHIM_STATE/calls.log"
+case " $* " in *" --zstd "*) ;; *) exec "$SHIM_REAL_TAR" "$@" ;; esac
 dest=""
 while [ $# -gt 0 ]; do [ "$1" = -C ] && dest=$2; shift; done
 mkdir -p "$dest/bin" "$dest/lib/ollama"
@@ -1364,7 +1368,7 @@ case_ollama_sha_mismatch_stops() {
   check "no binary" absent "$ROOT/usr/local/bin/ollama"
   check "no partial download left" eq "$(ls -A "$ROOT/var/cache/domovoi-provision" 2>/dev/null | grep -c .)" 0
   check "no marker" no_marker ollama
-  check "nothing unpacked" not_called "tar "
+  check "nothing unpacked" not_called "tar --zstd"
   end_case
 }
 
@@ -1721,7 +1725,10 @@ case_update_defaults_opt_into_the_lock() {
   # The administrator turns it off; a repair run (the installer changed)
   # leaves that alone and says so.
   sed -i 's/^DOMOVOI_USE_LOCK=1$/DOMOVOI_USE_LOCK=0/' "$ROOT/etc/default/domovoi-update"
+  # A commit: root reads the installer from the verified copy of HEAD, so
+  # an edit in the working tree alone changes nothing.
   echo "# changed" >>"$CHECKOUT/scripts/linux/install-update-unit.sh"
+  git -C "$CHECKOUT" commit -q -am "installer changed"
   run_prov --internet always --skip-models
   check "repair: exit 0" eq "$RC" 0
   check "repair: update-unit re-ran" eq "$(state_of update-unit)" done
@@ -1741,6 +1748,7 @@ case_update_defaults_opt_into_the_lock() {
     return
   fi
   echo "# changed again" >>"$CHECKOUT/scripts/linux/install-update-unit.sh"
+  git -C "$CHECKOUT" commit -q -am "installer changed again"
   run_prov --internet always --skip-models
   check "symlink: exit 0" eq "$RC" 0
   check "symlink: still a link" test -L "$f"
@@ -2965,7 +2973,104 @@ case_a_tag_that_moved_since_the_first_run_stops() {
   end_case
 }
 
+
+# ─── The verified copy (delta security review 2026-10-16, S4) ────────────
+#
+# A re-run used to install the units, run os-jobs.sh, gpu-runtime.sh and
+# install-update-unit.sh, read the pin manifest and copy the journald
+# drop-in from the working tree, which by then is the service user's.
+
+have_ssh_signing() { local out; out=$(ssh-keygen -Y 2>&1); [[ $out == *"requires an argument"* ]]; }
+not() { ! "$@"; }
+
+# tamper_checkout: what code running as the service user can do to its own
+# checkout without a commit: edit files, swap one for a link, hide an edit
+# from git status.
+tamper_checkout() {
+  local co=$CHECKOUT/scripts/linux
+  sed -i '/^User=/d; s#^ExecStart=.*#ExecStart=/bin/sh -c "id > /root/owned"#' "$co/units/domovoi-core.service"
+  sed -i "2i echo planted >>$CASE/ran-os-jobs" "$co/os-jobs.sh"
+  sed -i "2i echo planted >>$CASE/ran-gpu-runtime" "$co/gpu-runtime.sh"
+  sed -i "2i echo planted >>$CASE/ran-install-update-unit" "$co/install-update-unit.sh"
+  sed -i 's/^docker_key_fpr=.*/docker_key_fpr=0000000000000000000000000000000000000000/' "$co/provision-manifest.conf"
+  printf 'secret-line\n' >"$CASE/secret"
+  rm "$co/units/journald-domovoi.conf"
+  ln -s "$CASE/secret" "$co/units/journald-domovoi.conf"
+  git -C "$CHECKOUT" update-index --skip-worktree scripts/linux/os-jobs.sh
+}
+
+case_rerun_takes_nothing_from_the_working_tree() {
+  new_case rerun_takes_nothing_from_the_working_tree
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  local head; head=$(git -C "$CHECKOUT" rev-parse HEAD)
+  check "the first run's copy is gone" test ! -e "$ROOT/run/domovoi-provision/$head"
+  tamper_checkout
+  # Gone, so the steps that install them run again.
+  rm -f "$ROOT/etc/systemd/system/domovoi-core.service" "$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf" \
+    "$ROOT/etc/systemd/system/domovoi-update.service"
+  run_prov "${wsl_args[@]}"
+  local unit=$ROOT/etc/systemd/system/domovoi-core.service drop=$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf
+  check "re-run exit 0" eq "$RC" 0
+  check "the checkout read by upload-pack as the service user" called "runuser -u domovoi -- git upload-pack"
+  check "said where it reads from" said "the checkout's files are read from $ROOT/run/domovoi-provision/$head"
+  check "the units step ran" eq "$(state_of units)" done
+  check "the core unit is the commit's (User= kept)" grep -qx 'User=domovoi' "$unit"
+  check "not the edited one" not grep -q '/root/owned' "$unit"
+  check "the drop-in is the commit's" cmp -s "$drop" "$REAL_REPO/scripts/linux/units/journald-domovoi.conf"
+  check "nothing of the link's target" not grep -q secret-line "$drop"
+  check "the edited os-jobs.sh never ran" test ! -e "$CASE/ran-os-jobs"
+  check "the edited gpu-runtime.sh never ran" test ! -e "$CASE/ran-gpu-runtime"
+  check "the update-unit step ran" eq "$(state_of update-unit)" done
+  check "the commit's installer" called "install-update-unit --repo $CHECKOUT"
+  check "the edited one never ran" test ! -e "$CASE/ran-install-update-unit"
+  check "the pins are the commit's" said "pins from $ROOT/run/domovoi-provision/$head/scripts/linux/provision-manifest.conf"
+  check "so Docker's step is unchanged" eq "$(state_of docker)" skip
+  check "the copy is gone after the run" test ! -e "$ROOT/run/domovoi-provision/$head"
+  check "the mirror is root's state" test -d "$ROOT/var/lib/domovoi-update/mirror.git"
+  check "progress format" progress_ok
+  end_case
+}
+
+case_rerun_refuses_an_unverified_head() {
+  new_case rerun_refuses_an_unverified_head
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  mkdir -p "$CASE/keys" "$ROOT/etc/domovoi"
+  ssh-keygen -q -t ed25519 -N '' -C owner -f "$CASE/keys/owner" >/dev/null
+  printf 'owner@example.invalid namespaces="git" %s\n' "$(cut -d' ' -f1,2 "$CASE/keys/owner.pub")" >"$ROOT/etc/domovoi/allowed_signers"
+  tamper_checkout
+  rm -f "$ROOT/etc/systemd/system/domovoi-core.service"
+  run_prov "${wsl_args[@]}"
+  check "exit 1" eq "$RC" 1
+  check "says why" said "signed updates are enforced by /etc/domovoi/allowed_signers, but HEAD is not signed"
+  check "the final line says failed" eq "$(final_field result)" '"failed"'
+  check "the core unit was not reinstalled" test ! -e "$ROOT/etc/systemd/system/domovoi-core.service"
+  check "nothing of the checkout ran" test ! -e "$CASE/ran-os-jobs"
+  check "nor the gpu helper" test ! -e "$CASE/ran-gpu-runtime"
+  check "progress format" progress_ok
+  end_case
+}
+
+case_dry_run_with_a_checkout_changes_nothing() {
+  new_case dry_run_with_a_checkout_changes_nothing
+  run_prov "${wsl_args[@]}"
+  check "first run exit 0" eq "$RC" 0
+  tamper_checkout
+  local sig; sig=$(tree_sig)
+  run_prov --dry-run "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "every file under the root as it was" eq "$(tree_sig)" "$sig"
+  check "the helpers asked are the commit's" test ! -e "$CASE/ran-gpu-runtime"
+  check "result dry_run" eq "$(final_field result)" '"dry_run"'
+  end_case
+}
+
 CASES=(
+  case_rerun_takes_nothing_from_the_working_tree
+  case_rerun_refuses_an_unverified_head
+  case_dry_run_with_a_checkout_changes_nothing
   case_help_and_usage_errors
   case_import_check_names_no_dropped_package
   case_whisper_download_imports_without_pyav
