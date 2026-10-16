@@ -277,7 +277,10 @@ the first start (it writes the answer into the fresh `domovoi/.env`).
 Three ways in:
 
 - **Ubuntu 26.04, one script.** `scripts/linux/provision.sh` installs the
-  server, its services and the models in one unattended run:
+  server, its services and the models in one unattended run, at the latest
+  release, and the server then follows the `stable` channel: releases only
+  ([Release channels](docs/LINUX_HOST.md#release-channels); before the
+  first release, `main`):
   [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
 - **Windows 11, the installer (test build).** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
@@ -287,8 +290,8 @@ Three ways in:
 - **By hand, on Windows or Linux:** the commands below.
 
 ```powershell
-git clone https://github.com/coders-farm-official/domovoi
-cd domovoi
+git clone https://github.com/coders-farm-official/domovoi   # every change (main); add
+cd domovoi                          # --branch stable for releases only, from v1.0.0 on
 
 # Python dependencies (run from the repo root, where pyproject.toml lives).
 # A Linux server installs from the hash-pinned lock instead:

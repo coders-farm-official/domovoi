@@ -215,8 +215,15 @@ async def version_state() -> dict:
         problem = None
     in_progress = await asyncio.to_thread(self_restart.underway, last, mode)
     signature = await asyncio.to_thread(signature_state, checkout)
-    checkout_label = await asyncio.to_thread(_checkout_label, checkout)
-    track = await asyncio.to_thread(tracking)
+    if checkout == "unknown":
+        # No git, or not a checkout: nothing more to ask git.
+        checkout_label = await asyncio.to_thread(_pyproject_version) or "unknown"
+        track = {"branch": None, "remote": None, "merge": None, "channel": None, "intended": None}
+        newest = None
+    else:
+        checkout_label = await asyncio.to_thread(_checkout_label, checkout)
+        track = await asyncio.to_thread(tracking)
+        newest = await asyncio.to_thread(latest_release)
     return {
         # `sha` stays for backwards compatibility with existing callers —
         # and now means the RUNNING code, which is what they meant to ask.
@@ -241,7 +248,7 @@ async def version_state() -> dict:
         # and the release is out. `latest_release` is origin/stable's label
         # as last fetched (no fetch here), None before the first release.
         "channel_intended": track["intended"],
-        "latest_release": await asyncio.to_thread(latest_release),
+        "latest_release": newest,
         "channels": list(CHANNELS),
         "channel_pin": channel_pin(),
         # "unreadable" when the update unit's settings file is there but this

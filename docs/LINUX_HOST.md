@@ -258,7 +258,16 @@ sudo bash /tmp/domovoi/scripts/linux/provision.sh --internet always --timezone A
 
 It clones the repository again into `/opt/domovoi` as the `domovoi` user
 (an account it creates with no password login; an existing `--user` is
-used as it is, and one in `sudo`, `admin` or `wheel` is refused). On top
+used as it is, and one in `sudo`, `admin` or `wheel` is refused), at the
+latest release, and the box then follows the `stable` channel: releases
+only ([Release channels](#release-channels)). Before the repository's first
+release there is no `stable` branch yet; the script then installs `main`,
+follows it, and says so, and the Version card says when the first release
+is out. `--ref` picks something else: a branch (`--ref main`), a release
+tag (`--ref v1.0.0`, read as a tag only, never a branch of that name) or a
+full commit SHA (that commit only); with a tag or a SHA, `--track-branch`
+names the channel it follows (default `stable`). After the checkout, HEAD
+must be the commit `--ref` named, or nothing is installed. On top
 of the manual steps it pre-downloads what the core would otherwise fetch
 at its first boot: the Ollama models for the box's memory (`--tier`), the
 Whisper model, the Piper voice and the room image. The models include the
@@ -1181,7 +1190,8 @@ does this:
    second confirm, when only the read taken at the press shows it), and
    the card says **Updating…** and waits up to 15 minutes, not seconds.
 2. Refuse, touching nothing, if the checkout's `origin` or tracking branch
-   is not the pinned upstream, or if signed updates are enforced and HEAD
+   is not the pinned upstream (with a branch pin, HEAD must also be on one
+   of the pinned branches as last fetched), or if signed updates are enforced and HEAD
    does not verify against the root-owned allowed-signers file (both in
    [Signed updates](#signed-updates); the first check runs before step 1,
    on the plain restart too). Refuse, touching nothing, if tracked files
@@ -1201,7 +1211,9 @@ does this:
    needed a kill — systemd's after `TimeoutStopSec`, or this one — shows
    in the version panel instead of hiding in a slow step.
 5. If `pyproject.toml`, a `requirements*.lock` or a bundled plugin's lock
-   changed: re-sync the venv. By default that is pip's resolver, as it
+   changed: re-sync the venv. A change to `pyproject.toml` that only moves
+   `[project]`'s `version` line (every release's bump) is not a dependency
+   change: no re-sync, and a box answered **No** still takes the release. By default that is pip's resolver, as it
    was before the lock existed: CPU torch first, then
    `pip install -e ".[real-clients,voice-profile]"` from the index; when
    the checkout has `requirements-linux-py314.lock`, the step's detail
@@ -1431,7 +1443,9 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_REVOKED_SIGNERS=/etc/domovoi/revoked_signers
 # The upstream the checkout must follow; a checkout on another remote or branch is refused. Default: not pinned.
 # DOMOVOI_UPSTREAM_URL=https://github.com/coders-farm-official/domovoi
-# DOMOVOI_UPSTREAM_BRANCH=main
+# One branch, or several separated by spaces or commas. provision.sh writes the two release channels:
+# DOMOVOI_UPSTREAM_BRANCH="stable main"
+# The core reads this file as the service user (the pin, the signers path): keep it readable (0644).
 # 0: leave Ubuntu's background jobs alone (step 12, Internet or not). Default: they follow the answer.
 # DOMOVOI_MANAGE_OS_JOBS=1
 # 0: leave Docker's GPU runtime (the NVIDIA Container Toolkit) alone (step 7, Wake-word training).
@@ -1472,6 +1486,57 @@ above exists. Without that rule the panel says so and shows the manual
 command; it does not fall back to a plain bounce, which would skip the
 migrations. Not found, the button bounces core and web exactly as before.
 `systemctl mask domovoi-update.service` switches back to the plain bounce.
+
+### Release channels
+
+One version for the whole project, one tag per release (`v1.0.0`,
+`v1.0.1`, `v1.1.0-rc1`), and two branches a box can follow for updates:
+
+| Channel | What it holds | Who follows it |
+|---|---|---|
+| `stable` | The latest release's commit, nothing else. It only ever fast-forwards, once a release is complete (`git push origin "v1.0.1^{commit}:refs/heads/stable"`), and never gets a release candidate. | New installs: `provision.sh`'s default, and a release build of the Windows installer. |
+| `main` | Every change, as it lands. Release candidates are tags on it. | Boxes installed before the channels, until someone switches them; whoever wants changes before they are released. |
+
+The channel is the branch the checkout tracks, so the check, **Pull the
+latest**, the rolled-back `bad_sha` and the update unit's pin all work as
+before. Settings → Configuration → Version shows:
+
+- the release label of the code that runs: `1.0.0` on a release, `1.0.0 +
+  14 (abc1234)` past one (`git describe --tags --match "v[0-9]*"`);
+- **updates**: the channel, and for an admin a choice between the two;
+- after **Check for updates**, on `stable`: "Domovoi 1.0.1 is available",
+  "the latest release", or, on a box that runs code newer than the latest
+  release (switched from `main`), that updates resume with the next
+  release that includes it; on `main`: how many commits behind, and the
+  latest release.
+
+**Switching** (an admin, security tier: `POST /api/config/version/channel`)
+makes the local branch of that name at the commit the box already runs and
+tracks `origin/<channel>`. It never moves HEAD or a file, so it needs no
+restart and leaves the update unit's `applied_sha` and `bad_sha` as they
+were; the next check says what is new there, and pulling stays its own
+step. `main` → `stable` never takes a box backwards: past the latest
+release, it waits for the next one. `stable` → `main` is a fast-forward
+away. A switch is refused, changing nothing, while an update runs, under
+**No** (it fetches), for a channel the update unit's pin doesn't allow, for
+a box whose code is on neither branch's line, and before the first release
+(`stable` doesn't exist yet). Nothing switches by itself: an install that
+asked for `stable` before there was one follows `main` (it remembers what
+was asked for, `git config domovoi.intendedChannel stable`), and the
+Version card says so once the first release is out.
+
+Tags are fetched explicitly (`git fetch --tags`). A published tag never
+moves; if one upstream ever did, git refuses to overwrite the local copy
+("would clobber existing tag"), and the check and the pull show that error
+instead of moving.
+
+To follow a channel by hand, on a box without the dashboard:
+
+```bash
+sudo -u domovoi git -C /opt/domovoi fetch --tags origin
+sudo -u domovoi git -C /opt/domovoi checkout -B stable          # at HEAD: nothing moves
+sudo -u domovoi git -C /opt/domovoi branch --set-upstream-to origin/stable stable
+```
 
 ### The hash-pinned lock
 
@@ -1684,7 +1749,17 @@ DOMOVOI_UPSTREAM_BRANCH=main
 
 `origin` must have that URL (a trailing `.git` or `/` doesn't matter) and
 HEAD must track `origin/main`, or the run is `refused` with an `upstream`
-step saying which. All four settings are optional and read from that
+step saying which. `DOMOVOI_UPSTREAM_BRANCH` may name several branches,
+separated by spaces or commas: `provision.sh` writes `"stable main"`, the
+two [release channels](#release-channels), so the dashboard's channel
+switch works and any other branch is refused. With a branch pin, root also
+checks that HEAD itself is on one of the pinned branches as this box last
+fetched them (the tracking branch is the service user's config), on the
+plain restart too, and the core's check and pull compare with, and merge,
+`refs/remotes/origin/<branch>` by name rather than the checkout's `@{u}`.
+Keep the file readable by the service user (`0644`; it holds no secrets):
+the core reads the pin and the signers path from it, and while it can't,
+the dashboard offers no channel switch and says why. All four settings are optional and read from that
 root-owned file: `DOMOVOI_ALLOWED_SIGNERS` (default
 `/etc/domovoi/allowed_signers`; the core reads the path from the same file,
 so the two halves always look at one file), `DOMOVOI_REVOKED_SIGNERS`,
