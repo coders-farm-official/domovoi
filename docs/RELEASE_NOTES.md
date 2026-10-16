@@ -4,6 +4,66 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Release channels: stable and main; the version is a release label
+
+Server update (core, dashboard, the update unit's scripts; no migration).
+Nothing moves on an existing box: it keeps following `main`.
+
+* **Settings → Configuration → Version names the release.** "1.0.0" on a
+  release, "1.0.0 + 14 (abc1234)" past one, from the release tags (`git
+  describe --tags`). `GET /v1/admin/version` gains `version`,
+  `checkout_version`, `channel`, `channels`, `channel_pin`,
+  `channel_pin_problem`, `channel_intended` and `latest_release`; the
+  check gains `channel`, `upstream_version` and `latest_release`.
+* **Two channels.** `stable` only ever moves to a release's commit;
+  `main` carries every change. **New installs follow `stable`**:
+  `provision.sh` defaults to it, and a release build of the Windows
+  installer passes it. Until the first release (v1.0.0) there is no
+  `stable` branch: those installs follow `main`, say so in their log, and
+  the Version card says when the release is out.
+  ([LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels))
+* **An admin can switch the channel** (the card's **updates** row;
+  `POST /api/config/version/channel`, security tier, 501 before setup,
+  paused by the container guard like the pull). It never moves the code:
+  the check and the pull follow the other branch from then on. On
+  `stable`, "update available" means a newer release; a box that runs code
+  newer than the latest release waits for the next one.
+* **A release no longer counts as a dependency change.** A `pyproject.toml`
+  whose only change is `[project]`'s `version` line doesn't re-sync the
+  venv, so a box answered **No** takes a release that changes nothing
+  else.
+* **`DOMOVOI_UPSTREAM_BRANCH` may name several branches** ("stable main",
+  which `provision.sh` now writes on the boxes it installs or repairs).
+  With a branch pin the core compares with and pulls
+  `refs/remotes/origin/<branch>` by name, and root also requires HEAD to
+  be on one of the pinned branches, plain restarts included. Keep
+  `/etc/default/domovoi-update` readable by the service user (0644): while
+  the core can't read it, the card offers no channel switch.
+* **`provision.sh --ref` is read by its shape** (delta security review
+  S3): a full SHA is that commit, `v<digit>...` or `refs/tags/NAME` is that
+  tag only, `stable`, `main` and `refs/heads/NAME` the branch, any other
+  name the tag of that name when there is one, else the branch; a branch
+  named like a tag or a SHA no longer wins. After the checkout HEAD must be the commit it named. A
+  tag's commit is recorded, and a resumed install that finds the tag moved
+  stops.
+* **Tags are fetched on their own**, after the branches and never forced.
+  A published tag that moved upstream stays as this server had it, and the
+  card shows a warning about the labels; the check, the pull and the
+  switch go on.
+* **A pinned branch rewritten upstream** no longer stops **Restart
+  Domovoi**: the commit the box last applied restarts with a warning; an
+  update to anything else off the pinned branches is refused.
+* **Root's git ignores `refs/replace` and grafts** (update unit,
+  `provision.sh`, `install-update-unit.sh`, and the core's own git), so a
+  signature check sees the commit HEAD names.
+* **Windows installer:** `pins.iss` gains `DomovoiChannel`;
+  `windows\build.ps1 -Pin <tag|SHA>` moves the commit, the channel,
+  `provision.sh`'s pin and the tab-address flag together; Setup now
+  fetches `provision.sh` from the pinned commit (606829c on main, channel
+  `main` until a release build pins a tag); DomovoiHost fails a first
+  install closed if the commit it checked out isn't the one pinned. "What
+  Setup will change" ends with how to undo it.
+
 ## 2026-10-16 — Privacy fixes: the journal, "forget me", two routes before setup
 
 Server update (core and dashboard, a database migration, V029) and a new

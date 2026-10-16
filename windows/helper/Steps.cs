@@ -249,7 +249,7 @@ namespace Domovoi.Windows.Helper
             o.Say("copied " + Path.GetFileName(src) + " to " + dest + " (SHA-256 checked)");
         }
 
-        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string lanIp)
+        public static void WriteJob(Output o, string image, string imageSha, string provision, string provisionSha, string repoUrl, string commit, string trackBranch, string lanIp)
         {
             Ledger l = NeedLedger();
             if (!Sha256.IsHex(imageSha) || !Sha256.IsHex(provisionSha)) throw new ArgumentException("pins must be SHA-256 hex");
@@ -261,6 +261,7 @@ namespace Domovoi.Windows.Helper
             var opts = new ProvisionOptions();
             opts.RepoUrl = repoUrl;
             opts.Ref = commit;
+            opts.TrackBranch = trackBranch;
             opts.Internet = l.Internet;
             if (lanIp == "auto")
             {

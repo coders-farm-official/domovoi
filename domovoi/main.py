@@ -2420,6 +2420,33 @@ async def admin_version_pull() -> dict[str, Any]:
     return await git_version.pull()
 
 
+class _ChannelBody(BaseModel):
+    channel: str = Field(..., max_length=40)
+
+
+@app.post(
+    "/v1/admin/version/channel",
+    # Security tier: it changes which branch every later pull, and so the
+    # update unit's root run, follows. Bearer-only; 501 until an admin
+    # password exists.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_version_channel(body: _ChannelBody) -> dict[str, Any]:
+    """Follow the ``stable`` or the ``main`` channel from now on
+    (``git_version.switch_channel``): the local branch of that name is made
+    at HEAD, tracking ``origin/<channel>``. HEAD never moves; the next check
+    says what is new there, and the pull stays its own action. Answers
+    ``{ok, changed, channel, error}``; a refusal (unknown channel, internet
+    turned off, an update under way, root's DOMOVOI_UPSTREAM_BRANCH pinning
+    other branches, no such branch, code off that branch's line) is
+    ``ok: false`` with the reason, nothing changed.
+
+    423 while the container guard has an open tamper incident, like the
+    pull (docs/CONTAINER_GUARD.md)."""
+    await container_freeze.require_unfrozen("update_pull")
+    return await git_version.switch_channel(body.channel)
+
+
 @app.post(
     "/v1/admin/version/restart",
     # Security tier: this bounces the host's services. Same gate as the

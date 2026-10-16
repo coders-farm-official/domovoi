@@ -29,6 +29,13 @@
 #else
   #define DashboardRoute "settings"
 #endif
+; The channel the install follows for updates (pins.iss DomovoiChannel), in
+; the words the page that says what Setup changes uses.
+#if DomovoiChannel == "stable"
+  #define ChannelWords ": Domovoi releases only"
+#else
+  #define ChannelWords ": every change, as it lands"
+#endif
 #define AppVersion "1.0.0-rc1"
 #define Helper "DomovoiSetupHelper.exe"
 ; Which build this is, for the dashboard link on the last page: a URL no
@@ -422,7 +429,7 @@ var
   N: Integer;
   S: String;
 begin
-  S := 'Uninstalling Domovoi (Settings > Apps > Installed apps > Domovoi) undoes every change below.' + #13#10 + #13#10;
+  S := '';
   N := 1;
   if VmpState <> 'enabled' then
   begin
@@ -450,10 +457,11 @@ begin
   S := S + IntToStr(N) + '. C:\Program Files\Domovoi (this program) and C:\ProgramData\Domovoi (Domovoi''s Linux system, logs and settings; only administrators and domovoi-svc can open it). Setup won''t use a C:\ProgramData\Domovoi it didn''t make.' + #13#10#13#10;
   N := N + 1;
   S := S + IntToStr(N) + '. Setup''s install record in the registry, HKLM\SOFTWARE\Domovoi: what Setup changed, so the uninstaller can undo it.' + #13#10#13#10;
-  S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)}, Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
+  S := S + 'Downloads: about 10.5-13.5 GB (the AI models are most of it; the size depends on the models this PC''s memory gets). Ubuntu (418 MB) now; then, inside the distro, Domovoi''s code at commit {#Copy(DomovoiCommit, 1, 7)} (later updates follow the {#DomovoiChannel} channel{#ChannelWords}; you choose when, in Settings > Configuration > Version), Docker Engine, Python packages and the AI models (one of them reads pictures in chat), each checked against a pinned hash.' + #13#10#13#10;
   S := S + 'Not changed: power and sleep settings (this test build doesn''t ask), Windows Update, Smart App Control, your user accounts and files.' + #13#10#13#10;
   S := S + 'This test build is not code-signed: Windows SmartScreen may have warned before Setup started, and Windows may ask again about its programs.' + #13#10#13#10;
-  S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.';
+  S := S + 'Uninstalling never deletes files in your media folders: a media folder is removed only if it is empty.' + #13#10#13#10;
+  S := S + 'You can undo all of this later from Settings > Apps > Installed apps > Domovoi.';
   Result := S;
 end;
 
@@ -968,7 +976,7 @@ begin
     if not Step('Adding the firewall rules', 'firewall', 8, Lines) then Exit;
     if not Step('Handing the work to DomovoiHost', 'job --image ' + AddQuotes(ExpandConstant('{tmp}\{#UbuntuName}')) +
       ' --image-sha256 {#UbuntuSha256} --provision ' + AddQuotes(ExpandConstant('{tmp}\provision.sh')) +
-      ' --provision-sha256 {#ProvisionSha256} --repo-url {#DomovoiRepoUrl} --ref {#DomovoiCommit} --lan-ip auto', 12, Lines) then Exit;
+      ' --provision-sha256 {#ProvisionSha256} --repo-url {#DomovoiRepoUrl} --ref {#DomovoiCommit} --track-branch {#DomovoiChannel} --lan-ip auto', 12, Lines) then Exit;
     if not Step('Starting DomovoiHost', 'host-start', 14, Lines) then Exit;
     if not WaitForHost then Exit;
     ProgressPage.SetProgress(100, 100);

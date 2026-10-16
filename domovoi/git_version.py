@@ -23,6 +23,14 @@ On a Linux host with the update unit installed (docs/LINUX_HOST.md,
 pipeline: :func:`pull` records the SHA to roll back to, and
 :func:`version_state` reports the unit's last result.
 
+Releases and channels (docs/LINUX_HOST.md, "Release channels"): a release
+is a ``v<version>`` tag, and :func:`version_label` names the code by the
+nearest one (``1.0.0`` on a release, ``1.0.0 + 14 (abc1234)`` past it). The
+checkout follows one of two branches: ``stable``, which only ever moves to a
+release's commit, or ``main``, which carries every change.
+:func:`switch_channel` changes which one the check and the pull follow,
+and never moves HEAD.
+
 Signed updates (docs/LINUX_HOST.md, "Signed updates"): :func:`pull`
 verifies the fetched tip's SSH signature against the root-owned
 allowed-signers file BEFORE fast-forwarding, and refuses the pull while that
@@ -85,7 +93,15 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
         timeout=_GIT_TIMEOUT_SEC,
         check=False,
         creationflags=_NO_WINDOW,
+        env={**os.environ, **_GIT_ENV},
     )
+
+
+# Every git call reads the objects as they are: no refs/replace and no
+# grafts, so a commit can't be swapped for another one under its SHA when
+# its signature is checked (rc2 review C3; the update unit's root git does
+# the same).
+_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull}
 
 
 async def current_sha() -> str:
@@ -141,17 +157,20 @@ def invalidate_sha_cache() -> None:
 # actually running; `current_sha()` is what's on disk. When they differ, a
 # restart is pending.
 _BOOT_SHA: str | None = None
+_BOOT_LABEL: str | None = None
 _BOOT_MONOTONIC: float | None = None
 _BOOT_WALL: float | None = None
 
 
 async def capture_boot_state() -> None:
-    """Record the SHA and wall-clock time at process start. Called once from
-    the core's startup hook, before serving traffic. Idempotent."""
-    global _BOOT_SHA, _BOOT_MONOTONIC, _BOOT_WALL
+    """Record the SHA, its release label and the wall-clock time at process
+    start. Called once from the core's startup hook, before serving
+    traffic. Idempotent."""
+    global _BOOT_SHA, _BOOT_LABEL, _BOOT_MONOTONIC, _BOOT_WALL
     if _BOOT_SHA is not None:
         return
     _BOOT_SHA = await current_sha()
+    _BOOT_LABEL = await current_label()
     _BOOT_MONOTONIC = time.monotonic()
     _BOOT_WALL = time.time()
 
@@ -160,6 +179,12 @@ def boot_sha() -> str:
     """The SHA this process was launched from, or "unknown" if startup never
     captured it (stub/test contexts that skip the boot hook)."""
     return _BOOT_SHA or "unknown"
+
+
+def boot_label() -> str | None:
+    """The release label of the code this process was launched from
+    (:func:`version_label` at boot), or None if startup never captured it."""
+    return _BOOT_LABEL
 
 
 def uptime_sec() -> float | None:
@@ -198,12 +223,45 @@ async def version_state() -> dict:
         problem = None
     in_progress = await asyncio.to_thread(self_restart.underway, last, mode)
     signature = await asyncio.to_thread(signature_state, checkout)
+    if checkout == "unknown":
+        # No git, or not a checkout: nothing more to ask git.
+        checkout_label = await asyncio.to_thread(_pyproject_version) or "unknown"
+        track = {"branch": None, "remote": None, "merge": None, "channel": None, "intended": None}
+        newest = None
+    else:
+        checkout_label = await asyncio.to_thread(_checkout_label, checkout)
+        track = await asyncio.to_thread(tracking)
+        newest = await asyncio.to_thread(latest_release)
     return {
         # `sha` stays for backwards compatibility with existing callers —
         # and now means the RUNNING code, which is what they meant to ask.
         "sha": running,
         "running_sha": running,
         "checkout_sha": checkout,
+        # The release label (version_label) of the running code, captured
+        # at boot: "1.0.0", or "1.0.0 + 14 (abc1234)" past that release.
+        # None when boot never captured it. `checkout_version` is the
+        # checkout's, read now.
+        "version": boot_label(),
+        "checkout_version": checkout_label,
+        # The branch of origin the check and the pull follow ("stable",
+        # "main", another, or None), read from the checkout's config with
+        # no fetch; `channels` the ones Settings → Version offers, and
+        # `channel_pin` the branches root's update unit allows
+        # (DOMOVOI_UPSTREAM_BRANCH), None when it allows any.
+        "channel": track["channel"],
+        # The channel the box was set up to follow when that wasn't possible
+        # yet (stable before the first release), or the last one switched
+        # to; the card points at the switch once it differs from `channel`
+        # and the release is out. `latest_release` is origin/stable's label
+        # as last fetched (no fetch here), None before the first release.
+        "channel_intended": track["intended"],
+        "latest_release": newest,
+        "channels": list(CHANNELS),
+        "channel_pin": channel_pin(),
+        # "unreadable" when the update unit's settings file is there but this
+        # process can't read it (then the pin above can't be known), else None.
+        "channel_pin_problem": update_defaults_problem(),
         "restart_required": bool(
             known and running.removesuffix("-dirty") != checkout.removesuffix("-dirty")
         ),
@@ -243,6 +301,333 @@ async def version_state() -> dict:
 def _bad_sha(last: dict | None) -> str | None:
     bad = (last or {}).get("bad_sha")
     return bad if isinstance(bad, str) and _FULL_SHA_RE.match(bad) else None
+
+
+# ─── Releases and channels ───────────────────────────────────────────────
+#
+# One version for the whole project, and one tag per release: v1.0.0,
+# v1.0.1, v1.1.0-rc1 (design-notes V1-RELEASE-PLAN 1.1). The tags `gh
+# release create` makes are lightweight, hence --tags.
+#
+# Two channels, both branches of origin. `stable` only ever fast-forwards
+# to a release's commit, once the release is complete; `main` carries
+# every change. Releases are cut from main, so stable is always on main's
+# history: main → stable never moves a box backwards (it waits for the
+# next release that holds its code), stable → main is a fast-forward.
+# The channel IS the branch the checkout tracks, so the check, the pull,
+# bad_sha and the update unit's upstream pin all keep working through
+# @{u}, unchanged. New installs follow stable (provision.sh); a box
+# installed before the channels follows main until someone switches it.
+
+CHANNELS = ("stable", "main")
+_TAG_MATCH = "v[0-9]*"
+# `git describe` past a tag: v<release>-<commits since>-g<sha>. The
+# release itself may hold hyphens (1.0.0-rc1), hence the lazy match.
+_DESCRIBE_RE = re.compile(r"^v(?P<release>.+?)-(?P<n>[0-9]+)-g(?P<sha>[0-9a-f]{4,64})$")
+_LABEL_MAX_CHARS = 80
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+
+
+def _pyproject_version() -> str | None:
+    """Blocking. ``[project] version`` of the checkout's pyproject.toml, or
+    None. The package metadata is not asked: a development venv's editable
+    install can hold an older version than the tree."""
+    try:
+        import tomllib
+
+        with open(Path(settings.repo_dir) / "pyproject.toml", "rb") as f:
+            version = tomllib.load(f).get("project", {}).get("version")
+    except Exception:  # noqa: BLE001 — no file, not TOML: no version
+        return None
+    return version[:_LABEL_MAX_CHARS] if isinstance(version, str) and version else None
+
+
+def format_label(described: str) -> str | None:
+    """A ``git describe --tags`` answer as people read it: ``v1.0.0`` →
+    ``1.0.0``, ``v1.0.0-14-gabc1234f`` → ``1.0.0 + 14 (abc1234)``. A
+    ``-dirty`` suffix is dropped (the SHA carries that). None for anything
+    that isn't a ``v`` tag."""
+    text = (described or "").strip().removesuffix("-dirty")
+    m = _DESCRIBE_RE.match(text)
+    if m:
+        label = f"{m['release']} + {int(m['n'])} ({m['sha'][:7]})"
+    elif text.startswith("v") and len(text) > 1 and "\n" not in text:
+        label = text[1:]
+    else:
+        return None
+    return label[:_LABEL_MAX_CHARS]
+
+
+def version_label(rev: str = "HEAD") -> str:
+    """Blocking. The release label of ``rev``: the nearest ``v`` tag it is
+    at or past (:func:`format_label`). With no such tag in its history,
+    the pyproject version and the short SHA ("1.0.0rc2 (abc1234)"); with
+    no git at all, the pyproject version alone, else "unknown". Never
+    raises."""
+    try:
+        proc = _run("describe", "--tags", "--match", _TAG_MATCH, rev)
+        if proc.returncode == 0:
+            label = format_label(proc.stdout)
+            if label:
+                return label
+        short = _run("rev-parse", "--short", f"{rev}^{{commit}}")
+        sha = short.stdout.strip() if short.returncode == 0 else ""
+    except Exception:  # noqa: BLE001 — no git / timeout
+        sha = ""
+    pyver = _pyproject_version()
+    if sha and _SHORT_SHA_RE.match(sha):
+        return f"{pyver} ({sha[:7]})" if pyver else sha[:7]
+    return pyver or "unknown"
+
+
+async def current_label() -> str:
+    """:func:`version_label` of the checkout's HEAD. Never raises."""
+    return await asyncio.to_thread(version_label, "HEAD")
+
+
+# The checkout's label, keyed by the SHA current_sha() just read: it moves
+# only with HEAD or with the tags, and a fetch (which brings tags) drops it.
+_LABEL_CACHE: tuple[str, str] | None = None
+
+
+def _checkout_label(checkout_sha: str) -> str:
+    """Blocking. :func:`version_label` of HEAD, memoised per checkout SHA."""
+    global _LABEL_CACHE
+    if _LABEL_CACHE is not None and _LABEL_CACHE[0] == checkout_sha and checkout_sha != "unknown":
+        return _LABEL_CACHE[1]
+    label = version_label("HEAD")
+    _LABEL_CACHE = (checkout_sha, label)
+    return label
+
+
+def invalidate_label_cache() -> None:
+    global _LABEL_CACHE
+    _LABEL_CACHE = None
+
+
+def _config(key: str) -> str | None:
+    proc = _run("config", "--get", key)
+    value = proc.stdout.strip() if proc.returncode == 0 else ""
+    return value or None
+
+
+def tracking() -> dict:
+    """Blocking. What the checkout follows, from its config alone (no
+    fetch, and the remote-tracking ref need not exist yet): ``branch`` (the
+    local branch, None when HEAD is detached), ``remote`` and ``merge`` (its
+    upstream), ``channel``, the upstream's branch name when the remote is
+    origin, and ``intended``, the channel the box was set up for when that
+    was not possible yet (``git config domovoi.intendedChannel``:
+    provision.sh writes "stable" when origin had no stable branch, the
+    switch writes the channel it moves to). Never raises."""
+    out: dict = {"branch": None, "remote": None, "merge": None, "channel": None, "intended": None}
+    try:
+        intended = _config("domovoi.intendedChannel")
+        out["intended"] = intended if intended in CHANNELS else None
+        # The full name, not --short: a tag of the same name (a tag
+        # "stable") would make git shorten it to "heads/stable".
+        head = _run("symbolic-ref", "-q", "HEAD")
+        full = head.stdout.strip() if head.returncode == 0 else ""
+        branch = full.removeprefix("refs/heads/") if full.startswith("refs/heads/") else ""
+        if not branch or not _BRANCH_RE.match(branch):
+            return out
+        out["branch"] = branch
+        remote = _config(f"branch.{branch}.remote")
+        merge = _config(f"branch.{branch}.merge")
+        out["remote"], out["merge"] = remote, merge
+        if remote == "origin" and merge and merge.startswith("refs/heads/"):
+            name = merge.removeprefix("refs/heads/")
+            out["channel"] = name if _BRANCH_RE.match(name) else None
+    except Exception:  # noqa: BLE001 — no git / timeout: nothing known
+        pass
+    return out
+
+
+def channel_pin() -> list[str] | None:
+    """The branches root's update unit lets the checkout follow
+    (``DOMOVOI_UPSTREAM_BRANCH`` in /etc/default/domovoi-update: one name,
+    or several separated by spaces or commas; provision.sh writes the two
+    channels), or None when it doesn't pin one. The dashboard can't edit
+    that file, by design: a channel outside it is refused here, and by the
+    unit itself."""
+    raw = os.environ.get("DOMOVOI_UPSTREAM_BRANCH") or _defaults_get("DOMOVOI_UPSTREAM_BRANCH")
+    names = [n for n in re.split(r"[\s,]+", raw or "") if n]
+    return names or None
+
+
+def update_defaults_problem() -> str | None:
+    """"unreadable" when the update unit's env file exists but this process
+    can't read it, else None. Then channel_pin() and allowed_signers_path()
+    can't see what root pins (REV-20): the channel switch refuses rather
+    than offer a branch root would then refuse at every update."""
+    path = os.environ.get("DOMOVOI_UPDATE_DEFAULTS_FILE") or UPDATE_DEFAULTS_FILE
+    try:
+        with open(path, "rb"):
+            return None
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "unreadable"
+
+
+def _upstream_target() -> tuple[str | None, str | None]:
+    """Blocking. ``(rev, refusal)``: what the check counts against and the
+    pull merges. Without root's branch pin, the checkout's upstream
+    (``@{u}``). With it, ``refs/remotes/origin/<branch>`` named outright,
+    for the branch the checkout follows, which must be one the pin allows:
+    ``@{u}`` is the service user's config (delta security review
+    2026-10-16), and root checks the same again before it runs anything."""
+    pin = channel_pin()
+    if pin is None:
+        return "@{u}", None
+    track = tracking()
+    branch = track["channel"]
+    if branch is None or branch not in pin:
+        if track["remote"] and track["merge"]:
+            followed = f"{track['remote']}/{track['merge'].removeprefix('refs/heads/')}"
+        else:
+            followed = "no branch"
+        return None, (
+            f"this checkout follows {followed}, but the update unit only follows "
+            f"{', '.join('origin/' + b for b in pin)} (DOMOVOI_UPSTREAM_BRANCH in "
+            f"{UPDATE_DEFAULTS_FILE}); switch the channel in Settings > Version"
+        )
+    return f"refs/remotes/origin/{branch}", None
+
+
+def _contained_in_pin(head: str, pin: list[str]) -> bool:
+    """Blocking. Whether ``head`` is on one of the pinned branches as last
+    fetched: the rule root applies before every run (apply-update.sh)."""
+    for b in pin:
+        ref = f"refs/remotes/origin/{b}"
+        tip = _full_sha(ref)
+        if tip is not None and (tip == head or _ancestor(head, ref)):
+            return True
+    return False
+
+
+def _ancestor(older: str, newer: str) -> bool:
+    return _run("merge-base", "--is-ancestor", older, newer).returncode == 0
+
+
+def latest_release() -> str | None:
+    """Blocking. The label of origin's ``stable`` as last fetched (the
+    latest release), or None when there is no such branch yet."""
+    if _full_sha("refs/remotes/origin/stable") is None:
+        return None
+    return version_label("refs/remotes/origin/stable")
+
+
+def _channel_answer(ok: bool, error: str | None, channel: str | None = None,
+                    changed: bool = False) -> dict:
+    return {"ok": ok, "changed": changed, "channel": channel, "error": error}
+
+
+def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
+    """Blocking half of :func:`switch_channel`."""
+    fetched, _tag_warning_ignored = _fetch_branches_and_tags("origin")
+    if fetched.returncode != 0:
+        return _channel_answer(False, (fetched.stderr or "git fetch failed").strip()[:_ERROR_MAX_CHARS])
+    target = _full_sha(f"refs/remotes/origin/{channel}")
+    if target is None:
+        why = " (no release has been published on it yet)" if channel == "stable" else ""
+        return _channel_answer(False, f"the repository has no {channel} branch{why}, so there is nothing to follow there")
+    head = _full_sha("HEAD")
+    if head is None:
+        return _channel_answer(False, "git could not read this server's HEAD")
+    track = tracking()
+    if track["branch"] == channel and track["channel"] == channel:
+        _run("config", "domovoi.intendedChannel", channel)
+        return _channel_answer(True, None, channel)
+    # A pull only ever fast-forwards: the channel has to hold this code, or
+    # be behind it on the same line (then updates wait for its next release).
+    if not (_ancestor(head, target) or _ancestor(target, head)):
+        return _channel_answer(
+            False,
+            f"this server runs {head[:12]}, which is not on {channel}'s history, so a pull "
+            f"could never fast-forward to {channel}; nothing was changed",
+        )
+    # Root refuses to run code that is on none of the pinned branches: a
+    # switch that would leave the box there is refused here instead.
+    if pin is not None and not _contained_in_pin(head, pin):
+        return _channel_answer(
+            False,
+            f"this server runs {head[:12]}, which is newer than {channel} and on none of the "
+            f"branches the update unit allows ({', '.join(pin)}), so it would refuse every "
+            "update and restart after the switch; nothing was changed",
+        )
+    local = _full_sha(f"refs/heads/{channel}")
+    if local is not None and track["branch"] != channel and not (
+        local == head or _ancestor(local, head) or _ancestor(local, target)
+    ):
+        return _channel_answer(
+            False,
+            f"the local branch {channel} holds commits of its own ({local[:12]}), which a "
+            "switch would drop; nothing was changed",
+        )
+    if track["branch"] != channel:
+        # -B at HEAD: the branch is (re)made where the checkout already is,
+        # so no file changes and local edits stay where they are.
+        moved = _run("checkout", "-q", "-B", channel)
+        if moved.returncode != 0:
+            return _channel_answer(False, (moved.stderr or "git checkout failed").strip()[:_ERROR_MAX_CHARS])
+    tracked = _run("branch", "-q", "--set-upstream-to", f"origin/{channel}", channel)
+    if tracked.returncode != 0:
+        return _channel_answer(False, (tracked.stderr or "git branch failed").strip()[:_ERROR_MAX_CHARS])
+    if _full_sha("HEAD") != head:  # never: -B at HEAD keeps the commit
+        return _channel_answer(False, "HEAD moved during the switch; check the checkout by hand")
+    # What the household chose now, so the card's "switch to stable" note
+    # (an install from before the first release) doesn't come back.
+    _run("config", "domovoi.intendedChannel", channel)
+    log.info("update channel: now following origin/%s at %s (HEAD %s unchanged)", channel, target[:12], head[:12])
+    return _channel_answer(True, None, channel, changed=True)
+
+
+async def switch_channel(channel: str) -> dict:
+    """Follow origin's ``channel`` branch ("stable" or "main") from now on:
+    what the update check and the pull compare with and move to. HEAD never
+    moves: the local branch ``channel`` is made at HEAD and set to track
+    ``origin/<channel>``, and the next check says what is new there.
+    Returns ``{ok, changed, channel, error}``. Never raises.
+
+    Refused, with nothing changed, for a channel not in :data:`CHANNELS`;
+    under ``INTERNET_ACCESS=never`` (it fetches); while a restart or update
+    is under way; when root's update unit pins other branches
+    (:func:`channel_pin`); when origin has no such branch; when this code is
+    not on that branch's line (a pull could never fast-forward there); and
+    when a local branch of that name holds commits nothing else has."""
+    if channel not in CHANNELS:
+        return _channel_answer(False, f"unknown channel {channel!r}: one of {', '.join(CHANNELS)}")
+    if egress.internet_turned_off():
+        return _channel_answer(False, egress.TURNED_OFF_REASON)
+    last = await asyncio.to_thread(read_last_update)
+    if await asyncio.to_thread(self_restart.underway, last):
+        return _channel_answer(
+            False, "a restart or update is under way; switch once it has finished"
+        )
+    if update_defaults_problem():
+        return _channel_answer(
+            False,
+            f"this process can't read {UPDATE_DEFAULTS_FILE}, so it can't tell which "
+            "branches the update unit allows; make that file readable (chmod 0644: it "
+            "holds no secrets) and try again",
+        )
+    pin = channel_pin()
+    if pin is not None and channel not in pin:
+        return _channel_answer(
+            False,
+            f"this server's update unit only follows {', '.join(pin)} "
+            f"(DOMOVOI_UPSTREAM_BRANCH in {UPDATE_DEFAULTS_FILE}, which only an "
+            "administrator on the box can change)",
+        )
+    try:
+        return await asyncio.to_thread(_switch_channel, channel, pin)
+    except FileNotFoundError:
+        return _channel_answer(False, "git not installed")
+    except subprocess.TimeoutExpired:
+        return _channel_answer(False, "git timed out")
+    except Exception as e:  # noqa: BLE001 — never raise into the endpoint
+        return _channel_answer(False, str(e)[:_ERROR_MAX_CHARS])
 
 
 # ─── Signed updates ──────────────────────────────────────────────────────
@@ -544,6 +929,9 @@ _WARN_DETAIL_STEPS = frozenset(
         "wake-trainer",
         "core-restart",
         "journal",
+        # "HEAD ... is on none of the pinned branches ...; it is the commit
+        # this box last applied, so this restart goes on" (rc2 review C2).
+        "upstream",
     }
 )
 _WARN_DETAIL_MAX_CHARS = 300
@@ -684,20 +1072,65 @@ def _warn_detail(step: dict) -> str | None:
     return line[:_WARN_DETAIL_MAX_CHARS] or None
 
 
+# The branches first, on their own: they are what the check counts and the
+# pull merges. Then the tags, explicitly and never forced: the release
+# labels come from them. A published tag never moves; if one upstream ever
+# did, git refuses to overwrite this server's copy ("would clobber existing
+# tag"), and that is a warning about the labels on the card, never a failed
+# fetch: one moved tag must not stop every box from updating (rc2 review C1).
+_FETCH = ("fetch", "--no-tags")
+_FETCH_TAGS = ("fetch", "--no-tags", "origin", "refs/tags/*:refs/tags/*")
+_REJECTED_TAG_RE = re.compile(r"\[rejected\]\s+(\S+)\s+->\s+\S+\s+\(would clobber existing tag\)")
+
+
+def _tag_warning(stderr: str) -> str:
+    moved = sorted(set(_REJECTED_TAG_RE.findall(stderr or "")))
+    if moved:
+        names = ", ".join(moved[:5]) + (" and more" if len(moved) > 5 else "")
+        return (
+            f"a published release tag moved upstream ({names}); this server keeps the copy it "
+            "had, so a version label may be off. Updates are not affected. Published tags "
+            "never move: tell Domovoi's maintainers"
+        )[:_ERROR_MAX_CHARS]
+    return (
+        f"the release tags could not be fetched ({_last_line(stderr) or 'git fetch failed'}); "
+        "updates are not affected, but a version label may be out of date"
+    )[:_ERROR_MAX_CHARS]
+
+
+def _fetch_branches_and_tags(*remote: str) -> tuple[subprocess.CompletedProcess, str | None]:
+    """Blocking. ``(the branch fetch, tag_warning)``: the tags are fetched
+    only after the branches, and their failure is ``tag_warning``, never the
+    fetch's."""
+    branches = _run(*_FETCH, *remote)
+    warning = None
+    if branches.returncode == 0:
+        tags = _run(*_FETCH_TAGS)
+        if tags.returncode != 0:
+            warning = _tag_warning(tags.stderr)
+            log.warning("update check: %s", warning)
+    invalidate_label_cache()
+    return branches, warning
+
+
 async def fetch() -> dict:
-    """`git fetch` so subsequent behind/ahead counts compare against the live
-    upstream. Returns ``{"ok": bool, "error": str|None}`` — offline / no
-    remote surfaces as ``ok=False`` with the git stderr, never an exception.
+    """`git fetch --no-tags`, then the tags on their own
+    (:func:`_fetch_branches_and_tags`), so subsequent behind/ahead counts
+    compare against the live upstream and the release labels know every
+    tag. Returns ``{"ok": bool, "error": str|None, "tag_warning":
+    str|None}``: offline / no remote surfaces as ``ok=False`` with the git
+    stderr; tags that could not be fetched (one that moved upstream) only as
+    ``tag_warning``. Never an exception.
 
     Under ``INTERNET_ACCESS=never`` it reports ``ok=False`` with the
     turned-off reason and runs no git at all."""
     if egress.internet_turned_off():
         return {"ok": False, "error": egress.TURNED_OFF_REASON}
     try:
-        proc = await asyncio.to_thread(_run, "fetch")
+        proc, warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if proc.returncode != 0:
-            return {"ok": False, "error": (proc.stderr or "git fetch failed").strip()}
-        return {"ok": True, "error": None}
+            return {"ok": False, "error": (proc.stderr or "git fetch failed").strip(), "tag_warning": None}
+        return {"ok": True, "error": None, "tag_warning": warning}
     except FileNotFoundError:
         return {"ok": False, "error": "git not installed"}
     except subprocess.TimeoutExpired:
@@ -710,9 +1143,15 @@ async def commits_behind() -> dict:
     """Fetch, then count how far HEAD is behind/ahead of its upstream.
 
     Returns ``{"behind": int, "ahead": int, "upstream": bool,
-    "upstream_sha": str|None, "error": str|None}``. ``upstream_sha`` is the
-    full SHA a pull would move to, which the version panel compares with a
-    rolled-back ``bad_sha``. No tracking branch or an offline fetch →
+    "upstream_sha": str|None, "error": str|None, "channel": str|None,
+    "upstream_version": str|None, "latest_release": str|None,
+    "tag_warning": str|None}`` (the last: :func:`fetch`'s).
+    ``upstream_sha`` is the full SHA a pull would move to, which the version
+    panel compares with a rolled-back ``bad_sha``. ``channel`` is the
+    branch followed (:func:`tracking`), ``upstream_version`` the release
+    label of what a pull would move to (on ``stable``, the release that is
+    available), ``latest_release`` the label of origin's ``stable`` (None
+    before the first release). No tracking branch or an offline fetch →
     ``upstream=False`` plus an error string and zeroed counts. Never
     raises.
 
@@ -724,16 +1163,22 @@ async def commits_behind() -> dict:
                 "upstream_sha": None, "error": egress.TURNED_OFF_REASON}
     fetched = await fetch()
     try:
+        target, refusal = await asyncio.to_thread(_upstream_target)
+        if target is None:
+            release = await asyncio.to_thread(_release_info, None)
+            return {"behind": 0, "ahead": 0, "upstream": False,
+                    "upstream_sha": None, "error": refusal, **release}
         behind = await asyncio.to_thread(
-            _run, "rev-list", "--count", "HEAD..@{u}"
+            _run, "rev-list", "--count", f"HEAD..{target}"
         )
         ahead = await asyncio.to_thread(
-            _run, "rev-list", "--count", "@{u}..HEAD"
+            _run, "rev-list", "--count", f"{target}..HEAD"
         )
-        upstream_sha = await asyncio.to_thread(_full_sha, "@{u}")
+        upstream_sha = await asyncio.to_thread(_full_sha, target)
+        release = await asyncio.to_thread(_release_info, upstream_sha)
     except Exception as e:  # noqa: BLE001 — never raise into the endpoint
         return {"behind": 0, "ahead": 0, "upstream": False,
-                "upstream_sha": None, "error": str(e)}
+                "upstream_sha": None, "error": str(e), **_NO_RELEASE_INFO}
 
     # A missing upstream makes rev-list exit non-zero ("no upstream
     # configured" / "unknown revision @{u}"). Report it as upstream=False
@@ -748,6 +1193,7 @@ async def commits_behind() -> dict:
             "upstream": False,
             "upstream_sha": None,
             "error": fetched["error"] or err,
+            **release,
         }
     try:
         return {
@@ -756,10 +1202,24 @@ async def commits_behind() -> dict:
             "upstream": True,
             "upstream_sha": upstream_sha,
             "error": fetched["error"],
+            "tag_warning": fetched.get("tag_warning"),
+            **release,
         }
     except ValueError as e:
         return {"behind": 0, "ahead": 0, "upstream": False,
-                "upstream_sha": None, "error": str(e)}
+                "upstream_sha": None, "error": str(e), **release}
+
+
+_NO_RELEASE_INFO = {"channel": None, "upstream_version": None, "latest_release": None}
+
+
+def _release_info(upstream_sha: str | None) -> dict:
+    """Blocking. The check's release fields (:func:`commits_behind`)."""
+    return {
+        "channel": tracking()["channel"],
+        "upstream_version": version_label(upstream_sha) if upstream_sha else None,
+        "latest_release": latest_release(),
+    }
 
 
 def _not_pulled(error: str, signature: dict | None = None) -> dict:
@@ -803,10 +1263,13 @@ async def pull() -> dict:
     except Exception:  # noqa: BLE001 — the pull matters more than the record
         baseline = None
     try:
-        fetched = await asyncio.to_thread(_run, "fetch")
+        fetched, tag_warning = await asyncio.to_thread(_fetch_branches_and_tags)
         if fetched.returncode != 0:
             return _not_pulled((fetched.stderr or "git fetch failed").strip())
-        target = await asyncio.to_thread(_full_sha, "@{u}")
+        upstream, refusal = await asyncio.to_thread(_upstream_target)
+        if upstream is None:
+            return _not_pulled(refusal)
+        target = await asyncio.to_thread(_full_sha, upstream)
         if target is None:
             return _not_pulled(
                 "no upstream branch is configured for the current branch, "
@@ -820,6 +1283,13 @@ async def pull() -> dict:
     except Exception as e:  # noqa: BLE001
         return _not_pulled(str(e))
 
+    if update_defaults_problem():
+        log.warning(
+            "can't read %s: the branch pin and the signers path it may set are unknown to "
+            "this process, so the pull follows the checkout's own upstream; the update unit "
+            "still applies them as root (make the file readable: chmod 0644)",
+            UPDATE_DEFAULTS_FILE,
+        )
     if signature["status"] != "verified":
         if signature["enforced"]:
             error = (
@@ -857,4 +1327,7 @@ async def pull() -> dict:
         "error": None,
         "prev_sha": baseline,
         "signature": signature,
+        # Tags that could not be fetched (one moved upstream): the labels
+        # may be off; the pull itself went ahead.
+        "tag_warning": tag_warning,
     }

@@ -1,8 +1,10 @@
-; What this test build installs and downloads (PLAN 4.13; BRIEF rule 6: URL,
+; What this build installs and downloads (PLAN 4.13; BRIEF rule 6: URL,
 ; version and SHA-256 for everything fetched at run time). One file, so a
-; new pin is one edit; domovoi/tests/test_windows_installer.py holds
-; provision.sh's pin to the file it names (the one shipped inside Setup, or
-; the one at the pinned commit).
+; new pin is one edit, and the pins that belong together move together:
+; `windows\build.ps1 -Pin <tag or SHA>` rewrites DomovoiCommit,
+; DomovoiChannel, ProvisionSha256, ProvisionBundled (off) and
+; DashboardTabRoutes from that commit in one go, and
+; domovoi/tests/test_windows_installer.py fails while they disagree.
 ;
 ; Linux-side pins (docker-ce, models, Whisper, Ollama, images, the Python
 ; lock) are not here: provision.sh reads them from the checkout at the
@@ -10,39 +12,49 @@
 ; files), so they always belong to the code being installed.
 
 ; The commit Setup installs: on main's history, so updates fast-forward
-; from it. A full SHA, never a branch; release tags and their signers come
-; with code signing (PLAN 10, section 14 item 29).
+; from it. A full SHA, never a branch or a tag (provision.sh reads a SHA as
+; that commit only, and DomovoiHost checks the HEAD it got against it). A
+; release build pins its release tag's commit (design-notes
+; V1-RELEASE-PLAN 1.5: the tag is the commit households run).
 #define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"
-#define DomovoiCommit "4d6b4147f7d99d84fd0fcac2fdcb769c164eec92"
+#define DomovoiCommit "606829ce49622b19ec7494093ab239297d16faf3"
+
+; The release channel the install then follows for updates (provision.sh
+; --track-branch; docs/LINUX_HOST.md, Release channels): "stable" for a
+; release build, so the household gets releases only and can switch to
+; main in Settings > Version. "main" only while DomovoiCommit is not a
+; release's commit, as here (provision.sh at this commit predates the
+; channels: with stable it would stop for want of the branch); the test
+; holds "stable" to a commit a v* tag names. build.ps1 -Pin sets stable
+; unless given -Channel main.
+#define DomovoiChannel "main"
 
 ; Does the dashboard at that commit give each Settings tab its own address
 ; (#settings/configuration/setup: Settings > Configuration with the
 ; first-run admin setup open; wf/settings-deeplinks, SETUP_ROUTE in
 ; web/static/components.jsx)? Then "Open Domovoi" opens it and the last
 ; page's steps start there. Without them it opens #settings, Settings on its
-; first tab, and the steps say to click Configuration. Define it in the same
-; edit that moves DomovoiCommit to a commit that has them;
-; domovoi/tests/test_windows_installer.py checks it against the commit.
-; 4d6b414 has them.
+; first tab, and the steps say to click Configuration. build.ps1 -Pin sets
+; it from the commit; domovoi/tests/test_windows_installer.py checks it.
 #define DashboardTabRoutes
 
 ; provision.sh, the one script Setup runs inside the distro (as root); it
 ; then clones the repository at DomovoiCommit and reads every other pin
 ; from that checkout. Two ways to get it:
+; * not defined (the way a release builds): downloaded from the pinned
+;   commit (ProvisionUrl), so the script and the checkout it installs are
+;   always the same commit's.
 ; * ProvisionBundled defined: the repository's scripts/linux/provision.sh as
-;   this build's tree has it is packed inside DomovoiSetup.exe (nothing to
-;   download), for a test build whose provision.sh is ahead of the pinned
-;   commit. Builds pinned to fb62fa4 did this, for the --stop-before and
-;   start diagnostics fb62fa4's script lacked. This build: 4d6b414's
-;   script plus the whisper step's PyAV-free import (wf/provision-whisper-
-;   nodeps; 4d6b414's own stops there on a fresh venv), 138,176 bytes, LF.
-;   Take it out once the commit pinned has that fix.
-; * not defined: downloaded from the pinned commit (ProvisionUrl).
+;   this build's tree has it is packed inside DomovoiSetup.exe, for a test
+;   build whose provision.sh is ahead of the pinned commit. The test then
+;   holds ProvisionSha256 to this tree's file, and every file that script
+;   needs from the checkout (scripts/linux/units/..., the helpers) to exist
+;   at DomovoiCommit.
 ; Either way ProvisionSha256 is checked by the helper and by DomovoiHost.
-#define ProvisionBundled
+; #define ProvisionBundled
 #define ProvisionSource "..\..\scripts\linux\provision.sh"
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
-#define ProvisionSha256 "cb015f68ed1f2cadb6075088d952ab5315bcec9717c8a750942d9f57eee9c8fc"
+#define ProvisionSha256 "0d2e56a6c80c1a9e9b3150a5c713df7e1cdd8e09b9d78c7778ce22336a002204"
 
 ; Ubuntu 26.04.1's official WSL image, 418,495,746 bytes ([verified]
 ; SHA256SUMS 2026-09-24, PLAN 4.13; matched again 2026-10-11).

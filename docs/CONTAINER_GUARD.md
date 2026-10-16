@@ -301,7 +301,8 @@ these refuse with **HTTP 423** and a message naming the incident:
 * handing out the Android app: the APKs phones download from the join page
   (`/v1/android-app/files/*`), and the admin's fetch and upload that fill
   that cache;
-* pulling a Domovoi update, and a restart that would load code that isn't
+* pulling a Domovoi update, switching the update channel (stable or main:
+  what every later pull follows), and a restart that would load code that isn't
   running yet (pulled code, or a staged plugin upgrade — on a Linux host
   with the update unit, that restart is the unit's trigger).
 

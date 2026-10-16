@@ -1112,8 +1112,11 @@ case_full_run_wsl() {
   check "result ok" eq "$(final_field result)" '"ok"'
   check "restart required (wsl.conf changed)" eq "$(final_field restart_required)" true
   check "100% at the end" eq "$(final_field percent)" 100
-  check "one warning" eq "$(final_field warnings)" 1
-  check "the one warning: signed updates not enforced" said "signed updates are not enforced"
+  # The fixture origin is a repository before its first release: no stable
+  # branch, so the install follows main and says so.
+  check "two warnings" eq "$(final_field warnings)" 2
+  check "one: signed updates not enforced" said "signed updates are not enforced"
+  check "the other: no release on stable yet" said "has no stable branch yet (no release has been published)"
   # GPU: what Ollama found at its last start, for the installer to show.
   check "both GPUs in the final line" grep -qF '"gpu":["NVIDIA GeForce RTX 4070 Ti SUPER","NVIDIA GeForce RTX 4070 Ti SUPER"]' "$CASE/progress.jsonl"
   check "and in result.json" grep -qF '"gpu":["NVIDIA GeForce RTX 4070 Ti SUPER","NVIDIA GeForce RTX 4070 Ti SUPER"]' "$ROOT/var/lib/domovoi-provision/result.json"
@@ -1617,7 +1620,9 @@ case_wsl_zone_follows_windows() {
   run_prov --internet always --skip-models --timezone America/New_York
   check "exit 0" eq "$RC" 0
   check "warned that --timezone is ignored" said "--timezone America/New_York is ignored on WSL"
-  check "counted" eq "$(final_field warnings)" 2
+  # With signed updates not enforced, and no stable branch yet (the fixture
+  # origin has had no release).
+  check "counted" eq "$(final_field warnings)" 3
   check "no zone set" not_called "timedatectl"
   check "/etc/localtime as WSL left it" eq "$(cat "$ROOT/etc/localtime.harness-link")" /usr/share/zoneinfo/Etc/UTC
   check "/etc/timezone as WSL left it" eq "$(cat "$ROOT/etc/timezone")" Etc/UTC
@@ -1741,6 +1746,7 @@ case_update_defaults_opt_into_the_lock() {
   check "symlink: still a link" test -L "$f"
   check "symlink: the file it points to untouched" eq "$(cat "$CASE/managed/domovoi-update")" "DOMOVOI_UPDATE_KEEP_BACKUPS=3"
   check "symlink: warned" said "/etc/default/domovoi-update is a symlink, left as it is"
+  check "symlink: and no channel pin, said" said "no channel pin (DOMOVOI_UPSTREAM_BRANCH=\"stable main\") written through it"
   run_prov --internet always --skip-models
   check "symlink: the next run skips update-unit" eq "$(state_of update-unit)" skip
   end_case
@@ -2756,6 +2762,237 @@ case_gpu_runtime_helper_interface() {
   end_case
 }
 
+# ─── release channels (docs/LINUX_HOST.md, Release channels; 2026-10-16) ─
+#
+# New installs follow stable, the branch that only moves to a release's
+# commit; main carries every change. The fixture origin has no stable
+# branch (as the real one before its first release); release_origin makes
+# this case's own copy with one.
+
+# release_origin [STABLE_AT]: a bare copy of the fixture origin with
+# v1.0.0 tagged at FIXTURE_A and stable at STABLE_AT (default: there too,
+# the first release). Prints its path.
+release_origin() {
+  local o=$CASE/origin.git
+  git clone -q --bare "$ORIGIN" "$o"
+  git -C "$o" tag v1.0.0 "$FIXTURE_A"
+  git -C "$o" branch stable "${1:-$FIXTURE_A}"
+  printf '%s' "$o"
+}
+tracks() { eq "$(git -C "$CHECKOUT" rev-parse --abbrev-ref HEAD) $(git -C "$CHECKOUT" rev-parse --abbrev-ref '@{u}')" "$1 origin/$1"; }
+PIN_LINE='DOMOVOI_UPSTREAM_BRANCH="stable main"'
+
+case_new_install_follows_stable() {
+  new_case new_install_follows_stable
+  local o; o=$(release_origin)
+  run_prov "${wsl_args[@]}" --repo-url "$o"
+  check "exit 0" eq "$RC" 0
+  check "HEAD is the release" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "on stable, tracking origin/stable" tracks stable
+  check "no fallback" not_said "no stable branch yet"
+  check "nothing to remember" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel || echo unset)" unset
+  check "the channel pin written" has_line "$ROOT/etc/default/domovoi-update" "$PIN_LINE"
+  check "beside the lock line" has_line "$ROOT/etc/default/domovoi-update" "DOMOVOI_USE_LOCK=1"
+  check "before the update unit's installer ran" grep -qxF "$PIN_LINE" "$STATE/update-defaults-seen"
+  run_prov "${wsl_args[@]}" --repo-url "$o"
+  check "second run: update-unit skipped" eq "$(state_of update-unit)" skip
+  check "still one pin" eq "$(grep -c '^DOMOVOI_UPSTREAM_BRANCH=' "$ROOT/etc/default/domovoi-update")" 1
+  end_case
+}
+
+case_before_the_first_release_installs_follow_main() {
+  new_case before_the_first_release_installs_follow_main
+  run_prov "${wsl_args[@]}"
+  check "exit 0" eq "$RC" 0
+  check "HEAD is main's" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_B"
+  check "on main, tracking origin/main" tracks main
+  check "says why" said "has no stable branch yet (no release has been published): installing main"
+  check "and how to move later" said "switch to stable in Settings > Version after the first release"
+  check "the checkout keeps what was asked for" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel)" stable
+  check "the channel pin written (main is one)" has_line "$ROOT/etc/default/domovoi-update" "$PIN_LINE"
+  end_case
+}
+
+# The Windows installer's way: a pinned release commit (or its tag),
+# following stable.
+case_a_release_on_stable_by_tag_or_sha() {
+  new_case a_release_on_stable_by_tag_or_sha
+  local o; o=$(release_origin)
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref v1.0.0 --track-branch stable
+  check "tag: exit 0" eq "$RC" 0
+  check "tag: HEAD is the release" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "tag: on stable" tracks stable
+  rm -rf "$CHECKOUT"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref "$FIXTURE_A" --track-branch stable
+  check "sha: exit 0" eq "$RC" 0
+  check "sha: on stable" tracks stable
+  check "sha: no warning about the channel" not_said "newer than the latest release"
+  end_case
+}
+
+# A release candidate, or the installer's release before stable has moved
+# to it: newer than stable, on main. It follows stable and waits for the
+# next release, which holds it.
+case_a_commit_newer_than_stable_waits_for_the_next_release() {
+  new_case a_commit_newer_than_stable_waits_for_the_next_release
+  local o; o=$(release_origin)
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref "$FIXTURE_B" --track-branch stable
+  check "exit 0" eq "$RC" 0
+  check "HEAD is the commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_B"
+  check "on stable" tracks stable
+  check "says so" said "is newer than the latest release on stable; this box follows stable, and updates resume with the next release"
+  end_case
+}
+
+# Newer than stable but not on main (another branch's commit): no release
+# would ever hold it, so no update could fast-forward.
+case_a_commit_off_main_never_follows_stable() {
+  new_case a_commit_off_main_never_follows_stable
+  local o side; o=$(release_origin)
+  side=$(git -C "$ORIGIN" rev-parse bad-manifest)
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref "$side" --track-branch stable
+  check "exit 1" eq "$RC" 1
+  check "says why" said "is not on origin/stable's history, so an update could never fast-forward from it"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref "$FIXTURE_ELSEWHERE" --track-branch stable
+  check "unrelated: exit 1" eq "$RC" 1
+  end_case
+}
+
+# The installer's arguments before the first release: its pinned commit,
+# following main instead, with the same warning.
+case_the_installer_before_the_first_release_follows_main() {
+  new_case the_installer_before_the_first_release_follows_main
+  run_prov "${wsl_args[@]}" --ref "$FIXTURE_A" --track-branch stable
+  check "exit 0" eq "$RC" 0
+  check "HEAD is the pinned commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "on main" tracks main
+  check "says why" said "has no stable branch yet (no release has been published): this box follows main"
+  check "the checkout keeps what was asked for" eq "$(git -C "$CHECKOUT" config domovoi.intendedChannel)" stable
+  end_case
+}
+
+# --ref stable asked for by name has no fallback.
+case_ref_stable_without_one_stops() {
+  new_case ref_stable_without_one_stops
+  run_prov "${wsl_args[@]}" --ref stable
+  check "exit 1" eq "$RC" 1
+  check "says why" said "has no branch stable (--ref takes a branch, a tag such as v1.0.0, or a full commit SHA)"
+  end_case
+}
+
+# A box someone pointed at a branch of their own keeps following it: no pin.
+case_a_branch_of_its_own_gets_no_channel_pin() {
+  new_case a_branch_of_its_own_gets_no_channel_pin
+  local o; o=$(release_origin)
+  git -C "$o" branch feature "$FIXTURE_B"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref feature
+  check "exit 0" eq "$RC" 0
+  check "on feature" tracks feature
+  check "no pin" eq "$(grep -c '^DOMOVOI_UPSTREAM_BRANCH' "$ROOT/etc/default/domovoi-update")" 0
+  check "warned" said "not a release channel (stable or main): no branch pin written"
+  end_case
+}
+
+# An administrator's own pin stays; a box installed before the pin existed
+# gets it at its next run (the installer's repair).
+case_the_channel_pin_respects_the_administrator() {
+  new_case the_channel_pin_respects_the_administrator
+  local o f=$ROOT/etc/default/domovoi-update; o=$(release_origin)
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPSTREAM_BRANCH=stable\n' >"$f"
+  run_prov "${wsl_args[@]}" --repo-url "$o"
+  check "exit 0" eq "$RC" 0
+  check "the admin's pin kept" has_line "$f" "DOMOVOI_UPSTREAM_BRANCH=stable"
+  check "no second pin" eq "$(grep -c '^DOMOVOI_UPSTREAM_BRANCH' "$f")" 1
+  check "said" said "updates follow what /etc/default/domovoi-update pins (DOMOVOI_UPSTREAM_BRANCH=stable)"
+  # From before the pin: the file holds the lock line only.
+  printf 'DOMOVOI_USE_LOCK=1\n' >"$f"
+  run_prov "${wsl_args[@]}" --repo-url "$o"
+  check "repair: exit 0" eq "$RC" 0
+  check "repair: update-unit re-ran" eq "$(state_of update-unit)" done
+  check "repair: the pin added" has_line "$f" "$PIN_LINE"
+  check "repair: the lock line still once" eq "$(grep -c '^DOMOVOI_USE_LOCK=' "$f")" 1
+  end_case
+}
+
+# Delta security review 2026-10-16, S3: --ref is read by its shape (a full
+# SHA is the commit, v<digit>... is a tag), never as a branch of the same
+# name someone upstream could create; and HEAD must be the commit it named.
+case_a_branch_named_like_the_pinned_commit_is_not_used() {
+  new_case a_branch_named_like_the_pinned_commit_is_not_used
+  local o; o=$(release_origin)
+  git -C "$o" branch "$FIXTURE_A" "$FIXTURE_ELSEWHERE" 2>/dev/null
+  check "the look-alike branch is there" git -C "$o" rev-parse -q --verify "refs/heads/$FIXTURE_A"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref "$FIXTURE_A" --track-branch main
+  check "exit 0" eq "$RC" 0
+  check "HEAD is the pinned commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "on main, not the look-alike branch" tracks main
+  end_case
+}
+
+case_a_branch_named_like_a_tag_is_not_used() {
+  new_case a_branch_named_like_a_tag_is_not_used
+  local o; o=$(release_origin)
+  git -C "$o" branch v1.0.0 "$FIXTURE_ELSEWHERE"
+  git -C "$o" branch v9.9.9 "$FIXTURE_ELSEWHERE"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref v1.0.0 --track-branch stable
+  check "exit 0" eq "$RC" 0
+  check "HEAD is the tag's commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  check "on stable" tracks stable
+  check "said which commit the tag is" said "the tag v1.0.0 is commit $FIXTURE_A"
+  check "recorded it" eq "$(cat "$ROOT/var/lib/domovoi-provision/checkout-ref")" "tag v1.0.0 $FIXTURE_A"
+  rm -rf "$CHECKOUT"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref v9.9.9 --track-branch stable
+  check "no such tag, only a branch: exit 1" eq "$RC" 1
+  check "says there is no such tag" said "has no tag v9.9.9"
+  check "nothing installed" absent "$CHECKOUT/.git"
+  end_case
+}
+
+# A published tag never moves: a later clone (a resumed install) that finds
+# it at another commit stops, and installs nothing.
+case_a_tag_that_moved_since_the_first_run_stops() {
+  new_case a_tag_that_moved_since_the_first_run_stops
+  local o; o=$(release_origin)
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref v1.0.0 --track-branch stable
+  check "first run: exit 0" eq "$RC" 0
+  rm -rf "$CHECKOUT"
+  git -C "$o" tag -f v1.0.0 "$FIXTURE_B" >/dev/null
+  git -C "$o" branch -f stable "$FIXTURE_B"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref v1.0.0 --track-branch stable
+  check "moved: exit 1" eq "$RC" 1
+  check "says so" said "the tag v1.0.0 was commit $FIXTURE_A when this box was first set up from it and is $FIXTURE_B now"
+  check "nothing installed" absent "$CHECKOUT/.git"
+  end_case
+}
+
+# rc2 review C7: a tag whose name doesn't start with v is that tag, not a
+# branch of the same name; stable and main stay the branches whatever tags
+# exist; refs/heads/NAME asks for the branch.
+case_a_tag_not_named_v_wins_over_a_branch() {
+  new_case a_tag_not_named_v_wins_over_a_branch
+  local o; o=$(release_origin)
+  git -C "$o" tag release-1 "$FIXTURE_A"
+  git -C "$o" branch release-1 "$FIXTURE_ELSEWHERE"
+  git -C "$o" tag stable "$FIXTURE_ELSEWHERE"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref release-1
+  check "the tag: exit 0" eq "$RC" 0
+  check "HEAD is the tag's commit" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  # (Plain rev-parse --abbrev-ref would say heads/stable: a tag is named stable here.)
+  check "on stable" eq "$(git -C "$CHECKOUT" symbolic-ref HEAD) $(git -C "$CHECKOUT" config branch.stable.merge)" "refs/heads/stable refs/heads/stable"
+  check "said which commit" said "the tag release-1 is commit $FIXTURE_A"
+  rm -rf "$CHECKOUT"
+  run_prov "${wsl_args[@]}" --repo-url "$o"
+  check "default: exit 0" eq "$RC" 0
+  check "stable is the branch, not the tag named stable" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_A"
+  rm -rf "$CHECKOUT"
+  run_prov "${wsl_args[@]}" --repo-url "$o" --ref refs/heads/release-1
+  check "refs/heads/: exit 0" eq "$RC" 0
+  check "refs/heads/ is the branch, asked for by name" eq "$(git -C "$CHECKOUT" rev-parse HEAD)" "$FIXTURE_ELSEWHERE"
+  check "and it follows it" eq "$(git -C "$CHECKOUT" symbolic-ref HEAD) $(git -C "$CHECKOUT" config branch.release-1.merge)" "refs/heads/release-1 refs/heads/release-1"
+  end_case
+}
+
 CASES=(
   case_help_and_usage_errors
   case_import_check_names_no_dropped_package
@@ -2789,6 +3026,19 @@ CASES=(
   case_existing_checkout_is_not_moved
   case_ref_sha_follows_the_track_branch
   case_ref_off_the_track_branch_stops
+  case_new_install_follows_stable
+  case_before_the_first_release_installs_follow_main
+  case_a_release_on_stable_by_tag_or_sha
+  case_a_commit_newer_than_stable_waits_for_the_next_release
+  case_a_commit_off_main_never_follows_stable
+  case_the_installer_before_the_first_release_follows_main
+  case_ref_stable_without_one_stops
+  case_a_branch_of_its_own_gets_no_channel_pin
+  case_the_channel_pin_respects_the_administrator
+  case_a_branch_named_like_the_pinned_commit_is_not_used
+  case_a_branch_named_like_a_tag_is_not_used
+  case_a_tag_that_moved_since_the_first_run_stops
+  case_a_tag_not_named_v_wins_over_a_branch
   case_clone_from_a_bundle
   case_update_unit_failure_stops
   case_core_not_healthy_stops

@@ -8,8 +8,10 @@ installer, one service that keeps the distro running, and firewall rules.
 After setup the dashboard at `http://localhost:6369` is the only interface.
 
 **This is a test build.** It is not code-signed (see [Unsigned](#unsigned)),
-it installs a pinned commit of `main`, and some of the finished product is
-not in it yet (see [Not in this build](#not-in-this-build)). The native
+it installs a pinned commit and then follows a release channel (see
+[Updates and the release channel](#updates-and-the-release-channel)), and
+some of the finished product is not in it yet (see
+[Not in this build](#not-in-this-build)). The native
 Windows install in the
 [README](../README.md) and [SETUP_RUNBOOK.md](SETUP_RUNBOOK.md) is a
 different thing and is unchanged.
@@ -96,14 +98,17 @@ that:
    are refused, because Domovoi's account and its Linux system can write
    there.
 5. **Downloads** Ubuntu 26.04.1's official WSL image, and `provision.sh`
-   from the pinned commit (GitHub's raw file at `DomovoiCommit`, today
-   `4d6b414`, the v1.0.0-rc1 release), each checked against a pinned SHA-256
-   (`windows/installer/pins.iss`). A build whose `provision.sh` is ahead of
-   the pinned commit (`ProvisionBundled` in `pins.iss`) carries the script
-   inside `DomovoiSetup.exe` instead; it is checked against its pin the
-   same way, and it still installs the pinned commit's code. The
-   v1.0.0-rc1 build does: `4d6b414`'s script stops at its Whisper download
-   on a new install, so Setup carries it with that fixed.
+   from the pinned commit (GitHub's raw file at `DomovoiCommit`; a release
+   build pins its release tag's commit), each checked against a pinned
+   SHA-256 (`windows/installer/pins.iss`). A test build whose `provision.sh`
+   is ahead of the pinned commit (`ProvisionBundled` in `pins.iss`) carries
+   the script inside `DomovoiSetup.exe` instead; it is checked against its
+   pin the same way, it still installs the pinned commit's code, and every
+   file it reads from that checkout must exist at the pinned commit (the
+   installer's tests check both). The commit, its `provision.sh` pin, the
+   channel and the dashboard's tab addresses move together:
+   `windows\build.ps1 -Pin` sets all of them from one commit
+   ([Building it](#building-it)).
 6. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.
@@ -423,12 +428,35 @@ you share them.
 - Whether everything starts before anyone signs in after a reboot, and
   whether the GPU is used then, is still being proven.
 - Code signing (on hold): see [Unsigned](#unsigned).
-- A release channel. Setup installs the pinned commit (`DomovoiCommit`),
-  and the dashboard's updates then follow `main` from there, as on a Linux
-  box installed with `provision.sh`'s defaults.
 - Keep-data uninstall and reinstall onto kept data.
 - The optional details page after the internet question (town, state,
   AcoustID key); set them in the dashboard.
+
+## Updates and the release channel
+
+Setup installs the pinned commit (`DomovoiCommit`), and the dashboard's
+updates then follow a release channel (`DomovoiChannel` in `pins.iss`,
+handed to `provision.sh` as `--track-branch`; the channels are described in
+[LINUX_HOST.md, Release channels](LINUX_HOST.md#release-channels)):
+
+- **`stable`**, on a release build: Domovoi's releases only. Settings →
+  Configuration → Version says when a newer release is out; nothing
+  updates until an admin pulls it there.
+- **`main`**, on a build pinned to a commit that is not a release: every
+  change, as it lands.
+
+The repository has a `stable` branch only from the first release (v1.0.0)
+on. A release candidate's Setup (v1.0.0-rc2) that asks for stable before
+then follows `main`, and its log says so; the Version card says when the
+first release is out, and an admin switches to stable there. Nothing
+switches by itself. An install from before the channels follows `main`, as
+it always did, until someone switches it.
+
+Before it reports success, DomovoiHost checks that the commit the first
+install checked out is one Setup pinned (`provision.sh` also refuses a
+`--ref` that resolves anywhere else), and fails the install closed
+otherwise. Repairs of an install that passed that check keep whatever the
+dashboard's updates moved it to.
 
 ## Building it
 
@@ -437,7 +465,17 @@ From a Windows PowerShell 5.1 prompt in the repository:
 ```powershell
 .\windows\build.ps1                  # exes, unit tests, then DomovoiSetup.exe
 .\windows\build.ps1 -SkipInstaller   # exes and unit tests only
+.\windows\build.ps1 -Pin v1.0.0      # move the pins to a release tag's commit, then build
+.\windows\build.ps1 -Pin <sha> -Channel main -PinOnly   # a test pin, nothing built
 ```
+
+`-Pin` takes a release tag (`refs/tags` only, never a branch) or a full
+commit SHA that is in this clone and on `origin/main`'s history, and
+rewrites `pins.iss` in one go: `DomovoiCommit`, `DomovoiChannel` (`stable`
+unless `-Channel main`; `stable` needs a commit a `v*` tag names),
+`ProvisionSha256` (that commit's `provision.sh`, its exact bytes),
+`ProvisionBundled` off, and `DashboardTabRoutes`. Commit the changed
+`pins.iss` after the tag: the tag is the commit households run.
 
 The exes are C# for .NET Framework 4.8.1, built with the compiler that
 ships in Windows 11 (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`);

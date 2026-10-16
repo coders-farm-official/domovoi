@@ -160,6 +160,48 @@ namespace Domovoi.Windows
         }
     }
 
+    // The commit a first install checked out (delta security review
+    // 2026-10-16, S3). provision.sh reads --ref by its shape and checks HEAD
+    // itself; the host checks the HEAD its final line reports too, and fails
+    // closed. Until the first install has been verified, every commit a job
+    // since the import asked for counts (a failed install, then a newer
+    // Setup, may have cloned at either); once verified, later runs (repairs)
+    // keep whatever the dashboard's updates moved the checkout to.
+    public static class InstalledHead
+    {
+        static readonly Regex Sha = new Regex(@"^[0-9a-f]{40}\z");
+
+        // The --ref an install's provision.sh arguments carry, or null.
+        public static string RefOf(IList<string> args)
+        {
+            if (args == null) return null;
+            for (int i = 0; i + 1 < args.Count; i++)
+                if (args[i] == "--ref") return Sha.IsMatch(args[i + 1]) ? args[i + 1] : null;
+            return null;
+        }
+
+        // The commits asked for since the import, this one added once.
+        public static List<string> WithAsked(IList<string> asked, string commit)
+        {
+            var list = new List<string>();
+            if (asked != null) foreach (string a in asked) if (a != null && Sha.IsMatch(a) && !list.Contains(a)) list.Add(a);
+            if (commit != null && Sha.IsMatch(commit) && !list.Contains(commit)) list.Add(commit);
+            return list;
+        }
+
+        // Why the reported HEAD is not acceptable, or null when it is one of
+        // the commits Setup pinned.
+        public static string Problem(string head, IList<string> asked)
+        {
+            if (string.IsNullOrEmpty(head)) return "provision.sh did not report the commit it installed";
+            if (!Sha.IsMatch(head)) return "provision.sh reported a commit that is not a full SHA: " + head;
+            if (asked == null || asked.Count == 0) return "no pinned commit to compare the installed one with";
+            foreach (string a in asked) if (a == head) return null;
+            return "Domovoi's code is at commit " + head + ", not the one Setup pinned (" + string.Join(", ", new List<string>(asked).ToArray())
+                + "), so Setup stops here; uninstall Domovoi and run a Setup you trust";
+        }
+    }
+
     // What the pinned provision.sh can do, from its own text: the host
     // reads the exact file it runs (SHA-256 checked) before it runs it.
     public static class ProvisionScript
@@ -258,6 +300,9 @@ namespace Domovoi.Windows
     {
         public string RepoUrl;
         public string Ref;
+        // The release channel the install follows for updates (pins.iss
+        // DomovoiChannel): stable, or main. provision.sh's --track-branch.
+        public string TrackBranch = "stable";
         public string Internet;
         public string LanIp;
         // name -> Windows folder, in a stable order.
@@ -278,12 +323,15 @@ namespace Domovoi.Windows
             if (o.RepoUrl == null || !RepoUrl.IsMatch(o.RepoUrl)) throw new ArgumentException("repo URL must be https: " + o.RepoUrl);
             // A full commit SHA: the installer pins a commit, never a branch.
             if (o.Ref == null || !Sha.IsMatch(o.Ref)) throw new ArgumentException("ref must be a full 40-character commit SHA: " + o.Ref);
+            if (o.TrackBranch != "stable" && o.TrackBranch != "main")
+                throw new ArgumentException("the channel must be stable or main: " + o.TrackBranch);
             if (o.Internet != "always" && o.Internet != "sometimes" && o.Internet != "never")
                 throw new ArgumentException("internet must be always, sometimes or never: " + o.Internet);
             if (o.HealthTimeoutSec < 60 || o.HealthTimeoutSec > 99999) throw new ArgumentException("health timeout out of range");
             var a = new List<string>();
             a.Add("--repo-url"); a.Add(o.RepoUrl);
             a.Add("--ref"); a.Add(o.Ref);
+            a.Add("--track-branch"); a.Add(o.TrackBranch);
             a.Add("--internet"); a.Add(o.Internet);
             a.Add("--tier"); a.Add("auto");
             if (!string.IsNullOrEmpty(o.LanIp))

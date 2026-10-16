@@ -1110,7 +1110,7 @@ dependencies = ["onnxruntime"]
 case_retired_packages_kept_through_a_rollback() {
   new_case retired_packages_kept_through_a_rollback
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "2"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "2"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
   local sha_b; sha_b=$(commit_all "B: deps + broken code")
   echo "$sha_b" >"$STATE/curl-fail-when-head"
@@ -1315,7 +1315,7 @@ case_migration_health_failure_rolls_back() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf 'CREATE TABLE b (id int);\n' >"$REPO/domovoi/db/migrations/V002__b.sql"
   printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
-  printf '[project]\nname = "domovoi"\nversion = "2"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "2"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   local sha_b; sha_b=$(commit_all "B: migration + broken code")
   echo "$sha_b" >"$STATE/curl-fail-when-head"
   run_update
@@ -1720,7 +1720,7 @@ case_sync_failure_output_stays_valid_utf8() {
 case_clock_stepped_back_keeps_the_result_valid() {
   new_case clock_stepped_back_keeps_the_result_valid
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
   # A wall clock that NTP steps back 90 s after the run's fourth reading
   # (START_MS, the signature step's t0 and end, then the preflight's
@@ -1775,7 +1775,7 @@ SH
 case_uutils_date_leaves_the_durations_alone() {
   new_case uutils_date_leaves_the_durations_alone
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
   write_uutils_date "$CASE/uutilsbin"
   local t0=$SECONDS
@@ -1790,7 +1790,7 @@ case_uutils_date_leaves_the_durations_alone() {
 case_uutils_date_without_bash_clock_falls_back_to_seconds() {
   new_case uutils_date_without_bash_clock_falls_back_to_seconds
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
   write_uutils_date "$CASE/uutilsbin"
   local t0=$SECONDS
@@ -1863,7 +1863,7 @@ case_venv_from_the_core_unit() {
   : >"$CASE/unit-venv/pyvenv.cfg"
   printf '{ path=%s/unit-venv/bin/python ; argv[]=%s/unit-venv/bin/python -m domovoi.main ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\n' \
     "$CASE" "$CASE" >"$STATE/show-execstart"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
   NO_VENV_ENV=1 run_update
   check "status ok" eq "$(field status)" '"ok"'
@@ -1876,7 +1876,7 @@ case_venv_ignores_a_non_venv_interpreter() {
   new_case venv_ignores_a_non_venv_interpreter
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   printf '{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -m domovoi.main ; ignore_errors=no }\n' >"$STATE/show-execstart"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
   NO_VENV_ENV=1 run_update
   check "aborted before anything changed" eq "$(field status)" '"aborted"'
@@ -1891,7 +1891,7 @@ case_venv_ignores_a_non_venv_interpreter() {
 case_venv_not_writable_aborts() {
   new_case venv_not_writable_aborts
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   local sha_b; sha_b=$(commit_all "B: deps")
   write_root_shims "$CASE/rootbin"
   # The venv's site-packages belongs to someone else: `test -w` as the
@@ -2371,6 +2371,65 @@ case_never_refuses_a_dependency_update() {
   end_case
 }
 
+# A release bumps [project]'s version and nothing else in pyproject.toml:
+# not a dependency change (design-notes V1-RELEASE-PLAN 1.6, trap 1), so a
+# box whose answer is "never" still takes it, and no venv re-sync runs.
+case_version_bump_alone_is_not_a_dependency_change() {
+  new_case version_bump_alone_is_not_a_dependency_change
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  printf '[project]\nname = "domovoi"\nversion = "1.0.0rc2"\n' >"$REPO/pyproject.toml"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: release 1.0.0rc2")
+  run_update
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "mode update" eq "$(field mode)" '"update"'
+  check "not a dependency change" eq "$(field deps_changed)" false
+  check "no pip" not_called "pip "
+  check "read pyproject at both commits" called "git -C $REPO show $SHA_A:pyproject.toml"
+  check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# Anything else in pyproject.toml beside the version still is one: a new
+# dependency, and a version line outside [project] (another tool's).
+case_pyproject_beyond_the_version_is_a_dependency_change() {
+  new_case pyproject_beyond_the_version_is_a_dependency_change
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  echo never >"$STATE/internet-policy"
+  printf '[project]\nname = "domovoi"\nversion = "0"\n[tool.other]\nversion = "2"\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: another table's version")
+  run_update
+  check "refused under never" eq "$(field status)" '"aborted"'
+  check "names the dependencies" eq "$(field error | grep -c 'Python dependencies')" 1
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  # Online, the version bump with a new dependency re-syncs.
+  rm -f "$STATE/internet-policy"
+  printf '[project]\nname = "domovoi"\nversion = "1.0.0"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  commit_all "C: version and a dependency" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a dependency change" eq "$(field deps_changed)" true
+  check "the venv re-synced" called "install -e .[real-clients,voice-profile]"
+  end_case
+}
+
+# A pyproject.toml that the previous commit didn't have counts as changed
+# (git show fails on that side).
+case_pyproject_added_is_a_dependency_change() {
+  new_case pyproject_added_is_a_dependency_change
+  g rm -q pyproject.toml
+  local sha_a2; sha_a2=$(commit_all "A2: no pyproject")
+  mkdir -p "$UPD" && echo "$sha_a2" >"$UPD/applied_sha"
+  printf '[project]\nname = "domovoi"\nversion = "0"\n' >"$REPO/pyproject.toml"
+  commit_all "B: pyproject back" >/dev/null
+  run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a dependency change" eq "$(field deps_changed)" true
+  end_case
+}
+
 case_never_refuses_a_music_image_change() {
   new_case never_refuses_a_music_image_change
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
@@ -2518,7 +2577,7 @@ case_image_change_online_updates() {
 case_unanswered_dependency_update_reads_the_answer_once() {
   new_case unanswered_dependency_update_reads_the_answer_once
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   commit_all "B: deps" >/dev/null
   run_update
   check "status ok" eq "$(field status)" '"ok"'
@@ -3048,7 +3107,7 @@ case_signed_head_verifies_as_root_before_anything_runs() {
   if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
   write_signing_keys "$CASE/keys"
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
-  printf '[project]\nname = "domovoi"\nversion = "1"\n' >"$REPO/pyproject.toml"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
   local sha_b; sha_b=$(commit_signed "$CASE/keys/owner" "B: deps, signed")
   write_root_shims "$CASE/rootbin"
   write_stat_shim "$CASE/rootbin"
@@ -3204,6 +3263,131 @@ case_upstream_pin_that_matches_goes_on() {
   check "asked git for the remote (as the service user: git_as)" called "git -C $REPO remote get-url origin"
   check "and for the tracking branch" called "git -C $REPO rev-parse --symbolic-full-name @{u}"
   check "applied_sha moves to B" file_is "$UPD/applied_sha" "$sha_b"
+  end_case
+}
+
+# The pin provision.sh writes names both release channels ("stable main"):
+# the dashboard's channel switch moves between them and the unit follows,
+# any other branch is refused (and so is a comma-separated pin's).
+case_upstream_pin_of_both_channels_takes_either() {
+  new_case upstream_pin_of_both_channels_takes_either
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  local bare; bare=$(add_upstream)
+  UPSTREAM_BRANCH="stable main" run_update
+  check "main: status ok" eq "$(field status)" '"ok"'
+  check "main: an upstream step, ok" step_is upstream ok
+  # Settings > Version switched it to stable: a branch at HEAD, tracking
+  # origin/stable.
+  g push -q origin main:stable 2>/dev/null
+  g fetch -q origin
+  g checkout -q -B stable
+  g branch -q --set-upstream-to origin/stable stable
+  UPSTREAM_BRANCH="stable main" run_update
+  check "stable: status ok" eq "$(field status)" '"ok"'
+  check "stable: an upstream step, ok" step_is upstream ok
+  UPSTREAM_BRANCH="stable,main" run_update
+  check "commas: status ok" eq "$(field status)" '"ok"'
+  # A branch outside the pin.
+  g push -q origin main:release 2>/dev/null
+  g fetch -q origin
+  g checkout -q -B release
+  g branch -q --set-upstream-to origin/release release
+  UPSTREAM_BRANCH="stable main" run_update
+  check "release: refused" eq "$(field status)" '"refused"'
+  check "names both channels" eq "$(field error | grep -c 'tracks refs/remotes/origin/release, not one of the pinned branches (origin/stable, origin/main)')" 1
+  check "HEAD untouched" eq "$(g rev-parse HEAD)" "$sha_b"
+  end_case
+}
+
+# With a branch pin, HEAD itself must be on a pinned branch as last fetched
+# (root's git; the tracking config is the service user's): a local commit
+# no pinned branch holds is refused, plain restart included. A box on
+# stable past the latest release is on origin/main, and goes on.
+case_upstream_pin_refuses_a_head_on_no_pinned_branch() {
+  new_case upstream_pin_refuses_a_head_on_no_pinned_branch
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local bare; bare=$(add_upstream)
+  # stable is the release, A; main and HEAD are past it (B).
+  g push -q origin main:stable 2>/dev/null
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  g push -q origin main 2>/dev/null
+  g fetch -q origin
+  g checkout -q -B stable
+  g branch -q --set-upstream-to origin/stable stable
+  UPSTREAM_BRANCH="stable main" run_update
+  check "past the release, on main: ok" eq "$(field status)" '"ok"'
+  # Pinned to stable alone, the same box is on no pinned branch; HEAD is
+  # what the first run applied, so it restarts with a warning (C2).
+  : >"$STATE/calls.log"
+  UPSTREAM_BRANCH=stable run_update
+  check "stable alone: a warned restart" eq "$(field status)" '"ok"'
+  check "an upstream step, warn" step_is upstream warn
+  check "says why" grep -qF "HEAD ${sha_b:0:12} is on none of the pinned branches (origin/stable)" "$RESULT"
+  # A commit of its own, never pushed: refused under both channels.
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: local only" >/dev/null
+  UPSTREAM_BRANCH="stable main" run_update
+  check "local commit: refused" eq "$(field status)" '"refused"'
+  check "names both" eq "$(field error | grep -c 'is on none of the pinned branches (origin/stable, origin/main)')" 1
+  end_case
+}
+
+# rc2 review C2: a pinned branch force-pushed back past this box's HEAD
+# (upstream rewritten) must not stop a plain restart for ever. HEAD is the
+# commit this box last applied: it restarts, with a warning the card shows.
+# Anything else off the pinned branches is still refused.
+case_a_rewound_upstream_still_restarts() {
+  new_case a_rewound_upstream_still_restarts
+  local bare; bare=$(add_upstream)
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  g push -q origin main 2>/dev/null
+  mkdir -p "$UPD" && echo "$sha_b" >"$UPD/applied_sha"
+  git -C "$bare" update-ref refs/heads/main "$SHA_A"
+  g fetch -q origin 2>/dev/null
+  UPSTREAM_BRANCH="stable main" run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a plain restart" eq "$(field mode)" '"restart"'
+  check "an upstream step, warn" step_is upstream warn
+  check "it says why" grep -qF "is the commit this box last applied, so this restart goes on" "$RESULT"
+  check "restarted" called "systemctl start domovoi-core.service domovoi-web.service"
+  # A new commit of its own on top: an update to it is refused.
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: local only" >/dev/null
+  : >"$STATE/calls.log"
+  UPSTREAM_BRANCH="stable main" run_update
+  check "C: refused" eq "$(field status)" '"refused"'
+  check "C: nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+# rc2 review C3: root's git ignores the service user's refs/replace. HEAD
+# is an unsigned commit "replaced" by a signed one, the index reset and its
+# changes hidden with skip-worktree: with signing enforced, refused.
+case_a_replace_ref_never_passes_an_enforced_signature() {
+  new_case a_replace_ref_never_passes_an_enforced_signature
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 's\n' >"$REPO/review-s.txt"
+  local sha_s; sha_s=$(commit_signed "$CASE/keys/owner" "S: signed")
+  printf 'print("unsigned code")\n' >"$REPO/domovoi/app.py"
+  local sha_u; sha_u=$(commit_all "U: unsigned")
+  g replace "$sha_u" "$sha_s"
+  g reset -q
+  g diff --name-only | while read -r f; do g update-index --skip-worktree "$f"; done
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "HEAD is the unsigned commit" eq "$(g rev-parse HEAD)" "$sha_u"
+  check "refused" eq "$(field status)" '"refused"'
+  check "not verified" test "$(sig_field status)" != '"verified"'
+  check "nothing stopped" not_called "systemctl stop"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
   end_case
 }
 
@@ -3768,6 +3952,9 @@ CASES=(
   case_os_jobs_unanswered_bare_metal_changes_nothing
   case_os_jobs_a_kill_between_record_and_mask_heals
   case_never_refuses_a_dependency_update
+  case_version_bump_alone_is_not_a_dependency_change
+  case_pyproject_beyond_the_version_is_a_dependency_change
+  case_pyproject_added_is_a_dependency_change
   case_never_refuses_a_music_image_change
   case_never_mpd_conf_only_keeps_the_image
   case_never_refuses_a_container_image_change
@@ -3804,6 +3991,10 @@ CASES=(
   case_upstream_pin_mismatch_is_refused
   case_upstream_branch_pin_mismatch_is_refused
   case_upstream_pin_that_matches_goes_on
+  case_upstream_pin_of_both_channels_takes_either
+  case_upstream_pin_refuses_a_head_on_no_pinned_branch
+  case_a_rewound_upstream_still_restarts
+  case_a_replace_ref_never_passes_an_enforced_signature
   case_gpu_runtime_installed_while_the_services_are_stopped
   case_gpu_runtime_under_never_downloads_nothing
   case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database

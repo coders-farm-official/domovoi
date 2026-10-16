@@ -167,6 +167,11 @@
 
 set -euo pipefail
 
+# Every git this script runs reads objects as they are: no refs/replace and
+# no grafts. Both live in the service user's .git, and with them an unsigned
+# commit could pass for a signed one under its SHA (rc2 review C3).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 REPO_DIR=${DOMOVOI_REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}
@@ -301,8 +306,12 @@ BAD_FILE=$UPDATE_DIR/bad_sha
 FREEZE_FILE=$UPDATE_DIR/pip-freeze-pre.txt
 
 # What counts as "the dependencies changed" / "the MPD image changed".
-# Git pathspecs, relative to the repo root.
-DEPS_PATHS=(pyproject.toml 'requirements*.lock' 'requirements*.in' 'plugins/*/requirements*.lock')
+# Git pathspecs, relative to the repo root. pyproject.toml counts too, but
+# not a change to [project]'s version line alone (deps_changed): every
+# release bumps it, and a box whose internet answer is "never" must still
+# be able to take a release that changes nothing else there.
+DEPS_PATHS=('requirements*.lock' 'requirements*.in' 'plugins/*/requirements*.lock')
+PYPROJECT_PATH=pyproject.toml
 MPD_PATHS=(domovoi/Dockerfile.mpd domovoi/mpd.conf)
 # The compose file whose `image:` pins decide what domovoi-db (and the
 # search helper) pull: a moved digest is a download.
@@ -729,6 +738,32 @@ paths_changed() {
   [ "$rc" -ne 0 ]
 }
 
+# pyproject.toml on stdin, with [project]'s first `version =` line
+# replaced by one placeholder: two files that differ only there come out
+# the same. A version line in any other table is left as it is.
+without_project_version() {
+  awk '
+    /^[[:space:]]*\[/ { in_project = ($0 ~ /^[[:space:]]*\[project\][[:space:]]*(#.*)?$/) }
+    in_project && !seen && /^[[:space:]]*version[[:space:]]*=/ { print "version = (any)"; seen = 1; next }
+    { print }
+  '
+}
+
+# Did pyproject.toml change between PREV_SHA and HEAD_SHA in anything but
+# [project]'s version line? Either side missing, or git or awk failing,
+# counts as changed, the same rule as paths_changed.
+pyproject_deps_changed() {
+  local a b
+  paths_changed "$PYPROJECT_PATH" || return 1
+  a=$(git_as show "$PREV_SHA:$PYPROJECT_PATH" 2>/dev/null | without_project_version) || return 0
+  b=$(git_as show "$HEAD_SHA:$PYPROJECT_PATH" 2>/dev/null | without_project_version) || return 0
+  [ "$a" != "$b" ]
+}
+
+# The dependencies changed: a lock or a requirements file, or pyproject.toml
+# beyond a version bump.
+deps_changed() { paths_changed "${DEPS_PATHS[@]}" || pyproject_deps_changed; }
+
 # Did an `image:` line of the compose file change between PREV_SHA and
 # HEAD_SHA? Every image there is pinned by digest, so a changed line is a
 # pull on the next `docker compose up` (domovoi-db pulls Postgres and
@@ -876,8 +911,13 @@ norm_url() {
 # env file (DOMOVOI_UPSTREAM_URL, DOMOVOI_UPSTREAM_BRANCH). Nothing is
 # checked without a pin. Refuses before anything is touched: a checkout
 # that follows another remote or branch is not the one the owner signs.
+# DOMOVOI_UPSTREAM_BRANCH names one branch, or several separated by spaces
+# or commas: provision.sh pins the two release channels, "stable main", so
+# the dashboard's channel switch (Settings > Version) works and no other
+# branch does.
 check_upstream() {
-  local t0 url up want
+  local t0 url up want b ok applied warned
+  local -a branches=()
   [ -n "$UPSTREAM_URL" ] || [ -n "$UPSTREAM_BRANCH" ] || return 0
   t0=$(now_ms)
   if [ -n "$UPSTREAM_URL" ]; then
@@ -889,11 +929,43 @@ check_upstream() {
     fi
   fi
   if [ -n "$UPSTREAM_BRANCH" ]; then
-    want=refs/remotes/origin/$UPSTREAM_BRANCH
+    read -r -a branches <<<"${UPSTREAM_BRANCH//,/ }"
     up=$(git_as rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
-    if [ "$up" != "$want" ]; then
+    ok=0
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if [ "$up" = "refs/remotes/origin/$b" ]; then ok=1; fi
+    done
+    if [ "$ok" = 0 ]; then
+      want=$(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')
       add_step upstream refused "$t0" "HEAD tracks ${up:-no upstream branch}; the pin is $want"
-      finish refused "the checkout tracks ${up:-no upstream branch}, not the pinned origin/$UPSTREAM_BRANCH (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
+      if [ "${#branches[@]}" -gt 1 ]; then want="one of the pinned branches ($want)"; else want="the pinned $want"; fi
+      finish refused "the checkout tracks ${up:-no upstream branch}, not $want (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
+      return 1
+    fi
+    # And the code itself, by root's own git (delta security review
+    # 2026-10-16): the tracking branch is the service user's config, so
+    # HEAD must also be on one of the pinned branches as this box last
+    # fetched them. A box on stable past the latest release (switched from
+    # main) is on origin/main, which provision.sh's pin includes.
+    ok=0
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if git_root merge-base --is-ancestor "$HEAD_SHA" "refs/remotes/origin/$b" 2>/dev/null; then ok=1; fi
+    done
+    if [ "$ok" = 0 ]; then
+      want=$(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')
+      # The commit this box last applied, and so already ran: a pinned
+      # branch rewound past it upstream (a force-push) must not stop a plain
+      # restart for ever (rc2 review C2). It restarts with a warning; an
+      # update to anything else is still refused below.
+      applied=$(read_sha_file "$APPLIED_FILE" 2>/dev/null) || applied=""
+      if [ -n "$applied" ] && [ "$applied" = "$HEAD_SHA" ]; then
+        warned="HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($want) as this box last fetched them, upstream rewritten?; it is the commit this box last applied, so this restart goes on, and no update will until a pinned branch holds it again"
+        log "WARNING: $warned"
+        add_step upstream warn "$t0" "$warned"
+        return 0
+      fi
+      add_step upstream refused "$t0" "HEAD ${HEAD_SHA:0:12} is on none of $want"
+      finish refused "HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($want) as this box last fetched them (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
       return 1
     fi
   fi
@@ -2128,7 +2200,7 @@ full_update() {
     finish refused "tracked files have uncommitted changes, so a rollback could not restore this tree; commit or stash them, then restart again: $(printf '%s\n' "$dirty" | head -n 5 | tr '\n' ' ')"
     return
   fi
-  if paths_changed "${DEPS_PATHS[@]}"; then DEPS_CHANGED=1; fi
+  if deps_changed; then DEPS_CHANGED=1; fi
   if paths_changed "${MPD_PATHS[@]}"; then MPD_CHANGED=1; fi
   if paths_changed domovoi/Dockerfile.mpd; then MPD_IMAGE_CHANGED=1; fi
   if images_changed; then IMAGES_CHANGED=1; fi

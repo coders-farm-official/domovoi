@@ -12,6 +12,7 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 # Imported at module top on purpose: the web import guard refuses a NEW
@@ -331,5 +332,30 @@ async def pull_version(request: Request):
     return bridge_response(
         *await post_admin(
             "/v1/admin/version/pull", {}, headers=auth_forward_headers(request)
+        )
+    )
+
+
+class VersionChannelRequest(BaseModel):
+    channel: str = Field(..., max_length=40)
+
+
+@router.post(
+    "/config/version/channel",
+    # Security tier at both hops: it decides what every later pull, and so
+    # the update unit's root run, follows. Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def switch_version_channel(body: VersionChannelRequest, request: Request):
+    """Settings → Version's channel: follow ``stable`` (releases only) or
+    ``main`` (every change) from now on. HEAD never moves; the check and
+    the pull then compare with, and move to, that branch. Proxy of the
+    core's ``POST /v1/admin/version/channel`` →
+    ``{ok, changed, channel, error}``."""
+    return bridge_response(
+        *await post_admin(
+            "/v1/admin/version/channel",
+            {"channel": body.channel},
+            headers=auth_forward_headers(request),
         )
     )

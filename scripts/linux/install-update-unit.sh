@@ -75,6 +75,11 @@
 
 set -euo pipefail
 
+# Every git this script runs reads objects as they are: no refs/replace and
+# no grafts. Both live in the service user's .git, and with them an unsigned
+# commit could pass for a signed one under its SHA (rc2 review C3).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+
 PROG=install-update-unit
 SCRIPT_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
 ORIG_ARGS=("$@")
@@ -836,15 +841,41 @@ check_signing() {
     fi
     line ok "upstream pinned: origin is $url"
   fi
+  # One branch, or several separated by spaces or commas (provision.sh pins
+  # the two release channels, "stable main"), the way apply-update.sh reads it.
   want=$(defaults_get DOMOVOI_UPSTREAM_BRANCH)
   if [ -n "$want" ]; then
+    local -a branches=()
+    local b match="" tracked
+    read -r -a branches <<<"${want//,/ }"
     up=$(as_user git -C "$REPO" rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
-    if [ "$up" != "refs/remotes/origin/$want" ]; then
-      stop "$DEFAULTS_FILE pins the branch to origin/$want, but HEAD tracks ${up:-no upstream branch}" \
-        "The update unit would refuse every run. Fix the tracking branch as $SVC_USER (git -C $REPO branch --set-upstream-to origin/$want)," \
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if [ "$up" = "refs/remotes/origin/$b" ]; then match=$b; fi
+    done
+    if [ -z "$match" ]; then
+      stop "$DEFAULTS_FILE pins the branch to $(printf 'origin/%s or ' ${branches[@]+"${branches[@]}"} | sed 's/ or $//'), but HEAD tracks ${up:-no upstream branch}" \
+        "The update unit would refuse every run. Fix the tracking branch as $SVC_USER (git -C $REPO branch --set-upstream-to origin/${branches[0]:-main})," \
         "or the pin, then run this again."
     fi
-    line ok "upstream pinned: HEAD tracks origin/$want"
+    tracked=$match
+    # HEAD itself on a pinned branch, by root's git, as every run checks.
+    match=""
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if git -c "safe.directory=$REPO" -C "$REPO" merge-base --is-ancestor HEAD "refs/remotes/origin/$b" 2>/dev/null; then match=$b; fi
+    done
+    if [ -z "$match" ]; then
+      stop "HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')) as this box last fetched them" \
+        "The update unit would refuse every run. Pull the latest in the dashboard, or fix the pin, then run this again."
+    fi
+    line ok "upstream pinned: HEAD tracks origin/$tracked"
+  fi
+  # The core reads the branch pin and the signers path from this file too,
+  # as the service user (REV-20): unreadable, it can't tell what root pins.
+  if [ -f "$DEFAULTS_FILE" ] && [ -n "$(defaults_get DOMOVOI_UPSTREAM_BRANCH)$(defaults_get DOMOVOI_ALLOWED_SIGNERS)" ] \
+      && ! as_user test -r "$DEFAULTS_FILE"; then
+    line warning "$SVC_USER can't read $DEFAULTS_FILE, so the core can't see the branch pin or the signers path it sets"
+    more "The dashboard then can't switch the update channel, and a pull can't be checked the way the unit will check it."
+    more "The file holds no secrets: sudo chmod 0644 $DEFAULTS_FILE"
   fi
 }
 

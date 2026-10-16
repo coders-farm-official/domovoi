@@ -21,7 +21,10 @@
 #   media        --media folders: on WSL one drvfs line per folder in
 #                /etc/fstab, mounted at /srv/media/<name>; on bare metal the
 #                directories themselves
-#   checkout     git clone of --repo-url at --ref, as the service user, into
+#   checkout     git clone of --repo-url at --ref (default: stable, the
+#                latest release, which the checkout then follows; main
+#                while the repository has no stable branch yet), as the
+#                service user, into
 #                a directory beside --checkout-dir that is renamed into place
 #                only once the ref is checked out (and HEAD verified when
 #                /etc/domovoi/allowed_signers exists: docs/LINUX_HOST.md
@@ -95,7 +98,9 @@
 #   update-unit  scripts/linux/install-update-unit.sh (the dashboard's update
 #                button), with DOMOVOI_USE_LOCK=1 in
 #                /etc/default/domovoi-update: a box installed from the
-#                hash-pinned lock re-syncs from it on every update too
+#                hash-pinned lock re-syncs from it on every update too; and
+#                DOMOVOI_UPSTREAM_BRANCH="stable main" there, so updates
+#                follow one of the two release channels and nothing else
 #   finish       result, setup-code presence (never its content), the GPUs
 #
 # Idempotent and resumable. Each finished step leaves a marker in
@@ -159,6 +164,11 @@
 # without the other makes the script refuse to run. Never set them on a host.
 
 set -Eeuo pipefail
+
+# Every git this script runs reads objects as they are: no refs/replace and
+# no grafts, so HEAD's signature check sees the commit it names (rc2 review
+# C3; the checkout's .git is the service user's).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
 umask 022
 
 PROG=provision
@@ -435,8 +445,14 @@ NODEPS_LOCK_NAME=requirements-linux-py314-no-deps.lock
 # ─── Options ─────────────────────────────────────────────────────────────
 
 REPO_URL=https://github.com/coders-farm-official/domovoi
-REF=main
-TRACK_BRANCH=main
+# The release channel (docs/LINUX_HOST.md, Release channels): stable moves
+# only to a release's commit, main carries every change. New installs
+# follow stable. Before the first release origin has no stable branch, and
+# the defaults then take main instead, saying so (checkout_ref).
+REF=stable
+TRACK_BRANCH=stable
+REF_GIVEN=0
+TRACK_GIVEN=0
 CHECKOUT=/opt/domovoi
 SVC_USER=domovoi
 INTERNET=""
@@ -464,9 +480,18 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
   --repo-url URL        the repository to clone (default:
                         https://github.com/coders-farm-official/domovoi; a
                         local path or git bundle works too)
-  --ref REF             a branch, tag or full commit SHA to install (default: main)
+  --ref REF             a branch, tag or full commit SHA to install (default:
+                        stable, the latest release; main while the
+                        repository has no stable branch yet). Read by its
+                        shape: a full SHA is that commit, v<digit>... and
+                        tags/NAME a tag, refs/heads/NAME a branch; stable and
+                        main are always the branches; any other name is the
+                        tag of that name when there is one, else the branch
   --track-branch NAME   for a tag or SHA: the branch the checkout follows for
-                        updates; REF must be on its history (default: main)
+                        updates (default: stable; main without one). REF must
+                        be on its history, or newer than it on the same line
+                        (then updates resume with the next release that
+                        includes REF)
   --checkout-dir DIR    where the checkout goes (default: /opt/domovoi)
   --user NAME           the service user (default: domovoi). Created with no
                         password login; an existing account is used as it
@@ -545,8 +570,8 @@ while [ $# -gt 0 ]; do
       [ -n "$val" ] || usage_error "$opt needs a value"
       case $opt in
         --repo-url) REPO_URL=$val ;;
-        --ref) REF=$val ;;
-        --track-branch) TRACK_BRANCH=$val ;;
+        --ref) REF=$val; REF_GIVEN=1 ;;
+        --track-branch) TRACK_BRANCH=$val; TRACK_GIVEN=1 ;;
         --checkout-dir) CHECKOUT=${val%/} ;;
         --user) SVC_USER=$val ;;
         --internet) INTERNET=$val ;;
@@ -1387,20 +1412,115 @@ verify_head() {
   log "HEAD $HEAD_SHA is signed by $(git "${cfg[@]}" -C "$dir" log -1 --format=%GS HEAD)"
 }
 
+# ref_kind REF: how --ref is read, by its shape, so a branch can never
+# stand in for a tag or a commit of the same name (delta security review
+# 2026-10-16, S3: a branch named v1.0.0, or like the pinned SHA, used to be
+# preferred). Prints "sha SHA", "tag NAME", "branch NAME" or "name NAME":
+#   a full commit SHA (40 or 64 hex digits)     the commit object, nothing else
+#   refs/tags/NAME, tags/NAME, or v<digit>...   the tag refs/tags/NAME only
+#   refs/heads/NAME, stable or main             origin's branch NAME only
+#   any other name                              "name": the tag of that name
+#                                               when the clone has one, else
+#                                               the branch (rc2 review C7)
+ref_kind() {
+  local r=$1
+  if [[ $r =~ ^[0-9a-f]{40}$ ]] || [[ $r =~ ^[0-9a-f]{64}$ ]]; then echo "sha $r"
+  elif [[ $r == refs/tags/* ]]; then echo "tag ${r#refs/tags/}"
+  elif [[ $r == tags/* ]]; then echo "tag ${r#tags/}"
+  elif [[ $r == refs/heads/* ]]; then echo "branch ${r#refs/heads/}"
+  elif [[ $r =~ ^v[0-9] ]]; then echo "tag $r"
+  elif [ "$r" = stable ] || [ "$r" = main ]; then echo "branch $r"
+  else echo "name $r"; fi
+}
+
+# A tag this box was installed from, and its commit, kept beside the step
+# markers: a published tag never moves, so a later run (a resumed clone)
+# that finds it at another commit stops instead of installing that one.
+REF_RECORD=$STATE_DIR/checkout-ref
+check_tag_record() {
+  local name=$1 sha=$2 kind was_name was_sha
+  [ -f "$REF_RECORD" ] || return 0
+  read -r kind was_name was_sha <"$REF_RECORD" || return 0
+  if [ "$kind" = tag ] && [ "$was_name" = "$name" ] && [ "$was_sha" != "$sha" ]; then
+    die "the tag $name was commit $was_sha when this box was first set up from it and is $sha now: a published tag never moves, so nothing was installed (ask the publisher; $REF_RECORD holds the first answer)"
+  fi
+}
+
 # checkout_ref DIR: check --ref out in the fresh clone DIR, on a branch that
-# follows origin (a tag or SHA: --track-branch, which must contain it).
+# follows origin (a tag or SHA: --track-branch, which must contain it, or
+# be behind it on the same line), then make sure HEAD is the commit --ref
+# named.
+#
+# The release channel stable may not exist yet: origin has it from the
+# first release on. Until then the defaults take main (and a tag or SHA
+# given with --track-branch stable, the Windows installer's, follows main),
+# with a warning; the household can switch to stable from Settings >
+# Version once there is one. A --ref stable given on the command line has
+# no such fallback. The switch is the household's (Settings > Version);
+# nothing moves the box to stable by itself. The checkout keeps what was
+# asked for (git config domovoi.intendedChannel stable), and the Version
+# card says so once the first release is out.
 checkout_ref() {
-  local d=$1 sha
-  if gd "$d" rev-parse -q --verify "refs/remotes/origin/$REF^{commit}" >/dev/null; then
-    gd "$d" checkout -q -B "$REF" --track "origin/$REF" || die "checkout of $REF failed"
-  else
-    sha=$(gd "$d" rev-parse -q --verify "$REF^{commit}") || die "$REF is not a branch, tag or commit of $REPO_URL"
-    gd "$d" rev-parse -q --verify "refs/remotes/origin/$TRACK_BRANCH" >/dev/null \
-      || die "$REPO_URL has no branch $TRACK_BRANCH for updates to follow (--track-branch)"
-    gd "$d" merge-base --is-ancestor "$sha" "origin/$TRACK_BRANCH" \
-      || die "$REF is not on origin/$TRACK_BRANCH's history, so an update could never fast-forward from it"
-    gd "$d" checkout -q -B "$TRACK_BRANCH" "$sha" || die "checkout of $REF failed"
-    gd "$d" branch -q --set-upstream-to "origin/$TRACK_BRANCH" || die "can't make $TRACK_BRANCH track origin/$TRACK_BRANCH"
+  local d=$1 sha ref=$REF track=$TRACK_BRANCH kind name head intended=""
+  if ! gd "$d" rev-parse -q --verify "refs/remotes/origin/stable" >/dev/null; then
+    if [ "$ref" = stable ] && [ "$REF_GIVEN" = 0 ]; then
+      ref=main
+      [ "$TRACK_GIVEN" = 1 ] || track=main
+      intended=stable
+      warn "$REPO_URL has no stable branch yet (no release has been published): installing main, and this box follows main; switch to stable in Settings > Version after the first release"
+    fi
+    if [ "$track" = stable ] && [ "$ref" != stable ]; then
+      track=main
+      intended=stable
+      warn "$REPO_URL has no stable branch yet (no release has been published): this box follows main; switch to stable in Settings > Version after the first release"
+    fi
+  fi
+  read -r kind name <<<"$(ref_kind "$ref")"
+  if [ "$kind" = name ]; then
+    if gd "$d" rev-parse -q --verify "refs/tags/$name^{commit}" >/dev/null; then kind=tag; else kind=branch; fi
+  fi
+  case $kind in
+    branch)
+      sha=$(gd "$d" rev-parse -q --verify "refs/remotes/origin/$name^{commit}") \
+        || die "$REPO_URL has no branch $name (--ref takes a branch, a tag such as v1.0.0, or a full commit SHA)"
+      gd "$d" checkout -q -B "$name" --track "origin/$name" || die "checkout of $name failed"
+      ;;
+    sha|tag)
+      if [ "$kind" = sha ]; then
+        gd "$d" cat-file -e "$name^{commit}" 2>/dev/null || die "$name is not a commit of $REPO_URL"
+        sha=$name
+      else
+        sha=$(gd "$d" rev-parse -q --verify "refs/tags/$name^{commit}") || die "$REPO_URL has no tag $name"
+        check_tag_record "$name" "$sha"
+        log "the tag $name is commit $sha"
+      fi
+      gd "$d" rev-parse -q --verify "refs/remotes/origin/$track" >/dev/null \
+        || die "$REPO_URL has no branch $track for updates to follow (--track-branch)"
+      if ! gd "$d" merge-base --is-ancestor "$sha" "origin/$track"; then
+        # Newer than stable, and on main: a release candidate, or the Windows
+        # installer's pinned release before stable has moved to it. Releases
+        # are cut from main, so the next one holds this commit, and a pull
+        # fast-forwards then. Any other branch must contain REF.
+        { [ "$track" = stable ] \
+            && gd "$d" merge-base --is-ancestor "origin/stable" "$sha" \
+            && gd "$d" rev-parse -q --verify "refs/remotes/origin/main" >/dev/null \
+            && gd "$d" merge-base --is-ancestor "$sha" "origin/main"; } \
+          || die "$ref is not on origin/$track's history, so an update could never fast-forward from it"
+        warn "$ref is newer than the latest release on stable; this box follows stable, and updates resume with the next release, which includes $ref"
+      fi
+      gd "$d" checkout -q -B "$track" "$sha" || die "checkout of $ref failed"
+      gd "$d" branch -q --set-upstream-to "origin/$track" || die "can't make $track track origin/$track"
+      ;;
+  esac
+  head=$(gd "$d" rev-parse -q --verify HEAD) || die "can't read HEAD after checking $ref out"
+  [ "$head" = "$sha" ] || die "HEAD is $head after checking $ref out, not $sha; nothing was installed"
+  if [ -n "$intended" ]; then
+    gd "$d" config domovoi.intendedChannel "$intended" || warn "can't record the channel asked for (git config domovoi.intendedChannel $intended)"
+  fi
+  if [ "$DRY_RUN" = 0 ]; then
+    mkdir -p "$STATE_DIR"
+    printf '%s %s %s\n' "$kind" "$name" "$sha" >"$REF_RECORD.tmp" && mv -f "$REF_RECORD.tmp" "$REF_RECORD" \
+      || warn "can't record which commit --ref $ref named in $REF_RECORD"
   fi
 }
 
@@ -2825,21 +2945,60 @@ use_lock_lines() {
     "# The hash-pinned lock). Set it to 0 to re-sync through pip's resolver." \
     "DOMOVOI_USE_LOCK=1"
 }
+# The branches updates may follow: the two release channels (owner decision
+# 2026-10-16; docs/LINUX_HOST.md, Release channels), so the dashboard's
+# channel switch works and the update unit refuses any other branch. Written
+# like the lock line: only into a file that doesn't set it, and only while
+# the checkout follows one of them (a box someone pointed at a branch of
+# their own keeps updating from it, with a warning).
+channel_pin_set() { grep -q '^[[:space:]]*DOMOVOI_UPSTREAM_BRANCH[[:space:]]*=' "$UPDATE_DEFAULTS" 2>/dev/null; }
+channel_pin_lines() {
+  printf '%s\n' "# Written by scripts/linux/provision.sh: updates follow one of Domovoi's" \
+    "# release channels, stable or main (Settings > Version switches between" \
+    "# them; docs/LINUX_HOST.md, Release channels). Any other branch is refused." \
+    'DOMOVOI_UPSTREAM_BRANCH="stable main"'
+}
+checkout_upstream() { g rev-parse --symbolic-full-name '@{u}' 2>/dev/null || true; }
+follows_a_channel() {
+  case $(checkout_upstream) in refs/remotes/origin/stable|refs/remotes/origin/main) return 0 ;; esac
+  return 1
+}
 inputs_update_unit() {
   file_sig "$CHECKOUT/scripts/linux/install-update-unit.sh"
   echo "$CHECKOUT $SVC_USER"
   use_lock_lines
+  channel_pin_lines
 }
 check_update_unit() {
   [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ] \
-    && { [ -L "$UPDATE_DEFAULTS" ] || use_lock_set; }
+    && { [ -L "$UPDATE_DEFAULTS" ] || { use_lock_set && { channel_pin_set || ! follows_a_channel; }; }; }
 }
 plan_update_unit() {
   echo "DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update (unless it sets DOMOVOI_USE_LOCK already)"
+  echo 'DOMOVOI_UPSTREAM_BRANCH="stable main" there too (unless it sets one already, or the checkout follows another branch)'
   echo "bash scripts/linux/install-update-unit.sh --repo $CHECKOUT --user $SVC_USER"
 }
+# add_update_defaults: append the lines on stdin to /etc/default/domovoi-update,
+# creating it 0644, or keeping an administrator's file with its lines, mode
+# and owner (by rename from a temp file beside it).
+add_update_defaults() {
+  local mode owner tmp lines
+  lines=$(cat)
+  if [ -f "$UPDATE_DEFAULTS" ]; then
+    mode=$(stat -c %a "$UPDATE_DEFAULTS") && owner=$(stat -c %u:%g "$UPDATE_DEFAULTS") \
+      || die "can't read the mode and owner of /etc/default/domovoi-update"
+    tmp=$(mktemp "$(dirname "$UPDATE_DEFAULTS")/.domovoi-update.XXXXXX") || die "can't write in $(dirname "$UPDATE_DEFAULTS")"
+    if ! { { cat "$UPDATE_DEFAULTS"; echo; printf '%s\n' "$lines"; } >"$tmp" && chmod "$mode" "$tmp" \
+           && chown "$owner" "$tmp" && mv -f "$tmp" "$UPDATE_DEFAULTS"; }; then
+      rm -f "$tmp"
+      die "can't add to /etc/default/domovoi-update: $(printf '%s\n' "$lines" | grep -v '^#' | tr '\n' ' ')"
+    fi
+  else
+    write_if_changed "$UPDATE_DEFAULTS" 0644 < <(printf '%s\n' "$lines") || true
+  fi
+}
 do_update_unit() {
-  local have mode owner tmp
+  local have up
   # Before the installer, so that its pre-flight reports the lock as on.
   if [ -L "$UPDATE_DEFAULTS" ]; then
     have=""
@@ -2848,24 +3007,27 @@ do_update_unit() {
       warn "/etc/default/domovoi-update is a symlink, left as it is: this script does not write through it, so updates re-sync through pip's resolver unless the file it points to says DOMOVOI_USE_LOCK=1 (docs/LINUX_HOST.md, The hash-pinned lock)"
     fi
   elif ! use_lock_set; then
-    if [ -f "$UPDATE_DEFAULTS" ]; then
-      # The administrator's file: their lines kept, and its mode and owner.
-      mode=$(stat -c %a "$UPDATE_DEFAULTS") && owner=$(stat -c %u:%g "$UPDATE_DEFAULTS") \
-        || die "can't read the mode and owner of /etc/default/domovoi-update"
-      tmp=$(mktemp "$(dirname "$UPDATE_DEFAULTS")/.domovoi-update.XXXXXX") || die "can't write in $(dirname "$UPDATE_DEFAULTS")"
-      if ! { { cat "$UPDATE_DEFAULTS"; echo; use_lock_lines; } >"$tmp" && chmod "$mode" "$tmp" \
-             && chown "$owner" "$tmp" && mv -f "$tmp" "$UPDATE_DEFAULTS"; }; then
-        rm -f "$tmp"
-        die "can't add DOMOVOI_USE_LOCK=1 to /etc/default/domovoi-update"
-      fi
-    else
-      write_if_changed "$UPDATE_DEFAULTS" 0644 < <(use_lock_lines) || true
-    fi
+    use_lock_lines | add_update_defaults
     log "updates re-sync from the lock: DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update"
   else
     have=$(update_default DOMOVOI_USE_LOCK)
     if [ "$have" = 1 ]; then log "updates re-sync from the lock (DOMOVOI_USE_LOCK=1 in /etc/default/domovoi-update)"
     else warn "/etc/default/domovoi-update sets DOMOVOI_USE_LOCK=$have, left as it is: updates re-sync through pip's resolver, which checks no hashes, though this box was installed from the lock"; fi
+  fi
+  # The channel pin, the same way (a symlinked file is left alone above).
+  if [ -L "$UPDATE_DEFAULTS" ] && ! channel_pin_set; then
+    warn "/etc/default/domovoi-update is a symlink, left as it is: no channel pin (DOMOVOI_UPSTREAM_BRANCH=\"stable main\") written through it, so updates follow whatever branch the checkout tracks; add the line to the file it points to (docs/LINUX_HOST.md, Release channels)"
+  fi
+  if [ ! -L "$UPDATE_DEFAULTS" ]; then
+    up=$(checkout_upstream)
+    if channel_pin_set; then
+      log "updates follow what /etc/default/domovoi-update pins ($(grep '^[[:space:]]*DOMOVOI_UPSTREAM_BRANCH[[:space:]]*=' "$UPDATE_DEFAULTS" | tail -n 1 | tr -d '\r' | sed 's/^[[:space:]]*//')); the checkout tracks ${up#refs/remotes/}"
+    elif follows_a_channel; then
+      channel_pin_lines | add_update_defaults
+      log "updates follow ${up#refs/remotes/}, one of the release channels: DOMOVOI_UPSTREAM_BRANCH=\"stable main\" in /etc/default/domovoi-update"
+    else
+      warn "the checkout follows ${up:-no upstream branch}, not a release channel (stable or main): no branch pin written to /etc/default/domovoi-update, so updates follow that branch"
+    fi
   fi
   bash "$CHECKOUT/scripts/linux/install-update-unit.sh" --repo "$CHECKOUT" --user "$SVC_USER" \
     || die "scripts/linux/install-update-unit.sh stopped (its output above says why)"
