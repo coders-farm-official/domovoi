@@ -138,7 +138,7 @@ from this folder, see `listing/details.txt`):
   10-inch tablet screenshots: the `tablet-7` and `tablet-10` folders.
 
 **Store settings**: category **Productivity**; contact email
-**codersfarm@gmail.com**; website
+**info@codersfarm.org** (matches the developer profile); website
 `https://github.com/coders-farm-official/domovoi`.
 
 ## 5. App content (Policy and programs → App content)

@@ -1,7 +1,7 @@
 # Domovoi for Android: privacy policy
 
-Effective 15 October 2026. Published by Coders Farm, the makers of Domovoi
-(github.com/coders-farm-official/domovoi). Questions: **codersfarm@gmail.com**.
+Effective 16 October 2026. Published by Coders Farm, the makers of Domovoi
+(github.com/coders-farm-official/domovoi). Questions: **info@codersfarm.org**.
 
 Domovoi is a home assistant that runs on your own hardware. This policy
 covers the Domovoi Android app (`com.domovoi.app`), from Google Play, from

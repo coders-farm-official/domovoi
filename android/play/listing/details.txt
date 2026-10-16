@@ -12,7 +12,8 @@ Category:                     Productivity
 Tags (up to 5, pick from Play's list): Personal assistant, Smart home,
   Music player, Productivity (pick what the list offers that matches)
 
-Contact email (shown):        codersfarm@gmail.com
+Contact email (shown):        info@codersfarm.org (the developer profile's address too;
+                              the app's reply reports still go to codersfarm@gmail.com)
 Website:                      https://github.com/coders-farm-official/domovoi
 Phone (optional):             leave empty
 Privacy policy URL:           https://github.com/coders-farm-official/domovoi/blob/main/docs/PRIVACY_POLICY.md
