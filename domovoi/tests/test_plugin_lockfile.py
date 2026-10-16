@@ -9,6 +9,7 @@ shape is needed.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -366,9 +367,11 @@ def test_dry_run_refuses_a_lock_that_would_change_an_installed_dist(
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "compliments"
-LC08_OPTION_ZIP = Path(
-    "C:/Users/Kamron/claude-exp/domovoi-project/functional-testing/"
-    "plugin-fixtures/lc08/lc08-lockfile_option.zip"
+# One of the maintainers' plugin fixtures, kept outside this repo:
+# DOMOVOI_PLUGIN_FIXTURES_DIR names their folder; there is no default.
+_PLUGIN_FIXTURES = os.environ.get("DOMOVOI_PLUGIN_FIXTURES_DIR")
+LC08_OPTION_ZIP = (
+    Path(_PLUGIN_FIXTURES, "lc08", "lc08-lockfile_option.zip") if _PLUGIN_FIXTURES else None
 )
 
 
@@ -445,7 +448,8 @@ async def test_stage_keeps_the_precise_option_code(staging) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not LC08_OPTION_ZIP.is_file(), reason="LC-08 fixture zip not on this box")
+@pytest.mark.skipif(not (LC08_OPTION_ZIP and LC08_OPTION_ZIP.is_file()),
+                    reason="LC-08 fixture zip not here (set DOMOVOI_PLUGIN_FIXTURES_DIR)")
 async def test_stage_lc08_lockfile_option_fixture(staging) -> None:
     with pytest.raises(InstallError) as exc:
         await installer.stage_zip(LC08_OPTION_ZIP.read_bytes())

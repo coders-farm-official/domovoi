@@ -4,7 +4,8 @@ satellite/scripts/install-pc.sh.
 The config an enrolled laptop runs on, the wake-word models (from the
 core's signed channel or openWakeWord's release, always held to the
 pins), and the record the uninstaller reads. The real install, in fresh
-Debian and Ubuntu containers, is functional-testing/sat-pc/.
+Debian and Ubuntu containers, is run by the maintainers' functional test
+harness, kept outside this repo.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ EXAMPLE = ROOT / "satellite" / "config.toml.example"
 SEED = bytes([9]) * 32
 PUBLIC = _ed25519.public_key(SEED)
 FP = server_identity.fingerprint_for(PUBLIC)
-PAYLOAD = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
+PAYLOAD = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
 
 
 def test_the_model_pins_are_the_core_s():
@@ -53,7 +54,7 @@ def test_a_fresh_config_is_an_enrolled_pinned_laptop(tmp_path):
     assert report["backup"] is None
     cfg = client.Config.load(cfg_path)
     assert cfg.device.name == "generic_pc" and cfg.room_id == "kids_room" and cfg.room_name == "Kid's Room"
-    assert cfg.domovoi_url == "ws://192.168.0.117:6370" and cfg.server_fingerprint == FP
+    assert cfg.domovoi_url == "ws://192.168.1.20:6370" and cfg.server_fingerprint == FP
     assert cfg.permissions == "ask" and not cfg.wifi_enabled and not cfg.leds_enabled
     if sys.platform != "win32":
         assert stat.S_IMODE(os.stat(cfg_path).st_mode) == 0o600
@@ -81,7 +82,7 @@ def test_moving_to_another_core_or_room_starts_unapproved(tmp_path):
     d = cfg_path.parent
     for name in ("approved", "approval_code", "pairing_token"):
         (d / name).write_text("x\n")
-    other = enrolment.parse(enrolment.build("http://192.168.0.117:6370", FP, "Office"))
+    other = enrolment.parse(enrolment.build("http://192.168.1.20:6370", FP, "Office"))
     report = pc_install.write_config(cfg_path, EXAMPLE, other, "ask", now=lambda: 0)
     assert report["reset_approval"] is True
     assert not any((d / n).exists() for n in ("approved", "approval_code", "pairing_token"))
@@ -148,10 +149,10 @@ def opener_for(routes, seen):
 
 def test_models_come_from_the_core_when_it_serves_them(tmp_path, pinned):
     seen = []
-    routes = {"http://192.168.0.117:6370/v1/wake-base/manifest.sig": json.dumps(signed_list(pinned)).encode()}
+    routes = {"http://192.168.1.20:6370/v1/wake-base/manifest.sig": json.dumps(signed_list(pinned)).encode()}
     for name, body in BODIES.items():
-        routes[f"http://192.168.0.117:6370/v1/wake-base/{name}"] = body
-    got = pc_install.fetch_models(tmp_path, core="http://192.168.0.117:6370", fp=FP,
+        routes[f"http://192.168.1.20:6370/v1/wake-base/{name}"] = body
+    got = pc_install.fetch_models(tmp_path, core="http://192.168.1.20:6370", fp=FP,
                                   opener=opener_for(routes, seen), log=lambda m: None)
     assert set(got.values()) == {"core"}
     assert not any("github" in u for u in seen)
@@ -160,18 +161,18 @@ def test_models_come_from_the_core_when_it_serves_them(tmp_path, pinned):
 
 def test_a_list_signed_by_another_key_is_not_used(tmp_path, pinned):
     seen = []
-    routes = {"http://192.168.0.117:6370/v1/wake-base/manifest.sig":
+    routes = {"http://192.168.1.20:6370/v1/wake-base/manifest.sig":
               json.dumps(signed_list(pinned, seed=bytes([1]) * 32)).encode()}
     for name, body in BODIES.items():
         routes[pc_install.OWW_RELEASE_URL + name] = body
-    got = pc_install.fetch_models(tmp_path, core="http://192.168.0.117:6370", fp=FP,
+    got = pc_install.fetch_models(tmp_path, core="http://192.168.1.20:6370", fp=FP,
                                   opener=opener_for(routes, seen), log=lambda m: None)
     assert set(got.values()) == {"openwakeword"}
 
 
 def test_without_the_core_s_channel_the_release_is_used_and_held_to_the_pins(tmp_path, pinned):
     routes = {pc_install.OWW_RELEASE_URL + n: b for n, b in BODIES.items()}
-    got = pc_install.fetch_models(tmp_path, core="http://192.168.0.117:6370", fp=FP,
+    got = pc_install.fetch_models(tmp_path, core="http://192.168.1.20:6370", fp=FP,
                                   opener=opener_for(routes, []), log=lambda m: None)
     assert set(got.values()) == {"openwakeword"}
     assert pc_install.fetch_models(tmp_path, core=None, fp=None,

@@ -1645,8 +1645,8 @@ server sends can reach a request that is never made. The window is about
 **So the release note for 2026-09-25 has to say: reload the dashboard once
 (plain Ctrl-R is enough — no hard refresh, no clearing) on each browser and
 phone. Every release after this one arrives on an ordinary open.** Measured
-on the real dashboard, all four arrivals, in a real headless Chrome:
-`functional-testing/plan-20260922/reach-real-20260925/`.
+on the real dashboard, all four arrivals, in a real headless Chrome (with
+the maintainers' functional test harness, kept outside this repo).
 
 #### `GET /api/bundle` — is this tab running what the box has?
 

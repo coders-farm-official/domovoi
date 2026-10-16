@@ -136,8 +136,8 @@ covered by this policy.
 ## 6. Demo videos
 
 Recorded on the API 36 emulator with `adb shell screenrecord` (no audio),
-kept outside the repo for size, in
-`domovoi-project\functional-testing\play-prep\video\`:
+kept outside the repo for size, with the maintainers' Play submission
+material:
 
 | File | Shows | Length |
 |---|---|---|

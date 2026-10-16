@@ -5,9 +5,10 @@ headless install as root (S3), the accounts it must refuse (S2, N2).
 These change /etc, /usr/local, /var/lib and the account database, so they
 run only as root inside a container (``/.dockerenv``, or
 ``DOMOVOI_INSTALLER_SANDBOX=1`` for another runtime) — never on a
-developer's own machine. functional-testing/sat-pc/run-linux-tests.sh
---root runs them; nothing here needs the network (a fake core on
-127.0.0.1 answers the identity challenge, pip is pointed at nothing).
+developer's own machine. The maintainers' functional test harness (kept
+outside this repo) runs them that way; nothing here needs the network (a
+fake core on 127.0.0.1 answers the identity challenge, pip is pointed at
+nothing).
 """
 
 from __future__ import annotations

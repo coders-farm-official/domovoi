@@ -4,7 +4,7 @@ DB-free on purpose, so it never skips. The examples are the owner's own
 (2026-10-02: "$uicideboy$" said "suicide boys", GENER8ION said
 "generation") and textbook cases of each rule — none is taken from the
 held-out spoken-match gate set, which only ever measures (checked against
-functional-testing/spoken-gate/audit_set_v2.json when they were written).
+that set, kept outside this repo, when they were written).
 """
 
 from __future__ import annotations

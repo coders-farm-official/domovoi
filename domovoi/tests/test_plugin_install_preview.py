@@ -12,6 +12,7 @@ these fixtures declare no core Python requirements.
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import textwrap
 import zipfile
@@ -33,10 +34,10 @@ from domovoi.plugins_runtime.open_endpoints import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = Path(__file__).parent / "fixtures" / "compliments"
-LC05_ZIP = Path(
-    "C:/Users/Kamron/claude-exp/domovoi-project/functional-testing/"
-    "plugin-fixtures/lc05/lc05-satpayload.zip"
-)
+# One of the maintainers' plugin fixtures, kept outside this repo:
+# DOMOVOI_PLUGIN_FIXTURES_DIR names their folder; there is no default.
+_PLUGIN_FIXTURES = os.environ.get("DOMOVOI_PLUGIN_FIXTURES_DIR")
+LC05_ZIP = Path(_PLUGIN_FIXTURES, "lc05", "lc05-satpayload.zip") if _PLUGIN_FIXTURES else None
 H1 = "--hash=sha256:" + "0" * 64
 
 
@@ -520,7 +521,8 @@ async def test_preview_states_the_satellite_root_payload(staging) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not LC05_ZIP.is_file(), reason="LC-05 fixture zip not on this box")
+@pytest.mark.skipif(not (LC05_ZIP and LC05_ZIP.is_file()),
+                    reason="LC-05 fixture zip not here (set DOMOVOI_PLUGIN_FIXTURES_DIR)")
 async def test_preview_of_the_lc05_files_only_payload(staging) -> None:
     staged = await stage_zip(LC05_ZIP.read_bytes())
     sat = staged.preview["satellite"]

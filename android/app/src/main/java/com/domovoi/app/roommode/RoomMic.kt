@@ -116,7 +116,8 @@ class RoomMic(
 }
 
 /**
- * Test hooks for the emulator run (functional-testing/room-mode/): a debug
+ * Test hooks for an emulator run (the maintainers' functional test
+ * harness, kept outside this repo): a debug
  * build's receiver (src/debug, DebugFeedReceiver) may set [feed] so the room
  * hears recorded PCM instead of the host's microphone. Nothing in a release
  * build sets it; the receiver is not in a release APK.

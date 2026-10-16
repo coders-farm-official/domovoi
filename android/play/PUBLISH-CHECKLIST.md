@@ -16,7 +16,7 @@ quoted name if a path differs.
 | `DATA_SAFETY.md` | The data safety form, answer by answer |
 | `CONTENT_RATING.md` | Rating questionnaire, target audience, and the small App content forms |
 | `../scripts/play-bundle.ps1` / `.sh` | Builds and signs the `.aab` |
-| Demo videos | `domovoi-project\functional-testing\play-prep\video\` (outside the repo, 4 files, 37-75 s) |
+| Demo videos | Kept outside the repo with the maintainers' Play submission material (4 files, 37-75 s; listed in `DECLARATIONS.md` section 6) |
 
 ## What can happen tonight, and what waits on Google
 

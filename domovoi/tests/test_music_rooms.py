@@ -824,7 +824,7 @@ async def test_an_ordinary_did_you_mean_is_answered_here(house, monkeypatch) -> 
 
 @requires_db
 async def test_with_the_real_resolver_weezer_in_the_garage(db_session, monkeypatch, tmp_path) -> None:
-    """The incident library (functional-testing/incident-1014/lib_garage.py):
+    """The incident library (rebuilt from the 2026-10-14 incident):
     "In the Garage" by Weezer, "Garage Band Anthem" by The Garage, "Some
     Music" by Garage Kids on the album "In the Garage" — decided by the
     spoken-name resolver itself, over library_tracks."""
