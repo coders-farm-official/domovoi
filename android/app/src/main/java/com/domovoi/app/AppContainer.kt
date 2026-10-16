@@ -3,6 +3,7 @@ package com.domovoi.app
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
+import com.domovoi.app.net.ReportUpload
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
@@ -142,6 +143,11 @@ class AppContainer(context: Context) {
             .build()
         ModelDownloader(modelHttp)
     }
+
+    /** "Report this reply"'s HTTPS destination, when the owner has set one
+     *  (assistant/ReplyReport.kt REPORT_DESTINATION): no household token,
+     *  no redirects. Built on first use. */
+    val reportUpload: ReportUpload by lazy { ReportUpload(api.http) }
 }
 
 val LocalApp = staticCompositionLocalOf<AppContainer> {

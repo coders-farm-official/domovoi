@@ -11,7 +11,7 @@ administration is the deliberate exception — see *Settings* below.
 | Layer | Choice |
 |---|---|
 | Language / UI | Kotlin + Jetpack Compose (Material 3) |
-| Min / target SDK | 26 / 35 (Android 8.0 to 15; what each version gets: [docs/ANDROID_COMPATIBILITY.md](../docs/ANDROID_COMPATIBILITY.md)) |
+| Min / target SDK | 26 / 36 (Android 8.0 to 16; compiled against 36 with AGP 8.13.2; what each version gets: [docs/ANDROID_COMPATIBILITY.md](../docs/ANDROID_COMPATIBILITY.md)) |
 | ABIs | arm64-v8a, armeabi-v7a, x86_64, x86 (the on-device assistant on the 64-bit ones only; see *ABIs and APKs*) |
 | Networking | OkHttp + kotlinx.serialization (thin JSON client mirroring `web/static/data.js`) |
 | Realtime | One OkHttp WebSocket to `/ws/state`, subscribe-all, exponential-backoff reconnect (1s → 15s) — `net/StateBus.kt` |
@@ -48,6 +48,18 @@ a 64-bit process whose class loader finds `liblitertlm_jni.so`).
 | `libonnxruntime.so`, `libonnxruntime4j_jni.so` (phone voice, speech) | yes | yes | yes | yes | onnxruntime-android 1.28.0 AAR |
 | `libsherpa-onnx-jni.so` (speech recognition, voice detection) | yes | yes | yes | yes | built here, `native/sherpa-onnx/` |
 | `libandroidx.graphics.path.so`, `libdatastore_shared_counter.so` | yes | yes | yes | yes | AndroidX |
+| `libimage_processing_util_jni.so`, `libsurface_util_jni.so` (room mode's QR scanner) | yes | yes | yes | yes | CameraX 1.4.2 |
+
+**16 KB pages.** Every 64-bit library is built with 16 KB aligned LOAD
+segments and stored uncompressed at a 16 KB offset in the APK, so it maps
+on a phone with 16 KB memory pages (Android 15 and later may use them;
+Google Play requires it; Android 16 runs an app that isn't in a
+compatibility mode, with a warning). `check<Variant>NativeAlignment` reads
+every `lib/arm64-v8a` and `lib/x86_64` library in the built APKs and fails
+`assemble` when one isn't (the report is in
+`app/build/reports/native-alignment/`); it caught CameraX 1.3.4's
+`libimage_processing_util_jni.so` (4 KB), which is why CameraX is 1.4.2.
+32-bit libraries are exempt: no 32-bit process runs with 16 KB pages.
 
 What a build carries (`app/build.gradle.kts`):
 
@@ -165,6 +177,15 @@ APKs, `SHA256SUMS` and the manifest it would commit in
 `app/build/outputs/apk/release-signed/`; `-SkipBuild` (`--skip-build`)
 signs what the last build left. Needs a JDK, the SDK's build-tools 35.0.0,
 Python 3.11+, git and `gh auth login` with permission to publish releases.
+
+**Google Play:** `android/scripts/play-bundle.ps1` (or `.sh`) builds the
+App Bundle and signs it with the same key (jarsigner; its prompts and
+checks are the release scripts'), and `android/play/PUBLISH-CHECKLIST.md`
+walks through the Play Console, Play App Signing with this key (PEPK)
+included. `versionCode` is `YYMMDDNN`, one sequence for GitHub and Play.
+
+Keep the key and its password safe and backed up: every later release has
+to be signed with the same key, or phones refuse the upgrade.
 
 **Before 2027:** Google's Android developer verification is to make apps
 from unregistered developers hard to install on certified phones, sideloaded
@@ -414,6 +435,48 @@ and the 10-minute heat loop, with results to copy. It shares the model
 files with the assistant, and each frees the other's copy of the model
 before loading its own.
 
+**Report this reply** (Google Play's AI-generated content policy: a
+person can report an answer to the developer). Long-press a finished
+reply, **report this reply**: the sheet shows exactly what the report
+holds (the question before it, marked if spoken; the reply; the model and
+CPU or GPU; when; the app's version) and takes an optional note. **Save on
+this phone** keeps it in `filesDir/assistant-reports/` (one JSON file each,
+app-private, outside backups, apart from the conversations so clearing
+those keeps a report); the model settings' **Reports** card lists them, to
+send on or delete one or all. **Email draft to coders farm** opens the
+person's email app with the report addressed to codersfarm@gmail.com
+(Kamron's choice, 2026-10-15); it is sent only when they press send there.
+**Share as text** opens Android's share menu with the report as plain
+text. Where reports go is one line, `REPORT_DESTINATION` in
+`assistant/ReplyReport.kt`, behind `ReportSink`: `ReportDestination.Email`,
+`ReportDestination.Https(url)` (the report POSTed as JSON by
+`net/ReportUpload.kt`: https only, no household token, no redirect,
+"sent" only on a 2xx; the in-app path Play's policy describes, once
+Coders Farm has the endpoint) or `ReportDestination.None` (the share menu
+only). A change is declared in Play's data safety form
+(`android/play/DATA_SAFETY.md`).
+
+**The microphone permission** is asked on the first tap of the mic, after
+the app's own one-line reason ("Domovoi needs the microphone to hear your
+question…", `ui/screens/assistant/MicPermission.kt`); after a refusal
+Android won't ask about again, the tap shows the way to the app's settings
+instead of doing nothing.
+
+**Privacy.** Settings → About (and the local shell's settings) has a
+**Privacy** card: what the app keeps and where it goes, and the privacy
+policy's link from `PRIVACY_POLICY_URL`
+(`ui/screens/settings/PrivacyCard.kt`): `docs/PRIVACY_POLICY.md` as
+GitHub shows it on main (live once pushed; the owner may replace it with
+a Coders Farm page). Blank shows no link; it must be https.
+
+**TalkBack.** Titles are headings; the voice turn's state (listening,
+thinking, speaking) and the engine's loading or failing are live regions,
+read out as they change; a message's copy and report are screen-reader
+actions too, and it says who wrote it; switch rows toggle as one labelled
+control; every icon button and link says what it does
+(`AssistantAccessibilityTest` composes every state and finds no unlabelled
+control).
+
 **Open-source parts** of the assistant (the licences card in Settings →
 About lists them with their notices; nothing GPL):
 
@@ -428,6 +491,19 @@ About lists them with their notices; nothing GPL):
 | Moonshine base, English (speech to text, larger) | MIT | downloaded by the benchmark |
 | Silero VAD v4 (voice detection) | MIT | downloaded by the assistant |
 | Piper voices Norman, Kristin, Linda | public domain | downloaded from Settings → Voice; speak the assistant's replies |
+
+Under those parts the licences card lists **every library in the build**,
+from the variant's own dependency graph (`app/build.gradle.kts`
+`OpenSourceTask` writes `licences/maven.json` into the assets, with each
+library's POM licences and the licence and notice files it carries, and
+copies `android/licences/`: the Apache-2.0 text, ONNX Runtime's licence and
+third-party notices, libyuv's licence). Which licence each library is
+under is decided by hand in `ui/screens/settings/OpenSourceLicences.kt`
+(`RULES`), and `OpenSourceLicencesTest` holds the build to it: a library
+with no rule, a non-permissive rule, a POM that disagrees with its rule, a
+stale rule, or an analytics, advertising or crash-reporting library fails
+the unit tests. **Adding a dependency** therefore means checking its
+licence at its source and adding (or confirming) its rule.
 
 ## Settings: device-local only
 
@@ -523,8 +599,14 @@ leaves the home network). What the phone does, exactly:
   rings it asks the server what happened (within 2 s): a recorded fire
   posts with where it was heard; a timer cancelled meanwhile stays
   quiet; no answer posts anyway, "couldn't reach Domovoi to confirm".
-  Exact alarms: always on API 26–30, with `SCHEDULE_EXACT_ALARM` on
-  31–32 (inexact without it), `USE_EXACT_ALARM` from 33. Re-armed after
+  Exact alarms: always on API 26–30; from 31 with the person's
+  `SCHEDULE_EXACT_ALARM` grant ("Alarms & reminders", off by default
+  for a new install on Android 14+), inexact without it. Never
+  `USE_EXACT_ALARM`: Google Play keeps it for alarm-clock, timer and
+  calendar apps. Without the grant Home's timers card says "Timers may
+  ring a few minutes late on this phone" once, with **allow alarms**
+  (the system's page) and **not now**; when the grant comes,
+  everything is re-armed exact (`alerts/ExactAlarms.kt`). Re-armed after
   a reboot or an app update.
 - **Background sync (app off screen):** a self-rescheduling alarm
   (`alerts/TimerSync.kt`) wakes the app about every 15 minutes for a few

@@ -1,0 +1,27 @@
+Domovoi is an open-source voice assistant for your home that runs on your own hardware. Your voice, your music and your household's data stay with you: no account, no cloud service, no analytics and no ads.
+
+This app is the companion to a Domovoi server: a computer in your home running the free Domovoi software, with small speakers in each room. It also works on its own, with no server at all.
+
+ON ITS OWN, WITH NO SERVER
+• An assistant that answers on your phone. Type or tap the mic and ask; a language model running on the phone writes the answer and reads it aloud. After a one-time model download it works in airplane mode, and what you ask never leaves the phone. Needs a 64-bit phone with 8 GB of memory or more and about 3 GB of free space.
+• Play the music and videos on your phone, and browse its photos and the folders you choose.
+
+WITH YOUR DOMOVOI SERVER
+• Music in every room: browse your library, build a queue and play it in any room.
+• Radio stations, podcasts and audiobooks your server provides.
+• Chat with your home assistant by text or voice.
+• See the whole house at a glance: which rooms are playing, every timer counting down, and anything that needs attention.
+• Timer and reminder alerts on your phone when one goes off anywhere in the house.
+• Drop in on a room like an intercom.
+• Turn a spare phone or tablet into a room: room mode listens for the wake word, answers questions, plays music and rings timers, like any Domovoi room speaker. You turn it on yourself, after a screen that explains exactly what it does; a notification stays while it listens.
+
+PRIVATE BY DESIGN
+• The app talks to your own Domovoi server on your home network, and to nothing run by us.
+• The phone's assistant processes your voice on the phone and never stores audio.
+• Plain connections are allowed only to addresses on your home network; anything on the internet must use HTTPS.
+• Your household pairing is sealed with a key in the phone's keystore and left out of cloud backups.
+• No analytics, advertising or crash-reporting services.
+
+If one of the assistant's answers is offensive or wrong, long-press it to report it: you see exactly what the report holds before anything is sent.
+
+Domovoi is free and open source under the MIT license. Setting up a server, the source code and the documentation are at github.com/coders-farm-official/domovoi.

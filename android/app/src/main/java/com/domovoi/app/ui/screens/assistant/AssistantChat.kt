@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -55,6 +56,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +74,7 @@ import com.domovoi.app.assistant.EngineState
 import com.domovoi.app.assistant.LlmBackend
 import com.domovoi.app.assistant.ModelSetup
 import com.domovoi.app.assistant.ModelCatalog
+import com.domovoi.app.assistant.ReplyReport
 import com.domovoi.app.assistant.StoredMessage
 import com.domovoi.app.assistant.VoicePhase
 import com.domovoi.app.ui.components.ConfirmDialog
@@ -77,10 +87,17 @@ import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.Locale
 
-private enum class Pane { Chat, History, Model }
+private enum class Pane { Chat, History, Model, Report, Reports }
+
+/** A report being written survives a rotation as its JSON. */
+private val reportSaver = Saver<ReplyReport?, String>(
+    save = { r -> r?.let { Json.encodeToString(ReplyReport.serializer(), it) } ?: "" },
+    restore = { s -> if (s.isEmpty()) null else runCatching { Json.decodeFromString(ReplyReport.serializer(), s) }.getOrNull() },
+)
 
 /** The composer's text field. A local so the JVM tests, which have no
  *  Android resources for Material's text field, can put a plain one in. */
@@ -107,15 +124,33 @@ internal val LocalComposerField = staticCompositionLocalOf<@Composable (String, 
 @Composable
 internal fun AssistantChat(ui: AssistantUi, actions: AssistantActions) {
     var pane by rememberSaveable { mutableStateOf(Pane.Chat) }
-    when (pane) {
-        Pane.History -> HistoryPane(ui.history, ui.conversation.id, actions, onClose = { pane = Pane.Chat })
-        Pane.Model -> ModelPane(ui, actions, onClose = { pane = Pane.Chat })
-        Pane.Chat -> ChatPane(ui, actions, onHistory = { pane = Pane.History }, onModel = { pane = Pane.Model })
+    var reporting by rememberSaveable(stateSaver = reportSaver) { mutableStateOf<ReplyReport?>(null) }
+    val report = reporting
+    when {
+        pane == Pane.History -> HistoryPane(ui.history, ui.conversation.id, actions, onClose = { pane = Pane.Chat })
+        pane == Pane.Model -> ModelPane(ui, actions, onClose = { pane = Pane.Chat }, onReports = { pane = Pane.Reports })
+        pane == Pane.Reports -> ReportsPane(ui.reports, actions, onClose = { pane = Pane.Model })
+        pane == Pane.Report && report != null -> ReportPane(report, actions, onClose = {
+            reporting = null
+            pane = Pane.Chat
+        })
+        else -> ChatPane(ui, actions, onHistory = { pane = Pane.History }, onModel = { pane = Pane.Model }, onReport = { index ->
+            actions.draftReport(ui.conversation, index)?.let {
+                reporting = it
+                pane = Pane.Report
+            }
+        })
     }
 }
 
 @Composable
-private fun ChatPane(ui: AssistantUi, actions: AssistantActions, onHistory: () -> Unit, onModel: () -> Unit) {
+private fun ChatPane(
+    ui: AssistantUi,
+    actions: AssistantActions,
+    onHistory: () -> Unit,
+    onModel: () -> Unit,
+    onReport: (Int) -> Unit,
+) {
     val toast = LocalToast.current
     var draft by rememberSaveable { mutableStateOf("") }
     var offerSpeechFiles by remember { mutableStateOf(false) }
@@ -157,7 +192,13 @@ private fun ChatPane(ui: AssistantUi, actions: AssistantActions, onHistory: () -
                 ) {
                     val reversed = messages.asReversed()
                     itemsIndexed(reversed) { i, m ->
-                        MessageBubble(m, writing = i == 0 && ui.replying && !m.fromUser)
+                        val writing = i == 0 && ui.replying && !m.fromUser
+                        val index = messages.size - 1 - i
+                        MessageBubble(
+                            m,
+                            writing = writing,
+                            onReport = if (!m.fromUser && !writing && m.text.isNotBlank()) ({ onReport(index) }) else null,
+                        )
                     }
                 }
             }
@@ -228,7 +269,13 @@ private fun SpeechFilesDialog(ui: AssistantUi, actions: AssistantActions, onDism
 @Composable
 private fun VoiceLine(ui: AssistantUi) {
     val (pill, hint) = voiceLine(ui.voicePhase, ui.heardSpeech)
-    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Read out as it changes (listening, transcribing, thinking, speaking):
+    // a screen reader user hears where the turn is without looking.
+    Row(
+        Modifier.padding(top = 6.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Pill(pill, if (ui.voicePhase == VoicePhase.Listening) Tone.Warn else Tone.Brand, live = true)
         hint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted) }
     }
@@ -247,10 +294,10 @@ internal fun voiceLine(phase: VoicePhase, heardSpeech: Boolean): Pair<String, St
 @Composable
 private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -> Unit) {
     when (val e = ui.engine) {
-        is EngineState.Loading -> Row(Modifier.padding(top = 6.dp)) {
+        is EngineState.Loading -> Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
             Pill("loading the model on the ${e.backend.name.lowercase()}", Tone.Brand, live = true)
         }
-        is EngineState.Failed -> Column(Modifier.padding(top = 6.dp)) {
+        is EngineState.Failed -> Column(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
             Text(
                 "The model could not start on the ${e.backend.name.lowercase()}: ${e.reason}" +
                     if (e.backend == LlmBackend.GPU) ". This phone's graphics driver may not run it; the CPU does." else "",
@@ -266,19 +313,28 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
             }
         }
         else -> if (ui.thinking) {
-            Row(Modifier.padding(top = 6.dp)) { Pill("thinking", Tone.Brand, live = true) }
+            Row(Modifier.padding(top = 6.dp).semantics { liveRegion = LiveRegionMode.Polite }) { Pill("thinking", Tone.Brand, live = true) }
         }
     }
 }
 
+/**
+ * One message. Long-press opens its actions (copy; on a finished reply,
+ * "report this reply"); a screen reader gets the same as custom actions,
+ * and hears who said it ([bubbleState]).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(m: StoredMessage, writing: Boolean) {
+private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> Unit)? = null) {
     val toast = LocalToast.current
     val clipboard = LocalClipboardManager.current
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     val isUser = m.fromUser
+    val copy = {
+        clipboard.setText(AnnotatedString(m.text))
+        toast("copied")
+    }
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
         Box {
             Box(
@@ -294,6 +350,15 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean) {
                             menu = true
                         },
                     )
+                    .semantics {
+                        stateDescription = bubbleState(isUser, writing)
+                        customActions = bubbleActions(onReport != null).map { label ->
+                            CustomAccessibilityAction(label) {
+                                if (label == ACTION_COPY) copy() else onReport?.invoke()
+                                true
+                            }
+                        }
+                    }
                     .padding(horizontal = if (isUser) 12.dp else 0.dp, vertical = if (isUser) 8.dp else 2.dp),
             ) {
                 Column {
@@ -317,11 +382,16 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean) {
                 }
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("copy") }, onClick = {
-                    clipboard.setText(AnnotatedString(m.text))
-                    toast("copied")
+                DropdownMenuItem(text = { Text(ACTION_COPY) }, onClick = {
+                    copy()
                     menu = false
                 })
+                onReport?.let { report ->
+                    DropdownMenuItem(text = { Text(ACTION_REPORT) }, onClick = {
+                        menu = false
+                        report()
+                    })
+                }
                 replyDetails(m)?.let { details ->
                     DropdownMenuItem(text = { Text(details, color = Domovoi.colors.fgMuted) }, onClick = { menu = false }, enabled = false)
                 }
@@ -329,6 +399,20 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean) {
         }
     }
 }
+
+internal const val ACTION_COPY = "copy"
+internal const val ACTION_REPORT = "report this reply"
+
+/** What a screen reader hears after a message's words: who said it. */
+internal fun bubbleState(fromUser: Boolean, writing: Boolean): String = when {
+    fromUser -> "your message"
+    writing -> "Domovoi, writing"
+    else -> "Domovoi's reply"
+}
+
+/** A message's actions, as its long-press menu and a screen reader's
+ *  custom actions list them: report only on a finished reply with words. */
+internal fun bubbleActions(canReport: Boolean): List<String> = listOfNotNull(ACTION_COPY, ACTION_REPORT.takeIf { canReport })
 
 /** "0.45 s to first words · 30.2 tokens/s · cpu": how a reply went. */
 internal fun replyDetails(m: StoredMessage): String? {
@@ -373,7 +457,7 @@ private fun HistoryPane(history: List<ConversationSummary>, currentId: String, a
                                 if (c.id == currentId) Domovoi.colors.brandSoft else Domovoi.colors.card,
                                 RoundedCornerShape(8.dp),
                             )
-                            .clickable {
+                            .clickable(onClickLabel = "open", role = Role.Button) {
                                 actions.open(c.id)
                                 onClose()
                             }
@@ -387,7 +471,7 @@ private fun HistoryPane(history: List<ConversationSummary>, currentId: String, a
                                 style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
                         }
                         IconButton(onClick = { confirmDelete = c }) {
-                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "delete conversation", tint = Domovoi.colors.fgMuted)
+                            Icon(Icons.Outlined.DeleteOutline, contentDescription = "delete conversation: ${c.title}", tint = Domovoi.colors.fgMuted)
                         }
                     }
                 }
@@ -421,7 +505,7 @@ private fun HistoryPane(history: List<ConversationSummary>, currentId: String, a
 
 /** The model on this phone: where it runs, its size, delete it. */
 @Composable
-private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () -> Unit) {
+private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () -> Unit, onReports: () -> Unit) {
     BackHandler(onBack = onClose)
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -435,7 +519,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
     ) {
         PaneTitle("The model on this phone", onClose)
         DomovoiCard(Modifier.fillMaxWidth()) {
-            Text(model.name, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+            Text(model.name, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
             Text("${model.kind.label} · ${fmtBytes(model.totalBytes)} on the phone · ${model.license}" +
                 " (with the speech files: ${fmtBytes(ui.totalBytes)})",
                 style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
@@ -466,7 +550,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             OutlinedButton(onClick = { confirmDelete = true }) { Text("delete model", color = Domovoi.colors.err) }
         }
         DomovoiCard(Modifier.fillMaxWidth()) {
-            Text("Speech", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+            Text("Speech", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
             Text(speechSummary(ui), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
             if (!ui.voiceReady && ui.voiceSetup !is ModelSetup.Downloading &&
                 ui.voiceSetup != ModelSetup.Checking
@@ -476,8 +560,12 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
                 }
             }
             Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = ui.speakTyped, onCheckedChange = actions.setSpeakTyped)
+            // One control for a screen reader: the row toggles, labelled by its text.
+            Row(
+                Modifier.toggleable(value = ui.speakTyped, role = Role.Switch, onValueChange = actions.setSpeakTyped),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Switch(checked = ui.speakTyped, onCheckedChange = null)
                 Column(Modifier.padding(start = 10.dp)) {
                     Text("read typed replies aloud too", style = MaterialTheme.typography.labelLarge, color = Domovoi.colors.fg)
                     Text(
@@ -493,7 +581,7 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             }
         }
         DomovoiCard(Modifier.fillMaxWidth()) {
-            Text("Conversations", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+            Text("Conversations", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
             Text(
                 "${ui.history.size} kept on this phone, in the app's private storage and outside backups. The model " +
                     "sees the conversation you are in and nothing else on the phone: no files, media, contacts or location.",
@@ -502,6 +590,13 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
             )
             if (ui.history.isNotEmpty()) {
                 TextButton(onClick = { confirmClear = true }) { Text("clear all conversations", color = Domovoi.colors.err) }
+            }
+        }
+        DomovoiCard(Modifier.fillMaxWidth()) {
+            Text("Reports", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
+            Text(reportsSummary(ui.reports.size), style = MaterialTheme.typography.bodySmall, color = Domovoi.colors.fgMuted)
+            if (ui.reports.isNotEmpty()) {
+                TextButton(onClick = onReports) { Text("show reports", color = Domovoi.colors.brand) }
             }
         }
     }
@@ -529,13 +624,20 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
 }
 
 @Composable
-private fun PaneTitle(title: String, onBack: () -> Unit) {
+internal fun PaneTitle(title: String, onBack: () -> Unit) {
     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         IconButton(onClick = onBack) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "back", tint = Domovoi.colors.fg)
         }
-        Text(title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text(title, style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
     }
+}
+
+/** The model settings' reports card: how many, and what they are. */
+internal fun reportsSummary(count: Int): String = when (count) {
+    0 -> "None saved. To report an offensive, harmful or wrong reply, long-press it and choose report this reply."
+    1 -> "1 reply report saved on this phone, outside backups. It goes nowhere unless you share it."
+    else -> "$count reply reports saved on this phone, outside backups. They go nowhere unless you share them."
 }
 
 /** What listens and what speaks, in a sentence or two. */

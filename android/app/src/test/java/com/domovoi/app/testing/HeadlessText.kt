@@ -39,6 +39,23 @@ internal fun NodeTree.textButton(text: String): HeadlessButton {
     return found.lastOrNull() ?: error("no clickable shows \"$text\"; the tree shows ${texts()}")
 }
 
+/** What a screen reader would have nothing to say for: every control
+ *  (clickable, long-clickable, toggleable, selectable) with no text and no
+ *  content description anywhere inside it, by its modifier's name. */
+internal fun NodeTree.unlabelledControls(): List<String> = nodes().mapNotNull { node ->
+    val control = elementsOf(node).filterIsInstance<InspectableValue>()
+        .firstOrNull { it.nameFallback in CONTROLS } ?: return@mapNotNull null
+    val labelled = subtree(node).any { n ->
+        elementsOf(n).any { e ->
+            textOf(e) != null ||
+                (e as? SemanticsModifier)?.semanticsConfiguration?.getOrNull(SemanticsProperties.ContentDescription)?.isNotEmpty() == true
+        }
+    }
+    if (labelled) null else control.nameFallback
+}
+
+private val CONTROLS = setOf("clickable", "combinedClickable", "toggleable", "selectable", "triStateToggleable")
+
 private fun textOf(element: Modifier.Element): String? {
     val name = element.javaClass.simpleName
     if (name != "TextStringSimpleElement" && name != "TextAnnotatedStringElement") return null

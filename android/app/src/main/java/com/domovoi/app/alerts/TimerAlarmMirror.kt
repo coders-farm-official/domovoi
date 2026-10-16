@@ -119,10 +119,10 @@ fun reconcile(desired: List<MirrorAlarm>, current: List<MirrorAlarm>): Reconcile
 }
 
 /**
- * Exact or inexact, by API level. 26–30 always exact. 31–32 exact when the
- * SCHEDULE_EXACT_ALARM grant is in place (the user can revoke it), else
- * inexact — which Doze may hold for minutes. 33+ holds USE_EXACT_ALARM from
- * install, but the platform is still asked.
+ * Exact or inexact, by API level. 26–30 always exact. 31+ exact when the
+ * person's SCHEDULE_EXACT_ALARM grant is in place ("Alarms & reminders";
+ * Android 14+ leaves it off for a new install, and it can be taken back),
+ * else inexact — which Doze may hold for minutes. See ExactAlarms.
  */
 fun useExact(sdkInt: Int, canScheduleExact: Boolean): Boolean =
     sdkInt < 31 /* S */ || canScheduleExact

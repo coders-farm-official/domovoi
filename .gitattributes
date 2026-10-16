@@ -9,3 +9,4 @@ domovoi/voice_clips/** -text
 domovoi/tests/fixtures/media_tags/** -text
 # The speaker-encoder fixtures: 16 kHz excerpts and the embeddings recorded for them.
 domovoi/tests/fixtures/speaker_encoder/** -text
+android/licences/** -text

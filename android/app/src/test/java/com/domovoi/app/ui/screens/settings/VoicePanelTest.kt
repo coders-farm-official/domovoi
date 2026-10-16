@@ -55,6 +55,8 @@ class VoicePanelTest {
                 path == "licences/sherpa-onnx/LICENSE" -> File(RepoPhonemizer.androidDir, "native/sherpa-onnx/LICENSE")
                 path.startsWith("licences/sherpa-onnx/") ->
                     File(RepoPhonemizer.androidDir, "native/sherpa-onnx/licenses/" + path.removePrefix("licences/sherpa-onnx/"))
+                // The texts the build copies from android/licences/ (OpenSourceTask).
+                path.startsWith("licences/texts/") -> File(RepoPhonemizer.androidDir, "licences/" + path.removePrefix("licences/texts/"))
                 else -> error("no source for $path")
             }
             assertTrue("$path: $source", source.isFile)

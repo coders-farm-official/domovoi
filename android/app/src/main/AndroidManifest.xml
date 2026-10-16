@@ -48,17 +48,18 @@
 
     <!-- Timer and reminder alerts (alerts/): a local alarm per running timer
          so the phone rings on time with the app closed. Exact alarms need
-         SCHEDULE_EXACT_ALARM on API 31-32 (user-revocable; inexact without
-         it) and USE_EXACT_ALARM from API 33 (granted at install; fine for
-         this sideloaded app, a restriction for a future Play listing).
-         RECEIVE_BOOT_COMPLETED re-arms them after a reboot. The background
-         sync's tick (alerts/TimerSync.kt) is an exact alarm under the same
-         permissions: only an exact allow-while-idle alarm gets the network
-         in Doze. -->
-    <uses-permission
-        android:name="android.permission.SCHEDULE_EXACT_ALARM"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+         SCHEDULE_EXACT_ALARM from API 31: the person's own "Alarms &
+         reminders" grant, which they can give or take back in the system
+         settings (Android 14+ leaves it off for a new install); without it
+         every alarm is armed inexact and Home's timers card offers the
+         grant (alerts/ExactAlarms.kt). Not USE_EXACT_ALARM: Google Play
+         keeps that one for apps whose core function is an alarm clock,
+         timer or calendar, and Domovoi's timers are one feature of many
+         (android/play/DECLARATIONS.md). RECEIVE_BOOT_COMPLETED re-arms them
+         after a reboot. The background sync's tick (alerts/TimerSync.kt) is
+         an exact alarm under the same grant: only an exact
+         allow-while-idle alarm gets the network in Doze. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- The on-device assistant speaks with the phone's text-to-speech
@@ -77,9 +78,15 @@
          excludes every domain from both (res/xml/data_extraction_rules.xml);
          fullBackupContent says the same to API 26-30. networkSecurityConfig
          scopes cleartext to the home network; see
-         res/xml/network_security_config.xml. -->
+         res/xml/network_security_config.xml.
+         enableOnBackInvokedCallback: predictive back, the default once the
+         app targets API 36 on Android 16, opted into from Android 13 too, so
+         back behaves the same on every version: the app handles back only
+         through BackHandler / OnBackPressedDispatcher, never onBackPressed()
+         or KEYCODE_BACK (TargetApi36Test checks). -->
     <application
         android:name=".DomovoiApplication"
+        android:enableOnBackInvokedCallback="true"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -170,12 +177,17 @@
         <receiver
             android:name=".alerts.TimerSyncReceiver"
             android:exported="false" />
+        <!-- Also hears the "Alarms & reminders" grant being given (the
+             system sends it to the app, which may then arm exact alarms):
+             the same re-arm as after a reboot, now exact. Taking the grant
+             away stops the app, and the next start arms inexact. -->
         <receiver
             android:name=".alerts.TimerBootReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
             </intent-filter>
         </receiver>
 

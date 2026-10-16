@@ -112,12 +112,13 @@ class TimerAlarmMirrorTest {
         // 26-30: always exact.
         assertTrue(useExact(26, canScheduleExact = false))
         assertTrue(useExact(30, canScheduleExact = false))
-        // 31-32: only with the SCHEDULE_EXACT_ALARM grant.
+        // 31+: only with the SCHEDULE_EXACT_ALARM grant ("Alarms & reminders").
         assertTrue(useExact(31, canScheduleExact = true))
         assertFalse(useExact(31, canScheduleExact = false))
         assertTrue(useExact(32, canScheduleExact = true))
         assertFalse(useExact(32, canScheduleExact = false))
-        // 33+: USE_EXACT_ALARM, and the platform is still asked.
+        // 33+ too: the app holds no USE_EXACT_ALARM (a Play-restricted
+        // permission), so the grant is all there is.
         assertTrue(useExact(33, canScheduleExact = true))
         assertFalse(useExact(33, canScheduleExact = false))
         assertTrue(useExact(35, canScheduleExact = true))

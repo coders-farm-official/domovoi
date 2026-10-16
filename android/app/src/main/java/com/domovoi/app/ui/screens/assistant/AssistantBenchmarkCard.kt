@@ -38,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -179,8 +181,15 @@ fun AssistantBenchmarkCard() {
                 color = if (ui.downloading) Domovoi.colors.fgMuted else Domovoi.colors.err,
                 modifier = Modifier.padding(top = 4.dp))
         }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-            Switch(checked = ui.allowMobileData, onCheckedChange = { bench.setAllowMobileData(it) })
+        // One control for a screen reader: the row toggles, labelled by its text.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .heightIn(min = 48.dp)
+                .toggleable(value = ui.allowMobileData, role = Role.Switch, onValueChange = { bench.setAllowMobileData(it) }),
+        ) {
+            Switch(checked = ui.allowMobileData, onCheckedChange = null)
             Text("  allow mobile data", style = MaterialTheme.typography.labelMedium, color = Domovoi.colors.fgMuted)
         }
         ui.freeBytes?.let {

@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
+import androidx.compose.ui.semantics.Role
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,7 +38,8 @@ import com.domovoi.app.ui.theme.Domovoi
  * shell has no Settings route, so a gear in its top bar
  * ([LocalSettingsButton]) opens this instead. It holds only what needs no
  * server — the voice, the problem reports, the on-device assistant's
- * benchmark (64-bit installs only, [AssistantSupport]) and the licences —
+ * benchmark (64-bit installs only, [AssistantSupport]), privacy and the
+ * licences —
  * the same cards Settings → Voice and About show when a Domovoi is
  * connected.
  */
@@ -47,6 +50,7 @@ internal fun LocalSettingsScreen(
         VoiceCard()
         ProblemReportsCard()
         AssistantBenchmarkCard()
+        PrivacyCard()
         LicencesCard()
     },
 ) {
@@ -96,11 +100,14 @@ internal fun LocalSettingsScreen(
 /** The local shell's gear: opens [LocalSettingsScreen]. */
 @Composable
 internal fun LocalSettingsButton(onClick: () -> Unit) {
+    // 48 dp to touch (the accessibility minimum), however small it draws.
     Box(
         Modifier
+            .minimumInteractiveComponentSize()
             .clip(CircleShape)
-            .clickable(onClick = onClick)
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(6.dp),
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
             Icons.Filled.Settings,

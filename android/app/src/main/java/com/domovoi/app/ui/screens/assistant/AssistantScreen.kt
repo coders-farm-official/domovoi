@@ -26,11 +26,13 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -43,12 +45,23 @@ import com.domovoi.app.assistant.AssistantUi
 import com.domovoi.app.assistant.DeviceTier
 import com.domovoi.app.assistant.DeviceTiers
 import com.domovoi.app.assistant.LlmBackend
+import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.ModelSetup
+import com.domovoi.app.assistant.ReplyReport
+import com.domovoi.app.assistant.ReportOutcome
+import com.domovoi.app.assistant.ReportSink
+import com.domovoi.app.assistant.ReportSinks
+import com.domovoi.app.assistant.StoredConversation
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
+import com.domovoi.app.ui.components.openAppSettings
+import com.domovoi.app.ui.components.composeEmail
+import com.domovoi.app.ui.components.shareText
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /** What the assistant's screens can ask of it ([AssistantController] in the
  *  app; plain lambdas in the tests). */
@@ -70,6 +83,19 @@ internal class AssistantActions(
     val talk: () -> Unit = {},
     val downloadVoice: () -> Unit = {},
     val setSpeakTyped: (Boolean) -> Unit = {},
+    /** "report this reply": the report for the reply at an index of a
+     *  conversation, before the person's note; null when it is not one. */
+    val draftReport: (StoredConversation, Int) -> ReplyReport? = { c, i ->
+        ReplyReport.draft(c, i, ModelCatalog.chatModel, "", System.currentTimeMillis())
+    },
+    /** Keeps a report on the phone. */
+    val saveReport: (ReplyReport) -> Unit = {},
+    /** Where a report can go beyond the phone ([ReportSinks]); a button each. */
+    val reportSinks: List<ReportSink> = emptyList(),
+    /** Saves the report, then hands it to the sink. */
+    val deliverReport: (ReportSink, ReplyReport) -> Unit = { _, _ -> },
+    val deleteReport: (String) -> Unit = {},
+    val clearReports: () -> Unit = {},
 )
 
 /**
@@ -140,22 +166,66 @@ fun AssistantScreen() {
             assistant.download()
         }
     }
-    // The mic permission is asked on the first tap of the mic, with its
-    // reason in the toast if it is refused.
+    // The mic permission is asked on the first tap of the mic, after the
+    // app's own one-line reason (MicPermission.kt); a refusal Android won't
+    // ask about again points to the app's settings.
+    var micAsk by remember { mutableStateOf<MicAsk?>(null) }
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) assistant.talk() else toast("the microphone permission is needed to talk to Domovoi on this phone")
+        if (granted) {
+            assistant.talk()
+        } else {
+            val again = context.activity()?.let {
+                ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.RECORD_AUDIO)
+            } ?: true
+            micAsk = afterRefusal(again)
+            if (micAsk == null) toast(MIC_NOT_NOW)
+        }
     }
     val talk = {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             assistant.talk()
         } else {
-            askMic.launch(Manifest.permission.RECORD_AUDIO)
+            micAsk = MicAsk.Reason
         }
     }
-    AssistantContent(ui, actionsFor(assistant, download, talk))
+    MicPermissionDialog(
+        ask = micAsk,
+        onContinue = { askMic.launch(Manifest.permission.RECORD_AUDIO) },
+        onOpenSettings = { if (!openAppSettings(context)) toast("could not open the app's settings") },
+        onDismiss = { micAsk = null },
+    )
+    // "report this reply": saved on the phone; then the owner's destination
+    // when one is set (REPORT_DESTINATION: an HTTPS address or an email
+    // draft to Coders Farm), and the share menu.
+    val app = LocalApp.current
+    val sinks = remember(context) {
+        ReportSinks.available(
+            share = { subject, text -> shareText(context, subject, text) },
+            email = { to, subject, body -> composeEmail(context, to, subject, body) },
+            upload = { url, json -> app.reportUpload.post(url, json) },
+        )
+    }
+    val reportScope = rememberCoroutineScope()
+    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope) { toast(it) })
 }
 
-private fun actionsFor(a: AssistantController, download: () -> Unit, talk: () -> Unit) = AssistantActions(
+/** What the person is told once a report has been handed on (nothing when
+ *  another app opened with it: that app is what they see). */
+internal fun reportOutcomeToast(outcome: ReportOutcome): String? = when (outcome) {
+    ReportOutcome.HANDED_ON -> null
+    ReportOutcome.SENT -> "report sent to coders farm; it is kept on this phone too"
+    ReportOutcome.NO_APP -> "no app on this phone can take the report; it is saved here"
+    ReportOutcome.FAILED -> "couldn't send the report; it is saved here, try again from model settings, reports"
+}
+
+private fun actionsFor(
+    a: AssistantController,
+    download: () -> Unit,
+    talk: () -> Unit,
+    sinks: List<ReportSink>,
+    scope: CoroutineScope,
+    toast: (String) -> Unit,
+) = AssistantActions(
     download = download,
     pauseDownload = a::pauseDownload,
     cancelDownload = a::cancelDownload,
@@ -172,6 +242,15 @@ private fun actionsFor(a: AssistantController, download: () -> Unit, talk: () ->
     talk = talk,
     downloadVoice = a::downloadVoice,
     setSpeakTyped = a::setSpeakTyped,
+    draftReport = a::draftReport,
+    saveReport = { a.saveReport(it) },
+    reportSinks = sinks,
+    deliverReport = { sink, report ->
+        a.saveReport(report)
+        scope.launch { reportOutcomeToast(sink.deliver(report))?.let(toast) }
+    },
+    deleteReport = a::deleteReport,
+    clearReports = a::clearReports,
 )
 
 /** The screen for [ui], with no controller behind it (the tests render it). */
@@ -205,7 +284,7 @@ private fun Page(content: @Composable () -> Unit) {
 internal fun AssistantTitle(modifier: Modifier = Modifier, actions: (@Composable () -> Unit)? = null) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Icon(Icons.Filled.PhoneAndroid, contentDescription = null, tint = Domovoi.colors.brand, modifier = Modifier.size(20.dp))
-        Text("Domovoi", style = MaterialTheme.typography.titleLarge, color = Domovoi.colors.fg)
+        Text("Domovoi", style = MaterialTheme.typography.titleLarge, color = Domovoi.colors.fg, modifier = Modifier.asHeading())
         Pill("on this phone", Tone.Brand)
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             actions?.invoke()
@@ -217,7 +296,8 @@ internal fun AssistantTitle(modifier: Modifier = Modifier, actions: (@Composable
 @Composable
 private fun UnsupportedPhone(ui: AssistantUi) {
     DomovoiCard(Modifier.fillMaxWidth()) {
-        Text("This phone can't run the assistant", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+        Text("This phone can't run the assistant", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
+            modifier = Modifier.asHeading())
         Text(
             unsupportedText(ui.memory.marketedGb, ui.memory.lowRamDevice),
             style = MaterialTheme.typography.bodyMedium,
@@ -240,7 +320,8 @@ private fun NotInThisApp() {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         AssistantTitle()
         DomovoiCard(Modifier.fillMaxWidth()) {
-            Text("Not in this version of the app", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
+            Text("Not in this version of the app", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg,
+                modifier = Modifier.asHeading())
             Text(
                 "The assistant on the phone needs the 64-bit Domovoi app (the arm64-v8a download). " +
                     "This one is the 32-bit app; everything else works the same in both.",

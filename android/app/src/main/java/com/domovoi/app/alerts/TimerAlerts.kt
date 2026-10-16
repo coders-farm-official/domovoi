@@ -6,6 +6,7 @@ import android.util.Log
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.Discovery
+import com.domovoi.app.net.HouseholdLock
 import com.domovoi.app.net.StateBus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -75,19 +76,30 @@ class TimerAlerts(
     /** Home's "Timer alerts are off on this phone" was answered "not now". */
     val hintDismissed: StateFlow<Boolean> = store.hintDismissed.stateIn(scope, SharingStarted.Eagerly, false)
 
+    /** Home's "Timers may ring late on this phone" was answered "not now". */
+    val exactHintDismissed: StateFlow<Boolean> = store.exactHintDismissed.stateIn(scope, SharingStarted.Eagerly, false)
+
     private var started = false
     private var syncJob: Job? = null
 
     @Volatile
     private var lastCanPost: Boolean? = null
 
+    @Volatile
+    private var lastCanExact: Boolean? = null
+
     fun canPost(): Boolean = notifier.canPost()
+
+    /** Exact alarms are allowed (always below API 31; the person's "Alarms &
+     *  reminders" grant from 31, ExactAlarms). */
+    fun canExact(): Boolean = ExactAlarms.allowed(ctx)
 
     @Synchronized
     fun start() {
         if (started) return
         started = true
         lastCanPost = notifier.canPost()
+        lastCanExact = canExact()
 
         scope.launch {
             bus.events.collect { ev ->
@@ -124,7 +136,7 @@ class TimerAlerts(
         scope.launch {
             // A cold start is the one time the stored mirror can disagree
             // with AlarmManager: a force-stop (Settings, several OEMs' swipe
-            // away, a revoked exact-alarm grant on 31-32) cancels every
+            // away, a revoked exact-alarm grant on 31+) cancels every
             // alarm the app set and leaves the mirror listing them, and the
             // mirror sync only arms timers that are new or moved. So the
             // start re-arms what is stored first (idempotent:
@@ -157,17 +169,32 @@ class TimerAlerts(
     }
 
     /** MainActivity.onResume: notifications may have been turned on or off
-     *  in the system settings meanwhile. */
+     *  in the system settings meanwhile, or the exact-alarm grant given
+     *  (taking it away stops the app, so a resume only ever sees it come). */
     fun onAppResumed() {
         val now = notifier.canPost()
         if (now != lastCanPost) {
             lastCanPost = now
             requestSync(0)
         }
+        val exact = canExact()
+        if (exact != lastCanExact) {
+            lastCanExact = exact
+            // Room mode: nothing household is armed on a room phone.
+            if (HouseholdLock.roomModeActive) return
+            // What was armed inexact is armed again, now exact; the next
+            // tick too (TimerBootReceiver does the same on the system's
+            // own broadcast, whichever comes first).
+            scope.launch { safely("exact alarms re-arm") { sync.onBoot() } }
+        }
     }
 
     fun dismissHint() {
         scope.launch { safely("hint") { store.dismissHint() } }
+    }
+
+    fun dismissExactHint() {
+        scope.launch { safely("exact hint") { store.dismissExactHint() } }
     }
 
     @Synchronized

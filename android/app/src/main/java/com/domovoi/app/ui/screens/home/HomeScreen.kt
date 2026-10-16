@@ -33,6 +33,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.core.layout.WindowWidthSizeClass
+import com.domovoi.app.alerts.ExactAlarms
+import com.domovoi.app.alerts.timerAlertHint
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.net.ApiState
@@ -230,11 +232,20 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     // Done lines from the server's fire ledger; from the book on an older server.
     val tv = homeTimerView(timers.data, book, serverNow)
 
-    // Timer alerts need notifications on for this app; while they're off,
-    // the timers card says so once (until "not now").
+    // Timer alerts need notifications on for this app, and ring on time only
+    // with exact alarms allowed (alerts/ExactAlarms.kt); while either is
+    // missing, the timers card says so once (until "not now").
     var alertsOn by remember { mutableStateOf(app.alerts.canPost()) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { alertsOn = app.alerts.canPost() }
+    var exactOn by remember { mutableStateOf(app.alerts.canExact()) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        alertsOn = app.alerts.canPost()
+        exactOn = app.alerts.canExact()
+    }
     val alertsHintDismissed by app.alerts.hintDismissed.collectAsState()
+    val exactHintDismissed by app.alerts.exactHintDismissed.collectAsState()
+    val openExactAlarmSettings: () -> Unit = {
+        if (!ExactAlarms.openGrant(context)) toast("couldn't open the alarms & reminders settings")
+    }
     val openNotificationSettings: () -> Unit = {
         val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
@@ -389,9 +400,11 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
         HomeTimers(
             view = tv, nowMs = serverNow, shared = shared, compact = compact,
             onlineRooms = onlineRooms, cancelling = cancelling.keys, onCancel = onCancel,
-            alertsOff = !alertsOn && !alertsHintDismissed,
+            alertHint = timerAlertHint(alertsOn, exactOn, alertsHintDismissed, exactHintDismissed),
             onTurnOnAlerts = openNotificationSettings,
             onNotNow = { app.alerts.dismissHint() },
+            onAllowExact = openExactAlarmSettings,
+            onExactNotNow = { app.alerts.dismissExactHint() },
         )
     }
     val roomsSec: @Composable () -> Unit = {
