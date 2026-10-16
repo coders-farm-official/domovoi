@@ -1,13 +1,13 @@
-# TEST BUILDS ONLY (a stick made with debug=True): the journal and the
-# first-boot log on the first serial port, so the QEMU runs can read what
-# happened without a login. Never on a household's stick.
+# TEST BUILDS ONLY (a stick made with debug=True): debug-room.sh, the
+# journal and the first-boot log on the first serial port, so the QEMU kit
+# can read what happened without a login. Never on a household's stick.
 [Unit]
 Description=Domovoi room stick (test build): journal to ttyS0
 DefaultDependencies=no
 After=systemd-journald.service
 
 [Service]
-ExecStart=/bin/sh -c 'stty -F /dev/ttyS0 115200 2>/dev/null; (journalctl -b -f -o short-monotonic & tail -n 0 -F /var/log/domovoi-stick-firstboot.log 2>/dev/null) >/dev/ttyS0 2>&1'
+ExecStart=/bin/sh /usr/local/lib/domovoi-stick/debug-room.sh
 Restart=always
 
 [Install]

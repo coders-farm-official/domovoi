@@ -67,7 +67,9 @@ if [ -d /sys/firmware/efi ]; then
 	held=""
 	for p in shim-signed shim-signed-common shim-unsigned shim-helpers-amd64-signed \
 	         grub-efi-amd64-signed grub-efi-amd64-bin grub-efi-amd64 grub-common grub2-common; do
-		if in-target dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q "install ok installed"; then
+		# chroot, not in-target: in-target sends a command's output to the
+		# installer's log, not down the pipe (the first QEMU run held nothing).
+		if chroot "$T" dpkg-query -W -f '${Status}' "$p" 2>/dev/null | grep -q "install ok installed"; then
 			held="$held $p"
 		fi
 	done
@@ -101,6 +103,7 @@ in-target passwd -l root >>"$LOG" 2>&1 || true
 
 # Test builds only: the journal on the serial port for the QEMU runs.
 if [ -e /domovoi-stick/debug ] && [ -f "$SRC/test-only/domovoi-stick-debug.service" ]; then
+	cp "$SRC/test-only/debug-room.sh" "$LIB/debug-room.sh"
 	cp "$SRC/test-only/domovoi-stick-debug.service" "$T/etc/systemd/system/"
 	in-target systemctl enable domovoi-stick-debug.service >>"$LOG" 2>&1 || true
 fi

@@ -49,8 +49,8 @@ installed from the dashboard as a zip upload or a GitHub URL.
 
 > **Status: tested, and built in public.** Domovoi works today if you're
 > comfortable running your own server, and the easier ways in (an assistant
-> that runs on your phone, a Windows installer, rooms on spare laptops and
-> phones) are in early builds: see [Status and roadmap](#status-and-roadmap).
+> that runs on your phone, a Windows installer, rooms on spare laptops,
+> phones and old PCs) are in early builds: see [Status and roadmap](#status-and-roadmap).
 > Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
@@ -129,6 +129,11 @@ We build Domovoi in public. Here's where it stands.
   phone or tablet through the Android app's room mode, can be a room instead
   of a Raspberry Pi. Each joins with a one-line command or a QR code from the
   dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+- **A USB stick that turns an old PC into a room.** The dashboard prepares
+  the stick, and an old 64-bit PC, laptop or Intel Mac installs Debian and
+  the satellite from it after you type ERASE on it; a network cable for the
+  setup. Tested in virtual machines; real laptops are next
+  ([old computers](docs/SPARE_DEVICE_SATELLITES.md#old-computers-usb-stick)).
 
 **Coming next** (being finished now)
 
@@ -137,9 +142,6 @@ We build Domovoi in public. Here's where it stands.
 
 **Later**
 
-- **A USB stick that turns an old PC into a room:** the server writes the
-  stick, and the PC installs Debian and the satellite from it. A prototype
-  works; it isn't built into Domovoi yet.
 - **The Android app on Google Play,** once Coders Farm's developer account
   is cleared.
 - **The Windows installer out of test,** so one download turns the household

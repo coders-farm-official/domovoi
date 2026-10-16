@@ -27,6 +27,7 @@ WIFI=off
 [ "$(cat /domovoi-stick/wifi 2>/dev/null)" = on ] && WIFI=on
 
 stop() {  # stop TEMPLATE: say it, then power off (nothing was written)
+	mark "REFUSAL $1"
 	db_fset "$1" seen false
 	db_input critical "$1" || true
 	db_go || true

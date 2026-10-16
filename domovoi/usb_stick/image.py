@@ -77,7 +77,7 @@ MAX_BUNDLE_BYTES = 32 * 1024 * 1024
 _EXECUTABLE = frozenset({
     "installer/erase-confirm.sh", "installer/late.sh",
     "room/firstboot.sh", "room/boot-check.sh", "room/domovoi-status",
-    "test-only/debug-serial.sh",
+    "test-only/debug-serial.sh", "test-only/debug-room.sh",
 })
 #: The room's files, as /domovoi/room/<name> on the stick.
 ROOM_FILES = ("firstboot.sh", "console.py", "boot-check.sh", "domovoi-status", "52domovoi-stick")
@@ -408,6 +408,7 @@ def stick_files(*, pin: dict[str, Any], payload: str, bundle: bytes, epoch: int,
         entries.append(("domovoi/test-only", 0o755, None))
         entries.append(("domovoi/test-only/domovoi-stick-debug.service", 0o644,
                         _text("test-only/domovoi-stick-debug.service")))
+        entries.append(("domovoi/test-only/debug-room.sh", 0o755, _text("test-only/debug-room.sh")))
     entries.sort(key=lambda e: e[0])
     info = {
         "room": enrol.room, "room_id": enrol.room_id, "core": enrol.core, "fp": enrol.fp,
