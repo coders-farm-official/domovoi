@@ -13,7 +13,7 @@
 ; from it. A full SHA, never a branch; release tags and their signers come
 ; with code signing (PLAN 10, section 14 item 29).
 #define DomovoiRepoUrl "https://github.com/coders-farm-official/domovoi"
-#define DomovoiCommit "2f19bbd7c3264e3f52c1588c1425d37becde44d1"
+#define DomovoiCommit "4d6b4147f7d99d84fd0fcac2fdcb769c164eec92"
 
 ; Does the dashboard at that commit give each Settings tab its own address
 ; (#settings/configuration/setup: Settings > Configuration with the
@@ -23,7 +23,7 @@
 ; first tab, and the steps say to click Configuration. Define it in the same
 ; edit that moves DomovoiCommit to a commit that has them;
 ; domovoi/tests/test_windows_installer.py checks it against the commit.
-; 2f19bbd has them.
+; 4d6b414 has them.
 #define DashboardTabRoutes
 
 ; provision.sh, the one script Setup runs inside the distro (as root); it
@@ -35,13 +35,13 @@
 ;   commit. Builds pinned to fb62fa4 did this, for the --stop-before and
 ;   start diagnostics fb62fa4's script lacked.
 ; * not defined: downloaded from the pinned commit (ProvisionUrl). This
-;   build: 2f19bbd's script, which has both (130,360 bytes, LF; GitHub raw
-;   served exactly these bytes on 2026-10-13).
+;   build: 4d6b414's script, which has both (137,882 bytes, LF; GitHub raw
+;   served exactly these bytes on 2026-10-15).
 ; Either way ProvisionSha256 is checked by the helper and by DomovoiHost.
 ; #define ProvisionBundled
 #define ProvisionSource "..\..\scripts\linux\provision.sh"
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
-#define ProvisionSha256 "68088a139a044615d1f91cd4898474f56e10f6cc96a7577aa5bdfbdc54a7cd1d"
+#define ProvisionSha256 "b7b3e3188ded2474fb228ef62c0be3ff1890a1c4b840fe3c13ae54d01ca9679c"
 
 ; Ubuntu 26.04.1's official WSL image, 418,495,746 bytes ([verified]
 ; SHA256SUMS 2026-09-24, PLAN 4.13; matched again 2026-10-11).
