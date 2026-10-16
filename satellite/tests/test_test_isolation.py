@@ -30,6 +30,17 @@ def test_a_test_cannot_see_the_developers_config_dir(real_install_paths):
     assert not str(server_identity.CONFIG_DIR).startswith(str(real))
 
 
+def test_the_log_spool_was_never_the_developers(real_install_paths):
+    """``client.LOG_SPOOL`` is an object built at import, not a ``Path`` the
+    fixture below can move, so it keeps the home of import time: before the
+    session home (domovoi/tests/home_isolation.py) that was the real
+    ``~/.domovoi/log-spool.txt``, and every test that set the handler
+    offline wrote the developer's spool."""
+    real = real_install_paths["config_dir"]
+    assert not client.LOG_SPOOL.path.is_relative_to(real)
+    assert not client.CONFIG_DIR.is_relative_to(real)
+
+
 def test_the_satellite_modules_point_inside_the_tmp_home(satellite_paths_in_tmp):
     home = satellite_paths_in_tmp
     for path in (

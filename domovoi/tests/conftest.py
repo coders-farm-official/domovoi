@@ -4,6 +4,14 @@ import asyncio
 import os
 import socket
 
+# The home first: HOME/USERPROFILE at a temp folder before anything computes
+# a path from them (the repo-root conftest.py has already done this, and
+# guards the real ~/.domovoi; this covers a run that starts below the root,
+# a plugin repo importing this conftest for instance).
+from domovoi.tests import home_isolation as _home_isolation  # imports nothing of domovoi
+
+_home_isolation.isolate()
+
 # Force stub clients for the entire test run — BEFORE any domovoi import.
 # Real clients would try to load Whisper models, connect to Ollama, etc., which
 # the test suite shouldn't require.
@@ -133,6 +141,12 @@ if os.environ.get("HF_HUB_OFFLINE") != _hf_hub_offline_before:  # belt and brace
         os.environ.pop("HF_HUB_OFFLINE", None)
     else:
         os.environ["HF_HUB_OFFLINE"] = _hf_hub_offline_before
+# A domovoi/.env naming a folder inside the real ~/.domovoi (VOICE_MODELS_DIR=…)
+# would still aim the settings there: the same folder under the temp home.
+for _name in type(settings).model_fields:
+    _moved = _home_isolation.relocate(getattr(settings, _name))
+    if _moved is not None:
+        setattr(settings, _name, _moved)
 from domovoi.db.session import SessionLocal, engine
 
 # Per-test truncation set for the fresh V001 baseline. This is the CHURNED

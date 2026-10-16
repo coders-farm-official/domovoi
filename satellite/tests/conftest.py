@@ -31,25 +31,18 @@ answer to "this test wants to talk to a server" is a loopback fixture — not
 a pinned fingerprint, and not an exclusion here.
 """
 
-# Run this package with `python -m pytest` from the repo root, not with the
-# bare `pytest` console script.
+# Run this package with `python -m pytest` from the repo root.
 #
 # This directory has no `__init__.py`, so pytest's prepend import mode stops
-# here: it puts `satellite/tests` on sys.path, not the repo root. The console
-# script adds nothing else, and `satellite` is not in the editable install's
-# MAPPING — that lists `domovoi` and `web` only — so `pytest satellite/tests`
-# dies at collection with "No module named 'satellite'". Bare `pytest` with
-# no arguments does work, but by luck of ordering rather than design:
-# `domovoi/tests` is collected first and has an `__init__.py` chain up to the
-# repo root, which lands on sys.path before anything here is imported. Name
-# this package first and the same invocation fails.
-#
-# The mapped names are the quiet half of it. `domovoi` and `web` resolve
-# through that MAPPING, which points at whichever checkout `pip install -e .`
-# was run from — from a git worktree, the OTHER tree. A run that gets far
-# enough therefore reports on code nobody is editing, and nothing about the
-# output looks wrong. `python -m pytest` puts the cwd at sys.path[0] and none
-# of this arises.
+# here: it puts `satellite/tests` on sys.path, not the repo root, and
+# `satellite` is not in the editable install's MAPPING (that lists `domovoi`
+# and `web` only, pointing at whichever checkout `pip install -e .` was run
+# from — from a git worktree, the OTHER tree). The bare `pytest` console
+# script used to die here with "No module named 'satellite'"; since the
+# repo-root conftest.py (2026-10-15) every invocation inside the repo puts
+# the repo root on sys.path first, before anything imports `domovoi`, so it
+# works and imports this tree. `python -m pytest` puts the cwd at
+# sys.path[0] and never depended on that.
 #
 # Adding an `__init__.py` here would also put the repo root on sys.path, but
 # it is not a drive-by fix. It changes the import name of every module in
@@ -67,14 +60,24 @@ from pathlib import Path
 
 import pytest
 
-from satellite.tests._client_import import (
+# The home before anything below computes a path from it: a temp folder for
+# the session (domovoi/tests/home_isolation.py; the repo-root conftest.py
+# normally got there first). Module constants built at import point inside
+# SESSION_CONFIG_DIR, and the fixture below moves them on into each test's
+# own tmp dir.
+from domovoi.tests import home_isolation
+
+home_isolation.isolate()
+
+from satellite.tests._client_import import (  # noqa: E402
     install_audio_stand_ins,
     remove_audio_stand_ins,
 )
 
-# Resolved once, at import, while the environment is still the real one.
-REAL_HOME = Path.home()
+# The developer's own, as it was before the run moved it.
+REAL_HOME = home_isolation.real_home()
 REAL_CONFIG_DIR = REAL_HOME / ".domovoi"
+SESSION_CONFIG_DIR = Path.home() / ".domovoi"
 ROOT_CONFIG_DIR = Path("/etc/domovoi")
 # Root's state directory (satellite/net_settings.py keeps its record there).
 ROOT_STATE_DIR = Path("/var/lib/domovoi")
@@ -123,7 +126,8 @@ def _relocate(value: Path, home: Path) -> Path | None:
     (this repo is often checked out into a temp dir inside ``$HOME``), and
     relocating the source tree would take the bundled sounds and greetings
     with it."""
-    for root, stand_in in ((REAL_CONFIG_DIR, home / ".domovoi"),
+    for root, stand_in in ((SESSION_CONFIG_DIR, home / ".domovoi"),
+                           (REAL_CONFIG_DIR, home / ".domovoi"),
                            (ROOT_CONFIG_DIR, home / "etc-domovoi"),
                            (ROOT_STATE_DIR, home / "var-lib-domovoi"),
                            (ROOT_UNIT_DIR, home / "etc-systemd-system"),

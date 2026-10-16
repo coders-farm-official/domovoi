@@ -128,6 +128,10 @@ python -m web.scripts.dump_openapi   # writes web/openapi.json
   run DDL against core tables.
 - **Tests must use the test DB.** `domovoi/tests/conftest.py` derives
   `<dbname>_test` from `DATABASE_URL` and refuses to run otherwise.
+- **Tests never write the real `~/.domovoi`.** The repo-root `conftest.py`
+  points `HOME`/`USERPROFILE` at a temp folder before anything imports
+  domovoi, and fails the run, naming the paths, if the real folder changed
+  (`domovoi/tests/home_isolation.py`). A test that needs a home uses `tmp_path`.
 - **Stubs vs. real clients.** `USE_STUBS=true` (set by conftest) makes
   Whisper/Ollama/TTS deterministic fakes. Real clients install via extras.
 - **MPD is lazy-provisioned per room** by `domovoi/mpd_provisioner.py`; the

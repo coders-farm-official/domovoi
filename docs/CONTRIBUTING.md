@@ -137,6 +137,16 @@ Facts about the suite you should know before touching it:
   appending `_test` to the `DATABASE_URL` dbname, and **refuses to run** if
   the resolved dbname doesn't end in `_test`. This is the single line
   protecting your real data — the suite TRUNCATEs tables. Never weaken it.
+* Your home is protected the same way. The repo-root `conftest.py`, loaded
+  before any other, points `HOME`/`USERPROFILE` at a temp folder of each
+  process's own (each `-n` worker too) and `DOMOVOI_HOME` at its
+  `.domovoi`, so `Path.home()`, `~` and every default built from them land
+  there. It also records your real `~/.domovoi` at the start, and a run that
+  created, changed or removed anything in it **fails**, naming the paths
+  (`domovoi/tests/home_isolation.py`). A test that needs a home of its own
+  uses `tmp_path`. If something else on the machine writes there during a
+  run (a satellite running as you), `DOMOVOI_TEST_HOME_GUARD=off` skips the
+  check, never the isolation.
 * The test DB must exist and be migrated (`docker compose run --rm
   flyway-test` from `domovoi/`). Plugin migrations apply to both DBs
   automatically through the plugin migration runner.
