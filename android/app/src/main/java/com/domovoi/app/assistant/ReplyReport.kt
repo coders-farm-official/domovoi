@@ -35,7 +35,8 @@ data class ReplyReport(
     val answer: String = "",
     /** When the reply was written, epoch ms. */
     val answeredAt: Long = 0,
-    /** The model's name, as the model settings show it. */
+    /** The model's name, as the model settings show it; [CLOCK] for a
+     *  reply from the phone's clock, which no model wrote. */
     val model: String = "",
     /** The model's catalog id (ModelCatalog), which pins its exact file. */
     val modelId: String = "",
@@ -46,6 +47,12 @@ data class ReplyReport(
     /** The app's versionName. */
     val appVersion: String = "",
 ) {
+    /** The reply came from the phone's own clock, not a model. */
+    val fromClock: Boolean get() = model == CLOCK && modelId.isEmpty()
+
+    /** What [modelLine] is labelled: "source" for the clock, else "model". */
+    val sourceLabel: String get() = if (fromClock) "source" else "model"
+
     /** The reply's first line, cut short: the saved reports list's title. */
     val title: String
         get() = answer.trim().lineSequence().firstOrNull().orEmpty()
@@ -61,7 +68,7 @@ data class ReplyReport(
         appendLine("Domovoi on this phone: a reported reply")
         appendLine()
         appendLine("Reported: ${utc(created)}")
-        appendLine("Model: ${modelLine()}")
+        appendLine("${sourceLabel.replaceFirstChar { it.uppercase() }}: ${modelLine()}")
         if (appVersion.isNotBlank()) appendLine("App: $appVersion")
         appendLine()
         appendLine(if (spoken) "Question (spoken):" else "Question:")
@@ -89,6 +96,9 @@ data class ReplyReport(
 
     companion object {
         const val TITLE_CHARS = 60
+
+        /** The source of a reply the phone's clock gave (no model wrote it). */
+        const val CLOCK = "the phone's clock"
 
         /** A note is a few sentences, not a document. */
         const val NOTE_MAX_CHARS = 2_000
@@ -119,9 +129,9 @@ data class ReplyReport(
                 spoken = asked?.spoken == true,
                 answer = reply.text,
                 answeredAt = reply.at,
-                model = model.name,
-                modelId = model.id,
-                backend = reply.backend,
+                model = if (reply.fromClock) CLOCK else model.name,
+                modelId = if (reply.fromClock) "" else model.id,
+                backend = reply.backend.takeUnless { reply.fromClock },
                 appVersion = appVersion,
             )
         }

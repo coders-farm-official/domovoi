@@ -35,7 +35,7 @@ class FakeLlmEngine(
         isLoaded = true
     }
 
-    override fun reply(system: String, history: List<ChatTurn>): Flow<String> = flow {
+    override fun reply(system: String, history: List<ChatTurn>, now: String?): Flow<String> = flow {
         calls += system to history
         failWith?.let { throw it }
         deltas.forEachIndexed { i, d ->

@@ -44,6 +44,8 @@ data class StoredMessage(
     val sttMs: Long? = null,
     /** A reply stopped while it was spoken: the tap to the voice silenced, ms. */
     val stopMs: Long? = null,
+    /** A reply from the phone's own clock (ClockQuestions), not the model. */
+    val fromClock: Boolean = false,
 ) {
     val fromUser: Boolean get() = from == Speaker.USER
 }

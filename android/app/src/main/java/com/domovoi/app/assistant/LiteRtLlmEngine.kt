@@ -30,8 +30,11 @@ import java.io.File
  * One conversation is kept between replies: when the next history is the
  * last one plus a new user turn, only that turn is sent, so the model does
  * not re-read the whole conversation ([canContinue]); otherwise the
- * conversation is rebuilt from the system prompt and the history. Thinking
- * is off: a voice reply should start with its first words.
+ * conversation is rebuilt from the system prompt and the history. The
+ * phone's clock rides along without breaking that: in the system instruction
+ * of a conversation built for the turn, ahead of the question when a kept
+ * one was told an older reading ([withClock]). Thinking is off: a voice
+ * reply should start with its first words.
  *
  * [audioInput] also loads the model's audio encoder, for the M0 experiment
  * that hands the recorded question to the model directly ([replyToAudio]).
@@ -47,6 +50,8 @@ class LiteRtLlmEngine(
     private var conversation: Conversation? = null
     private var seenSystem: String? = null
     private var seen: List<ChatTurn> = emptyList()
+    /** The last clock reading the kept conversation was told. */
+    private var seenNow: String? = null
     @Volatile private var active: Conversation? = null
     @Volatile private var stats: LlmStats? = null
 
@@ -72,11 +77,11 @@ class LiteRtLlmEngine(
         synchronized(lock) { engine = created }
     }
 
-    override fun reply(system: String, history: List<ChatTurn>): Flow<String> = flow {
+    override fun reply(system: String, history: List<ChatTurn>, now: String?): Flow<String> = flow {
         require(history.isNotEmpty() && history.last().fromUser) { "the last turn must be the user's" }
-        val conv = conversationFor(system, history)
+        val (conv, question) = conversationFor(system, history, now)
         val text = StringBuilder()
-        stream(conv, Message.user(history.last().text)).collect { delta ->
+        stream(conv, Message.user(question)).collect { delta ->
             text.append(delta)
             emit(delta)
         }
@@ -87,6 +92,7 @@ class LiteRtLlmEngine(
         synchronized(lock) {
             seenSystem = system
             seen = history + ChatTurn(fromUser = false, text = text.toString())
+            if (!now.isNullOrBlank()) seenNow = now
         }
     }.flowOn(Dispatchers.IO)
 
@@ -127,16 +133,23 @@ class LiteRtLlmEngine(
         }
     }
 
-    private fun conversationFor(system: String, history: List<ChatTurn>): Conversation = synchronized(lock) {
+    /** The conversation for [history] (the kept one when it can continue)
+     *  and the new question as it is sent to it, with the clock ([withClock]). */
+    private fun conversationFor(system: String, history: List<ChatTurn>, now: String?): Pair<Conversation, String> = synchronized(lock) {
+        val question = history.last().text
         val current = conversation
-        if (current != null && current.isAlive && canContinue(seenSystem, seen, system, history)) return current
+        if (current != null && current.isAlive && canContinue(seenSystem, seen, system, history)) {
+            return current to withClock(system, question, now, seenNow, rebuilt = false).question
+        }
         dropConversation()
         val e = engine ?: error("the model is not loaded")
-        e.createConversation(conversationConfig(system, history.dropLast(1))).also {
+        val turn = withClock(system, question, now, told = null, rebuilt = true)
+        e.createConversation(conversationConfig(turn.system, history.dropLast(1))).also {
             conversation = it
             seenSystem = system
             seen = history.dropLast(1)
-        }
+            seenNow = now
+        } to turn.question
     }
 
     private fun conversationConfig(system: String, earlier: List<ChatTurn>) = ConversationConfig(
@@ -150,6 +163,7 @@ class LiteRtLlmEngine(
         conversation = null
         seenSystem = null
         seen = emptyList()
+        seenNow = null
     }
 
     /** The model's text deltas for [message]. Collection ending early (a

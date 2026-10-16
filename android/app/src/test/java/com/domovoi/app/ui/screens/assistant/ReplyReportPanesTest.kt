@@ -101,6 +101,15 @@ class ReplyReportPanesTest {
         assertTrue("back is labelled: $labels", "back" in labels)
     }
 
+    @Test fun aClockAnswersSheetNamesThePhonesClockNotTheModel() {
+        val tree = NodeTree()
+        var shown = emptyList<String>()
+        val clock = draft.copy(answer = "It's 3:42 PM.", model = ReplyReport.CLOCK, modelId = "", backend = null)
+        render(tree, { ReportPane(clock, actions) {} }) { shown = tree.texts() }
+        assertTrue(shown.toString(), "source" in shown && "the phone's clock" in shown)
+        assertFalse(shown.toString(), "model" in shown || shown.any { it.contains(ModelCatalog.chatModel.name) })
+    }
+
     @Test fun aReplyWithNoQuestionSaysSo() {
         val tree = NodeTree()
         var shown = emptyList<String>()

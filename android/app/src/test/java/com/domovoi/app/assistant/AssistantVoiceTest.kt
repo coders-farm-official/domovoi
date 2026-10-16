@@ -19,6 +19,8 @@ import org.junit.Test
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.time.ZoneId
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -36,6 +38,7 @@ class AssistantVoiceTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val said = CopyOnWriteArrayList<String>()
     private val clock = TestClock()
+    private val engines = CopyOnWriteArrayList<ScriptedEngine>()
 
     private fun model(id: String, kind: ModelKind) = CatalogModel(
         id, id, kind, listOf(ModelFile("$id.bin", "https://example.org/$id.bin", 10, "0".repeat(64))),
@@ -61,7 +64,7 @@ class AssistantVoiceTest {
 
     /** A kit of fakes: a mic that says something then stops, a recognizer
      *  that hears [heard], and a voice that records what it says. */
-    private inner class FakeKit(var heard: String = "what time is it") : VoiceKit {
+    private inner class FakeKit(var heard: String = "why is the sky blue") : VoiceKit {
         val out = GatedSpeechOut(clock)
         @Volatile var source: () -> AudioSource = { FakeAudioSource(listOf(quiet, loud, loud, quiet, quiet, quiet)) }
         @Volatile var closes = 0
@@ -86,13 +89,15 @@ class AssistantVoiceTest {
         conversations = conversations,
         jobs = jobs,
         settings = settings,
-        newEngine = { ScriptedEngine().also { it.script = engineDeltas } },
+        newEngine = { ScriptedEngine().also { it.script = engineDeltas; engines += it } },
         scope = scope,
         models = models,
         voiceKit = kit,
         micAllowed = micAllowed,
         micRefusal = { MicArbiter.refusal(MicOwnership.Owner.ASSISTANT) },
         nanos = clock.read,
+        clock = { EPOCH_MS },
+        clockStyle = { ClockStyle(ZoneId.of("America/Los_Angeles"), Locale.US, is24Hour = false) },
     ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
     private fun until(what: String, timeoutMs: Long = 5_000, ok: () -> Boolean) {
@@ -113,7 +118,7 @@ class AssistantVoiceTest {
         c.talk()
         until("answered") { c.ui().conversation.messages.size == 2 && c.ui().voicePhase == VoicePhase.Idle }
         val (q, a) = c.ui().conversation.messages
-        assertEquals("what time is it", q.text)
+        assertEquals("why is the sky blue", q.text)
         assertTrue(q.spoken)
         assertEquals("Hello there.", a.text)
         assertEquals(listOf("Hello there."), kit.out.spoken.toList())
@@ -123,6 +128,27 @@ class AssistantVoiceTest {
         assertEquals(500L, timed.silenceWaitMs)
         until("saved with its timing") { conversations.load(c.ui().conversation.id)?.messages?.last()?.voiceMs != null }
         assertNull("the mic is given back", MicArbiter.shared.holder())
+    }
+
+    /** The owner's report (2026-10-16): "What time is it?" by voice got "I
+     *  cannot tell you the time". The phone's clock answers it, aloud, at
+     *  once: no model is loaded for it. */
+    @Test fun aSpokenTimeQuestionIsAnsweredFromThePhoneClockAloud() {
+        install(llm, stt, vad)
+        val kit = FakeKit(heard = "What time is it?")
+        val c = controller(kit)
+        until("ready") { c.ui().installed && c.ui().voiceReady }
+        c.talk()
+        until("answered") { c.ui().conversation.messages.size == 2 && c.ui().voicePhase == VoicePhase.Idle }
+        val (q, a) = c.ui().conversation.messages
+        assertEquals("What time is it?", q.text)
+        assertTrue(q.spoken)
+        assertEquals("It's 3:42 PM.", a.text)
+        assertNull(a.error)
+        assertEquals(listOf("It's 3:42 PM."), kit.out.spoken.toList())
+        assertTrue("no model for the clock", engines.isEmpty())
+        until("timing filed") { c.ui().conversation.messages.last().voiceMs != null }
+        until("saved") { conversations.load(c.ui().conversation.id)?.messages?.last()?.text == "It's 3:42 PM." }
     }
 
     @Test fun typedRepliesStaySilentUnlessTurnedOn() {
@@ -232,6 +258,10 @@ class AssistantVoiceTest {
         assertTrue(c.ui().conversation.messages.last().text.isNotEmpty())
     }
 }
+
+/** 2026-10-15 15:42:00 in Los Angeles (PDT, UTC-07:00). */
+private val EPOCH_MS = java.time.ZonedDateTime.of(2026, 10, 15, 15, 42, 0, 0, ZoneId.of("America/Los_Angeles"))
+    .toInstant().toEpochMilli()
 
 /** MicCapture takes the mic through the app's one owner rule. */
 class MicCaptureOwnerTest {

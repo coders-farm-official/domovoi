@@ -137,8 +137,12 @@ data class AssistantUi(
  *   sentence by sentence in the phone's own voice. Replies to typed
  *   questions stay silent unless the owner turns that on.
  * - **Conversations:** kept on the phone ([ConversationStore]); the model
- *   sees the system prompt and the conversation, nothing else, and only as
- *   much of a long conversation as fits its context ([HistoryWindow]).
+ *   sees the system prompt, the phone's clock (read every turn) and the
+ *   conversation, nothing else, and only as much of a long conversation as
+ *   fits its context ([HistoryWindow]).
+ * - **The clock:** "what time is it", "what's the date", "what day is it"
+ *   and the like ([ClockQuestions]) are answered from the phone's own clock
+ *   at once, typed or spoken, without the model.
  *
  * Nothing here touches the network: the download job is the only network
  * use, and it lives in the worker ([ModelDownloadWorker]).
@@ -174,6 +178,9 @@ class AssistantController(
     private val reports: ReplyReportStore? = null,
     /** The app's versionName, written into a report. */
     private val appVersion: String = "",
+    /** How the phone shows the time (zone, locale, 12/24-hour), read every
+     *  turn; [clock] gives the moment. */
+    private val clockStyle: () -> ClockStyle = { ClockStyle.system(is24Hour = false) },
 ) {
     private val _state = MutableStateFlow(
         AssistantUi(
@@ -699,6 +706,7 @@ class AssistantController(
 
     private suspend fun reply(asked: StoredConversation, onDelta: (String) -> Unit = {}): StoredConversation {
         save(asked)
+        clockReply(asked, onDelta)?.let { return it }
         val backend = settings.backend
         val llm = try {
             ensureEngine()
@@ -718,7 +726,7 @@ class AssistantController(
         fun live(): StoredMessage = StoredMessage(Speaker.DOMOVOI, text.toString(), clock(), backend = backend.label)
         _state.update { it.copy(conversation = asked.copy(messages = asked.messages + live())) }
         try {
-            llm.reply(Persona.SYSTEM_PROMPT, window.of(turns)).collect { delta ->
+            llm.reply(Persona.SYSTEM_PROMPT, window.of(turns), clockLine()).collect { delta ->
                 if (firstMs == null && delta.isNotBlank()) firstMs = (nanos() - sent) / 1_000_000
                 text.append(delta)
                 onDelta(delta)
@@ -735,6 +743,33 @@ class AssistantController(
             return finishReply(asked, live().copy(error = "The model stopped: ${plainReason(e)}", firstTextMs = firstMs))
         }
     }
+
+    /**
+     * A question about the time, the date or the day ([ClockQuestions]),
+     * answered from the phone's own clock at once: no model, so nothing waits
+     * for one to load. The answer goes where a model's would (the
+     * conversation, and [onDelta], which reads a spoken turn's reply aloud).
+     * Null: a question for the model.
+     */
+    private suspend fun clockReply(asked: StoredConversation, onDelta: (String) -> Unit): StoredConversation? {
+        val question = asked.messages.lastOrNull()?.takeIf { it.fromUser } ?: return null
+        val kind = ClockQuestions.match(question.text) ?: return null
+        val sent = nanos()
+        val text = runCatching {
+            val style = clockStyle()
+            ClockQuestions.answer(kind, style.at(clock()), style)
+        }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull() ?: return null
+        onDelta(text)
+        val reply = StoredMessage(Speaker.DOMOVOI, text, clock(), firstTextMs = (nanos() - sent) / 1_000_000, fromClock = true)
+        return finishReply(asked, reply)
+    }
+
+    /** The phone's clock for the model, read now (Persona.clockLine); null
+     *  when it cannot be read. */
+    private fun clockLine(): String? = runCatching {
+        val style = clockStyle()
+        Persona.clockLine(style.at(clock()), style)
+    }.onFailure { Log.w(TAG, "the phone's clock could not be read", it) }.getOrNull()
 
     private suspend fun finishReply(asked: StoredConversation, reply: StoredMessage): StoredConversation {
         val done = asked.copy(updated = reply.at.coerceAtLeast(asked.updated), messages = asked.messages + reply)
@@ -896,6 +931,7 @@ class AssistantController(
                 reports = ReplyReportStore(File(app.filesDir, "assistant-reports")),
                 appVersion = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }
                     .getOrNull().orEmpty(),
+                clockStyle = { ClockStyle.system(android.text.format.DateFormat.is24HourFormat(app)) },
             ).also { it.attach(app) }
         }
 

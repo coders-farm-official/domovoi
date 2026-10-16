@@ -21,6 +21,9 @@ import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -52,6 +55,10 @@ class AssistantControllerTest {
         root.deleteRecursively()
     }
 
+    /** The phone's clock, when a test sets it; the real one otherwise. */
+    @Volatile private var nowMs: Long? = null
+    @Volatile private var style = ClockStyle(LA, Locale.US, is24Hour = false)
+
     private fun controller(
         memoryGib: Double = 7.6,
         models: List<CatalogModel> = listOf(llm),
@@ -67,6 +74,8 @@ class AssistantControllerTest {
         beforeLoad = { beforeLoads++ },
         unloadAfterMs = unloadAfterMs,
         models = models,
+        clock = { nowMs ?: System.currentTimeMillis() },
+        clockStyle = { style },
     ).also { c -> scope.launch { c.messages.collect { said += it } } }
 
     private fun install(m: CatalogModel = llm) {
@@ -323,6 +332,78 @@ class AssistantControllerTest {
         assertEquals(2, c.ui().conversation.messages.size)
     }
 
+    // ── The phone's clock ───────────────────────────────────────────────
+
+    @Test fun aTimeQuestionIsAnsweredFromThePhoneClockWithoutTheModel() {
+        nowMs = OCT_15_1542
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        c.send("What time is it?")
+        until("answered") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val a = c.ui().conversation.messages.last()
+        assertEquals(Speaker.DOMOVOI, a.from)
+        assertEquals("It's 3:42 PM.", a.text)
+        assertNull(a.error)
+        assertNotNull(a.firstTextMs)
+        assertTrue(a.fromClock)
+        assertNull(a.backend)
+        assertNull(a.tokensPerS)
+        assertEquals("the phone's clock", c.draftReport(c.ui().conversation, 1)!!.modelLine())
+        assertTrue("no model was loaded for it", engines.isEmpty())
+        assertEquals(EngineState.Unloaded, c.ui().engine)
+        until("saved") { conversations.load(c.ui().conversation.id)?.messages?.lastOrNull()?.text == "It's 3:42 PM." }
+
+        // The 24-hour setting and the date, read at the time of asking.
+        style = style.copy(is24Hour = true)
+        nowMs = OCT_15_1542 + 60 * 60_000L
+        c.send("whats todays date")
+        until("answered again") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        assertEquals("Today is Thursday, October 15, 2026.", c.ui().conversation.messages.last().text)
+        c.send("what time is it now")
+        until("and again") { !c.ui().replying && c.ui().conversation.messages.size == 6 }
+        assertEquals("It's 16:42.", c.ui().conversation.messages.last().text)
+        assertTrue(engines.isEmpty())
+    }
+
+    @Test fun everyModelTurnIsToldThePhoneClockAsItIsThen() {
+        nowMs = OCT_15_1542
+        install()
+        val c = controller()
+        until("installed") { c.ui().installed }
+        // Not a clock question: the model answers it, told the clock.
+        c.send("What time is it in Tokyo?")
+        until("replied") { !c.ui().replying && c.ui().conversation.messages.size == 2 }
+        val engine = engines.single()
+        assertFalse("a model's reply", c.ui().conversation.messages.last().fromClock)
+        assertEquals(Persona.SYSTEM_PROMPT, engine.systems.last())
+        assertEquals(
+            "The phone's clock says it is Thursday, October 15, 2026, 3:42 PM, Pacific Daylight Time " +
+                "(America/Los_Angeles, UTC-07:00).",
+            engine.nows.last(),
+        )
+
+        // Minutes later, the next turn is told the new time; the system
+        // prompt stays the same, so the kept conversation can continue.
+        nowMs = OCT_15_1542 + 25 * 60_000L
+        c.send("How long until Friday?")
+        until("replied again") { !c.ui().replying && c.ui().conversation.messages.size == 4 }
+        assertEquals(listOf(Persona.SYSTEM_PROMPT, Persona.SYSTEM_PROMPT), engine.systems.toList())
+        assertTrue(engine.nows.last(), engine.nows.last().contains(", 4:07 PM, "))
+
+        // A clock answer in between is part of what the model sees next.
+        c.send("what day is it")
+        until("the clock answered") { !c.ui().replying && c.ui().conversation.messages.size == 6 }
+        assertEquals("It's Thursday.", c.ui().conversation.messages.last().text)
+        assertEquals(2, engine.replies.size)
+        c.send("And tomorrow?")
+        until("replied a third time") { !c.ui().replying && c.ui().conversation.messages.size == 8 }
+        assertEquals(
+            listOf(ChatTurn(true, "what day is it"), ChatTurn(false, "It's Thursday."), ChatTurn(true, "And tomorrow?")),
+            engine.replies.last().takeLast(3),
+        )
+    }
+
     @Test fun stopKeepsWhatWasWritten() {
         install()
         val gate = CompletableDeferred<Unit>()
@@ -390,6 +471,11 @@ class AssistantControllerTest {
     }
 }
 
+private val LA: ZoneId = ZoneId.of("America/Los_Angeles")
+
+/** 2026-10-15 15:42:00 in Los Angeles (PDT, UTC-07:00). */
+private val OCT_15_1542: Long = ZonedDateTime.of(2026, 10, 15, 15, 42, 0, 0, LA).toInstant().toEpochMilli()
+
 /** The download job, faked: [starts] records each start, and the job is
  *  whatever the test puts in [flow]. */
 class FakeJobs : DownloadJobs {
@@ -416,6 +502,8 @@ class ScriptedEngine : LlmEngine {
     val loads = CopyOnWriteArrayList<LlmBackend>()
     val replies = CopyOnWriteArrayList<List<ChatTurn>>()
     val systems = CopyOnWriteArrayList<String>()
+    /** The clock line each reply was given ("" for none). */
+    val nows = CopyOnWriteArrayList<String>()
     var failLoad: Throwable? = null
     var script = listOf("Hello", " there.")
     var gate: CompletableDeferred<Unit>? = null
@@ -429,9 +517,10 @@ class ScriptedEngine : LlmEngine {
         isLoaded = true
     }
 
-    override fun reply(system: String, history: List<ChatTurn>): Flow<String> = flow {
+    override fun reply(system: String, history: List<ChatTurn>, now: String?): Flow<String> = flow {
         systems += system
         replies += history
+        nows += now.orEmpty()
         script.forEachIndexed { i, d ->
             emit(d)
             if (i == 0) gate?.await()

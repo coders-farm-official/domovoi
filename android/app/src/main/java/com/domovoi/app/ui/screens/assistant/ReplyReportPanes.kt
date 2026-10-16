@@ -86,7 +86,7 @@ internal fun ReportPane(draft: ReplyReport, actions: AssistantActions, onClose: 
         )
         ReportField(if (draft.spoken) "your question (spoken)" else "your question", draft.question?.ifBlank { null } ?: NO_QUESTION)
         ReportField("the reply", draft.answer)
-        ReportField("model", draft.modelLine())
+        ReportField(draft.sourceLabel, draft.modelLine())
         ReportField("written", "${relTime(Instant.ofEpochMilli(draft.answeredAt).toString())} (${ReplyReport.utc(draft.answeredAt)})")
         if (draft.appVersion.isNotBlank()) ReportField("app", draft.appVersion)
         SectionLabel("your note")

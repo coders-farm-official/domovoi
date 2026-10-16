@@ -257,6 +257,19 @@ class AssistantScreenTest {
         assertNull(replyDetails(StoredMessage(Speaker.DOMOVOI, "hi")))
     }
 
+    /** The clock's answer names its source, never a model's numbers. */
+    @Test fun aClockAnswersDetailsNameThePhonesClock() {
+        assertEquals("0.00 s to first words · the phone's clock",
+            replyDetails(StoredMessage(Speaker.DOMOVOI, "It's 3:42 PM.", firstTextMs = 0, fromClock = true)))
+        val spoken = StoredMessage(Speaker.DOMOVOI, "It's 3:42 PM.", voiceMs = 310, silenceWaitMs = 500, sttMs = 60,
+            firstTextMs = 1, tokensPerS = 30.0, backend = "cpu", fromClock = true)
+        assertEquals(
+            "0.31 s from end of speech to first word (+0.5 s silence wait) · heard in 60 ms · 0.00 s to first words · " +
+                "the phone's clock",
+            replyDetails(spoken),
+        )
+    }
+
     @Test fun theModelPanelSaysWhereItRunsAndHowLongItTook() {
         assertEquals("In memory, on the CPU; loaded in 2.4 s.", engineSummary(EngineState.Ready(LlmBackend.CPU, 2_400)))
         assertEquals("Not in memory now; it loads when you open the assistant.", engineSummary(EngineState.Unloaded))

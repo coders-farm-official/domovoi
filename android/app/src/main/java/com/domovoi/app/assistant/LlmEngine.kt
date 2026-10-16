@@ -21,8 +21,9 @@ data class LlmStats(
 
 /**
  * A language model running on the phone. By design it has no tool, file or
- * media parameters: the model sees the system prompt and the conversation,
- * nothing else, so there is no path from it to the user's data.
+ * media parameters: the model sees the system prompt, the phone's clock and
+ * the conversation, nothing else, so there is no path from it to the user's
+ * data.
  */
 interface LlmEngine : AutoCloseable {
     val isLoaded: Boolean
@@ -31,8 +32,10 @@ interface LlmEngine : AutoCloseable {
     suspend fun load(model: File, backend: LlmBackend)
 
     /** The reply to the last turn of [history] (which must be the user's),
-     *  as text deltas in order. Cancelling collection stops the model. */
-    fun reply(system: String, history: List<ChatTurn>): Flow<String>
+     *  as text deltas in order. Cancelling collection stops the model.
+     *  [now]: the phone's clock for this turn (Persona.clockLine), or null;
+     *  the model is given it as [withClock] says. */
+    fun reply(system: String, history: List<ChatTurn>, now: String? = null): Flow<String>
 
     /** Stops a reply in progress; a no-op when there is none. */
     fun cancel()
@@ -54,3 +57,27 @@ internal fun canContinue(seenSystem: String?, seen: List<ChatTurn>, system: Stri
         history.size == seen.size + 1 &&
         history.last().fromUser &&
         history.subList(0, seen.size) == seen
+
+/** What the model is told on a turn with the clock reading [now]. */
+internal data class ClockedTurn(
+    /** The system instruction, for a conversation built for this turn. */
+    val system: String,
+    /** The new question as it is sent. */
+    val question: String,
+)
+
+/**
+ * How a turn's clock reading [now] reaches the model without costing the
+ * kept conversation ([canContinue] compares [system] alone, never the
+ * clock, which changes every minute): a conversation built for this turn has
+ * [now] at the end of its system instruction; a kept one, told [told] when
+ * it was built or on a later turn, gets [now] ahead of the new [question],
+ * and only when the reading has changed since. [rebuilt]: the conversation
+ * is built for this turn.
+ */
+internal fun withClock(system: String, question: String, now: String?, told: String?, rebuilt: Boolean): ClockedTurn = when {
+    now.isNullOrBlank() -> ClockedTurn(system, question)
+    rebuilt -> ClockedTurn("$system\n\n$now", question)
+    now == told -> ClockedTurn(system, question)
+    else -> ClockedTurn(system, "$now\n\n$question")
+}
