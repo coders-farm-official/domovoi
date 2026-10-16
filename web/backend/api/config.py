@@ -40,7 +40,7 @@ from web.backend.schemas import ConfigResponse, ConfigUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["config"])
 
-WEB_VERSION = "1.0.0rc1"
+WEB_VERSION = "1.0.0rc2"
 
 
 def home_problems_visibility() -> str:

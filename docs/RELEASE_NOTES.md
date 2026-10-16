@@ -4,6 +4,25 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — 1.0.0-rc2: previews say so, and the licences of what Domovoi downloads
+
+Version 1.0.0rc2 (the app 1.0.0-rc2, versionCode 26101602). Nothing to do
+after updating.
+
+* **Previews are labelled.** Domovoi 1.0's previews work, but have been
+  tried on fewer devices and may still change: the Windows installer,
+  the phone's on-device assistant, and spare computers and phones as
+  rooms. The dashboard's **add a spare device** card, the phone's join
+  page, the app's assistant setup and room mode, and the installer now
+  say "preview" (the installer used to say "test build").
+* **[docs/LICENSES.md](LICENSES.md)** lists every model, voice and dataset
+  a server, the app and the wake-word trainer download, with its licence.
+  Two defaults are not permissive. The wake word `hey_jarvis` is CC
+  BY-NC-SA 4.0, which is non-commercial. The answer model `llama3.2:3b` is
+  under the Llama 3.2 Community License. Both are fine at home; read the
+  page before you pass them on, or use them in a business. Settings →
+  About, on the dashboard and in the app, links to it.
+
 ## 2026-10-16 — Android app: reply reports go to info@codersfarm.org
 
 Android app only (versionCode 26101601, still 1.0.0-rc1); nothing changes

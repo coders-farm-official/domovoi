@@ -29,7 +29,7 @@
 #else
   #define DashboardRoute "settings"
 #endif
-#define AppVersion "1.0.0-rc1"
+#define AppVersion "1.0.0-rc2"
 #define Helper "DomovoiSetupHelper.exe"
 ; Which build this is, for the dashboard link on the last page: a URL no
 ; earlier build opened, so an old cache-first service worker of the
