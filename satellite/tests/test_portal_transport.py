@@ -162,9 +162,9 @@ def test_custom_room_overrides_picker_and_is_slugged(portal):
 def test_explicit_url_is_kept(portal):
     payload = portal.build_payload({
         "ssid": "HomeNet", "psk": PSK, "room": "office",
-        "url": "ws://192.168.0.117:6370",
+        "url": "ws://192.168.1.20:6370",
     })
-    assert payload["domovoi_url"] == "ws://192.168.0.117:6370"
+    assert payload["domovoi_url"] == "ws://192.168.1.20:6370"
 
 
 @pytest.mark.parametrize("fields,fragment", [
@@ -280,11 +280,11 @@ def test_bad_room_redisplays_the_form_without_the_password(portal):
 
 
 @pytest.mark.parametrize("url", [
-    "http://192.168.0.117:6370",
+    "http://192.168.1.20:6370",
     "ws://8.8.8.8:6370",
     "ws://example.com:6370",
     "ws://127.0.0.1:6370",
-    "ws://user:pw@192.168.0.117:6370",
+    "ws://user:pw@192.168.1.20:6370",
 ])
 def test_an_address_off_the_lan_is_refused_with_a_400(portal, url):
     status, body = _post(portal, "/provision", {
@@ -298,8 +298,8 @@ def test_an_address_off_the_lan_is_refused_with_a_400(portal, url):
 
 
 @pytest.mark.parametrize("url,resolved", [
-    ("ws://192.168.0.117:6370", "ws://192.168.0.117:6370"),
-    ("192.168.0.117", "ws://192.168.0.117:6370"),
+    ("ws://192.168.1.20:6370", "ws://192.168.1.20:6370"),
+    ("192.168.1.20", "ws://192.168.1.20:6370"),
     ("domovoi.local", "ws://domovoi.local:6370"),
 ])
 def test_the_accepted_page_shows_the_resolved_server(portal, url, resolved):

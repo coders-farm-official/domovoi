@@ -94,9 +94,9 @@ SCENARIOS = {
                                     "detail": "host name 'raspberrypi' -> 'domovoi-kitchen'",
                                     "early": "early rename unit disabled by the operator; left alone"}),
     "step_skipped": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
-                          hostname="kamrons-pi",
+                          hostname="alexs-pi",
                           net_step={"state": "skipped", "when": "boot", "version": 2,
-                                    "detail": "host name 'kamrons-pi' looks chosen by a person"}),
+                                    "detail": "host name 'alexs-pi' looks chosen by a person"}),
     "step_failed": _with({"rx_mbits": 30.0, "signal_dbm": -58, "mode": "managed"},
                          hostname="raspberrypi",
                          reboot_needed="the boot-time network settings did not all apply (x); reboot this satellite to retry",
@@ -188,7 +188,7 @@ def test_the_boot_step_and_host_name_are_shown(driven):
 
 def test_a_skipped_rename_says_why(driven):
     o = driven["step_skipped"]["overview"]
-    assert "skipped" in o and "looks chosen by a person" in o and "host name kamrons-pi" in o
+    assert "skipped" in o and "looks chosen by a person" in o and "host name alexs-pi" in o
 
 
 def test_a_failed_step_asks_for_a_reboot_to_retry(driven):

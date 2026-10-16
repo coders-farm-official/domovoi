@@ -41,7 +41,7 @@ namespace Domovoi.Windows
             return false;
         }
 
-        // "192.168.0.0/24" for 192.168.0.240 and prefix 24. Refuses prefixes
+        // "192.168.1.0/24" for 192.168.1.30 and prefix 24. Refuses prefixes
         // shorter than /8: no LAN is that big, and a rule for it would be a
         // rule for the internet.
         public static string Subnet(string ip, int prefix)

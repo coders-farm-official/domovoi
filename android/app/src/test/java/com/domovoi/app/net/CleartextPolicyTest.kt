@@ -24,7 +24,7 @@ class CleartextPolicyTest {
         "10.0.2.2",            // emulator host
         "10.0.0.1", "10.255.255.255",
         "172.16.0.1", "172.31.255.254",
-        "192.168.0.117", "192.168.1.10",
+        "192.168.1.20", "192.168.1.10",
         "127.0.0.1", "127.0.0.2",
         "169.254.10.10",
         "100.64.0.1", "100.127.255.254",
@@ -65,12 +65,12 @@ class CleartextPolicyTest {
             val url = "https://$h/api/health".toHttpUrl()
             assertTrue(h, CleartextPolicy.permits(url))
         }
-        assertTrue(CleartextPolicy.permits("https://192.168.0.117:6369/".toHttpUrl()))
+        assertTrue(CleartextPolicy.permits("https://192.168.1.20:6369/".toHttpUrl()))
     }
 
     @Test fun httpIsPermittedOnlyOnTheHomeNetwork() {
         assertTrue(CleartextPolicy.permits("http://10.0.2.2:6390/api/health".toHttpUrl()))
-        assertTrue(CleartextPolicy.permits("http://192.168.0.117:6369/".toHttpUrl()))
+        assertTrue(CleartextPolicy.permits("http://192.168.1.20:6369/".toHttpUrl()))
         assertTrue(CleartextPolicy.permits("http://domovoi.local:6369/".toHttpUrl()))
         assertFalse(CleartextPolicy.permits("http://203.0.113.5:6369/".toHttpUrl()))
         assertFalse(CleartextPolicy.permits("http://domovoi.example.com:6369/".toHttpUrl()))
@@ -80,7 +80,7 @@ class CleartextPolicyTest {
         // Request.Builder rewrites ws/wss to http/https, which is how the
         // StateBus and drop-in WebSocket requests reach the policy.
         fun ws(s: String) = Request.Builder().url(s).build().url
-        assertTrue(CleartextPolicy.permits(ws("ws://192.168.0.117:6369/ws/state")))
+        assertTrue(CleartextPolicy.permits(ws("ws://192.168.1.20:6369/ws/state")))
         assertTrue(CleartextPolicy.permits(ws("ws://10.0.2.2:6394/v1/dropin/kitchen")))
         assertFalse(CleartextPolicy.permits(ws("ws://203.0.113.5:6370/v1/dropin/kitchen")))
         assertTrue(CleartextPolicy.permits(ws("wss://203.0.113.5:6370/v1/dropin/kitchen")))

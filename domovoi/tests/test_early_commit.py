@@ -48,7 +48,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Household commands the design's prefix-hazard analysis ran over (research
 # corpus), the continuations it observed, the voice test plan's utterances
-# (functional-testing/voice-plan.json, cleaned of harness syntax), and
+# (kept outside this repo with the maintainers' functional test harness,
+# cleaned of harness syntax), and
 # continuations the fast-path regexes themselves invite. Whisper's style:
 # digits, lower case (the router lowercases anyway).
 CORPUS = """
@@ -386,17 +387,15 @@ def _is_room_continuation(prefix: str, whole: tuple) -> bool:
 
 
 def _voice_plan_utterances() -> list[str]:
-    """The voice test plan's spoken steps, when the plan is next to the
-    repo (it lives outside it, in functional-testing/) or named by
-    DOMOVOI_VOICE_PLAN. Harness syntax is dropped; what is left that
-    isn't an utterance routes nowhere and costs nothing."""
-    candidates = [os.environ.get("DOMOVOI_VOICE_PLAN"), REPO_ROOT.parent / "functional-testing" / "voice-plan.json"]
-    for path in candidates:
-        if path and Path(path).is_file():
-            plan = json.loads(Path(path).read_text(encoding="utf-8"))
-            break
-    else:
+    """The voice test plan's spoken steps, when DOMOVOI_VOICE_PLAN names
+    the plan (it lives outside the repo, with the maintainers' functional
+    test harness; there is no default path). Harness syntax is dropped;
+    what is left that isn't an utterance routes nowhere and costs
+    nothing."""
+    path = os.environ.get("DOMOVOI_VOICE_PLAN")
+    if not path or not Path(path).is_file():
         return []
+    plan = json.loads(Path(path).read_text(encoding="utf-8"))
     out: list[str] = []
     for test in plan.get("tests", []):
         for step in test.get("steps") or []:

@@ -222,7 +222,7 @@ static class Tests
         o.RepoUrl = "https://github.com/coders-farm-official/domovoi";
         o.Ref = "eb4a497fe821c08b6b8c39d7603ff7384d696dfc";
         o.Internet = "never";
-        o.LanIp = "192.168.0.240";
+        o.LanIp = "192.168.1.30";
         o.Media = MediaPaths.Under(@"C:\Users\Public\Domovoi\");
         return o;
     }
@@ -235,7 +235,7 @@ static class Tests
             {
                 "--repo-url", "https://github.com/coders-farm-official/domovoi",
                 "--ref", "eb4a497fe821c08b6b8c39d7603ff7384d696dfc",
-                "--internet", "never", "--tier", "auto", "--lan-ip", "192.168.0.240",
+                "--internet", "never", "--tier", "auto", "--lan-ip", "192.168.1.30",
                 "--media", @"music=C:\Users\Public\Domovoi\Music",
                 "--media", @"pictures=C:\Users\Public\Domovoi\Pictures",
                 "--media", @"videos=C:\Users\Public\Domovoi\Videos",
@@ -303,25 +303,25 @@ static class Tests
     {
         Run("lan: private addresses", delegate
         {
-            foreach (string s in new[] { "10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.254", "192.168.0.240" })
+            foreach (string s in new[] { "10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.254", "192.168.1.30" })
                 True(Lan.IsPrivateIPv4(s), s);
-            foreach (string s in new[] { "172.15.0.1", "172.32.0.1", "100.64.0.1", "100.101.102.103", "169.254.1.1", "127.0.0.1", "8.8.8.8", "192.169.0.1", "1.2", "::1", "", null, "192.168.0.256" })
+            foreach (string s in new[] { "172.15.0.1", "172.32.0.1", "100.64.0.1", "100.101.102.103", "169.254.1.1", "127.0.0.1", "8.8.8.8", "192.169.0.1", "1.2", "::1", "", null, "192.168.1.256" })
                 True(!Lan.IsPrivateIPv4(s), "not private: " + s);
         });
         Run("lan: subnets", delegate
         {
-            Eq("192.168.0.0/24", Lan.Subnet("192.168.0.240", 24), "/24");
+            Eq("192.168.1.0/24", Lan.Subnet("192.168.1.30", 24), "/24");
             Eq("10.0.0.0/8", Lan.Subnet("10.1.2.3", 8), "/8");
-            Eq("192.168.0.240/32", Lan.Subnet("192.168.0.240", 32), "/32");
+            Eq("192.168.1.30/32", Lan.Subnet("192.168.1.30", 32), "/32");
             Eq("172.16.0.0/12", Lan.Subnet("172.20.5.6", 12), "/12");
-            Throws<ArgumentException>(delegate { Lan.Subnet("192.168.0.1", 7); }, "/7");
-            Throws<ArgumentException>(delegate { Lan.Subnet("192.168.0.1", 0); }, "/0");
+            Throws<ArgumentException>(delegate { Lan.Subnet("192.168.1.1", 7); }, "/7");
+            Throws<ArgumentException>(delegate { Lan.Subnet("192.168.1.1", 0); }, "/0");
             Eq(24, Lan.PrefixFromMask("255.255.255.0"), "mask 24");
             Eq(20, Lan.PrefixFromMask("255.255.240.0"), "mask 20");
             Throws<ArgumentException>(delegate { Lan.PrefixFromMask("255.0.255.0"); }, "holes");
-            True(Lan.IsCidr("192.168.0.0/24"), "cidr");
-            True(!Lan.IsCidr("192.168.0.5/24"), "host bits set");
-            True(!Lan.IsCidr("192.168.0.0"), "no prefix");
+            True(Lan.IsCidr("192.168.1.0/24"), "cidr");
+            True(!Lan.IsCidr("192.168.1.5/24"), "host bits set");
+            True(!Lan.IsCidr("192.168.1.0"), "no prefix");
             True(!Lan.IsCidr("0.0.0.0/0"), "everything");
         });
     }
@@ -435,16 +435,16 @@ static class Tests
     {
         Run("firewall: rules for the LAN ports, scoped to the subnet", delegate
         {
-            var rules = Firewall.Plan("192.168.0.0/24");
+            var rules = Firewall.Plan("192.168.1.0/24");
             SeqEq(new[] { "Domovoi-Dashboard-6369", "Domovoi-Core-6370", "Domovoi-MPD-8050-8099", "Domovoi-Jellyfin-8096", "Domovoi-RomM-7676", "Domovoi-Kiwix-9467" }, rules.Select(r => r.Name), "names");
             SeqEq(new[] { "6369", "6370", "8050-8099", "8096", "7676", "9467" }, rules.Select(r => r.LocalPorts), "ports");
-            True(rules.All(r => r.RemoteAddress == "192.168.0.0/24"), "subnet");
+            True(rules.All(r => r.RemoteAddress == "192.168.1.0/24"), "subnet");
             True(!rules.Any(r => r.LocalPorts == "6432" || r.LocalPorts == "11434"), "no loopback-only port opened");
         });
         Run("firewall: never a public or malformed scope", delegate
         {
             Throws<ArgumentException>(delegate { Firewall.Plan("8.8.8.0/24"); }, "public");
-            Throws<ArgumentException>(delegate { Firewall.Plan("192.168.0.5/24"); }, "host address");
+            Throws<ArgumentException>(delegate { Firewall.Plan("192.168.1.5/24"); }, "host address");
             Throws<ArgumentException>(delegate { Firewall.Plan("0.0.0.0/0"); }, "everything");
             Throws<ArgumentException>(delegate { Firewall.Plan("100.64.0.0/10"); }, "CGNAT");
         });
@@ -462,7 +462,7 @@ static class Tests
         });
         Run("firewall: a quote in a display name can't break out", delegate
         {
-            var r = Firewall.Plan("192.168.0.0/24");
+            var r = Firewall.Plan("192.168.1.0/24");
             r[0].DisplayName = "x'; Remove-Item C:\\ -Recurse; '";
             string s = Firewall.AddScript(r);
             True(s.Contains("'x''; Remove-Item C:\\ -Recurse; '''"), "doubled quote");
@@ -597,7 +597,7 @@ static class Tests
         l.AccountSid = Sid; l.AccountCreated = true; l.ServiceCreated = true; l.ProgramDataCreated = true;
         l.UserListKeyCreated = true; l.SpecialAccountsKeyCreated = true;
         l.Rights = new List<string> { "SeServiceLogonRight" };
-        l.FirewallRules = Firewall.Plan("192.168.0.0/24").Select(r => r.Name).ToList();
+        l.FirewallRules = Firewall.Plan("192.168.1.0/24").Select(r => r.Name).ToList();
         var root = new MediaFolderRecord(); root.Path = l.MediaRoot; root.Created = true; root.AddedSids = new List<string> { Sid, Users };
         l.Media.Add(root);
         foreach (var m in MediaPaths.Under(l.MediaRoot))
@@ -739,8 +739,8 @@ static class Tests
             f.LedgerSidHasDomovoiProfile = false;
             var kinds = UninstallPlan.Make(l, f).Select(s => s.Kind).ToList();
             True(!kinds.Contains(UninstallKind.DeleteProfile) && !kinds.Contains(UninstallKind.RemoveRights) && !kinds.Contains(UninstallKind.StopAccountProcesses), "left alone");
-            True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc") && UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.MY-PC\"), "domovoi-svc folders");
-            True(!UninstallFacts.IsDomovoiProfilePath(@"C:\Users\Kamron") && !UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svcx") && !UninstallFacts.IsDomovoiProfilePath(null), "others");
+            True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc") && UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.DESKTOP-ALEX\"), "domovoi-svc folders");
+            True(!UninstallFacts.IsDomovoiProfilePath(@"C:\Users\alex") && !UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svcx") && !UninstallFacts.IsDomovoiProfilePath(null), "others");
         });
         Run("uninstall: ProgramData Setup didn't make is never deleted (review #4)", delegate
         {
@@ -873,12 +873,12 @@ static class Tests
             foreach (string bad in new[]
             {
                 @"C:\Windows", @"C:\Windows\Temp\x", @"C:\Program Files", @"C:\Program Files\Domovoi", @"C:\Program Files (x86)\Foo",
-                @"C:\ProgramData", @"C:\ProgramData\Domovoi\x", @"C:\Users", @"C:\Users\Kamron", @"C:\Users\Public",
-                @"C:\Users\Kamron\AppData\Roaming\Microsoft\Windows\Start Menu", @"C:\Users\Default\Music", @"C:\Users\domovoi-svc\x",
+                @"C:\ProgramData", @"C:\ProgramData\Domovoi\x", @"C:\Users", @"C:\Users\alex", @"C:\Users\Public",
+                @"C:\Users\alex\AppData\Roaming\Microsoft\Windows\Start Menu", @"C:\Users\Default\Music", @"C:\Users\domovoi-svc\x",
                 @"C:\Recovery\x",
             })
                 True(MediaPaths.SystemProblem(bad, sys) != null, "refused: " + bad);
-            foreach (string ok in new[] { @"C:\Users\Public\Domovoi", @"C:\Users\Kamron\Music", @"D:\Media", @"C:\Media", @"C:\Users\Public\Music\Domovoi", @"C:\Windows2" })
+            foreach (string ok in new[] { @"C:\Users\Public\Domovoi", @"C:\Users\alex\Music", @"D:\Media", @"C:\Media", @"C:\Users\Public\Music\Domovoi", @"C:\Windows2" })
                 True(MediaPaths.SystemProblem(ok, sys) == null, "allowed: " + ok + " (" + MediaPaths.SystemProblem(ok, sys) + ")");
         });
         Run("media root: this PC's own system folders are found", delegate
@@ -933,7 +933,7 @@ static class Tests
         });
         Run("firewall: the add script clears only Domovoi's rules before adding", delegate
         {
-            string add = Firewall.AddScript(Firewall.Plan("192.168.0.0/24"));
+            string add = Firewall.AddScript(Firewall.Plan("192.168.1.0/24"));
             string prelude = add.Substring(0, add.IndexOf("New-NetFirewallHyperVRule", StringComparison.Ordinal));
             SeqEq(new[] { "Domovoi-Core-6370", "Domovoi-MPD-8050-8099" }, RunAgainstFakeRules(prelude), "removed");
         });
@@ -1190,7 +1190,7 @@ static class Tests
         });
     }
 
-    const string RealSid = "S-1-5-21-225214871-3057608554-2089764004-1003";
+    const string RealSid = "S-1-5-21-1111111111-2222222222-3333333333-1003";
 
     // Runs ProfileTask's cleanup script against stand-in cmdlets: the
     // profile Get-CimInstance returns, and what got removed and unregistered.
@@ -1229,11 +1229,11 @@ static class Tests
         Run("profile task: deletes domovoi-svc's profile once its account is gone, then itself (item 8)", delegate
         {
             SeqEq(new[] { @"removed C:\Users\domovoi-svc", @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc", false), "done");
-            SeqEq(new[] { @"removed C:\Users\domovoi-svc.MY-PC", @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc.MY-PC", false), "the renamed folder too");
+            SeqEq(new[] { @"removed C:\Users\domovoi-svc.DESKTOP-ALEX", @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svc.DESKTOP-ALEX", false), "the renamed folder too");
         });
         Run("profile task: anything else is left, and the task still goes", delegate
         {
-            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\Kamron", false), "another profile");
+            SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\alex", false), "another profile");
             SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, @"C:\Users\domovoi-svcx", false), "a look-alike");
             Eq(0, RunCleanup(RealSid, @"C:\Users\domovoi-svc", true).Count, "a loaded profile: nothing, and the task stays for the next boot");
             SeqEq(new[] { @"unregistered \DomovoiRemoveProfile" }, RunCleanup(RealSid, null, false), "no profile");
@@ -1405,7 +1405,7 @@ static class Tests
                 @"\??\C:\Temp\new.dll", @"!\??\C:\Program Files\Domovoi\DomovoiHost.exe",
             };
             Eq(3, PendingDeletes.Under(entries, roots), "two deletes and a rename into Program Files");
-            Eq(0, PendingDeletes.Under(new List<string> { @"\??\C:\Users\Kamron\x", "" }, roots), "someone else's");
+            Eq(0, PendingDeletes.Under(new List<string> { @"\??\C:\Users\alex\x", "" }, roots), "someone else's");
             Eq(0, PendingDeletes.Under(null, roots), "none");
             Eq(1, PendingDeletes.Under(new List<string> { @"\??\c:\programdata\domovoi\state\install.log" }, roots), "case, and a list cut short");
         });
@@ -1417,23 +1417,23 @@ static class Tests
         });
     }
 
-    const string OldSid = "S-1-5-21-225214871-3057608554-2089764004-1003";
-    const string NewSid = "S-1-5-21-225214871-3057608554-2089764004-1005";
-    const string MineSid = "S-1-5-21-225214871-3057608554-2089764004-1001";
+    const string OldSid = "S-1-5-21-1111111111-2222222222-3333333333-1003";
+    const string NewSid = "S-1-5-21-1111111111-2222222222-3333333333-1005";
+    const string MineSid = "S-1-5-21-1111111111-2222222222-3333333333-1001";
 
     static void LeftoverProfileTests()
     {
         Func<string, bool> accounts = sid => sid != OldSid;
         Run("leftover profile: a first install, and a live install in domovoi-svc.<PC name>, find nothing", delegate
         {
-            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\Kamron") }, new[] { @"C:\Users\Kamron" }, accounts).Count, "first install");
-            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\Kamron"), new ProfileEntry(NewSid, @"C:\Users\domovoi-svc.MY-PC") },
-                new[] { @"C:\Users\Kamron", @"C:\Users\domovoi-svc.MY-PC" }, accounts).Count, "the account's own profile under another name");
+            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\alex") }, new[] { @"C:\Users\alex" }, accounts).Count, "first install");
+            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\alex"), new ProfileEntry(NewSid, @"C:\Users\domovoi-svc.DESKTOP-ALEX") },
+                new[] { @"C:\Users\alex", @"C:\Users\domovoi-svc.DESKTOP-ALEX" }, accounts).Count, "the account's own profile under another name");
         });
         Run("leftover profile: this PC today, the deleted account's domovoi-svc folder, with the one-line cleanup", delegate
         {
-            var found = LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\Kamron"), new ProfileEntry(OldSid, @"C:\Users\domovoi-svc") },
-                new[] { @"C:\Users\Kamron", @"C:\Users\domovoi-svc" }, accounts);
+            var found = LeftoverProfiles.Find(new[] { new ProfileEntry(MineSid, @"C:\Users\alex"), new ProfileEntry(OldSid, @"C:\Users\domovoi-svc") },
+                new[] { @"C:\Users\alex", @"C:\Users\domovoi-svc" }, accounts);
             Eq(1, found.Count, "one");
             Eq(@"C:\Users\domovoi-svc", found[0].Path, "path");
             Eq("Get-CimInstance Win32_UserProfile -Filter \"SID='" + OldSid + "'\" | Remove-CimInstance", found[0].Cleanup(), "cleanup");
@@ -1443,26 +1443,26 @@ static class Tests
         });
         Run("leftover profile: the old one next to a new install's domovoi-svc.<PC name>: only the old one", delegate
         {
-            var found = LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\domovoi-svc"), new ProfileEntry(NewSid, @"C:\Users\domovoi-svc.MY-PC") },
-                new[] { @"C:\Users\domovoi-svc", @"C:\Users\domovoi-svc.MY-PC" }, accounts);
+            var found = LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\domovoi-svc"), new ProfileEntry(NewSid, @"C:\Users\domovoi-svc.DESKTOP-ALEX") },
+                new[] { @"C:\Users\domovoi-svc", @"C:\Users\domovoi-svc.DESKTOP-ALEX" }, accounts);
             SeqEq(new[] { @"C:\Users\domovoi-svc" }, found.Select(f => f.Path), "the old one");
         });
         Run("leftover profile: a folder with no profile entry; look-alikes and other people left alone", delegate
         {
-            var found = LeftoverProfiles.Find(new ProfileEntry[0], new[] { @"C:\Users\domovoi-svc\", @"C:\Users\domovoi-svcx", @"C:\Users\Kamron" }, accounts);
+            var found = LeftoverProfiles.Find(new ProfileEntry[0], new[] { @"C:\Users\domovoi-svc\", @"C:\Users\domovoi-svcx", @"C:\Users\alex" }, accounts);
             Eq(1, found.Count, "one");
             True(found[0].Sid == null, "no SID");
             Eq(@"Remove-Item -LiteralPath 'C:\Users\domovoi-svc' -Recurse -Force", found[0].Cleanup(), "cleanup");
             ParsesAsPowerShell(found[0].Cleanup(), "the cleanup");
-            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\Kamron") }, new string[0], accounts).Count, "a deleted account that isn't domovoi-svc");
+            Eq(0, LeftoverProfiles.Find(new[] { new ProfileEntry(OldSid, @"C:\Users\alex") }, new string[0], accounts).Count, "a deleted account that isn't domovoi-svc");
         });
         Run("leftover profile: the account lookup Setup uses; .wslconfig goes into the real profile", delegate
         {
             True(Domovoi.Windows.Helper.Preflight.SidIsAnAccount(System.Security.Principal.WindowsIdentity.GetCurrent().User.Value), "this account");
             True(!Domovoi.Windows.Helper.Preflight.SidIsAnAccount("S-1-5-21-1-2-3-4000"), "no such account");
-            Eq(@"C:\Users\domovoi-svc.MY-PC\.wslconfig", WslConfig.FileIn(@"C:\Users\domovoi-svc.MY-PC"), "where Windows made the profile");
+            Eq(@"C:\Users\domovoi-svc.DESKTOP-ALEX\.wslconfig", WslConfig.FileIn(@"C:\Users\domovoi-svc.DESKTOP-ALEX"), "where Windows made the profile");
             Throws<ArgumentException>(delegate { WslConfig.FileIn(""); }, "no profile");
-            True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.MY-PC"), "the uninstall recognises it");
+            True(UninstallFacts.IsDomovoiProfilePath(@"C:\Users\domovoi-svc.DESKTOP-ALEX"), "the uninstall recognises it");
         });
     }
 

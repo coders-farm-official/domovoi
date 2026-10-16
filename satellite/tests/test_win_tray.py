@@ -28,8 +28,8 @@ FULL_KEYS = [f"wake.setting_{i:02d}" for i in range(30)]
 
 def status(**kw):
     st = {"connection": "connected", "mic": "listening", "output": "idle",
-          "room": {"id": "den", "name": "Den"}, "server": {"host": "192.168.0.117"},
-          "dashboard": "http://192.168.0.117:6369", "volume": 40, "pending": []}
+          "room": {"id": "den", "name": "Den"}, "server": {"host": "192.168.1.20"},
+          "dashboard": "http://192.168.1.20:6369", "volume": 40, "pending": []}
     st.update(kw)
     return st
 
@@ -262,11 +262,11 @@ def test_the_tray_is_one_per_user(monkeypatch):
 def test_the_tray_opens_only_a_web_address_or_a_folder(monkeypatch, tmp_path):
     opened = []
     monkeypatch.setattr(win_tray.os, "startfile", opened.append)
-    assert win_tray._open("http://192.168.0.117:6369") is True
+    assert win_tray._open("http://192.168.1.20:6369") is True
     assert win_tray._open(str(tmp_path)) is True
     for bad in (r"C:\Windows\System32\calc.exe", "file:///C:/x", "", "ms-settings:privacy"):
         assert win_tray._open(bad) is False
-    assert opened == ["http://192.168.0.117:6369", str(tmp_path)]
+    assert opened == ["http://192.168.1.20:6369", str(tmp_path)]
 
 
 @windows_only

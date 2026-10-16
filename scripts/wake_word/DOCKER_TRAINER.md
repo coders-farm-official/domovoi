@@ -380,8 +380,8 @@ Notes:
 ### Placeholder mapping (host -> container)
 | Placeholder | Host value (example) | In container |
 |---|---|---|
-| `{clips_dir}` | `C:\Users\Kamron\.domovoi\wake_clips\hey_domovoi\.training` | `/data/clips` (read-only) |
-| `dirname({out})` | `C:\Users\Kamron\.domovoi\wake_models` | `/data/models` |
+| `{clips_dir}` | `C:\Users\alex\.domovoi\wake_clips\hey_domovoi\.training` | `/data/clips` (read-only) |
+| `dirname({out})` | `C:\Users\alex\.domovoi\wake_models` | `/data/models` |
 | `{phrase}` | `hey domovoi` | `WAKE_PHRASE` env |
 | `{slug}` | `hey_domovoi` | `WAKE_SLUG` env -> writes `/data/models/hey_domovoi.onnx` |
 | `{out}` | `C:\...\wake_models\hey_domovoi.onnx` | (the host path the worker stat()s; appears via the `/data/models` bind) |
@@ -602,7 +602,7 @@ card. Details: [docs/WINDOWS_HOST.md](../../docs/WINDOWS_HOST.md#training-wake-w
 ## What you get
 
 `<slug>.onnx` at the host `{out}` (e.g.
-`C:\Users\Kamron\.domovoi\wake_models\hey_domovoi.onnx`), about 205 KB. The
+`C:\Users\alex\.domovoi\wake_models\hey_domovoi.onnx`), about 205 KB. The
 worker marks the row `ready`, the model serves over `/v1/wake-models/<slug>.onnx`,
 and the dashboard's **Push to …** control pushes it to satellites. The Pi's
 effective wake word, the served filename, and the openWakeWord prediction-dict

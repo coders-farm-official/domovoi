@@ -16,8 +16,9 @@ import java.io.File
  * buffering (80 ms chunks, the 480-sample context, 76-frame windows, the
  * 16-embedding input, the five silent warm-up scores). With the real
  * models on ONNX Runtime for the JVM: the same scores openWakeWord 0.6.0
- * gives a recorded "hey jarvis" (functional-testing/room-mode/
- * oww_reference.py) — run when -Pdomovoi.oww.dir and -Pdomovoi.room.clips
+ * gives a recorded "hey jarvis" (measured with a reference script in the
+ * maintainers' functional test harness, kept outside this repo) — run
+ * when -Pdomovoi.oww.dir and -Pdomovoi.room.clips
  * point at the models and the clips (not in the repo: their licence).
  */
 class WakeDetectorTest {

@@ -118,7 +118,7 @@ def test_every_loopback_spelling_is_allowed(host, network_guard):
 
 
 @pytest.mark.parametrize(
-    "host", ["192.168.0.117", "10.0.2.2", "example.test", "0.0.0.0", "1270.0.1"]
+    "host", ["192.168.1.20", "10.0.2.2", "example.test", "0.0.0.0", "1270.0.1"]
 )
 def test_everything_else_is_not_loopback(host, network_guard):
     assert network_guard.is_loopback(host) is False

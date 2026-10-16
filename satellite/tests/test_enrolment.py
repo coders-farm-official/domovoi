@@ -80,7 +80,7 @@ def test_the_fixture_covers_what_the_brief_names():
 ])
 def test_whatever_the_builder_writes_parses_back(name):
     fp = FIXTURE["build"][0]["fp"]
-    parsed = en.parse(en.build("http://192.168.0.117:6370", fp, name))
+    parsed = en.parse(en.build("http://192.168.1.20:6370", fp, name))
     assert parsed.room == name.strip()
     assert parsed.room_id == en.room_id_for(name)
     assert en.ROOM_ID_RE.match(parsed.room_id), "the core's own room-id rule"
@@ -90,13 +90,13 @@ def test_whatever_the_builder_writes_parses_back(name):
 def test_the_builder_refuses_what_the_parser_would():
     fp = FIXTURE["build"][0]["fp"]
     with pytest.raises(en.EnrolmentError) as e:
-        en.build("ws://192.168.0.117:6370", fp, "Kitchen")
+        en.build("ws://192.168.1.20:6370", fp, "Kitchen")
     assert e.value.reason == "bad_core"
     with pytest.raises(en.EnrolmentError) as e:
-        en.build("http://192.168.0.117:6370", "SHA256:short", "Kitchen")
+        en.build("http://192.168.1.20:6370", "SHA256:short", "Kitchen")
     assert e.value.reason == "bad_fp"
     with pytest.raises(en.EnrolmentError) as e:
-        en.build("http://192.168.0.117:6370", fp, "!!!")
+        en.build("http://192.168.1.20:6370", fp, "!!!")
     assert e.value.reason == "bad_room"
 
 
@@ -130,7 +130,7 @@ def test_the_home_names_are_the_core_s_lan_names():
 
 
 @pytest.mark.parametrize("host,home", [
-    ("192.168.0.117", True), ("10.0.0.1", True), ("172.16.0.1", True), ("172.31.255.255", True),
+    ("192.168.1.20", True), ("10.0.0.1", True), ("172.16.0.1", True), ("172.31.255.255", True),
     ("172.32.0.1", False), ("8.8.8.8", False), ("127.0.0.1", False), ("100.64.0.1", False),
     ("169.254.1.1", False), ("fd00::17", True), ("fe80::1", True), ("2001:db8::1", False),
     ("::1", False), ("domovoi.local", True), ("kitchen.home.arpa", True), ("local", False),
@@ -185,16 +185,16 @@ def _signing_opener(seed, public, seen):
 def test_verify_proves_the_core_named_in_the_payload():
     seed, public, fp = _core()
     seen: list[str] = []
-    enrolment = en.parse(en.build("http://192.168.0.117:6370", fp, "Study"))
+    enrolment = en.parse(en.build("http://192.168.1.20:6370", fp, "Study"))
     assert en.verify(enrolment, opener=_signing_opener(seed, public, seen)) == fp
-    assert seen and seen[0].startswith("http://192.168.0.117:6370/v1/health?challenge=")
-    assert "addr=192.168.0.117%3A6370" in seen[0]
+    assert seen and seen[0].startswith("http://192.168.1.20:6370/v1/health?challenge=")
+    assert "addr=192.168.1.20%3A6370" in seen[0]
 
 
 def test_verify_refuses_a_core_holding_a_different_key():
     seed, public, _fp = _core(7)
     _s2, _p2, other_fp = _core(8)
-    enrolment = en.parse(en.build("http://192.168.0.117:6370", other_fp, "Study"))
+    enrolment = en.parse(en.build("http://192.168.1.20:6370", other_fp, "Study"))
     with pytest.raises(server_identity.IdentityError):
         en.verify(enrolment, opener=_signing_opener(seed, public, []))
 

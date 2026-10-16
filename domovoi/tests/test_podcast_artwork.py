@@ -135,7 +135,7 @@ async def test_an_http_error_or_an_oversized_body_stores_nothing(server, monkeyp
 
 @pytest.mark.asyncio
 async def test_a_house_local_artwork_url_is_never_fetched(server) -> None:
-    for url in ("http://127.0.0.1:6370/v1/admin/snapshot", "http://192.168.0.1/admin.png",
+    for url in ("http://127.0.0.1:6370/v1/admin/snapshot", "http://192.168.1.1/admin.png",
                 "file:///etc/passwd", "https://does-not-resolve.example/x.jpg"):
         assert await pa.ensure_artwork(6, url) is None
     assert server.hits == []

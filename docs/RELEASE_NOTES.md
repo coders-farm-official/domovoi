@@ -1799,12 +1799,9 @@ step. In this order:
     `ReadWritePaths=`/`BindPaths=` lines first. Afterwards check that
     Settings → Version still offers Restart Domovoi.
 
-**For the owner's own machine** (not part of any install): remove the
-`Bash(python -c ' *)` and `Bash(git add *)` entries from
-`domovoi-project/.claude/settings.local.json` and allow the specific
-scripts you use instead (A8-16); delete `COLLABORA_JWT_SECRET` and
-`ONLYOFFICE_JWT_SECRET` from the dev box's `domovoi/.env`, whose engines
-are retired (A8-18).
+**Leftover secrets:** a `domovoi/.env` that still has
+`COLLABORA_JWT_SECRET` or `ONLYOFFICE_JWT_SECRET` can drop them; their
+engines are retired (A8-18).
 
 ### What changes
 
@@ -3504,8 +3501,8 @@ when its heuristic window lapses, which on this box is hours rather than
 days.
 
 Measured on the real dashboard in a real headless Chrome, all four ways a
-person arrives, with and without a service worker:
-`functional-testing/plan-20260922/reach-real-20260925/`.
+person arrives, with and without a service worker (with the maintainers'
+functional test harness, kept outside this repo).
 
 ### What changed
 

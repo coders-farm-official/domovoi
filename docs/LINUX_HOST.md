@@ -1649,10 +1649,10 @@ first command, on the machine you commit from, prints the line; the rest,
 as your admin user on the box, put it in place owned by root:
 
 ```bash
-printf 'kamron namespaces="git" %s\n' "$(cut -d' ' -f1,2 ~/.ssh/domovoi_signing.pub)"
+printf 'alex namespaces="git" %s\n' "$(cut -d' ' -f1,2 ~/.ssh/domovoi_signing.pub)"
 
 sudo install -d -m 0755 -o root -g root /etc/domovoi
-echo 'kamron namespaces="git" ssh-ed25519 AAAA...' | sudo tee /etc/domovoi/allowed_signers >/dev/null
+echo 'alex namespaces="git" ssh-ed25519 AAAA...' | sudo tee /etc/domovoi/allowed_signers >/dev/null
 sudo chmod 0644 /etc/domovoi/allowed_signers
 ```
 
@@ -1664,8 +1664,8 @@ sudo git -C /opt/domovoi -c safe.directory=/opt/domovoi -c gpg.ssh.allowedSigner
 sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
 ```
 
-The first prints `Good "git" signature for kamron with ED25519 key ...`.
-The second reports `signed updates enforced: HEAD ... is signed by kamron`,
+The first prints `Good "git" signature for alex with ED25519 key ...`.
+The second reports `signed updates enforced: HEAD ... is signed by alex`,
 or stops, changing nothing, if HEAD would be refused. If the checkout is
 still on a commit from before you started signing, pull a signed one first
 (**Pull the latest** verifies it), then restart. Several people can sign:

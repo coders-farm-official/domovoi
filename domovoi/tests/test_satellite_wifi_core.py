@@ -102,11 +102,11 @@ def test_a_health_sample_keeps_the_boot_step_and_the_host_name():
     s = satellite_health.validate_sample({
         "seq": 1, "ts": 1.0, "hostname": "domovoi-office",
         "net_step": {"state": "skipped", "when": "boot", "at": 1760000000.5, "version": 2,
-                     "detail": "host name 'kamrons-pi' looks chosen by a person; not renaming it"},
+                     "detail": "host name 'alexs-pi' looks chosen by a person; not renaming it"},
     })
     assert s["hostname"] == "domovoi-office"
     assert s["net_step"] == {"state": "skipped", "when": "boot", "at": 1760000000.5, "version": 2,
-                             "detail": "host name 'kamrons-pi' looks chosen by a person; not renaming it"}
+                             "detail": "host name 'alexs-pi' looks chosen by a person; not renaming it"}
     for state in ("applied", "unchanged", "failed", "not_run", "not_installed", "running"):
         assert satellite_health.validate_sample(
             {"seq": 1, "net_step": {"state": state}})["net_step"]["state"] == state

@@ -25,10 +25,10 @@ you actually run. This script does, against either of two targets:
                  token.
 
 Usage:
-    python scripts/eval_routing.py --core http://192.168.0.117:6370 --room bench
+    python scripts/eval_routing.py --core http://192.168.1.20:6370 --room bench
     python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b
     python scripts/eval_routing.py --ollama http://localhost:11434 --only qa --only double_check
-    python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b         --live-tools http://192.168.0.117:6370
+    python scripts/eval_routing.py --ollama http://localhost:11434 --model qwen3:8b         --live-tools http://192.168.1.20:6370
     python scripts/eval_routing.py --list
 
 Exit status is 1 when any case misroutes, so it can gate a deploy. Pass
@@ -323,7 +323,7 @@ def append_jsonl(path: Path, results: list[Result], target: str, model: str | No
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     target = p.add_mutually_exclusive_group()
-    target.add_argument("--core", metavar="URL", help="running core, e.g. http://192.168.0.117:6370")
+    target.add_argument("--core", metavar="URL", help="running core, e.g. http://192.168.1.20:6370")
     target.add_argument("--ollama", metavar="URL", help="Ollama server, e.g. http://localhost:11434")
     p.add_argument("--model", help="tool model for --ollama (default: settings.ollama_tool_model)")
     p.add_argument("--room", default="eval", help="room_id for --core turns (default: eval)")

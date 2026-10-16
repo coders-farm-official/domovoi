@@ -455,8 +455,8 @@ def _wifi_profiles_for_ssid(nmcli: str, ssid: str, run) -> list[str]:
 
     Matched on the ssid PROPERTY rather than the profile's name, because
     that is what NetworkManager itself matches on when it decides to reuse a
-    profile: ``Kamber Wifi 2.0 1`` carries the same ssid as
-    ``Kamber Wifi 2.0`` and is just as able to break the next attempt.
+    profile: ``Maple Wifi 2.0 1`` carries the same ssid as
+    ``Maple Wifi 2.0`` and is just as able to break the next attempt.
     """
     try:
         r = run(
@@ -563,7 +563,7 @@ def _nmcli_join(
         # `nmcli device wifi connect` REUSED a matching saved profile, so
         # one broken profile made every later attempt fail the same way no
         # matter what was re-typed; and each fresh one is how
-        # `Kamber Wifi 2.0 1`, `... 2` pile up.
+        # `Maple Wifi 2.0 1`, `... 2` pile up.
         _delete_wifi_profiles(
             nmcli, _wifi_profiles_for_ssid(nmcli, ssid, run), run
         )

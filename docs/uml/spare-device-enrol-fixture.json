@@ -42,10 +42,10 @@
     {
       "name": "basic",
       "about": "The dashboard's own output for a plain room name.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -54,10 +54,10 @@
     {
       "name": "room_needs_escapes",
       "about": "Apostrophe, spaces and an ampersand: every one percent-encoded; the apostrophe is dropped from the id.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kid%27s%20Room%20%26%20Den",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kid%27s%20Room%20%26%20Den",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kid's Room & Den",
         "room_id": "kids_room_den"
@@ -66,10 +66,10 @@
     {
       "name": "room_unicode",
       "about": "UTF-8 escapes; NFKD folds the umlaut away in the id.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=K%C3%BCche%202",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=K%C3%BCche%202",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Küche 2",
         "room_id": "kuche_2"
@@ -78,10 +78,10 @@
     {
       "name": "room_curly_apostrophe",
       "about": "U+2019 is dropped like '.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Grandma%E2%80%99s%20Study",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Grandma%E2%80%99s%20Study",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Grandma’s Study",
         "room_id": "grandmas_study"
@@ -90,10 +90,10 @@
     {
       "name": "room_emoji",
       "about": "A 4-byte UTF-8 character (2 UTF-16 units, 1 code point) is a separator.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den%20%F0%9F%8E%AE",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den%20%F0%9F%8E%AE",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Den 🎮",
         "room_id": "den"
@@ -102,10 +102,10 @@
     {
       "name": "room_leading_digit",
       "about": "A room id must start with a letter: room_ goes in front.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3AxFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc&room=2nd%20Bedroom",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3AxFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc&room=2nd%20Bedroom",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:xFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc",
         "room": "2nd Bedroom",
         "room_id": "room_2nd_bedroom"
@@ -114,10 +114,10 @@
     {
       "name": "room_fullwidth",
       "about": "NFKD turns full-width letters into ASCII.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3AxFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc&room=%EF%BC%AF%EF%BD%86%EF%BD%86%EF%BD%89%EF%BD%83%EF%BD%85",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3AxFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc&room=%EF%BC%AF%EF%BD%86%EF%BD%86%EF%BD%89%EF%BD%83%EF%BD%85",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:xFM61jsPaKBtEvoVBew6Ov71zjWcA86KuI6Jv93LGvc",
         "room": "Ｏｆｆｉｃｅ",
         "room_id": "office"
@@ -234,10 +234,10 @@
     {
       "name": "trailing_slash",
       "about": "A trailing / is dropped.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370%2F&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Office",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370%2F&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Office",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Office",
         "room_id": "office"
@@ -246,10 +246,10 @@
     {
       "name": "hand_typed_raw",
       "about": "Typed without escapes: ':' and '/' may be raw in a query, and a raw '+' is a plus sign, never a space.",
-      "payload": "domovoi-room:1?core=http://192.168.0.117:6370&fp=SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Office",
+      "payload": "domovoi-room:1?core=http://192.168.1.20:6370&fp=SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Office",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Office",
         "room_id": "office"
@@ -258,10 +258,10 @@
     {
       "name": "lowercase_hex",
       "about": "Lower-case hex escapes decode the same.",
-      "payload": "domovoi-room:1?core=http%3a%2f%2f192.168.0.117%3a6370&fp=SHA256%3A4gq%2bpNW%2flnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Office",
+      "payload": "domovoi-room:1?core=http%3a%2f%2f192.168.1.20%3a6370&fp=SHA256%3A4gq%2bpNW%2flnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Office",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Office",
         "room_id": "office"
@@ -270,10 +270,10 @@
     {
       "name": "uppercase_scheme",
       "about": "The scheme is matched without regard to case.",
-      "payload": "DOMOVOI-ROOM:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "DOMOVOI-ROOM:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -282,10 +282,10 @@
     {
       "name": "field_order",
       "about": "Fields may come in any order.",
-      "payload": "domovoi-room:1?room=Kitchen&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&core=http%3A%2F%2F192.168.0.117%3A6370",
+      "payload": "domovoi-room:1?room=Kitchen&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&core=http%3A%2F%2F192.168.1.20%3A6370",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -294,10 +294,10 @@
     {
       "name": "unknown_key_ignored",
       "about": "A key this version doesn't know is ignored.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&label=Downstairs&v2_hint=1",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&label=Downstairs&v2_hint=1",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -306,10 +306,10 @@
     {
       "name": "plus_in_room",
       "about": "%2B and a raw + are both '+'.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=A+B%2BC",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=A+B%2BC",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "A+B+C",
         "room_id": "a_b_c"
@@ -318,10 +318,10 @@
     {
       "name": "surrounding_whitespace",
       "about": "A pasted payload's surrounding spaces, tabs and newlines are trimmed (only those).",
-      "payload": "  domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen\r\n",
+      "payload": "  domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen\r\n",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -330,10 +330,10 @@
     {
       "name": "room_spaces_kept",
       "about": "The name is kept as decoded; its id ignores spaces at either end.",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%20Office%20",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%20Office%20",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": " Office ",
         "room_id": "office"
@@ -342,10 +342,10 @@
     {
       "name": "join_link",
       "about": "What the dashboard's QR code carries.",
-      "payload": "http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://192.168.1.20:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -353,10 +353,10 @@
     },
     {
       "name": "join_link_upper_case_scheme_and_path",
-      "payload": "HTTP://192.168.0.117:6370/JOIN#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "HTTP://192.168.1.20:6370/JOIN#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -364,10 +364,10 @@
     },
     {
       "name": "join_link_trimmed",
-      "payload": "  http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen\n",
+      "payload": "  http://192.168.1.20:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen\n",
       "expect": {
-        "core": "http://192.168.0.117:6370",
-        "ws_url": "ws://192.168.0.117:6370",
+        "core": "http://192.168.1.20:6370",
+        "ws_url": "ws://192.168.1.20:6370",
         "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "room": "Kitchen",
         "room_id": "kitchen"
@@ -404,7 +404,7 @@
     },
     {
       "name": "wrong_scheme",
-      "payload": "https://192.168.0.117:6370",
+      "payload": "https://192.168.1.20:6370",
       "reason": "not_enrolment"
     },
     {
@@ -414,22 +414,22 @@
     },
     {
       "name": "bad_version",
-      "payload": "domovoi-room:2?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:2?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "unsupported_version"
     },
     {
       "name": "version_zero_padded",
-      "payload": "domovoi-room:01?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:01?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "unsupported_version"
     },
     {
       "name": "no_version",
-      "payload": "domovoi-room:?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
       "name": "slashes",
-      "payload": "domovoi-room://1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room://1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
@@ -444,52 +444,52 @@
     },
     {
       "name": "pair_without_equals",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&room2",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&room2",
       "reason": "malformed"
     },
     {
       "name": "empty_pair",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
       "name": "duplicate_key",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&room=Office",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&room=Office",
       "reason": "malformed"
     },
     {
       "name": "bad_escape_short",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen%2",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen%2",
       "reason": "malformed"
     },
     {
       "name": "bad_escape_hex",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen%G1",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen%G1",
       "reason": "malformed"
     },
     {
       "name": "invalid_utf8",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=K%C3%28che",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=K%C3%28che",
       "reason": "malformed"
     },
     {
       "name": "raw_space",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Living Room",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Living Room",
       "reason": "malformed"
     },
     {
       "name": "raw_non_ascii",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Küche",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Küche",
       "reason": "malformed"
     },
     {
       "name": "fragment",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen#top",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen#top",
       "reason": "malformed"
     },
     {
       "name": "too_long",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen&pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       "reason": "malformed"
     },
     {
@@ -499,22 +499,22 @@
     },
     {
       "name": "missing_fp",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&room=Kitchen",
       "reason": "missing_fp"
     },
     {
       "name": "empty_fp",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=&room=Kitchen",
       "reason": "missing_fp"
     },
     {
       "name": "missing_room",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
       "reason": "missing_room"
     },
     {
       "name": "non_http_scheme",
-      "payload": "domovoi-room:1?core=ws%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=ws%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
@@ -573,7 +573,7 @@
     },
     {
       "name": "ipv4_mapped_ipv6",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F%5B%3A%3Affff%3A192.168.0.1%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F%5B%3A%3Affff%3A192.168.1.1%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "not_home_network",
       "about": "An IPv4-mapped IPv6 address is not unique-local."
     },
@@ -596,27 +596,27 @@
     },
     {
       "name": "core_with_path",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370%2Fadmin&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370%2Fadmin&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
       "name": "core_with_query",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370%3Fx%3D1&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370%3Fx%3D1&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
       "name": "core_with_userinfo",
-      "payload": "domovoi-room:1?core=http%3A%2F%2Fadmin%40192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2Fadmin%40192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
       "name": "core_port_out_of_range",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A70000&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A70000&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
       "name": "core_port_not_numeric",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3Aport&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3Aport&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
@@ -626,7 +626,7 @@
     },
     {
       "name": "core_space",
-      "payload": "domovoi-room:1?core=%20http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=%20http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_core"
     },
     {
@@ -641,114 +641,114 @@
     },
     {
       "name": "fp_lowercase_prefix",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=sha256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=sha256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_fp"
     },
     {
       "name": "fp_short",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoO&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoO&room=Kitchen",
       "reason": "bad_fp"
     },
     {
       "name": "fp_padded",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA%3D&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA%3D&room=Kitchen",
       "reason": "bad_fp"
     },
     {
       "name": "fp_plus_as_space",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%20pNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%20pNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "bad_fp",
       "about": "A form decoder's mistake: '+' read as a space."
     },
     {
       "name": "room_no_letters",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%21%21%21",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%21%21%21",
       "reason": "bad_room"
     },
     {
       "name": "room_cyrillic_only",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%D0%9A%D1%83%D1%85%D0%BD%D1%8F",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%D0%9A%D1%83%D1%85%D0%BD%D1%8F",
       "reason": "bad_room"
     },
     {
       "name": "room_spaces_only",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%20%20%20",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=%20%20%20",
       "reason": "bad_room"
     },
     {
       "name": "room_id_too_long",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=The%20Very%20Long%20Upstairs%20Guest%20Bedroom%20Corner",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=The%20Very%20Long%20Upstairs%20Guest%20Bedroom%20Corner",
       "reason": "bad_room"
     },
     {
       "name": "room_id_too_long_with_prefix",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=1234567890abcdefghij1234567890",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=1234567890abcdefghij1234567890",
       "reason": "bad_room",
       "about": "28 digits and letters is fine, until room_ goes in front."
     },
     {
       "name": "room_name_too_long",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "reason": "bad_room"
     },
     {
       "name": "room_control_char",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen%0A",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen%0A",
       "reason": "bad_room"
     },
     {
       "name": "room_format_char",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kit%E2%80%8Dchen",
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kit%E2%80%8Dchen",
       "reason": "bad_room"
     },
     {
       "name": "join_link_no_fragment",
-      "payload": "http://192.168.0.117:6370/join",
+      "payload": "http://192.168.1.20:6370/join",
       "reason": "not_enrolment"
     },
     {
       "name": "join_link_other_path",
-      "payload": "http://192.168.0.117:6370/other#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://192.168.1.20:6370/other#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "not_enrolment"
     },
     {
       "name": "join_link_with_a_query",
-      "payload": "http://192.168.0.117:6370/join?app=missing#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://192.168.1.20:6370/join?app=missing#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "not_enrolment"
     },
     {
       "name": "join_link_fragment_not_a_code",
-      "payload": "http://192.168.0.117:6370/join#hello",
+      "payload": "http://192.168.1.20:6370/join#hello",
       "reason": "not_enrolment"
     },
     {
       "name": "join_link_other_server",
-      "payload": "http://192.168.0.200:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://192.168.1.200:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
       "name": "join_link_other_port",
-      "payload": "http://192.168.0.117:6369/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://192.168.1.20:6369/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
       "name": "join_link_https_for_an_http_core",
-      "payload": "https://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "https://192.168.1.20:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
       "name": "join_link_address_too_long",
-      "payload": "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.lan/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.lan/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "malformed"
     },
     {
       "name": "join_link_bad_version",
-      "payload": "http://192.168.0.117:6370/join#domovoi-room:2?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "payload": "http://192.168.1.20:6370/join#domovoi-room:2?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
       "reason": "unsupported_version"
     },
     {
       "name": "join_link_two_fragments",
-      "payload": "http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen#x",
+      "payload": "http://192.168.1.20:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen#x",
       "reason": "malformed"
     },
     {
@@ -759,16 +759,16 @@
   ],
   "build": [
     {
-      "core": "http://192.168.0.117:6370",
+      "core": "http://192.168.1.20:6370",
       "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
       "room": "Kitchen",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen"
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen"
     },
     {
-      "core": "http://192.168.0.117:6370",
+      "core": "http://192.168.1.20:6370",
       "fp": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
       "room": "Kid's Room & Den",
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kid%27s%20Room%20%26%20Den"
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kid%27s%20Room%20%26%20Den"
     },
     {
       "core": "http://[fd00::17]:6370",
@@ -785,8 +785,8 @@
   ],
   "build_join": [
     {
-      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
-      "join_link": "http://192.168.0.117:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen"
+      "payload": "domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen",
+      "join_link": "http://192.168.1.20:6370/join#domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Kitchen"
     },
     {
       "payload": "domovoi-room:1?core=http%3A%2F%2F%5Bfd00%3A%3A17%5D%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA&room=Den",

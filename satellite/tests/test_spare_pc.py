@@ -686,7 +686,7 @@ def test_a_start_that_passes_the_checks_clears_the_reason(tmp_path, monkeypatch)
     cfg_path = tmp_path / "config.toml"
     profile = "windows_pc" if sys.platform == "win32" else "generic_pc"
     cfg_path.write_text(f'[device]\nprofile = "{profile}"\n[satellite]\nroom_id = "study"\n'
-                        f'domovoi_url = "ws://192.168.0.117:6370"\nserver_fingerprint = "{FP}"\n', encoding="utf-8")
+                        f'domovoi_url = "ws://192.168.1.20:6370"\nserver_fingerprint = "{FP}"\n', encoding="utf-8")
     with pytest.raises(_Started):
         client.main(["--config", str(cfg_path)])
     assert not_started.read() is None

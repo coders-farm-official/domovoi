@@ -100,7 +100,7 @@ class RoomProtocolTest {
 
     @Test
     fun onlyAnHttpUrlIsAStream() {
-        assertTrue(RoomProtocol.isStreamUrl("http://192.168.0.240:8051/stream.mp3"))
+        assertTrue(RoomProtocol.isStreamUrl("http://192.168.1.30:8051/stream.mp3"))
         assertFalse(RoomProtocol.isStreamUrl("-w /sdcard/x"))
         assertFalse(RoomProtocol.isStreamUrl("file:///etc/passwd"))
         assertFalse(RoomProtocol.isStreamUrl("http://h/a b"))
@@ -109,7 +109,7 @@ class RoomProtocolTest {
 
     @Test
     fun theStreamUrlFollowsTheCoreUrl() {
-        assertEquals("ws://192.168.0.240:6370/v1/stream/kitchen", RoomProtocol.streamUrl("http://192.168.0.240:6370", "kitchen"))
+        assertEquals("ws://192.168.1.30:6370/v1/stream/kitchen", RoomProtocol.streamUrl("http://192.168.1.30:6370", "kitchen"))
         assertEquals("wss://h:6370/v1/stream/a", RoomProtocol.streamUrl("https://h:6370/", "a"))
     }
 

@@ -254,16 +254,16 @@ class PlayerServerSwitchTest {
     // ---- the scope itself ---------------------------------------------------
 
     @Test fun serversAreToldApartByIdentityThenAddress() {
-        val a = ServerScope("http://192.168.0.117:6369", "SHA256:a")
+        val a = ServerScope("http://192.168.1.20:6369", "SHA256:a")
         assertTrue(a.isSameServer(ServerScope("http://beelink.lan:6369", "SHA256:a")))
-        assertFalse(a.isSameServer(ServerScope("http://192.168.0.117:6369", "SHA256:b")))
-        assertTrue(a.isSameServer(ServerScope("http://192.168.0.117:6369", null)))
-        assertFalse(a.isSameServer(ServerScope("http://192.168.0.240:6369", null)))
+        assertFalse(a.isSameServer(ServerScope("http://192.168.1.20:6369", "SHA256:b")))
+        assertTrue(a.isSameServer(ServerScope("http://192.168.1.20:6369", null)))
+        assertFalse(a.isSameServer(ServerScope("http://192.168.1.30:6369", null)))
         assertFalse(ServerScope.NONE.isSameServer(ServerScope.NONE))
         assertFalse(a.isSameServer(ServerScope.NONE))
         assertEquals(ServerScope("http://beelink.lan:6369", "SHA256:a"), ServerScope("http://beelink.lan:6369", null).merge(a.copy(address = null)))
         assertEquals(ServerScope.NONE, ServerScope.of("", null))
-        assertEquals(ServerScope("http://192.168.0.240:6369", null), ServerScope.of("http://192.168.0.240:6369/", null))
+        assertEquals(ServerScope("http://192.168.1.30:6369", null), ServerScope.of("http://192.168.1.30:6369/", null))
     }
 
     @Test fun thePlanKeepsThePhonesSongsInOrder() {

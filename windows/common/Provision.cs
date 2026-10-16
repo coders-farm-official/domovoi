@@ -407,10 +407,10 @@ namespace Domovoi.Windows
             s.Trees.AddRange(new[]
             {
                 @"C:\Windows", @"C:\Program Files", @"C:\Program Files (x86)", @"C:\ProgramData",
-                @"C:\Users\Default", @"C:\Users\domovoi-svc", @"C:\Users\Kamron\AppData", @"C:\Users\Public\AppData",
+                @"C:\Users\Default", @"C:\Users\domovoi-svc", @"C:\Users\alex\AppData", @"C:\Users\Public\AppData",
                 @"C:\$Recycle.Bin", @"C:\System Volume Information", @"C:\Recovery",
             });
-            s.Exact.AddRange(new[] { @"C:\Users", @"C:\Users\Public", @"C:\Users\Kamron" });
+            s.Exact.AddRange(new[] { @"C:\Users", @"C:\Users\Public", @"C:\Users\alex" });
             return s;
         }
     }

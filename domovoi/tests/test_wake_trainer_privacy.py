@@ -3,10 +3,11 @@ training data is what was pinned.
 
 The trainer copies the recorded clips (somebody's voice) into the cache
 volume for a run and removes the copies at the end. The review of
-2026-10-13 (functional-testing/review-wake-gpu/kill_test.sh) found that a
-run stopped from outside left them there: the wrapper's ``docker rm -f``
-killed the container before the entrypoint's ``finally`` ran, and as PID 1
-the entrypoint ignored the SIGTERM a ``docker stop`` would have sent. Now:
+2026-10-13 (a kill test in the maintainers' functional test harness)
+found that a run stopped from outside left them there: the wrapper's
+``docker rm -f`` killed the container before the entrypoint's ``finally``
+ran, and as PID 1 the entrypoint ignored the SIGTERM a ``docker stop``
+would have sent. Now:
 
 * the container runs under ``--init`` and the entrypoint turns SIGTERM,
   SIGINT and SIGHUP into an exit that runs its ``finally``;

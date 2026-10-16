@@ -44,7 +44,7 @@ class RoomIdentityTest {
     @Test
     fun anAnswerForAnotherAddressOrNonceOrKeyIsRefused() {
         assertThrows(RoomIdentity.IdentityException::class.java) {
-            RoomIdentity.verifyHealthDocument(fixture["health"], challenge, fp, "192.168.0.99:6370")
+            RoomIdentity.verifyHealthDocument(fixture["health"], challenge, fp, "192.168.1.99:6370")
         }
         assertThrows(RoomIdentity.IdentityException::class.java) {
             RoomIdentity.verifyHealthDocument(fixture["health"], "00$challenge".take(32), fp, addr)
@@ -68,7 +68,7 @@ class RoomIdentityTest {
         val doc = buildJsonObject {
             put("identity", buildJsonObject {
                 put("algorithm", "ed25519")
-                put("public_key", "qvDjqrqlUyNof5tJphegfPIIF1Uzwu62kyRo9GMxDwc=")
+                put("public_key", fixture["health"]!!.jsonObject["identity"]!!.jsonObject["public_key"]!!.jsonPrimitive.content)
                 put("challenge", challenge)
                 put("addr_refused", addr)
             })
@@ -85,7 +85,7 @@ class RoomIdentityTest {
         val pub = Ed25519.publicKey(seed)
         val pinned = RoomIdentity.fingerprintOf(pub)
         var asked: String? = null
-        val proved = RoomIdentity.verifyServer("http://192.168.0.240:6370", pinned) { url ->
+        val proved = RoomIdentity.verifyServer("http://192.168.1.30:6370", pinned) { url ->
             asked = url
             val q = url.substringAfter('?').split('&').associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8") }
             val c = q.getValue("challenge")
@@ -104,18 +104,18 @@ class RoomIdentityTest {
             }.toString()
         }
         assertEquals(pinned, proved)
-        assertTrue(asked!!, asked!!.startsWith("http://192.168.0.240:6370/v1/health?challenge="))
-        assertTrue(asked!!, asked!!.endsWith("&addr=192.168.0.240%3A6370"))
+        assertTrue(asked!!, asked!!.startsWith("http://192.168.1.30:6370/v1/health?challenge="))
+        assertTrue(asked!!, asked!!.endsWith("&addr=192.168.1.30%3A6370"))
         // A transport failure is "not provable", in words.
         val e = assertThrows(RoomIdentity.IdentityException::class.java) {
-            RoomIdentity.verifyServer("http://192.168.0.240:6370", pinned) { throw java.io.IOException("refused") }
+            RoomIdentity.verifyServer("http://192.168.1.30:6370", pinned) { throw java.io.IOException("refused") }
         }
         assertTrue(e.message!!.contains("could not reach"))
     }
 
     @Test
     fun dialedAddressesAreSpelledLikeThePis() {
-        assertEquals("192.168.0.240:6370", RoomIdentity.dialedAddress("http://192.168.0.240:6370"))
+        assertEquals("192.168.1.30:6370", RoomIdentity.dialedAddress("http://192.168.1.30:6370"))
         assertEquals("domovoi.local:80", RoomIdentity.dialedAddress("http://Domovoi.LOCAL/"))
         assertEquals("[fd00::5]:6370", RoomIdentity.dialedAddress("ws://[fd00::5]:6370"))
         assertEquals("h:443", RoomIdentity.dialedAddress("https://h"))

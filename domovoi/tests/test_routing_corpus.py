@@ -16,7 +16,7 @@ DB-free on purpose so they never skip:
 * the routing prompt still names the failure mode.
 
 The live half — POST the corpus at a running core — runs only when
-``DOMOVOI_EVAL_CORE_URL`` is set (e.g. ``http://192.168.0.117:6370``). It
+``DOMOVOI_EVAL_CORE_URL`` is set (e.g. ``http://192.168.1.20:6370``). It
 writes intents_log rows on that core, so it is opt-in, never default.
 """
 

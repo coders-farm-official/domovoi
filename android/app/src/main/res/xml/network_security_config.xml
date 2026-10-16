@@ -10,7 +10,7 @@
 
   Android matches <domain> entries by exact host or DNS suffix and cannot
   express an IP range, while the usual server address is an RFC 1918 IP such
-  as http://192.168.0.117:6369. So the platform half below keeps cleartext
+  as http://192.168.1.20:6369. So the platform half below keeps cleartext
   reachable and the whole rule - IP ranges and name suffixes alike - is
   enforced by net/CleartextPolicy.kt on the app's single OkHttpClient, which
   the API, both WebSockets, media3 and Coil all share. CleartextPolicyTest and

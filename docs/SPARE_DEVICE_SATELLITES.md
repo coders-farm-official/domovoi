@@ -83,7 +83,7 @@ name, **make the code**, **copy the command**. It looks like this (one
 line):
 
 ```
-d=$(mktemp -d) && { wget -qO "$d/s.tgz" http://192.168.0.117:6370/v1/satellite-code/bundle.tar.gz || curl -fsSLo "$d/s.tgz" http://…; } && echo '<sha256>  '"$d/s.tgz" | sha256sum -c --quiet - && tar -xzf "$d/s.tgz" -C "$d" && bash "$d/satellite/scripts/install-pc.sh" 'domovoi-room:1?core=…&fp=…&room=Kid%27s%20Room'
+d=$(mktemp -d) && { wget -qO "$d/s.tgz" http://192.168.1.20:6370/v1/satellite-code/bundle.tar.gz || curl -fsSLo "$d/s.tgz" http://…; } && echo '<sha256>  '"$d/s.tgz" | sha256sum -c --quiet - && tar -xzf "$d/s.tgz" -C "$d" && bash "$d/satellite/scripts/install-pc.sh" 'domovoi-room:1?core=…&fp=…&room=Kid%27s%20Room'
 ```
 
 It downloads the satellite software from your server and runs it **only if

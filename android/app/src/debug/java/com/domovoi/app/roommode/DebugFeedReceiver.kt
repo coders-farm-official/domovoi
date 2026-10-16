@@ -11,8 +11,9 @@ import java.util.concurrent.LinkedBlockingQueue
 
 /**
  * DEBUG BUILDS ONLY: feeds the room recorded audio instead of the
- * microphone, for the emulator run (functional-testing/room-mode/), so a
- * test never listens to the host's real microphone.
+ * microphone, for an emulator run (the maintainers' functional test
+ * harness, kept outside this repo), so a test never listens to the host's
+ * real microphone.
  *
  *     adb push hey_jarvis.pcm /sdcard/Android/data/com.domovoi.app/files/feed/
  *     adb shell am broadcast -a com.domovoi.app.debug.ROOM_FEED -n com.domovoi.app/.roommode.DebugFeedReceiver --ez on true

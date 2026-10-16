@@ -146,7 +146,7 @@ def test_validate_root_rejects_config_secret(tmp_path, monkeypatch):
 def test_drive_token():
     assert fs.drive_token("E:\\") == "E"
     assert fs.drive_token("e:/") == "E"
-    assert fs.drive_token("/media/kamron/sdb1") == "sdb1"
+    assert fs.drive_token("/media/alex/sdb1") == "sdb1"
     assert fs.drive_token("/media/usb/") == "usb"
 
 

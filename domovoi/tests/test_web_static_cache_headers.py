@@ -260,9 +260,9 @@ def test_the_shell_cache_name_moved_for_this_release(sw_source):
 # that is answered 304, the browser keeps the page with no ?v= on
 # anything — and every asset URL in it is one it already has cached. The
 # versioned HTML never arrives because the HTML carrying it never
-# arrives, on the first reload or the tenth. Measured in a real browser:
-# functional-testing/plan-20260922/reach-real-20260925/reach-real-1.json
-# (lane T1 step 6) against reach-real-2.json (the unfixed control).
+# arrives, on the first reload or the tenth. Measured in a real browser
+# with the maintainers' functional test harness (kept outside this repo),
+# against the unfixed control.
 
 
 @pytest.mark.parametrize("path", ["/", "/index.html"])

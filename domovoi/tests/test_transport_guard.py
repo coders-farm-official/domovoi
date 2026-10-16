@@ -64,7 +64,7 @@ LAN_HOSTS = [
     "localhost",
     "localhost:6370",
     "127.0.0.1:6370",
-    "192.168.0.117:6370",
+    "192.168.1.20:6370",
     "10.1.2.3",
     "172.16.4.5",
     "172.31.255.254",
@@ -128,7 +128,7 @@ def test_a_configured_host_passes(monkeypatch):
 
 
 async def test_middleware_passes_a_lan_host():
-    status, body = await call(LanHostMiddleware(ok_app), headers={"host": "192.168.0.117:6370"})
+    status, body = await call(LanHostMiddleware(ok_app), headers={"host": "192.168.1.20:6370"})
     assert status == 200
     assert body == b"through"
 
@@ -170,7 +170,7 @@ async def test_middleware_lets_websocket_scopes_through():
 LAN_ORIGINS = [
     "http://localhost:6369",
     "http://127.0.0.1:6369",
-    "http://192.168.0.117:6369",
+    "http://192.168.1.20:6369",
     "http://10.0.0.4",
     "http://172.20.1.1:8080",
     "https://domovoi.local",

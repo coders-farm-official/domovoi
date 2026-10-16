@@ -311,8 +311,8 @@ one credential the app has. The rules, all unit-tested under
   `shared_prefs/domovoi-vault.xml`, under a non-exportable key in the
   Android Keystore; a blob the key cannot open is "nothing paired" and the
   app asks to pair again. At every start a plain `device_tokens` value in
-  the DataStore (an install from before the vault — or
-  `functional-testing/at.py pair --via datastore`, which writes exactly
+  the DataStore (an install from before the vault — or the maintainers'
+  test harness, kept outside this repo, which pairs by writing exactly
   that) is swept into the vault and the plain key removed — only once the
   vault's record is committed to disk, so a process killed between the
   two writes leaves the token in one file or the other, never in neither

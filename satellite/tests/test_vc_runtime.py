@@ -140,7 +140,7 @@ def test_the_install_fetches_the_runtime_wheel_and_places_it_before_pip(tmp_path
         raise wi.InstallError("stop here", 9)
 
     monkeypatch.setattr(wi, "pip_install", pip)
-    payload = enrolment.build("http://192.168.0.117:6370", "SHA256:" + "A" * 43, "Den")
+    payload = enrolment.build("http://192.168.1.20:6370", "SHA256:" + "A" * 43, "Den")
     args = __import__("types").SimpleNamespace(
         payload=payload, bundle=str(ROOT), staged_python=str(tmp_path / "py"), root=str(tmp_path / "root"),
         permissions="ask", power="no", yes=True, no_start=True, wait=0, registry_file=str(tmp_path / "r.json"),

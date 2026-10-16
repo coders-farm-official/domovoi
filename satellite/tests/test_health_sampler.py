@@ -68,8 +68,8 @@ def fake_tools(answers: dict[str, str | None]):
 TOOLS = {
     "vcgencmd": "throttled=0x50005\n",
     "nmcli": "GENERAL.STATE:100 (connected)\n",
-    "ip": "default via 192.168.0.1 dev wlan0 proto dhcp src 192.168.0.42 metric 600\n"
-          "192.168.0.0/24 dev wlan0 proto kernel scope link src 192.168.0.42\n",
+    "ip": "default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.42 metric 600\n"
+          "192.168.1.0/24 dev wlan0 proto kernel scope link src 192.168.1.42\n",
 }
 
 
@@ -140,8 +140,8 @@ def test_nm_state_and_default_gateway_parse():
     assert health.parse_nm_state("GENERAL.STATE:30 (disconnected)\n") == {"code": 30, "state": "disconnected"}
     assert health.parse_nm_state("") is None
     assert health.parse_nm_state("Error: Device 'wlan0' not found.") is None
-    assert health.parse_default_gateway(TOOLS["ip"]) == "192.168.0.1"
-    assert health.parse_default_gateway("192.168.0.0/24 dev wlan0\n") is None
+    assert health.parse_default_gateway(TOOLS["ip"]) == "192.168.1.1"
+    assert health.parse_default_gateway("192.168.1.0/24 dev wlan0\n") is None
     assert health.parse_default_gateway(None) is None
 
 
@@ -177,12 +177,12 @@ def _connect_with(outcomes: dict[tuple[str, int], BaseException | None]):
 def test_gateway_counts_a_refusal_as_answering():
     """A home router answers a SYN on 53 or 80 with either an accept or an
     RST; both prove the link. Only silence does not."""
-    refused = _connect_with({("192.168.0.1", 53): ConnectionRefusedError()})
-    assert health.host_answers("192.168.0.1", connect=refused) is True
-    assert refused.seen == [("192.168.0.1", 53)]
+    refused = _connect_with({("192.168.1.1", 53): ConnectionRefusedError()})
+    assert health.host_answers("192.168.1.1", connect=refused) is True
+    assert refused.seen == [("192.168.1.1", 53)]
     silent = _connect_with({})
-    assert health.host_answers("192.168.0.1", connect=silent) is False
-    assert silent.seen == [("192.168.0.1", 53), ("192.168.0.1", 80), ("192.168.0.1", 443)]
+    assert health.host_answers("192.168.1.1", connect=silent) is False
+    assert silent.seen == [("192.168.1.1", 53), ("192.168.1.1", 80), ("192.168.1.1", 443)]
 
 
 def test_a_gateway_that_drops_tcp_but_answers_ping_answers(tmp_path):
@@ -192,7 +192,7 @@ def test_a_gateway_that_drops_tcp_but_answers_ping_answers(tmp_path):
     pings: list[str] = []
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=fake_tools(TOOLS),
                              connect=_connect_with({}), ping=lambda h: pings.append(h) or True)
-    assert sampler.sample({})["gateway_ok"] is True and pings == ["192.168.0.1"]
+    assert sampler.sample({})["gateway_ok"] is True and pings == ["192.168.1.1"]
     sampler.ping = lambda h: False
     assert sampler.sample({})["gateway_ok"] is False
     sampler.ping = lambda h: None            # this host cannot ping: TCP decides
@@ -207,20 +207,20 @@ def test_icmp_echo_never_raises():
 
 def test_the_core_probe_tells_a_refusing_host_from_a_silent_one(tmp_path):
     proc, sysfs = make_proc(tmp_path)
-    connect = _connect_with({("192.168.0.1", 53): None,
-                             ("192.168.0.117", 6370): ConnectionRefusedError()})
+    connect = _connect_with({("192.168.1.1", 53): None,
+                             ("192.168.1.20", 6370): ConnectionRefusedError()})
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=fake_tools(TOOLS),
                              connect=connect, ping=None)
-    doc = sampler.sample({}, core_host="192.168.0.117", core_port=6370, probe_core=True)
+    doc = sampler.sample({}, core_host="192.168.1.20", core_port=6370, probe_core=True)
     assert doc["core_ok"] is False and doc["core_host_ok"] is True
-    sampler.connect = _connect_with({("192.168.0.1", 53): None})
-    doc = sampler.sample({}, core_host="192.168.0.117", core_port=6370, probe_core=True)
+    sampler.connect = _connect_with({("192.168.1.1", 53): None})
+    doc = sampler.sample({}, core_host="192.168.1.20", core_port=6370, probe_core=True)
     assert doc["core_ok"] is False and doc["core_host_ok"] is False
 
 
 def test_no_default_route_is_a_fact_and_a_failed_ip_is_not(tmp_path):
     proc, sysfs = make_proc(tmp_path)
-    no_route = dict(TOOLS, ip="192.168.0.0/24 dev wlan0 proto kernel scope link\n")
+    no_route = dict(TOOLS, ip="192.168.1.0/24 dev wlan0 proto kernel scope link\n")
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=fake_tools(no_route),
                              connect=_connect_with({}), ping=None)
     doc = sampler.sample({})
@@ -232,10 +232,10 @@ def test_no_default_route_is_a_fact_and_a_failed_ip_is_not(tmp_path):
 
 
 def test_the_core_must_actually_accept():
-    refused = _connect_with({("192.168.0.117", 6370): ConnectionRefusedError()})
-    assert health.service_reachable("192.168.0.117", 6370, connect=refused) is False
-    up = _connect_with({("192.168.0.117", 6370): None})
-    assert health.service_reachable("192.168.0.117", 6370, connect=up) is True
+    refused = _connect_with({("192.168.1.20", 6370): ConnectionRefusedError()})
+    assert health.service_reachable("192.168.1.20", 6370, connect=refused) is False
+    up = _connect_with({("192.168.1.20", 6370): None})
+    assert health.service_reachable("192.168.1.20", 6370, connect=up) is True
 
 
 @pytest.mark.parametrize(
@@ -271,12 +271,12 @@ def test_a_close_code_is_reported_as_such():
 def test_a_sample_merges_host_probes_and_process_facts(tmp_path):
     proc, sysfs = make_proc(tmp_path)
     run = fake_tools(TOOLS)
-    connect = _connect_with({("192.168.0.1", 53): ConnectionRefusedError(),
-                             ("192.168.0.117", 6370): None})
+    connect = _connect_with({("192.168.1.1", 53): ConnectionRefusedError(),
+                             ("192.168.1.20", 6370): None})
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=run, connect=connect)
     doc = sampler.sample(
         {"mic_fps": 33.2, "wake_loop_age_s": 0.4, "ws": "down", "reconnects": 3},
-        core_host="192.168.0.117", core_port=6370, probe_core=True,
+        core_host="192.168.1.20", core_port=6370, probe_core=True,
     )
     assert doc["seq"] == 1
     assert doc["rss_kb"] == 48112 and doc["hwm_kb"] == 61440 and doc["threads"] == 9
@@ -287,7 +287,7 @@ def test_a_sample_merges_host_probes_and_process_facts(tmp_path):
     assert "under_voltage" in doc["throttled_flags"]
     assert doc["boot_id"].startswith("9d2f1b6e")
     assert doc["nm_state"] == {"code": 100, "state": "connected"}
-    assert doc["gateway"] == "192.168.0.1"
+    assert doc["gateway"] == "192.168.1.1"
     assert doc["gateway_ok"] is True
     assert doc["core_ok"] is True
     assert doc["mic_fps"] == 33.2 and doc["reconnects"] == 3
@@ -296,19 +296,19 @@ def test_a_sample_merges_host_probes_and_process_facts(tmp_path):
 
 def test_the_core_is_not_probed_while_the_socket_is_up(tmp_path):
     proc, sysfs = make_proc(tmp_path)
-    connect = _connect_with({("192.168.0.1", 53): None})
+    connect = _connect_with({("192.168.1.1", 53): None})
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs),
                              run=fake_tools(TOOLS), connect=connect)
-    doc = sampler.sample({}, core_host="192.168.0.117", core_port=6370, probe_core=False)
+    doc = sampler.sample({}, core_host="192.168.1.20", core_port=6370, probe_core=False)
     assert doc["core_ok"] is None
-    assert ("192.168.0.117", 6370) not in connect.seen
+    assert ("192.168.1.20", 6370) not in connect.seen
 
 
 def test_missing_tools_are_left_alone_after_three_misses_then_asked_again(tmp_path, monkeypatch):
     proc, sysfs = make_proc(tmp_path)
     run = fake_tools({"ip": TOOLS["ip"]})      # no vcgencmd, no nmcli
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs), run=run,
-                             connect=_connect_with({("192.168.0.1", 53): None}), ping=None)
+                             connect=_connect_with({("192.168.1.1", 53): None}), ping=None)
     clock = [1000.0]
     monkeypatch.setattr(health.time, "monotonic", lambda: clock[0])
     first = sampler.sample({})
@@ -333,7 +333,7 @@ def test_one_failed_nmcli_does_not_silence_it_for_the_process(tmp_path):
     answers = dict(TOOLS)
     sampler = health.Sampler(proc_root=str(proc), sys_root=str(sysfs),
                              run=lambda argv, timeout=5.0: answers.get(argv[0]),
-                             connect=_connect_with({("192.168.0.1", 53): None}), ping=None)
+                             connect=_connect_with({("192.168.1.1", 53): None}), ping=None)
     answers["nmcli"] = None
     assert sampler.sample({})["nm_state"] is None
     answers["nmcli"] = "GENERAL.STATE:30 (disconnected)\n"

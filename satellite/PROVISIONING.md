@@ -673,7 +673,7 @@ Three settings every satellite carries since 2026-10-12, because the router kept
 |---|---|
 | `applied` | Something changed this boot; the detail says what. |
 | `nothing to change` | Everything was already in place. |
-| `skipped` | Something was left alone on purpose, e.g. `host name 'kamrons-pi' looks chosen by a person`, or `no room_id in config.toml`. |
+| `skipped` | Something was left alone on purpose, e.g. `host name 'alexs-pi' looks chosen by a person`, or `no room_id in config.toml`. |
 | `failed` | Something could not be applied; the detail has the first error. It also shows **reboot needed**, because a reboot retries. |
 | `not run` | Either the step has not run since the code that needs it arrived (it shows **reboot needed**), or it did not run this boot at all: the unit is enabled, but no record for this boot appeared within 3 minutes. |
 | `running` | Less than 3 minutes since boot, and the step has not written this boot's record yet. |

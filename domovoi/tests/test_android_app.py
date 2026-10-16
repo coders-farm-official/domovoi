@@ -470,7 +470,7 @@ def test_write_then_check_is_what_the_release_script_runs(tmp_path):
 
 JOIN_HARNESS = Path(__file__).with_name("join_page_harness.js")
 ANDROID_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36"
-PAYLOAD = ("domovoi-room:1?core=http%3A%2F%2F192.168.0.117%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"
+PAYLOAD = ("domovoi-room:1?core=http%3A%2F%2F192.168.1.20%3A6370&fp=SHA256%3A4gq%2BpNW%2FlnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"
            "&room=Kid%27s%20%3Cb%3ERoom%3C%2Fb%3E")
 
 
@@ -498,7 +498,7 @@ def _join(href, app, ua=ANDROID_UA, platform="Linux armv81", no_url=False) -> di
 
 
 def test_the_join_page_offers_the_app_then_opens_it_as_the_room():
-    page = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status())
+    page = _join("http://192.168.1.20:6370/join#" + PAYLOAD, _app_status())
     assert page["doc_title"] == "Domovoi room: Kid's <b>Room</b>", "the name is text, never markup"
     assert page["room-name"]["text"] == "“Kid's <b>Room</b>”" and not page["step-room"]["hidden"]
     assert page["dl-main"]["href"] == "/v1/android-app/files/domovoi-1.0.0-arm64-v8a.apk"
@@ -511,16 +511,16 @@ def test_the_join_page_offers_the_app_then_opens_it_as_the_room():
     fallback = link.split("S.browser_fallback_url=", 1)[1][: -len(";end")]
     from urllib.parse import unquote
 
-    assert unquote(fallback) == "http://192.168.0.117:6370/join?app=missing#" + PAYLOAD
+    assert unquote(fallback) == "http://192.168.1.20:6370/join?app=missing#" + PAYLOAD
     assert page["not-android"]["hidden"] and page["missing-app"]["hidden"] and page["bad-code"]["hidden"]
     assert page["step-connect"]["hidden"], "a room's page has no household step"
 
 
 def test_a_32_bit_browser_gets_the_32_bit_app_first_and_firefox_the_plain_link():
-    page = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status(), platform="Linux armv7l")
+    page = _join("http://192.168.1.20:6370/join#" + PAYLOAD, _app_status(), platform="Linux armv7l")
     assert page["dl-main"]["href"].endswith("armeabi-v7a.apk") and page["dl-other"]["href"].endswith("arm64-v8a.apk")
     assert "32-bit" in page["dl-main-sub"]["text"]
-    ff = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status(),
+    ff = _join("http://192.168.1.20:6370/join#" + PAYLOAD, _app_status(),
                ua="Mozilla/5.0 (Android 10; Mobile; rv:140.0) Gecko/140.0 Firefox/140.0")
     assert ff["open-room"]["href"] == PAYLOAD
 
@@ -531,7 +531,7 @@ def test_a_32_bit_browser_gets_the_32_bit_app_first_and_firefox_the_plain_link()
     (None, "Couldn’t ask this server"),
 ], ids=["no_release", "not_on_the_server", "server_error"])
 def test_without_an_app_to_offer_the_page_says_why_and_offers_nothing(app, words):
-    page = _join("http://192.168.0.117:6370/join#" + PAYLOAD, app)
+    page = _join("http://192.168.1.20:6370/join#" + PAYLOAD, app)
     assert words in page["install-state"]["text"] and page["install-state"]["cls"] == "state warn"
     assert page["downloads"]["hidden"]
     if app is not None:
@@ -540,14 +540,14 @@ def test_without_an_app_to_offer_the_page_says_why_and_offers_nothing(app, words
 
 
 def test_the_household_page_and_a_bad_code():
-    page = _join("http://192.168.0.117:6370/join", _app_status(ready=(True, False)))
+    page = _join("http://192.168.1.20:6370/join", _app_status(ready=(True, False)))
     assert page["doc_title"] == "" and page["step-room"]["hidden"] and not page["step-connect"]["hidden"]
     assert page["dl-main"]["href"].endswith("arm64-v8a.apk") and page["dl-other-line"]["hidden"]
-    bad = _join("http://192.168.0.117:6370/join#domovoi-room:1?nope", _app_status())
+    bad = _join("http://192.168.1.20:6370/join#domovoi-room:1?nope", _app_status())
     assert not bad["bad-code"]["hidden"] and bad["step-room"]["hidden"]
-    missing = _join("http://192.168.0.117:6370/join?app=missing#" + PAYLOAD, _app_status())
+    missing = _join("http://192.168.1.20:6370/join?app=missing#" + PAYLOAD, _app_status())
     assert not missing["missing-app"]["hidden"]
-    desktop = _join("http://192.168.0.117:6370/join", _app_status(), ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+    desktop = _join("http://192.168.1.20:6370/join", _app_status(), ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
     assert not desktop["not-android"]["hidden"]
 
 
@@ -649,12 +649,12 @@ def test_a_symlink_in_the_cache_is_never_served(tmp_path, cache, monkeypatch):
 def test_a_room_code_for_another_server_is_refused_plainly(no_url):
     """Security review 2026-10-15: the page hands the app only a code that
     names the server the page came from."""
-    page = _join("http://192.168.0.200:6370/join#" + PAYLOAD, _app_status(), no_url=no_url)
+    page = _join("http://192.168.1.200:6370/join#" + PAYLOAD, _app_status(), no_url=no_url)
     assert not page["other-server"]["hidden"]
-    assert "192.168.0.117:6370" in page["other-server"]["text"] and "192.168.0.200:6370" in page["other-server"]["text"]
+    assert "192.168.1.20:6370" in page["other-server"]["text"] and "192.168.1.200:6370" in page["other-server"]["text"]
     assert page["step-room"]["hidden"] and page["open-room"]["href"] is None
     assert page["doc_title"] == ""
-    same = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status(), no_url=no_url)
+    same = _join("http://192.168.1.20:6370/join#" + PAYLOAD, _app_status(), no_url=no_url)
     assert same["other-server"]["hidden"] and not same["step-room"]["hidden"]
-    port = _join("http://192.168.0.117:6369/join#" + PAYLOAD, _app_status(), no_url=no_url)
+    port = _join("http://192.168.1.20:6369/join#" + PAYLOAD, _app_status(), no_url=no_url)
     assert not port["other-server"]["hidden"], "another port is another server"

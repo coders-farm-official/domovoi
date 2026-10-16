@@ -354,7 +354,7 @@ async def test_stream_upgrade_from_a_foreign_origin_is_refused(monkeypatch, orig
 
 
 @pytest.mark.parametrize(
-    "origin", ["http://192.168.0.117:6369", "http://localhost:6369", "https://domovoi.local"]
+    "origin", ["http://192.168.1.20:6369", "http://localhost:6369", "https://domovoi.local"]
 )
 async def test_lan_origins_reach_the_next_gate(monkeypatch, origin):
     install_fake_db(monkeypatch, admin=True, sessions={ADMIN_TOKEN},

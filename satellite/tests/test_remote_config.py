@@ -30,7 +30,7 @@ def pc_sat(**sections):
     doc = {
         "device": {"profile": "generic_pc"},
         "satellite": {"room_id": "study", "room_name": "Study",
-                      "domovoi_url": "ws://192.168.0.117:6370", "server_fingerprint": FP},
+                      "domovoi_url": "ws://192.168.1.20:6370", "server_fingerprint": FP},
     }
     for name, values in sections.items():
         doc.setdefault(name, {}).update(values)
@@ -43,7 +43,7 @@ def pi_sat():
 
 def installed_config(permissions: str = "automatic", profile: str = "generic_pc") -> str:
     text = (f'[device]\nprofile = "{profile}"\n'
-            '[satellite]\nroom_id = "study"\ndomovoi_url = "ws://192.168.0.117:6370"\n'
+            '[satellite]\nroom_id = "study"\ndomovoi_url = "ws://192.168.1.20:6370"\n'
             f'server_fingerprint = "{FP}"\n'
             f'[pc]\npermissions = "{permissions}"\n[music]\n')
     client.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,7 @@ def test_R1_no_spelling_of_the_pin_key_changes_the_pin(make, key):
     sat._apply_config_changes({key: EVIL, "satellite.domovoi_url": "ws://203.0.113.9:6370"})
     assert client.CONFIG_PATH.read_text(encoding="utf-8") == before
     cfg = client.Config.load(client.CONFIG_PATH)
-    assert cfg.server_fingerprint == FP and cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert cfg.server_fingerprint == FP and cfg.domovoi_url == "ws://192.168.1.20:6370"
     assert server_identity.pinned_fingerprint(cfg.server_fingerprint) == (FP, "config")
 
 
@@ -187,7 +187,7 @@ def test_R2_the_player_never_passes_one_on():
     out = engine_platform.AlsaAudioOut()
     assert out.wav_argv(PIPE, "chime.wav") == ["aplay", "-q", "-D", "default", "chime.wav"]
     assert "-a" in out.mp3_argv(PIPE, "x.mp3", 1.0) and PIPE not in out.mp3_argv(PIPE, "x.mp3", 1.0)
-    assert PIPE not in out.stream_argv(PIPE, "http://192.168.0.117:8050")
+    assert PIPE not in out.stream_argv(PIPE, "http://192.168.1.20:8050")
 
 
 @pytest.mark.parametrize("name", [
@@ -292,15 +292,15 @@ def test_discovery_never_moves_a_laptop_off_the_home_network(tmp_path):
     from types import SimpleNamespace
 
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text('[satellite]\ndomovoi_url = "ws://192.168.0.117:6370"\n', encoding="utf-8")
+    cfg_path.write_text('[satellite]\ndomovoi_url = "ws://192.168.1.20:6370"\n', encoding="utf-8")
     sat = pc_sat()
     found = SimpleNamespace(url="ws://203.0.113.9:6370", via="name", detail="domovoi.local")
     client._adopt_located(sat.cfg, cfg_path, found, False)
-    assert sat.cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert sat.cfg.domovoi_url == "ws://192.168.1.20:6370"
     assert "203.0.113.9" not in cfg_path.read_text(encoding="utf-8")
-    home = SimpleNamespace(url="ws://192.168.0.200:6370", via="sweep", detail="")
+    home = SimpleNamespace(url="ws://192.168.1.200:6370", via="sweep", detail="")
     client._adopt_located(sat.cfg, cfg_path, home, False)
-    assert sat.cfg.domovoi_url == "ws://192.168.0.200:6370"
+    assert sat.cfg.domovoi_url == "ws://192.168.1.200:6370"
 
 
 @pytest.mark.parametrize("value", [[0.5], {"x": 1}, float("nan"), float("inf"), None, 10**13,

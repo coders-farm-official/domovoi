@@ -2,7 +2,7 @@
 
 Audit A2-04: `POST /v1/admin/music/add-by-url` ran `check_outbound_fetch`
 (an admin session passes outright) and nothing else, so an admin request
-queued `http://127.0.0.1:6394/...` or `http://192.168.0.1/` for a provider
+queued `http://127.0.0.1:6394/...` or `http://192.168.1.1/` for a provider
 plugin to fetch — outside `net_safety` and the internet switch entirely —
 while SECURITY_PRIVACY.md said add-by-URL goes through the outbound-URL
 check and that "No internet" closes it. Under **No** the route answered
@@ -80,7 +80,7 @@ async def _add(url: str):
     [
         "http://127.0.0.1:6394/v1/health",   # this core
         "http://127.0.0.1:6390/",            # the dashboard
-        "http://192.168.0.1/",               # the router
+        "http://192.168.1.1/",               # the router
         "http://10.0.0.5:8080/admin",
         "http://[::1]:6283/v1/agents/",      # Letta, on the box
         "http://0x7f000001/",                # loopback, spelled oddly

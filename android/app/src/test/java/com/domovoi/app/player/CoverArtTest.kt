@@ -17,7 +17,7 @@ import org.junit.Test
  */
 class CoverArtTest {
 
-    private val api = ApiClient(baseUrlProvider = { "http://192.168.0.117:6369" })
+    private val api = ApiClient(baseUrlProvider = { "http://192.168.1.20:6369" })
 
     @After fun clean() = CoverArt.forgetMisses()
 
@@ -34,7 +34,7 @@ class CoverArtTest {
 
     @Test fun serverPathsResolveAgainstTheActiveServer() {
         assertEquals(
-            "http://192.168.0.117:6369/api/music/library/12/cover",
+            "http://192.168.1.20:6369/api/music/library/12/cover",
             CoverArt.model(CoverArt.libraryPath(12), api::absolute),
         )
         val emulator = ApiClient(baseUrlProvider = { "http://10.0.2.2:6390" })
@@ -60,9 +60,9 @@ class CoverArtTest {
     }
 
     @Test fun onlyA404IsRememberedAsMissing() {
-        val a = "http://192.168.0.117:6369/api/music/library/1/cover"
-        val b = "http://192.168.0.117:6369/api/music/library/2/cover"
-        val c = "http://192.168.0.117:6369/api/music/library/3/cover"
+        val a = "http://192.168.1.20:6369/api/music/library/1/cover"
+        val b = "http://192.168.1.20:6369/api/music/library/2/cover"
+        val c = "http://192.168.1.20:6369/api/music/library/3/cover"
         CoverArt.noteFailure(a, 404)
         CoverArt.noteFailure(b, 500)      // the server hiccuped: ask again later
         CoverArt.noteFailure(c, null)     // no answer at all (offline)

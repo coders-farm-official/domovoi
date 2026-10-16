@@ -20,18 +20,18 @@ from satellite.tests.test_server_identity import _health_opener, _server
 
 
 def test_sweep_covers_the_subnet_without_us():
-    hosts = discovery.candidate_hosts("192.168.0.117")
+    hosts = discovery.candidate_hosts("192.168.1.20")
     assert len(hosts) == 253                      # /24 hosts, minus ourselves
-    assert "192.168.0.117" not in hosts
-    assert "192.168.0.1" in hosts
+    assert "192.168.1.20" not in hosts
+    assert "192.168.1.1" in hosts
 
 
 def test_nearest_addresses_are_probed_first():
     """A home core is usually a low reservation or a near-by lease, so
     distance ordering finds it in a handful of probes, not two hundred."""
-    hosts = discovery.candidate_hosts("192.168.0.117")
-    assert hosts[0] in ("192.168.0.116", "192.168.0.118")
-    assert hosts.index("192.168.0.118") < hosts.index("192.168.0.250")
+    hosts = discovery.candidate_hosts("192.168.1.20")
+    assert hosts[0] in ("192.168.1.19", "192.168.1.21")
+    assert hosts.index("192.168.1.21") < hosts.index("192.168.1.250")
 
 
 def test_oversized_networks_are_refused():
@@ -67,7 +67,7 @@ def _opener(body: bytes, status: int = 200):
 
 def test_probe_accepts_a_real_core():
     body = b'{"status": "ok", "bot_name": "Domovoi", "use_stubs": "false"}'
-    assert discovery.probe("192.168.0.117", opener=_opener(body)) is True
+    assert discovery.probe("192.168.1.20", opener=_opener(body)) is True
 
 
 @pytest.mark.parametrize("body", [
@@ -79,13 +79,13 @@ def test_probe_accepts_a_real_core():
 def test_probe_rejects_everything_else(body):
     """The signature check is what stops us adopting some unrelated service
     that happens to be listening on 6370."""
-    assert discovery.probe("192.168.0.9", opener=_opener(body)) is False
+    assert discovery.probe("192.168.1.9", opener=_opener(body)) is False
 
 
 def test_probe_swallows_connection_errors():
     def boom(url, timeout=None):
         raise OSError("connection refused")
-    assert discovery.probe("192.168.0.9", opener=boom) is False
+    assert discovery.probe("192.168.1.9", opener=boom) is False
 
 
 # ─── the probe, once the card knows whose server it is ────────────────────
@@ -94,7 +94,7 @@ def test_probe_swallows_connection_errors():
 def test_probe_accepts_the_core_the_card_was_prepared_for():
     seed, public, fingerprint = _server()
     assert discovery.probe(
-        "192.168.0.117", opener=_health_opener(seed, public),
+        "192.168.1.20", opener=_health_opener(seed, public),
         expected_fingerprint=fingerprint,
     ) is True
 
@@ -105,16 +105,16 @@ def test_probe_refuses_a_host_that_answers_as_domovoi_but_is_not_ours(caplog):
     seed_b, public_b, _ = _server(2)
     with caplog.at_level("WARNING"):
         assert discovery.probe(
-            "192.168.0.9", opener=_health_opener(seed_b, public_b),
+            "192.168.1.9", opener=_health_opener(seed_b, public_b),
             expected_fingerprint=ours,
         ) is False
-    assert "192.168.0.9" in caplog.text
+    assert "192.168.1.9" in caplog.text
 
 
 def test_probe_refuses_a_host_with_no_identity_when_the_card_has_one():
     seed, public, fingerprint = _server()
     assert discovery.probe(
-        "192.168.0.9", opener=_health_opener(seed, public, identity=False),
+        "192.168.1.9", opener=_health_opener(seed, public, identity=False),
         expected_fingerprint=fingerprint,
     ) is False
 
@@ -131,11 +131,11 @@ def test_probe_asks_the_core_to_sign_for_the_address_it_dialed():
     seed, public, fingerprint = _server()
     asked: list[dict[str, str]] = []
     assert discovery.probe(
-        "192.168.0.117", port=6370,
+        "192.168.1.20", port=6370,
         opener=_health_opener(seed, public, asked=asked),
         expected_fingerprint=fingerprint,
     ) is True
-    assert asked[0]["addr"] == "192.168.0.117:6370"
+    assert asked[0]["addr"] == "192.168.1.20:6370"
 
 
 def test_probe_refuses_a_relay_the_core_would_not_sign_for(caplog):
@@ -144,10 +144,10 @@ def test_probe_refuses_a_relay_the_core_would_not_sign_for(caplog):
     seed, public, fingerprint = _server()
     with caplog.at_level("WARNING"):
         assert discovery.probe(
-            "192.168.0.141", opener=_health_opener(seed, public, bind="refuse"),
+            "192.168.1.141", opener=_health_opener(seed, public, bind="refuse"),
             expected_fingerprint=fingerprint,
         ) is False
-    assert "192.168.0.141 answers as Domovoi but" in caplog.text
+    assert "192.168.1.141 answers as Domovoi but" in caplog.text
     assert "the signed address is not the one dialed" in caplog.text
 
 
@@ -156,8 +156,8 @@ def test_probe_refuses_a_relay_that_forwards_an_answer_signed_for_the_core():
     the core signs, but for an address we did not dial."""
     seed, public, fingerprint = _server()
     assert discovery.probe(
-        "192.168.0.141",
-        opener=_health_opener(seed, public, bind="192.168.0.2:6370"),
+        "192.168.1.141",
+        opener=_health_opener(seed, public, bind="192.168.1.2:6370"),
         expected_fingerprint=fingerprint,
     ) is False
 
@@ -168,7 +168,7 @@ def test_probe_refuses_a_relay_that_strips_our_question(caplog):
     seed, public, fingerprint = _server()
     with caplog.at_level("WARNING"):
         assert discovery.probe(
-            "192.168.0.141", opener=_health_opener(seed, public, bind=None),
+            "192.168.1.141", opener=_health_opener(seed, public, bind=None),
             expected_fingerprint=fingerprint,
         ) is False
     assert "not bound to the address dialed" in caplog.text
@@ -176,9 +176,9 @@ def test_probe_refuses_a_relay_that_strips_our_question(caplog):
 
 def test_a_sweep_that_finds_only_relays_finds_nothing():
     seed, public, fingerprint = _server()
-    opener = _health_opener(seed, public, bind="192.168.0.2:6370")
+    opener = _health_opener(seed, public, bind="192.168.1.2:6370")
     found = discovery.find_core(
-        hosts=["192.168.0.140", "192.168.0.141"],
+        hosts=["192.168.1.140", "192.168.1.141"],
         probe_fn=lambda h, port=None, expected_fingerprint=None: discovery.probe(
             h, opener=opener, expected_fingerprint=expected_fingerprint
         ),
@@ -197,7 +197,7 @@ def test_an_unpinned_probe_is_exactly_what_it_always_was():
         seen.append(url)
         return _Resp(body)
 
-    assert discovery.probe("192.168.0.117", opener=opener) is True
+    assert discovery.probe("192.168.1.20", opener=opener) is True
     assert "challenge=" not in seen[0] and "addr=" not in seen[0]
 
 
@@ -206,7 +206,7 @@ def test_a_sweep_that_finds_only_impostors_finds_nothing():
     seed_b, public_b, _ = _server(2)
     opener = _health_opener(seed_b, public_b)
     found = discovery.find_core(
-        hosts=["192.168.0.4", "192.168.0.5"],
+        hosts=["192.168.1.4", "192.168.1.5"],
         probe_fn=lambda h, port=None, expected_fingerprint=None: discovery.probe(
             h, opener=opener, expected_fingerprint=expected_fingerprint
         ),
@@ -226,11 +226,11 @@ def test_resolve_url_has_no_address_to_offer_when_nothing_verifies():
 
 
 def test_find_core_returns_the_host_that_answers():
-    hosts = [f"192.168.0.{n}" for n in range(2, 40)]
+    hosts = [f"192.168.1.{n}" for n in range(2, 40)]
     found = discovery.find_core(
-        hosts=hosts, probe_fn=lambda h, port=None: h == "192.168.0.31",
+        hosts=hosts, probe_fn=lambda h, port=None: h == "192.168.1.31",
     )
-    assert found == "192.168.0.31"
+    assert found == "192.168.1.31"
 
 
 def test_find_core_returns_none_when_nothing_answers():
@@ -250,15 +250,15 @@ def test_a_typed_address_always_wins():
     """An address entered in the setup portal must never be second-guessed
     by a sweep."""
     url = discovery.resolve_url(
-        "ws://192.168.0.117:6370",
+        "ws://192.168.1.20:6370",
         finder=lambda port=None: pytest.fail("discovery should not have run"),
     )
-    assert url == "ws://192.168.0.117:6370"
+    assert url == "ws://192.168.1.20:6370"
 
 
 def test_auto_resolves_to_a_websocket_url():
-    url = discovery.resolve_url("auto", finder=lambda port=None: "192.168.0.117")
-    assert url == "ws://192.168.0.117:6370"
+    url = discovery.resolve_url("auto", finder=lambda port=None: "192.168.1.20")
+    assert url == "ws://192.168.1.20:6370"
 
 
 @pytest.mark.parametrize("configured", ["auto", "AUTO", " auto ", ""])
@@ -433,25 +433,25 @@ def cfgfile(tmp_path, monkeypatch):
 
 
 def test_a_discovered_address_is_returned_for_this_boot(cfgfile, monkeypatch):
-    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
-    assert pm.resolve_auto_url("auto") == "ws://192.168.0.117:6370"
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.1.20")
+    assert pm.resolve_auto_url("auto") == "ws://192.168.1.20:6370"
 
 
 def test_a_discovered_address_is_not_written_into_the_config(cfgfile, monkeypatch):
     """It is a candidate, not configuration. Config.toml only learns the
     address once the server says this device is paired, which means a
     person approved it on the dashboard."""
-    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.1.20")
     pm.resolve_auto_url("auto")
     body = cfgfile.read_text()
     assert 'domovoi_url = "auto"' in body
-    assert "192.168.0.117" not in body
+    assert "192.168.1.20" not in body
 
 
 def test_a_discovered_address_waits_in_the_pending_sidecar(cfgfile, monkeypatch):
-    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.1.20")
     pm.resolve_auto_url("auto")
-    assert server_identity.read_pending_server()[0] == "ws://192.168.0.117:6370"
+    assert server_identity.read_pending_server()[0] == "ws://192.168.1.20:6370"
 
 
 def test_the_config_file_is_left_exactly_as_it_was(cfgfile, monkeypatch):
@@ -463,7 +463,7 @@ def test_the_config_file_is_left_exactly_as_it_was(cfgfile, monkeypatch):
 
 def test_an_explicit_address_is_left_alone(cfgfile):
     """Someone who typed an address into the setup form meant it."""
-    assert pm.resolve_auto_url("ws://192.168.0.5:6370") == "ws://192.168.0.5:6370"
+    assert pm.resolve_auto_url("ws://192.168.1.5:6370") == "ws://192.168.1.5:6370"
     assert 'domovoi_url = "auto"' in cfgfile.read_text()   # untouched
 
 
@@ -484,7 +484,7 @@ def test_a_pinned_card_sweeps_for_its_own_server_only(cfgfile, monkeypatch):
 
     def fake_find(port=None, expected_fingerprint=None):
         seen["fingerprint"] = expected_fingerprint
-        return "192.168.0.117"
+        return "192.168.1.20"
 
     server_identity.ROOT_PIN.write_text(
         '{"fingerprint": "SHA256:ours"}', encoding="utf-8"
@@ -551,14 +551,14 @@ def test_the_core_name_comes_before_the_last_known_address():
     """The core moved from .117 to .50; its name says so."""
     asked = []
     found = discovery.locate(
-        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        names=["domovoi.local"], last_known="ws://192.168.1.20:6370",
         expected_fingerprint=OURS[2],
-        resolver=_resolver({"domovoi.local": ["192.168.0.50"]}),
-        probe_fn=_lan({"192.168.0.50": OURS, "192.168.0.117": OURS}, asked),
+        resolver=_resolver({"domovoi.local": ["192.168.1.50"]}),
+        probe_fn=_lan({"192.168.1.50": OURS, "192.168.1.20": OURS}, asked),
         finder=_no_sweep,
     )
-    assert found == discovery.Located("ws://192.168.0.50:6370", "name", "domovoi.local -> 192.168.0.50")
-    assert asked == ["192.168.0.50"]
+    assert found == discovery.Located("ws://192.168.1.50:6370", "name", "domovoi.local -> 192.168.1.50")
+    assert asked == ["192.168.1.50"]
 
 
 def test_a_name_answered_by_an_impostor_is_refused():
@@ -566,15 +566,15 @@ def test_a_name_answered_by_an_impostor_is_refused():
     pinned key is what they cannot do."""
     asked = []
     found = discovery.locate(
-        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        names=["domovoi.local"], last_known="ws://192.168.1.20:6370",
         expected_fingerprint=OURS[2],
-        resolver=_resolver({"domovoi.local": ["192.168.0.66"]}),
-        probe_fn=_lan({"192.168.0.66": THEIRS, "192.168.0.117": OURS}, asked),
+        resolver=_resolver({"domovoi.local": ["192.168.1.66"]}),
+        probe_fn=_lan({"192.168.1.66": THEIRS, "192.168.1.20": OURS}, asked),
         finder=_no_sweep,
     )
     assert found is not None and found.via == "last-known"
-    assert found.url == "ws://192.168.0.117:6370"
-    assert asked == ["192.168.0.66", "192.168.0.117"]
+    assert found.url == "ws://192.168.1.20:6370"
+    assert asked == ["192.168.1.66", "192.168.1.20"]
 
 
 def test_a_name_that_points_at_a_relay_is_refused():
@@ -583,13 +583,13 @@ def test_a_name_that_points_at_a_relay_is_refused():
     seed, public, fp = OURS
 
     def probe_fn(host, *, port=6370, timeout=None, expected_fingerprint=None):
-        bind = "echo" if host == "192.168.0.117" else "192.168.0.117:6370"
+        bind = "echo" if host == "192.168.1.20" else "192.168.1.20:6370"
         return discovery.probe(host, port=port, opener=_health_opener(seed, public, bind=bind),
                                expected_fingerprint=expected_fingerprint)
 
     found = discovery.locate(
         names=["domovoi.local"], last_known=None, expected_fingerprint=fp,
-        resolver=_resolver({"domovoi.local": ["192.168.0.141"]}),
+        resolver=_resolver({"domovoi.local": ["192.168.1.141"]}),
         probe_fn=probe_fn, finder=lambda **k: None,
     )
     assert found is None
@@ -600,36 +600,36 @@ def test_the_sweep_is_the_last_resort():
 
     def finder(**k):
         order.append(("sweep", k.get("expected_fingerprint")))
-        return "192.168.0.50"
+        return "192.168.1.50"
 
     found = discovery.locate(
-        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        names=["domovoi.local"], last_known="ws://192.168.1.20:6370",
         expected_fingerprint=OURS[2],
         resolver=_resolver({}),
         probe_fn=_lan({}, order), finder=finder,
     )
-    assert found == discovery.Located("ws://192.168.0.50:6370", "scan", "192.168.0.50")
+    assert found == discovery.Located("ws://192.168.1.50:6370", "scan", "192.168.1.50")
     # The name did not resolve, the last-known address was asked, then the sweep.
-    assert order == ["192.168.0.117", ("sweep", OURS[2])]
+    assert order == ["192.168.1.20", ("sweep", OURS[2])]
 
 
 def test_every_address_a_name_resolves_to_is_tried_in_order():
     asked = []
     found = discovery.locate(
         names=["domovoi.local"], expected_fingerprint=OURS[2],
-        resolver=_resolver({"domovoi.local": ["192.168.0.9", "192.168.0.50"]}),
-        probe_fn=_lan({"192.168.0.50": OURS}, asked), finder=_no_sweep,
+        resolver=_resolver({"domovoi.local": ["192.168.1.9", "192.168.1.50"]}),
+        probe_fn=_lan({"192.168.1.50": OURS}, asked), finder=_no_sweep,
     )
-    assert found.url == "ws://192.168.0.50:6370"
-    assert asked == ["192.168.0.9", "192.168.0.50"]
+    assert found.url == "ws://192.168.1.50:6370"
+    assert asked == ["192.168.1.9", "192.168.1.50"]
 
 
 def test_nothing_verifying_anywhere_is_none():
     found = discovery.locate(
-        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        names=["domovoi.local"], last_known="ws://192.168.1.20:6370",
         expected_fingerprint=OURS[2],
-        resolver=_resolver({"domovoi.local": ["192.168.0.66"]}),
-        probe_fn=_lan({"192.168.0.66": THEIRS}), finder=lambda **k: None,
+        resolver=_resolver({"domovoi.local": ["192.168.1.66"]}),
+        probe_fn=_lan({"192.168.1.66": THEIRS}), finder=lambda **k: None,
     )
     assert found is None
 
@@ -638,7 +638,7 @@ def test_the_names_are_the_default_then_what_the_core_advertised(tmp_path):
     path = tmp_path / "server-names.json"
     assert discovery.server_names(path) == ["domovoi.local"]
     assert discovery.remember_names(
-        ["Beelink.local.", "not a name!", "192.168.0.5", "localhost", "domovoi.local"], path
+        ["Beelink.local.", "not a name!", "192.168.1.5", "localhost", "domovoi.local"], path
     ) is True
     assert discovery.server_names(path) == ["domovoi.local", "beelink.local"]
     # Saying the same thing again writes nothing.
@@ -657,8 +657,8 @@ def test_a_name_lookup_never_hangs_and_never_returns_loopback():
 
     assert discovery.resolve_name("domovoi.local", timeout=0.05, resolver=slow) == []
     gate.set()
-    mixed = _resolver({"domovoi.local": ["127.0.1.1", "192.168.0.50", "192.168.0.50"]})
-    assert discovery.resolve_name("domovoi.local", resolver=mixed) == ["192.168.0.50"]
+    mixed = _resolver({"domovoi.local": ["127.0.1.1", "192.168.1.50", "192.168.1.50"]})
+    assert discovery.resolve_name("domovoi.local", resolver=mixed) == ["192.168.1.50"]
 
 
 def test_in_tests_a_name_nobody_resolved_does_not_resolve():
@@ -669,11 +669,11 @@ def test_in_tests_a_name_nobody_resolved_does_not_resolve():
 def test_setup_looks_for_the_server_by_name_first(cfgfile, monkeypatch):
     """Provisioning mode's discovery after the Wi-Fi join is the same order."""
     asked = []
-    monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER", _resolver({"domovoi.local": ["192.168.0.50"]}))
+    monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER", _resolver({"domovoi.local": ["192.168.1.50"]}))
     monkeypatch.setattr(discovery, "probe", lambda host, **k: asked.append(host) or True)
     monkeypatch.setattr(discovery, "find_core", _no_sweep)
-    assert pm.resolve_auto_url("auto") == "ws://192.168.0.50:6370"
-    assert asked == ["192.168.0.50"]
+    assert pm.resolve_auto_url("auto") == "ws://192.168.1.50:6370"
+    assert asked == ["192.168.1.50"]
 
 
 def test_a_core_found_by_name_keeps_the_configured_scheme_and_port():
@@ -683,33 +683,33 @@ def test_a_core_found_by_name_keeps_the_configured_scheme_and_port():
 
     def probe_fn(host, *, port=6370, timeout=None, expected_fingerprint=None, scheme="http"):
         asked.append((host, port, scheme))
-        return host == "192.168.0.50"
+        return host == "192.168.1.50"
 
     found = discovery.locate(
-        names=["domovoi.local"], last_known="wss://192.168.0.117:7443",
+        names=["domovoi.local"], last_known="wss://192.168.1.20:7443",
         expected_fingerprint=OURS[2],
-        resolver=_resolver({"domovoi.local": ["192.168.0.50"]}),
+        resolver=_resolver({"domovoi.local": ["192.168.1.50"]}),
         probe_fn=probe_fn, finder=_no_sweep,
     )
-    assert found.url == "wss://192.168.0.50:7443"
-    assert asked == [("192.168.0.50", 7443, "https")]
+    assert found.url == "wss://192.168.1.50:7443"
+    assert asked == [("192.168.1.50", 7443, "https")]
 
 
 def test_a_refusing_last_address_skips_the_sweep_but_not_the_names():
     asked = []
     found = discovery.locate(
-        names=["domovoi.local"], last_known="ws://192.168.0.117:6370",
+        names=["domovoi.local"], last_known="ws://192.168.1.20:6370",
         expected_fingerprint=OURS[2],
         resolver=_resolver({}),
         probe_fn=_lan({}, asked), finder=_no_sweep,
-        refused=lambda host, port: (host, port) == ("192.168.0.117", 6370),
+        refused=lambda host, port: (host, port) == ("192.168.1.20", 6370),
     )
     assert found is None
-    assert asked == ["192.168.0.117"]
+    assert asked == ["192.168.1.20"]
 
 
 def test_the_http_base_of_a_core_address():
-    assert discovery.http_base_of("ws://192.168.0.5:6370") == "http://192.168.0.5:6370"
+    assert discovery.http_base_of("ws://192.168.1.5:6370") == "http://192.168.1.5:6370"
     assert discovery.http_base_of("wss://domovoi.local") == "https://domovoi.local:6370"
     assert discovery.host_port_of("ws://10.0.0.2") == ("10.0.0.2", 6370)
 
@@ -728,19 +728,19 @@ def test_a_laptop_never_follows_its_server_off_the_home_network(tmp_path, monkey
     client = import_client()
     cfg = client.Config.from_toml({
         "device": {"profile": "generic_pc"},
-        "satellite": {"room_id": "study", "domovoi_url": "ws://192.168.0.117:6370",
+        "satellite": {"room_id": "study", "domovoi_url": "ws://192.168.1.20:6370",
                       "server_fingerprint": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA"},
     })
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text('[satellite]\ndomovoi_url = "ws://192.168.0.117:6370"\n', encoding="utf-8")
+    cfg_path.write_text('[satellite]\ndomovoi_url = "ws://192.168.1.20:6370"\n', encoding="utf-8")
     for url in ("ws://203.0.113.9:6370", "ws://8.8.8.8:6370", "ws://core.example.com:6370", "ws://127.0.0.1:6370"):
         client._adopt_located(cfg, cfg_path, SimpleNamespace(url=url, via="sweep", detail=""), False)
-        assert cfg.domovoi_url == "ws://192.168.0.117:6370", url
-        assert "192.168.0.117" in cfg_path.read_text(encoding="utf-8")
+        assert cfg.domovoi_url == "ws://192.168.1.20:6370", url
+        assert "192.168.1.20" in cfg_path.read_text(encoding="utf-8")
     client._adopt_located(cfg, cfg_path, SimpleNamespace(url="ws://domovoi.local:6370", via="name", detail=""), False)
     assert cfg.domovoi_url == "ws://domovoi.local:6370" and "domovoi.local" in cfg_path.read_text(encoding="utf-8")
     # A Pi follows its pinned server wherever it proves itself, as before.
     pi = client.Config.from_toml({"device": {"profile": "xvf3800_usb"},
-                                  "satellite": {"domovoi_url": "ws://192.168.0.117:6370"}})
+                                  "satellite": {"domovoi_url": "ws://192.168.1.20:6370"}})
     client._adopt_located(pi, cfg_path, SimpleNamespace(url="ws://203.0.113.9:6370", via="sweep", detail=""), False)
     assert pi.domovoi_url == "ws://203.0.113.9:6370"

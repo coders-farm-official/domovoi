@@ -245,8 +245,8 @@ def test_both_trees_canonicalize_a_document_the_same_way():
     assert server_identity.canonical_json(doc) == sat_identity.canonical_json(doc)
     assert server_identity.health_message("n") == sat_identity.health_message("n")
     assert (
-        server_identity.health_message("n", "192.168.0.117:6370")
-        == sat_identity.health_message("n", "192.168.0.117:6370")
+        server_identity.health_message("n", "192.168.1.20:6370")
+        == sat_identity.health_message("n", "192.168.1.20:6370")
     )
     assert (
         server_identity.manifest_message("c", doc)
@@ -355,22 +355,22 @@ def test_the_serial_store_sits_beside_the_key_not_in_the_developers_home(tmp_pat
 def test_a_bound_health_answer_proves_the_server_for_that_address(tmp_path):
     identity = _identity(tmp_path)
     challenge = server_identity.new_challenge()
-    doc = {"status": "ok", "identity": identity.health_answer(challenge, addr="192.168.0.117:6370")}
-    assert doc["identity"]["addr"] == "192.168.0.117:6370"
+    doc = {"status": "ok", "identity": identity.health_answer(challenge, addr="192.168.1.20:6370")}
+    assert doc["identity"]["addr"] == "192.168.1.20:6370"
     assert sat_identity.verify_health_document(
         doc, challenge=challenge, expected_fingerprint=identity.fingerprint,
-        addr="192.168.0.117:6370",
+        addr="192.168.1.20:6370",
     ) == identity.fingerprint
 
 
 def test_a_relayed_answer_signed_for_the_cores_address_is_not_proof_of_the_relay(tmp_path):
     identity = _identity(tmp_path)
     challenge = server_identity.new_challenge()
-    doc = {"identity": identity.health_answer(challenge, addr="192.168.0.2:6370")}
+    doc = {"identity": identity.health_answer(challenge, addr="192.168.1.2:6370")}
     with pytest.raises(sat_identity.IdentityError) as e:
         sat_identity.verify_health_document(
             doc, challenge=challenge, expected_fingerprint=identity.fingerprint,
-            addr="192.168.0.141:6370",
+            addr="192.168.1.141:6370",
         )
     assert "not the one dialed" in str(e.value)
 
@@ -378,14 +378,14 @@ def test_a_relayed_answer_signed_for_the_cores_address_is_not_proof_of_the_relay
 def test_a_bound_signature_is_not_an_unbound_one_and_vice_versa(tmp_path):
     identity = _identity(tmp_path)
     challenge = server_identity.new_challenge()
-    bound = identity.health_answer(challenge, addr="192.168.0.2:6370")
+    bound = identity.health_answer(challenge, addr="192.168.1.2:6370")
     unbound = identity.health_answer(challenge)
     assert bound["signature"] != unbound["signature"]
     assert server_identity.health_message(challenge) != \
-        server_identity.health_message(challenge, "192.168.0.2:6370")
+        server_identity.health_message(challenge, "192.168.1.2:6370")
 
 
-@pytest.mark.parametrize("challenge", ["abc\ndef", "abc def", "", "a" * 129, "nonce\n192.168.0.2:6370"])
+@pytest.mark.parametrize("challenge", ["abc\ndef", "abc def", "", "a" * 129, "nonce\n192.168.1.2:6370"])
 def test_a_challenge_that_could_smuggle_an_address_is_not_signable(challenge):
     """``<ctx>\\n<nonce>\\n<addr>`` vs ``<ctx>\\n<nonce>``: a nonce with a
     newline in it would let an UNBOUND signature over ``C\\nA`` pass as a
@@ -396,7 +396,7 @@ def test_a_challenge_that_could_smuggle_an_address_is_not_signable(challenge):
 
 def test_an_ordinary_hex_nonce_and_a_host_port_are_fine():
     assert server_identity.valid_challenge(server_identity.new_challenge())
-    assert server_identity.valid_addr("192.168.0.117:6370")
+    assert server_identity.valid_addr("192.168.1.20:6370")
     assert server_identity.valid_addr("[fd00::1]:6370")
     assert server_identity.valid_addr("host.docker.internal:6394")
     assert not server_identity.valid_addr("a b:6370")
@@ -409,13 +409,13 @@ def test_which_addresses_this_server_will_sign_for(monkeypatch):
     from domovoi.config import settings
 
     ours = server_identity.dialed_address_is_ours
-    own = lambda ip: str(ip) == "192.168.0.117"  # noqa: E731 — the box's one interface
+    own = lambda ip: str(ip) == "192.168.1.20"  # noqa: E731 — the box's one interface
     monkeypatch.setattr(settings, "trusted_hosts", "")
     assert ours("127.0.0.1:6370", can_bind=own) is True
     assert ours("[::1]:6370", can_bind=own) is True
     assert ours("localhost:6370", can_bind=own) is True
-    assert ours("192.168.0.117:6370", can_bind=own) is True
-    assert ours("192.168.0.141:6370", can_bind=own) is False       # the relay
+    assert ours("192.168.1.20:6370", can_bind=own) is True
+    assert ours("192.168.1.141:6370", can_bind=own) is False       # the relay
     assert ours("host.docker.internal:6394", can_bind=own) is False  # a name, unlisted
     assert ours("domovoi-st-rogue:6370", can_bind=own) is False
     assert ours("0.0.0.0:6370", can_bind=own) is False

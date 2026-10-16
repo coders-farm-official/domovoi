@@ -398,7 +398,8 @@ async def test_two_overlapping_turn_ons_start_one_job(box, monkeypatch):
     """Review: both passed the job check while the first was still in
     ``requirements`` (seconds on a loaded box), so two jobs ran and the
     second one's cleanup removed the first one's download container. The
-    review's own test (functional-testing/review-wake-gpu), now passing."""
+    review's own test (in the maintainers' functional test harness, kept
+    outside this repo), now passing."""
     real_requirements = wts.requirements
     jobs: list[str] = []
 

@@ -145,7 +145,7 @@ async def test_a_lan_origin_on_another_port_gets_no_cors_grant() -> None:
     (
         "http://localhost:{port}",
         "http://127.0.0.1:{port}",
-        "http://192.168.0.117:{port}",
+        "http://192.168.1.20:{port}",
         "http://10.0.0.4:{port}",
         "http://172.16.3.9:{port}",
         "http://domovoi.local:{port}",
@@ -159,8 +159,8 @@ def test_the_lan_origins_the_household_uses_are_allowed(origin) -> None:
 @pytest.mark.parametrize(
     "origin",
     (
-        "http://192.168.0.117:8096",      # the media server on the same box
-        "http://192.168.0.117",           # port 80 on the same box
+        "http://192.168.1.20:8096",      # the media server on the same box
+        "http://192.168.1.20",           # port 80 on the same box
         "https://evil.example.com",
         "http://domovoi.local.evil.com:6369",
         "http://8.8.8.8:6369",

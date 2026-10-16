@@ -10,7 +10,7 @@ import org.junit.Test
  * normalised address as every other per-server answer.
  */
 class OwnerPerServerTest {
-    private val home = "http://192.168.0.117:6369"
+    private val home = "http://192.168.1.20:6369"
     private val cabin = "http://10.0.0.5:6369"
 
     @Test fun eachServerKeepsItsOwnOwner() {

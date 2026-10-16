@@ -32,7 +32,7 @@ import pytest
 from satellite import provisioning_mode as pm
 
 PSK = "hunter2hunter2"
-SSID = "Kamber Wifi 2.0"
+SSID = "Maple Wifi 2.0"
 
 SECRETS = (
     "Error: Connection activation failed: (7) Secrets were required, "
@@ -438,7 +438,7 @@ def test_a_stale_profile_with_no_key_mgmt_is_replaced_not_inherited(blind):
 
 
 def test_the_duplicate_profiles_of_earlier_attempts_all_go(blind):
-    """Matched on the ssid property, not the name: `Kamber Wifi 2.0 1` is
+    """Matched on the ssid property, not the name: `Maple Wifi 2.0 1` is
     just as able to be picked up as the one without the suffix."""
     nm = FakeNM(
         visible_after_scans=999,
@@ -461,8 +461,8 @@ def test_a_profile_for_another_network_is_left_alone(blind):
 
 
 def test_repeated_attempts_do_not_pile_up_profiles(blind):
-    """Three submissions of the same form used to leave `Kamber Wifi 2.0`,
-    `Kamber Wifi 2.0 1`, `Kamber Wifi 2.0 2`."""
+    """Three submissions of the same form used to leave `Maple Wifi 2.0`,
+    `Maple Wifi 2.0 1`, `Maple Wifi 2.0 2`."""
     nm = FakeNM(visible_after_scans=999)
     for _ in range(3):
         ok, _ = _join(nm)

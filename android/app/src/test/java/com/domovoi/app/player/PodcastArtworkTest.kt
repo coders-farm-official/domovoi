@@ -13,15 +13,15 @@ import org.junit.Test
  */
 class PodcastArtworkTest {
 
-    private val api = ApiClient(baseUrlProvider = { "http://192.168.0.117:6369" })
+    private val api = ApiClient(baseUrlProvider = { "http://192.168.1.20:6369" })
 
     @Test fun aServerPathLoadsFromTheActiveServer() {
         assertEquals(
-            "http://192.168.0.117:6369/api/podcasts/subscriptions/3/artwork?v=1a2b3c4d",
+            "http://192.168.1.20:6369/api/podcasts/subscriptions/3/artwork?v=1a2b3c4d",
             PodcastArtwork.model("/api/podcasts/subscriptions/3/artwork?v=1a2b3c4d", api::absolute),
         )
         assertEquals(
-            "http://192.168.0.117:6369/api/podcasts/discover/artwork/0123456789abcdef0123456789abcdef",
+            "http://192.168.1.20:6369/api/podcasts/discover/artwork/0123456789abcdef0123456789abcdef",
             PodcastArtwork.model("/api/podcasts/discover/artwork/0123456789abcdef0123456789abcdef", api::absolute),
         )
     }

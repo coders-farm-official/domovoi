@@ -63,26 +63,26 @@ def config_file(tmp_path):
 def test_a_discovered_address_is_used_this_boot(config_file, monkeypatch):
     from satellite import discovery
 
-    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.1.20")
     cfg = _cfg()
     assert client._resolve_server_url(cfg, config_file) is True
-    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert cfg.domovoi_url == "ws://192.168.1.20:6370"
 
 
 def test_a_discovered_address_does_not_reach_the_config_file(config_file, monkeypatch):
     from satellite import discovery
 
-    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.0.117")
+    monkeypatch.setattr(discovery, "find_core", lambda port=None: "192.168.1.20")
     before = config_file.read_text(encoding="utf-8")
     client._resolve_server_url(_cfg(), config_file)
     assert config_file.read_text(encoding="utf-8") == before
-    assert server_identity.read_pending_server()[0] == "ws://192.168.0.117:6370"
+    assert server_identity.read_pending_server()[0] == "ws://192.168.1.20:6370"
 
 
 def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_file, monkeypatch):
     """The pending address is the last-known one: asked first (after the
     core's name), and when it answers as the server nothing is swept."""
-    server_identity.write_pending_server("ws://192.168.0.117:6370")
+    server_identity.write_pending_server("ws://192.168.1.20:6370")
     cfg = _cfg()
 
     def never(*a, **k):      # a sweep here would be the bug
@@ -91,17 +91,17 @@ def test_a_second_boot_reuses_the_pending_address_instead_of_sweeping(config_fil
     from satellite import discovery
 
     asked = []
-    monkeypatch.setattr(discovery, "probe", lambda host, **k: asked.append(host) or host == "192.168.0.117")
+    monkeypatch.setattr(discovery, "probe", lambda host, **k: asked.append(host) or host == "192.168.1.20")
     monkeypatch.setattr(discovery, "find_core", never)
     assert client._resolve_server_url(cfg, config_file) is True
-    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
-    assert asked == ["192.168.0.117"]
+    assert cfg.domovoi_url == "ws://192.168.1.20:6370"
+    assert asked == ["192.168.1.20"]
 
 
 def test_a_pending_address_that_does_not_answer_is_still_used_when_nothing_else_does(config_file, monkeypatch):
     """The core is down at boot: nothing verifies anywhere. The pending
     address is still the best there is, exactly as before."""
-    server_identity.write_pending_server("ws://192.168.0.117:6370")
+    server_identity.write_pending_server("ws://192.168.1.20:6370")
     from satellite import discovery
 
     monkeypatch.setattr(discovery, "probe", lambda host, **k: False)
@@ -109,23 +109,23 @@ def test_a_pending_address_that_does_not_answer_is_still_used_when_nothing_else_
     monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
     cfg = _cfg()
     assert client._resolve_server_url(cfg, config_file) is True
-    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert cfg.domovoi_url == "ws://192.168.1.20:6370"
 
 
 def test_an_address_someone_typed_is_left_alone(config_file):
-    cfg = _cfg("ws://192.168.0.5:6370")
+    cfg = _cfg("ws://192.168.1.5:6370")
     assert client._resolve_server_url(cfg, config_file) is True
-    assert cfg.domovoi_url == "ws://192.168.0.5:6370"
+    assert cfg.domovoi_url == "ws://192.168.1.5:6370"
     assert server_identity.read_pending_server() == (None, None)
 
 
 # ─── approval is what makes it configuration ──────────────────────────────
 
 def test_approval_writes_the_address_into_the_config(config_file):
-    server_identity.write_pending_server("ws://192.168.0.117:6370", "SHA256:ours")
+    server_identity.write_pending_server("ws://192.168.1.20:6370", "SHA256:ours")
     client._promote_pending_server(config_file)
     body = config_file.read_text(encoding="utf-8")
-    assert 'domovoi_url = "ws://192.168.0.117:6370"' in body
+    assert 'domovoi_url = "ws://192.168.1.20:6370"' in body
     assert 'server_fingerprint = "SHA256:ours"' in body
     assert "# the server this room talks to" in body      # comments survive
     assert server_identity.read_pending_server() == (None, None)
@@ -151,7 +151,7 @@ def test_the_ready_frame_is_what_promotes_it():
 
 def test_the_server_that_holds_our_key_is_accepted():
     seed, public, fingerprint = _server()
-    cfg = _cfg("ws://192.168.0.117:6370", fingerprint)
+    cfg = _cfg("ws://192.168.1.20:6370", fingerprint)
     assert client._verify_server_identity(
         cfg, opener=_health_opener(seed, public)
     ) is True
@@ -160,7 +160,7 @@ def test_the_server_that_holds_our_key_is_accepted():
 def test_a_different_server_on_our_address_is_refused(caplog):
     _seed_a, _public_a, ours = _server(1)
     seed_b, public_b, _ = _server(2)
-    cfg = _cfg("ws://192.168.0.117:6370", ours)
+    cfg = _cfg("ws://192.168.1.20:6370", ours)
     with caplog.at_level("ERROR"):
         assert client._verify_server_identity(
             cfg, opener=_health_opener(seed_b, public_b)
@@ -170,7 +170,7 @@ def test_a_different_server_on_our_address_is_refused(caplog):
 
 def test_a_device_with_nothing_pinned_records_what_it_meets():
     seed, public, fingerprint = _server()
-    cfg = _cfg("ws://192.168.0.117:6370")
+    cfg = _cfg("ws://192.168.1.20:6370")
     assert client._verify_server_identity(
         cfg, opener=_health_opener(seed, public)
     ) is True
@@ -180,7 +180,7 @@ def test_a_device_with_nothing_pinned_records_what_it_meets():
 def test_and_is_then_held_to_it():
     seed_a, public_a, _ours = _server(1)
     seed_b, public_b, _ = _server(2)
-    cfg = _cfg("ws://192.168.0.117:6370")
+    cfg = _cfg("ws://192.168.1.20:6370")
     client._verify_server_identity(cfg, opener=_health_opener(seed_a, public_a))
     assert client._verify_server_identity(
         cfg, opener=_health_opener(seed_b, public_b)
@@ -192,7 +192,7 @@ def test_an_older_core_with_no_identity_is_still_talked_to():
     paired to a core that will not carry an identity until it is upgraded,
     and refusing here would take them off the air."""
     seed, public, _fingerprint = _server()
-    cfg = _cfg("ws://192.168.0.117:6370")
+    cfg = _cfg("ws://192.168.1.20:6370")
     assert client._verify_server_identity(
         cfg, opener=_health_opener(seed, public, identity=False)
     ) is True
@@ -204,7 +204,7 @@ def test_an_older_core_is_only_asked_once_a_boot():
     round trip in front of the socket, asking a core that will not have
     grown an identity since the last attempt."""
     seed, public, _fingerprint = _server()
-    cfg = _cfg("ws://192.168.0.117:6370")
+    cfg = _cfg("ws://192.168.1.20:6370")
     client._verify_server_identity(
         cfg, opener=_health_opener(seed, public, identity=False)
     )
@@ -220,7 +220,7 @@ def test_a_pinned_device_keeps_asking_an_unreachable_server():
     merely down has to be re-checked, because the next attempt may reach
     the real server."""
     _seed, _public, ours = _server()
-    cfg = _cfg("ws://192.168.0.117:6370", ours)
+    cfg = _cfg("ws://192.168.1.20:6370", ours)
     calls = []
 
     def down(url, timeout=None):
@@ -235,7 +235,7 @@ def test_a_pinned_device_keeps_asking_an_unreachable_server():
 def test_an_unreachable_server_does_not_block_an_unpinned_device():
     """Nothing to compare against, so the socket attempt below is what
     reports the outage — with its own message and its own backoff."""
-    cfg = _cfg("ws://192.168.0.117:6370")
+    cfg = _cfg("ws://192.168.1.20:6370")
 
     def down(url, timeout=None):
         raise OSError("connection refused")
@@ -283,7 +283,7 @@ def test_a_config_fingerprint_cannot_point_the_client_at_another_core(caplog):
     server_identity.ROOT_PIN.write_text(
         '{"fingerprint": "%s"}' % ours, encoding="utf-8"
     )
-    cfg = _cfg("ws://192.168.0.9:6370", rogue)
+    cfg = _cfg("ws://192.168.1.9:6370", rogue)
     with caplog.at_level("ERROR"):
         assert client._verify_server_identity(
             cfg, opener=_health_opener(seed_b, public_b)

@@ -119,26 +119,26 @@ def opener_for(answers: dict):
 
 def test_the_core_s_copy_is_used_when_it_is_the_pinned_file(tmp_path):
     body = b"wheel bytes" * 100
-    op = opener_for({"192.168.0.117:6370": body, "upstream": b"never"})
-    assert wi.fetch_pinned(entry_for(body), tmp_path, core="http://192.168.0.117:6370", opener=op) == "core"
+    op = opener_for({"192.168.1.20:6370": body, "upstream": b"never"})
+    assert wi.fetch_pinned(entry_for(body), tmp_path, core="http://192.168.1.20:6370", opener=op) == "core"
     assert (tmp_path / "x-1.0-py3-none-any.whl").read_bytes() == body
-    assert op.seen == ["http://192.168.0.117:6370/v1/satellite-windows/files/x-1.0-py3-none-any.whl"]
-    assert wi.fetch_pinned(entry_for(body), tmp_path, core="http://192.168.0.117:6370", opener=op) == "present"
+    assert op.seen == ["http://192.168.1.20:6370/v1/satellite-windows/files/x-1.0-py3-none-any.whl"]
+    assert wi.fetch_pinned(entry_for(body), tmp_path, core="http://192.168.1.20:6370", opener=op) == "present"
 
 
 def test_a_core_serving_other_bytes_is_passed_over_for_upstream(tmp_path):
     body = b"the real wheel" * 50
-    op = opener_for({"192.168.0.117:6370": b"x" * len(body), "upstream": body})
-    assert wi.fetch_pinned(entry_for(body), tmp_path, core="http://192.168.0.117:6370", opener=op) == "upstream"
+    op = opener_for({"192.168.1.20:6370": b"x" * len(body), "upstream": body})
+    assert wi.fetch_pinned(entry_for(body), tmp_path, core="http://192.168.1.20:6370", opener=op) == "upstream"
     assert (tmp_path / "x-1.0-py3-none-any.whl").read_bytes() == body
 
 
 def test_nobody_serving_the_pinned_file_stops_the_install(tmp_path):
     body = b"real"
-    op = opener_for({"192.168.0.117:6370": b"fake", "upstream": OSError("offline")})
+    op = opener_for({"192.168.1.20:6370": b"fake", "upstream": OSError("offline")})
     dest = tmp_path / "wheels"
     with pytest.raises(wi.InstallError, match="could not get"):
-        wi.fetch_pinned(entry_for(body), dest, core="http://192.168.0.117:6370", opener=op)
+        wi.fetch_pinned(entry_for(body), dest, core="http://192.168.1.20:6370", opener=op)
     assert not list(dest.iterdir()), "nothing unverified is left behind"
 
 
@@ -242,7 +242,7 @@ def _args(tmp_path, payload, **kw):
 def test_a_core_that_can_not_prove_its_identity_writes_nothing(tmp_path, monkeypatch):
     from satellite import server_identity
 
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Den")
 
     def refuse(e, opener=None, timeout=None):
         raise server_identity.IdentityError("signed by someone else")
@@ -298,7 +298,7 @@ def test_a_pc_that_runs_the_domovoi_server_is_refused_before_anything(tmp_path):
     marker = tmp_path / "ProgramData-Domovoi"
     marker.mkdir()
     root = tmp_path / "Satellite"
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Den")
     signals = json.loads(NOTHING)
     signals["programdata"] = str(marker)
     r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), payload, "-InstallRoot", str(root),
@@ -640,7 +640,7 @@ def _install_order(tmp_path, monkeypatch, *, proven: bool):
         raise wi.InstallError("stop the test here", 9)
 
     monkeypatch.setattr(wi, "replace_dir", replace_dir)
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Den")
     with pytest.raises(wi.InstallError):
         wi.install(_args(tmp_path, payload, profile=str(tmp_path)))
     return calls
@@ -840,7 +840,7 @@ def test_the_installer_waits_on_the_engine_of_the_install_s_own_python(tmp_path,
     monkeypatch.setattr(pc_install, "write_config", lambda *a, **k: {})
     monkeypatch.setattr(pc_engine, "wait_for_approval",
                         lambda path, timeout, **kw: seen.update(kw, path=path) or "connected")
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Den")
     root = tmp_path / "root"
     args = _args(tmp_path, payload, no_start=False, wait=30, profile=str(tmp_path))
     monkeypatch.setattr(wi.shutil, "copyfile", lambda *a, **k: None)

@@ -90,7 +90,7 @@ class RoomNetworkTest {
     fun theClientHasNoRedirectFollowerAndTheUpgradeIsTagged() {
         assertTrue(!RoomNetwork.BASE.followRedirects && !RoomNetwork.BASE.followSslRedirects)
         assertTrue(RoomNetwork.BASE.interceptors.none { it === com.domovoi.app.net.RedirectPolicy.interceptor })
-        val r = RoomNetwork.streamRequest("ws://192.168.0.240:6370/v1/stream/kitchen")
+        val r = RoomNetwork.streamRequest("ws://192.168.1.30:6370/v1/stream/kitchen")
         assertNotNull(r.tag(TokenScope.WsUpgrade::class.java))
     }
 }

@@ -29,8 +29,8 @@ def _wrapper():
 tw = _wrapper()
 
 SMI_TWO_CARDS = (
-    "0, GPU-0d564e47-ed79-9c0e-bbdf-48e3b9be0c44, 9656\n"
-    "1, GPU-a038cbc3-d87c-8a67-d917-c09d5cd150b8, 948\n"
+    "0, GPU-00000000-1111-4222-8333-444444444444, 9656\n"
+    "1, GPU-55555555-6666-4777-8888-999999999999, 948\n"
 )
 
 
@@ -50,12 +50,12 @@ def _fake_smi(monkeypatch, stdout, *, on_path=True, wsl_file=False):
 
 def test_least_used_card_is_picked_with_its_uuid(monkeypatch):
     _fake_smi(monkeypatch, SMI_TWO_CARDS)
-    assert tw.select_gpu() == ("1", 2, "GPU-a038cbc3-d87c-8a67-d917-c09d5cd150b8")
+    assert tw.select_gpu() == ("1", 2, "GPU-55555555-6666-4777-8888-999999999999")
 
 
 def test_single_card_uses_all(monkeypatch):
-    _fake_smi(monkeypatch, "0, GPU-0d564e47-ed79-9c0e-bbdf-48e3b9be0c44, 610\n")
-    assert tw.select_gpu() == ("all", 1, "GPU-0d564e47-ed79-9c0e-bbdf-48e3b9be0c44")
+    _fake_smi(monkeypatch, "0, GPU-00000000-1111-4222-8333-444444444444, 610\n")
+    assert tw.select_gpu() == ("all", 1, "GPU-00000000-1111-4222-8333-444444444444")
 
 
 def test_wsl_nvidia_smi_is_found_off_the_unit_path(monkeypatch):
@@ -74,11 +74,11 @@ def test_no_nvidia_smi_anywhere(monkeypatch):
 def test_the_chosen_card_reaches_cuda_inside_the_container():
     argv = tw.build_run_argv(
         "/clips", "/models", "hey domovoi", "hey_domovoi",
-        ["--gpus", "device=1"], "GPU-a038cbc3-d87c-8a67-d917-c09d5cd150b8",
+        ["--gpus", "device=1"], "GPU-55555555-6666-4777-8888-999999999999",
     )
     assert argv[argv.index("--gpus") + 1] == "device=1"
-    assert "CUDA_VISIBLE_DEVICES=GPU-a038cbc3-d87c-8a67-d917-c09d5cd150b8" in argv
-    assert argv[argv.index("CUDA_VISIBLE_DEVICES=GPU-a038cbc3-d87c-8a67-d917-c09d5cd150b8") - 1] == "-e"
+    assert "CUDA_VISIBLE_DEVICES=GPU-55555555-6666-4777-8888-999999999999" in argv
+    assert argv[argv.index("CUDA_VISIBLE_DEVICES=GPU-55555555-6666-4777-8888-999999999999") - 1] == "-e"
     # Still before the image name, which stays last.
     assert argv[-1] == tw.IMAGE
 

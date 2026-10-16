@@ -135,12 +135,12 @@ async def test_status_with_full_cache() -> None:
     ctx = Context(
         room_id="kitchen",
         online=True,
-        wifi_status={"rx_mbits": 43.3, "tx_mbits": 72.2, "ssid": "Kamber Wifi 2.0"},
+        wifi_status={"rx_mbits": 43.3, "tx_mbits": 72.2, "ssid": "Maple Wifi 2.0"},
     )
     m = _DIAGNOSTIC_RE.match("how's your wifi")
     assert m
     response = await WifiHandler()._status_from_match(m, ctx, None)
-    assert response.text == "WiFi is connected at 43 megabits per second to Kamber Wifi 2.0."
+    assert response.text == "WiFi is connected at 43 megabits per second to Maple Wifi 2.0."
     assert response.pi_action is None  # diagnostic doesn't trigger an action
 
 
