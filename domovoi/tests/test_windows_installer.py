@@ -138,6 +138,159 @@ def test_provision_pin_is_the_file_at_the_pinned_commit():
     assert "\n  --stop-before STEP " in text and "start_diagnostics()" in text
 
 
+def _git_bytes(*args: str) -> bytes | None:
+    git = shutil.which("git")
+    if not git:
+        return None
+    proc = subprocess.run([git, "-C", str(REPO_ROOT), *args], capture_output=True)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _needed_files(script: str) -> set[str]:
+    """The repository files a provision.sh reads from the checkout it
+    clones: its helpers and units under scripts/linux, the locks, the
+    compose file, the room image's Dockerfile, pyproject.toml and the doc
+    that pins Ollama."""
+    need = {m for m in re.findall(r"scripts/linux/(?!tests/)[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?\.(?:sh|conf|service)", script)}
+    m = re.search(r"^SHIPPED_UNITS=\(([^)]*)\)", script, re.M)
+    for unit in (m.group(1).split() if m else []):
+        need.add(f"scripts/linux/units/{unit}")
+    for name in re.findall(r"^(?:NODEPS_)?LOCK_NAME=(\S+)$", script, re.M):
+        need.add(name)
+    for path in re.findall(r"\$CHECKOUT/((?:domovoi|docs)/[A-Za-z0-9_-][A-Za-z0-9_.-]*|pyproject\.toml)\b", script):
+        need.add(path)
+    need.discard("domovoi/.env")      # made by the env step, not shipped
+    return need
+
+
+def _missing_at(commit: str, script: str) -> list[str]:
+    return sorted(p for p in _needed_files(script) if _git_bytes("cat-file", "-e", f"{commit}:{p}") is None)
+
+
+def test_the_pins_move_together():
+    """DomovoiCommit, ProvisionSha256 and the provision.sh Setup runs belong
+    to each other (delta security review 2026-10-16, N9): the script Setup
+    runs hashes to the pin, and every file that script reads from the
+    checkout exists at the pinned commit (batch 11's provision.sh needs
+    scripts/linux/units/journald-domovoi.conf, which rc1's 4d6b414 lacks).
+    windows\\build.ps1 -Pin moves them in one go."""
+    commit = _pins()["DomovoiCommit"]
+    if _git_bytes("cat-file", "-e", f"{commit}^{{commit}}") is None:
+        pytest.skip(f"commit {commit[:7]} is not in this clone")
+    if _provision_bundled():
+        script = (REPO_ROOT / "scripts" / "linux" / "provision.sh").read_bytes()
+    else:
+        script = _git_bytes("cat-file", "blob", f"{commit}:scripts/linux/provision.sh")
+    assert script is not None
+    assert hashlib.sha256(script).hexdigest() == _pins()["ProvisionSha256"]
+    text = script.decode("utf-8")
+    assert len(_needed_files(text)) >= 10, sorted(_needed_files(text))
+    assert _missing_at(commit, text) == [], f"files provision.sh reads that {commit[:7]} lacks"
+
+
+def test_a_bundled_script_ahead_of_its_commit_is_caught():
+    """The rule above, on the pair that broke after batch 11: this tree's
+    provision.sh with rc1's commit."""
+    rc1 = "4d6b4147f7d99d84fd0fcac2fdcb769c164eec92"
+    if _git_bytes("cat-file", "-e", f"{rc1}^{{commit}}") is None:
+        pytest.skip("rc1's commit is not in this clone")
+    tree = (REPO_ROOT / "scripts" / "linux" / "provision.sh").read_text(encoding="utf-8")
+    assert "scripts/linux/units/journald-domovoi.conf" in _missing_at(rc1, tree)
+
+
+def test_the_channel_is_stable_only_for_a_release():
+    """Setup follows stable on a release build (the household gets releases
+    only); a pin that isn't a release's commit follows main."""
+    pins = _pins()
+    assert pins["DomovoiChannel"] in ("stable", "main")
+    if pins["DomovoiChannel"] != "stable":
+        return
+    commit = pins["DomovoiCommit"]
+    tags = _git_bytes("tag", "--points-at", commit, "--list", "v[0-9]*")
+    if tags is None or _git_bytes("cat-file", "-e", f"{commit}^{{commit}}") is None:
+        pytest.skip(f"commit {commit[:7]} is not in this clone")
+    assert tags.strip(), f"DomovoiChannel is stable, but no v* tag names {commit[:7]}"
+
+
+def test_the_job_follows_the_channel():
+    s = SCRIPT.read_text(encoding="ascii")
+    assert "--ref {#DomovoiCommit} --track-branch {#DomovoiChannel} --lan-ip auto" in s
+    assert '#if DomovoiChannel == "stable"' in s and "{#ChannelWords}" in s
+
+
+def test_the_changes_page_leads_with_the_changes_and_ends_with_the_undo():
+    """Owner feedback 2026-10-16: the changes first; the way to undo them
+    last."""
+    s = SCRIPT.read_text(encoding="ascii")
+    body = s[s.index("function ConsentText: String;"):]
+    body = body[: body.index("\nend;")]
+    assert "S := '';\n  N := 1;" in body
+    assert "undoes every change below" not in body
+    last = [line.strip() for line in body.splitlines() if line.strip().startswith("S := S +")][-1]
+    assert last == "S := S + 'You can undo all of this later from Settings > Apps > Installed apps > Domovoi.';"
+
+
+requires_pin_tool = pytest.mark.skipif(
+    sys.platform != "win32" or POWERSHELL is None or shutil.which("git") is None,
+    reason="build.ps1 -Pin runs in Windows PowerShell, with git",
+)
+
+
+def _pin_tool(tmp_path: Path, *args: str) -> tuple[subprocess.CompletedProcess, Path]:
+    copy = tmp_path / "pins.iss"
+    copy.write_bytes(PINS.read_bytes())
+    proc = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(BUILD),
+         *args, "-PinOnly", "-PinsFile", str(copy)],
+        capture_output=True, text=True, timeout=120,
+    )
+    return proc, copy
+
+
+@requires_pin_tool
+def test_the_pin_tool_reproduces_the_pins(tmp_path):
+    """Moving the pins to the commit and channel they already name changes
+    nothing: every pin in pins.iss is what build.ps1 -Pin derives from
+    DomovoiCommit."""
+    pins = _pins()
+    if _git_bytes("cat-file", "-e", f"{pins['DomovoiCommit']}^{{commit}}") is None:
+        pytest.skip("the pinned commit is not in this clone")
+    proc, copy = _pin_tool(tmp_path, "-Pin", pins["DomovoiCommit"], "-Channel", pins["DomovoiChannel"])
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert copy.read_bytes() == PINS.read_bytes()
+
+
+@requires_pin_tool
+def test_the_pin_tool_pins_a_release_tag(tmp_path):
+    rc1 = "4d6b4147f7d99d84fd0fcac2fdcb769c164eec92"
+    if _git_bytes("rev-parse", "--verify", "--quiet", "refs/tags/v1.0.0-rc1") is None:
+        pytest.skip("the v1.0.0-rc1 tag is not in this clone")
+    proc, copy = _pin_tool(tmp_path, "-Pin", "v1.0.0-rc1")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    text = copy.read_text(encoding="ascii")
+    assert f'#define DomovoiCommit "{rc1}"' in text
+    assert '#define DomovoiChannel "stable"' in text
+    blob = _git_bytes("cat-file", "blob", f"{rc1}:scripts/linux/provision.sh")
+    assert f'#define ProvisionSha256 "{hashlib.sha256(blob).hexdigest()}"' in text
+    assert "\n; #define ProvisionBundled\n" in text and "\n#define DashboardTabRoutes\n" in text
+    assert b"\r" not in copy.read_bytes()
+
+
+@requires_pin_tool
+def test_the_pin_tool_refuses_a_branch_and_a_stable_non_release(tmp_path):
+    proc, copy = _pin_tool(tmp_path, "-Pin", "main")
+    assert proc.returncode != 0 and "never a branch" in proc.stdout + proc.stderr
+    assert copy.read_bytes() == PINS.read_bytes()
+    pinned = _pins()["DomovoiCommit"]
+    if _git_bytes("cat-file", "-e", f"{pinned}^{{commit}}") is None:
+        pytest.skip("the pinned commit is not in this clone")
+    if (_git_bytes("tag", "--points-at", pinned, "--list", "v[0-9]*") or b"").strip():
+        pytest.skip("the pinned commit is a release")
+    proc, copy = _pin_tool(tmp_path, "-Pin", pinned, "-Channel", "stable")
+    assert proc.returncode != 0 and "is not a release" in proc.stdout + proc.stderr
+    assert copy.read_bytes() == PINS.read_bytes()
+
+
 def test_every_download_estimate_agrees():
     """Setup's pages, the helper's no-internet message and the doc give the
     same "about X-Y GB" for what an install downloads."""

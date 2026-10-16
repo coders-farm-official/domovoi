@@ -17,7 +17,7 @@
 //   account --exe PATH [--no-deny-logon]
 //   media
 //   firewall [--subnet CIDR]
-//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--lan-ip IP|auto|none]
+//   job --image P --image-sha256 H --provision P --provision-sha256 H --repo-url U --ref SHA [--track-branch stable|main] [--lan-ip IP|auto|none]
 //   check-media --root DIR                          read-only
 //   host-start | host-retry | host-park | setup-code
 //   uninstall [--dry-run]                           exit 3: done, with leftovers
@@ -118,7 +118,7 @@ namespace Domovoi.Windows.Helper
                     case "firewall": Steps.FirewallRules(o, a.Opt("--subnet")); return 0;
                     case "job":
                         Steps.WriteJob(o, a.Req("--image"), a.Req("--image-sha256"), a.Req("--provision"), a.Req("--provision-sha256"),
-                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--lan-ip") ?? "auto");
+                            a.Req("--repo-url"), a.Req("--ref"), a.Opt("--track-branch") ?? "stable", a.Opt("--lan-ip") ?? "auto");
                         return 0;
                     case "host-start": Steps.HostStart(o); return 0;
                     case "host-status": Steps.HostStatusOut(o); return 0;

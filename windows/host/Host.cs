@@ -341,6 +341,10 @@ namespace Domovoi.Windows.Host
                 return false;
             }
             UpdateState("imported", true);
+            // The first install's checkout is then checked against the
+            // commit this job (or a later one, before it succeeds) pinned.
+            UpdateState("install_commits", InstalledHead.WithAsked(null, InstalledHead.RefOf(job.ProvisionArgs)).ToArray());
+            UpdateState("head_verified", false);
             return true;
         }
 
@@ -485,6 +489,18 @@ namespace Domovoi.Windows.Host
         {
             Status("provisioning", HostProgress.PhaseProvision, 0, "Preparing Domovoi's Linux system");
             if (!CopyScriptIn(job)) return false;
+            // S3 (delta security review 2026-10-16): until the first install
+            // is verified, the HEAD it reports must be a commit Setup pinned.
+            // A distro imported before this check existed has no list: never
+            // checked (its checkout follows the dashboard's updates).
+            var st = ReadState();
+            List<string> asked = Json.StrList(st, "install_commits");
+            bool checkHead = asked != null && Json.Bool(st, "head_verified") != true;
+            if (checkHead)
+            {
+                asked = InstalledHead.WithAsked(asked, InstalledHead.RefOf(job.ProvisionArgs));
+                UpdateState("install_commits", asked.ToArray());
+            }
             int restarts = 0, lost = 0, busy = 0;
             bool verifying = false;
             // The port check right before the start step (owner fixes
@@ -511,6 +527,13 @@ namespace Domovoi.Windows.Host
                 switch (v)
                 {
                     case ProvisionVerdict.Done:
+                        if (checkHead)
+                        {
+                            string bad = InstalledHead.Problem(final.Head, asked);
+                            if (bad != null) { Fail(bad, "checkout"); return false; }
+                            UpdateState("head_verified", true);
+                            log.Write("the installed commit " + final.Head + " is the one Setup pinned");
+                        }
                         return true;
                     case ProvisionVerdict.DoneRestartDistro:
                     case ProvisionVerdict.RestartDistroAndRerun:

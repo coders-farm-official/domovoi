@@ -235,6 +235,7 @@ static class Tests
             {
                 "--repo-url", "https://github.com/coders-farm-official/domovoi",
                 "--ref", "eb4a497fe821c08b6b8c39d7603ff7384d696dfc",
+                "--track-branch", "stable",
                 "--internet", "never", "--tier", "auto", "--lan-ip", "192.168.1.30",
                 "--media", @"music=C:\Users\Public\Domovoi\Music",
                 "--media", @"pictures=C:\Users\Public\Domovoi\Pictures",
@@ -243,6 +244,41 @@ static class Tests
                 "--media", @"audiobooks=C:\Users\Public\Domovoi\Audiobooks",
                 "--health-timeout", "900",
             }, ProvisionArgs.Build(Opts()), "args");
+        });
+        Run("args: the main channel, where pins.iss says so", delegate
+        {
+            var o = Opts(); o.TrackBranch = "main";
+            var a = ProvisionArgs.Build(o);
+            Eq("main", a[a.IndexOf("--track-branch") + 1], "track branch");
+        });
+        Run("installed head: the --ref of the job", delegate
+        {
+            Eq("eb4a497fe821c08b6b8c39d7603ff7384d696dfc", InstalledHead.RefOf(ProvisionArgs.Build(Opts())), "ref");
+            True(InstalledHead.RefOf(new List<string> { "--ref", "main" }) == null, "a branch is no pin");
+            True(InstalledHead.RefOf(new List<string> { "--ref" }) == null, "no value");
+            True(InstalledHead.RefOf(null) == null, "no args");
+        });
+        Run("installed head: any commit pinned since the import, once each", delegate
+        {
+            const string a = "eb4a497fe821c08b6b8c39d7603ff7384d696dfc", b = "606829ce49622b19ec7494093ab239297d16faf3";
+            var l = InstalledHead.WithAsked(null, a);
+            SeqEq(new[] { a }, l, "first");
+            l = InstalledHead.WithAsked(l, b);
+            SeqEq(new[] { a, b }, l, "a newer Setup");
+            SeqEq(new[] { a, b }, InstalledHead.WithAsked(l, a), "no repeats");
+            SeqEq(new[] { a }, InstalledHead.WithAsked(new List<string> { a, "main", null }, null), "junk dropped");
+        });
+        Run("installed head: fails closed on anything but a pinned commit", delegate
+        {
+            const string a = "eb4a497fe821c08b6b8c39d7603ff7384d696dfc", b = "606829ce49622b19ec7494093ab239297d16faf3";
+            var asked = new List<string> { a, b };
+            True(InstalledHead.Problem(a, asked) == null, "the first pin");
+            True(InstalledHead.Problem(b, asked) == null, "the later pin");
+            string why = InstalledHead.Problem("f280d9a4b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6", asked);
+            True(why != null && why.Contains("not the one Setup pinned"), "another commit: " + why);
+            True(InstalledHead.Problem(null, asked) != null, "no head reported");
+            True(InstalledHead.Problem("eb4a497", asked) != null, "a short SHA");
+            True(InstalledHead.Problem(a, new List<string>()) != null, "nothing to compare with");
         });
         Run("args: no LAN IP leaves the repo's auto", delegate
         {
@@ -257,6 +293,10 @@ static class Tests
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "a short SHA");
             o = Opts(); o.RepoUrl = "http://github.com/x/y";
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "http");
+            o = Opts(); o.TrackBranch = "release";
+            Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "a branch that is not a channel");
+            o = Opts(); o.TrackBranch = null;
+            Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "no channel");
             o = Opts(); o.Internet = "yes";
             Throws<ArgumentException>(delegate { ProvisionArgs.Build(o); }, "internet");
             o = Opts(); o.LanIp = "8.8.8.8";
