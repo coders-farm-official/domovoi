@@ -22,9 +22,14 @@ from domovoi.models import Context, Intent, Response
 from domovoi.router import _no_speakers_yet, route
 from domovoi.tests.conftest import requires_db
 
-# The utterance that produced the original 500: matches a music fast path,
-# which calls get_mpd_client_for() to reach the room's daemon.
-PLAY = "play some jazz in the kitchen"
+# A music fast path in the asking room, which calls get_mpd_client_for() to
+# reach the room's daemon. The original 500 was "play some jazz in the
+# kitchen"; since music plays in another room by name (2026-10-14,
+# domovoi/handlers/music_rooms.py) a named room is looked up among the rooms
+# first, so that form no longer reaches the daemon on a box with no rooms
+# (ROOM_NAMED, below, checks it still degrades).
+PLAY = "play some jazz"
+ROOM_NAMED = "play some jazz in the kitchen"
 
 
 def test_exception_is_typed_not_bare_runtime_error():
@@ -58,6 +63,14 @@ async def test_music_request_degrades_when_no_room_is_provisioned(
     )
 
     # A spoken answer, not an exception — and one that says what to do.
+    assert "satellite" in resp.text.lower()
+
+    # The original utterance, which names the room: still an answer.
+    resp = await route(
+        Intent(transcript=ROOM_NAMED, room_id="kitchen"),
+        Context(room_id="kitchen", online=True),
+        db_session,
+    )
     assert "satellite" in resp.text.lower()
 
 

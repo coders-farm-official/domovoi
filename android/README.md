@@ -158,7 +158,7 @@ uninstalls it once before the first release build goes on.
    bash android/scripts/release.sh          # Linux, macOS, Git Bash
    ```
 
-   It builds `-Pdomovoi.apkPerAbi -Pdomovoi.abis=arm64-v8a,armeabi-v7a`,
+   It builds `:app:assembleRelease -Pdomovoi.apkPerAbi -Pdomovoi.abis=arm64-v8a,armeabi-v7a`,
    asks for the keystore file, the alias and the passwords (typed, not
    shown; never written anywhere: apksigner reads them from the script's
    environment for that one call), signs

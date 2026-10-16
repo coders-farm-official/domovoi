@@ -159,6 +159,12 @@ _WEB_BACKEND_CORE_IMPORTS = (
     # (``from domovoi import lan_address`` inside the handler). It only
     # worked because satellite_adoption happened to import it first.
     "domovoi.lan_address",
+    # The tag reader and the MPD client that replaced mutagen and
+    # python-mpd2 (2026-10-15, GPL/LGPL clean-up) are core modules, not
+    # third-party packages, so the guard sees them: music.py imports them
+    # inside handlers (embedded cover art, every room's now-playing read).
+    "domovoi.media_tags",
+    "domovoi.clients.mpd_protocol",
 )
 
 

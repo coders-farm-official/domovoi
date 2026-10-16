@@ -387,7 +387,10 @@ async def android_app_for_household_phones() -> dict[str, Any]:
         join_url = core + enrolment.JOIN_PATH
     except enrolment.EnrolmentError as e:
         problem = str(e)
-    status, app = await get_admin("/v1/android-app")
+    # The core's public view, so deliberately no credential: an open route
+    # forwards none (headers={} says so to the every-hop-forwards guard,
+    # domovoi/tests/test_web_proxy_credentials.py).
+    status, app = await get_admin("/v1/android-app", headers={})
     if status != 200 or not isinstance(app, dict):
         app = {"release": None, "apks": [], "ready": False, "unreachable": True}
     return {"join_url": join_url, "join_problem": problem, **app}
