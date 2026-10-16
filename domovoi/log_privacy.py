@@ -59,8 +59,13 @@ from typing import Any
 _NAME = r"[A-Za-z0-9_\-]*(?:token|secret|password|passwd|api[_\-]?key)|sig|signature|setup_code"
 
 _PARAM_RE = re.compile(
-    r"(?P<lead>(?:^|[?&;\s,(\"'\[{]))(?P<name>" + _NAME + r")=(?P<value>[^&\s\"'#,;)\]}]+)",
+    r"(?P<lead>(?:^|[?&;\s,(\"'\[{]))(?P<name>" + _NAME + r")=(?P<value>(?!%)[^&\s\"'#,;)\]}]+)",
     re.IGNORECASE,
+)
+#: A format string that puts an argument right after a credential's name
+#: (``"pairing_token=%s"``): such a record is formatted first, then scrubbed.
+_PLACEHOLDER_RE = re.compile(
+    r"(?:^|[?&;\s,(\"'\[{])(?:" + _NAME + r")=%", re.IGNORECASE,
 )
 _BEARER_RE = re.compile(r"(?P<lead>\bbearer\s+)(?P<value>[A-Za-z0-9._~+/=\-]{6,})", re.IGNORECASE)
 
@@ -108,6 +113,9 @@ def scrub_record(record: logging.LogRecord) -> None:
     """Blank credentials in ``record`` in place (message, arguments and
     traceback text). Never raises."""
     try:
+        if isinstance(record.msg, str) and record.args and _PLACEHOLDER_RE.search(record.msg):
+            # The credential is an argument: blank it in the formatted line.
+            record.msg, record.args = scrub(record.getMessage()), ()
         if isinstance(record.msg, str):
             record.msg = scrub(record.msg)
         args = record.args

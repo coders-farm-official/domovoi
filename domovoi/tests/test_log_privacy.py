@@ -120,6 +120,16 @@ def test_url_objects_exceptions_and_tracebacks_are_scrubbed() -> None:
     assert TOKEN not in text and "device_token=***" in text
 
 
+def test_a_credential_passed_as_an_argument_after_its_name_is_blanked_too() -> None:
+    """``log.info("pairing_token=%s", tok)``: the format string's
+    placeholder is not blanked (that would break the formatting and lose
+    the line); the formatted line is."""
+    rec = _record("pairing_token=%s room=%s", (TOKEN, "kitchen"))
+    assert rec.getMessage() == "pairing_token=*** room=kitchen"
+    rec = _record("GET %s", (f"/a?device_token={TOKEN}&b=%2F",))
+    assert rec.getMessage() == "GET /a?device_token=***&b=%2F"
+
+
 def test_install_is_idempotent() -> None:
     log_privacy.install()
     first = logging.getLogRecordFactory()
