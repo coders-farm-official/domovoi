@@ -207,7 +207,7 @@ domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
 ```
 
 * `core`: the core's base URL as the device dials it, `http` or `https`
-  only (e.g. `http://192.168.0.117:6370`), and on the home network: an
+  only (e.g. `http://192.168.1.20:6370`), and on the home network: an
   RFC 1918 IPv4 address, an IPv6 unique-local or link-local one, or a name
   ending in `.local`, `.home.arpa`, `.lan` or `.internal` (the core's own
   LAN names) — never loopback, a public address or
@@ -234,7 +234,7 @@ dashboard, exactly like a Pi.
 
 **The QR code carries it inside a join link** (2026-10-15):
 `<core>/join#<payload>`, e.g.
-`http://192.168.0.117:6370/join#domovoi-room:1?core=…`. A phone's own
+`http://192.168.1.20:6370/join#domovoi-room:1?core=…`. A phone's own
 camera opens it in the browser, where the core's join page (`GET /join`)
 hands the phone the Android app and opens it as the room; the payload is
 the URL's fragment, which no browser sends to a server. Both parsers take

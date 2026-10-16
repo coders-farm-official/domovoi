@@ -8,7 +8,7 @@ Two jobs live here.
 The :mod:`domovoi.workers.library_indexer` walks
 ``settings.music_dir`` via :py:meth:`pathlib.Path.rglob` and stamps
 ``str(path)`` — on Windows that produces a backslash-separated
-absolute path like ``C:\\Users\\Kamron\\music\\Artist\\Track.mp3``.
+absolute path like ``C:\\Users\\alex\\music\\Artist\\Track.mp3``.
 MPD inside Docker mounts the same directory at ``/music`` and
 reports forward-slash relative URIs like ``Artist/Track.mp3``.
 

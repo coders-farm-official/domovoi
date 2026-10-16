@@ -66,14 +66,14 @@ def make_sat(*, ws_up: bool, rx: float | None, core: str | None = "silent",
         wifi_min_healthy_mbits=5.0,
         wifi_cooldown_sec=300.0,
         wifi_degraded_after_disconnect_sec=30.0,
-        domovoi_url="ws://192.168.0.117:6370",
+        domovoi_url="ws://192.168.1.20:6370",
     )
     sat.shutdown_event = OneTick(ticks)
     sat._network_degraded = threading.Event()
     # None = the WS is up; a monotonic stamp far in the past = long down.
     sat._ws_disconnected_since = None if ws_up else 1.0
     sat.calls = []
-    link = {"rx_mbits": rx, "tx_mbits": 57.7, "ssid": "Kamber Wifi 2.0",
+    link = {"rx_mbits": rx, "tx_mbits": 57.7, "ssid": "Maple Wifi 2.0",
             "signal_dbm": -55, "mode": mode}
     if mode == "ap":
         link = {"rx_mbits": None, "tx_mbits": None, "ssid": None, "signal_dbm": None, "mode": "ap"}
@@ -209,7 +209,7 @@ def test_hotspot_recovery_honours_the_shared_cooldown():
 @pytest.mark.parametrize(
     "url, expected",
     [
-        ("ws://192.168.0.117:6370", ("192.168.0.117", 6370)),
+        ("ws://192.168.1.20:6370", ("192.168.1.20", 6370)),
         ("wss://domovoi.local", ("domovoi.local", 443)),
         ("ws://domovoi.local", ("domovoi.local", 80)),
     ],
@@ -242,7 +242,7 @@ def test_the_core_probe_tells_a_refusal_from_silence(monkeypatch, exc, outcome):
 
     monkeypatch.setattr(client.health.socket, "create_connection", connect)
     sat = object.__new__(client.Satellite)
-    sat.cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370")
+    sat.cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370")
     real = client.health.probe_service
     monkeypatch.setattr(
         client.health, "probe_service",

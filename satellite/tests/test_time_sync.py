@@ -54,7 +54,7 @@ def test_it_is_a_self_contained_python3_script():
 
 
 def test_the_config_url_is_accepted_as_is(helper):
-    assert helper.http_base("ws://192.168.0.117:6370") == "http://192.168.0.117:6370"
+    assert helper.http_base("ws://192.168.1.20:6370") == "http://192.168.1.20:6370"
     assert helper.http_base("wss://core.lan:6370/v1/stream/den") == "https://core.lan:6370"
     assert helper.http_base("http://core:6370/") == "http://core:6370"
 
@@ -262,9 +262,9 @@ def test_an_unreachable_server_is_exit_one_with_a_reason(helper, monkeypatch, ca
         raise urllib.error.URLError("connection refused")
 
     monkeypatch.setattr(helper, "fetch", down)
-    assert helper.main(["ws://192.168.0.117:6370"]) == 1
+    assert helper.main(["ws://192.168.1.20:6370"]) == 1
     out = capsys.readouterr().out
-    assert "unreachable" in out and "http://192.168.0.117:6370/v1/time" in out
+    assert "unreachable" in out and "http://192.168.1.20:6370/v1/time" in out
 
 
 def test_a_non_root_caller_is_refused_before_any_network(helper, monkeypatch):
@@ -372,30 +372,30 @@ def _signing_opener(seed, public, *, sign=True, fingerprint=None, bind="echo",
 
 def test_without_a_pin_the_argument_stands(helper):
     """A hand-built unit, and every Pi flashed before pins existed."""
-    assert helper.authorized_url("ws://192.168.0.117:6370", None) == (
-        "ws://192.168.0.117:6370", "unpinned",
+    assert helper.authorized_url("ws://192.168.1.20:6370", None) == (
+        "ws://192.168.1.20:6370", "unpinned",
     )
 
 
 def test_the_pinned_address_is_the_one_used(helper):
     assert helper.authorized_url(
-        "ws://192.168.0.117:6370", "ws://192.168.0.117:6370"
-    ) == ("ws://192.168.0.117:6370", "pinned")
+        "ws://192.168.1.20:6370", "ws://192.168.1.20:6370"
+    ) == ("ws://192.168.1.20:6370", "pinned")
 
 
 def test_a_different_address_is_refused_by_name(helper):
     url, why = helper.authorized_url(
-        "ws://192.168.0.9:6370", "ws://192.168.0.117:6370"
+        "ws://192.168.1.9:6370", "ws://192.168.1.20:6370"
     )
     assert url is None
-    assert "192.168.0.9" in why and "192.168.0.117" in why
+    assert "192.168.1.9" in why and "192.168.1.20" in why
 
 
 def test_a_refused_address_leaves_the_clock_and_the_zone_alone(
     helper, monkeypatch, capsys, _pins_in_tmp,
 ):
     (_pins_in_tmp / "server.url").write_text(
-        "ws://192.168.0.117:6370\n", encoding="utf-8"
+        "ws://192.168.1.20:6370\n", encoding="utf-8"
     )
     monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(helper, "fetch", lambda url: pytest.fail("must not fetch"))
@@ -405,13 +405,13 @@ def test_a_refused_address_leaves_the_clock_and_the_zone_alone(
     monkeypatch.setattr(
         helper, "set_clock", lambda *a, **k: pytest.fail("must not step the clock")
     )
-    assert helper.main(["ws://192.168.0.9:6370"]) == 2
+    assert helper.main(["ws://192.168.1.9:6370"]) == 2
     assert "this device's time source is" in capsys.readouterr().out
 
 
 def test_the_pinned_address_is_still_synced(helper, monkeypatch, _pins_in_tmp):
     (_pins_in_tmp / "server.url").write_text(
-        "ws://192.168.0.117:6370\n", encoding="utf-8"
+        "ws://192.168.1.20:6370\n", encoding="utf-8"
     )
     monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(
@@ -420,7 +420,7 @@ def test_the_pinned_address_is_still_synced(helper, monkeypatch, _pins_in_tmp):
     )
     monkeypatch.setattr(helper, "current_zone", lambda: "America/New_York")
     monkeypatch.setattr(helper.time, "time", lambda: 1000.1)
-    assert helper.main(["ws://192.168.0.117:6370"]) == 0
+    assert helper.main(["ws://192.168.1.20:6370"]) == 0
 
 
 # --- and whether that address is still our server ------------------------
@@ -431,7 +431,7 @@ def test_the_server_that_signs_our_nonce_passes(helper):
 
     seed, public, fingerprint = _keypair()
     assert helper.verify_identity(
-        "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
+        "ws://192.168.1.20:6370", {"fingerprint": fingerprint},
         opener=_signing_opener(seed, public), verifier=_ed25519,
     ) == ""
 
@@ -442,7 +442,7 @@ def test_a_different_server_on_the_pinned_address_is_named(helper):
     _seed_a, _public_a, ours = _keypair(1)
     seed_b, public_b, _theirs = _keypair(2)
     assert "a different server" in helper.verify_identity(
-        "ws://192.168.0.117:6370", {"fingerprint": ours},
+        "ws://192.168.1.20:6370", {"fingerprint": ours},
         opener=_signing_opener(seed_b, public_b), verifier=_ed25519,
     )
 
@@ -453,7 +453,7 @@ def test_claiming_our_fingerprint_without_the_key_does_not_pass(helper):
     _seed_a, _public_a, ours = _keypair(1)
     seed_b, public_b, _ = _keypair(2)
     assert helper.verify_identity(
-        "ws://192.168.0.117:6370", {"fingerprint": ours},
+        "ws://192.168.1.20:6370", {"fingerprint": ours},
         opener=_signing_opener(seed_b, public_b, fingerprint=ours),
         verifier=_ed25519,
     )
@@ -464,7 +464,7 @@ def test_an_answer_with_no_signature_does_not_pass(helper):
 
     seed, public, fingerprint = _keypair()
     assert helper.verify_identity(
-        "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
+        "ws://192.168.1.20:6370", {"fingerprint": fingerprint},
         opener=_signing_opener(seed, public, sign=False), verifier=_ed25519,
     )
 
@@ -484,10 +484,10 @@ def test_the_helper_asks_the_server_to_sign_for_the_address_it_dialed(helper):
     seed, public, fingerprint = _keypair()
     asked: list[dict] = []
     assert helper.verify_identity(
-        "ws://192.168.0.117:6370", {"fingerprint": fingerprint},
+        "ws://192.168.1.20:6370", {"fingerprint": fingerprint},
         opener=_signing_opener(seed, public, asked=asked), verifier=_ed25519,
     ) == ""
-    assert asked[0]["addr"] == "192.168.0.117:6370"
+    assert asked[0]["addr"] == "192.168.1.20:6370"
 
 
 def test_an_answer_signed_for_another_address_does_not_pass(helper):
@@ -497,8 +497,8 @@ def test_an_answer_signed_for_another_address_does_not_pass(helper):
 
     seed, public, fingerprint = _keypair()
     problem = helper.verify_identity(
-        "ws://192.168.0.9:6370", {"fingerprint": fingerprint},
-        opener=_signing_opener(seed, public, bind="192.168.0.117:6370"),
+        "ws://192.168.1.9:6370", {"fingerprint": fingerprint},
+        opener=_signing_opener(seed, public, bind="192.168.1.20:6370"),
         verifier=_ed25519,
     )
     assert "not the one dialed" in problem
@@ -509,7 +509,7 @@ def test_an_answer_bound_to_no_address_does_not_pass(helper):
 
     seed, public, fingerprint = _keypair()
     problem = helper.verify_identity(
-        "ws://192.168.0.9:6370", {"fingerprint": fingerprint},
+        "ws://192.168.1.9:6370", {"fingerprint": fingerprint},
         opener=_signing_opener(seed, public, bind=None), verifier=_ed25519,
     )
     assert "not bound to the address dialed" in problem
@@ -520,14 +520,14 @@ def test_a_server_that_would_not_sign_for_the_address_is_named(helper):
 
     seed, public, fingerprint = _keypair()
     problem = helper.verify_identity(
-        "ws://192.168.0.9:6370", {"fingerprint": fingerprint},
+        "ws://192.168.1.9:6370", {"fingerprint": fingerprint},
         opener=_signing_opener(seed, public, bind="refuse"), verifier=_ed25519,
     )
-    assert "would not sign" in problem and "192.168.0.9:6370" in problem
+    assert "would not sign" in problem and "192.168.1.9:6370" in problem
 
 
 @pytest.mark.parametrize("url,addr", [
-    ("ws://192.168.0.117:6370", "192.168.0.117:6370"),
+    ("ws://192.168.1.20:6370", "192.168.1.20:6370"),
     ("http://core.lan:6370/", "core.lan:6370"),
     ("wss://core.lan", "core.lan:443"),
     ("ws://[fd00::1]:6370", "[fd00::1]:6370"),
@@ -546,7 +546,7 @@ def test_a_unit_with_no_verifier_installed_carries_on(helper):
     syncs its clock. The client proved the same server before calling us."""
     _seed, _public, fingerprint = _keypair()
     assert helper.verify_identity(
-        "ws://192.168.0.117:6370", {"fingerprint": fingerprint}, verifier=None,
+        "ws://192.168.1.20:6370", {"fingerprint": fingerprint}, verifier=None,
         opener=lambda *a, **k: pytest.fail("must not ask"),
     ) == ""
 
@@ -569,7 +569,7 @@ def test_a_server_that_cannot_prove_itself_changes_nothing(
     monkeypatch.setattr(
         helper, "set_clock", lambda *a, **k: pytest.fail("must not step the clock")
     )
-    assert helper.main(["ws://192.168.0.117:6370"]) == 2
+    assert helper.main(["ws://192.168.1.20:6370"]) == 2
     assert "refusing the time from" in capsys.readouterr().out
 
 
@@ -587,7 +587,7 @@ def test_a_server_that_proves_itself_is_synced(
     )
     monkeypatch.setattr(helper, "current_zone", lambda: "America/New_York")
     monkeypatch.setattr(helper.time, "time", lambda: 1000.1)
-    assert helper.main(["ws://192.168.0.117:6370"]) == 0
+    assert helper.main(["ws://192.168.1.20:6370"]) == 0
 
 
 def test_a_malformed_identity_pin_is_treated_as_no_pin(helper, _pins_in_tmp):
@@ -617,7 +617,7 @@ def test_a_moved_server_that_proves_itself_is_followed_and_recorded(
     The helper does not take its word: the new address must sign a fresh
     nonce for itself with the pinned key, to THIS run. Then the clock is
     copied and root's record follows."""
-    (_pins_in_tmp / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (_pins_in_tmp / "server.url").write_text("ws://192.168.1.20:6370\n", encoding="utf-8")
     (_pins_in_tmp / "server-identity.json").write_text(
         json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8")
     monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
@@ -628,35 +628,35 @@ def test_a_moved_server_that_proves_itself_is_followed_and_recorded(
     monkeypatch.setattr(helper, "fetch", lambda url: ({"tz": "America/New_York", "epoch": 1000.0}, 0.0))
     monkeypatch.setattr(helper, "current_zone", lambda: "America/New_York")
     monkeypatch.setattr(helper.time, "time", lambda: 1000.1)
-    assert helper.main(["ws://192.168.0.50:6370"]) == 0
-    assert checked == ["ws://192.168.0.50:6370"], "proved once, by this run"
-    assert (_pins_in_tmp / "server.url").read_text(encoding="utf-8").strip() == "ws://192.168.0.50:6370"
-    assert "moved to http://192.168.0.50:6370" in capsys.readouterr().out
+    assert helper.main(["ws://192.168.1.50:6370"]) == 0
+    assert checked == ["ws://192.168.1.50:6370"], "proved once, by this run"
+    assert (_pins_in_tmp / "server.url").read_text(encoding="utf-8").strip() == "ws://192.168.1.50:6370"
+    assert "moved to http://192.168.1.50:6370" in capsys.readouterr().out
 
 
 def test_a_moved_address_that_cannot_prove_itself_is_refused(
     helper, monkeypatch, capsys, _pins_in_tmp,
 ):
-    (_pins_in_tmp / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (_pins_in_tmp / "server.url").write_text("ws://192.168.1.20:6370\n", encoding="utf-8")
     (_pins_in_tmp / "server-identity.json").write_text(
         json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8")
     monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(helper, "_verifier", lambda *a, **k: object())
     monkeypatch.setattr(helper, "verify_identity", lambda url, pin, **k: "a different server")
     monkeypatch.setattr(helper, "fetch", lambda url: pytest.fail("must not fetch"))
-    assert helper.main(["ws://192.168.0.66:6370"]) == 2
-    assert (_pins_in_tmp / "server.url").read_text(encoding="utf-8").strip() == "ws://192.168.0.117:6370"
+    assert helper.main(["ws://192.168.1.66:6370"]) == 2
+    assert (_pins_in_tmp / "server.url").read_text(encoding="utf-8").strip() == "ws://192.168.1.20:6370"
     assert "did not prove" in capsys.readouterr().out
 
 
 def test_without_a_verifier_a_moved_address_is_refused_as_before(
     helper, monkeypatch, capsys, _pins_in_tmp,
 ):
-    (_pins_in_tmp / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (_pins_in_tmp / "server.url").write_text("ws://192.168.1.20:6370\n", encoding="utf-8")
     (_pins_in_tmp / "server-identity.json").write_text(
         json.dumps({"fingerprint": "SHA256:ours"}), encoding="utf-8")
     monkeypatch.setattr(helper.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(helper, "_verifier", lambda *a, **k: None)
     monkeypatch.setattr(helper, "verify_identity", lambda *a, **k: pytest.fail("no verifier"))
-    assert helper.main(["ws://192.168.0.50:6370"]) == 2
+    assert helper.main(["ws://192.168.1.50:6370"]) == 2
     assert "this device's time source is" in capsys.readouterr().out

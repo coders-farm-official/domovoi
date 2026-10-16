@@ -1951,8 +1951,8 @@ case_env_keeps_household_settings() {
 # administrator's account is refused.
 case_existing_user_is_not_locked() {
   new_case existing_user_is_not_locked --bare
-  echo kamron >>"$STATE/users"; echo "kamron sudo" >>"$STATE/groups"; mkdir -p "$ROOT/home/kamron"
-  run_prov --internet always --user kamron --skip-models
+  echo alex >>"$STATE/users"; echo "alex sudo" >>"$STATE/groups"; mkdir -p "$ROOT/home/alex"
+  run_prov --internet always --user alex --skip-models
   check "an administrator's account: exit 2" eq "$RC" 2
   check "says why" said "is an administrator's account (in the sudo group)"
   check "one final line, usage_error" eq "$(final_field result)" '"usage_error"'
@@ -2202,7 +2202,7 @@ case_wsl_conf_restart_note_comes_first() {
 # systemd would misread.
 case_bare_metal_media_paths() {
   new_case bare_metal_media_paths --bare
-  run_prov --internet sometimes --skip-models --media music=/home/kamron/Music
+  run_prov --internet sometimes --skip-models --media music=/home/alex/Music
   check "another user's home: exit 2" eq "$RC" 2
   check "says why" said "is in another user's home, which the services can't see"
   check "nothing ran" not_called "apt-get"

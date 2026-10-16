@@ -34,7 +34,7 @@ client = import_client()
 # ─── the link reading ─────────────────────────────────────────────────────
 
 IW_LINK = """Connected to 9c:53:22:aa:bb:cc (on wlan0)
-	SSID: Kamber Wifi 2.0
+	SSID: Maple Wifi 2.0
 	freq: 2437
 	RX: 1234567 bytes (8910 packets)
 	TX: 234567 bytes (1234 packets)
@@ -50,7 +50,7 @@ IW_LINK = """Connected to 9c:53:22:aa:bb:cc (on wlan0)
 
 def test_the_signal_is_read_alongside_the_rates():
     link = client._parse_iw_link(IW_LINK)
-    assert link == {"rx_mbits": 1.0, "tx_mbits": 72.2, "ssid": "Kamber Wifi 2.0",
+    assert link == {"rx_mbits": 1.0, "tx_mbits": 72.2, "ssid": "Maple Wifi 2.0",
                     "signal_dbm": -67, "mode": "managed"}
 
 
@@ -276,11 +276,11 @@ def test_the_step_s_outcome_follows_the_boot_without_a_new_record(tmp_path, monk
 
 def test_a_skipped_rename_is_in_the_health_sample_not_only_the_log(tmp_path, monkeypatch):
     _report(tmp_path, changed=[], skipped=[
-        "host name 'kamrons-pi' looks chosen by a person; not renaming it to 'domovoi-kitchen'"])
+        "host name 'alexs-pi' looks chosen by a person; not renaming it to 'domovoi-kitchen'"])
     _booted(monkeypatch)
     sat = object.__new__(client.Satellite)
     sat._check_net_settings()
-    assert sat._net_step["state"] == "skipped" and "kamrons-pi" in sat._net_step["detail"]
+    assert sat._net_step["state"] == "skipped" and "alexs-pi" in sat._net_step["detail"]
     assert sat._net_reboot_needed is None
 
 
@@ -318,7 +318,7 @@ def sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(server_identity, "ROOT_PIN", tmp_path / "etc-pin.json")
     monkeypatch.setattr(server_identity, "PENDING_SERVER_SIDECAR", tmp_path / "pending.json")
     cfg = tmp_path / "config.toml"
-    cfg.write_text('[satellite]\n# ours\ndomovoi_url = "ws://192.168.0.117:6370"\nroom_id = "kitchen"\n',
+    cfg.write_text('[satellite]\n# ours\ndomovoi_url = "ws://192.168.1.20:6370"\nroom_id = "kitchen"\n',
                    encoding="utf-8")
     return cfg
 
@@ -340,15 +340,15 @@ def _lan_probe(owners):
 def test_a_paired_satellite_follows_its_core_by_name_and_saves_it(sidecars, monkeypatch):
     monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
     monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
-                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.0.50", 6370))])
-    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.0.50": OURS}))
+                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.1.50", 6370))])
+    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.1.50": OURS}))
     monkeypatch.setattr(discovery, "find_core", lambda **k: pytest.fail("swept"))
-    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=OURS[2],
                                 room_id="kitchen")
     assert client._resolve_server_url(cfg, sidecars) is True
-    assert cfg.domovoi_url == "ws://192.168.0.50:6370"
+    assert cfg.domovoi_url == "ws://192.168.1.50:6370"
     body = sidecars.read_text(encoding="utf-8")
-    assert 'domovoi_url = "ws://192.168.0.50:6370"' in body
+    assert 'domovoi_url = "ws://192.168.1.50:6370"' in body
     assert "# ours" in body, "comments survive"
 
 
@@ -356,14 +356,14 @@ def test_an_impostor_answering_the_name_changes_nothing(sidecars, monkeypatch):
     theirs = _server(2)
     monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "silent")
     monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
-                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.0.66", 6370))])
-    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.0.66": theirs}))
+                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.1.66", 6370))])
+    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.1.66": theirs}))
     monkeypatch.setattr(discovery, "find_core", lambda **k: None)
     before = sidecars.read_text(encoding="utf-8")
-    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=OURS[2],
                                 room_id="kitchen")
     assert client._resolve_server_url(cfg, sidecars) is True
-    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert cfg.domovoi_url == "ws://192.168.1.20:6370"
     assert sidecars.read_text(encoding="utf-8") == before
 
 
@@ -377,10 +377,10 @@ def test_a_core_that_is_merely_down_is_not_swept_for(sidecars, monkeypatch):
     monkeypatch.setattr(discovery, "probe", lambda *a, **k: False)
     monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "refused")
     monkeypatch.setattr(discovery, "find_core", lambda **k: pytest.fail("swept while refused"))
-    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=OURS[2],
                                 room_id="kitchen")
     assert client._resolve_server_url(cfg, sidecars) is True
-    assert cfg.domovoi_url == "ws://192.168.0.117:6370"
+    assert cfg.domovoi_url == "ws://192.168.1.20:6370"
     assert asked == ["domovoi.local"]
 
 
@@ -389,28 +389,28 @@ def test_the_core_is_followed_even_when_its_old_address_now_refuses(sidecars, mo
     The refusal must not stop the search: the name finds .50, which proves
     it holds the pinned key."""
     monkeypatch.setattr(discovery, "_DEFAULT_RESOLVER",
-                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.0.50", 6370))])
-    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.0.50": OURS}))
+                        lambda name, *a, **k: [(2, 1, 6, "", ("192.168.1.50", 6370))])
+    monkeypatch.setattr(discovery, "probe", _lan_probe({"192.168.1.50": OURS}))
     monkeypatch.setattr(client.health, "probe_service", lambda *a, **k: "refused")
     monkeypatch.setattr(discovery, "find_core", lambda **k: pytest.fail("swept"))
     monkeypatch.setattr(client, "CONFIG_PATH", sidecars)
     sat = object.__new__(client.Satellite)
-    sat.cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+    sat.cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=OURS[2],
                                     room_id="kitchen", sat_type="voice")
     sat._relocate_server()
-    assert sat.cfg.domovoi_url == "ws://192.168.0.50:6370"
-    assert 'domovoi_url = "ws://192.168.0.50:6370"' in sidecars.read_text(encoding="utf-8")
+    assert sat.cfg.domovoi_url == "ws://192.168.1.50:6370"
+    assert 'domovoi_url = "ws://192.168.1.50:6370"' in sidecars.read_text(encoding="utf-8")
 
 
 def test_a_video_satellite_s_kiosk_follows_the_move(sidecars, monkeypatch):
     restarted = []
     monkeypatch.setattr(client.kiosk, "restart_kiosk", lambda: restarted.append(1) or True)
-    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=OURS[2],
                                 room_id="kitchen", sat_type="video")
-    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.0.50:6370", "name", "x"), False)
+    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.1.50:6370", "name", "x"), False)
     assert restarted == [1]
     cfg.sat_type = "voice"
-    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.0.51:6370", "name", "x"), False)
+    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.1.51:6370", "name", "x"), False)
     assert restarted == [1]
 
 
@@ -422,9 +422,9 @@ def test_the_config_write_is_atomic(sidecars, monkeypatch):
         raise OSError("disk full")
 
     monkeypatch.setattr(client.os, "replace", boom)
-    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.0.117:6370", server_fingerprint=OURS[2],
+    cfg = types.SimpleNamespace(domovoi_url="ws://192.168.1.20:6370", server_fingerprint=OURS[2],
                                 room_id="kitchen", sat_type="voice")
-    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.0.50:6370", "name", "x"), False)
+    client._adopt_located(cfg, sidecars, discovery.Located("ws://192.168.1.50:6370", "name", "x"), False)
     assert sidecars.read_text(encoding="utf-8") == before
     assert not sidecars.with_name(sidecars.name + ".tmp").exists()
 

@@ -38,7 +38,7 @@ async def test_admin_snapshot_returns_state_dicts() -> None:
         app.state.active_sessions = {"kitchen": object(), "garage": object()}
         app.state.resumable_music = {"kitchen": "http://my-domovoi:8001"}
         app.state.wifi_status = {
-            "kitchen": {"rx_mbits": 39.0, "tx_mbits": 72.2, "ssid": "Kamber Wifi 2.0"}
+            "kitchen": {"rx_mbits": 39.0, "tx_mbits": 72.2, "ssid": "Maple Wifi 2.0"}
         }
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get("/v1/admin/snapshot")
@@ -46,7 +46,7 @@ async def test_admin_snapshot_returns_state_dicts() -> None:
         body = r.json()
         assert sorted(body["active_rooms"]) == ["garage", "kitchen"]
         assert body["resumable_music"]["kitchen"] == "http://my-domovoi:8001"
-        assert body["wifi_status"]["kitchen"]["ssid"] == "Kamber Wifi 2.0"
+        assert body["wifi_status"]["kitchen"]["ssid"] == "Maple Wifi 2.0"
 
 
 @requires_db

@@ -86,14 +86,14 @@ def core(monkeypatch):
     monkeypatch.setattr(web_sats, "get_admin", get_admin)
     monkeypatch.setattr(web_sats, "_list_rooms", rooms)
     monkeypatch.setattr(web_sats, "_list_pairings", pairings)
-    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.0.117:6370")
+    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.1.20:6370")
     return answers
 
 
 async def test_the_route_answers_with_a_payload_the_device_parses(core):
     got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Kid's Room"), Req())
     parsed = enrolment.parse(got["payload"])
-    assert parsed.core == "http://192.168.0.117:6370" and parsed.fp == FP
+    assert parsed.core == "http://192.168.1.20:6370" and parsed.fp == FP
     assert (got["room"], got["room_id"]) == ("Kid's Room", "kids_room")
     assert got["bundle_sha256"] == SHA and got["conflict"] is None
     assert got["command"] == web_sats.install_command(parsed.core, SHA, got["payload"])
@@ -154,8 +154,8 @@ def test_the_route_is_an_admin_s():
 # ─── the command ──────────────────────────────────────────────────────────
 
 def test_the_command_checks_the_digest_before_it_runs_anything():
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
-    cmd = web_sats.install_command("http://192.168.0.117:6370", SHA, payload)
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
+    cmd = web_sats.install_command("http://192.168.1.20:6370", SHA, payload)
     fetch = cmd.index("wget")
     check = cmd.index("sha256sum -c")
     unpack = cmd.index("tar -xzf")
@@ -163,7 +163,7 @@ def test_the_command_checks_the_digest_before_it_runs_anything():
     assert fetch < check < unpack < run
     assert f"'{SHA}  '" in cmd and "&&" in cmd[check:run]
     assert "'" + payload + "'" in cmd, "the payload is one shell word"
-    assert "http://192.168.0.117:6370/v1/satellite-code/bundle.tar.gz" in cmd
+    assert "http://192.168.1.20:6370/v1/satellite-code/bundle.tar.gz" in cmd
     assert "sudo" not in cmd, "the command itself takes no privilege"
 
 
@@ -204,8 +204,8 @@ def test_the_command_is_valid_shell_and_the_payload_survives_it(tmp_path):
 # ─── the Windows command (2026-10-13) ─────────────────────────────────────
 
 def test_the_windows_command_checks_the_digest_before_it_runs_anything():
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
-    cmd = web_sats.install_command_windows("http://192.168.0.117:6370", SHA, payload)
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
+    cmd = web_sats.install_command_windows("http://192.168.1.20:6370", SHA, payload)
     fetch = cmd.index("Invoke-WebRequest")
     check = cmd.index("Get-FileHash")
     stop = cmd.index("throw")
@@ -217,7 +217,7 @@ def test_the_windows_command_checks_the_digest_before_it_runs_anything():
     assert "$ErrorActionPreference='Stop'" in cmd and cmd.startswith("& {"), "scoped to the command"
     assert "-ExecutionPolicy Bypass -File" in cmd and "Set-ExecutionPolicy" not in cmd
     assert "RunAs" not in cmd and "-Verb" not in cmd, "the command takes no privilege"
-    assert "http://192.168.0.117:6370/v1/satellite-code/bundle.tar.gz" in cmd
+    assert "http://192.168.1.20:6370/v1/satellite-code/bundle.tar.gz" in cmd
 
 
 def test_a_quote_in_a_value_can_not_end_the_powershell_string():
@@ -342,12 +342,12 @@ def _drive(scenarios: dict, tmp: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def card(tmp_path_factory) -> dict:
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
     answer = {
         "payload": payload, "room": "Kid's Room", "room_id": "kids_room",
-        "core": "http://192.168.0.117:6370", "fingerprint": FP, "bundle_sha256": SHA,
-        "bundle_size": 812345, "command": web_sats.install_command("http://192.168.0.117:6370", SHA, payload),
-        "command_windows": web_sats.install_command_windows("http://192.168.0.117:6370", SHA, payload),
+        "core": "http://192.168.1.20:6370", "fingerprint": FP, "bundle_sha256": SHA,
+        "bundle_size": 812345, "command": web_sats.install_command("http://192.168.1.20:6370", SHA, payload),
+        "command_windows": web_sats.install_command_windows("http://192.168.1.20:6370", SHA, payload),
         "windows_runtime": WIN_RUNTIME,
         "conflict": None,
     }
@@ -396,7 +396,7 @@ def test_the_card_gives_windows_its_command_the_unsigned_warning_and_the_files_b
 
 async def test_the_qr_is_a_join_link_the_app_parses_like_the_payload(core):
     got = await web_sats.spare_device_enrolment(SpareDeviceEnrolRequest(room="Kid's Room"), Req())
-    assert got["join_url"] == "http://192.168.0.117:6370/join#" + got["payload"]
+    assert got["join_url"] == "http://192.168.1.20:6370/join#" + got["payload"]
     assert enrolment.parse(got["join_url"]) == enrolment.parse(got["payload"])
     assert got["android_app"] == APP_NONE
     assert core["posted"] == [], "no release: nothing to fetch"
@@ -497,9 +497,9 @@ async def test_household_phones_get_the_join_page_without_a_room_code(monkeypatc
         return 200, {"release": APP_READY["release"], "apks": APP_READY["apks"], "ready": True}
 
     monkeypatch.setattr(domovoi_client, "get_admin", get_admin)
-    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.0.117:6370")
+    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.1.20:6370")
     got = await devices.android_app_for_household_phones()
-    assert got["join_url"] == "http://192.168.0.117:6370/join" and got["ready"] is True
+    assert got["join_url"] == "http://192.168.1.20:6370/join" and got["ready"] is True
     monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://127.0.0.1:6370")
     got = await devices.android_app_for_household_phones()
     assert got["join_url"] is None and "home network" in got["join_problem"]
@@ -537,10 +537,10 @@ window.qrcode = (...a) => { const q = __qr(...a); const add = q.addData.bind(q);
 
 @pytest.fixture(scope="module")
 def phone(tmp_path_factory) -> dict:
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
     base = {
         "payload": payload, "join_url": enrolment.join_link(payload), "room": "Kid's Room", "room_id": "kids_room",
-        "core": "http://192.168.0.117:6370", "fingerprint": FP, "bundle_sha256": SHA, "bundle_size": 812345,
+        "core": "http://192.168.1.20:6370", "fingerprint": FP, "bundle_sha256": SHA, "bundle_size": 812345,
         "command": "c", "command_windows": None, "windows_runtime": None, "conflict": None,
     }
     qr_js = (REPO / "web" / "static" / "vendor" / "qrcode" / "qrcode.js").read_text(encoding="utf-8")
@@ -561,7 +561,7 @@ def phone(tmp_path_factory) -> dict:
                 "script": "const w = h.global('window'); h.render(); await w.__settle(h); "
                           "return { text: h.text().join(' '), qr: w.__qrData.slice() };"}
 
-    ready_public = {"join_url": "http://192.168.0.117:6370/join", "join_problem": None,
+    ready_public = {"join_url": "http://192.168.1.20:6370/join", "join_problem": None,
                     "release": APP_READY["release"], "apks": APP_READY["apks"], "ready": True}
     return _drive({
         "none": scenario(APP_NONE),
@@ -584,7 +584,7 @@ def phone(tmp_path_factory) -> dict:
 
 
 def test_the_phone_qr_carries_the_join_link(phone):
-    payload = enrolment.build("http://192.168.0.117:6370", FP, "Kid's Room")
+    payload = enrolment.build("http://192.168.1.20:6370", FP, "Kid's Room")
     assert phone["none"]["qr"] == [enrolment.join_link(payload)]
     assert "phone's camera" in phone["none"]["text"]
 
@@ -629,8 +629,8 @@ def test_a_ready_server_says_what_it_hands_out(phone):
 
 def test_settings_devices_offers_the_app_to_household_phones(phone):
     r = phone["card_ready"]
-    assert "Get the Domovoi app" in r["text"] and "http://192.168.0.117:6370/join" in r["text"]
-    assert r["qr"] == ["http://192.168.0.117:6370/join"]
+    assert "Get the Domovoi app" in r["text"] and "http://192.168.1.20:6370/join" in r["text"]
+    assert r["qr"] == ["http://192.168.1.20:6370/join"]
     assert "No app release yet" in phone["card_none"]["text"] and phone["card_none"]["qr"] == []
     admin = phone["card_missing"]
     assert "Download the app to this server (about 127 MB)" in admin["text"] and admin["qr"] == []

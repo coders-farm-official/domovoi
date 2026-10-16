@@ -3,7 +3,7 @@
 Office satellite, 2026-09-30 00:16:04 — the first cast after the room's MPD
 daemon restarted:
 
-    starting music: http://192.168.0.117:8051 (alsa=plughw:CARD=Array,DEV=0)
+    starting music: http://192.168.1.20:8051 (alsa=plughw:CARD=Array,DEV=0)
     mpg123 exited rc=1; stderr tail:
     [src/resolver.c:timeout_connect():239] error: connection failed: Connection refused
     ...
@@ -58,13 +58,13 @@ from satellite.tests._client_import import import_client
 
 client = import_client()
 
-URL = "http://192.168.0.117:8051"
-OTHER = "http://192.168.0.117:8052"
+URL = "http://192.168.1.20:8051"
+OTHER = "http://192.168.1.20:8052"
 DEVICE = "plughw:CARD=Array,DEV=0"
 REFUSED = (
     b"[src/resolver.c:timeout_connect():239] error: connection failed: Connection refused\n"
-    b"[src/resolver.c:open_connection():326] error: Cannot resolve/connect to 192.168.0.117:8051!\n"
-    b"[src/httpget.c:http_open():467] error: Unable to establish connection to 192.168.0.117\n"
+    b"[src/resolver.c:open_connection():326] error: Cannot resolve/connect to 192.168.1.20:8051!\n"
+    b"[src/httpget.c:http_open():467] error: Unable to establish connection to 192.168.1.20\n"
 )
 NO_DATA = (
     b"[src/libmpg123/readers.c:stream_parse_headers():1056] error: "
@@ -744,6 +744,6 @@ def test_the_spawn_itself_refuses_a_url_that_is_not_http(monkeypatch):
 def test_an_http_stream_url_still_plays(monkeypatch):
     sat = make_sat(monkeypatch, [("plays",)])
     sat._music_stop_gen = 0
-    music_start(sat, "HTTP://192.168.0.117:8051")
+    music_start(sat, "HTTP://192.168.1.20:8051")
     wait_for(lambda: len(sat.procs) == 1)
-    assert sat.procs[0].argv[-1] == "HTTP://192.168.0.117:8051"
+    assert sat.procs[0].argv[-1] == "HTTP://192.168.1.20:8051"

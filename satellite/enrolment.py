@@ -8,7 +8,7 @@ code for a phone. Both carry the same **enrolment payload**, a URI:
     domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
 
 * ``core`` — the core's base URL as the device should dial it, ``http`` or
-  ``https`` only, e.g. ``http://192.168.0.117:6370``, on the home network
+  ``https`` only, e.g. ``http://192.168.1.20:6370``, on the home network
   (:func:`is_home_network_host`): a code someone was shown on a web page
   must not be able to send a room's microphone out of the house. The
   satellite socket is the same host and port with ``ws``/``wss``.

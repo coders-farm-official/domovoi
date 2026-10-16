@@ -144,7 +144,7 @@ so the two have to agree, and both are needed:
 * the worker cannot reach a browser where it never registers: a first
   load, a failed registration, or the ordinary case on Kamron's box, where
   the dashboard is served over plain HTTP at
-  ``http://192.168.0.117:6369`` and a service worker therefore CANNOT
+  ``http://192.168.1.20:6369`` and a service worker therefore CANNOT
   register, because that is not a secure context. On that install this
   module is the only layer there is.
 """

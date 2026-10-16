@@ -32,7 +32,7 @@ class FakeHost:
                  hostnamectl_ok=True, avahi_active=True, nm_running=True,
                  undeletable=(), hostname_path=None, unit_dir=None):
         self.profiles = profiles if profiles is not None else [
-            {"name": "Kamber Wifi 2.0", "uuid": "u-home", "mode": "infrastructure", "ssid": "Kamber Wifi 2.0"},
+            {"name": "Maple Wifi 2.0", "uuid": "u-home", "mode": "infrastructure", "ssid": "Maple Wifi 2.0"},
             {"name": "domovoi-setup", "uuid": "u-setup", "mode": "ap", "ssid": "Domovoi-Setup-AB12"},
         ]
         self.powersave = dict(powersave or {"u-home": 0})
@@ -46,7 +46,7 @@ class FakeHost:
         # The radio as NetworkManager reports it, and what a DHCP re-ask
         # was told; systemd's enable links.
         self.link_state = 100
-        self.link_conn = "Kamber Wifi 2.0"
+        self.link_conn = "Maple Wifi 2.0"
         self.modify_ok = True
         self.dhcp_names: list[str] = []
         self.unit_dir = unit_dir
@@ -196,7 +196,7 @@ def test_a_name_somebody_chose_is_never_renamed():
     assert ns.may_rename("domovoi-den", "domovoi-kitchen", set_before="domovoi-den"),         "the room was renamed, and this step had set the old name"
     assert not ns.may_rename("domovoi-den", "domovoi-kitchen"), "a domovoi-* name a person chose"
     assert not ns.may_rename("domovoi-pi", "domovoi-kitchen", set_before="domovoi-den")
-    assert not ns.may_rename("kamrons-pi", "domovoi-kitchen")
+    assert not ns.may_rename("alexs-pi", "domovoi-kitchen")
     assert not ns.may_rename("domovoi-kitchen", "domovoi-kitchen")
 
 
@@ -224,14 +224,14 @@ def test_the_first_boot_after_the_upgrade_applies_all_three(host):
     assert doc["errors"] == []
     changed = " | ".join(doc["changed"])
     assert "deleted the setup hotspot profile domovoi-setup (u-setup)" in changed
-    assert "power saving off on 'Kamber Wifi 2.0'" in changed
+    assert "power saving off on 'Maple Wifi 2.0'" in changed
     assert "(iw)" in changed
     assert "host name 'raspberrypi' -> 'domovoi-kitchen'" in changed
     assert "avahi-daemon restarted" in changed
     assert host.paths["hostname_path"].read_text().strip() == "domovoi-kitchen"
     assert "127.0.1.1\tdomovoi-kitchen" in host.paths["hosts_path"].read_text()
     assert host.powersave["u-home"] == 2
-    assert [p["name"] for p in host.profiles] == ["Kamber Wifi 2.0"]
+    assert [p["name"] for p in host.profiles] == ["Maple Wifi 2.0"]
     # Renamed after NetworkManager may already have asked DHCP as
     # raspberrypi: asked once more, under the new name.
     assert host.dhcp_names == ["domovoi-kitchen"]
@@ -272,10 +272,10 @@ def test_only_the_setup_profile_is_deleted(host):
 
 
 def test_a_chosen_host_name_is_left_and_said(host):
-    host.paths["hostname_path"].write_text("kamrons-pi\n", encoding="utf-8")
+    host.paths["hostname_path"].write_text("alexs-pi\n", encoding="utf-8")
     doc = _apply(host)
     assert not host.ran("hostnamectl")
-    assert any("kamrons-pi" in s for s in doc["skipped"])
+    assert any("alexs-pi" in s for s in doc["skipped"])
     assert "raspberrypi" in host.paths["hosts_path"].read_text(), "/etc/hosts untouched too"
 
 
@@ -416,14 +416,14 @@ def test_power_saving_is_changed_on_the_house_profile_only(host):
     """Not every saved client profile: the one named domovoi-home, or on an
     older card the one in use."""
     host.profiles = [
-        {"name": "Kamber Wifi 2.0", "uuid": "u-home", "mode": "infrastructure", "ssid": "Kamber Wifi 2.0"},
+        {"name": "Maple Wifi 2.0", "uuid": "u-home", "mode": "infrastructure", "ssid": "Maple Wifi 2.0"},
         {"name": "Cafe", "uuid": "u-cafe", "mode": "infrastructure", "ssid": "Cafe"},
     ]
     host.powersave = {"u-home": 0, "u-cafe": 0}
     doc = _apply(host)
     assert not host.ran("connection", "modify"), "two client profiles, none in use: no guess"
     assert any("no profile is clearly the house network" in s for s in doc["skipped"])
-    host.profiles.append({"name": "domovoi-home", "uuid": "u-dh", "mode": "infrastructure", "ssid": "Kamber"})
+    host.profiles.append({"name": "domovoi-home", "uuid": "u-dh", "mode": "infrastructure", "ssid": "Maple"})
     host.powersave["u-dh"] = 0
     _apply(host)
     assert [c[4] for c in host.ran("connection", "modify")] == ["u-dh"]
@@ -507,10 +507,10 @@ def test_handing_a_file_over_does_not_follow_links_in_the_call(tmp_path, monkeyp
 def pins(tmp_path):
     etc = tmp_path / "etc"
     etc.mkdir()
-    (etc / "server.url").write_text("ws://192.168.0.117:6370\n", encoding="utf-8")
+    (etc / "server.url").write_text("ws://192.168.1.20:6370\n", encoding="utf-8")
     (etc / "server-identity.json").write_text('{"fingerprint": "SHA256:ours"}', encoding="utf-8")
     cfg = tmp_path / "config.toml"
-    cfg.write_text('[satellite]\ndomovoi_url = "ws://192.168.0.50:6370"\n', encoding="utf-8")
+    cfg.write_text('[satellite]\ndomovoi_url = "ws://192.168.1.50:6370"\n', encoding="utf-8")
     return {"pin_path": etc / "server.url", "identity_path": etc / "server-identity.json",
             "config_path": cfg}
 
@@ -524,16 +524,16 @@ def test_root_follows_a_move_only_after_checking_it_itself(pins):
 
     report = ns.Report()
     ns.refresh_server_pin(report, probe=probe, sleep=lambda s: None, **pins)
-    assert asked == [("192.168.0.50", 6370, "SHA256:ours")], "root's own pin, root's own probe"
-    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.0.50:6370"
-    assert any("192.168.0.117 -> ws://192.168.0.50" in c or "-> ws://192.168.0.50:6370" in c
+    assert asked == [("192.168.1.50", 6370, "SHA256:ours")], "root's own pin, root's own probe"
+    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.1.50:6370"
+    assert any("192.168.1.20 -> ws://192.168.1.50" in c or "-> ws://192.168.1.50:6370" in c
                for c in report.changed)
 
 
 def test_an_address_that_cannot_prove_itself_leaves_roots_record(pins):
     report = ns.Report()
     ns.refresh_server_pin(report, probe=lambda *a, **k: False, attempts=2, sleep=lambda s: None, **pins)
-    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.0.117:6370"
+    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.1.20:6370"
     assert report.errors == [], "a server that is down this boot is retried, not an error"
     assert report.skipped
 
@@ -542,11 +542,11 @@ def test_without_roots_identity_pin_nothing_moves(pins):
     pins["identity_path"].unlink()
     report = ns.Report()
     ns.refresh_server_pin(report, probe=lambda *a, **k: pytest.fail("asked"), **pins)
-    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.0.117:6370"
+    assert pins["pin_path"].read_text(encoding="utf-8").strip() == "ws://192.168.1.20:6370"
 
 
 def test_a_current_record_is_left_alone(pins):
-    pins["config_path"].write_text('[satellite]\ndomovoi_url = "ws://192.168.0.117:6370"\n',
+    pins["config_path"].write_text('[satellite]\ndomovoi_url = "ws://192.168.1.20:6370"\n',
                                    encoding="utf-8")
     report = ns.Report()
     ns.refresh_server_pin(report, probe=lambda *a, **k: pytest.fail("asked"), **pins)
@@ -645,7 +645,7 @@ def test_the_helper_refuses_a_target_that_is_not_a_host_name(tmp_path, target):
 
 
 def test_the_helper_never_renames_a_name_a_person_chose(tmp_path):
-    root = _root(tmp_path, hostname="kamrons-pi", record="domovoi-den")
+    root = _root(tmp_path, hostname="alexs-pi", record="domovoi-den")
     run = Calls()
     _helper()["main"](["--root", str(root)], run=run)
     assert run.calls == [] and "looks chosen by a person" in _early_doc(root)["skipped"][0]
@@ -713,7 +713,7 @@ def test_the_boot_step_leaves_the_helper_its_target(host):
     _apply(host)
     assert host.paths["target_path"].read_text().strip() == "domovoi-kitchen"
     # A name left alone (a person's): no target, so the helper does nothing.
-    host.paths["hostname_path"].write_text("kamrons-pi\n", encoding="utf-8")
+    host.paths["hostname_path"].write_text("alexs-pi\n", encoding="utf-8")
     _apply(host, room="den")
     assert not host.paths["target_path"].exists()
 
@@ -1064,9 +1064,9 @@ def _doc(**kw):
     (_doc(changed=["host name 'raspberrypi' -> 'domovoi-office'"]), "applied", "-> 'domovoi-office'"),
     (_doc(), "unchanged", "nothing to change (host name domovoi-office)"),
     (_doc(skipped=["access-point profile 'x' is not Domovoi's",
-                   "host name 'kamrons-pi' looks chosen by a person; not renaming it to 'domovoi-office'"],
+                   "host name 'alexs-pi' looks chosen by a person; not renaming it to 'domovoi-office'"],
           changed=["Wi-Fi power saving off on 'home'"]),
-     "skipped", "kamrons-pi"),
+     "skipped", "alexs-pi"),
     (_doc(skipped=["host name: no room_id in config.toml"]), "skipped", "no room_id"),
     (_doc(errors=["a", "b"], changed=["c"]), "failed", "a (and 1 more)"),
 ])

@@ -110,8 +110,8 @@ def test_build_device_info_rejects_unknown_status() -> None:
     ("   ", "auto"),
     ("auto", "auto"),
     ("AUTO", "auto"),
-    ("ws://192.168.0.117:6370", "ws://192.168.0.117:6370"),
-    ("ws://192.168.0.117:6370/", "ws://192.168.0.117:6370"),
+    ("ws://192.168.1.20:6370", "ws://192.168.1.20:6370"),
+    ("ws://192.168.1.20:6370/", "ws://192.168.1.20:6370"),
     ("wss://10.1.2.3:8443", "wss://10.1.2.3:8443"),
     ("ws://172.31.255.254", "ws://172.31.255.254:6370"),
     ("192.168.1.20", "ws://192.168.1.20:6370"),
@@ -124,9 +124,9 @@ def test_lan_server_addresses_are_normalised(raw, expected) -> None:
 
 
 @pytest.mark.parametrize("raw", [
-    "http://192.168.0.117:6370",       # not a WebSocket address
+    "http://192.168.1.20:6370",       # not a WebSocket address
     "https://domovoi.local",
-    "ftp://192.168.0.117",
+    "ftp://192.168.1.20",
     "ws://8.8.8.8:6370",               # public
     "ws://1.1.1.1",
     "ws://example.com:6370",           # a public name
@@ -137,16 +137,16 @@ def test_lan_server_addresses_are_normalised(raw, expected) -> None:
     "ws://100.64.0.1:6370",            # carrier-grade NAT
     "ws://172.32.0.1:6370",            # just outside 172.16/12
     "ws://[fd00::1]:6370",             # IPv6 is not what the LAN rule allows
-    "ws://user:pw@192.168.0.117:6370", # credentials
-    "ws://192.168.0.117:6370/v1/x",    # a path
-    "ws://192.168.0.117:6370?x=1",
-    "ws://192.168.0.117:0",
-    "ws://192.168.0.117:99999",
-    "ws://192.168.0.117:abc",
+    "ws://user:pw@192.168.1.20:6370", # credentials
+    "ws://192.168.1.20:6370/v1/x",    # a path
+    "ws://192.168.1.20:6370?x=1",
+    "ws://192.168.1.20:0",
+    "ws://192.168.1.20:99999",
+    "ws://192.168.1.20:abc",
     "ws://",
     "ws:///v1",
-    "ws://192.168.0.\n117:6370",       # a newline inside is not a host
-    "ws://192.168.0.117:6370\tx",
+    "ws://192.168.1.\n20:6370",        # a newline inside is not a host
+    "ws://192.168.1.20:6370\tx",
     "ws://" + "a" * 300 + ".local",
 ])
 def test_the_portal_refuses_addresses_off_the_lan_or_off_shape(raw) -> None:

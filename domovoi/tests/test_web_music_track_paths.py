@@ -125,14 +125,14 @@ def test_a_row_outside_the_library_is_refused_without_its_path(library, monkeypa
 @pytest.mark.parametrize(
     ("music_dir", "stored", "shown"),
     [
-        ("/home/kamron/Music", "/home/kamron/Music/A/B/c.mp3", "A/B/c.mp3"),
-        ("/home/kamron/Music/", "/home/kamron/Music/c.mp3", "c.mp3"),
-        ("/home/kamron/Music", "/mnt/elsewhere/c.mp3", "c.mp3"),
-        (r"C:\Users\Kamron\Music", r"C:\Users\Kamron\Music\A\c.mp3", "A/c.mp3"),
-        (r"C:\Users\Kamron\Music", r"c:\users\kamron\music\A\c.mp3", "A/c.mp3"),
-        ("C:/Users/Kamron/Music", r"C:\Users\Kamron\Music\A\c.mp3", "A/c.mp3"),
-        (r"C:\Users\Kamron\Music", r"D:\Other\c.mp3", "c.mp3"),
-        ("/home/kamron/Music", "", ""),
+        ("/home/alex/Music", "/home/alex/Music/A/B/c.mp3", "A/B/c.mp3"),
+        ("/home/alex/Music/", "/home/alex/Music/c.mp3", "c.mp3"),
+        ("/home/alex/Music", "/mnt/elsewhere/c.mp3", "c.mp3"),
+        (r"C:\Users\alex\Music", r"C:\Users\alex\Music\A\c.mp3", "A/c.mp3"),
+        (r"C:\Users\alex\Music", r"c:\users\alex\music\A\c.mp3", "A/c.mp3"),
+        ("C:/Users/alex/Music", r"C:\Users\alex\Music\A\c.mp3", "A/c.mp3"),
+        (r"C:\Users\alex\Music", r"D:\Other\c.mp3", "c.mp3"),
+        ("/home/alex/Music", "", ""),
     ],
 )
 def test_the_public_path_rule(monkeypatch, music_dir, stored, shown):
@@ -141,6 +141,6 @@ def test_the_public_path_rule(monkeypatch, music_dir, stored, shown):
 
 
 def test_playlist_tracks_use_the_same_rule(monkeypatch):
-    monkeypatch.setattr(settings, "music_dir", "/home/kamron/Music", raising=False)
-    t = playlists_api._row_to_track(_row(9, "/home/kamron/Music/A/c.mp3"))
+    monkeypatch.setattr(settings, "music_dir", "/home/alex/Music", raising=False)
+    t = playlists_api._row_to_track(_row(9, "/home/alex/Music/A/c.mp3"))
     assert t.file_path == "A/c.mp3"

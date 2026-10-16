@@ -21,7 +21,7 @@ class LinkSchemeTest {
         "http://news.example/story/1",
         "HTTPS://News.Example/Story",
         "Http://news.example/mixed-case",
-        "https://192.168.0.117:6369/#news",
+        "https://192.168.1.20:6369/#news",
     )
 
     private val otherLinks = listOf(

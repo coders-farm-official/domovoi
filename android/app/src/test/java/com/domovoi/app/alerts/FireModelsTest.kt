@@ -120,9 +120,9 @@ class FireModelsTest {
     // ---- server identity ----------------------------------------------------
 
     @Test fun serverKeyIsEightHexDigitsOfTheNormalisedUrl() {
-        val k = serverKey("http://192.168.0.117:6369")
+        val k = serverKey("http://192.168.1.20:6369")
         assertTrue(k, Regex("[0-9a-f]{8}").matches(k))
-        assertEquals(k, serverKey("http://192.168.0.117:6369/ "))
+        assertEquals(k, serverKey("http://192.168.1.20:6369/ "))
         assertNotEquals(k, serverKey("http://10.0.2.2:6390"))
         assertEquals("timer_fire:$k", alertTag(k))
     }

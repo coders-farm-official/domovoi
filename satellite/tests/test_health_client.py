@@ -586,7 +586,7 @@ def test_reboots_are_held_to_one_an_hour(tmp_path, monkeypatch):
 
 def test_connect_failures_are_recorded_in_offline_diag(tmp_path):
     sat = health_sat(tmp_path)
-    sat._health_last_sample = {"gateway": "192.168.0.1", "gateway_ok": True, "core_ok": False}
+    sat._health_last_sample = {"gateway": "192.168.1.1", "gateway_ok": True, "core_ok": False}
     sat._note_connect_failure(ConnectionRefusedError(111, "Connection refused"))
     sat._last_server_error = "pairing_rejected"
     sat._note_session_ended_before_ready()

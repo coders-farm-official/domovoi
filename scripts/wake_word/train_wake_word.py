@@ -368,8 +368,8 @@ def to_docker_mount_source(host_path: str) -> str:
     """Normalize a host path into a Docker-bind-mount source that is safe across
     Windows and POSIX *and* survives any later shlex round-trips.
 
-    On Windows, ``C:\\Users\\Kamron\\.domovoi\\wake_clips\\hey_domovoi`` becomes
-    ``C:/Users/Kamron/.domovoi/wake_clips/hey_domovoi`` (forward slashes — Docker
+    On Windows, ``C:\\Users\\alex\\.domovoi\\wake_clips\\hey_domovoi`` becomes
+    ``C:/Users/alex/.domovoi/wake_clips/hey_domovoi`` (forward slashes — Docker
     Desktop accepts this and it dodges backslash-as-escape pitfalls). On POSIX
     the path is already fine. We resolve to an absolute path so a relative arg
     can't produce a surprise anonymous volume.

@@ -127,7 +127,7 @@ class RoomEnrolmentTest {
         for (h in listOf("10.0.0.1", "172.16.0.1", "172.31.255.255", "192.168.1.2", "fd00::1", "fe80::1", "core.local", "x.home.arpa", "box.lan", "a.internal")) {
             assertTrue(h, RoomEnrolment.isHomeNetworkHost(h))
         }
-        for (h in listOf("127.0.0.1", "localhost", "100.64.0.1", "169.254.1.1", "8.8.8.8", "172.32.0.1", "::1", "::ffff:192.168.0.1", "2001:db8::1", "local", "x.localhost", "010.0.0.1")) {
+        for (h in listOf("127.0.0.1", "localhost", "100.64.0.1", "169.254.1.1", "8.8.8.8", "172.32.0.1", "::1", "::ffff:192.168.1.1", "2001:db8::1", "local", "x.localhost", "010.0.0.1")) {
             assertTrue(h, !RoomEnrolment.isHomeNetworkHost(h))
         }
     }

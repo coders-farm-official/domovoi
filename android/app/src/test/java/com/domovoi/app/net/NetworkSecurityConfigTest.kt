@@ -72,7 +72,7 @@ class NetworkSecurityConfigTest {
 
     @Test fun configKeepsTheHomeNetworkReachableInTheClear() {
         // Android cannot express an IP range here, and the usual server
-        // address (e.g. http://192.168.0.117:6369, or 10.0.2.2:6390 from the
+        // address (e.g. http://192.168.1.20:6369, or 10.0.2.2:6390 from the
         // emulator) is an RFC 1918 IP: the platform half stays open and
         // CleartextPolicy narrows it to the home network on every request.
         val base = config.elements("base-config").single()

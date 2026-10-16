@@ -134,7 +134,7 @@ def test_the_autouse_fixture_keeps_the_machine_answer_out(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     "host",
-    ["127.1", "10.0.0.5", "192.168.0.117", "::1", "[::1]", "fe80::1", "localhost",
+    ["127.1", "10.0.0.5", "192.168.1.20", "::1", "[::1]", "fe80::1", "localhost",
      "nas", "media.local", "host.docker.internal", "router.lan", "NAS.", "printer.home.arpa",
      "0x7f000001", "100.64.0.9", "fd00::5", "box.localdomain"],
 )
@@ -171,7 +171,7 @@ def test_local_suffixes_cover_the_transport_guard_list() -> None:
 def test_check_destination_under_never_and_always() -> None:
     with egress.override_policy("never"):
         assert egress.check_destination("https://example.com/feed") == egress.TURNED_OFF_REASON
-        assert egress.check_destination("http://192.168.0.117:6370/v1/health") is None
+        assert egress.check_destination("http://192.168.1.20:6370/v1/health") is None
         assert egress.check_destination("http://localhost:11434/api/tags") is None
         assert egress.check_destination("http://[::1]:8080/") is None
         assert egress.check_destination("not a url") is None       # no host: not ours to judge
@@ -229,24 +229,24 @@ async def test_async_client_refuses_non_local_under_never_and_keeps_caller_hooks
         ) as client:
             with pytest.raises(egress.InternetTurnedOff):
                 await client.get("https://example.com/feed.xml")
-            r = await client.get("http://192.168.0.2:8000/feed.xml")
+            r = await client.get("http://192.168.1.2:8000/feed.xml")
             assert r.status_code == 200
         assert client.event_hooks["request"][0] is egress.async_request_hook
-    assert seen == ["http://192.168.0.2:8000/feed.xml"]
-    assert caller_saw == ["http://192.168.0.2:8000/feed.xml"]
+    assert seen == ["http://192.168.1.2:8000/feed.xml"]
+    assert caller_saw == ["http://192.168.1.2:8000/feed.xml"]
 
 
 @pytest.mark.asyncio
 async def test_async_client_refuses_a_redirect_hop_to_the_internet() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == "192.168.0.2":
+        if request.url.host == "192.168.1.2":
             return httpx.Response(302, headers={"location": "https://example.com/elsewhere"})
         return httpx.Response(200)
 
     with egress.override_policy("never"):
         async with egress.async_client(transport=httpx.MockTransport(handler)) as client:
             with pytest.raises(egress.InternetTurnedOff):
-                await client.get("http://192.168.0.2/start", follow_redirects=True)
+                await client.get("http://192.168.1.2/start", follow_redirects=True)
 
 
 def test_sync_client_hook() -> None:

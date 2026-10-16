@@ -81,12 +81,12 @@
       "board": "linux_pc",
       "room": {"id": "kids_room", "name": "Kid's Room"},
       "server": {
-        "url": "ws://192.168.0.117:6370",
-        "host": "192.168.0.117",
+        "url": "ws://192.168.1.20:6370",
+        "host": "192.168.1.20",
         "fingerprint": "SHA256:4gq+pNW/lnGijI3MZ4vGYczKK6r6YgmCylej3GSSoOA",
         "pinned": true
       },
-      "dashboard": "http://192.168.0.117:6369",
+      "dashboard": "http://192.168.1.20:6369",
       "connection": "awaiting_approval",
       "reason": null,
       "mic": "off",

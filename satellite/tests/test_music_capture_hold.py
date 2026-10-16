@@ -59,7 +59,7 @@ client = import_client()
 # just after a capture closed must not read as spawned inside it.
 SPEED = 6.0
 FRAME_WALL = client.FRAME_MS / 1000 / SPEED
-URL = "http://192.168.0.117:8051"
+URL = "http://192.168.1.20:8051"
 DEVICE = "plughw:CARD=Array,DEV=0"
 
 

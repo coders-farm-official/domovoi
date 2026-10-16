@@ -191,7 +191,7 @@ async def test_the_tray_registers_shows_the_state_and_its_menu_drives_the_engine
         revision, items = await layout(panel, name)
         labels = [p.get("label") for _, p in items if p.get("type") != "separator"]
         assert "Mute listening" in labels and "Stop satellite…" in labels
-        assert labels[0] == "Kid's Room · connected to 192.168.0.117"
+        assert labels[0] == "Kid's Room · connected to 192.168.1.20"
 
         # Mute from the menu: the engine mutes, and the icon and menu follow.
         await call(panel, name, tray_dbus.MENU_PATH, tray_dbus.MENU_INTERFACE, "Event", "isvu",

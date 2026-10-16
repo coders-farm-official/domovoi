@@ -303,7 +303,7 @@ async def test_health_still_answers_the_unbound_form_for_older_satellites(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("challenge", ["abc\ndef", "abc def", "nonce\n192.168.0.2:6370"])
+@pytest.mark.parametrize("challenge", ["abc\ndef", "abc def", "nonce\n192.168.1.2:6370"])
 async def test_a_challenge_with_a_newline_or_space_is_refused_unsigned(healthy_core, challenge):
     """An unbound signature over ``C\\nA`` would be a bound one for ``C``
     and ``A``; the alphabet is what makes the two forms distinct."""

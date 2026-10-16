@@ -87,7 +87,7 @@ class _FakeRequests:
         return self.routes[path]
 
 
-BASE = "http://192.168.0.117:6370"
+BASE = "http://192.168.1.20:6370"
 
 
 def _file_response(body: bytes):

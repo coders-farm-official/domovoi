@@ -111,7 +111,7 @@ def build_train_argv(cmd_template: str, **values: str) -> list[str]:
     posix=False on Windows so the substituted Windows paths (the clips /
     out dirs live under ~/.domovoi) keep their backslashes: POSIX mode
     treats "\\" as an escape and would mangle "C:\\Users\\…" into
-    "C:UsersKamron…". In that mode shlex keeps a token's surrounding double
+    "C:Usersalex…". In that mode shlex keeps a token's surrounding double
     quotes, so they are taken off here (the template "Turn on" writes
     quotes every path).
 

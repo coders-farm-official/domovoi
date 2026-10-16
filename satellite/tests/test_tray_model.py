@@ -75,7 +75,7 @@ def labels(items):
 def test_the_menu_has_every_item_of_the_design():
     items = tray.menu(status())
     got = labels(items)
-    assert got[0] == "Kid's Room · connected to 192.168.0.117"
+    assert got[0] == "Kid's Room · connected to 192.168.1.20"
     for want in ("Mute listening", "Volume up", "Volume down", "Which room is this? (plays a chime)",
                  "Open dashboard", "Show logs folder", "About",
                  "Quit tray (the satellite keeps running)", "Stop satellite…"):
@@ -197,7 +197,7 @@ def test_each_action_asks_the_engine_for_the_right_thing():
         acts.do(action)
     assert ("volume", {"delta": 10}) in client.calls and ("volume", {"delta": -10}) in client.calls
     assert ("approve", {"action": "a1"}) in client.calls and ("decline", {"action": "a1"}) in client.calls
-    assert opened == ["http://192.168.0.117:6369", "/home/x/.domovoi"]
+    assert opened == ["http://192.168.1.20:6369", "/home/x/.domovoi"]
     assert acts.do("stop_ask").key == "stop" and ran == []
     acts.do("stop")
     assert ran == [["systemctl", "--user", "stop", "domovoi-satellite.service"]]

@@ -2634,7 +2634,7 @@ const SpareDeviceCard = ({ fire }) => {
             </label>
             {editCore && (
               <input value={core} onChange={e => setCore(e.target.value)} className="mono"
-                     placeholder="http://192.168.0.117:6370" aria-label="server address"
+                     placeholder="http://192.168.1.20:6370" aria-label="server address"
                      style={{ ...smInput, minWidth: 220 }}/>
             )}
           </div>

@@ -154,6 +154,6 @@ def test_env_writer_merges_and_preserves(tmp_path) -> None:
 
 def test_env_writer_quotes_values_with_spaces(tmp_path) -> None:
     env = tmp_path / ".env"
-    write_env_values({"music_dir": "C:/Users/Kamron/My Music"}, env_path=env)
+    write_env_values({"music_dir": "C:/Users/alex/My Music"}, env_path=env)
     parsed = _parse_env(env.read_text(encoding="utf-8"))
-    assert parsed["MUSIC_DIR"] == "C:/Users/Kamron/My Music"
+    assert parsed["MUSIC_DIR"] == "C:/Users/alex/My Music"

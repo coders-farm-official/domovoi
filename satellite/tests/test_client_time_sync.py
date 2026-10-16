@@ -39,8 +39,8 @@ def test_the_helper_is_called_through_sudo_with_the_server_url(monkeypatch):
         )
 
     monkeypatch.setattr(client.subprocess, "run", run)
-    verdict = client._sync_time_with_server("ws://192.168.0.117:6370")
-    assert calls == [["sudo", "-n", "/usr/local/sbin/domovoi-sync-time", "ws://192.168.0.117:6370"]]
+    verdict = client._sync_time_with_server("ws://192.168.1.20:6370")
+    assert calls == [["sudo", "-n", "/usr/local/sbin/domovoi-sync-time", "ws://192.168.1.20:6370"]]
     assert verdict.startswith("tz America/New_York")
 
 

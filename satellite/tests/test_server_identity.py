@@ -113,7 +113,7 @@ def _isolate_sidecars(tmp_path, monkeypatch):
 def test_a_server_that_signs_our_nonce_is_accepted():
     seed, public, fingerprint = _server()
     assert server_identity.verify_server(
-        "http://192.168.0.117:6370", expected_fingerprint=fingerprint,
+        "http://192.168.1.20:6370", expected_fingerprint=fingerprint,
         opener=_health_opener(seed, public),
     ) == fingerprint
 
@@ -123,7 +123,7 @@ def test_a_server_holding_a_different_key_is_refused():
     seed_b, public_b, _theirs = _server(2)
     with pytest.raises(server_identity.IdentityError):
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=ours,
+            "http://192.168.1.9:6370", expected_fingerprint=ours,
             opener=_health_opener(seed_b, public_b),
         )
 
@@ -135,7 +135,7 @@ def test_a_server_that_claims_our_fingerprint_without_the_key_is_refused():
     seed_b, public_b, _ = _server(2)
     with pytest.raises(server_identity.IdentityError):
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=ours,
+            "http://192.168.1.9:6370", expected_fingerprint=ours,
             opener=_health_opener(seed_b, public_b, fingerprint=ours),
         )
 
@@ -144,7 +144,7 @@ def test_a_server_that_offers_no_signature_is_refused():
     seed, public, fingerprint = _server()
     with pytest.raises(server_identity.IdentityError):
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            "http://192.168.1.9:6370", expected_fingerprint=fingerprint,
             opener=_health_opener(seed, public, sign_challenge=False),
         )
 
@@ -156,7 +156,7 @@ def test_a_server_that_offers_no_identity_at_all_is_refused_when_pinned():
     seed, public, fingerprint = _server()
     with pytest.raises(server_identity.IdentityUnavailable):
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            "http://192.168.1.9:6370", expected_fingerprint=fingerprint,
             opener=_health_opener(seed, public, identity=False),
         )
 
@@ -166,7 +166,7 @@ def test_an_unreachable_host_is_not_reported_as_having_no_identity():
         raise OSError("connection refused")
     with pytest.raises(server_identity.IdentityError) as e:
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint="SHA256:ours",
+            "http://192.168.1.9:6370", expected_fingerprint="SHA256:ours",
             opener=boom,
         )
     assert not isinstance(e.value, server_identity.IdentityUnavailable)
@@ -177,7 +177,7 @@ def test_an_unreachable_host_is_reported_as_unprovable_not_as_a_crash():
         raise OSError("connection refused")
     with pytest.raises(server_identity.IdentityError):
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=None, opener=boom
+            "http://192.168.1.9:6370", expected_fingerprint=None, opener=boom
         )
 
 
@@ -186,7 +186,7 @@ def test_with_nothing_pinned_the_identity_that_answers_is_reported():
     answer — that is what it records and holds the server to afterwards."""
     seed, public, fingerprint = _server()
     assert server_identity.verify_server(
-        "http://192.168.0.117:6370", expected_fingerprint=None,
+        "http://192.168.1.20:6370", expected_fingerprint=None,
         opener=_health_opener(seed, public),
     ) == fingerprint
 
@@ -203,10 +203,10 @@ def test_the_question_names_the_address_dialed_and_the_answer_must_match_it():
     seed, public, fingerprint = _server()
     asked: list[dict[str, str]] = []
     assert server_identity.verify_server(
-        "http://192.168.0.117:6370", expected_fingerprint=fingerprint,
+        "http://192.168.1.20:6370", expected_fingerprint=fingerprint,
         opener=_health_opener(seed, public, asked=asked),
     ) == fingerprint
-    assert asked[0]["addr"] == "192.168.0.117:6370"
+    assert asked[0]["addr"] == "192.168.1.20:6370"
 
 
 def test_an_answer_the_core_signed_for_a_different_address_is_refused():
@@ -215,8 +215,8 @@ def test_an_answer_the_core_signed_for_a_different_address_is_refused():
     seed, public, fingerprint = _server()
     with pytest.raises(server_identity.IdentityError) as e:
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
-            opener=_health_opener(seed, public, bind="192.168.0.117:6370"),
+            "http://192.168.1.9:6370", expected_fingerprint=fingerprint,
+            opener=_health_opener(seed, public, bind="192.168.1.20:6370"),
         )
     assert "not the one dialed" in str(e.value)
 
@@ -227,7 +227,7 @@ def test_an_answer_bound_to_no_address_is_refused_when_pinned():
     seed, public, fingerprint = _server()
     with pytest.raises(server_identity.IdentityError) as e:
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            "http://192.168.1.9:6370", expected_fingerprint=fingerprint,
             opener=_health_opener(seed, public, bind=None),
         )
     assert "not bound to the address dialed" in str(e.value)
@@ -239,7 +239,7 @@ def test_a_core_that_would_not_sign_for_the_address_is_refused_with_the_reason()
     seed, public, fingerprint = _server()
     with pytest.raises(server_identity.IdentityError) as e:
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=fingerprint,
+            "http://192.168.1.9:6370", expected_fingerprint=fingerprint,
             opener=_health_opener(seed, public, bind="refuse"),
         )
     assert "would not sign" in str(e.value)
@@ -251,7 +251,7 @@ def test_a_bound_answer_still_has_to_be_signed_with_the_pinned_key():
     seed_b, public_b, _theirs = _server(2)
     with pytest.raises(server_identity.IdentityError) as e:
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=ours,
+            "http://192.168.1.9:6370", expected_fingerprint=ours,
             opener=_health_opener(seed_b, public_b),
         )
     assert "a different server" in str(e.value)
@@ -263,7 +263,7 @@ def test_an_unpinned_device_still_takes_an_older_cores_unbound_answer():
     core from before the binding. It records what it meets, as before."""
     seed, public, fingerprint = _server()
     assert server_identity.verify_server(
-        "http://192.168.0.117:6370", expected_fingerprint=None,
+        "http://192.168.1.20:6370", expected_fingerprint=None,
         opener=_health_opener(seed, public, bind=None),
     ) == fingerprint
 
@@ -274,13 +274,13 @@ def test_an_unpinned_device_refuses_an_answer_bound_to_somebody_elses_address():
     seed, public, _fingerprint = _server()
     with pytest.raises(server_identity.IdentityError):
         server_identity.verify_server(
-            "http://192.168.0.9:6370", expected_fingerprint=None,
-            opener=_health_opener(seed, public, bind="192.168.0.117:6370"),
+            "http://192.168.1.9:6370", expected_fingerprint=None,
+            opener=_health_opener(seed, public, bind="192.168.1.20:6370"),
         )
 
 
 @pytest.mark.parametrize("url,addr", [
-    ("http://192.168.0.117:6370", "192.168.0.117:6370"),
+    ("http://192.168.1.20:6370", "192.168.1.20:6370"),
     ("http://core.lan:6370/", "core.lan:6370"),
     ("http://core.lan", "core.lan:80"),
     ("https://core.lan", "core.lan:443"),
@@ -468,10 +468,10 @@ def test_a_migrated_record_is_still_only_written_once():
 
 def test_a_discovered_address_is_kept_out_of_the_way_until_approved():
     assert server_identity.write_pending_server(
-        "ws://192.168.0.117:6370", "SHA256:abc"
+        "ws://192.168.1.20:6370", "SHA256:abc"
     ) is True
     assert server_identity.read_pending_server() == (
-        "ws://192.168.0.117:6370", "SHA256:abc",
+        "ws://192.168.1.20:6370", "SHA256:abc",
     )
     server_identity.clear_pending_server()
     assert server_identity.read_pending_server() == (None, None)

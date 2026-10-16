@@ -32,7 +32,7 @@ PUBLIC_V4 = "93.184.216.34"
 HOUSE_URLS = [
     "http://127.0.0.1:6370/v1/health",
     "http://localhost:6369/api/config/editable",
-    "http://192.168.0.117:6370/v1/admin/version",
+    "http://192.168.1.20:6370/v1/admin/version",
     "http://10.0.0.5/stream",
     "http://[::1]:6370/x",
     "http://169.254.169.254/latest/meta-data/",
