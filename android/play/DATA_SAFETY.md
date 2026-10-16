@@ -34,9 +34,9 @@ from "sharing"; the declaration below is the cautious reading.
 
 | Question | Answer | Why (code) |
 |---|---|---|
-| Does your app collect or share any of the required user data types? | **Yes** (only the optional reply report; see below) | The report is the only thing that can reach Coders Farm: `assistant/ReplyReport.kt` `REPORT_DESTINATION` = `Email("codersfarm@gmail.com")`, an email draft the user sends from their own email app. Declared to be safe, though the app itself transmits nothing (`EmailDraftSink` only opens `ACTION_SENDTO mailto:`). |
+| Does your app collect or share any of the required user data types? | **Yes** (only the optional reply report; see below) | The report is the only thing that can reach Coders Farm: `assistant/ReplyReport.kt` `REPORT_DESTINATION` = `Email("info@codersfarm.org")`, an email draft the user sends from their own email app. Declared to be safe, though the app itself transmits nothing (`EmailDraftSink` only opens `ACTION_SENDTO mailto:`). |
 | Is all of the user data collected by your app encrypted in transit? | **Yes** | The report travels by the user's email provider (TLS between providers); the HTTPS option (`ReportDestination.Https`) is https-only (`net/ReportUpload.kt`, `ReportSinks.valid`). Model and voice downloads are https-only and pinned (`assistant/ModelCatalog.kt`). |
-| Do you provide a way for users to request that their data be deleted? | **Yes** | Email codersfarm@gmail.com to delete a report we received (privacy policy, "Reports"). Everything on the phone has in-app delete (conversations, reports, models) and goes with an uninstall. |
+| Do you provide a way for users to request that their data be deleted? | **Yes** | Email info@codersfarm.org to delete a report we received (privacy policy, "Reports"). Everything on the phone has in-app delete (conversations, reports, models) and goes with an uninstall. |
 | Does the app allow users to create an account? | **No** | There is no account with Coders Farm. Pairing with the household server is not an account with us. |
 
 If Kamron decides the email draft is the user's own transfer and declares

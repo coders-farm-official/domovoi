@@ -267,7 +267,8 @@ sealed interface ReportDestination {
 /**
  * WHERE REPORTS GO: the owner's one line. Kamron's choice (2026-10-15): an
  * email draft to Coders Farm's address, the same one the Play listing gives
- * as its contact. The other shapes it can take:
+ * as its contact (info@codersfarm.org since 2026-10-16). The other shapes it
+ * can take:
  *   ReportDestination.Https("https://codersfarm.org/api/domovoi/reports")
  *   ReportDestination.None   (the share menu only)
  * A change is declared in Play's data safety form (android/play/DATA_SAFETY.md
@@ -275,7 +276,7 @@ sealed interface ReportDestination {
  * "Reports"). An address that is not a valid https URL or email address
  * offers nothing (ReplyReportTest holds this constant to that).
  */
-val REPORT_DESTINATION: ReportDestination = ReportDestination.Email("codersfarm@gmail.com")
+val REPORT_DESTINATION: ReportDestination = ReportDestination.Email("info@codersfarm.org")
 
 /** The Android share menu, with the report as plain text ([ReplyReport.asText]).
  *  [share] opens it (subject, text) from the screen's activity: false when
