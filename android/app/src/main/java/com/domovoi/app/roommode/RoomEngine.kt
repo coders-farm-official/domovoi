@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
+import com.domovoi.app.diagnostics.SpokenLog
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -342,7 +343,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         when (val f = RoomProtocol.parse(text)) {
             is RoomProtocol.ServerFrame.Ready -> onReady(f)
             is RoomProtocol.ServerFrame.Error -> onError(f)
-            is RoomProtocol.ServerFrame.Transcript -> Log.i(TAG, "heard: ${f.text}")
+            is RoomProtocol.ServerFrame.Transcript -> Log.i(TAG, "heard: ${SpokenLog.said(f.text)}")
             is RoomProtocol.ServerFrame.ResponseStart -> onResponseStart(f)
             is RoomProtocol.ServerFrame.ResponseEnd -> onResponseEnd(f)
             is RoomProtocol.ServerFrame.EndCapture -> if (f.utt != null && f.utt == captureUtt) endCaptureFor = f.utt

@@ -163,6 +163,13 @@ val EverythingRoutes = listOf(
  * the phone's own music, videos and files, and the on-device assistant
  * where this install has it ([assistant]). The assistant works with no
  * server at all, so this is where it lives first.
+ *
+ * On a shared screen ([shared]: the kitchen tablet) the local shell, which
+ * "this phone" opens with one tap, leaves off what the workspace's
+ * launchers leave off ([SharedScreenHidden]): the tablet's own files and
+ * the assistant's conversations kept on it (delta review N7, 2026-10-16).
+ * Presentational, like the rest of the shared view.
  */
-fun localTabs(assistant: Boolean = onDeviceAssistant()): List<Route> =
-    listOf(Route.Music, Route.Videos, Route.Files) + if (assistant) listOf(Route.Assistant) else emptyList()
+fun localTabs(assistant: Boolean = onDeviceAssistant(), shared: Boolean = false): List<Route> =
+    (listOf(Route.Music, Route.Videos, Route.Files) + if (assistant) listOf(Route.Assistant) else emptyList())
+        .filterNot { shared && it in SharedScreenHidden }

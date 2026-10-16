@@ -110,6 +110,15 @@ class RoutesTest {
         assertTrue(Route.Stations.visibleOn(caps(CAP_STATIONS), shared = true))
     }
 
+    /** Delta review N7: "this phone" (the local shell, one tap from the
+     *  shared view) used to show Files and the assistant on the kitchen
+     *  tablet; it leaves them off as the workspace's launchers do. */
+    @Test fun aSharedScreensLocalShellLeavesFilesAndTheAssistantOff() {
+        assertEquals(listOf(Route.Music, Route.Videos), localTabs(assistant = true, shared = true))
+        assertEquals(listOf(Route.Music, Route.Videos), localTabs(assistant = false, shared = true))
+        assertEquals(listOf(Route.Music, Route.Videos, Route.Files, Route.Assistant), localTabs(assistant = true, shared = false))
+    }
+
     /** The on-device assistant is on every launcher of an install that has
      *  its engine (a 64-bit phone and APK) and on none of one that doesn't:
      *  no dead tab on a 32-bit phone. */

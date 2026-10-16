@@ -102,6 +102,9 @@ android {
     }
     buildFeatures {
         compose = true
+        // BuildConfig.DEBUG: logcat carries spoken words in debug builds only
+        // (diagnostics/SpokenLog.kt, delta review N7).
+        buildConfig = true
     }
     // Speech recognition and voice detection: sherpa-onnx's JNI library,
     // built from source WITHOUT its text to speech (espeak-ng, GPL-3.0) by
