@@ -393,6 +393,14 @@ async def _windows_runtime(request: Request) -> dict[str, Any] | None:
     return doc if status == 200 and isinstance(doc, dict) else None
 
 
+async def _linux_runtime(request: Request) -> dict[str, Any] | None:
+    """Whether the core holds the Linux satellite's own Python
+    (domovoi/satellite_linux.py: for computers whose python3 won't do), or
+    None from a core that doesn't say."""
+    status, doc = await get_admin("/v1/admin/satellite-linux", headers=auth_forward_headers(request))
+    return doc if status == 200 and isinstance(doc, dict) else None
+
+
 async def _room_in_use(room_id: str) -> str | None:
     """Why a new device can't simply take this room, or None."""
     rooms = {r["room_id"] for r in await _list_rooms()}
@@ -457,6 +465,7 @@ async def spare_device_enrolment(body: SpareDeviceEnrolRequest, request: Request
         "command_windows": install_command_windows(parsed.core, digest["sha256"], payload),
         "windows_runtime": await _windows_runtime(request),
         "android_app": await _android_app_for_a_phone(request),
+        "linux_runtime": await _linux_runtime(request),
         "conflict": await _room_in_use(parsed.room_id),
     }
 
@@ -562,6 +571,31 @@ async def windows_runtime_status(request: Request):
 async def windows_runtime_fetch(request: Request):
     """Start fetching the Windows satellite's runtime onto the core."""
     status, doc = await post_admin("/v1/admin/satellite-windows/fetch", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.get(
+    "/linux-runtime",
+    # What this server holds for Linux laptops whose own Python won't do;
+    # an admin's business, like the card that shows it.
+    dependencies=[Depends(require_admin_read)],
+)
+async def linux_runtime_status(request: Request):
+    """Whether the core holds the Linux satellite's own Python (``ready``,
+    ``pythons``, ``missing``, ``bytes_total``, ``bytes_cached``, ``fetch``)."""
+    status, doc = await get_admin("/v1/admin/satellite-linux", headers=auth_forward_headers(request))
+    return bridge_response(status, doc) if status != 200 else doc
+
+
+@router.post(
+    "/linux-runtime/fetch",
+    # The server downloads ~65 MB from GitHub on an admin's word, every
+    # file held to its pin; refused when internet access is off.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def linux_runtime_fetch(request: Request):
+    """Start fetching the Linux satellite's own Python onto the core."""
+    status, doc = await post_admin("/v1/admin/satellite-linux/fetch", headers=auth_forward_headers(request))
     return bridge_response(status, doc) if status != 200 else doc
 
 

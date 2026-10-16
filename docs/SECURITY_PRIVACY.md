@@ -1668,7 +1668,7 @@ outbound traffic, each with its own off switch:
 | **Wake-word base models** — one-time openWakeWord model download (GitHub release assets) | Refreshing the satellite media cache on the server; on the Pi only for a card prepared with offline off | One-time. Every file is checked against pinned SHA-256 digests on the server and again on the Pi; a mismatch is deleted, never loaded. Under `never` the server refuses the refresh. |
 | **Wake-word training** — the trainer image's build (Docker Hub's base image, two GitHub repositories, PyPI packages, GitHub release assets, Ubuntu's package archive) and its training data (Hugging Face `davidscripka/openwakeword_features` and `MIT_environmental_impulse_responses`, openWakeWord's background-clip zips on Backblaze B2): about 22 GB, once | Only after an admin turns training on in Settings → Wake Words: the build and the data download then, a rebuild by the Linux update unit when `scripts/wake_word/docker` changes, and a training that finds its data missing. All of it from inside containers, outside the core's outbound-URL check ([details](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) | Don't turn it on. Under `never` the card refuses, every training is refused before it starts, and the update unit doesn't rebuild; answering `never` stops a setup job's build or download and the update unit's rebuild that are already running. |
 | **NVIDIA Container Toolkit** — NVIDIA's apt repository (`nvidia.github.io`) | Only on a Linux server (or the Windows install's distro) where an NVIDIA GPU is visible: at install, and at an update or Restart while it is missing; `apt upgrade` afterwards, like any package | `DOMOVOI_MANAGE_GPU_RUNTIME=0` in `/etc/default/domovoi-update`. Under `never` the update unit downloads nothing (the install itself still does, as for every package it installs). |
-| **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), and **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub) | Only when an admin starts one | Don't start them. Under `never` they are refused. |
+| **Admin downloads** — Ollama model installs (the Ollama registry), plugin installs (GitHub, PyPI), **Refresh caches** for satellite media (PyPI, Docker Hub, Debian's mirrors, GitHub), and the spare-device card's **get the Windows files** (python.org, PyPI) and **get the Linux Python** (python-build-standalone's GitHub releases), each file held to its pinned SHA-256 | Only when an admin starts one | Don't start them. Under `never` they are refused. |
 | **Plugins** — a plugin's own requests | Whatever the plugin does; its install screen says | Requests made through the SDK's HTTP client (`sdk.http`, or the web host's `http()`) and streams played through `sdk.playback` are refused under `never`; a plugin that opens its own connections (raw HTTP, its own downloads, `docker pull`) is outside the switch. Settings → Internet lists every enabled plugin whose manifest asks for the network. |
 | **Satellite plugin payloads** — a plugin's `[satellite]` system packages, installed by the satellite's root helper | When an enabled plugin declares `apt_packages` (none of the bundled ones do) | Under `never` the payload manifest marks each plugin `offline` and the helper installs from the satellite's local package caches only (`apt-get --no-download`); a satellite whose helper predates that leaves the apt work for later. |
 
@@ -2034,12 +2034,50 @@ unencrypted and unauthenticated on the LAN, as a Pi's are.
 
 **The whole chain an install trusts:** the dashboard page (plain HTTP,
 above); your Domovoi server, which built the bundle and holds the key the
-device pins; the computer's own apt sources, for the system packages; and
-PyPI, for the satellite's Python packages — which the installer takes only
-from the hash-pinned list for that Python in the bundle
-(`satellite/locks/`, `pip --require-hashes --only-binary=:all:`), so PyPI
-supplies the files but cannot choose them. The wake-word models are held
-to pinned SHA-256s the same way.
+device pins; the computer's own package sources (apt, dnf, zypper or
+pacman), for the system packages; and PyPI, for the satellite's Python
+packages — which the installer takes only from the hash-pinned list for
+that Python in the bundle (`satellite/locks/`, `pip --require-hashes
+--only-binary=:all:`), so PyPI supplies the files but cannot choose them.
+The wake-word models are held to pinned SHA-256s the same way.
+
+**The satellite's own Python (2026-10-15).** A computer whose `python3`
+won't do (older than 3.11, missing, or not a Debian-family system's:
+Ubuntu 22.04, Mint 21, Debian 11, Fedora, openSUSE, Arch) gets
+python-build-standalone's CPython (Astral's relocatable build; 3.14.8 on
+x86-64, 3.13.16 on 64-bit ARM), pinned by size and SHA-256 in
+`satellite/locks/linux-python.txt` inside the bundle the command checked.
+GitHub supplies it (or your server's cache of the same file, which an
+admin fetches through the outbound gate) but cannot choose it: the
+installer reads at most one byte past the pinned size and unpacks nothing
+that isn't the pinned file. It asks your server for it only at an address
+the identity check would itself accept (the payload read as that check
+reads it: a home-network address, the right shape) and follows no
+redirect from it; from GitHub it follows redirects to `https` only, with
+curl or wget alike. It unpacks it first in a folder of the installing
+account that no other account can change, all the way up (its home,
+root's for root; else a new 0700 folder in `/tmp`), to check the server's
+identity before anything is written, then **root copies the file into its
+own folder and checks that copy again** (the first one is the account's to
+change) before unpacking it, owned by root, readable by all and writable
+by no one else whatever the umask, into
+`/usr/local/lib/domovoi-satellite/python`; the satellite's venv is made
+from it as from `/usr/bin/python3`. **Both copies get an empty
+`lib/python3XY.zip` before they first run**, and each run checks its
+standard library is its own: CPython looks for that file in every folder
+above its `bin/`, so without it a library planted higher up (`/tmp/lib/…`
+by any local account) would have been imported first, `-I` or not
+(security review of wf/sat-pc-python). Every Python the installer runs,
+the first copy included, runs with `-I`; root runs only `/usr/bin/python3`
+or its own copy (root's folders all the way down, no link, nobody else may
+write), and refuses any other (the record and the purge helper below).
+Its `dbm` module's Berkeley DB (a copyleft licence) is deleted from both
+copies; nothing in it is GNU readline or GDBM. The archive itself is
+upstream's, unmodified (its SHA-256 is the pin): your server fetches it
+from GitHub and hands it only to your own computers; Domovoi never ships
+or hosts it. **It is not updated by the computer's own package
+manager**: a newer pin arrives with a Domovoi update and reaches a laptop
+when its install command is run again, as on Windows.
 
 ### What a spare computer holds, and what the server may do to it
 
@@ -2083,8 +2121,10 @@ to pinned SHA-256s the same way.
   (`systemctl --user -M NAME@`) and removes its files as the account
   (`runuser`, a clean environment). Either way `--purge` is root's copy of
   `satellite/scripts/purge-satellite-files.py` under `/usr/bin/python3
-  -I`, run as the account, and removes only the satellite's files from
-  `~/.domovoi`. On a
+  -I` (or root's own copy of the satellite's Python, `-I`, above), run as
+  the account, and removes only the satellite's files from
+  `~/.domovoi`; the uninstall then removes that Python's folder, a fixed
+  path of root's. On a
   headless box the account's own files are removed as that account, and
   `--purge` ends with `userdel -r`. The **installer** does run the
   satellite's code, as the satellite's account and only after every sudo

@@ -1,0 +1,24 @@
+# The Python a Linux satellite installs when it uses its own
+# (satellite/scripts/install-pc.sh: the computer's python3 is older than
+# 3.11, missing, or not a Debian-family system's), and that the core fetches
+# and caches for it (domovoi/satellite_linux.py). python-build-standalone's
+# CPython (Astral, https://github.com/astral-sh/python-build-standalone),
+# "install_only_stripped", built for glibc 2.17 and newer, release 20261009.
+# Every file is checked against its size and SHA-256 before it is used.
+# Written by scripts/dev/linux_runtime_lock.py; never edited by hand.
+#
+# Licences (each build's PYTHON.json, checked with --licences): CPython
+# (PSF-2.0); OpenSSL (Apache-2.0), libffi (MIT), SQLite (public domain),
+# zlib (Zlib), bzip2 (bzip2-1.0.6), xz (0BSD), zstd (BSD-3-Clause), expat
+# (MIT), mpdecimal (BSD-2-Clause), libuuid (BSD-3-Clause), ncurses (X11),
+# libedit in place of GNU readline (BSD-3-Clause), Tcl/Tk (TCL), libX11,
+# libxcb and libXau (MIT/X11). No GNU readline and no GDBM are in it. The
+# one copyleft part, the dbm module's Berkeley DB (Sleepycat), is deleted
+# by the installer from both its copies (lib-dynload/_dbm.*.so) and never
+# loaded. The archive itself is upstream's, unmodified (its SHA-256 is the
+# pin): each household's own server fetches it from GitHub and hands it
+# only to that household's computers; Domovoi never ships or hosts it.
+#
+# python <machine> <version> <file> <size> <sha256> <url>
+python x86_64 3.14.8 cpython-3.14.8+20261009-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz 36299807 ddc902fd26460f728758c67d80417c1031edf97589f1f162c4ba3aa158a35998 https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.14.8%2B20261009-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+python aarch64 3.13.16 cpython-3.13.16+20261009-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz 29327967 52c6993abd6ac687cceb787ecee83b166271bc06ad80ac9cac82c5d28d3c00bc https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.13.16%2B20261009-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz

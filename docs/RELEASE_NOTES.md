@@ -4,6 +4,41 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-15 — Older Linux laptops, and Fedora, openSUSE and Arch, can be rooms
+
+Server update (core and dashboard; no migration). Laptops pick it up from a
+new install command.
+
+* **Ubuntu 22.04, Linux Mint 21 and Debian 11 laptops are no longer
+  refused.** Their Python is too old for the satellite (3.10, 3.9), so the
+  install command now gives such a computer **the satellite's own Python**:
+  CPython 3.14.8 (3.13.16 on 64-bit ARM) from the python-build-standalone
+  project, pinned by size and SHA-256 in `satellite/locks/linux-python.txt`,
+  checked before anything unpacks it, and installed owned by root in
+  `/usr/local/lib/domovoi-satellite/python` (removed by the uninstall).
+  Debian 12/13 and Ubuntu 24.04 keep using their own Python, as before.
+  Guide: [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#older-linux-and-fedora-opensuse-arch).
+* **Fedora, openSUSE and Arch** install their packages with dnf, zypper
+  and pacman (and always use the satellite's own Python). Any other Linux
+  is told what to install and to run the command with `--skip-packages`.
+* **Get the Linux Python** on the add-a-spare-device card has the server
+  fetch it once (66 MB from GitHub for both kinds of computer, each file
+  held to its pin; refused under "keep everything in the house") and
+  serve it to laptops at `/v1/satellite-linux/files/…`; otherwise a laptop
+  downloads the same pinned file from GitHub itself.
+* **The satellite's own Python is not updated by the laptop's package
+  manager.** A Domovoi update that pins a newer one reaches a laptop when
+  its install command is made and run again.
+* Refused, with the reason and the fix: a Debian upgraded from 10 without
+  merged /usr (`sudo apt install usrmerge`), and a C library older than
+  glibc 2.28.
+* **A processor from before about 2009 is refused up front, on Linux and
+  Windows** ("this computer's processor is too old for Domovoi"): the
+  satellite's numpy (2.4 and later) needs x86-64-v2 (SSSE3, SSE4.2,
+  POPCNT, CMPXCHG16B), so a Core 2 used to install everything and then
+  fail at its first import. 64-bit ARM is not affected. **Debian 11's support ended in August 2026**; it installs,
+  but prefer Debian 12.
+
 ## 2026-10-15 — A frozen core restarts itself, and the dashboard can restart it
 
 On 2026-10-14 the core froze: port 6370 open, nothing answering, every

@@ -9,10 +9,19 @@
 #   bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall [--purge]
 #   sudo bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall [--purge] --account NAME
 #
-# Current Debian (12, 13) and Ubuntu (24.04 and later). Run it as the
-# account the satellite should use, NOT as root: it asks for sudo for the
-# system steps (apt, linger, power settings). What it does, in order:
+# Debian and Ubuntu (and Mint, Pop!_OS and the rest of their family) with
+# apt, Fedora with dnf, openSUSE with zypper, Arch with pacman; x86-64 or
+# 64-bit ARM, glibc 2.28 or newer. Run it as the account the satellite
+# should use, NOT as root: it asks for sudo for the system steps (packages,
+# linger, power settings). What it does, in order:
 #
+#   0. Picks the Python: a Debian-family computer's own python3 when it is
+#      3.11 or newer with a pinned package list (Debian 12 and 13, Ubuntu
+#      24.04 and later); otherwise (Ubuntu 22.04, Mint 21, Debian 11, Fedora,
+#      Arch, openSUSE, ...) the satellite's own: the CPython that
+#      satellite/locks/linux-python.txt pins by size and SHA-256, from the
+#      Domovoi server's cache or else from GitHub, checked before it is
+#      unpacked. Nothing is installed yet: it waits in a temporary folder.
 #   1. Reads the enrolment payload and makes the core prove it holds the
 #      fingerprint in it (an address-bound signed challenge) BEFORE writing
 #      anything. A core that can't is refused and nothing changes.
@@ -24,9 +33,12 @@
 #      satellite's account can write is ever run or read by root). Every
 #      sudo step comes before the satellite's own code runs; on a desktop,
 #      sudo then forgets your password (sudo -k), and the satellite's code
-#      runs in a session with no terminal (setsid).
-#   4. Installs the system packages it needs (python3-venv, libportaudio2,
-#      mpg123, alsa-utils; on a desktop python3-tk and pulseaudio-utils).
+#      runs in a session with no terminal (setsid). The satellite's own
+#      Python, if step 0 chose it, goes beside them (root's copy, checked
+#      again by root: /usr/local/lib/domovoi-satellite/python).
+#   4. Installs the system packages it needs (PortAudio, mpg123, the ALSA
+#      utilities; on a desktop pactl; with the computer's own Python on
+#      Debian or Ubuntu also python3-venv, and on a desktop python3-tk).
 #   5. A headless box: its own account, domovoi-sat, under /var/lib. A
 #      desktop: linger (it starts at boot) and the audio group.
 #   6. Asks, one by one, before any power change: ignore the lid switch,
@@ -59,7 +71,11 @@
 #   --charge-limit N             the limit step 6 offers (default 80)
 #   --yes                        no questions: --permissions must be given
 #   --no-start                   install, don't start (or wait)
-#   --skip-apt                   the packages are already there
+#   --python auto|system|pinned  step 0 (default auto); system is for
+#                                Debian and Ubuntu with Python 3.11+
+#   --skip-packages              the packages are already there (also
+#                                --skip-apt); on any other Linux, install
+#                                them yourself and give this
 #   --wait SECONDS               how long step 10 waits (default 900; 0: don't)
 #   --uninstall [--purge]        undo all of it (--purge: the config too);
 #                                run root's copy, as the uninstall line says
@@ -101,6 +117,7 @@ CHARGE_LIMIT=80
 ASSUME_YES=0
 NO_START=0
 SKIP_APT=0
+PYTHON_CHOICE=auto
 WAIT_SEC=900
 UNINSTALL=0
 PURGE=0
@@ -120,7 +137,8 @@ while [ $# -gt 0 ]; do
     --charge-limit) CHARGE_LIMIT=${2:-}; shift 2 ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --no-start) NO_START=1; shift ;;
-    --skip-apt) SKIP_APT=1; shift ;;
+    --skip-apt|--skip-packages) SKIP_APT=1; shift ;;
+    --python) PYTHON_CHOICE=${2:-}; shift 2 ;;
     --wait) WAIT_SEC=${2:-}; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge) PURGE=1; shift ;;
@@ -133,6 +151,7 @@ done
 case $PERMISSIONS in ""|automatic|ask) ;; *) die "--permissions is automatic or ask" 2 ;; esac
 case $MODE in ""|desktop|headless) ;; *) die "--mode is desktop or headless" 2 ;; esac
 case $POWER in ask|no|yes) ;; *) die "--power is ask, no or yes" 2 ;; esac
+case $PYTHON_CHOICE in auto|system|pinned) ;; *) die "--python is auto, system or pinned" 2 ;; esac
 case $CHARGE_LIMIT in ''|*[!0-9]*) die "--charge-limit is a number" 2 ;; esac
 [ "$CHARGE_LIMIT" -ge 50 ] && [ "$CHARGE_LIMIT" -le 100 ] || die "--charge-limit is 50 to 100" 2
 case $WAIT_SEC in ''|*[!0-9]*) die "--wait is a number of seconds" 2 ;; esac
@@ -152,7 +171,28 @@ ask_yes_no() {  # ask_yes_no "question" -> 0 for yes; the default is No
   case $answer in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 
-[ "$(/usr/bin/uname -s)" = Linux ] || die "this installer is for Linux (Debian or Ubuntu)" 2
+if [ -x /usr/bin/uname ] && [ "$(/usr/bin/uname -s)" != Linux ]; then die "this installer is for Linux" 2; fi
+
+# Every tool this script names by its full path (a test holds this list to
+# the script). A system that keeps them in /bin and /sbin only is a Debian
+# upgraded from 10 or older without merged /usr: Debian's own package
+# converts it, and is needed before its next release upgrade anyway.
+TOOLS="/usr/bin/awk /usr/bin/basename /usr/bin/cat /usr/bin/chmod /usr/bin/cp /usr/bin/cut /usr/bin/date
+  /usr/bin/dirname /usr/bin/env /usr/bin/find /usr/bin/getent /usr/bin/grep /usr/bin/head /usr/bin/id
+  /usr/bin/install /usr/bin/ls /usr/bin/mkdir /usr/bin/mktemp /usr/bin/mv /usr/bin/rm /usr/bin/rmdir
+  /usr/bin/sed /usr/bin/setsid /usr/bin/sh /usr/bin/sha256sum /usr/bin/sleep /usr/bin/stat /usr/bin/tar
+  /usr/bin/tee /usr/bin/test /usr/bin/tr /usr/bin/uname /usr/sbin/useradd /usr/sbin/userdel /usr/sbin/usermod"
+[ "$(/usr/bin/id -u)" = 0 ] && TOOLS="$TOOLS /usr/sbin/runuser"
+MISSING_TOOLS=""
+for _t in $TOOLS; do [ -x "$_t" ] || MISSING_TOOLS="$MISSING_TOOLS $_t"; done
+unset _t
+if [ -n "$MISSING_TOOLS" ]; then
+  if [ ! -L /bin ] && [ -x /bin/rm ] && [ ! -x /usr/bin/rm ]; then
+    die "this system keeps its programs in /bin and /sbin (a Debian upgraded without merged /usr), so nothing was installed. Convert it with: sudo apt install usrmerge   then run the command again" 2
+  fi
+  die "this system has none of:$MISSING_TOOLS, so nothing was installed" 2
+fi
+
 if [ "$(/usr/bin/id -u)" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "${MODE:-}" != headless ]; then
   die "run this as the account the satellite should use, not as root (it asks for sudo when it needs it); for a box with no desktop, add --mode headless" 2
 fi
@@ -177,8 +217,23 @@ UNIT=domovoi-satellite.service
 ROOT_LIB=/usr/local/lib/domovoi-satellite
 UNINSTALLER=$ROOT_LIB/install-pc.sh
 # --purge's helper (satellite/scripts/purge-satellite-files.py), root's copy:
-# run with the system's python3 -I, never the satellite's own code.
+# run with the system's python3 -I (or root's own copy of the satellite's
+# Python, below), never the satellite's own code.
 PURGER=$ROOT_LIB/purge-satellite-files.py
+# The satellite's own Python, when the computer's won't do: root's copy,
+# beside the uninstaller, root-owned as /usr/bin/python3 is (the satellite's
+# venv is made from it; root runs it only with -I). Pinned in the bundle's
+# satellite/locks/linux-python.txt; its packages (numpy, scipy, onnxruntime:
+# manylinux_2_28 wheels) need glibc 2.28.
+PYTHON_HOME=$ROOT_LIB/python
+PINNED_PY=$PYTHON_HOME/bin/python3
+# Root's own working names while it puts that Python in place (fixed paths).
+PY_PART=$ROOT_LIB/.python.tar.gz
+PY_NEW=$ROOT_LIB/.python.new
+PY_OLD=$ROOT_LIB/.python.old
+PY_LOCK_REL=satellite/locks/linux-python.txt
+PBS_RELEASES=https://github.com/astral-sh/python-build-standalone/releases/download/
+MIN_GLIBC_MINOR=28
 RECORD_DIR=/var/lib/domovoi-satellite
 RECORD=$RECORD_DIR/install.json
 # Every system file the installer may create, and every unit it may mask.
@@ -279,10 +334,27 @@ user_systemctl() {  # the satellite account's own systemd (root reaches it with 
   fi
 }
 
+python_is_root_s() {  # python_is_root_s PYTHON -> 0 when root may run it
+  # The system's python3, or root's own copy of the satellite's Python:
+  # every folder from $ROOT_LIB down to it root's, none of them writable by
+  # anyone else, and no link on the way. Never the one in a temporary
+  # folder, which is the installing account's.
+  [ "$1" = /usr/bin/python3 ] && return 0
+  [ "$1" = "$PINNED_PY" ] && [ ! -L "$ROOT_LIB" ] && [ ! -L "$PYTHON_HOME" ] && [ ! -L "$PYTHON_HOME/bin" ] || return 1
+  local p
+  for p in "$ROOT_LIB" "$PYTHON_HOME" "$PYTHON_HOME/bin" "$PINNED_PY"; do
+    case $(/usr/bin/stat -L -c '%u %a' "$p" 2>/dev/null) in
+      "0 "*[0145][0145]) ;;
+      *) return 1 ;;
+    esac
+  done
+}
+
 # ─── root's record ───────────────────────────────────────────────────────
 
 record_set() {  # record_set KEY=JSON ...: root's record of what this installer changed
   need_sudo
+  python_is_root_s "$PY" || die "root runs only the system's Python or its own copy, not $PY" 1
   $SUDO /usr/bin/install -d -o root -g root -m 0755 "$RECORD_DIR"
   $SUDO $PY -I -c '
 import json, os, sys
@@ -311,6 +383,7 @@ os.replace(tmp, path)
 record_get() {  # record_get KEY -> its value ("" when absent); only a root-owned record counts
   [ -f "$RECORD" ] && [ ! -L "$RECORD" ] || return 0
   [ "$(/usr/bin/stat -c %u "$RECORD")" = 0 ] && [ "$(/usr/bin/stat -c %u "$RECORD_DIR")" = 0 ] || return 0
+  [ -x "$PY" ] && python_is_root_s "$PY" || return 0
   $PY -I -c '
 import json, sys
 try:
@@ -330,15 +403,355 @@ else:
 ' "$RECORD" "$1"
 }
 
+# ─── the satellite's own Python ──────────────────────────────────────────
+#
+# For a computer whose python3 won't do (step 0). The lock line for this
+# machine, from the bundle the dashboard's command checked; the file it
+# names, from the Domovoi server's cache (only an address step 1 itself
+# would accept) or from GitHub, held to its size and SHA-256 before anything
+# unpacks it; unpacked first in a folder of the installing account that no
+# other account can change, all the way up (for step 1, before anything is
+# written), then by root into root's own folder from root's own copy, which
+# root checks again (the first folder is the account's).
+#
+# Both copies get an empty python3XY.zip in their own lib/ before they first
+# run: CPython looks for that file in every folder above its bin/ to find
+# its standard library, so without one inside the tree, a lib/python3XY.zip
+# and lib/python3.XY/ planted higher up (in /tmp, say) would be imported
+# instead, sitecustomize and all, -I or not (security review of
+# wf/sat-pc-python).
+
+PIN_VERSION="" PIN_FILE="" PIN_SIZE="" PIN_SHA="" PIN_URL="" PYSTAGE=""
+MACHINE=$(/usr/bin/uname -m)
+
+read_pin() {  # the lock's line for $MACHINE -> PIN_*; 1 when there is none
+  local kind m v f s h u extra rel
+  local file_re='^cpython-(3\.[0-9]{1,2}\.[0-9]{1,3})\+([0-9]{8})-(x86_64|aarch64)-unknown-linux-gnu-install_only_stripped\.tar\.gz$'
+  [ -f "$SRC/$PY_LOCK_REL" ] || return 1
+  while read -r kind m v f s h u extra; do
+    [ "$kind" = python ] && [ "$m" = "$MACHINE" ] || continue
+    [[ $f =~ $file_re ]] && [ "${BASH_REMATCH[1]}" = "$v" ] && [ "${BASH_REMATCH[3]}" = "$m" ] \
+      || die "the bundle's $PY_LOCK_REL names a bad file for $m" 1
+    rel=${BASH_REMATCH[2]}
+    [[ $s =~ ^[0-9]{1,9}$ ]] && [[ $h =~ ^[0-9a-f]{64}$ ]] && [ -z "$extra" ] \
+      && [ "$u" = "$PBS_RELEASES$rel/${f//+/%2B}" ] || die "the bundle's $PY_LOCK_REL has a bad line for $m" 1
+    PIN_VERSION=$v PIN_FILE=$f PIN_SIZE=$s PIN_SHA=$h PIN_URL=$u
+    return 0
+  done <"$SRC/$PY_LOCK_REL"
+  return 1
+}
+
+# The payload, read as step 1 (satellite/enrolment.py parse) reads it, so
+# that step 0 asks no address for the file that step 1 would refuse: the
+# grammar, the strict %-escapes, the keys, the fingerprint's shape, and the
+# core address exactly (normalize_core and is_home_network_host). Only the
+# room name's finer rules (letters, UTF-8, control characters) are left to
+# step 1; they name no address. A test holds this to the shared fixture
+# (docs/uml/spare-device-enrol-fixture.json) and to normalize_core.
+
+ipv4_ok() {  # ipv4_ok TEXT -> 0 for a dotted quad Python's ipaddress takes (no leading zeros)
+  local o
+  [[ $1 =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] || return 1
+  for o in "${BASH_REMATCH[@]:1}"; do [ "$o" -le 255 ] || return 1; done
+}
+
+ipv6_first() {  # ipv6_first TEXT -> prints its first 16 bits (decimal) if Python's IPv6Address takes it
+  local s=$1 parts n i skip=-1 hi lo p first
+  [[ $s =~ ^[0-9a-f:.]+$ ]] || return 1
+  IFS=: read -r -a parts <<<"$s:"          # the extra ':' keeps a trailing empty part
+  n=${#parts[@]}
+  [ "$n" -ge 3 ] || return 1
+  if [[ ${parts[n-1]} == *.* ]]; then
+    ipv4_ok "${parts[n-1]}" || return 1
+    parts[n-1]=0; parts[n]=0; n=$((n + 1))
+  fi
+  [ "$n" -le 9 ] || return 1
+  for ((i = 1; i < n - 1; i++)); do
+    if [ -z "${parts[i]}" ]; then [ "$skip" -lt 0 ] || return 1; skip=$i; fi
+  done
+  if [ "$skip" -ge 0 ]; then
+    hi=$skip lo=$((n - skip - 1))
+    if [ -z "${parts[0]}" ]; then hi=$((hi - 1)); [ "$hi" = 0 ] || return 1; fi
+    if [ -z "${parts[n-1]}" ]; then lo=$((lo - 1)); [ "$lo" = 0 ] || return 1; fi
+    [ $((8 - hi - lo)) -ge 1 ] || return 1
+  else
+    [ "$n" = 8 ] && [ -n "${parts[0]}" ] && [ -n "${parts[n-1]}" ] || return 1
+  fi
+  for ((i = 0; i < n; i++)); do
+    p=${parts[i]}
+    [ "$i" = "$skip" ] && continue
+    [ -z "$p" ] && { [ "$i" = 0 ] || [ "$i" = $((n - 1)) ]; } && continue
+    [[ $p =~ ^[0-9a-f]{1,4}$ ]] || return 1
+  done
+  first=${parts[0]:-0}
+  printf '%d' "$((16#$first))"
+}
+
+home_host() {  # home_host HOST -> 0 when is_home_network_host would take it (lower-case, no brackets)
+  local h=$1 a b x
+  if [[ $h == *:* ]]; then
+    x=$(ipv6_first "$h") || return 1
+    { [ "$x" -ge $((16#fc00)) ] && [ "$x" -le $((16#fdff)) ]; } || { [ "$x" -ge $((16#fe80)) ] && [ "$x" -le $((16#febf)) ]; }
+    return
+  fi
+  if ipv4_ok "$h"; then
+    a=${h%%.*}; b=${h#*.}; b=${b%%.*}
+    [ "$a" = 10 ] || { [ "$a" = 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ]; } || { [ "$a" = 192 ] && [ "$b" = 168 ]; }
+    return
+  fi
+  local s
+  for s in .local .home.arpa .lan .internal; do
+    [[ $h == *"$s" ]] && [ "${#h}" -gt "${#s}" ] && return 0
+  done
+  return 1
+}
+
+core_normal() {  # core_normal VALUE -> prints the core address as normalize_core makes it, or nothing
+  local LC_ALL=C v=$1 scheme rest netloc path host after shown port=""
+  [ "${#v}" -ge 1 ] && [ "${#v}" -le 256 ] && [[ $v =~ ^[!-~]+$ ]] || return 0
+  case $v in *'?'*|*'#'*|*'@'*) return 0 ;; esac
+  [[ $v =~ ^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$ ]] || return 0
+  scheme=${BASH_REMATCH[1],,} rest=${BASH_REMATCH[2]}
+  case $scheme in http|https) ;; *) return 0 ;; esac
+  netloc=${rest%%/*} path=${rest#"$netloc"}
+  [ -z "$path" ] || [ "$path" = / ] || return 0
+  if [[ $netloc == \[* ]]; then
+    [[ $netloc == *\]* ]] || return 0
+    host=${netloc#\[}; after=${host#*\]}; host=${host%%\]*}; host=${host,,}
+    case $host in *%*|*\[*) return 0 ;; esac
+    ipv6_first "$host" >/dev/null || return 0
+    shown="[$host]"
+  else
+    host=${netloc%%:*}; after=${netloc#"$host"}; host=${host,,}
+    [[ $host =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]] || return 0
+    shown=$host
+  fi
+  if [ -n "$after" ]; then
+    [[ $after =~ ^:[0-9]+$ ]] || return 0
+    port=${after#:}
+    while [ "${port#0}" != "$port" ]; do port=${port#0}; done
+    [ -n "$port" ] && [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 0
+    port=":$port"
+  fi
+  home_host "$host" || return 0
+  printf '%s' "$scheme://$shown$port"
+}
+
+payload_core() {  # the payload's core address if step 1 would take the payload's address and shape, else nothing
+  local LC_ALL=C t=$PAYLOAD ws=$' \t\r\n' rest query q pair key value seen=" " core="" fp="" room="" bs='\x'
+  local raw_re="^([A-Za-z0-9._~!\$'()*+,;:@/?-]|%[0-9A-Fa-f]{2})*\$"
+  while [ -n "$t" ] && [[ $ws == *"${t:0:1}"* ]]; do t=${t:1}; done
+  while [ -n "$t" ] && [[ $ws == *"${t: -1}"* ]]; do t=${t:0:${#t}-1}; done
+  [ "${#t}" -le 1024 ] && [[ $t == *:* ]] || return 0
+  rest=${t%%:*}
+  [ "${rest,,}" = domovoi-room ] || return 0
+  rest=${t#*:}
+  [[ $rest == '1?'* ]] || return 0
+  query=${rest#1\?}
+  case $query in *'#'*) return 0 ;; esac
+  q=$query
+  while :; do
+    pair=${q%%&*}
+    [[ $pair == *=* ]] || return 0
+    key=${pair%%=*} value=${pair#*=}
+    [[ $key =~ ^[a-z][a-z0-9_]{0,31}$ ]] && [[ $value =~ $raw_re ]] || return 0
+    case $seen in *" $key "*) return 0 ;; esac
+    seen="$seen$key "
+    # A NUL can't live in a shell variable, so it is refused here (step 1
+    # refuses one in the address and the fingerprint; stricter elsewhere,
+    # never laxer); the "." keeps a decoded trailing newline.
+    case $value in *%00*) [ "$key" = room ] || return 0 ;; esac
+    value=$(printf '%b.' "${value//%/$bs}"); value=${value%.}
+    case $key in core) core=$value ;; fp) fp=$value ;; room) room=$value ;; esac
+    [ "$pair" != "$q" ] || break
+    q=${q#*&}
+  done
+  [ -n "$core" ] && [ -n "$room" ] && [[ $fp =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || return 0
+  core_normal "$core"
+}
+
+fetch_to() {  # fetch_to URL FILE HOPS: at most $PIN_SIZE + 1 bytes of what URL serves
+  # HOPS redirects at most, each to https only: 0 for the Domovoi server,
+  # which never redirects; GitHub sends its release files to another https
+  # host. curl and wget hold to the same rule (wget follows one hop at a
+  # time here, so it can refuse plain http and a bad Location).
+  local LC_ALL=C url=$1 hops=$3 status loc
+  /usr/bin/rm -f "$2"
+  if [ -x /usr/bin/curl ]; then
+    /usr/bin/curl -fsSL --proto '=http,https' --proto-redir '=https' --max-redirs "$hops" --connect-timeout 15 \
+      --max-time 1800 "$url" 2>/dev/null | /usr/bin/head -c "$((PIN_SIZE + 1))" >"$2" || true
+  elif [ -x /usr/bin/wget ]; then
+    while :; do
+      /usr/bin/wget -q -S --max-redirect=0 --timeout=30 -O - "$url" 2>"$2.headers" \
+        | /usr/bin/head -c "$((PIN_SIZE + 1))" >"$2" || true
+      read -r status loc <<<"$(/usr/bin/awk '$1 ~ /^HTTP\// {s = $2; l = ""} tolower($1) == "location:" {l = $2}
+                                            END {print s, l}' "$2.headers" | /usr/bin/tr -d '\r')"
+      case $status in 3??) ;; *) break ;; esac
+      /usr/bin/rm -f "$2"
+      [ "$hops" -gt 0 ] && [[ $loc =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[!-~]*)?$ ]] || break
+      hops=$((hops - 1)) url=$loc
+    done
+    /usr/bin/rm -f "$2.headers"
+  fi
+}
+
+pinned_ok() {  # pinned_ok FILE -> 0 when it is exactly the pinned file (size, then SHA-256)
+  [ -f "$1" ] && [ ! -L "$1" ] && [ "$($SUDO_CHECK /usr/bin/stat -c %s "$1")" = "$PIN_SIZE" ] \
+    && [ "$($SUDO_CHECK /usr/bin/sha256sum "$1" | /usr/bin/cut -d' ' -f1)" = "$PIN_SHA" ]
+}
+SUDO_CHECK=""
+
+CPUINFO=/proc/cpuinfo
+
+cpu_ok() {  # 0 when this processor runs the satellite's numpy: x86-64-v2, or any 64-bit ARM
+  # x86-64-v2 is SSSE3, SSE4.2, POPCNT and CMPXCHG16B (Intel from 2008-2009,
+  # AMD from 2011; a Core 2 lacks SSE4.2 and POPCNT). numpy 2.4+ needs it on
+  # every x86-64 list in satellite/locks/. When the kernel says nothing about
+  # the flags, nothing is refused.
+  local flags f
+  [ "$MACHINE" = x86_64 ] || return 0
+  flags=$(/usr/bin/awk -F: '$1 ~ /^flags[ \t]*$/ {print " " $2 " "; exit}' "$CPUINFO" 2>/dev/null) || return 0
+  [ -n "$flags" ] || return 0
+  for f in ssse3 sse4_2 popcnt cx16; do
+    case $flags in *" $f "*) ;; *) return 1 ;; esac
+  done
+}
+
+glibc_ok() {  # 0 when this is glibc 2.28 or newer
+  local g major minor
+  g=$(/usr/bin/getconf GNU_LIBC_VERSION 2>/dev/null || true)
+  case $g in "glibc "*) ;; *) return 1 ;; esac
+  g=${g#glibc }; major=${g%%.*}; minor=${g#*.}; minor=${minor%%.*}
+  [[ $major =~ ^[0-9]+$ ]] && [[ $minor =~ ^[0-9]+$ ]] || return 1
+  [ "$major" -gt 2 ] || { [ "$major" = 2 ] && [ "$minor" -ge "$MIN_GLIBC_MINOR" ]; }
+}
+
+private_dir() {  # private_dir DIR -> 0 when only root and this account can change DIR and every folder above it
+  local d me
+  me=$(/usr/bin/id -u)
+  d=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
+  while :; do
+    case $(/usr/bin/stat -c '%u %a' "$d" 2>/dev/null) in
+      "0 "*[0145][0145]|"$me "*[0145][0145]) ;;
+      *) return 1 ;;
+    esac
+    [ "$d" = / ] && return 0
+    d=$(/usr/bin/dirname "$d")
+  done
+}
+
+make_stage() {  # -> PYSTAGE: a new 0700 folder of this account's, reached through no link
+  # In the account's own home (root's for root) as the account database
+  # names it but by its resolved path, when no other account can change
+  # that or anything above it; else in /tmp, where the landmark is what
+  # keeps the search inside the tree. Checked again once it exists, and
+  # used only by that resolved path: a link in the home's path (one a
+  # folder others can write holds, say) can't be swapped under it
+  # (security review of wf/sat-pc-python, round 2).
+  local home real=""
+  home=$(/usr/bin/getent passwd "$(/usr/bin/id -un)" | /usr/bin/cut -d: -f6)
+  [ -z "$home" ] || real=$(cd -P -- "$home" 2>/dev/null && pwd -P) || real=""
+  if [ -n "$real" ] && private_dir "$real"; then
+    PYSTAGE=$(/usr/bin/mktemp -d "$real/.domovoi-python.XXXXXXXX")
+  else
+    PYSTAGE=$(/usr/bin/mktemp -d /tmp/domovoi-python.XXXXXXXX)
+  fi
+  [ "$(cd -P -- "$PYSTAGE" 2>/dev/null && pwd -P)" = "$PYSTAGE" ] \
+    && [ "$(/usr/bin/stat -c '%u %a' "$PYSTAGE")" = "$(/usr/bin/id -u) 700" ] \
+    && { [ "${PYSTAGE#/tmp/}" != "$PYSTAGE" ] || private_dir "$PYSTAGE"; } \
+    || die "the folder for the satellite's Python ($PYSTAGE) is not this account's alone, so nothing was installed" 1
+}
+
+landmark_zip() {  # landmark_zip -> an empty zip (its end record alone) on stdout
+  printf 'PK\005\006'
+  /usr/bin/head -c 18 /dev/zero
+}
+
+stage_pinned_python() {  # step 0: the pinned file, checked, unpacked in a private folder -> PY
+  local f core home zip
+  [ -x /usr/bin/curl ] || [ -x /usr/bin/wget ] || die "curl or wget is needed to download the satellite's Python" 2
+  make_stage
+  f=$PYSTAGE/$PIN_FILE
+  say "This computer gets the satellite's own Python $PIN_VERSION ($((PIN_SIZE / 1000000)) MB, pinned by its SHA-256)..."
+  core=$(payload_core)
+  if [ -n "$core" ]; then fetch_to "$core/v1/satellite-linux/files/$PIN_FILE" "$f" 0; fi
+  if pinned_ok "$f"; then
+    say "  from the Domovoi server"
+  else
+    fetch_to "$PIN_URL" "$f" 5
+    pinned_ok "$f" || die "neither the Domovoi server nor GitHub gave the pinned Python $PIN_VERSION, so nothing was installed. In the dashboard: Settings -> Satellites -> Add a spare device -> get the Linux Python (or connect this computer to the internet), then run the command again" 1
+    say "  from GitHub (python-build-standalone)"
+  fi
+  /usr/bin/mkdir "$PYSTAGE/x"
+  /usr/bin/tar -xzf "$f" -C "$PYSTAGE/x" --no-same-owner
+  /usr/bin/find "$PYSTAGE/x/python/lib" -path '*/lib-dynload/_dbm.*.so' -type f -delete
+  zip=$PYSTAGE/x/python/lib/$(landmark_name)
+  landmark_zip >"$zip"
+  PY=$PYSTAGE/x/python/bin/python3
+  [ "$($PY -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" = "$PIN_VERSION" ] \
+    || die "the satellite's Python $PIN_VERSION does not run on this computer, so nothing was installed" 1
+  python_stays_home "$PYSTAGE/x/python" || die "the satellite's Python $PIN_VERSION reads its library from outside its own folder, so nothing was installed" 1
+}
+
+landmark_name() {  # python3XY.zip for the pinned version
+  local mm=${PIN_VERSION%.*}
+  printf 'python%s.zip' "${mm//./}"
+}
+
+python_stays_home() {  # python_stays_home PREFIX -> 0 when $PY's prefix and library are inside PREFIX
+  # (the landmark's proof: a library planted higher up would show here).
+  local got prefix os_file real
+  real=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 1
+  got=$($PY -I -c 'import sys, os; print(sys.prefix); print(os.__file__)' 2>/dev/null) || return 1
+  prefix=$(printf '%s\n' "$got" | /usr/bin/sed -n 1p) os_file=$(printf '%s\n' "$got" | /usr/bin/sed -n 2p)
+  { [ "$prefix" = "$1" ] && [[ $os_file == "$1/lib/"* ]]; } || { [ "$prefix" = "$real" ] && [[ $os_file == "$real/lib/"* ]]; }
+}
+
+install_root_s_python() {  # step 3: root's own copy of the staged Python -> PY=$PINNED_PY
+  # Root copies the file into its own folder and checks THAT copy: the one
+  # in the temporary folder is the installing account's to change.
+  $SUDO /usr/bin/rm -rf "$PY_NEW" "$PY_OLD"
+  $SUDO /usr/bin/install -o root -g root -m 0600 "$PYSTAGE/$PIN_FILE" "$PY_PART"
+  SUDO_CHECK=$SUDO
+  if ! pinned_ok "$PY_PART"; then
+    $SUDO /usr/bin/rm -f "$PY_PART"
+    die "the satellite's Python changed after it was checked, so it was not installed" 1
+  fi
+  SUDO_CHECK=""
+  $SUDO /usr/bin/install -d -o root -g root -m 0755 "$PY_NEW"
+  $SUDO /usr/bin/tar -xzf "$PY_PART" -C "$PY_NEW" --no-same-owner
+  # The dbm module's Berkeley DB is copyleft (Sleepycat): never installed.
+  $SUDO /usr/bin/find "$PY_NEW/python/lib" -path '*/lib-dynload/_dbm.*.so' -type f -delete
+  landmark_zip | $SUDO /usr/bin/tee "$PY_NEW/python/lib/$(landmark_name)" >/dev/null
+  # Readable by everyone, writable by root alone, whatever root's umask
+  # made of the folders tar created (the archive lists none); no setuid.
+  $SUDO /usr/bin/chmod -R u=rwX,go=rX "$PY_NEW"
+  if [ -e "$PYTHON_HOME" ] || [ -L "$PYTHON_HOME" ]; then $SUDO /usr/bin/mv "$PYTHON_HOME" "$PY_OLD"; fi
+  $SUDO /usr/bin/mv "$PY_NEW/python" "$PYTHON_HOME"
+  $SUDO /usr/bin/rm -rf "$PY_NEW" "$PY_OLD"
+  $SUDO /usr/bin/rm -f "$PY_PART"
+  PY=$PINNED_PY
+  python_is_root_s "$PY" && [ "$($PY -I -c 'import platform; print(platform.python_version())')" = "$PIN_VERSION" ] \
+    && python_stays_home "$PYTHON_HOME" || die "root's copy of the satellite's Python is not usable" 1
+  say "  the satellite's Python $PIN_VERSION is in $PYTHON_HOME (root's)"
+}
+
+remove_root_s_python() {  # root's fixed paths only; never through a link
+  if [ -d "$PYTHON_HOME" ] && [ ! -L "$PYTHON_HOME" ]; then $SUDO /usr/bin/rm -rf "$PYTHON_HOME"; fi
+  $SUDO /usr/bin/rm -rf "$PY_NEW" "$PY_OLD"
+  $SUDO /usr/bin/rm -f "$PY_PART"
+}
+
 # ─── uninstall ───────────────────────────────────────────────────────────
 
 purge_satellite_files() {  # the satellite's own files in $CONFIG_DIR, and only those
-  # Root's copy of the purger under the system's python3 -I, run as the
-  # account (its files, its rights): nothing the satellite's account can
-  # change runs here. On a computer that also runs a Domovoi server,
+  # Root's copy of the purger under a Python root may run (python_is_root_s)
+  # with -I, run as the account (its files, its rights): nothing the
+  # satellite's account can change runs here. On a computer that also runs a Domovoi server,
   # ~/.domovoi holds that server's key, voices and wake models too, and the
   # purger leaves them.
-  if [ -f "$PURGER" ] && [ ! -L "$PURGER" ] && [ "$(/usr/bin/stat -c %u "$PURGER")" = 0 ]; then
+  if [ -f "$PURGER" ] && [ ! -L "$PURGER" ] && [ "$(/usr/bin/stat -c %u "$PURGER")" = 0 ] \
+     && [ -x "$PY" ] && python_is_root_s "$PY"; then
     as_sat $PY -I "$PURGER" "$CONFIG_DIR" >/dev/null
   else
     local f
@@ -354,6 +767,9 @@ purge_satellite_files() {  # the satellite's own files in $CONFIG_DIR, and only 
 
 uninstall() {
   local recorded_mode recorded_account state t
+  # Root's copy of the satellite's own Python, if the install used one (a
+  # computer may have no python3 of its own); else the system's.
+  if [ -x "$PINNED_PY" ] && python_is_root_s "$PINNED_PY"; then PY=$PINNED_PY; fi
   recorded_mode=$(record_get mode)
   recorded_account=$(record_get account)
   if [ -z "$MODE" ]; then MODE=$recorded_mode; fi
@@ -464,6 +880,9 @@ uninstall() {
   fi
   $SUDO /usr/bin/rm -f "$RECORD"
   $SUDO /usr/bin/rmdir "$RECORD_DIR" 2>/dev/null || true
+  # The satellite's own Python, if it had one, and what an interrupted
+  # install left of one: root's fixed paths, after its last use above.
+  remove_root_s_python
   # Last: this file itself (bash keeps reading the open copy).
   $SUDO /usr/bin/rm -f "$PURGER"
   $SUDO /usr/bin/rm -f "$UNINSTALLER"
@@ -484,34 +903,84 @@ case $SRC/ in
   "$SAT_HOME_HEADLESS"/*) die "run the installer from the dashboard's command, not from the satellite's own copy of it" 2 ;;
 esac
 
-# ─── 1. the payload, and the core proves who it is ───────────────────────
-
 [ -n "$PAYLOAD" ] || die "give the enrolment payload ('domovoi-room:1?...') from the dashboard: Settings -> Satellites -> Add a spare device" 2
-[ -x "$PY" ] || die "python3 is needed (sudo apt install python3)"
-$PY -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
-  || die "Python 3.11 or newer is needed (Debian 12, Ubuntu 24.04 and later have it)"
+trap '[ -z "$PYSTAGE" ] || /usr/bin/rm -rf "$PYSTAGE"' EXIT
+
+# ─── 0. the system, and which Python ─────────────────────────────────────
+
+OS_ID="" OS_LIKE="" OS_NAME="this Linux"
 if [ -r /etc/os-release ]; then
   # shellcheck disable=SC1091
-  . /etc/os-release
-  case " ${ID:-} ${ID_LIKE:-} " in
-    *" debian "*|*" ubuntu "*) ;;
-    *) say "note: this is ${PRETTY_NAME:-an unknown Linux}; the installer is tested on Debian and Ubuntu" ;;
-  esac
+  OS_ID=$(. /etc/os-release && printf '%s' "${ID:-}")
+  # shellcheck disable=SC1091
+  OS_LIKE=$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")
+  # shellcheck disable=SC1091
+  OS_NAME=$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-this Linux}")
+fi
+# How its packages are installed: apt (Debian, Ubuntu, Mint, ...), dnf
+# (Fedora), zypper (openSUSE), pacman (Arch). Anything else installs them
+# itself and says --skip-packages.
+case " $OS_ID $OS_LIKE " in
+  *" debian "*|*" ubuntu "*) FAMILY=debian ;;
+  *" fedora "*) FAMILY=fedora ;;
+  *" suse "*|*" opensuse "*) FAMILY=suse ;;
+  *" arch "*) FAMILY=arch ;;
+  *) FAMILY="" ;;
+esac
+if [ -z "$FAMILY" ] && [ "$SKIP_APT" = 0 ]; then
+  die "this is $OS_NAME: the installer installs its few packages with apt (Debian, Ubuntu, Mint), dnf (Fedora), zypper (openSUSE) or pacman (Arch), so nothing was installed. Install PortAudio, mpg123, the ALSA utilities and (with a desktop) pactl yourself, then run the command again with --skip-packages" 2
+fi
+case $MACHINE in
+  x86_64|aarch64) ;;
+  *) die "this computer is $MACHINE: the satellite runs on x86-64 and 64-bit ARM (aarch64), so nothing was installed" 2 ;;
+esac
+# Before anything is downloaded: the satellite's numpy (2.4 and later) runs
+# only on an x86-64-v2 processor, and would otherwise fail at its first use.
+cpu_ok || die "this computer's processor is too old for Domovoi (needs roughly 2009 or newer), so nothing was installed" 2
+
+# The computer's own python3 on Debian and Ubuntu when it is new enough and
+# has a pinned package list; the satellite's own otherwise.
+SYSTEM_WHY=""
+if [ "$FAMILY" != debian ]; then
+  SYSTEM_WHY="the computer's own Python is used only on Debian and Ubuntu"
+elif [ ! -x /usr/bin/python3 ]; then
+  SYSTEM_WHY="it has no python3"
+elif ! /usr/bin/python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+  SYSTEM_WHY="its Python is $(/usr/bin/python3 -I -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unknown), older than the 3.11 the satellite needs"
+elif [ ! -f "$SRC/satellite/locks/pc-$(/usr/bin/python3 -I -c 'import sys; print("cp%d%d" % sys.version_info[:2])')-$MACHINE.txt" ]; then
+  SYSTEM_WHY="its Python $(/usr/bin/python3 -I -c 'import platform; print(platform.python_version())') has no pinned package list yet"
+fi
+case $PYTHON_CHOICE in
+  system) [ -z "$SYSTEM_WHY" ] || die "--python system: $SYSTEM_WHY, so nothing was installed" 2; USE_PY=system ;;
+  pinned) USE_PY=pinned ;;
+  *) if [ -z "$SYSTEM_WHY" ]; then USE_PY=system; else USE_PY=pinned; fi ;;
+esac
+if [ "$USE_PY" = pinned ]; then
+  read_pin || die "there is no pinned Python for $MACHINE in this bundle, so nothing was installed" 2
+  glibc_ok || die "this Linux's C library is $(/usr/bin/getconf GNU_LIBC_VERSION 2>/dev/null || echo 'not glibc'); the satellite needs glibc 2.$MIN_GLIBC_MINOR or newer (Debian 10, Ubuntu 18.10, Fedora 29 and later), so nothing was installed" 2
+  [ "$PYTHON_CHOICE" = pinned ] || say "$OS_NAME: $SYSTEM_WHY."
 fi
 # The Python packages come from a hash-pinned list made for this Python and
 # machine (satellite/scripts/lock-pc-requirements.sh); none, no install.
-PYTAG=$($PY -I -c 'import sys; print("cp%d%d" % sys.version_info[:2])')
-LOCK_REL=satellite/locks/pc-$PYTAG-$(/usr/bin/uname -m).txt
-if [ ! -f "$SRC/$LOCK_REL" ]; then
-  die "there is no pinned package list for Python $PYTAG on $(uname -m) yet, so nothing was installed (lists: $(cd "$SRC/satellite/locks" && ls pc-*.txt 2>/dev/null | sed 's/^pc-//; s/\.txt$//' | tr '\n' ' '))" 2
+if [ "$USE_PY" = pinned ]; then
+  PYTAG=cp$(printf '%s' "$PIN_VERSION" | /usr/bin/cut -d. -f1-2 | /usr/bin/tr -d .)
+else
+  PYTAG=$($PY -I -c 'import sys; print("cp%d%d" % sys.version_info[:2])')
 fi
+LOCK_REL=satellite/locks/pc-$PYTAG-$MACHINE.txt
+if [ ! -f "$SRC/$LOCK_REL" ]; then
+  die "there is no pinned package list for Python $PYTAG on $MACHINE yet, so nothing was installed (lists: $(cd "$SRC/satellite/locks" && ls pc-*.txt 2>/dev/null | sed 's/^pc-//; s/\.txt$//' | tr '\n' ' '))" 2
+fi
+[ "$USE_PY" = system ] || stage_pinned_python
+
+# ─── 1. the payload, and the core proves who it is ───────────────────────
 
 say "Checking the Domovoi server named in the code..."
 ERRFILE=$(mktemp)
 set +e
-# -P: nothing from the current directory is importable; the bundle is
-# named explicitly.
-ENROL_JSON=$(/usr/bin/env PYTHONPATH="$SRC" $PY -P -s -m satellite.enrolment verify "$PAYLOAD" 2>"$ERRFILE")
+# -I (as every Python this script runs): no environment, no user site, nothing
+# from the current directory; the bundle is put on the path explicitly.
+ENROL_JSON=$($PY -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("satellite.enrolment", run_name="__main__", alter_sys=True)' "$SRC" verify "$PAYLOAD" 2>"$ERRFILE")
 rc=$?
 set -e
 msg=$(/usr/bin/cat "$ERRFILE" 2>/dev/null || true)
@@ -581,26 +1050,56 @@ if ! [ "$HERE/install-pc.sh" -ef "$UNINSTALLER" ]; then
   $SUDO /usr/bin/install -o root -g root -m 0755 "$HERE/install-pc.sh" "$UNINSTALLER"
 fi
 $SUDO /usr/bin/install -o root -g root -m 0644 "$HERE/purge-satellite-files.py" "$PURGER"
-record_set "mode=\"$MODE\"" "account=\"$RUN_AS\"" "installed_at=$(/usr/bin/date +%s)"
+if [ "$USE_PY" = pinned ]; then
+  install_root_s_python
+else
+  # The computer's own Python: an earlier install's copy of ours goes.
+  remove_root_s_python
+fi
+record_set "mode=\"$MODE\"" "account=\"$RUN_AS\"" "installed_at=$(/usr/bin/date +%s)" \
+  "python=\"$USE_PY\"" "python_version=\"$($PY -I -c 'import platform; print(platform.python_version())')\""
 
 # ─── 4. system packages ──────────────────────────────────────────────────
 
 missing_pkgs() {
   local p out=""
   for p in "$@"; do
-    /usr/bin/dpkg-query -W -f '${Status}' "$p" 2>/dev/null | /usr/bin/grep -q "install ok installed" || out="$out $p"
+    case $FAMILY in
+      debian) /usr/bin/dpkg-query -W -f '${Status}' "$p" 2>/dev/null | /usr/bin/grep -q "install ok installed" ;;
+      fedora|suse) /usr/bin/rpm -q --quiet "$p" 2>/dev/null ;;
+      arch) /usr/bin/pacman -Q "$p" >/dev/null 2>&1 ;;
+    esac || out="$out $p"
   done
   printf '%s' "$out"
 }
-PKGS="python3-venv python3-pip libportaudio2 mpg123 alsa-utils ca-certificates"
-[ "$MODE" = desktop ] && PKGS="$PKGS python3-tk pulseaudio-utils"
+# PortAudio (the microphone and speakers), mpg123 (music), the ALSA
+# utilities (aplay, amixer), the CA certificates (pip's downloads), and on
+# a desktop pactl (the sound server's volume). With the computer's own
+# Python (Debian and Ubuntu only) also its venv, and on a desktop Tk for
+# the tray's window; the satellite's own Python has both.
+case $FAMILY in
+  debian) PKGS="libportaudio2 mpg123 alsa-utils ca-certificates"; DESKTOP_PKGS="pulseaudio-utils"
+          if [ "$USE_PY" = system ]; then PKGS="python3-venv python3-pip $PKGS"; DESKTOP_PKGS="python3-tk $DESKTOP_PKGS"; fi ;;
+  fedora) PKGS="portaudio mpg123 alsa-utils ca-certificates"; DESKTOP_PKGS="pulseaudio-utils" ;;
+  suse) PKGS="libportaudio2 mpg123 alsa-utils ca-certificates"; DESKTOP_PKGS="pulseaudio-utils" ;;
+  arch) PKGS="portaudio mpg123 alsa-utils ca-certificates"; DESKTOP_PKGS="libpulse" ;;
+  *) PKGS="" DESKTOP_PKGS="" ;;
+esac
+[ "$MODE" = desktop ] && PKGS="$PKGS $DESKTOP_PKGS"
 if [ "$SKIP_APT" = 0 ]; then
   MISSING=$(missing_pkgs $PKGS)
   if [ -n "$MISSING" ]; then
     say "Installing system packages:$MISSING"
-    $SUDO /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update -qq
     # shellcheck disable=SC2086
-    $SUDO /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $MISSING
+    case $FAMILY in
+      debian)
+        $SUDO /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        $SUDO /usr/bin/env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $MISSING ;;
+      fedora) $SUDO /usr/bin/dnf install -y -q $MISSING ;;
+      suse) $SUDO /usr/bin/zypper --non-interactive --quiet install --no-recommends $MISSING ;;
+      arch) $SUDO /usr/bin/pacman -S --needed --noconfirm $MISSING \
+              || die "pacman could not install$MISSING: bring the system up to date (sudo pacman -Syu), then run the command again" ;;
+    esac
   fi
 fi
 

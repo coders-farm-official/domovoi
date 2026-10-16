@@ -12,6 +12,9 @@ Windows, which has already checked this bundle's SHA-256 before running it:
     powershell -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Uninstall [-Purge]
 
 In order:
+  0. Refuses a processor older than about 2009 (the satellite's numpy needs
+     x86-64-v2: SSSE3, SSE4.2, POPCNT, CMPXCHG16B), before anything is
+     downloaded.
   1. Refuses a PC that runs the Domovoi server (its Windows service or
      install record, its data folder, a server's files in this account, or
      a server answering on this PC): "use this PC as a room" will come with
@@ -56,7 +59,12 @@ param(
     [string]$TestRegistryFile = '',
     [string]$TestCorePcSignals = '',
     [switch]$TestAsAdministrator,
-    [switch]$TestAudioHooks
+    [switch]$TestAudioHooks,
+    # Tests only, like the ones above: the processor features (by
+    # IsProcessorFeaturePresent number) to treat as missing, and the Windows
+    # build to treat this one as.
+    [int[]]$TestCpuMissing = @(),
+    [int]$TestWindowsBuild = 0
 )
 
 Set-StrictMode -Version 2.0
@@ -94,6 +102,40 @@ if ($Uninstall) {
 
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
     Fail 'this satellite needs 64-bit Windows on an Intel or AMD processor (x64)' 2
+}
+
+function Get-MissingCpuFeatures {
+    # The satellite's numpy (2.4 and later) runs only on an x86-64-v2
+    # processor: SSSE3, SSE4.2, POPCNT and CMPXCHG16B (Intel from 2008-2009,
+    # AMD from 2011; a Core 2 lacks SSE4.2 and POPCNT), and would otherwise
+    # fail at its first use, after the whole install. Windows reports
+    # CMPXCHG16B on every version, SSSE3 and SSE4.2 from Windows 10 2004
+    # (build 19041) on, POPCNT not at all (every x64 processor with SSE4.2
+    # has it). The names of what is missing; none when Windows can't say.
+    $features = [ordered]@{ '14' = 'CMPXCHG16B' }
+    $build = [Environment]::OSVersion.Version.Build
+    if ($TestWindowsBuild) { $build = $TestWindowsBuild }
+    if ($build -ge 19041) { $features['36'] = 'SSSE3'; $features['38'] = 'SSE4.2' }
+    try {
+        if (-not ('DomovoiSatellite.Cpu' -as [type])) {
+            Add-Type -Namespace DomovoiSatellite -Name Cpu -ErrorAction Stop -MemberDefinition (
+                '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);')
+        }
+    } catch {
+        return @()
+    }
+    $missing = @()
+    foreach ($f in $features.Keys) {
+        $present = [DomovoiSatellite.Cpu]::IsProcessorFeaturePresent([uint32]$f)
+        if ($TestCpuMissing -contains [int]$f) { $present = $false }
+        if (-not $present) { $missing += $features[$f] }
+    }
+    return $missing
+}
+$cpuMissing = @(Get-MissingCpuFeatures)
+if ($cpuMissing.Count -gt 0) {
+    Fail ("this computer's processor is too old for Domovoi (needs roughly 2009 or newer; it has no " +
+          ($cpuMissing -join ', ') + '), so nothing was installed') 2
 }
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if ($TestAsAdministrator -or $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
