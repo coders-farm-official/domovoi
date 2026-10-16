@@ -39,6 +39,8 @@ the event loop responsive.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
 import hashlib
 import io
 import json
@@ -51,6 +53,7 @@ import sys
 import tempfile
 import threading
 import wave
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,6 +86,10 @@ class SynthResult:
     # what a sample that can't play its own voice says. Not part of
     # equality.
     failures: tuple[str, ...] = field(default=(), compare=False)
+    # The Piper voice the chain stopped for because its files aren't on
+    # disk yet (only while downloads are deferred: see synthesize_detailed);
+    # None otherwise. Not part of equality.
+    missing_voice: str | None = field(default=None, compare=False)
 
 
 def engine_failure_words(engine: str, exc: BaseException) -> str:
@@ -773,6 +780,23 @@ class PiperVoice:
         return b"".join(p.tobytes() for p in parts)
 
 
+# How a voice that isn't on disk is met in the thread that wants it: None,
+# downloaded there (the old way, for callers outside the speech chain);
+# "defer", the chain stops and says so (SynthResult.missing_voice) so the
+# caller fetches it in the downloads pool, holding no speech thread; "fail",
+# a failure of the Piper rung (the fetch failed already), and the chain
+# falls back. Set by RealTTSClient.synthesize_detailed around its call;
+# the speech pool copies it into the thread (domovoi/executors.py).
+_DOWNLOADS_IN_THREAD: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "tts_downloads_in_thread", default=None)
+
+
+class _PiperVoiceNotOnDisk(Exception):
+    def __init__(self, voice: str) -> None:
+        super().__init__(f"Piper voice {voice} is not on disk yet")
+        self.voice = voice
+
+
 def _piper_voice(voice: str) -> PiperVoice:
     """The loaded voice for ``voice`` (a model_ref), loading it once.
     Blocking — worker threads only. The voice's own lock makes a boot or
@@ -780,9 +804,16 @@ def _piper_voice(voice: str) -> PiperVoice:
     once between them; a turn in another voice never waits on it (until
     2026-10-14 one global lock was held through the download, and every
     reply in every voice queued behind a slow one, a thread each: see
-    domovoi/executors.py)."""
+    domovoi/executors.py). In the speech chain a voice that isn't on disk
+    is never downloaded here (:data:`_DOWNLOADS_IN_THREAD`)."""
     v = _piper_voice_cache.get(voice)
     if v is None:
+        mode = _DOWNLOADS_IN_THREAD.get()
+        if mode is not None and _piper_local_path(voice) is None:
+            if mode == "defer":
+                raise _PiperVoiceNotOnDisk(voice)
+            raise PiperDownloadError(
+                f"Piper voice {voice} is not on disk: its download failed or was refused")
         with _piper_voice_lock(voice):
             v = _piper_voice_cache.get(voice)
             if v is None:
@@ -799,9 +830,40 @@ def preload_piper_voice_sync(voice: str) -> bool:
     """Load a Piper voice (and the text-to-phoneme converter) and
     synthesize one short word with it, so the first reply in that voice
     pays neither the model load nor the first inference. Blocking — run it
-    in a worker thread (``domovoi/speech_warmup.py``). True when the voice
+    in a worker thread (``domovoi/speech_warmup.py``, which fetches the
+    voice first with :func:`ensure_piper_voice`). True when the voice
     rendered audio."""
     return _synth_piper_sync("Okay.", voice, 1.0) is not None
+
+
+# One fetch per voice at a time, per event loop: every reply waiting for
+# the same voice awaits it, and none holds a thread meanwhile.
+_DOWNLOADS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Task]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _fetch_piper_voice_sync(voice: str) -> Path:
+    with _piper_voice_lock(voice):
+        return _piper_voice_path(voice)
+
+
+async def ensure_piper_voice(voice: str) -> None:
+    """Make sure a Piper voice's files are on disk, downloading them first
+    if they aren't: in the "downloads" pool (domovoi/executors.py), never
+    in the speech pool, so a reply in a voice that is loaded never waits
+    behind a voice that is still coming (review 2026-10-15: four turns
+    waiting on one download took every speech thread). Replies waiting for
+    the same voice share the one fetch. Raises what the fetch raised."""
+    if piper_voice_on_disk(voice):
+        return
+    loop = asyncio.get_running_loop()
+    tasks = _DOWNLOADS.setdefault(loop, {})
+    task = tasks.get(voice)
+    if task is None or task.done():
+        task = tasks[voice] = loop.create_task(
+            executors.run("downloads", _fetch_piper_voice_sync, voice))
+    await asyncio.shield(task)
 
 
 def _phonemize(text: str, dialect: str = "en") -> list[str]:
@@ -948,7 +1010,28 @@ class RealTTSClient:
         # narrate an emoji's Unicode name. Single choke point: every spoken
         # path in the core lands here (see domovoi/speech_sanitize).
         text = sanitize_for_speech(text or "")
-        return await executors.run("tts", self._synth_detailed_blocking, text, engine, voice)
+        # A Piper voice that isn't on disk stops the chain in the speech
+        # thread (its download deferred), is fetched in the downloads pool
+        # holding no speech thread, and the chain runs again: a reply in a
+        # voice already loaded never waits behind one still coming (review
+        # 2026-10-15: four turns waiting on one download took every speech
+        # thread). If the fetch fails, the chain runs without it.
+        token = _DOWNLOADS_IN_THREAD.set("defer")
+        try:
+            res = await executors.run("tts", self._synth_detailed_blocking, text, engine, voice)
+        finally:
+            _DOWNLOADS_IN_THREAD.reset(token)
+        if res.missing_voice is None:
+            return res
+        try:
+            await ensure_piper_voice(res.missing_voice)
+        except Exception as e:  # noqa: BLE001 - the chain says it, and falls back
+            log.warning("TTS: Piper voice %s isn't available: %s", res.missing_voice, e)
+        token = _DOWNLOADS_IN_THREAD.set("fail")
+        try:
+            return await executors.run("tts", self._synth_detailed_blocking, text, engine, voice)
+        finally:
+            _DOWNLOADS_IN_THREAD.reset(token)
 
     def _synth_blocking(
         self, text: str, engine: str | None = None, voice: str | None = None
@@ -980,6 +1063,10 @@ class RealTTSClient:
                 if out and not _wav_is_silent(out):
                     return SynthResult(wav=out, engine=eng, voice=used, failures=tuple(failures))
                 failures.append(f"{eng}: no audio")
+            except _PiperVoiceNotOnDisk as e:
+                # Not a failure yet: the caller fetches it, then asks again.
+                return SynthResult(wav=b"", engine="", voice=None, failures=tuple(failures),
+                                   missing_voice=e.voice)
             except Exception as e:
                 log.warning("TTS engine %s failed: %s", eng, e)
                 failures.append(engine_failure_words(eng, e))

@@ -92,6 +92,9 @@ async def _load_piper(ref: str) -> bool:
 
     t0 = time.monotonic()
     try:
+        # The files first, in the downloads pool; then the load, which then
+        # never downloads in a speech thread.
+        await tts.ensure_piper_voice(ref)
         ok = await executors.run("tts", tts.preload_piper_voice_sync, ref)
     except Exception as e:  # noqa: BLE001
         log.warning(

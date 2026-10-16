@@ -44,8 +44,12 @@ POOL_SIZES: dict[str, int] = {
     # Whisper transcriptions (speculative and final) and the voice
     # embedder that tells household members apart.
     "speech": 8,
-    # Text to speech: Piper synthesis, and a Piper voice's first download.
+    # Text to speech: Piper synthesis. Never a download: a reply in a voice
+    # that is loaded must not wait behind one that is still coming.
     "tts": 4,
+    # A Piper voice's first download (clients/tts.py ensure_piper_voice),
+    # once per voice however many replies wait for it.
+    "downloads": 2,
     # Plugin installs, upgrades and packaging: pip, unzip, hashing.
     "plugins": 2,
 }
