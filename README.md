@@ -3,9 +3,32 @@
        alt="Domovoi, the open-source voice assistant: the amber cat answering &quot;Hey Domovoi&quot;. Your voice stays home, local and privacy-first. github.com/coders-farm-official/domovoi">
 </p>
 
-# Domovoi
+<h1 align="center">Domovoi</h1>
 
-**A self-hosted, local-first voice assistant for your home.**
+<p align="center">
+  <strong>A self-hosted, local-first voice assistant for your home.</strong><br>
+  Made in the open by <a href="https://codersfarm.org">Coders Farm</a>, a nonprofit
+  in Lansing, Michigan that teaches people to code for free.
+</p>
+
+<p align="center">
+  <img alt="status: tested and ready" src="https://img.shields.io/badge/status-tested%20and%20ready-2EA043?style=flat-square&labelColor=1F1A14">
+  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-F2A618?style=flat-square&labelColor=1F1A14"></a>
+  <br>
+  <img alt="runs on: Linux, Windows, Raspberry Pi, Android" src="https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows%20%C2%B7%20Raspberry%20Pi%20%C2%B7%20Android-F2A618?style=flat-square&labelColor=1F1A14">
+  <img alt="built with: Python, Kotlin" src="https://img.shields.io/badge/built%20with-Python%20%C2%B7%20Kotlin-F2A618?style=flat-square&labelColor=1F1A14">
+</p>
+
+<p align="center">
+  <a href="https://discord.gg/j3H5XamSxg"><img alt="Join us on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white"></a>
+  <a href="https://forms.gle/wbz194RhuLmJdg3D8"><img alt="Get updates by email" src="https://img.shields.io/badge/Get%20updates%20by%20email-F2A618?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <a href="#status-and-roadmap">Status and roadmap</a> ·
+  <a href="https://learn.codersfarm.org">Learn to code, free</a> ·
+  <a href="https://donate.codersfarm.org">Support Coders Farm</a>
+</p>
 
 Domovoi runs entirely on your own hardware: a server on your network does the
 listening, thinking, and speaking, and small Raspberry Pi satellites put a
@@ -22,6 +45,12 @@ news briefings, podcasts and audiobooks, a calendar, documents, and internet
 radio (via the bundled [radio plugin](plugins/radio)). Everything else is a
 plugin away — installed from the dashboard as a zip upload or a GitHub URL.
 
+> **Status: tested, and built in public.** Domovoi works today if you're
+> comfortable running your own server, and the easier ways in (an assistant
+> that runs on your phone, a Windows installer) are in early builds: see
+> [Status and roadmap](#status-and-roadmap). Ask questions in
+> [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
+
 > **Why "Domovoi"?** In Slavic folklore, a *domovoi* is the guardian spirit of
 > the household — a small, usually benevolent creature that lives behind the
 > stove, watches over the family, and keeps the house in order. It often takes
@@ -33,6 +62,7 @@ plugin away — installed from the dashboard as a zip upload or a GitHub URL.
 
 ## Table of contents
 
+- [Status and roadmap](#status-and-roadmap)
 - [Who it's for](#who-its-for)
 - [First install](#first-install)
 - [Returning users: moving or reinstalling](#returning-users-moving-or-reinstalling)
@@ -41,6 +71,54 @@ plugin away — installed from the dashboard as a zip upload or a GitHub URL.
 - [Plugins](#plugins)
 - [Documentation](#documentation)
 - [License & credits](#license--credits)
+
+---
+
+## Status and roadmap
+
+We build Domovoi in public. Here's where it stands.
+
+**Works today**
+
+- **The server** listens, thinks and speaks on your own machine: Whisper for
+  speech, two local Ollama models, and Piper for the voice. It runs on Linux
+  or Windows, with an NVIDIA GPU or on CPU alone
+  ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)).
+- **Raspberry Pi satellites** put a voice in every room, with wake word,
+  barge-in, and intercom and drop-in between rooms.
+- **The web dashboard** manages all of it, from plugins to training your own
+  wake word.
+- **The Android app** brings the dashboard, a music player and drop-in to your
+  phone. With no server it still plays your phone's own music, videos and
+  files.
+
+**In early builds**
+
+- **An assistant on your phone, no server needed.** The Android app's
+  Assistant tab runs a model on the phone itself (Gemma 4 E2B on LiteRT-LM)
+  for text chat and push-to-talk voice. It needs a 64-bit phone with 8 GB of
+  memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
+- **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
+  server inside WSL2 on a Windows 11 PC ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
+  phone or tablet through the Android app's room mode, can be a room instead
+  of a Raspberry Pi ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+
+**Coming next**
+
+1. **The phone assistant on Google Play,** finished and still working in
+   airplane mode.
+2. **The Windows installer out of test,** so one download turns the household
+   gaming PC into a Domovoi server.
+
+**How it's built.** Domovoi is written with AI coding agents and held to the
+same bar Coders Farm teaches: automated tests, review, and a written
+[security model](docs/SECURITY_PRIVACY.md). The code is all here; read it.
+
+**Follow along and get help.** Updates go out on [Discord](https://discord.gg/j3H5XamSxg)
+and by [email](https://forms.gle/wbz194RhuLmJdg3D8). For questions and install help, use
+[Discussions](https://github.com/coders-farm-official/domovoi/discussions);
+replies can take a few days while we build.
 
 ---
 
@@ -410,6 +488,13 @@ Want to write one? Start at the
 
 Domovoi is [MIT licensed](LICENSE) — copyright © 2026
 [Coders Farm](https://github.com/coders-farm-official).
+
+Coders Farm is a 501(c)(3) nonprofit in Lansing, Michigan. Everything we
+build is open source, and everything we teach is free: start learning to code
+at [learn.codersfarm.org](https://learn.codersfarm.org). If Domovoi is useful
+to you, you can support the work at
+[donate.codersfarm.org](https://donate.codersfarm.org); donations are
+tax-deductible to the extent the law allows.
 
 Built on the shoulders of excellent open source: Whisper &
 faster-whisper, Ollama, Piper, openWakeWord, MPD, Postgres, Flyway, and
