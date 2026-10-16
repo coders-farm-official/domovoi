@@ -18,7 +18,7 @@ xorriso -osirrox on -indev "$ISO" -extract /install.amd/gtk/initrd.gz /tmp/di.gz
 I=$REPO/domovoi/usb_stick/stick/installer
 mkdir -p "$C/k/stick" "$C/k/bin"
 cp "$I/lib.sh" "$I/templates" "$I/erase-confirm.sh" "$I/early.sh" "$I/udhcpc-default.script" "$C/k/stick/"
-echo Kitchen >"$C/k/stick/room-name"; echo http://192.168.0.117:6370 >"$C/k/stick/core-url"; echo off >"$C/k/stick/wifi"
+echo Kitchen >"$C/k/stick/room-name"; echo http://192.168.1.20:6370 >"$C/k/stick/core-url"; echo off >"$C/k/stick/wifi"
 
 cat >"$C/k/confmodule" <<'SH'
 DC=$SB/debconf

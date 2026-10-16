@@ -5,7 +5,7 @@ installer's answers and our initrd (a newc cpio the kernel unpacks after
 Debian's own), the boot menus, stick.json, the tar repack.py puts into the
 image, and the repack step itself with a stand-in for xorriso. No network,
 no xorriso, no Debian image: the real repack runs in the QEMU kit
-(functional-testing/usb-stick/, docs/SPARE_DEVICE_SATELLITES.md).
+(scripts/dev/usb-stick/, docs/SPARE_DEVICE_SATELLITES.md).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from domovoi.usb_stick import image, repack
 from satellite import enrolment
 
 FP = "SHA256:" + base64.b64encode(hashlib.sha256(b"a test server").digest()).decode().rstrip("=")
-CORE = "http://192.168.0.117:6370"
+CORE = "http://192.168.1.20:6370"
 EPOCH = 1_760_000_000
 BUNDLE = b"\x1f\x8b" + b"satellite bundle bytes" * 100
 

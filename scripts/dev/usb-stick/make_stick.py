@@ -8,7 +8,7 @@ Room stick kit (domovoi/usb_stick/, 2026-10-16). Two ways:
   the way the core builds it, ``image.stick_files`` makes our files, and
   ``repack_in_docker.py`` runs ``repack.py`` (xorriso) in the kit's
   container. ``--debug`` (the default) adds the serial markers.
-* ``--from ft``: a throwaway stack (functional-testing/ft.py up
+* ``--from ft``: a throwaway stack (the functional test harness's ft.py up
   --with-core, its core started with DOMOVOI_USB_STICK_REPACK pointing at
   repack_in_docker.py and DOMOVOI_USB_STICK_DEBUG=1): the dashboard's own
   route makes the stick (POST /api/satellites/usb-stick, as the admin, with
@@ -18,8 +18,8 @@ Room stick kit (domovoi/usb_stick/, 2026-10-16). Two ways:
   against the SHA-256 in its Raspberry Pi Imager list.
 
   python make_stick.py --from offline --room Kitchen --out kitchen.img
-  python make_stick.py --from ft --room Kitchen --out kitchen-ft.img --ft-dir <functional-testing>
-  python make_stick.py api <functional-testing> POST /api/satellites/approvals/kitchen/approve '{"code": "807662"}'
+  python make_stick.py --from ft --room Kitchen --out kitchen-ft.img --ft-dir <harness-dir>
+  python make_stick.py api <harness-dir> POST /api/satellites/approvals/kitchen/approve '{"code": "807662"}'
 
 Writes into $USB_STICK_KIT_DIR/out/.
 """
@@ -178,7 +178,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--mutant", choices=["poweroff-returns"], default=None,
                    help="offline: a stick whose power-off returns (a test of the ERASE gate failing closed)")
     p.add_argument("--epoch", type=int, default=None)
-    p.add_argument("--ft-dir", default=None, help="ft: the functional-testing folder (runs/current.json)")
+    p.add_argument("--ft-dir", default=None, help="ft: the functional test harness folder (runs/current.json)")
     a = p.parse_args(argv)
     return offline(a) if a.src == "offline" else from_ft(a)
 

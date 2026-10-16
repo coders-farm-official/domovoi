@@ -7,7 +7,7 @@ Old computers (USB stick), 2026-10-16. The shell pieces run under a real
 bash (Git Bash on Windows, never WSL's launcher) against made-up /sys and
 /proc trees; symlinks, which sysfs is made of, are made with ln -s (MSYS
 "lnk" links on Windows, which its readlink follows). The installer itself,
-partman and a real disk are the QEMU kit's (functional-testing/usb-stick/).
+partman and a real disk are the QEMU kit's (scripts/dev/usb-stick/).
 """
 
 from __future__ import annotations
@@ -327,7 +327,7 @@ def test_the_code_is_drawn_in_block_digits_that_fit_the_screen():
 
 def test_the_screen_says_what_to_do_in_every_state():
     c = _console()
-    info = {"room": "Kitchen", "core": "http://192.168.0.117:6370", "fp": "SHA256:" + "A" * 43}
+    info = {"room": "Kitchen", "core": "http://192.168.1.20:6370", "fp": "SHA256:" + "A" * 43}
     lines, done = c.screen_for({"connection": "awaiting_approval"}, "807662", info, 120)
     text = "\n".join(lines)
     assert not done and "Room: Kitchen" in text and "(the code is 807 662)" in text

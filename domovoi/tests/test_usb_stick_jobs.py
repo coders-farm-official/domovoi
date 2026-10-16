@@ -32,7 +32,7 @@ from satellite import enrolment
 
 FP = "SHA256:" + base64.b64encode(hashlib.sha256(b"this server").digest()).decode().rstrip("=")
 OTHER_FP = "SHA256:" + base64.b64encode(hashlib.sha256(b"another server").digest()).decode().rstrip("=")
-CORE = "http://192.168.0.117:6370"
+CORE = "http://192.168.1.20:6370"
 ISO = b"DEBIAN-NETINST" * 4096
 PIN = {
     "pin_version": 1, "name": "debian-13.7.0-amd64-netinst.iso", "version": "13.7.0",
@@ -208,7 +208,7 @@ def test_imager_s_list_has_one_device_one_image_and_no_customisation(home):
     assert os_["release_date"] == "2025-10-09"
     assert "init_format" not in os_, "no OS customisation offered"
     assert "Kitchen" not in json.dumps(lst), "the room's name stays off the list"
-    assert os_["url"].startswith("http://192.168.0.117:6370/v1/usb-stick/") and os_["url"].endswith(".img")
+    assert os_["url"].startswith("http://192.168.1.20:6370/v1/usb-stick/") and os_["url"].endswith(".img")
 
 
 def test_one_stick_per_room_and_at_most_three(home):

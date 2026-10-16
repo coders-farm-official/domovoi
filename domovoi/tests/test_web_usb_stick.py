@@ -21,13 +21,13 @@ import pytest
 from fastapi import HTTPException
 
 from domovoi.tests.test_web_spare_device_enrol import (
-    FILES, FP, SHA, WIN_RUNTIME, Req, _SETUP, _drive,
+    FILES, FP, LINUX_RUNTIME, SHA, WIN_RUNTIME, Req, _SETUP, _drive,
 )
 from satellite import enrolment
 from web.backend.api import satellites as web_sats
 from web.backend.schemas import SpareDeviceEnrolRequest
 
-CORE = "http://192.168.0.117:6370"
+CORE = "http://192.168.1.20:6370"
 BUILD_ID = "AbCdEfGhIjKlMnOpQrStUvWxYz012345"
 IDLE = {"running": False, "stage": None, "room": None, "room_id": None, "ok": None, "message": None,
         "reason": None, "bytes_done": 0, "bytes_todo": 0, "build": None}
@@ -54,6 +54,9 @@ def core(monkeypatch):
         "/v1/satellite-code/bundle.sha256": (200, {"sha256": SHA, "size": 812345}),
         "/v1/admin/satellite-windows": (200, WIN_RUNTIME),
         "/v1/admin/android-app": (200, {"release": None, "apks": []}),
+        # The enrolment answer asks for the Linux satellite's own Python too
+        # (batch 11's older-Linux card, beside this one).
+        "/v1/admin/satellite-linux": (200, LINUX_RUNTIME),
         "/v1/admin/usb-stick": (200, STATUS),
     }
     posted: list = []
@@ -82,7 +85,7 @@ def core(monkeypatch):
     monkeypatch.setattr(web_sats, "delete_admin", delete_admin)
     monkeypatch.setattr(web_sats, "_list_rooms", rooms)
     monkeypatch.setattr(web_sats, "_list_pairings", pairings)
-    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.0.117:6370")
+    monkeypatch.setattr(web_sats.satellite_adoption, "advertised_domovoi_url", lambda: "ws://192.168.1.20:6370")
     answers["posted"], answers["deleted"] = posted, deleted
     return answers
 

@@ -127,7 +127,7 @@ class Box:
         for name in ("lib.sh", "templates"):
             shutil.copy(STICK / "installer" / name, self.stick / name)
         (self.stick / "room-name").write_text(newline="\n", data="Kitchen\n", encoding="utf-8")
-        (self.stick / "core-url").write_text(newline="\n", data="http://192.168.0.117:6370\n", encoding="utf-8")
+        (self.stick / "core-url").write_text(newline="\n", data="http://192.168.1.20:6370\n", encoding="utf-8")
         (self.stick / "wifi").write_text(newline="\n", data="on\n" if wifi else "off\n", encoding="utf-8")
         (self.sb / "confmodule").write_bytes(CONFMODULE.encode())
         _stubs(self.sb / "bin")
@@ -443,7 +443,7 @@ def test_late_holds_nothing_on_bios_and_adds_the_serial_unit_only_on_a_test_buil
 # ─── firstboot.sh: the room's first start ────────────────────────────────
 
 FB_STUBS = {
-    "ip": 'echo "default via 192.168.0.1 dev eth0"\n',
+    "ip": 'echo "default via 192.168.1.1 dev eth0"\n',
     "sleep": "exit 0\n",
     "date": 'if [ "$1" = -s ]; then echo "date -s $2" >>"$SB/calls"; exit 0; fi\nexec /usr/bin/date "$@"\n',
 }
