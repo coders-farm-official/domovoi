@@ -28,4 +28,14 @@ class PersonaTest {
         val p = Persona.SYSTEM_PROMPT
         listOf("no internet", "timers", "music", "files").forEach { assertTrue(it, p.contains(it)) }
     }
+
+    /** The owner's report (2026-10-16): "I cannot tell you the time. I do not
+     *  have access to that information." The prompt says it has the clock. */
+    @Test fun thePromptSaysThePhoneHasAClock() {
+        val p = Persona.SYSTEM_PROMPT
+        assertTrue(p.contains("You do have the phone's clock"))
+        listOf("the time", "the date", "the day").forEach { assertTrue(it, p.contains(it)) }
+        assertFalse(Regex("(no|without|cannot|can't|don't have) (access to )?(the )?(time|clock|date)", RegexOption.IGNORE_CASE)
+            .containsMatchIn(p))
+    }
 }

@@ -138,7 +138,7 @@ class BenchRunnersTest {
     @Test fun aReplyCancelledByStopEndsTheLoopCleanly() = runBlocking {
         var stopped = false
         val cancelling = object : LlmEngine by FakeLlmEngine(clock) {
-            override fun reply(system: String, history: List<ChatTurn>): Flow<String> = flow {
+            override fun reply(system: String, history: List<ChatTurn>, now: String?): Flow<String> = flow {
                 stopped = true
                 throw CancellationException("cancelled by stop")
             }
