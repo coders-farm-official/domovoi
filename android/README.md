@@ -452,7 +452,7 @@ this phone** keeps it in `filesDir/assistant-reports/` (one JSON file each,
 app-private, outside backups, apart from the conversations so clearing
 those keeps a report); the model settings' **Reports** card lists them, to
 send on or delete one or all. **Email draft to coders farm** opens the
-person's email app with the report addressed to codersfarm@gmail.com
+person's email app with the report addressed to info@codersfarm.org
 (Kamron's choice, 2026-10-15); it is sent only when they press send there.
 **Share as text** opens Android's share menu with the report as plain
 text. Where reports go is one line, `REPORT_DESTINATION` in
