@@ -66,22 +66,22 @@ import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.theme.Domovoi
 
 /**
- * Settings > About > the on-device assistant benchmark (M0 of the phone
- * assistant): download the models, run the measured tests, copy the
- * results. No route or tab of its own; everything runs in
- * [AssistantBench], so a run carries on when this card leaves the screen.
+ * Settings > About > developer options > the on-device assistant benchmark
+ * (M0 of the phone assistant): download the models, run the measured tests,
+ * copy the results. A developer's tool, so it shows only with developer
+ * options on (ui/screens/settings/DeveloperOptionsSection.kt). No route or
+ * tab of its own; everything runs in [AssistantBench], so a run carries on
+ * when this card leaves the screen.
  *
  * Nothing at all where the assistant's engine is not in this install (a
  * 32-bit phone or APK, [AssistantSupport]): no card, no dead buttons. On a
- * 64-bit phone running the 32-bit app, one line says which app has it.
+ * 64-bit phone running the 32-bit app, About says which app has the
+ * assistant instead ([AssistantIn64BitAppNote], for everyone).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AssistantBenchmarkCard() {
-    if (!AssistantSupport.available) {
-        if (AssistantSupport.thirtyTwoBitAppOn64BitPhone) AssistantIn64BitAppOnly()
-        return
-    }
+    if (!AssistantSupport.available) return
     val bench = LocalApp.current.assistantBench
     val toast = LocalToast.current
     val context = LocalContext.current
@@ -327,10 +327,16 @@ fun AssistantBenchmarkCard() {
     }
 }
 
-/** In the card's place on a 64-bit phone running the 32-bit app: a note,
- *  no controls. */
+/** A 64-bit phone running the 32-bit app, which has no on-device
+ *  assistant: the 64-bit app would. */
+internal fun assistantIn64BitAppOnly(): Boolean = !AssistantSupport.available && AssistantSupport.thirtyTwoBitAppOn64BitPhone
+
+/** Settings → About (and the no-server settings) on a 64-bit phone running
+ *  the 32-bit app: which app has the assistant. A note, no controls, for
+ *  everyone; nothing on any other install. */
 @Composable
-private fun AssistantIn64BitAppOnly() {
+internal fun AssistantIn64BitAppNote() {
+    if (!assistantIn64BitAppOnly()) return
     DomovoiCard(Modifier.fillMaxWidth()) {
         Text("On-device assistant", style = MaterialTheme.typography.titleMedium, color = Domovoi.colors.fg)
         Text(

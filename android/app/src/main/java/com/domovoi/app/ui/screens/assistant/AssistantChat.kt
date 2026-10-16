@@ -77,6 +77,7 @@ import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.ReplyReport
 import com.domovoi.app.assistant.StoredMessage
 import com.domovoi.app.assistant.VoicePhase
+import com.domovoi.app.data.LocalDeveloperOptionsOn
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
 import com.domovoi.app.ui.components.EmptyState
@@ -320,8 +321,9 @@ private fun EngineLine(ui: AssistantUi, actions: AssistantActions, onModel: () -
 
 /**
  * One message. Long-press opens its actions (copy; on a finished reply,
- * "report this reply"); a screen reader gets the same as custom actions,
- * and hears who said it ([bubbleState]).
+ * "report this reply") and, with developer options on, the reply's timings
+ * ([replyDetails]); a screen reader gets the actions as custom actions, and
+ * hears who said it ([bubbleState]).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -392,7 +394,7 @@ private fun MessageBubble(m: StoredMessage, writing: Boolean, onReport: (() -> U
                         report()
                     })
                 }
-                replyDetails(m)?.let { details ->
+                if (LocalDeveloperOptionsOn.current) replyDetails(m)?.let { details ->
                     DropdownMenuItem(text = { Text(details, color = Domovoi.colors.fgMuted) }, onClick = { menu = false }, enabled = false)
                 }
             }
@@ -575,7 +577,8 @@ private fun ModelPane(ui: AssistantUi, actions: AssistantActions, onClose: () ->
                     )
                 }
             }
-            ui.lastStopMs?.let {
+            // A measurement for developers (data/DeveloperOptions.kt).
+            if (LocalDeveloperOptionsOn.current) ui.lastStopMs?.let {
                 Text("Last stop: silent $it ms after the tap.", style = MaterialTheme.typography.bodySmall,
                     color = Domovoi.colors.fgSubtle, modifier = Modifier.padding(top = 4.dp))
             }

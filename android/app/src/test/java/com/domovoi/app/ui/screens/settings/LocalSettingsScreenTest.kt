@@ -9,13 +9,15 @@ import com.domovoi.app.testing.composeTest
 import com.domovoi.app.testing.texts
 import com.domovoi.app.testing.withHeadlessWindow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * With no server the app shows the local-media shell, which has no
  * Settings route; its top bar's gear opens [LocalSettingsScreen] so this
- * phone's own settings (problem reports, the on-device assistant benchmark)
+ * phone's own settings (problem reports, the app's version and, while they
+ * are on, the developer options with the on-device assistant benchmark)
  * are reachable offline. Composed for real on the JVM ([HeadlessUi]).
  */
 class LocalSettingsScreenTest {
@@ -56,8 +58,9 @@ class LocalSettingsScreenTest {
 
     /** The wiring, read off the compiled classes: the local shell shows the
      *  gear and opens the screen, and the screen's default content is the
-     *  problem reports and the assistant benchmark. */
-    @Test fun theLocalShellOffersItAndItHoldsTheBenchmark() {
+     *  problem reports, the app's version and the developer options, which
+     *  hold the assistant benchmark (DeveloperOptionsSectionTest). */
+    @Test fun theLocalShellOffersItAndItHoldsTheDeveloperOptions() {
         val screen = "com/domovoi/app/ui/screens/settings/LocalSettingsScreenKt"
         val fromShell = Bytecode.callers("com.domovoi.app.ui.shell.AppShellKt", screen,
             setOf("LocalSettingsButton", "LocalSettingsScreen"))
@@ -75,6 +78,9 @@ class LocalSettingsScreenTest {
             runCatching { Bytecode.callers(f, owner, setOf(name)).isNotEmpty() }.getOrDefault(false)
         }
         assertTrue(calledFromScreen("com/domovoi/app/ui/screens/settings/ProblemReportsKt", "ProblemReportsCard"))
-        assertTrue(calledFromScreen("com/domovoi/app/ui/screens/assistant/AssistantBenchmarkCardKt", "AssistantBenchmarkCard"))
+        assertTrue(calledFromScreen("com/domovoi/app/ui/screens/settings/DeveloperOptionsSectionKt", "AboutThisAppCard"))
+        assertTrue(calledFromScreen("com/domovoi/app/ui/screens/settings/DeveloperOptionsSectionKt", "DeveloperOptionsSection"))
+        assertFalse("the benchmark only under developer options",
+            calledFromScreen("com/domovoi/app/ui/screens/assistant/AssistantBenchmarkCardKt", "AssistantBenchmarkCard"))
     }
 }

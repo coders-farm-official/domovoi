@@ -529,8 +529,9 @@ private fun OfflineShell(choice: ServerChoice) {
     // has it (localTabs); the index of the one showing.
     val tabs = remember { localTabs() }
     var tab by rememberSaveable { mutableStateOf(0) }
-    // This phone's own settings (problem reports, the on-device assistant
-    // benchmark): the top bar's gear opens them, with no server needed.
+    // This phone's own settings (voice, problem reports, the app's version
+    // and developer options): the top bar's gear opens them, with no server
+    // needed.
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     if (settingsOpen) {
         LocalSettingsScreen(onBack = { settingsOpen = false })

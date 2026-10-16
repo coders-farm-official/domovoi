@@ -39,7 +39,8 @@ import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.ui.components.PageHeader
-import com.domovoi.app.ui.screens.assistant.AssistantBenchmarkCard
+import com.domovoi.app.ui.screens.assistant.AssistantIn64BitAppNote
+import com.domovoi.app.ui.screens.assistant.assistantIn64BitAppOnly
 import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.shell.LocalSettingsTabRequest
 import com.domovoi.app.ui.shell.Route
@@ -64,7 +65,7 @@ internal enum class SettingsTab(val key: String, val label: String, val sub: Str
     Voice("voice", "Voice", "How this phone speaks: your Domovoi's voice, downloaded once, or the phone's own."),
     Satellites("satellites", "Satellites", "The Pi in each room: status, announcements, and each room's details."),
     Server("server", "Server settings", "Greetings, voices, wake words, models and configuration are managed on the dashboard."),
-    About("about", "About", "What Domovoi is, a link to the user manual, and this phone's problem reports.");
+    About("about", "About", "What Domovoi is, a link to the user manual, this app's version, and this phone's problem reports.");
 
     companion object {
         fun named(key: String?): SettingsTab? = entries.firstOrNull { it.key == key }
@@ -195,11 +196,14 @@ private fun openInBrowser(context: Context, url: String): Boolean =
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }.isSuccess
 
 // ---------------------------------------------------------------------------
-// About — pure frontend, no data fetch (settings.jsx AboutPanel).
+// About — pure frontend, no data fetch (settings.jsx AboutPanel). The app's
+// version line (seven taps: developer options) and, while they are on, the
+// developer options at the end (DeveloperOptionsSection.kt).
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun AboutPanel(navigate: (Route) -> Unit) {
+    val developerOptions by LocalApp.current.developerOptions.on.collectAsState()
     val fg = Domovoi.colors.fg
     val strong = SpanStyle(fontWeight = FontWeight.SemiBold, color = fg)
 
@@ -247,8 +251,9 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = Domovoi.colors.fgMuted,
                     )
+                    AppVersionLine()
                     Text(
-                        "Build / version identifiers live on the dashboard under Configuration → Version.",
+                        "The server's build / version identifiers live on the dashboard under Configuration → Version.",
                         style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                         color = Domovoi.colors.fgFaint,
                     )
@@ -264,8 +269,9 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
             }
         }
         item { ProblemReportsCard() }
-        item { AssistantBenchmarkCard() }
+        if (assistantIn64BitAppOnly()) item { AssistantIn64BitAppNote() }
         item { PrivacyCard() }
         item { LicencesCard() }
+        if (developerOptions) item { DeveloperOptionsSection() }
     }
 }

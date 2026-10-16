@@ -1,14 +1,17 @@
 package com.domovoi.app
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.util.Log
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.domovoi.app.net.ReportUpload
 import com.domovoi.app.alerts.IncidentAlerts
 import com.domovoi.app.assistant.AssistantBench
 import com.domovoi.app.assistant.AssistantController
+import com.domovoi.app.assistant.AssistantSupport
 import com.domovoi.app.assistant.ModelDownloader
 import com.domovoi.app.alerts.TimerAlerts
+import com.domovoi.app.data.DeveloperOptions
 import com.domovoi.app.data.Prefs
 import com.domovoi.app.net.ApiClient
 import com.domovoi.app.net.DeviceAuthInterceptor
@@ -102,8 +105,22 @@ class AppContainer(context: Context) {
         }
     }
 
-    /** The on-device assistant's benchmark (Settings → About; M0 of the
-     *  phone assistant). Built on first use. Its only network use is the
+    /** Developer options (data/DeveloperOptions.kt): the benchmark and the
+     *  assistant's timings, off for a household until the app version is
+     *  tapped seven times; on from the start in a debug build. Kept in
+     *  [prefs]. Nothing to show, so never on, without the on-device
+     *  assistant (a 32-bit install). */
+    val developerOptions: DeveloperOptions by lazy {
+        DeveloperOptions(
+            prefs,
+            debugBuild = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+            available = AssistantSupport.available,
+        )
+    }
+
+    /** The on-device assistant's benchmark (Settings → About → developer
+     *  options; M0 of the phone assistant). Built on first use. Its only
+     *  network use is the
      *  model download the user starts, on a copy of the app's client WITHOUT
      *  the household token (the models come from public hosts): the same
      *  redirect and cleartext rules, no device token. */
