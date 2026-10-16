@@ -240,7 +240,7 @@ def check_apk(path: Path, entry: dict[str, Any], cert_sha256: str) -> None:
         raise ApkRefused("abi", f"{name}: carries libraries for {shown}, not {entry['abi']} only")
 
 
-# (path, size, mtime_ns, pins) -> None when it passed, else the refusal's
+# (path, size, mtime_ns, inode, ctime_ns, pins) -> None when it passed, else the refusal's
 # message: a file is checked once per change, not on every request.
 _checked: dict[tuple[Any, ...], str | None] = {}
 _checked_lock = threading.Lock()
@@ -253,7 +253,11 @@ def _passes(path: Path, entry: dict[str, Any], cert_sha256: str) -> bool:
         return False
     if path.is_symlink() or not path.is_file() or st.st_size != entry["size"]:
         return False
-    key = (str(path), st.st_size, st.st_mtime_ns, entry["sha256"], cert_sha256, entry["abi"])
+    # The file's identity as well as its size and time: a same-size file
+    # put in its place with the old mtime is a new inode (and, on Linux, a
+    # new ctime, which can't be set back), so it is checked again.
+    key = (str(path), st.st_size, st.st_mtime_ns, st.st_ino, st.st_ctime_ns,
+           entry["sha256"], cert_sha256, entry["abi"])
     with _checked_lock:
         if key in _checked:
             return _checked[key] is None

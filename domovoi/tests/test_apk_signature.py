@@ -23,7 +23,8 @@ from domovoi import apk_signature as sig
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "android_app"
 META = json.loads((FIX / "fixtures.json").read_text(encoding="utf-8"))["files"]
-SIGNED_RSA = [n for n, m in META.items() if m["key"] in ("release", "other") and m["apksigner_v2"]]
+SIGNED_RSA = [n for n, m in META.items()
+              if m["key"] in ("release", "other") and m["apksigner_v2"] and "refused" not in m["about"]]
 
 
 def test_the_fixtures_are_what_fixtures_json_says():
@@ -191,3 +192,57 @@ def test_signers_android_would_refuse_are_refused(name, words):
         sig.verify(FIX / name)
     assert words in str(e.value)
     assert META[name]["apksigner_verifies"] is False
+
+
+# ─── the security review's forgeries (2026-10-15) ─────────────────────────
+
+@pytest.mark.parametrize("name,words", [
+    ("v31-other-arm64-v8a.apk", "v3.1 block"),
+    ("v3-stripped-arm64-v8a.apk", "v3 signature was stripped"),
+    ("v2-two-signers-arm64-v8a.apk", "v2 block has 2 signers"),
+    ("v3-two-ranges-arm64-v8a.apk", "v3 block has 2 signers"),
+], ids=lambda v: v if v.endswith(".apk") else None)
+def test_what_the_review_forged_is_refused(name, words):
+    """Each sits beside the release key's genuine blocks and is signed,
+    validly, by another key. v31-other: apksigner at min SDK 26 accepts it,
+    but an Android 13+ phone believes the v3.1 signer (apksigner at 33
+    names the other key): so any v3.1 block is refused. v3-stripped: v2's
+    stripping-protection attribute names v3, so its absence is refused,
+    as Android does. Two signers in v2 or v3: exactly one is supported."""
+    with pytest.raises(sig.ApkSignatureError) as e:
+        sig.verify(FIX / name)
+    assert words in str(e.value)
+
+
+def test_the_release_v2_names_v3_and_a_v2_only_signing_does_not():
+    """The stripping-protection attribute is what apksigner writes when it
+    signs v2 and v3: the release fixtures carry it, the v2-only one not."""
+    marker = struct.pack("<I", sig.STRIPPING_PROTECTION_ATTR_ID)
+    assert marker in (FIX / "release-arm64-v8a.apk").read_bytes()
+    assert marker not in (FIX / "release-v2only-arm64-v8a.apk").read_bytes()
+    assert sig.verify(FIX / "release-v2only-arm64-v8a.apk").schemes == (2,)
+
+
+def _der(tag: int, body: bytes) -> bytes:
+    n = len(body)
+    length = bytes([n]) if n < 0x80 else bytes([0x80 | ((n.bit_length() + 7) // 8)]) + n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag]) + length + body
+
+
+def _spki(n: int, e: int) -> bytes:
+    def integer(v: int) -> bytes:
+        b = v.to_bytes((v.bit_length() + 8) // 8, "big")
+        return _der(0x02, b)
+    key = _der(0x30, integer(n) + integer(e))
+    alg = _der(0x30, _der(0x06, bytes.fromhex("2a864886f70d010101")) + b"\x05\x00")
+    return _der(0x30, alg + _der(0x03, b"\x00" + key))
+
+
+def test_rsa_keys_are_capped_like_java_does():
+    ok = (1 << 4095) | 1
+    assert sig.rsa_public_key(_spki(ok, 65537)) == (ok, 65537)
+    for n, e, words in (((1 << 8192) | 1, 65537, "at most 8192"), (ok, 2 ** 32 + 1, "exponent"),
+                        ((1 << 2046) | 1, 65537, "at least 2048"), (ok, 65536, "exponent")):
+        with pytest.raises(sig.ApkSignatureError) as err:
+            sig.rsa_public_key(_spki(n, e))
+        assert words in str(err.value)

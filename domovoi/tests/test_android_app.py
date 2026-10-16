@@ -13,6 +13,7 @@ import hashlib
 import io
 import ipaddress
 import struct
+import sys
 import json
 from pathlib import Path
 
@@ -289,8 +290,29 @@ def test_an_upload_matching_a_bad_pin_is_still_held_to_the_key(tmp_path, cache):
     assert list(cache.iterdir()) == []
 
 
-async def test_the_upload_route_checks_and_keeps_the_file(tmp_path, cache, monkeypatch):
-    from starlette.datastructures import UploadFile
+class _CountingApp:
+    """The core app, counting the request-body bytes it pulls."""
+
+    def __init__(self, app):
+        self.app, self.read = app, 0
+
+    async def __call__(self, scope, receive, send):
+        async def counted():
+            message = await receive()
+            if message.get("type") == "http.request":
+                self.read += len(message.get("body") or b"")
+            return message
+
+        await self.app(scope, counted, send)
+
+
+def _core_client(app):
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:6370")
+
+
+@pytest.fixture
+def upload_route(tmp_path, cache, monkeypatch):
+    from domovoi.admin_auth import require_admin_mutation
 
     async def open_channel(*a, **k):
         return None
@@ -298,15 +320,43 @@ async def test_the_upload_route_checks_and_keeps_the_file(tmp_path, cache, monke
     monkeypatch.setattr(main.container_freeze, "require_unfrozen", open_channel)
     m = load(tmp_path, manifest_doc(GOOD))
     monkeypatch.setattr(main, "_android_manifest", lambda: m)
-    got = await main.admin_android_app_upload(UploadFile(io.BytesIO(GOOD["arm64-v8a"]), filename="x.apk"))
-    assert got["accepted"] == "domovoi-9.9.9-arm64-v8a.apk" and got["apks"][0]["ready"] is True
-    with pytest.raises(HTTPException) as e:
-        await main.admin_android_app_upload(UploadFile(io.BytesIO(fixture("other-arm64-v8a.apk")), filename="y.apk"))
-    assert e.value.status_code == 422 and e.value.detail["reason"] == "unknown"
-    with pytest.raises(HTTPException) as e:
-        await main.admin_android_app_upload(UploadFile(io.BytesIO(GOOD["arm64-v8a"] * 2), filename="z.apk"))
-    assert e.value.status_code == 413
+    main.app.dependency_overrides[require_admin_mutation] = lambda: None
+    yield m
+    main.app.dependency_overrides.pop(require_admin_mutation, None)
+
+
+async def test_the_upload_route_checks_and_keeps_the_file(upload_route, cache):
+    async with _core_client(main.app) as c:
+        r = await c.post("/v1/admin/android-app/upload",
+                         files={"file": ("x.apk", GOOD["arm64-v8a"], "application/vnd.android.package-archive")})
+        assert r.status_code == 200, r.text
+        assert r.json()["accepted"] == "domovoi-9.9.9-arm64-v8a.apk" and r.json()["apks"][0]["ready"] is True
+        r = await c.post("/v1/admin/android-app/upload", files={"file": ("y.apk", fixture("other-arm64-v8a.apk"))})
+        assert r.status_code == 422 and r.json()["detail"]["reason"] == "unknown"
+        r = await c.post("/v1/admin/android-app/upload", files={"file": ("z.apk", GOOD["arm64-v8a"] * 2)})
+        assert r.status_code == 413
+        r = await c.post("/v1/admin/android-app/upload", files={"other": ("z.apk", b"x")})
+        assert r.status_code == 422
+        r = await c.post("/v1/admin/android-app/upload", content=b"PK", headers={"content-type": "application/octet-stream"})
+        assert r.status_code == 415
     assert sorted(p.name for p in cache.iterdir()) == ["domovoi-9.9.9-arm64-v8a.apk"]
+
+
+async def test_a_caller_the_gate_refuses_gets_no_upload_read(upload_route):
+    """Security review 2026-10-15: the body is parsed after the admin gate,
+    so a refused caller's 5 MB is never read (let alone spooled to disk)."""
+    from domovoi.admin_auth import require_admin_mutation
+
+    def refuse():
+        raise HTTPException(status_code=401, detail="admin session required")
+
+    main.app.dependency_overrides[require_admin_mutation] = refuse
+    counting = _CountingApp(main.app)
+    body = b"x" * (5 * 1024 * 1024)
+    async with _core_client(counting) as c:
+        r = await c.post("/v1/admin/android-app/upload", files={"file": ("big.apk", body)})
+    assert r.status_code == 401
+    assert counting.read < 64 * 1024, f"{counting.read} bytes read before the gate refused"
 
 
 # ─── the routes ───────────────────────────────────────────────────────────
@@ -433,13 +483,13 @@ def _app_status(ready=(True, True), release=True):
             "apks": apks, "ready": all(ready)}
 
 
-def _join(href, app, ua=ANDROID_UA, platform="Linux armv81") -> dict:
+def _join(href, app, ua=ANDROID_UA, platform="Linux armv81", no_url=False) -> dict:
     import shutil
     import subprocess
 
     node = shutil.which("node")
     assert node, "node is required to run the join page's script"
-    scenario = json.dumps({"href": href, "ua": ua, "platform": platform, "app": app})
+    scenario = json.dumps({"href": href, "ua": ua, "platform": platform, "app": app, "noUrl": no_url})
     proc = subprocess.run([node, str(JOIN_HARNESS), str(aa.REPO), scenario],
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert proc.returncode == 0, proc.stderr
@@ -532,3 +582,78 @@ def test_a_validly_signed_file_that_is_not_the_pinned_bytes_is_not_served(tmp_pa
     with pytest.raises(aa.ApkRefused) as e:
         aa.check_apk(probe, m["release"]["apks"][0], RELEASE_CERT)
     assert e.value.reason == "sha256"
+
+
+# ─── the check memo (security review 2026-10-15) ──────────────────────────
+
+def _served_after_swap(m, cache, *, in_place: bool) -> bool:
+    """Fill the memo with the good file, put same-size other bytes in its
+    place with the old mtime back, and ask again."""
+    import os
+
+    name = aa.file_name(VERSION, "arm64-v8a")
+    path = aa.cached_file(m, name)
+    assert path is not None
+    st = path.stat()
+    evil = fixture("other-arm64-v8a.apk")[: st.st_size].ljust(st.st_size, b"\0")
+    if in_place:
+        with open(path, "r+b") as f:
+            f.write(evil)
+    else:
+        tmp = path.with_name("swap.tmp")
+        tmp.write_bytes(evil)
+        os.replace(tmp, path)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert path.stat().st_mtime_ns == st.st_mtime_ns and path.stat().st_size == st.st_size
+    return aa.cached_file(m, name) is not None
+
+
+def test_a_file_swapped_under_the_memo_is_checked_again(tmp_path, cache):
+    m = load(tmp_path, manifest_doc(GOOD))
+    aa.accept_upload(m, _upload(m, GOOD["arm64-v8a"]))
+    assert not _served_after_swap(m, cache, in_place=False), "a new inode is a new file"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps no change time a write moves (st_ctime is creation)")
+def test_bytes_rewritten_in_place_with_the_old_mtime_are_checked_again(tmp_path, cache):
+    m = load(tmp_path, manifest_doc(GOOD))
+    aa.accept_upload(m, _upload(m, GOOD["arm64-v8a"]))
+    assert not _served_after_swap(m, cache, in_place=True), "the ctime moved"
+
+
+def test_a_symlink_in_the_cache_is_never_served(tmp_path, cache, monkeypatch):
+    """The real check needs symlinks (skipped where Windows refuses them);
+    the stand-in holds the rule everywhere: a link is refused before any
+    bytes are looked at."""
+    m = load(tmp_path, manifest_doc(GOOD))
+    aa.accept_upload(m, _upload(m, GOOD["arm64-v8a"]))
+    name = aa.file_name(VERSION, "arm64-v8a")
+    aa._checked.clear()
+    real = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == name or real(self))
+    assert aa.cached_file(m, name) is None
+    monkeypatch.setattr(Path, "is_symlink", real)
+    target = tmp_path / "elsewhere.apk"
+    target.write_bytes(GOOD["arm64-v8a"])
+    link = cache / name
+    link.unlink()
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("this system makes no symlinks for us")
+    assert aa.cached_file(m, name) is None
+
+
+@pytest.mark.parametrize("no_url", [False, True], ids=["url_parser", "old_browser"])
+def test_a_room_code_for_another_server_is_refused_plainly(no_url):
+    """Security review 2026-10-15: the page hands the app only a code that
+    names the server the page came from."""
+    page = _join("http://192.168.0.200:6370/join#" + PAYLOAD, _app_status(), no_url=no_url)
+    assert not page["other-server"]["hidden"]
+    assert "192.168.0.117:6370" in page["other-server"]["text"] and "192.168.0.200:6370" in page["other-server"]["text"]
+    assert page["step-room"]["hidden"] and page["open-room"]["href"] is None
+    assert page["doc_title"] == ""
+    same = _join("http://192.168.0.117:6370/join#" + PAYLOAD, _app_status(), no_url=no_url)
+    assert same["other-server"]["hidden"] and not same["step-room"]["hidden"]
+    port = _join("http://192.168.0.117:6369/join#" + PAYLOAD, _app_status(), no_url=no_url)
+    assert not port["other-server"]["hidden"], "another port is another server"

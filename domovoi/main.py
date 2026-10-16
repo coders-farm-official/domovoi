@@ -1591,17 +1591,31 @@ async def admin_android_app_fetch() -> dict[str, Any]:
 
 
 @app.post("/v1/admin/android-app/upload", dependencies=[Depends(require_admin_mutation)])
-async def admin_android_app_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+async def admin_android_app_upload(request: Request) -> dict[str, Any]:
     """An admin hands the server one of the release's APKs (no internet
-    here, or a slow line): kept only if it is exactly one the manifest
-    names (size and SHA-256) and its signature is the release key's. 422
-    with the reason otherwise; 413 when it is bigger than any of them."""
+    here, or a slow line), as multipart field ``file``: kept only if it is
+    exactly one the manifest names (size and SHA-256) and its signature is
+    the release key's. 422 with the reason otherwise; 413 when it is bigger
+    than any of them.
+
+    The body is parsed HERE, after the admin gate and the freeze: a
+    ``File()`` parameter would have FastAPI read (and spool to disk) the
+    whole upload before the gate ran, for anyone (security review
+    2026-10-15)."""
     await container_freeze.require_unfrozen("android_app")
     from domovoi import android_app
 
     manifest = _android_manifest()
     if not manifest.get("release"):
         raise HTTPException(status_code=409, detail="there is no app release yet")
+    if not (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        raise HTTPException(status_code=415, detail="send the APK as a multipart upload (field 'file')")
+    from domovoi.transport_guard import read_multipart
+
+    form = await read_multipart(request, max_files=1, max_fields=4)
+    file = form.get("file")
+    if file is None or isinstance(file, str):
+        raise HTTPException(status_code=422, detail="the upload carries no file (field 'file')")
     limit = max(e["size"] for e in manifest["release"]["apks"])
     target = android_app.upload_target(manifest)
     written = 0
@@ -1622,6 +1636,8 @@ async def admin_android_app_upload(file: UploadFile = File(...)) -> dict[str, An
     except BaseException:
         target.unlink(missing_ok=True)
         raise
+    finally:
+        await form.close()
     try:
         entry = await asyncio.to_thread(android_app.accept_upload, manifest, target)
     except android_app.ApkRefused as e:

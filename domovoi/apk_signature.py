@@ -31,10 +31,12 @@ Scope, on purpose narrow (a refusal names what is missing):
 * RSA keys with PKCS#1 v1.5 signatures, SHA-256 or SHA-512 — what
   ``apksigner`` makes for the RSA release key ``android/README.md`` has
   you create (SHA-512 for keys over 3072 bits). RSA-PSS, ECDSA and DSA are
-  refused, as are keys under 2048 bits.
+  refused, as are keys under 2048 or over 8192 bits and exponents over 2^32.
 * A v2 block is required: Android 8 (the app's minimum) reads v2, not v3.
   A v3 block, when present, is verified too and must name the same
-  certificate (key rotation is not supported).
+  certificate (key rotation is not supported); a v3 block the v2 signer's
+  stripping-protection attribute names must be present; any v3.1 block is
+  refused (an Android 13+ phone would believe its signer instead).
 * Exactly one signer.
 
 Pure Python (the core has no ``cryptography`` dependency, see
@@ -56,6 +58,13 @@ from typing import BinaryIO
 APK_SIG_BLOCK_MAGIC = b"APK Sig Block 42"
 V2_BLOCK_ID = 0x7109871A
 V3_BLOCK_ID = 0xF05368C0
+#: APK Signature Scheme v3.1 (key rotation aimed at Android 13+): an
+#: Android 13+ phone believes its signer over v3's, so an APK carrying one
+#: is refused outright (this verifier supports no rotation).
+V31_BLOCK_ID = 0x1B93AD61
+#: A v2 signer's attribute naming a newer scheme that must be present too
+#: (Android refuses the APK when that block was stripped).
+STRIPPING_PROTECTION_ATTR_ID = 0xBEEFF00D
 
 #: Signature algorithm ids this verifier checks: (digest, Android's
 #: preference order — higher wins when a signer lists both).
@@ -73,6 +82,10 @@ KNOWN_UNSUPPORTED = {
 }
 
 MIN_RSA_BITS = 2048
+#: Caps like Java's provider: no key here is bigger, and pow() with a
+#: huge modulus or exponent is a cheap way to burn the server's CPU.
+MAX_RSA_BITS = 8192
+MAX_RSA_EXPONENT = 2 ** 32
 _CHUNK = 1024 * 1024
 _EOCD_MIN = 22
 _EOCD_SIG = b"PK\x05\x06"
@@ -152,7 +165,8 @@ def _signing_block(f: BinaryIO, file_size: int) -> tuple[int, int, int, bytes, b
 
 
 def _scheme_blocks(pairs: bytes) -> dict[int, bytes]:
-    """The v2 and v3 values among the block's ID-value pairs; each at most once."""
+    """The v2 and v3 values among the block's ID-value pairs; each at most
+    once. A v3.1 block is refused (see :data:`V31_BLOCK_ID`)."""
     out: dict[int, bytes] = {}
     pos = 0
     while pos < len(pairs):
@@ -163,6 +177,10 @@ def _scheme_blocks(pairs: bytes) -> dict[int, bytes]:
         if length < 4 or length > len(pairs) - pos:
             raise ApkSignatureError("an entry in the APK signing block has a bad length")
         (block_id,) = struct.unpack_from("<I", pairs, pos)
+        if block_id == V31_BLOCK_ID:
+            raise ApkSignatureError(
+                "the APK carries an APK Signature Scheme v3.1 block (key rotation), which is not supported"
+            )
         if block_id in (V2_BLOCK_ID, V3_BLOCK_ID):
             if block_id in out:
                 raise ApkSignatureError("the APK signing block names a scheme twice")
@@ -271,7 +289,9 @@ def rsa_public_key(spki: bytes) -> tuple[int, int]:
     e = int.from_bytes(key[e_start:e_end], "big")
     if n.bit_length() < MIN_RSA_BITS:
         raise ApkSignatureError(f"the RSA key is {n.bit_length()} bits; at least {MIN_RSA_BITS} are needed")
-    if e < 3 or e % 2 == 0:
+    if n.bit_length() > MAX_RSA_BITS:
+        raise ApkSignatureError(f"the RSA key is {n.bit_length()} bits; at most {MAX_RSA_BITS} are accepted")
+    if e < 3 or e % 2 == 0 or e > MAX_RSA_EXPONENT:
         raise ApkSignatureError("the RSA public exponent is not usable")
     return n, e
 
@@ -323,6 +343,8 @@ class _Signer:
     algorithm: int
     digest: bytes
     key_bits: int
+    #: The schemes v2's stripping-protection attribute says must be there too.
+    requires: frozenset[int] = frozenset()
 
 
 def _verify_signer(block: bytes, scheme: int) -> _Signer:
@@ -370,8 +392,15 @@ def _verify_signer(block: bytes, scheme: int) -> _Signer:
         raise ApkSignatureError(f"the v{scheme} signer has no certificate")
     if certificate_public_key(certs[0]) != public_key:
         raise ApkSignatureError(f"the v{scheme} certificate does not carry the key that signed")
+    requires: set[int] = set()
+    for item in sd.sequence():                      # the additional attributes
+        ar = _Reader(item)
+        attr_id = ar.u32()
+        if scheme == 2 and attr_id == STRIPPING_PROTECTION_ATTR_ID:
+            requires.add(ar.u32())
     wanted = dict(digests)[algorithm]
-    return _Signer(cert=certs[0], algorithm=algorithm, digest=wanted, key_bits=n.bit_length())
+    return _Signer(cert=certs[0], algorithm=algorithm, digest=wanted, key_bits=n.bit_length(),
+                   requires=frozenset(requires))
 
 
 # ─── the whole file ───────────────────────────────────────────────────────
@@ -395,6 +424,8 @@ def verify(path: str | os.PathLike[str]) -> Verified:
         signers = {2: _verify_signer(blocks[V2_BLOCK_ID], 2)}
         if V3_BLOCK_ID in blocks:
             signers[3] = _verify_signer(blocks[V3_BLOCK_ID], 3)
+        elif 3 in signers[2].requires:
+            raise ApkSignatureError("the APK's v3 signature was stripped (its v2 signer says there was one)")
         if len({s.cert for s in signers.values()}) != 1:
             raise ApkSignatureError("the v2 and v3 signers differ (key rotation is not supported)")
         # The end record as it was before the signing block went in: its

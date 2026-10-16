@@ -351,3 +351,23 @@ class BodyLimitMiddleware:
             await send(message)
 
         await self.app(scope, limited_receive, guarded_send)
+
+
+async def read_multipart(request, **limits):
+    """``request.form(**limits)``, with a body that isn't a readable
+    multipart form answered 400 (what FastAPI's own form parsing said).
+    For routes that parse their form after their gate rather than through
+    Form()/File() parameters, which FastAPI reads before any dependency
+    runs. Anything else (a body-size refusal from the transport guard's
+    middleware) passes through untouched."""
+    from fastapi import HTTPException
+    from starlette.formparsers import MultiPartException
+
+    try:
+        return await request.form(**limits)
+    except MultiPartException as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
+    except Exception as e:  # noqa: BLE001 — python-multipart's own parse errors
+        if type(e).__module__.split(".")[0] in ("python_multipart", "multipart"):
+            raise HTTPException(status_code=400, detail="the upload is not a readable multipart form") from None
+        raise

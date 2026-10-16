@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -234,22 +234,66 @@ async def sample_voice(voice_id: int, request: Request) -> Response:
 @router.post(
     "/piper", response_model=Voice, status_code=201,
     dependencies=[Depends(require_admin_mutation)],
+    # The form is read in the handler, after the gate; this documents it.
+    openapi_extra={"requestBody": {"required": True, "content": {"multipart/form-data": {"schema": {
+        "type": "object", "required": ["name", "onnx", "config"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 80},
+            "set_default": {"type": "boolean", "default": False},
+            "onnx": {"type": "string", "format": "binary"},
+            "config": {"type": "string", "format": "binary"},
+        }}}}}},
 )
-async def upload_piper_voice(
-    request: Request,
-    name: str = Form(..., min_length=1, max_length=80),
-    set_default: bool = Form(False),
-    onnx: UploadFile = File(...),
-    config: UploadFile = File(...),
-) -> Voice:
-    """Upload a Piper voice: the ``.onnx`` model and its ``.onnx.json``
-    config. Saved under the voice-models dir as ``<slug>.onnx`` /
-    ``<slug>.onnx.json``; the row's ``model_ref`` is the slug.
+async def upload_piper_voice(request: Request) -> Voice:
+    """Upload a Piper voice: multipart fields ``name`` (1-80 characters),
+    ``set_default`` (optional bool), ``onnx`` (the ``.onnx`` model) and
+    ``config`` (its ``.onnx.json``). Saved under the voice-models dir as
+    ``<slug>.onnx`` / ``<slug>.onnx.json``; the row's ``model_ref`` is the
+    slug.
 
-    Admin-gated, and both files are streamed to disk under a byte budget
-    (model ``_MAX_ONNX_BYTES``, config ``_MAX_CONFIG_BYTES``) rather than
-    read into memory — an oversized upload is answered 413 while it is
-    still arriving."""
+    Admin-gated, and the form is parsed HERE, after the gate: Form()/File()
+    parameters would have FastAPI read (and spool to disk) the whole upload
+    for anyone before the gate ran (security review 2026-10-15). Both files
+    are then streamed to disk under a byte budget (model ``_MAX_ONNX_BYTES``,
+    config ``_MAX_CONFIG_BYTES``); an oversized one is answered 413."""
+    if not (request.headers.get("content-type") or "").lower().startswith("multipart/form-data"):
+        raise HTTPException(status_code=422, detail="send the voice as a multipart form (name, onnx, config)")
+    from domovoi.transport_guard import read_multipart
+
+    form = await read_multipart(request, max_files=2, max_fields=4)
+    try:
+        name, set_default, onnx, config = _piper_form(form)
+        return await _store_piper_voice(request, name, set_default, onnx, config)
+    finally:
+        await form.close()
+
+
+_TRUE = frozenset({"1", "true", "t", "yes", "y", "on"})
+_FALSE = frozenset({"0", "false", "f", "no", "n", "off"})
+
+
+def _piper_form(form) -> tuple[str, bool, UploadFile, UploadFile]:
+    """The upload's fields, held to what the old Form()/File() parameters
+    required (422 otherwise)."""
+    name = form.get("name")
+    if not isinstance(name, str) or not 1 <= len(name) <= 80:
+        raise HTTPException(status_code=422, detail="name must be 1 to 80 characters")
+    raw = form.get("set_default")
+    if raw is None:
+        set_default = False
+    elif isinstance(raw, str) and raw.strip().lower() in _TRUE | _FALSE:
+        set_default = raw.strip().lower() in _TRUE
+    else:
+        raise HTTPException(status_code=422, detail="set_default must be true or false")
+    onnx, config = form.get("onnx"), form.get("config")
+    if onnx is None or isinstance(onnx, str) or config is None or isinstance(config, str):
+        raise HTTPException(status_code=422, detail="the upload needs the model (onnx) and its config (config)")
+    return name, set_default, onnx, config
+
+
+async def _store_piper_voice(
+    request: Request, name: str, set_default: bool, onnx: UploadFile, config: UploadFile,
+) -> Voice:
     name = name.strip()
     slug = voice_slug(name)
     if not (onnx.filename or "").endswith(".onnx"):

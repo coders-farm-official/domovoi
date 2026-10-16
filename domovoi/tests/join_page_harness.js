@@ -47,7 +47,7 @@ const url = new URL(sc.href);
 const window = { location: { href: sc.href, search: url.search, protocol: url.protocol, host: url.host } };
 vm.runInNewContext(src, {
   window, document, XMLHttpRequest, navigator: { userAgent: sc.ua, platform: sc.platform },
-  encodeURIComponent, decodeURIComponent, JSON, Math, String,
+  encodeURIComponent, decodeURIComponent, JSON, Math, String, URL: sc.noUrl ? undefined : URL,
 });
 const out = { doc_title: document.title };
 for (const [id, el] of Object.entries(els)) out[id] = { text: el.textContent, hidden: el.hidden, href: el.attrs.href || null, cls: el.className };

@@ -2,8 +2,9 @@
  * XMLHttpRequest on purpose: it has to run on an old phone's browser.
  *
  * - The room code (domovoi-room:1?core=…&fp=…&room=…, satellite/enrolment.py)
- *   is the URL's fragment. It is read here only to show the room's name
- *   and to hand it, unchanged, to the app; the app checks it in full
+ *   is the URL's fragment. It is read here only to show the room's name,
+ *   to check it names THIS server (else it is refused, plainly), and to
+ *   hand it, unchanged, to the app; the app checks it in full
  *   (RoomEnrolment.kt) and makes the server prove its key. Shown with
  *   textContent only.
  * - What to download comes from GET /v1/android-app on this same server
@@ -75,6 +76,26 @@
   function looks32bit() {
     var p = String(navigator.platform || '') + ' ' + String(navigator.userAgent || '');
     return /armv7l|armv7 /i.test(p);
+  }
+
+  // The room code's server, as scheme://host[:port], or null. The URL
+  // parser where the browser has one (it writes IPv6 and default ports the
+  // way location does), else the text lower-cased.
+  function origin(url) {
+    try {
+      var u = new URL(url);
+      return u.protocol + '//' + u.host;
+    } catch (e) {
+      var m = /^(https?:\/\/[^\/?#]+)\/?$/i.exec(url);
+      return m ? m[1].toLowerCase() : null;
+    }
+  }
+
+  // A room code made by THIS server names this server: the page refuses
+  // one naming another (a link someone built to send the phone elsewhere),
+  // rather than hand it to the app. The app checks it in full anyway.
+  function sameServer(core) {
+    return origin(core) === (window.location.protocol + '//' + window.location.host).toLowerCase();
   }
 
   function isAndroid() { return /Android/i.test(String(navigator.userAgent || '')); }
@@ -163,9 +184,16 @@
     var missingApp = /[?&]app=missing(&|$)/.test(window.location.search);
     show('not-android', !isAndroid());
     text('server-line', 'From the Domovoi server at ' + window.location.host + '.');
-    if (code && code.bad) {
+    if (code && !code.bad && !sameServer(code.core)) {
+      text('other-server', 'This room code is for the Domovoi server at ' + code.core.replace(/^https?:\/\//i, '') +
+        ', not this one (' + window.location.host + '). Scan the code on this home\u2019s dashboard again, ' +
+        'or open Domovoi Room on the phone and scan it there.');
+      show('other-server', true);
+      code = { bad: true };
+    } else if (code && code.bad) {
       show('bad-code', true);
-    } else if (code) {
+    }
+    if (code && !code.bad) {
       document.title = 'Domovoi room: ' + code.room;
       text('title', 'Make this phone a Domovoi room');
       text('lede', 'It becomes the room “' + code.room + '” of this home’s Domovoi. Two steps, about ten minutes, on the phone’s charger and your home Wi-Fi.');

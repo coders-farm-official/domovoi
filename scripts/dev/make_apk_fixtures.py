@@ -273,6 +273,79 @@ def forge_mixed_v3(src: Path, dest: Path, other_cert: bytes, n: int, d: int) -> 
     dest.write_bytes(_assemble(data, [(0x7109871A, values[0x7109871A]), (0xF05368C0, _seq([signer]))]))
 
 
+def _pairs(data: bytes) -> list[tuple[int, bytes]]:
+    """The signing block's ID-value pairs, in order."""
+    block_off, cd_off, _, _ = _blocks(data)
+    pairs, pos, out = data[block_off + 8:cd_off - 24], 0, []
+    while pos < len(pairs):
+        ln = struct.unpack_from("<Q", pairs, pos)[0]
+        out.append((struct.unpack_from("<I", pairs, pos + 8)[0], pairs[pos + 12:pos + 8 + ln]))
+        pos += 8 + ln
+    return out
+
+
+def _content_digest(data: bytes, dest: Path) -> bytes:
+    sys.path.insert(0, str(REPO))
+    from domovoi import apk_signature
+
+    block_off, cd_off, eocd, _ = _blocks(data)
+    eocd_for_digest = data[eocd:eocd + 16] + struct.pack("<I", block_off) + data[eocd + 20:]
+    tmp = dest.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    try:
+        with open(tmp, "rb") as f:
+            return apk_signature._chunked_digest(f, "sha256", [(0, block_off), (cd_off, eocd), eocd_for_digest])
+    finally:
+        tmp.unlink()
+
+
+def _v3_signer(digest: bytes, cert: bytes, n: int, d: int, min_sdk: int, max_sdk: int) -> bytes:
+    sys.path.insert(0, str(REPO))
+    from domovoi import apk_signature
+
+    sdk = struct.pack("<II", min_sdk, max_sdk)
+    signed = _seq([struct.pack("<I", 0x0103) + _lp(digest)]) + _seq([cert]) + sdk + _seq([])
+    return (_lp(signed) + sdk + _seq([struct.pack("<I", 0x0103) + _lp(_sign_sha256(n, d, signed))])
+            + _lp(apk_signature.certificate_public_key(cert)))
+
+
+def _v2_signer(digest: bytes, cert: bytes, n: int, d: int) -> bytes:
+    sys.path.insert(0, str(REPO))
+    from domovoi import apk_signature
+
+    signed = _seq([struct.pack("<I", 0x0103) + _lp(digest)]) + _seq([cert]) + _seq([])
+    return (_lp(signed) + _seq([struct.pack("<I", 0x0103) + _lp(_sign_sha256(n, d, signed))])
+            + _lp(apk_signature.certificate_public_key(cert)))
+
+
+def forge_review_set(release_apk: Path, other_cert: bytes, n: int, d: int) -> list[str]:
+    """The security review's forgeries (2026-10-15), each beside the release
+    key's genuine blocks and signed, validly, by the other key:
+    a v3.1 block (Android 13+ would believe it); v3 stripped although v2's
+    stripping-protection attribute names it; a second v2 signer; a v3 block
+    whose second signer covers SDK 33+."""
+    data = release_apk.read_bytes()
+    pairs = _pairs(data)
+    blocks = dict(pairs)
+    digest = _content_digest(data, OUT / "review.tmp")
+    v31 = _seq([_v3_signer(digest, other_cert, n, d, 33, 0x7FFFFFFF)])
+    made = {
+        "v31-other-arm64-v8a.apk": _assemble(data, pairs + [(0x1B93AD61, v31)]),
+        "v3-stripped-arm64-v8a.apk": _assemble(data, [(i, v) for i, v in pairs if i != 0xF05368C0]),
+    }
+    rel_v2 = _R(blocks[0x7109871A]).items()
+    made["v2-two-signers-arm64-v8a.apk"] = _assemble(
+        data, [(0x7109871A, _seq(rel_v2 + [_v2_signer(digest, other_cert, n, d)]))]
+        + [(i, v) for i, v in pairs if i != 0x7109871A])
+    rel_v3 = _R(blocks[0xF05368C0]).items()
+    made["v3-two-ranges-arm64-v8a.apk"] = _assemble(
+        data, [(0x7109871A, blocks[0x7109871A]),
+               (0xF05368C0, _seq(rel_v3 + [_v3_signer(digest, other_cert, n, d, 33, 0x7FFFFFFF)]))])
+    for name, body in made.items():
+        (OUT / name).write_bytes(body)
+    return list(made)
+
+
 def describe(apk: Path) -> dict:
     r = subprocess.run([java_bin("java"), "-jar", str(APKSIGNER), "verify", "--verbose", "--print-certs",
                         "--min-sdk-version", "26", str(apk)], capture_output=True, text=True)
@@ -337,6 +410,14 @@ def main() -> int:
                        _first_cert(OUT / "other-arm64-v8a.apk"), n, d)
         plan.append(("mixed-v3-arm64-v8a.apk", ["arm64-v8a"], "release",
                      {}, "the release key's v2 block, another key's (valid) v3 block: refused"))
+        about = {
+            "v31-other-arm64-v8a.apk": "a v3.1 block signed by another key beside the release blocks: refused",
+            "v3-stripped-arm64-v8a.apk": "v3 removed although v2's stripping protection names it: refused",
+            "v2-two-signers-arm64-v8a.apk": "a second v2 signer (another key): refused",
+            "v3-two-ranges-arm64-v8a.apk": "a second v3 signer for SDK 33+ (another key): refused",
+        }
+        for name in forge_review_set(OUT / "release-arm64-v8a.apk", _first_cert(OUT / "other-arm64-v8a.apk"), n, d):
+            plan.append((name, ["arm64-v8a"], "release", {}, about[name]))
         for name, abis, key, schemes, about in plan:
             data = (OUT / name).read_bytes()
             manifest["files"][name] = {

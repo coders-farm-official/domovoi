@@ -2762,8 +2762,14 @@ devices, so:
   (`domovoi/apk_signature.py`, pure Python, cross-checked against
   `apksigner` on the test fixtures); that certificate's SHA-256 is the
   pinned one; and it carries native libraries for exactly its entry's ABI.
-  A v2 block is required (Android 8 reads no v3); RSA-PSS, ECDSA, DSA,
-  keys under 2048 bits, several signers and key rotation are refused.
+  A v2 block is required (Android 8 reads no v3), and a v3 block its
+  stripping-protection attribute names must be there (Android refuses a
+  stripped one too); any v3.1 block is refused, since an Android 13+ phone
+  would believe its signer over v3's; RSA-PSS, ECDSA, DSA, keys under
+  2048 or over 8192 bits, exponents over 2^32, several signers and key
+  rotation are refused. The security review's forgeries (another key's
+  v3.1 beside the release blocks, v3 stripped, a second signer in v2 or
+  v3, the pinned certificate signed by another key) are test fixtures.
 * **Where it comes from:** only
   `https://github.com/coders-farm-official/domovoi/releases/download/<tag>/<file>`
   (the URL is fixed by the manifest's tag and file name), through the
@@ -2777,22 +2783,32 @@ devices, so:
   moved in only after the checks.
 * **Serving** (`GET /v1/android-app/files/{name}`) is open on the LAN, like
   the satellite code bundle, because the phone asking has not joined the
-  household; only a name the manifest lists, only bytes that still pass.
+  household; only a name the manifest lists, only bytes that still pass
+  (re-checked whenever the file's size, mtime, inode or ctime changes).
   Paused (423, "Paused by Domovoi's container guard…") while a tamper
-  incident is open, with the fetch and the upload.
+  incident is open, with the fetch and the upload. The upload route reads
+  its body only after the admin gate, so nobody else's upload is ever read
+  or spooled to disk (`/api/voices/piper` likewise, since the same review).
 * **The join page** is static, served by the core with its own
   `Content-Security-Policy` (`default-src 'none'`, this server's script and
   style only, nothing inline, no frames, `connect-src 'self'`) and
   `Referrer-Policy: no-referrer`. The room code rides in the URL fragment,
   which browsers never send, so it is in no server's log; the page shows
-  the room's name with `textContent` only. Its button is an Android
+  the room's name with `textContent` only, and refuses, in plain words, a
+  code that names any server but the one the page came from. Its button is
+  an Android
   `intent:` link to the app's `domovoi-room:` handler restricted to package
   `com.domovoi.app`; the app then checks the code in full and makes the
   server prove its key, exactly as when the code is scanned in the app
   (the link only fills the form).
 
-**What this does not cover, plainly.** The page and the APK travel over
-plain HTTP on the LAN, like the dashboard. Someone who can answer for the
+**What this does not cover, plainly.** The join page trusts the LAN like
+any plain-HTTP page: it and the APK travel unencrypted, like the
+dashboard, and the page cannot prove which server sent it. The pin does
+not depend on it: the room code's fingerprint is checked by the app
+itself, which makes the server prove its key before it writes anything,
+so a code scanned in the app's own scanner (Domovoi Room → scan) keeps
+the pin intact whatever any page says. Someone who can answer for the
 server's address on your network (a spoofed router, ARP or DNS) could show
 a phone a different page with a different APK; Android accepts any validly
 signed app the first time it is installed, and the phone has no way to

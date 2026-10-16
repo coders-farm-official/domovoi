@@ -7133,13 +7133,37 @@
           "voices"
         ],
         "summary": "Upload Piper Voice",
-        "description": "Upload a Piper voice: the ``.onnx`` model and its ``.onnx.json``\nconfig. Saved under the voice-models dir as ``<slug>.onnx`` /\n``<slug>.onnx.json``; the row's ``model_ref`` is the slug.\n\nAdmin-gated, and both files are streamed to disk under a byte budget\n(model ``_MAX_ONNX_BYTES``, config ``_MAX_CONFIG_BYTES``) rather than\nread into memory \u2014 an oversized upload is answered 413 while it is\nstill arriving.",
+        "description": "Upload a Piper voice: multipart fields ``name`` (1-80 characters),\n``set_default`` (optional bool), ``onnx`` (the ``.onnx`` model) and\n``config`` (its ``.onnx.json``). Saved under the voice-models dir as\n``<slug>.onnx`` / ``<slug>.onnx.json``; the row's ``model_ref`` is the\nslug.\n\nAdmin-gated, and the form is parsed HERE, after the gate: Form()/File()\nparameters would have FastAPI read (and spool to disk) the whole upload\nfor anyone before the gate ran (security review 2026-10-15). Both files\nare then streamed to disk under a byte budget (model ``_MAX_ONNX_BYTES``,\nconfig ``_MAX_CONFIG_BYTES``); an oversized one is answered 413.",
         "operationId": "upload_piper_voice_api_voices_piper_post",
         "requestBody": {
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_upload_piper_voice_api_voices_piper_post"
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80,
+                    "minLength": 1
+                  },
+                  "set_default": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "onnx": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "config": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "name",
+                  "onnx",
+                  "config"
+                ]
               }
             }
           },
@@ -7152,16 +7176,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Voice"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -13616,38 +13630,6 @@
           "files"
         ],
         "title": "Body_upload_documents_api_documents_upload_post"
-      },
-      "Body_upload_piper_voice_api_voices_piper_post": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 80,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "set_default": {
-            "type": "boolean",
-            "title": "Set Default",
-            "default": false
-          },
-          "onnx": {
-            "type": "string",
-            "contentMediaType": "application/octet-stream",
-            "title": "Onnx"
-          },
-          "config": {
-            "type": "string",
-            "contentMediaType": "application/octet-stream",
-            "title": "Config"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "onnx",
-          "config"
-        ],
-        "title": "Body_upload_piper_voice_api_voices_piper_post"
       },
       "Body_upload_to_library_api_music_library_upload_post": {
         "properties": {
