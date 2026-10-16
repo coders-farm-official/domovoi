@@ -10,6 +10,10 @@
  * - What to download comes from GET /v1/android-app on this same server
  *   (domovoi/android_app.py public_status): the release and, per ABI,
  *   whether this server holds a checked copy.
+ * - The app's "update available" notice (android/…/update/AppUpdate.kt)
+ *   opens this page as /join?abi=<abi>&update=1: the app knows the phone's
+ *   own processor, so that APK goes first when this server holds it, and
+ *   the page is worded for a phone that already has the app.
  * - Step 2 is an Android intent: link to the app's domovoi-room: handler
  *   (package com.domovoi.app only), falling back to this page with
  *   ?app=missing when the app isn't installed. Firefox gets the plain
@@ -98,6 +102,12 @@
     return origin(core) === (window.location.protocol + '//' + window.location.host).toLowerCase();
   }
 
+  // The ABI the app asked for (?abi=), when it is one a release carries.
+  function askedAbi() {
+    var m = /[?&]abi=(arm64-v8a|armeabi-v7a)(&|$)/.exec(window.location.search);
+    return m ? m[1] : null;
+  }
+
   function isAndroid() { return /Android/i.test(String(navigator.userAgent || '')); }
 
   function get(path, done) {
@@ -146,14 +156,20 @@
     show('install-state', false);
     var first = ready64 ? main64 : main32;
     var second = ready64 ? (ready32 ? main32 : null) : null;
-    if (looks32bit() && ready32) { first = main32; second = ready64 ? main64 : null; }
+    var asked = askedAbi();
+    var picked = (asked === 'armeabi-v7a' && ready32) || (asked === 'arm64-v8a' && ready64);
+    if (picked) {
+      first = apks[asked];
+      second = asked === 'armeabi-v7a' ? (ready64 ? main64 : null) : (ready32 ? main32 : null);
+    } else if (looks32bit() && ready32) { first = main32; second = ready64 ? main64 : null; }
     var label = { 'arm64-v8a': 'most phones', 'armeabi-v7a': 'older or cheaper phones (32-bit)' };
     var main = $('dl-main');
     main.href = first.path;
     main.setAttribute('download', first.file);
     main.textContent = first.abi === 'armeabi-v7a' ? 'download the 32-bit app' : 'download the app';
-    text('dl-main-sub', 'For ' + label[first.abi] + (first.abi === 'armeabi-v7a' && looks32bit()
-      ? ': this phone looks like a 32-bit one' : '') + ' · ' + mb(first.size));
+    text('dl-main-sub', 'For ' + label[first.abi] + (picked ? ': the one the app chose for this phone'
+      : first.abi === 'armeabi-v7a' && looks32bit() ? ': this phone looks like a 32-bit one' : '') +
+      ' · ' + mb(first.size));
     if (second) {
       var other = $('dl-other');
       other.href = second.path;
@@ -175,8 +191,14 @@
       ? ' Come back to this page in the browser for step 2.'
       : ' Open Domovoi from the home screen.'));
     show('downloads', true);
-    // A household phone's next step, once there is an app to install.
-    show('step-connect', !code);
+    // A household phone's next step, once there is an app to install (an
+    // update has none: the app is set up already).
+    show('step-connect', !code && !updating());
+  }
+
+  // Opened by the app's update notice (?update=1), with no room code.
+  function updating() {
+    return /[?&]update=1(&|$)/.test(window.location.search) && !fragment();
   }
 
   function main() {
@@ -184,6 +206,12 @@
     var missingApp = /[?&]app=missing(&|$)/.test(window.location.search);
     show('not-android', !isAndroid());
     text('server-line', 'From the Domovoi server at ' + window.location.host + '.');
+    if (updating()) {
+      text('title', 'Update the Domovoi app');
+      text('lede', 'A newer Domovoi app for this phone, straight from this home’s own Domovoi server. ' +
+        'It installs over the one you have: your servers and settings stay.');
+      text('install-title', 'Install the update');
+    }
     if (code && !code.bad && !sameServer(code.core)) {
       text('other-server', 'This room code is for the Domovoi server at ' + code.core.replace(/^https?:\/\//i, '') +
         ', not this one (' + window.location.host + '). Scan the code on this home\u2019s dashboard again, ' +

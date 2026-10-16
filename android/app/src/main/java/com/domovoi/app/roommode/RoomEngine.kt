@@ -8,6 +8,8 @@ import android.util.Log
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.audio.MicOwnership
 import com.domovoi.app.diagnostics.SpokenLog
+import com.domovoi.app.update.AppOffer
+import com.domovoi.app.update.AppUpdates
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,6 +89,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         val wakeProblem: String? = null,
         val peerRoom: String? = null,
         val musicPlaying: Boolean = false,
+        /** The app release this core hands out (update/AppUpdate.kt), read
+         *  after connecting, at most every few hours; the screen decides. */
+        val appOffer: AppOffer? = null,
     )
 
     private val _status = MutableStateFlow(Status(muted = store.muted))
@@ -129,6 +134,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     @Volatile private var downSince = SystemClock.elapsedRealtime()
     private val reconnects = AtomicInteger(0)
     @Volatile private var sessionGen = 0
+    @Volatile private var appOfferAt = 0L
     private var outcome: CompletableDeferred<String>? = null
     private var closed: CompletableDeferred<Unit>? = null
     private val checkNow = MutableStateFlow(0)
@@ -252,6 +258,7 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 continue
             }
             syncModels(client, enrol)
+            checkAppOffer(client, enrol)
             when (val result = session(client, enrol)) {
                 "ready" -> {
                     backoff = 1_000L
@@ -562,6 +569,25 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
                 }
                 if (wantModels == null && !_status.value.wakeReady) update { it.copy(wakeProblem = why) }
             }
+        }
+    }
+
+    /** The core's public app release ([AppUpdates.CORE_PATH], no credential),
+     *  for the room screen's quiet update line: after connecting, then every
+     *  [APP_OFFER_EVERY_MS] (a failure: again in [APP_OFFER_RETRY_MS]),
+     *  keeping the last answer meanwhile. */
+    private fun checkAppOffer(client: OkHttpClient, enrol: Enrolment) {
+        val now = SystemClock.elapsedRealtime()
+        if (appOfferAt != 0L && now - appOfferAt < APP_OFFER_EVERY_MS) return
+        appOfferAt = now
+        val offer = runCatching {
+            val body = RoomModels.get(client, enrol.coreUrl + AppUpdates.CORE_PATH, limit = 64 * 1024)
+            AppUpdates.fromCore(enrol.coreUrl, body.toString(Charsets.UTF_8))
+        }.onFailure { Log.i(TAG, "app release check: ${it.message}") }.getOrNull()
+        if (offer != null) {
+            update { it.copy(appOffer = offer) }
+        } else {
+            appOfferAt = now - APP_OFFER_EVERY_MS + APP_OFFER_RETRY_MS
         }
     }
 
@@ -916,6 +942,8 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
     private suspend fun healthLoop() {
         while (scope.isActive && running) {
             delay(HEALTH_INTERVAL_MS)
+            // A room stays connected for days: the release check rides this tick (it waits its hours).
+            if (ready) http?.let { c -> store.enrolment?.let { e -> checkAppOffer(c, e) } }
             if (!ready || "health" !in features) continue
             runCatching { send(HealthSample.build(healthFacts())) }
         }
@@ -962,6 +990,9 @@ class RoomEngine(private val context: Context, private val store: RoomStore) {
         const val NUDGE_FLOOR_MS = 10_000L
         const val REPLY_TIMEOUT_MS = 60_000L
         const val HEALTH_INTERVAL_MS = 60_000L
+        /** How often the room asks its core which app release it offers. */
+        const val APP_OFFER_EVERY_MS = 6 * 60 * 60_000L
+        const val APP_OFFER_RETRY_MS = 30 * 60_000L
         /** 210 ms of mic dropped after the acknowledgement (the Pi's tail). */
         const val ACK_TAIL_FRAMES = 7
         /** Quieter than this is never speech, whatever the detector says. */
