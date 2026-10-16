@@ -501,6 +501,7 @@ from domovoi.turn_timings import (
     timings_for_row,
     whisper_block,
 )
+from domovoi.log_privacy import said
 
 log = logging.getLogger(__name__)
 
@@ -3708,7 +3709,7 @@ class StreamSession:
                 "greeting over the capture: upgrade it (a current "
                 "satellite plays the greeting before it listens), or "
                 "check [music] alsa_device.",
-                trigger, self.room_id, cleaned,
+                trigger, self.room_id, said(cleaned),
                 f" ({greeting_clip})" if greeting_clip else "",
             )
         elif drop == "echo":
@@ -3718,7 +3719,7 @@ class StreamSession:
                 "back through the mic. Barge-in is firing on speaker "
                 "echo; raise [barge_in] min_speech_ms or set "
                 "require_wake_word=true for this room.",
-                self.room_id, cleaned, self._last_spoken_text,
+                self.room_id, said(cleaned), said(self._last_spoken_text),
             )
         else:
             log.warning(
@@ -3767,7 +3768,7 @@ class StreamSession:
                 transcript, greeting_clip, before_capture=ack_before_capture,
             )
             if cleaned != transcript:
-                log.info("stripped bled-in greeting: %r → %r", transcript, cleaned)
+                log.info("stripped bled-in greeting: %r → %r", said(transcript), said(cleaned))
                 transcript = cleaned
             if greeting_only:
                 return transcript, "greeting"
@@ -3792,7 +3793,7 @@ class StreamSession:
             if cleaned != transcript:
                 log.info(
                     "self-echo: stripped leading echo in room=%s: %r → %r",
-                    self.room_id, transcript, cleaned,
+                    self.room_id, said(transcript), said(cleaned),
                 )
                 transcript = cleaned
         # Nothing to route. A capture that Whisper hears as silence -
@@ -3902,7 +3903,7 @@ class StreamSession:
         if cleaned != transcript:
             log.info(
                 "stream %s: second hearing on the 30 s window: %r -> %r",
-                self.room_id, transcript, cleaned,
+                self.room_id, said(transcript), said(cleaned),
             )
         return (
             dataclasses.replace(
@@ -5807,7 +5808,7 @@ class StreamSession:
                 log.warning(
                     "intercom: TTS synth failed mid-stream for room=%s "
                     "sentence=%r: %s",
-                    self.room_id, sentence[:60], e,
+                    self.room_id, said(sentence[:60]), e,
                 )
                 # First sentence already streamed — let the
                 # already-delivered audio land and stop here.

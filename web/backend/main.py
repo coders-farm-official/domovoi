@@ -88,6 +88,14 @@ from web.backend.realtime import (
 from web.backend.schemas import HealthResponse
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+# S5 (delta review 2026-10-16): no log line this process writes may carry
+# the household token. Its uvicorn access log printed every
+# ``?device_token=`` URL the dashboard builds, into the journal (kept on
+# disk); every record now has credential values blanked as it is made,
+# whatever logger or handler it goes through (domovoi/log_privacy.py).
+from domovoi import log_privacy  # noqa: E402
+
+log_privacy.install()
 log = logging.getLogger(__name__)
 
 

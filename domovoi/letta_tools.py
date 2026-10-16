@@ -47,6 +47,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from domovoi.log_privacy import said
+
 log = logging.getLogger(__name__)
 
 
@@ -257,7 +259,7 @@ async def _dispatch_searxng(args: dict[str, Any]) -> str:
     try:
         results = await client.search(query, max_results=_SEARXNG_MAX_RESULTS)
     except Exception as e:  # noqa: BLE001 — degrade, don't crash the stream
-        log.warning("chat-mode searxng lookup failed for %r: %s", query, e)
+        log.warning("chat-mode searxng lookup failed for %r: %s", said(query), e)
         return f"I couldn't search for {query} right now."
     if not results:
         return f"I didn't find anything for {query}."

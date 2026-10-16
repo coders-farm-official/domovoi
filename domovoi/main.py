@@ -114,6 +114,13 @@ logging.basicConfig(
     format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# S5 (delta review 2026-10-16): no log line the core writes may carry a
+# credential — uvicorn prints a WebSocket's ``?token=`` with its path, and
+# stdout is the journal, kept on disk. Every record has credential values
+# blanked as it is made (domovoi/log_privacy.py).
+from domovoi import log_privacy  # noqa: E402
+
+log_privacy.install()
 log = logging.getLogger(__name__)
 
 

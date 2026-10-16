@@ -30,6 +30,9 @@ from domovoi.handlers.music_rooms import (
 from domovoi.handlers.shared import phone_play
 from domovoi.handlers.shared.play_history import record_media_play
 from domovoi.models import Context, Intent, Response
+from domovoi.log_privacy import said
+from domovoi.log_privacy import said
+from domovoi.log_privacy import said
 from domovoi.music_pause import note_paused_by_person
 
 # Session-context keys for the external-streaming seam. A registered
@@ -698,7 +701,7 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
                 except Exception as e:
                     log.warning(
                         "streaming provider %r failed for %r: %s",
-                        getattr(provider, "slug", "?"), q_display, e,
+                        getattr(provider, "slug", "?"), said(q_display), e,
                     )
                 if stream_response is not None:
                     # Tag the matched_handler so logs make the path visible,
@@ -1665,7 +1668,7 @@ class MusicHandler(MusicRoomsMixin, MusicChoiceMixin, Handler):
         try:
             candidates = await provider.search(query, limit=10)
         except Exception as e:
-            log.warning("smart_skip: provider search failed for %r: %s", query, e)
+            log.warning("smart_skip: provider search failed for %r: %s", said(query), e)
             return None
         seen_current = False
         for candidate in candidates or []:

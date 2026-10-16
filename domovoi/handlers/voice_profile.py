@@ -89,6 +89,7 @@ from domovoi.db.repositories import (
 )
 from domovoi.confirmations import request_confirmation
 from domovoi.handlers.base import FastPath, Handler, HandlerDisplay
+from domovoi.log_privacy import said
 from domovoi.models import Context, Intent, Response, is_phone_room
 
 log = logging.getLogger(__name__)
@@ -485,7 +486,7 @@ async def maybe_inject_third_party_ask(
         )
         log.info(
             "third-party classifier: cluster %d conf=%.2f text=%r",
-            idx, conf, candidate_text[:80],
+            idx, conf, said(candidate_text[:80]),
         )
         if conf > best_conf:
             best_conf = conf
