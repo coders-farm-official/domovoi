@@ -123,6 +123,14 @@ object Discovery {
      * Scan the /24 around the phone's address for dashboards on
      * [DEFAULT_PORT]. ~254 probes at 40-way concurrency with sub-second
      * timeouts — a few seconds wall-clock on a quiet network.
+     *
+     * [onProgress] is called in the caller's context: on the main thread
+     * when the picker calls this, where it writes Compose state. Only each
+     * probe's network call leaves that context ([probe] runs it on
+     * [Dispatchers.IO]). Until 2026-10-16 every host's whole coroutine ran
+     * on IO, so the callback ran on up to forty IO threads at once, and its
+     * Compose write crashed the first connect on the batch-11 emulator
+     * smoke.
      */
     suspend fun scan(
         http: OkHttpClient,
@@ -130,18 +138,30 @@ object Discovery {
     ): List<FoundDomovoi> {
         val ip = localIpv4() ?: return emptyList()
         val prefix = ip.substringBeforeLast('.')
+        val bases = (1..254).map { n -> "http://$prefix.$n:$DEFAULT_PORT" }
+        return sweep(bases, onProgress) { base -> probe(http, base, timeoutMs = 700) }
+    }
+
+    /** [scan] over [bases], with the probe passed in: at most 40 probes in
+     *  flight, and [onProgress] called in the caller's context, whatever
+     *  thread a probe finishes on. */
+    internal suspend fun sweep(
+        bases: List<String>,
+        onProgress: (done: Int, total: Int, found: Int) -> Unit,
+        probe: suspend (base: String) -> FoundDomovoi?,
+    ): List<FoundDomovoi> {
         val done = AtomicInteger(0)
         val foundCount = AtomicInteger(0)
         val gate = Semaphore(40)
         return coroutineScope {
-            (1..254).map { n ->
-                async(Dispatchers.IO) {
-                    gate.withPermit {
-                        val hit = probe(http, "http://$prefix.$n:$DEFAULT_PORT", timeoutMs = 700)
-                        if (hit != null) foundCount.incrementAndGet()
-                        onProgress(done.incrementAndGet(), 254, foundCount.get())
-                        hit
-                    }
+            bases.map { base ->
+                // No dispatcher: this runs where the caller runs. `probe`
+                // switches to IO for the request and comes back here.
+                async {
+                    val hit = gate.withPermit { probe(base) }
+                    if (hit != null) foundCount.incrementAndGet()
+                    onProgress(done.incrementAndGet(), bases.size, foundCount.get())
+                    hit
                 }
             }.awaitAll().filterNotNull().sortedBy { it.url }
         }
