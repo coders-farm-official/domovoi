@@ -76,6 +76,10 @@ data class ReplyReport(
         }
     }.trimEnd() + "\n"
 
+    /** The report as the JSON an HTTPS destination receives: these fields
+     *  and nothing else, under a kind and a version. */
+    fun asJson(): String = REPORT_JSON.encodeToString(ReportEnvelope.serializer(), ReportEnvelope(report = this))
+
     /** "Gemma 4 E2B (instruction-tuned), gemma-4-e2b-it, on the cpu". */
     fun modelLine(): String = listOfNotNull(
         model.ifBlank { null },
@@ -178,17 +182,38 @@ class ReplyReportStore(val dir: File) {
     }
 }
 
+/** What [ReplyReport.asJson] sends: the report, labelled. */
+@Serializable
+internal data class ReportEnvelope(
+    val kind: String = "domovoi-reply-report",
+    val version: Int = 1,
+    val report: ReplyReport,
+)
+
+private val REPORT_JSON = Json { encodeDefaults = true; explicitNulls = true }
+
 /**
  * Where a report can go from the phone, beyond being saved on it. One small
- * interface, so the owner's choice of where reports are sent (open decision
- * 2 of the assistant plan: an HTTPS endpoint on codersfarm.org, or an email
- * draft) is one more implementation listed in [ReportSinks.available], not
- * a new flow; the report sheet shows a button per sink, labelled by it.
+ * interface, so the owner's choice of where reports reach Coders Farm (open
+ * decision 2 of the assistant plan) is the one line [REPORT_DESTINATION],
+ * not a new flow; the report sheet shows a button per sink, labelled by it.
  *
- * Until that choice is made the only sink is [ShareAsTextSink], the
- * Android share menu: nothing leaves the phone until the person picks an
- * app there and sends it themselves, and no button claims to send anything
- * (owner rule: no control that cannot do what it says).
+ * Google Play's AI-generated content policy asks that a person can report
+ * an offensive reply to the developer without leaving the app. The sinks:
+ *
+ *  - [HttpsReportSink]: sends the report to a Coders Farm HTTPS address,
+ *    inside the app, and says "sent" only when that address said it got it.
+ *    What the policy asks for, once such an address exists.
+ *  - [EmailDraftSink]: opens the person's email app with the report
+ *    addressed to Coders Farm; it is sent only when they press send there.
+ *    Simpler (no server), but it leaves the app.
+ *  - [ShareAsTextSink]: the Android share menu, to whoever the person picks.
+ *    Always offered.
+ *
+ * [REPORT_DESTINATION] is the owner's pick (an email draft). With
+ * [ReportDestination.None] the share menu is the only sink; no button
+ * claims to send what it does not send (owner rule: no control that cannot
+ * do what it says).
  */
 interface ReportSink {
     /** The button, lowercase chrome ("share as text"). */
@@ -197,9 +222,50 @@ interface ReportSink {
     /** One sentence the sheet shows under the buttons: what a tap does. */
     val explains: String
 
-    /** Hands [report] on; false when it could not (no app to take it). */
-    fun deliver(report: ReplyReport): Boolean
+    /** Hands [report] on. A sink that sends does so off the main thread. */
+    suspend fun deliver(report: ReplyReport): ReportOutcome
 }
+
+/** What became of a report handed to a [ReportSink]. */
+enum class ReportOutcome {
+    /** Another app has it (the share menu, an email draft): it goes only
+     *  if the person sends it from there. */
+    HANDED_ON,
+
+    /** The Coders Farm address answered that it has it. */
+    SENT,
+
+    /** No app on the phone takes it (no share target, no email app). */
+    NO_APP,
+
+    /** The address did not take it (offline, refused, an error). */
+    FAILED,
+}
+
+/** Where "report this reply" reaches Coders Farm: the owner's choice. */
+sealed interface ReportDestination {
+    /** Not chosen yet: the share menu only. */
+    data object None : ReportDestination
+
+    /** An email draft to [address], sent from the person's email app. */
+    data class Email(val address: String) : ReportDestination
+
+    /** A POST of the report as JSON ([ReplyReport.asJson]) to [url], https only. */
+    data class Https(val url: String) : ReportDestination
+}
+
+/**
+ * WHERE REPORTS GO: the owner's one line. Kamron's choice (2026-10-15): an
+ * email draft to Coders Farm's address, the same one the Play listing gives
+ * as its contact. The other shapes it can take:
+ *   ReportDestination.Https("https://codersfarm.org/api/domovoi/reports")
+ *   ReportDestination.None   (the share menu only)
+ * A change is declared in Play's data safety form (android/play/DATA_SAFETY.md
+ * has the answers for each) and the privacy policy (docs/PRIVACY_POLICY.md,
+ * "Reports"). An address that is not a valid https URL or email address
+ * offers nothing (ReplyReportTest holds this constant to that).
+ */
+val REPORT_DESTINATION: ReportDestination = ReportDestination.Email("codersfarm@gmail.com")
 
 /** The Android share menu, with the report as plain text ([ReplyReport.asText]).
  *  [share] opens it (subject, text) from the screen's activity: false when
@@ -210,20 +276,87 @@ class ShareAsTextSink(private val share: (subject: String, text: String) -> Bool
         "Share as text opens Android's share menu with the report as plain text, so you can send it with an " +
             "email or messaging app to whoever you choose. Nothing leaves the phone until you do."
 
-    override fun deliver(report: ReplyReport): Boolean = share(SUBJECT, report.asText())
+    override suspend fun deliver(report: ReplyReport): ReportOutcome =
+        if (share(SUBJECT, report.asText())) ReportOutcome.HANDED_ON else ReportOutcome.NO_APP
 
     companion object {
         const val SUBJECT = "Domovoi: a reported reply"
     }
 }
 
+/** An email draft to Coders Farm with the report as its text. [compose]
+ *  opens the person's email app (to, subject, body): false when there is
+ *  none. The app itself sends nothing. */
+class EmailDraftSink(
+    val address: String,
+    private val compose: (to: String, subject: String, body: String) -> Boolean,
+) : ReportSink {
+    override val label = "email draft to coders farm"
+    override val explains =
+        "Email draft opens your email app with the report addressed to Coders Farm, who make Domovoi " +
+            "($address). It is sent only when you press send there."
+
+    override suspend fun deliver(report: ReplyReport): ReportOutcome =
+        if (compose(address, ShareAsTextSink.SUBJECT, report.asText())) ReportOutcome.HANDED_ON else ReportOutcome.NO_APP
+}
+
+/**
+ * The report to Coders Farm over HTTPS: [ReplyReport.asJson] POSTed to
+ * [url] by [upload] (net/ReportUpload.kt: the app's client without the
+ * household token, no redirect followed; the assistant's own code never
+ * touches the network, NoNetworkTest). [upload] answers true only for a
+ * 2xx, so "sent" is said only when the address said it has the report.
+ */
+class HttpsReportSink(
+    val url: String,
+    private val upload: suspend (url: String, json: String) -> Boolean,
+) : ReportSink {
+    override val label = "send to coders farm"
+    override val explains =
+        "Send to Coders Farm sends exactly this report, and nothing else from this phone, over HTTPS to " +
+            "Coders Farm, who make Domovoi, so they can look into the reply. It is sent only when you tap it."
+
+    override suspend fun deliver(report: ReplyReport): ReportOutcome = try {
+        if (upload(url, report.asJson())) ReportOutcome.SENT else ReportOutcome.FAILED
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        ReportOutcome.FAILED
+    }
+}
+
 object ReportSinks {
+    private val EMAIL = Regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$")
+
+    /** https, a dotted host name, an optional port and path: no user info,
+     *  no spaces. (A regex, not java.net.URI: the assistant's code names no
+     *  networking class, NoNetworkTest.) */
+    private val HTTPS = Regex("^https://([A-Za-z0-9-]+\\.)+[A-Za-z0-9-]+(:[0-9]{1,5})?(/[^\\s@]*)?$", RegexOption.IGNORE_CASE)
+
+    /** [destination] can be offered as it is written. */
+    fun valid(destination: ReportDestination): Boolean = when (destination) {
+        ReportDestination.None -> true
+        is ReportDestination.Email -> EMAIL.matches(destination.address.trim())
+        is ReportDestination.Https -> HTTPS.matches(destination.url.trim())
+    }
+
     /**
-     * The sinks the report sheet offers, in order. The owner's destination
-     * (see [ReportSink]) goes here once chosen, ahead of the share menu; it
-     * must then be declared in the Play data safety form, as it sends user
-     * data, and pass the assistant's no-network test (an HTTP sink lives
-     * outside assistant/ or is listed there as the downloader is).
+     * The sinks the report sheet offers, in order: the owner's destination
+     * ([REPORT_DESTINATION]) first when it is set and valid, then the share
+     * menu. A sink that sends must be declared in the Play data safety form.
      */
-    fun available(share: (subject: String, text: String) -> Boolean): List<ReportSink> = listOf(ShareAsTextSink(share))
+    fun available(
+        share: (subject: String, text: String) -> Boolean,
+        email: (to: String, subject: String, body: String) -> Boolean = { _, _, _ -> false },
+        upload: suspend (url: String, json: String) -> Boolean = { _, _ -> false },
+        destination: ReportDestination = REPORT_DESTINATION,
+    ): List<ReportSink> {
+        val chosen: ReportSink? = when {
+            !valid(destination) -> null
+            destination is ReportDestination.Email -> EmailDraftSink(destination.address.trim(), email)
+            destination is ReportDestination.Https -> HttpsReportSink(destination.url.trim(), upload)
+            else -> null
+        }
+        return listOfNotNull(chosen, ShareAsTextSink(share))
+    }
 }

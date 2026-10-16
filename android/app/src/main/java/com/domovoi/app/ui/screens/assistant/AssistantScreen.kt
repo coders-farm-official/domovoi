@@ -26,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,7 @@ import com.domovoi.app.assistant.LlmBackend
 import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.ModelSetup
 import com.domovoi.app.assistant.ReplyReport
+import com.domovoi.app.assistant.ReportOutcome
 import com.domovoi.app.assistant.ReportSink
 import com.domovoi.app.assistant.ReportSinks
 import com.domovoi.app.assistant.StoredConversation
@@ -55,8 +57,11 @@ import com.domovoi.app.ui.components.LoadingState
 import com.domovoi.app.ui.components.Pill
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.components.openAppSettings
+import com.domovoi.app.ui.components.composeEmail
 import com.domovoi.app.ui.components.shareText
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /** What the assistant's screens can ask of it ([AssistantController] in the
  *  app; plain lambdas in the tests). */
@@ -189,12 +194,28 @@ fun AssistantScreen() {
         onOpenSettings = { if (!openAppSettings(context)) toast("could not open the app's settings") },
         onDismiss = { micAsk = null },
     )
-    // "report this reply": saved on the phone; the share menu is the one way
-    // on from it until the owner picks a destination (ReportSink).
+    // "report this reply": saved on the phone; then the owner's destination
+    // when one is set (REPORT_DESTINATION: an HTTPS address or an email
+    // draft to Coders Farm), and the share menu.
+    val app = LocalApp.current
     val sinks = remember(context) {
-        ReportSinks.available { subject, text -> shareText(context, subject, text) }
+        ReportSinks.available(
+            share = { subject, text -> shareText(context, subject, text) },
+            email = { to, subject, body -> composeEmail(context, to, subject, body) },
+            upload = { url, json -> app.reportUpload.post(url, json) },
+        )
     }
-    AssistantContent(ui, actionsFor(assistant, download, talk, sinks) { toast(it) })
+    val reportScope = rememberCoroutineScope()
+    AssistantContent(ui, actionsFor(assistant, download, talk, sinks, reportScope) { toast(it) })
+}
+
+/** What the person is told once a report has been handed on (nothing when
+ *  another app opened with it: that app is what they see). */
+internal fun reportOutcomeToast(outcome: ReportOutcome): String? = when (outcome) {
+    ReportOutcome.HANDED_ON -> null
+    ReportOutcome.SENT -> "report sent to coders farm; it is kept on this phone too"
+    ReportOutcome.NO_APP -> "no app on this phone can take the report; it is saved here"
+    ReportOutcome.FAILED -> "couldn't send the report; it is saved here, try again from model settings, reports"
 }
 
 private fun actionsFor(
@@ -202,6 +223,7 @@ private fun actionsFor(
     download: () -> Unit,
     talk: () -> Unit,
     sinks: List<ReportSink>,
+    scope: CoroutineScope,
     toast: (String) -> Unit,
 ) = AssistantActions(
     download = download,
@@ -225,7 +247,7 @@ private fun actionsFor(
     reportSinks = sinks,
     deliverReport = { sink, report ->
         a.saveReport(report)
-        if (!sink.deliver(report)) toast("no app on this phone can take the report; it is saved here")
+        scope.launch { reportOutcomeToast(sink.deliver(report))?.let(toast) }
     },
     deleteReport = a::deleteReport,
     clearReports = a::clearReports,

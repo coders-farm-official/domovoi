@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -135,18 +136,107 @@ class ReplyReportTest {
 
     // ── Where a report can go ───────────────────────────────────────────
 
-    @Test fun theShareMenuIsTheOnlySinkAndNothingClaimsToSend() {
+    @Test fun theShareMenuIsTheOnlySinkAndNothingClaimsToSend() = runBlocking {
         val shared = mutableListOf<Pair<String, String>>()
-        val sinks = ReportSinks.available { subject, text -> shared += subject to text; true }
+        val sinks = ReportSinks.available(share = { subject, text -> shared += subject to text; true }, destination = ReportDestination.None)
         assertEquals(listOf("share as text"), sinks.map { it.label })
         sinks.forEach { s ->
             assertFalse("${s.label} says it sends", Regex("(?i)\\bsend\\b").containsMatchIn(s.label))
             assertTrue(s.explains.contains("Nothing leaves the phone until you do"))
         }
         val r = ReplyReport(id = "r-1-a", created = 1, answer = "an answer")
-        assertTrue(sinks.single().deliver(r))
+        assertEquals(ReportOutcome.HANDED_ON, sinks.single().deliver(r))
         assertEquals(listOf(ShareAsTextSink.SUBJECT to r.asText()), shared)
-        assertFalse("no app to take it", ShareAsTextSink { _, _ -> false }.deliver(r))
+        assertEquals("no app to take it", ReportOutcome.NO_APP, ShareAsTextSink { _, _ -> false }.deliver(r))
+    }
+
+    /** The owner's one line, as shipped: nothing chosen yet, or a valid
+     *  address. A typo offers nothing rather than a button that fails. */
+    @Test fun theShippedDestinationIsNoneOrValid() {
+        assertTrue("REPORT_DESTINATION is not a valid https URL or email address: $REPORT_DESTINATION",
+            ReportSinks.valid(REPORT_DESTINATION))
+        val upload = mutableListOf<String>()
+        val sinks = ReportSinks.available(share = { _, _ -> true }, upload = { url, _ -> upload += url; true })
+        if (REPORT_DESTINATION == ReportDestination.None) {
+            assertEquals("with no destination only the share menu is offered", listOf("share as text"), sinks.map { it.label })
+        } else {
+            assertEquals(2, sinks.size)
+            assertEquals("share as text", sinks.last().label)
+        }
+    }
+
+    @Test fun destinationsAreCheckedBeforeTheyAreOffered() {
+        fun v(d: ReportDestination) = ReportSinks.valid(d)
+        assertTrue(v(ReportDestination.None))
+        assertTrue(v(ReportDestination.Email("domovoi-reports@codersfarm.org")))
+        assertTrue(v(ReportDestination.Email(" reports@codersfarm.org ")))
+        assertFalse(v(ReportDestination.Email("")))
+        assertFalse(v(ReportDestination.Email("codersfarm.org")))
+        assertFalse(v(ReportDestination.Email("a@b")))
+        assertTrue(v(ReportDestination.Https("https://codersfarm.org/api/domovoi/reports")))
+        assertTrue(v(ReportDestination.Https("https://reports.codersfarm.org:8443/v1")))
+        assertFalse("http", v(ReportDestination.Https("http://codersfarm.org/api/domovoi/reports")))
+        assertFalse("no host", v(ReportDestination.Https("https:///reports")))
+        assertFalse("user info", v(ReportDestination.Https("https://me@codersfarm.org/r")))
+        assertFalse("blank", v(ReportDestination.Https("")))
+        // An invalid one offers only the share menu.
+        assertEquals(listOf("share as text"),
+            ReportSinks.available(share = { _, _ -> true }, destination = ReportDestination.Https("http://x.org/r")).map { it.label })
+    }
+
+    @Test fun anEmailDraftIsAddressedToCodersFarmAndSendsNothingItself() = runBlocking {
+        val drafts = mutableListOf<Triple<String, String, String>>()
+        val sinks = ReportSinks.available(
+            share = { _, _ -> true },
+            email = { to, subject, body -> drafts += Triple(to, subject, body); true },
+            destination = ReportDestination.Email(" domovoi-reports@codersfarm.org "),
+        )
+        assertEquals(listOf("email draft to coders farm", "share as text"), sinks.map { it.label })
+        val email = sinks.first()
+        assertFalse("its label does not say it sends", Regex("(?i)\\bsend\\b").containsMatchIn(email.label))
+        assertTrue(email.explains.contains("domovoi-reports@codersfarm.org"))
+        assertTrue(email.explains.contains("sent only when you press send there"))
+        val r = ReplyReport(id = "r-1-a", created = 1, answer = "an answer", note = "rude")
+        assertEquals(ReportOutcome.HANDED_ON, email.deliver(r))
+        assertEquals(listOf(Triple("domovoi-reports@codersfarm.org", ShareAsTextSink.SUBJECT, r.asText())), drafts)
+        assertEquals(ReportOutcome.NO_APP, EmailDraftSink("a@b.org") { _, _, _ -> false }.deliver(r))
+    }
+
+    @Test fun anHttpsSinkSaysSentOnlyWhenTheAddressTookIt() = runBlocking {
+        val posted = mutableListOf<Pair<String, String>>()
+        var answer = true
+        val sinks = ReportSinks.available(
+            share = { _, _ -> true },
+            upload = { url, json -> posted += url to json; answer },
+            destination = ReportDestination.Https("https://codersfarm.org/api/domovoi/reports"),
+        )
+        assertEquals(listOf("send to coders farm", "share as text"), sinks.map { it.label })
+        val send = sinks.first()
+        assertTrue(send.explains.contains("It is sent only when you tap it"))
+        val r = ReplyReport(id = "r-1-a", created = 1, question = "q?", answer = "an answer", note = "rude", appVersion = "1.0.0")
+        assertEquals(ReportOutcome.SENT, send.deliver(r))
+        assertEquals("https://codersfarm.org/api/domovoi/reports", posted.single().first)
+        answer = false
+        assertEquals(ReportOutcome.FAILED, send.deliver(r))
+        assertEquals("a throwing upload is a failure, not a crash", ReportOutcome.FAILED,
+            HttpsReportSink("https://x.org/r") { _, _ -> error("offline") }.deliver(r))
+    }
+
+    /** What an HTTPS destination receives: the report's own fields (what the
+     *  sheet shows) under a kind and a version, and nothing else. */
+    @Test fun theJsonHoldsExactlyTheReport() {
+        val r = ReplyReport(id = "r-1-a", created = 1, question = "q?", spoken = true, answer = "an answer",
+            answeredAt = 2, model = "m", modelId = "mid", backend = "cpu", note = "rude", appVersion = "1.0.0")
+        val o = kotlinx.serialization.json.Json.parseToJsonElement(r.asJson()) as kotlinx.serialization.json.JsonObject
+        assertEquals(setOf("kind", "version", "report"), o.keys)
+        assertEquals("\"domovoi-reply-report\"", o["kind"].toString())
+        assertEquals("1", o["version"].toString())
+        val report = o["report"] as kotlinx.serialization.json.JsonObject
+        assertEquals(
+            setOf("id", "created", "question", "spoken", "answer", "answeredAt", "model", "modelId", "backend", "note", "appVersion"),
+            report.keys,
+        )
+        assertEquals("\"an answer\"", report["answer"].toString())
     }
 
     // ── The controller ──────────────────────────────────────────────────
