@@ -104,7 +104,7 @@ Every Domovoi term you'll meet in these docs, in the dashboard, or in the code �
 
 **VAD (voice activity detection)** — the classifier that decides which audio frames contain speech. The satellite uses it to find the end of your utterance and to detect *barge-in* during playback.
 
-**Voice profile** — a locally stored voice embedding tied to a person, enrolled by introduction ("I'm Sarah") and matched on every utterance so Domovoi knows who's talking. Powers per-person memory and personalization; "forget me" deletes it.
+**Voice profile** — a locally stored voice embedding tied to a person, enrolled by introduction ("I'm Sarah") and matched on every utterance so Domovoi knows who's talking. Powers per-person memory and personalization; "forget me", said in that person's own voice, deletes it (a voice that only claimed the name loses just the samples it added).
 
 **Wake acknowledgement** — what a satellite does when it hears the *wake word*, before it listens for the command: a spoken greeting from the greeting bank (the default), a short chime, or the light alone (`[wake] ack_mode`, per satellite, also in the dashboard's satellite Settings). The sound plays to its end and the mic audio under it is dropped, so the satellite cannot hear — and answer — its own greeting.
 

@@ -1130,7 +1130,10 @@ async def test_forget_me_from_a_phone_still_writes_both_rows(
         r = await _turn(c, tid)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["reply"] == "Okay, I've forgotten you, Ana."
+    assert body["reply"] == (
+        "Okay, I've forgotten you, Ana: your voice, your profile and everything I "
+        "remembered about you."
+    )
     assert body["speaker"] is None
     user, assistant = await _rows(tid)
     assert (user["content"], user["speaker_person_id"], user["speaker_confidence"]) == ("forget me", None, None)

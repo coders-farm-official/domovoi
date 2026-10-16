@@ -320,6 +320,13 @@ def stub_people_repo(monkeypatch):
     monkeypatch.setattr(
         "domovoi.handlers.voice_profile.PeopleRepository", _StubPeopleRepo
     )
+
+    async def _whole_person(self, ctx, session):
+        # The voice is the person's own (V029's check has its own tests,
+        # test_voice_claims.py): the delete path is what these are about.
+        return "person", []
+
+    monkeypatch.setattr(VoiceProfileHandler, "_forget_scope", _whole_person)
     return _StubPeopleRepo
 
 

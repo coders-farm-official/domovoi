@@ -443,9 +443,19 @@ def store(monkeypatch) -> _Store:
         async def all_for_model(self, _model):
             return list(st.profiles)
 
-        async def add(self, *, person_id, embedding, model, room_id, sample_seconds):
+        async def add(self, *, person_id, embedding, model, room_id, sample_seconds, claim_of=None):
             st.profiles.append((len(st.profiles) + 1, person_id, embedding, room_id))
             return len(st.profiles)
+
+        async def person_samples(self, person_id, _model):
+            # No name claims here (V029; test_voice_claims.py has them):
+            # every sample is the person's own.
+            from domovoi.db.repositories import VoiceSample
+
+            return [
+                VoiceSample(id=i, embedding=e, source="satellite", room_id=r, claimed=False, claim_of=None)
+                for i, p, e, r in st.profiles if p == person_id
+            ]
 
     class _Denylist:
         EMBEDDING_MODEL_TAG = "resemblyzer-v1"

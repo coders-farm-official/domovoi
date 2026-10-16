@@ -432,7 +432,7 @@
           "plugins"
         ],
         "summary": "List Installed",
-        "description": "Installed plugins for the admin page: registry row + the fields\nthe list renders (permissions, capabilities, pages). Open read \u2014\n\u00a712 keeps the registry list open; errors show for everyone.",
+        "description": "Installed plugins for the admin page: registry row + the fields\nthe list renders (permissions, capabilities, pages), and what the\nplugin's running workers say about themselves (``worker_notes``, from\nthe core). Open read \u2014 \u00a712 keeps the registry list open; errors show\nfor everyone.",
         "operationId": "list_installed_api_plugins_get",
         "responses": {
           "200": {
@@ -3133,7 +3133,7 @@
           "people"
         ],
         "summary": "Delete Person",
-        "description": "Same SQL as the voice \"forget me\" path.\n\nCascades to ``voice_profiles`` via FK; ``intents_log.person_id``\nand ``conversation_log.person_id`` lapse to NULL via\n``ON DELETE SET NULL``. Historical audit trail\nstays \u2014 anonymized rather than deleted.",
+        "description": "Same SQL as the voice \"forget me\" path (which runs it only for a\nvoice that matches the person's own samples; this is the admin's way).\n\nCascades to ``voice_profiles`` via FK; ``intents_log.person_id``\nand ``conversation_log.person_id`` lapse to NULL via\n``ON DELETE SET NULL``. Historical audit trail\nstays \u2014 anonymized rather than deleted.",
         "operationId": "delete_person_api_people__person_id__delete",
         "parameters": [
           {
@@ -3333,7 +3333,7 @@
           "people"
         ],
         "summary": "List Profiles",
-        "description": "A person's voice samples (metadata only, never an embedding),\nnewest first, each with its ``source``: ``satellite`` or ``phone``\n(V026). The dashboard's People page lists the two sets apart; an\nadmin deletes one with ``DELETE \u2026/profiles/{profile_id}``.",
+        "description": "A person's voice samples (metadata only, never an embedding),\nnewest first, each with its ``source``: ``satellite`` or ``phone``\n(V026), and whether it came from a name claim (V029). The dashboard's\nPeople page lists the two sets apart and marks the claims; an admin\ndeletes one with ``DELETE \u2026/profiles/{profile_id}`` (a claim goes with\nwhat rooms learned through it).\n\nOpen, but trimmed for a caller who isn't an admin (N4): no ``room_id``\non a phone sample (it is ``phone-<device id>``), and no claim details\n(where, by whom).",
         "operationId": "list_profiles_api_people__person_id__profiles_get",
         "parameters": [
           {
@@ -6693,7 +6693,7 @@
           "config"
         ],
         "summary": "Pull Version",
-        "description": "`git pull --ff-only` on the Domovoi server \u2014 a deliberate, separate\naction never triggered by the check. Admin tier, like the core route it\nproxies to. A dirty or diverged tree returns pulled=False; the Domovoi\nserver process is not restarted.",
+        "description": "`git pull --ff-only` on the Domovoi server \u2014 a deliberate, separate\naction never triggered by the check. Security tier, like the core route\nit proxies to. A dirty or diverged tree returns pulled=False; the Domovoi\nserver process is not restarted.",
         "operationId": "pull_version_api_config_version_pull_post",
         "responses": {
           "200": {
@@ -20387,6 +20387,67 @@
             "type": "string",
             "title": "Source",
             "default": "satellite"
+          },
+          "claimed": {
+            "type": "boolean",
+            "title": "Claimed",
+            "default": false
+          },
+          "claimed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed At"
+          },
+          "claim_room": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Room"
+          },
+          "claimed_by_person_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By Person Id"
+          },
+          "claimed_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By Name"
+          },
+          "claim_of": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claim Of"
           }
         },
         "type": "object",

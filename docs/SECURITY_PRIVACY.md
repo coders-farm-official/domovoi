@@ -276,6 +276,36 @@ every path says so and leaves the choice to an admin, who renames
 (`PATCH /api/people/{id}`, admin tier; a name someone else has is refused)
 or removes one.
 
+**A name claim is not proof, so it can't delete anyone** (delta review S1,
+owner decision 2026-10-16). Saying a known person's name and "yes" still
+adds that clip to them, on the phone or at a satellite: it teaches rooms
+the voice. But nothing there shows the clip is that person's, and "forget
+me" used to delete whoever the voice was then recognized as — a
+stranger's phone could say "my name is Sam", "yes", "forget me" and
+Sam's profile and memories were gone. Now every sample added that way
+is marked (V029: when, the room or phone where the yes was said, and who
+the voice was recognized as at the time, if anyone), and so is a sample a
+room later learns from a voice recognized only through such a claim.
+"Forget me" deletes the person — their profile, every voice sample, their
+memories and favorites — only when the voice matches the person's **own**
+samples (the ones they enrolled with, or learned from their own voice) at
+the usual match threshold, or when an admin does it on the People page. Any
+other voice loses only the samples it claimed (and what rooms learned
+through them), and Domovoi says so: "I've forgotten the voice you added to
+Sam. I kept Sam's profile and memories …". A voice that matches
+neither the person nor a claim of its own forgets nothing, and is told why.
+A household with no claims sees no change. The People page marks each
+claimed sample; where it was claimed and by whom are shown to an admin
+only, who deletes a wrong one there (a phone sample's room names the phone,
+so `GET /api/people/{id}/profiles`, which is open, leaves it out for
+everyone else, N4). Limits, said plainly: samples saved before V029 count
+as the person's own, whoever added them; a claim still makes the speaker
+recognized as that person until it is removed ("who am I" says "You're
+Sam"), with what that person's recognition gives — their memories and
+favorites in answers; and the record of turns already taken (chat
+messages, `intents_log`) keeps naming whoever the voice was recognized as
+at the time.
+
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
 microphone as soon as a call is placed, `confirm` asks first when the call

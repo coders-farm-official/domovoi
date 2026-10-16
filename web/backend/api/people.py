@@ -17,10 +17,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
 from domovoi.admin_auth import (
+    check_admin_request,
     require_admin_mutation,
     require_device,
     require_device_read,
@@ -72,7 +73,10 @@ DEVICE = [Depends(require_device)]
 # reads open handed the same presence feed to any LAN host that polled.
 #
 # Left open on purpose, pending an owner decision: a person's voice-profile
-# rows (enrolment metadata, never an embedding or a recording).
+# rows (enrolment metadata, never an embedding or a recording). What an
+# open caller sees of them is trimmed (delta review N4, 2026-10-16): a
+# phone sample's room is ``phone-<device id>``, so its ``room_id`` and the
+# claim details (who, where) are an admin's only.
 READ = [Depends(require_device_read)]
 
 
@@ -286,36 +290,62 @@ async def list_notes_mentioning(person_id: int) -> list[VoiceNote]:
         ]
 
 
+async def _caller_is_admin(request: Request) -> bool:
+    """An admin's view: a Bearer, the dashboard cookie, or a box no one
+    has claimed yet (everything is open to the LAN before setup)."""
+    return await check_admin_request(request) in ("ok", "cookie-only", "pre-setup")
+
+
 @router.get("/{person_id}/profiles", response_model=list[VoiceProfile])
-async def list_profiles(person_id: int) -> list[VoiceProfile]:
+async def list_profiles(person_id: int, request: Request) -> list[VoiceProfile]:
     """A person's voice samples (metadata only, never an embedding),
     newest first, each with its ``source``: ``satellite`` or ``phone``
-    (V026). The dashboard's People page lists the two sets apart; an
-    admin deletes one with ``DELETE …/profiles/{profile_id}``."""
+    (V026), and whether it came from a name claim (V029). The dashboard's
+    People page lists the two sets apart and marks the claims; an admin
+    deletes one with ``DELETE …/profiles/{profile_id}`` (a claim goes with
+    what rooms learned through it).
+
+    Open, but trimmed for a caller who isn't an admin (N4): no ``room_id``
+    on a phone sample (it is ``phone-<device id>``), and no claim details
+    (where, by whom)."""
+    admin = await _caller_is_admin(request)
     async with session_scope() as s:
         rows = await s.execute(
             text(
                 """
-                SELECT id, person_id, model, enrolled_at, room_id, sample_seconds, source
-                FROM voice_profiles
-                WHERE person_id = :pid
-                ORDER BY enrolled_at DESC, id DESC
+                SELECT v.id, v.person_id, v.model, v.enrolled_at, v.room_id,
+                       v.sample_seconds, v.source,
+                       COALESCE(v.claimed_at, root.claimed_at), v.claim_room,
+                       v.claimed_by_person_id, claimer.name, v.claim_of
+                  FROM voice_profiles v
+                  LEFT JOIN voice_profiles root ON root.id = v.claim_of
+                  LEFT JOIN people claimer ON claimer.id = v.claimed_by_person_id
+                 WHERE v.person_id = :pid
+                 ORDER BY v.enrolled_at DESC, v.id DESC
                 """
             ),
             {"pid": person_id},
         )
-        return [
-            VoiceProfile(
+        out = []
+        for r in rows.all():
+            phone = r[6] == "phone"
+            claimed = r[7] is not None or r[11] is not None
+            out.append(VoiceProfile(
                 id=int(r[0]),
                 person_id=int(r[1]),
                 model=r[2],
                 enrolled_at=r[3],
-                room_id=r[4],
+                room_id=r[4] if admin or not phone else None,
                 sample_seconds=r[5],
                 source=r[6],
-            )
-            for r in rows.all()
-        ]
+                claimed=claimed,
+                claimed_at=r[7],
+                claim_room=r[8] if admin else None,
+                claimed_by_person_id=r[9] if admin else None,
+                claimed_by_name=r[10] if admin else None,
+                claim_of=r[11] if admin else None,
+            ))
+        return out
 
 
 # ─── Destructive ───────────────────────────────────────────────────────────
@@ -326,7 +356,8 @@ async def list_profiles(person_id: int) -> list[VoiceProfile]:
     dependencies=[Depends(require_admin_mutation)],
 )
 async def delete_person(person_id: int) -> None:
-    """Same SQL as the voice "forget me" path.
+    """Same SQL as the voice "forget me" path (which runs it only for a
+    voice that matches the person's own samples; this is the admin's way).
 
     Cascades to ``voice_profiles`` via FK; ``intents_log.person_id``
     and ``conversation_log.person_id`` lapse to NULL via

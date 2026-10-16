@@ -39,6 +39,15 @@ their satellite samples (:func:`phone_matching_samples`). A phone turn
 never learns (job 4 is satellite-only); phone samples are only added on
 purpose, by "my name is …" said into the chat mic (handlers/voice_profile.py).
 
+Claimed samples (V029, delta review S1). A sample added because somebody
+said a known person's name and "yes" counts in matching like any other
+(owner decision 2026-10-16: the claim teaches rooms the voice), but it is
+marked, and so is a room sample learned from a voice that matches only
+through it (:func:`learned_through_claim`). "Forget me" holds the voice
+against the person's OWN samples (:func:`is_own_voice`) before it deletes
+a person, and otherwise removes only that voice's claims
+(:func:`claims_by_this_voice`).
+
 Every decision is logged at INFO with the best and runner-up scores, so
 a misrecognition can be read back from the journal.
 
@@ -184,6 +193,79 @@ SATELLITE_SAMPLES = "satellite"
 PHONE_SAMPLES = "phone"
 
 
+# ─── A person's own voice, apart from claimed samples (V029) ──────────────
+
+
+def centroid_score(embedding: np.ndarray, blobs: list[bytes]) -> float | None:
+    """The cosine of ``embedding`` against the centroid of ``blobs`` (as
+    :func:`_person_scores` scores a person), or None when none is usable."""
+    vectors = []
+    for blob in blobs:
+        stored = _deserialize_embedding(blob)
+        norm = float(np.linalg.norm(stored))
+        if norm:
+            vectors.append(stored / norm)
+    if not vectors:
+        return None
+    return _cosine(embedding, np.mean(vectors, axis=0))
+
+
+def own_voice_blobs(samples: list[Any], *, phone: bool) -> list[bytes]:
+    """The samples a turn's voice is held against to decide whether it IS
+    this person (delta review S1): the person's own samples only — never
+    one added by a name claim, or learned through one — in the set the turn
+    is matched with (a phone turn: their own phone samples when they have
+    any, else their own satellite samples). ``samples`` are
+    ``VoiceProfilesRepository.person_samples`` rows."""
+    own = [s for s in samples if s.own]
+    if phone:
+        mine = [s.embedding for s in own if s.source == PHONE_SAMPLES]
+        if mine:
+            return mine
+    return [s.embedding for s in own if s.source == SATELLITE_SAMPLES]
+
+
+def is_own_voice(embedding: np.ndarray, samples: list[Any], *, phone: bool) -> bool:
+    """Whether ``embedding`` matches the person's OWN voice at the match
+    threshold (:func:`own_voice_blobs`) — what "forget me" asks before it
+    deletes a person."""
+    score = centroid_score(embedding, own_voice_blobs(samples, phone=phone))
+    return score is not None and score >= settings.voice_profile_match_threshold
+
+
+def claims_by_this_voice(embedding: np.ndarray, samples: list[Any]) -> list[int]:
+    """The claims (sample ids) this voice made: every claimed sample that it
+    matches at the threshold, or that a sample learned through it does —
+    "forget me" from a voice that is not the person's own removes these,
+    and with them what was learned through them (V029's cascade)."""
+    threshold = settings.voice_profile_match_threshold
+    roots: set[int] = set()
+    for s in samples:
+        root = s.claim_root
+        if root is None or root in roots:
+            continue
+        if _cosine(embedding, _deserialize_embedding(s.embedding)) >= threshold:
+            roots.add(root)
+    claimed_ids = {s.id for s in samples if s.claimed}
+    return sorted(r for r in roots if r in claimed_ids)
+
+
+def learned_through_claim(embedding: np.ndarray, samples: list[Any]) -> int | None:
+    """For a clip a satellite is about to learn (job 4): None when it
+    matches the person's own satellite voice, else the claim it was
+    recognized through — the claimed (or claim-learned) sample it is
+    closest to — so the learned sample goes with that claim. ``samples``:
+    the person's ``person_samples`` rows."""
+    satellite = [s for s in samples if s.source == SATELLITE_SAMPLES]
+    if all(s.own for s in satellite):
+        return None
+    if is_own_voice(embedding, satellite, phone=False):
+        return None
+    claimed = [s for s in satellite if not s.own]
+    best = max(claimed, key=lambda s: _cosine(embedding, _deserialize_embedding(s.embedding)))
+    return best.claim_root
+
+
 def phone_matching_samples(
     rows: list[tuple[int, int, bytes, str | None, str]],
 ) -> list[tuple[int, bytes]]:
@@ -306,12 +388,20 @@ async def _learn_room(
         return
     try:
         async with session_scope() as s:
-            await VoiceProfilesRepository(s).add(
+            repo = VoiceProfilesRepository(s)
+            # A voice recognized only through somebody's name claim (V029)
+            # is not this person's own: the room learns it as part of that
+            # claim, so "forget me" from that voice takes it away too.
+            claim_of = learned_through_claim(
+                embedding, await repo.person_samples(person_id, repo.EMBEDDING_MODEL_TAG),
+            )
+            await repo.add(
                 person_id=person_id,
                 embedding=_serialize_embedding(embedding),
                 model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
                 room_id=room_id,
                 sample_seconds=None,
+                claim_of=claim_of,
             )
     except Exception as e:
         log.warning("voice sample for a new room: DB write failed: %s", e)
