@@ -31,24 +31,27 @@
 </p>
 
 Domovoi runs entirely on your own hardware: a server on your network does the
-listening, thinking, and speaking, and small Raspberry Pi satellites put a
-voice in every room. Your voice never leaves your network — speech recognition
-(Whisper on your GPU), language models (Ollama), and text-to-speech all run
-locally. When your internet goes out, Domovoi keeps working: every skill
-declares up front whether it needs the network, and anything that can run
-offline does. Whether it uses the internet at all is your choice:
+listening, thinking, and speaking, and small Raspberry Pi satellites (or a
+spare laptop or an old phone) put a voice in every room. Your voice never
+leaves your network — speech recognition (Whisper, on a GPU or the CPU),
+language models (Ollama), and text-to-speech all run locally. When your
+internet goes out, Domovoi keeps working: every skill declares up front
+whether it needs the network, and anything that can run offline does.
+Whether it uses the internet at all is your choice:
 [Will your Domovoi have internet?](docs/INTERNET.md)
 
 Out of the box it handles music and your media library, timers and reminders,
 room-to-room intercom and drop-in, voice notes, per-person voice profiles,
-news briefings, podcasts and audiobooks, a calendar, documents, and internet
-radio (via the bundled [radio plugin](plugins/radio)). Everything else is a
-plugin away — installed from the dashboard as a zip upload or a GitHub URL.
+news briefings, podcasts and audiobooks, videos, song lyrics, a calendar,
+documents, a text chat that can read pictures, and internet radio (via the
+bundled [radio plugin](plugins/radio)). Everything else is a plugin away —
+installed from the dashboard as a zip upload or a GitHub URL.
 
 > **Status: tested, and built in public.** Domovoi works today if you're
 > comfortable running your own server, and the easier ways in (an assistant
-> that runs on your phone, a Windows installer) are in early builds: see
-> [Status and roadmap](#status-and-roadmap). Ask questions in
+> that runs on your phone, a Windows installer, rooms on spare laptops and
+> phones) are in early builds: see [Status and roadmap](#status-and-roadmap).
+> Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
 > **Why "Domovoi"?** In Slavic folklore, a *domovoi* is the guardian spirit of
@@ -81,35 +84,70 @@ We build Domovoi in public. Here's where it stands.
 **Works today**
 
 - **The server** listens, thinks and speaks on your own machine: Whisper for
-  speech, two local Ollama models, and Piper for the voice. It runs on Linux
-  or Windows, with an NVIDIA GPU or on CPU alone
+  speech, two local Ollama models (and a small vision model for pictures in
+  chat), and Piper for the voice. It runs on Linux or Windows, with an NVIDIA
+  GPU or on CPU alone, and on Ubuntu 26.04 one script installs all of it
   ([Linux host](docs/LINUX_HOST.md) · [CPU host](docs/CPU_HOST.md)).
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
-  barge-in, and intercom and drop-in between rooms.
+  barge-in, and intercom and drop-in between rooms. The dashboard prepares
+  a Pi's SD card, and you finish its setup from your phone over the Pi's
+  own setup Wi-Fi.
 - **The web dashboard** manages all of it, from plugins to training your own
-  wake word.
-- **The Android app** brings the dashboard, a music player and drop-in to your
-  phone. With no server it still plays your phone's own music, videos and
-  files.
+  wake word on the server (about 20 minutes on an NVIDIA GPU, longer on the
+  CPU). After you sign in as admin, reloading the page keeps you signed in
+  for an hour.
+- **The Android app** brings the dashboard, a music player, chat and drop-in
+  to your phone, on Android 8.0 or later, 32-bit phones included
+  ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)). With no server it
+  still plays your phone's own music, videos and files. Until its first
+  signed release (below) you build the app yourself
+  ([android/README.md](android/README.md#building)).
 
 **In early builds**
 
 - **An assistant on your phone, no server needed.** The Android app's
   Assistant tab runs a model on the phone itself (Gemma 4 E2B on LiteRT-LM)
-  for text chat and push-to-talk voice. It needs a 64-bit phone with 8 GB of
+  for text chat and push-to-talk voice, in airplane mode too once its
+  2.45 GB of models are downloaded. It needs a 64-bit phone with 8 GB of
   memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
 - **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
-  server inside WSL2 on a Windows 11 PC ([Windows installer](docs/WINDOWS_HOST.md)).
+  server inside WSL2 on a Windows 11 PC. It isn't code-signed, and there is
+  no download yet: you build it from the repository
+  ([Windows installer](docs/WINDOWS_HOST.md)).
 - **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
   phone or tablet through the Android app's room mode, can be a room instead
-  of a Raspberry Pi ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+  of a Raspberry Pi. Each joins with a one-line command or a QR code from the
+  dashboard ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
 
-**Coming next**
+**Coming next** (being finished now)
 
-1. **The phone assistant on Google Play,** finished and still working in
-   airplane mode.
-2. **The Windows installer out of test,** so one download turns the household
-   gaming PC into a Domovoi server.
+1. **The app from your own server.** The Android app's first signed release,
+   which your Domovoi server checks and hands out on your home network: a
+   phone scans one QR code, installs the app and can become a room.
+2. **The phone assistant, polished,** and the app updated for Android 16:
+   reporting a bad reply, a licences screen, screen-reader labels.
+3. **Music in another room by voice:** "play some jazz in the garage",
+   and podcasts and audiobooks the same way.
+4. **Two people with the same name:** a satellite asks who's speaking
+   instead of guessing.
+5. **No GPL or LGPL libraries in the server's Python code:** tag reading,
+   the MPD client and an audio encoder move to permissively licensed
+   replacements.
+6. **Fixes for a rare server freeze:** the core restarts itself when it
+   stalls, and the dashboard can restart a core that has stopped answering.
+
+**Later**
+
+- **A USB stick that turns an old PC into a room:** the server writes the
+  stick, and the PC installs Debian and the satellite from it. A prototype
+  works; it isn't built into Domovoi yet.
+- **The Android app on Google Play,** once Coders Farm's developer account
+  is cleared.
+- **The Windows installer out of test,** so one download turns the household
+  gaming PC into a Domovoi server.
+- **"Hey Domovoi" as a default wake word.** A model trained at home can't be
+  shipped to everyone: its training data isn't licensed for that. A shipped
+  default needs training data with permissive licences throughout.
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written
@@ -126,24 +164,29 @@ replies can take a few days while we build.
 
 ### The everyday household
 
-You want an Alexa-style assistant that doesn't ship audio to a datacenter.
-Domovoi gives you that on your own Wi-Fi:
+You want a smart-speaker-style assistant that doesn't ship audio to a
+datacenter. Domovoi gives you that on your own Wi-Fi:
 
 - **Out of the box:** wake-word voice control in any room with a satellite —
   music, timers, reminders, questions, news, intercom ("tell the kitchen
   dinner's ready"), drop-in, voice notes. Domovoi learns who's speaking (say
   "I'm Sarah" once) and can forget you on request. A web dashboard on your
-  LAN manages all of it, and an Android app brings the dashboard and a music
-  player to your phone.
-- **Hardware you need:** one PC with an NVIDIA GPU as the server (Windows is
-  the documented first-class host), plus a Raspberry Pi Zero 2 W per room
-  with a ReSpeaker mic board and a speaker — roughly the price of a
-  commercial smart speaker per room. Details and shopping list:
-  [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
-- **The wake word** defaults to the built-in `hey_jarvis` model, and the
-  documented path is to train your own **"Hey Domovoi"** from the dashboard:
-  record a few clips through the satellite's own mic, train on the server,
-  push to the room. No cloud, no third-party service.
+  LAN manages all of it, and an Android app brings the dashboard, a music
+  player and chat to your phone.
+- **Hardware you need:** one always-on PC as the server, Linux or Windows.
+  An NVIDIA GPU makes speech recognition fastest; without one it runs on the
+  CPU ([Running without an NVIDIA GPU](docs/CPU_HOST.md)). Then, per room,
+  a Raspberry Pi Zero 2 W with a ReSpeaker mic board and a speaker — roughly
+  the price of a commercial smart speaker per room. Details and shopping
+  list: [Satellite hardware guide](docs/SATELLITE_HARDWARE.md). A spare
+  laptop, PC or old phone can be a room instead
+  ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
+- **The wake word** defaults to openWakeWord's built-in `hey_jarvis` model,
+  and the documented path is to train your own **"Hey Domovoi"** from the
+  dashboard: record at least 15 clips through the satellite's own mic, train
+  on the server, push to the room. Training runs on your server, not in a
+  cloud; it needs a server with 24 GB of memory and a one-time download of
+  about 22 GB ([wake-word training](scripts/wake_word/README.md)).
 
 ---
 
@@ -158,10 +201,10 @@ Domovoi gives you that on your own Wi-Fi:
 
 | What | Why |
 |---|---|
-| A PC with an **NVIDIA GPU** | Whisper speech-to-text runs on CUDA. Windows is the documented, tested host. No NVIDIA GPU? It still runs — see [Running without an NVIDIA GPU](docs/CPU_HOST.md). Prefer Linux? See [Running the server on Linux](docs/LINUX_HOST.md). |
+| A PC that stays on, ideally with an **NVIDIA GPU** | With one, Whisper speech-to-text runs on CUDA. No NVIDIA GPU? It still runs, on the CPU — see [Running without an NVIDIA GPU](docs/CPU_HOST.md). The steps below are written Windows-first; on Linux see [Running the server on Linux](docs/LINUX_HOST.md). |
 | **Python 3.11+** | The core service and dashboard run natively (they need GPU access, so they're not containerized). |
-| **Docker Desktop** | Runs Postgres, database migrations, and per-room audio (MPD) containers. |
-| **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both. |
+| **Docker** (Docker Desktop on Windows, Docker Engine on Linux) | Runs Postgres, database migrations, the web-search helper, and per-room audio (MPD) containers. |
+| **[Ollama](https://ollama.com)** | Local language models. Domovoi uses two: a small conversational model (`llama3.2:3b`) and a tool-routing model (`qwen2.5:14b`) — pull both (on a CPU-only server, `qwen2.5:7b` in place of the 14B). Pictures in chat use a third, small vision model (`qwen3-vl:2b-instruct-q4_K_M`), which an admin can add later from **Settings → Models**. |
 | **Git** | To clone the repo. |
 | **Internet, while you install** | Packages, Docker images and the models all download during setup. After that it's your choice — see [Will your Domovoi have internet?](#will-your-domovoi-have-internet) below. |
 | **~20 GB free disk** | For the software and all default models — **plus** room for your own media library. See [Disk footprint](#disk-footprint) below. |
@@ -175,6 +218,7 @@ dominated by the two Ollama models:
 |---|---:|
 | Ollama `qwen2.5:14b` (tool routing) | ~9 GB |
 | Ollama `llama3.2:3b` (Q&A) | ~2 GB |
+| Ollama `qwen3-vl:2b-instruct-q4_K_M` (pictures in chat, optional) | ~1.9 GB |
 | Whisper `large-v3` (STT, fp16) | ~1.5 GB |
 | Python env — mostly the NVIDIA cuBLAS/cuDNN wheels + torch | ~2.5–4 GB |
 | Docker images (Postgres, Flyway, per-room MPD) | ~1 GB |
@@ -183,7 +227,10 @@ dominated by the two Ollama models:
 **On top of that** sits your own **music/podcast/audiobook library** (your
 files, any size) — so provision ~20 GB for Domovoi itself and add whatever
 your media needs. Not counted here: Docker Desktop the application (~1–2 GB)
-and your GPU drivers, which are prerequisites.
+and your GPU drivers, which are prerequisites. Wake-word training, if you
+turn it on, takes about 32 GB more the first time. The Windows installer
+asks for 40 GB free on the system drive
+([Which PCs](docs/WINDOWS_HOST.md#which-pcs)).
 
 **Shrink it:** swap the tool model to `qwen2.5:7b` (~4.7 GB) to save ~4 GB —
 the biggest single win; use a smaller Whisper (`medium` ~0.8 GB, `small`
@@ -199,9 +246,10 @@ in the dashboard right after you claim the admin account (step 2), and
 the answer sets the defaults of the online extras:
 
 - **Yes, always** turns on web answers (it starts the local search helper,
-  SearXNG), other names for artists from MusicBrainz, podcast downloads,
-  and song recognition once you add a free AcoustID key. Still yours to
-  do: your town for local news, the AcoustID key, your radio market:
+  SearXNG), other names for artists from MusicBrainz, synced lyrics from
+  LRCLIB, podcast downloads, and song recognition once you add a free
+  AcoustID key. Still yours to do: your town for local news, the AcoustID
+  key, your radio market:
   [If your Domovoi will have internet](docs/INTERNET.md#if-your-domovoi-will-have-internet).
 - **Sometimes** is the same without automatic podcast downloads.
 - **No** makes the server contact nothing outside your network, and greys
@@ -214,6 +262,17 @@ in **Settings → Internet**. Answering from the command line instead:
 the first start (it writes the answer into the fresh `domovoi/.env`).
 
 ### 1. Install the server
+
+Three ways in:
+
+- **Ubuntu 26.04, one script.** `scripts/linux/provision.sh` installs the
+  server, its services and the models in one unattended run:
+  [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
+- **Windows 11, the installer (test build).** `DomovoiSetup.exe` runs that
+  same script inside a private WSL2 distro. It is unsigned and not offered
+  as a download yet; you build it with `windows\build.ps1`
+  ([Windows installer](docs/WINDOWS_HOST.md)).
+- **By hand, on Windows or Linux:** the commands below.
 
 ```powershell
 git clone https://github.com/coders-farm-official/domovoi
@@ -269,6 +328,11 @@ fresh one) and the file is deleted the moment setup completes. Until setup
 is done, configuration writes, service restarts, satellite code pushes and
 pairing changes answer 501 — finish setup first.
 
+Once you have signed in, reloading the dashboard (or opening it in another
+tab of the same browser) keeps you signed in for an hour; **Settings →
+Configuration → Security → Stay signed in after a reload** changes the
+minutes, and **sign out** ends it at once.
+
 Day-to-day features work without logging in — the admin password gates the
 risky operations (plugin installs, configuration, credentials). The
 household **device token** in `~/.domovoi/device-token.txt` (also shown in
@@ -283,11 +347,31 @@ Domovoi will have internet ([above](#will-your-domovoi-have-internet)).
 
 ### 3. Add your first satellite
 
-Flash a Pi, seat the mic board, install the satellite client, point it at
-your server (`domovoi_url = "ws://<server>:6370"` in the Pi's
-`~/.domovoi/config.toml`), and give it a room name. The full walk-through —
-hardware list, soldering notes, audio setup, systemd service — is in the
-[Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
+However a room starts, it ends the same way: the device shows or says a
+six-digit approval code, and you type that code into **Settings →
+Satellites** on the dashboard (as admin) to make it a room. Three routes:
+
+- **A Raspberry Pi.** Flash stock Raspberry Pi OS Lite (64-bit), put the
+  card in the server, and use **Settings → Satellites → prepare satellite
+  media** (on the Windows installer, which can't see SD cards, download the
+  zip and unzip it onto the card). On its first boot the Pi raises its own
+  setup Wi-Fi (`Domovoi-Setup-<id>`): join it from a phone, pick your home
+  Wi-Fi, name the room, then approve the code the Pi says out loud.
+  Hardware list, the two mic boards, and the by-hand route (installing the
+  satellite client and pointing it at `ws://<server>:6370` yourself) are in
+  the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
+- **A spare Linux or Windows laptop or PC.** **Settings → Satellites → add
+  a spare device**: type the room's name, press **make the code**, and run
+  the one-line command it shows on that computer. The computer checks it
+  reached *your* server, then shows its approval code
+  ([Linux](docs/SPARE_DEVICE_SATELLITES.md#linux-laptops-and-mini-pcs) ·
+  [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
+- **An old phone or tablet** (Android 8.0 or later). The same **add a spare
+  device** card shows a QR code: install the Domovoi Android app on the
+  phone, open its **Domovoi Room** icon and scan the code. The phone gets
+  its wake-word models from the server, so press **prepare satellite media
+  → Refresh caches** once first
+  ([room mode](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
 
 Say the wake word. The house spirit is home.
 
@@ -304,11 +388,14 @@ Three things hold your state:
    `pg_dump` the `domovoi` database on the old machine and restore it on the
    new one (Postgres publishes on `127.0.0.1:6432` — run `pg_dump` on the
    server itself — user/db `domovoi`, password in `domovoi/.env`).
-2. **`~/.domovoi/` on the server** — downloaded Piper voices, chime sounds,
-   trained wake-word models and their training clips, cover art, and your
-   podcast/audiobook files. Copy the whole directory across. (Music lives
-   wherever your configured music directory points — `~/Music` by default —
-   and moves with it.)
+2. **`~/.domovoi/` on the server** — the server's identity key
+   (`server-identity.json`), downloaded Piper voices, chime sounds, trained
+   wake-word models and their training clips, cover art, and your
+   podcast/audiobook files. Copy the whole directory across, and keep any
+   backup of it as safe as you would a private key. (Music, videos,
+   pictures and documents live wherever their folders point — `~/Music`,
+   `~/Videos`, `~/Pictures` and `~/Documents` by default — and move with
+   them.)
 3. **`domovoi/.env` in the repo checkout** — settings you changed from the
    dashboard are persisted here, and so is the Postgres password the
    database was initialised with. Copy it into the fresh clone before first
@@ -319,11 +406,21 @@ a restored database up to the current schema automatically. Your admin
 password rides along in the database; if you restored `~/.domovoi` without
 the database, first boot simply writes a new setup code.
 
-**Satellites** don't need reflashing: if the new server keeps the old
-hostname/IP, they reconnect on their own; otherwise edit `domovoi_url` in
-each Pi's `~/.domovoi/config.toml` (or its Settings tab on the dashboard once
-it reconnects). Satellites re-sync sounds and wake-word models from the
-server automatically.
+**Satellites** don't need reflashing, as long as `~/.domovoi` came across:
+every satellite holds itself to the server's identity key (a prepared card
+has it built in, a spare device gets it when it joins, a hand-built Pi
+records the first server it meets). A server with a new key is "a different
+server" to them, and each one has to be prepared or added again
+([Server identity](docs/SECURITY_PRIVACY.md#server-identity-which-core-a-satellite-belongs-to)).
+A new address is usually found on its own: a Pi or a Linux laptop looks for
+the server by name, then at its last address, then across its own network.
+A Pi that still can't find it: edit `domovoi_url` in its
+`~/.domovoi/config.toml`. Satellites re-sync sounds and wake-word models
+from the server automatically.
+
+**The Windows installer** can't yet keep the data through an uninstall and
+reinstall onto it; that is not in the test build
+([Not in this build](docs/WINDOWS_HOST.md#not-in-this-build)).
 
 ---
 
@@ -332,16 +429,16 @@ server automatically.
 ```mermaid
 flowchart TB
     subgraph LAN["Your home network"]
-        subgraph Server["Domovoi server (PC with NVIDIA GPU)"]
-            CORE["Core voice service\nFastAPI :6370\nWhisper (CUDA) · routing · TTS"]
+        subgraph Server["Domovoi server (an always-on PC)"]
+            CORE["Core voice service\nFastAPI :6370\nWhisper (GPU or CPU) · routing · TTS"]
             WEB["Web dashboard backend\nFastAPI :6369"]
             PG[("Postgres 16\nhost :6432 · Docker")]
-            OLLAMA["Ollama :11434\nllama3.2:3b + qwen2.5:14b"]
+            OLLAMA["Ollama :11434\nlocal language models"]
             MPD["MPD per room (Docker)\ncontrol 6650+N · stream 8050+N"]
         end
 
         SAT1["Satellite: kitchen\nPi + mic board"]
-        SAT2["Satellite: bedroom\nPi + mic board"]
+        SAT2["Satellite: bedroom\nspare laptop or old phone"]
         BROWSER["Browser\ndashboard on :6369"]
         DROID["Android app"]
 
@@ -383,34 +480,46 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 
 ## What each interface can do
 
-| | Voice satellites | Web dashboard | Android app |
-|---|---|---|---|
-| Hands-free voice, wake word | ✅ the whole point | — | — |
-| Barge-in (interrupt Domovoi mid-sentence) | ✅ | — | — |
-| Intercom & drop-in between rooms | ✅ initiate & receive | — | ✅ drop into a room from your phone |
-| Music playback | ✅ in-room via MPD | ✅ full web player | ✅ native local player |
-| Edit a room's shared queue (reorder, drop, clear) | voice: play / skip / stop | ✅ drag to reorder | ✅ move & remove |
-| Browse & organise files across every library | — | ✅ drag and drop to move | ✅ move via a destination picker |
-| Library, playlists, podcasts, audiobooks, news | voice control | ✅ full management | ✅ dashboard parity |
-| Save music, podcasts & audiobooks to your device | — | ✅ browser download | ✅ via DownloadManager |
-| Calendar, documents, people & voice profiles | voice where it makes sense | ✅ | ✅ |
-| Satellite management & per-room settings | — | ✅ edits the Pi's config remotely | ✅ view/manage |
-| Custom wake-word recording & training | records the clips | ✅ record → train → push to room | — |
-| **Plugin install & administration** | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
-| Admin setup / login | — | ✅ | — (no admin session; Settings → Server settings opens the dashboard) |
+| | Voice satellites (Pi, spare computer) | Phone room mode | Web dashboard | Android app |
+|---|---|---|---|---|
+| Hands-free voice, wake word | ✅ the whole point | ✅ | — | — |
+| Barge-in (interrupt Domovoi mid-sentence) | ✅ off until you turn it on | — | — | — |
+| Push-to-talk voice | — | — | — | ✅ chat mic, and the on-phone assistant |
+| Intercom & drop-in between rooms | ✅ initiate & receive; drop-in needs an echo-cancelling mic (the XVF3800 board, or a speakerphone on a laptop) | ✅ as a satellite; drop-in on phones with an echo canceller | — | ✅ drop into a room from your phone |
+| Music playback | ✅ in-room via MPD | ✅ the room's music | ✅ full web player | ✅ native local player |
+| Edit a room's shared queue (reorder, drop, clear) | voice: play / skip / stop | voice: play / skip / stop | ✅ drag to reorder | ✅ move & remove |
+| Browse & organise files across every library | — | — | ✅ drag and drop to move | ✅ move via a destination picker |
+| Library, playlists, podcasts, audiobooks, news | voice control | voice control | ✅ full management | ✅ dashboard parity |
+| Videos | — | — | ✅ | ✅ |
+| Text chat with Domovoi, pictures included | — | — | ✅ | ✅ |
+| An assistant that answers with no server | — | — | — | ✅ early build: 64-bit phones with 8 GB or more |
+| Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ via DownloadManager |
+| Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
+| Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
+| Custom wake-word recording & training | records the clips | wakes on a pushed model; no recording | ✅ record → train → push to room | — |
+| **Plugin install & administration** | — | — | ✅ **only here** — admin-gated, two-phase trust screen | — (plugin *screens* appear when installed) |
+| Admin setup / login | — | — | ✅ | — (no admin session; Settings → Server settings opens the dashboard) |
 
 The differences are deliberate:
 
-- **Satellites** are ears and a voice — no screens, no admin surface. They're
-  the only interface with wake word, barge-in, and *receiving* an intercom
-  announcement or drop-in, because that needs an always-listening mic and a
-  speaker in the room. (The Android app can *initiate* a drop-in into a room —
-  see below — since your phone already has a mic and speaker; it just isn't a
-  room others can call into.)
+- **Satellites** are ears and a voice — no screens, no admin surface. With
+  phones in room mode, they're the only interfaces with a wake word and
+  *receiving* an intercom announcement or drop-in, because that needs an
+  always-listening mic and a speaker in the room. A spare laptop or PC does
+  what a Pi does with its voice, without the Pi's LEDs, mic-gain tuning or
+  Wi-Fi self-healing. (The Android app can *initiate* a drop-in into a
+  room — see below — since your phone already has a mic and speaker; it
+  just isn't a room others can call into unless it is in room mode.)
+- **Phone room mode** turns an old phone or tablet on its charger into a
+  room: wake word, answers, the room's music, announcements, and drop-ins
+  where the phone has an echo canceller. It has no barge-in and no chat
+  mode, and the dashboard doesn't restart, upgrade or reconfigure it; the
+  app updates like any other app
+  ([what a phone room does](docs/SPARE_DEVICE_SATELLITES.md#what-a-phone-room-does)).
 - **The dashboard** is the seat of management. It is the *only* place plugins
   can be installed, and installs are admin-gated behind an explicit trust
   screen. It's also where you record, train, and deploy custom wake words and
-  edit any satellite's settings remotely.
+  edit a Pi's or a spare computer's settings remotely.
 - **The room queue belongs to the room, not to a device.** Each client also
   has its own private player queue, but the queue a room's speaker plays from
   is shared: anyone can add to it, reorder it, or drop a track, and every
@@ -425,11 +534,14 @@ The differences are deliberate:
   only renders screens for capabilities that exist — install the radio
   plugin and a Stations screen appears; remove it and the screen goes away.
   Server administration (greetings, voices, wake words, models,
-  configuration) stays on the dashboard: the app's Settings keeps only
-  Connection and About, and its Server settings tab opens the dashboard.
+  configuration) stays on the dashboard: the app's Settings keeps what
+  belongs to the phone (Connection, Phone bar, Voice, Satellites, About),
+  and its Server settings tab opens the dashboard.
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
-  whoever's there from anywhere on the network.
+  whoever's there from anywhere on the network. Its **Assistant** tab (an
+  early build) answers on the phone itself, with no server; it is separate
+  from Chat, which talks to your server.
 
 ---
 
@@ -476,11 +588,18 @@ Want to write one? Start at the
 | [Security & privacy](docs/SECURITY_PRIVACY.md) | Threat model, what leaves your network (and what never does) |
 | [Container guard](docs/CONTAINER_GUARD.md) | Which Docker containers Domovoi watches, the alerts when one fails, and the freeze when one looks tampered with |
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
+| [Pi provisioning checklist](satellite/PROVISIONING.md) | Every command and gotcha for building a Pi satellite by hand |
+| [Video satellites](satellite/VIDEO_SATELLITE.md) | A satellite with a screen: the now-playing kiosk build on a Radxa Zero 3W |
+| [Satellites on spare devices](docs/SPARE_DEVICE_SATELLITES.md) | A Linux or Windows laptop or PC, or an old phone or tablet in room mode, as a room: the command or QR code, the approval, what each can and can't do |
+| [Wake-word training](scripts/wake_word/README.md) | Training your own wake word from the dashboard: what it needs, what a training does to the server, the licence of what it makes |
+| [Hardware validation](docs/HARDWARE_VALIDATION.md) | The checks on real devices that satellite onboarding and video satellites still need |
 | [Android compatibility](docs/ANDROID_COMPATIBILITY.md) | Which phones and Android versions the app runs on, which APK to install, what each version gets |
+| [The Android app](android/README.md) | Building the app, and how it works: offline mode, the on-phone assistant, room mode, what the phone holds |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
-| [Running the server on Linux](docs/LINUX_HOST.md) | Linux install, what differs from the Windows-first docs, systemd units |
+| [Running the server on Linux](docs/LINUX_HOST.md) | Linux install (one script or by hand), what differs from the Windows-first docs, systemd units, updates from the dashboard |
 | [The Windows installer (test build)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
+| [Release notes](docs/RELEASE_NOTES.md) | What changed, newest first, and what an operator has to do after an update |
 
 ---
 
@@ -507,5 +626,15 @@ feeds them (`domovoi/phonemizer`) is Domovoi's own (MIT) on the Carnegie
 Mellon Pronouncing Dictionary (BSD-2-Clause style; its licence ships in
 `domovoi/phonemizer/data/cmudict/LICENSE`); no espeak-ng code or data is
 used.
+
+The default wake word, `hey_jarvis`, is one of openWakeWord's pre-trained
+models, which are licensed CC BY-NC-SA 4.0 (non-commercial). A wake word
+you train on your own server is for your household only
+([why](scripts/wake_word/README.md#5-licence-a-model-trained-here-is-for-this-household)).
+
+The Android app's on-phone assistant runs Gemma 4 E2B (Apache-2.0) on
+LiteRT-LM (Apache-2.0), and listens with Moonshine and Silero VAD (both
+MIT) through sherpa-onnx (Apache-2.0). Room mode wakes with openWakeWord's
+models on ONNX Runtime (MIT).
 
 *May your stove stay warm and your wake word never misfire.* 🐈
