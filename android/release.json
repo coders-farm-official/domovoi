@@ -7,5 +7,29 @@
     "signing certificate's SHA-256: the server serves an APK only when its own signature is that key's.",
     "release is null until the first release exists. See android/README.md, 'Publishing a release'."
   ],
-  "release": null
+  "release": {
+    "package": "com.domovoi.app",
+    "version_name": "1.0.0-rc1",
+    "version_code": 26101501,
+    "tag": "v1.0.0-rc1",
+    "commit": "4d6b4147f7d99d84fd0fcac2fdcb769c164eec92",
+    "published": "2026-10-16",
+    "cert_sha256": "296b175ca65d173a65156330bceffca319dbcef355cf2cd500028ef43465d5db",
+    "apks": [
+      {
+        "abi": "arm64-v8a",
+        "file": "domovoi-1.0.0-rc1-arm64-v8a.apk",
+        "url": "https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0-rc1/domovoi-1.0.0-rc1-arm64-v8a.apk",
+        "sha256": "268ff4212d5c403e1060870f30b61811a8fbe2b0878882de490ac8d17e20f474",
+        "size": 79996285
+      },
+      {
+        "abi": "armeabi-v7a",
+        "file": "domovoi-1.0.0-rc1-armeabi-v7a.apk",
+        "url": "https://github.com/coders-farm-official/domovoi/releases/download/v1.0.0-rc1/domovoi-1.0.0-rc1-armeabi-v7a.apk",
+        "sha256": "206e595f6c515e33e3841231bc005f3845f2c80a160ad26b3fe90f4a5490b6c8",
+        "size": 48518461
+      }
+    ]
+  }
 }
