@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 # very first step of provisioning raises FileNotFoundError, before the
 # radio is touched — so the device looks like it failed to join Wi-Fi.
 _CODE_EXT_ALLOW = frozenset(
-    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json", ".example"}
+    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".ps1", ".json", ".example"}
 )
 
 

@@ -116,6 +116,10 @@ ALLOWLIST: dict[tuple[str, str, str], str] = {
     # ── web: the auth surface itself ──────────────────────────────────
     ("web", "POST", "/api/auth/setup"): "IS the auth surface — requires the setup code, backoff-throttled",
     ("web", "POST", "/api/auth/login"): "IS the auth surface — password + backoff",
+    ("web", "POST", "/api/auth/resume"): (
+        "IS the auth surface — the session cookie, same origin and X-Requested-With, "
+        "inside the reload window after a password sign-in (test_admin_reload_resume.py)"
+    ),
     ("web", "POST", "/api/auth/logout"): "checks the Bearer inside the handler (401 without)",
     ("web", "DELETE", "/api/auth/sessions/{token_hash}"): "checks the Bearer inside the handler",
     ("web", "POST", "/api/auth/password"): "checks the Bearer inside the handler",
@@ -260,6 +264,15 @@ SECURITY_TIER_ROUTES = [
     ("web", "DELETE", "/api/captures/rooms/{room_id}"),
     ("web", "PATCH", "/api/captures/clips/{room_id}/{capture_id}"),
     ("web", "DELETE", "/api/captures/clips/{room_id}/{capture_id}"),
+    # "Turn on wake-word training" (2026-10-13): builds and runs a Docker
+    # image as the service user and writes WAKE_WORD_TRAIN_COMMAND, so it
+    # is a config write.
+    ("core", "POST", "/v1/admin/wake/trainer/enable"),
+    ("web", "POST", "/api/wake-words/trainer/enable"),
+    # ...and "Turn off and free the space": two settings off, Docker's
+    # image and volume removed.
+    ("core", "POST", "/v1/admin/wake/trainer/disable"),
+    ("web", "POST", "/api/wake-words/trainer/disable"),
 ]
 
 

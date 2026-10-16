@@ -143,7 +143,12 @@ class PrefsVaultStore(context: Context) : TokenVault.Store {
  * user authentication required (the token must be usable with the screen
  * locked — the background timer sync runs then).
  */
-class KeystoreSealer : TokenVault.Sealer {
+class KeystoreSealer(
+    /** The Keystore key's alias; room mode seals its room key under its own
+     *  (roommode/RoomStore.kt), never the household's. */
+    private val alias: String = ALIAS,
+    private val aad: ByteArray = AAD,
+) : TokenVault.Sealer {
     private val key: SecretKey by lazy { loadOrCreateKey() }
 
     override fun seal(plain: ByteArray): ByteArray {
@@ -151,7 +156,7 @@ class KeystoreSealer : TokenVault.Sealer {
         cipher.init(Cipher.ENCRYPT_MODE, key)
         val iv = cipher.iv
         check(iv.size == IV_BYTES) { "unexpected GCM iv size ${iv.size}" }
-        cipher.updateAAD(AAD)
+        cipher.updateAAD(aad)
         return iv + cipher.doFinal(plain)
     }
 
@@ -159,16 +164,16 @@ class KeystoreSealer : TokenVault.Sealer {
         require(sealed.size > IV_BYTES) { "sealed blob too short" }
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, sealed, 0, IV_BYTES))
-        cipher.updateAAD(AAD)
+        cipher.updateAAD(aad)
         return cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES)
     }
 
     private fun loadOrCreateKey(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        (ks.getKey(alias, null) as? SecretKey)?.let { return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
         generator.init(
-            KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                 .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                 .setKeySize(256)

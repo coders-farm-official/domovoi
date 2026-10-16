@@ -188,6 +188,17 @@ class WorkerRunner:
         for hook in self._hooks.get(owner, []):
             self._hook_done.pop(hook.name, None)
 
+    def start_worker(self, owner: str, name: str) -> bool:
+        """Start ONE registered worker that isn't running (its enabled
+        setting was off at boot and has just been switched on, e.g. the
+        wake-word trainer by Settings → Wake Words). Unlike start_owner it
+        fires no startup hooks. True when it is running afterwards."""
+        for entry in self._workers.get(owner, []):
+            if entry.worker.name == name:
+                self._start_entry(entry)
+                return entry.task is not None and not entry.task.done()
+        return False
+
     def remove_owner(self, owner: str) -> None:
         """Registration teardown AFTER stop_owner (disable/uninstall)."""
         self._workers.pop(owner, None)

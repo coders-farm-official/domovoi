@@ -558,7 +558,7 @@
       }
     },
     "linux_pc": {
-      "about": "A Linux laptop running the Python client (S1 draft, 'automatic' mode): the same boolean keys as a Pi plus a `supports` list without Wi-Fi, LEDs, mic gain, plugin payloads, time sync or chat mode. `tray` is a name this core doesn't know: ignored.",
+      "about": "A Linux laptop running the Python client (S1, `generic_pc`): the same boolean keys as a Pi plus board linux_pc and a `supports` list without Wi-Fi, LEDs, mic gain, plugin payloads, time sync or chat mode (no root helpers on a laptop). The hello is the one satellite/pc_engine.py hello_fields() adds, in both permissions: with \"ask me\" an update or a restart is held for the person's OK, not refused.",
       "hello": {
         "type": "hello",
         "room_id": "study",
@@ -581,8 +581,7 @@
           "wake_clips",
           "wake_models",
           "sounds",
-          "voice",
-          "tray"
+          "voice"
         ]
       },
       "ready": {
@@ -614,9 +613,7 @@
           "wake_models"
         ],
         "board": "linux_pc",
-        "unknown_abilities": [
-          "tray"
-        ],
+        "unknown_abilities": [],
         "allowed": [
           "announce_after_session_end",
           "capture_control",
@@ -764,8 +761,212 @@
         }
       }
     },
+    "windows_pc": {
+      "about": "A Windows laptop or PC running the Python client (2026-10-13, `windows_pc`): the hello of linux_pc with board windows_pc, the same narrow `supports` list (no Wi-Fi, LEDs, mic gain, plugin payloads, time sync or chat mode; no administrator rights on the PC) and the same \"ask me\" holding of updates and restarts: satellite/pc_engine.py hello_fields() with the windows_pc profile.",
+      "hello": {
+        "type": "hello",
+        "room_id": "den",
+        "wake_word": "hey_jarvis",
+        "synced_sha": "44f0fff",
+        "supports_full_duplex": false,
+        "pairing_token": "fixture-pairing-token-den-000000000000000000000000",
+        "approval_code": "482913",
+        "sat_type": "voice",
+        "mic_enabled": true,
+        "speech_pause": true,
+        "capture_control": true,
+        "announce_after_session_end": true,
+        "board": "windows_pc",
+        "supports": [
+          "restart",
+          "code_sync",
+          "config",
+          "logs",
+          "wake_clips",
+          "wake_models",
+          "sounds",
+          "voice"
+        ]
+      },
+      "ready": {
+        "type": "ready",
+        "protocol_version": "0.1",
+        "room_id": "den",
+        "audio_sample_rate_in": 16000,
+        "features": [
+          "speech_pause",
+          "end_capture",
+          "music_failed",
+          "health",
+          "log_push"
+        ]
+      },
+      "expect": {
+        "declared": true,
+        "supports_shown": [
+          "announce_after_session_end",
+          "capture_control",
+          "code_sync",
+          "config",
+          "logs",
+          "restart",
+          "sounds",
+          "speech_pause",
+          "voice",
+          "wake_clips",
+          "wake_models"
+        ],
+        "board": "windows_pc",
+        "unknown_abilities": [],
+        "allowed": [
+          "announce_after_session_end",
+          "capture_control",
+          "code_sync",
+          "config",
+          "logs",
+          "restart",
+          "sounds",
+          "speech_pause",
+          "voice",
+          "wake_clips",
+          "wake_models"
+        ],
+        "not_allowed": [
+          "chat_mode",
+          "display",
+          "full_duplex",
+          "leds",
+          "mic_gain",
+          "plugin_payloads",
+          "time_sync",
+          "wifi"
+        ],
+        "frames_sent": [
+          "restart",
+          "upgrade",
+          "set_config",
+          "get_logs",
+          "start_wake_recording",
+          "stop_wake_recording",
+          "set_wake_word",
+          "wake_models_changed",
+          "sounds_changed",
+          "end_capture",
+          "announcement"
+        ],
+        "frames_never": [
+          "set_display",
+          "chat_start",
+          "dropin_start"
+        ],
+        "upgrade_extra": {
+          "plugin_payloads": false
+        },
+        "config_hidden_sections": [
+          "display",
+          "leds",
+          "mic_gain",
+          "wifi"
+        ],
+        "pi_actions_kept": [
+          "set_voice",
+          "restart"
+        ],
+        "dashboard": {
+          "board_badge": "Windows PC",
+          "restart": true,
+          "upgrade": true,
+          "settings_tab": true,
+          "live_logs": true,
+          "announce": true,
+          "drop_in": false,
+          "wake_record": true,
+          "wake_push": true
+        }
+      },
+      "health": {
+        "frame": {
+          "type": "health",
+          "seq": 7,
+          "ts": 1760280060.0,
+          "rss_kb": 148000,
+          "hwm_kb": 152000,
+          "threads": 22,
+          "fds": 61,
+          "cpu_pct": 4.0,
+          "sys_cpu_pct": 9.5,
+          "load1": 0.8,
+          "load5": 0.7,
+          "load15": 0.6,
+          "mem_avail_kb": 3900000,
+          "soc_temp_c": 61.0,
+          "uptime_s": 7200,
+          "proc_uptime_s": 1800,
+          "boot_id": "88bb-den-windows",
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "idle": true,
+          "ws": "up",
+          "reconnects": 0,
+          "wifi": {
+            "rx_mbits": 300.0,
+            "tx_mbits": 270.0,
+            "ssid": "home"
+          },
+          "battery": {
+            "percent": 81,
+            "charging": true,
+            "on_power": true
+          },
+          "mic_blocked": false,
+          "fan_rpm": 2100
+        },
+        "stored": {
+          "seq": 7,
+          "ts": 1760280060.0,
+          "rss_kb": 148000,
+          "hwm_kb": 152000,
+          "threads": 22,
+          "fds": 61,
+          "cpu_pct": 4.0,
+          "sys_cpu_pct": 9.5,
+          "load1": 0.8,
+          "load5": 0.7,
+          "load15": 0.6,
+          "mem_avail_kb": 3900000,
+          "soc_temp_c": 61.0,
+          "uptime_s": 7200,
+          "proc_uptime_s": 1800,
+          "boot_id": "88bb-den-windows",
+          "gateway": "192.168.0.1",
+          "gateway_ok": true,
+          "core_ok": true,
+          "default_route": true,
+          "mic_expected": true,
+          "mic_fps": 33.3,
+          "idle": true,
+          "ws": "up",
+          "reconnects": 0,
+          "wifi": {
+            "rx_mbits": 300.0,
+            "tx_mbits": 270.0,
+            "ssid": "home"
+          },
+          "battery": {
+            "percent": 81,
+            "charging": true,
+            "on_power": true
+          },
+          "mic_blocked": false
+        }
+      }
+    },
     "android_room": {
-      "about": "An Android phone in room mode (S3 draft): only `supports`, no boolean keys. Echo cancellation for drop-ins but no chat mode; it updates through its app store, so no restart, code sync, settings, live log or clip recording.",
+      "about": "An Android phone in room mode (android roommode/, what RoomProtocol.hello sends on a phone with an echo canceller; a phone without one leaves full_duplex out): only `supports`, no boolean keys. Echo cancellation for drop-ins but no chat mode; it mirrors the server's sounds and wake models; it updates through its app store, so no restart, code sync, settings, live log or clip recording.",
       "hello": {
         "type": "hello",
         "room_id": "nursery",
@@ -780,7 +981,8 @@
           "speech_pause",
           "capture_control",
           "announce_after_session_end",
-          "wake_models"
+          "wake_models",
+          "sounds"
         ]
       },
       "ready": {
@@ -802,6 +1004,7 @@
           "announce_after_session_end",
           "capture_control",
           "full_duplex",
+          "sounds",
           "speech_pause",
           "wake_models"
         ],
@@ -811,6 +1014,7 @@
           "announce_after_session_end",
           "capture_control",
           "full_duplex",
+          "sounds",
           "speech_pause",
           "wake_models"
         ],
@@ -824,7 +1028,6 @@
           "mic_gain",
           "plugin_payloads",
           "restart",
-          "sounds",
           "time_sync",
           "voice",
           "wake_clips",
@@ -833,6 +1036,7 @@
         "frames_sent": [
           "set_wake_word",
           "wake_models_changed",
+          "sounds_changed",
           "dropin_start",
           "end_capture",
           "announcement"
@@ -844,7 +1048,6 @@
           "get_logs",
           "start_wake_recording",
           "stop_wake_recording",
-          "sounds_changed",
           "set_display",
           "chat_start"
         ],

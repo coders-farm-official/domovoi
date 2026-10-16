@@ -22,7 +22,10 @@ piper_sample_generator_path: /opt/piper-sample-generator
 n_samples: __N_SAMPLES__
 n_samples_val: __N_SAMPLES_VAL__
 tts_batch_size: __TTS_BATCH__
-custom_negative_phrases: []
+# Near misses of the phrase ("hey domino" for "hey domovoi"), worked out
+# from the phrase and the CMU dictionary by train_runner.near_miss_phrases;
+# a JSON list, which YAML reads as a flow sequence.
+custom_negative_phrases: __CUSTOM_NEGATIVES__
 
 # --- augmentation (varies acoustics; resamples to the 16 kHz training set) ---
 augmentation_rounds: 1
@@ -34,7 +37,7 @@ background_paths_duplication_rate:
 rir_paths:
   - __RIR_DIR__
 
-# --- precomputed negative / FP-validation features (from the ~7 GB cache vol) ---
+# --- precomputed negative / FP-validation features (from the ~17.5 GB cache vol) ---
 false_positive_validation_data_path: __FP_VAL_NPY__
 feature_data_files:
   ACAV100M_sample: __NEG_FEATURES_NPY__

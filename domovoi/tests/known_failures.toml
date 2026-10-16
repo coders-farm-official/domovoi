@@ -98,3 +98,11 @@ since = "19e9e43"
 test = "domovoi/tests/test_plugin_device_tier.py::test_the_web_mount_refuses_a_websocket_route[nested-websocket]"
 reason = "a nested router's route is named with the outer prefix (/in/ws): how this FastAPI version nests included routers (sometimes passes)"
 since = "19e9e43"
+
+# Seen once in the full -n 4 run at integration/1014a (774f0aa, 2026-10-15,
+# right after a reboot); passes alone 3 of 3 at that head and on d79578e, and
+# nothing in batch 9 touches web/backend/realtime.py or the test.
+[[failure]]
+test = "domovoi/tests/test_realtime_listen.py::test_listen_task_routes_acquisitions_notify_to_poll_loop"
+reason = "flaky under load: gives the LISTEN connection a fixed 0.3 s to come up before the NOTIFY, which Postgres drops for a late subscriber"
+since = "d79578e"

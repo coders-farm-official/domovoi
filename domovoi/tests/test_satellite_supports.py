@@ -43,7 +43,7 @@ REPO = Path(__file__).resolve().parents[2]
 FIXTURES = json.loads((REPO / "docs" / "uml" / "satellite-fixtures.json").read_text(encoding="utf-8"))
 DEVICES: dict[str, dict[str, Any]] = FIXTURES["devices"]
 PI_DEVICES = ("pi_2mic_hat", "pi_xvf3800")
-SPARE_DEVICES = ("linux_pc", "android_room")
+SPARE_DEVICES = ("linux_pc", "windows_pc", "android_room")
 GATES: dict[str, list[str]] = FIXTURES["frame_gates"]
 
 
@@ -574,6 +574,50 @@ async def test_settings_endpoints_hide_and_refuse_what_the_device_left_out(core,
     assert pc_ws.sent == [{"type": "set_config", "changes": {"wake.threshold": 0.6}}]
 
 
+async def test_the_settings_endpoint_refuses_what_the_satellite_would_refuse(core, paired, inventory):
+    """Round 2: a value the satellite refuses (an ALSA name that runs a
+    command, a string over 120 characters, a line break) is refused here
+    with the reason, instead of "sent" and then silently dropped."""
+    pi, pi_ws = await _connect(core, "pi_xvf3800")
+    async with core.client as c:
+        r = await c.post(f"/v1/admin/satellite/{pi.room_id}/config", json={"changes": {
+            "music.alsa_device": 'file:"|id",raw',
+            "audio.output_mixer_card": "0;reboot",
+            "audio.output_mixer_control": 'PCM"',
+            "audio.input_device": "x" * 121,
+            "audio.output_device": "Array\nmore",
+            "wake.threshold": 0.6,
+        }}, headers=ADMIN)
+    body = r.json()
+    assert body["sent"] == ["wake.threshold"], body
+    assert "plain ALSA device name" in body["rejected"]["music.alsa_device"]
+    assert "card number or name" in body["rejected"]["audio.output_mixer_card"]
+    assert "mixer control name" in body["rejected"]["audio.output_mixer_control"]
+    assert "120 characters" in body["rejected"]["audio.input_device"]
+    # The core's own text check (any setting, since 2026-10-13: "can't hold
+    # a control character") answers before the satellite limit's ("no
+    # control characters"); either says why.
+    assert "control character" in body["rejected"]["audio.output_device"]
+    assert pi_ws.sent == [{"type": "set_config", "changes": {"wake.threshold": 0.6}}]
+
+
+async def test_a_windows_pc_s_device_names_are_checked_by_the_windows_rule(core, paired, inventory):
+    """Merged with eeb09c9: the core's ALSA check would refuse a real
+    Windows name; on board windows_pc the satellite's Windows rule applies."""
+    pc, pc_ws = await _connect(core, "windows_pc")
+    async with core.client as c:
+        r = await c.post(f"/v1/admin/satellite/{pc.room_id}/config", json={"changes": {
+            "music.alsa_device": "Speakers (Realtek(R) Audio)",
+            "audio.input_device": "x & calc.exe",
+            "audio.output_device": 'file:"|id",raw',
+        }}, headers=ADMIN)
+    body = r.json()
+    assert body["sent"] == ["music.alsa_device"], body
+    assert "a Windows audio device" in body["rejected"]["audio.input_device"]
+    assert "a Windows audio device" in body["rejected"]["audio.output_device"]
+    assert pc_ws.sent == [{"type": "set_config", "changes": {"music.alsa_device": "Speakers (Realtek(R) Audio)"}}]
+
+
 async def test_logs_endpoint_skips_the_live_pull_for_a_device_without_logs(core, paired, inventory):
     phone, ws = await _connect(core, "android_room")
     async with core.client as c:
@@ -627,10 +671,47 @@ async def test_the_snapshot_lists_supports_and_board_only_for_devices_that_sent_
     assert snap["satellite_supports"] == {
         DEVICES[d]["hello"]["room_id"]: DEVICES[d]["expect"]["supports_shown"] for d in SPARE_DEVICES
     }
-    assert snap["satellite_board"] == {"study": "linux_pc", "nursery": "android_room"}
+    assert snap["satellite_board"] == {"study": "linux_pc", "den": "windows_pc", "nursery": "android_room"}
     assert snap["satellite_full_duplex"] == {
-        "kitchen": False, "living-room": True, "study": False, "nursery": True,
+        "kitchen": False, "living-room": True, "study": False, "den": False, "nursery": True,
     }
+
+
+async def test_a_pi_s_ignored_settings_reach_the_snapshot_and_the_row(core, paired, inventory, monkeypatch):
+    """2026-10-13: a Pi that replaced a stored setting with its profile's
+    default says so in its hello; the dashboard's row shows it."""
+    from domovoi import main as core_main
+    from web.backend.api import satellites as web_sats
+
+    async def sha():
+        return "abc1234"
+
+    async def no_np(*a, **kw):
+        return None
+
+    monkeypatch.setattr(core_main.git_version, "cached_current_sha", sha)
+    monkeypatch.setattr(web_sats, "_now_playing_for", no_np)
+    note = "music device setting ignored: not a plain ALSA name"
+    hello = dict(DEVICES["pi_xvf3800"]["hello"], settings_ignored=[note, 7, "x" * 500, "bad\nline"])
+    ws = FakeWS(state=core.app.state)
+    session = StreamSession(ws, hello["room_id"])  # type: ignore[arg-type]
+    await session._on_control(hello)
+    core.app.state.active_sessions[session.room_id] = session
+    await _connect(core, "pi_2mic_hat")
+    async with core.client as c:
+        snap = (await c.get("/v1/admin/snapshot")).json()
+    assert snap["satellite_settings_ignored"] == {hello["room_id"]: [note, "x" * 160]}
+    row = {"room_id": hello["room_id"], "control_port": 6650, "http_port": 8050, "last_connected_at": None}
+    sat = await web_sats._satellite_for(row, {**snap, "active_rooms": [hello["room_id"]]}, {}, {}, {})
+    assert sat.settings_ignored == [note, "x" * 160]
+    offline = await web_sats._satellite_for(row, {**snap, "active_rooms": []}, {}, {}, {})
+    assert offline.settings_ignored is None
+
+
+def test_the_health_sample_keeps_ignored_settings_as_short_strings():
+    kept = sh.validate_sample({"rss_kb": 1, "settings_ignored": ["music device setting ignored", 3, "", "y" * 300]})
+    assert kept["settings_ignored"] == ["music device setting ignored", "y" * 160]
+    assert sh.validate_sample({"rss_kb": 1, "settings_ignored": "not a list"})["settings_ignored"] is None
 
 
 # ─── the dashboard's row ──────────────────────────────────────────────────

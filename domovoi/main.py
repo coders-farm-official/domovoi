@@ -236,6 +236,16 @@ def _register_core_reapply_hooks() -> None:
     from domovoi import fast_lane
 
     reapply.on_reapply("fastlane_mode", fast_lane.apply_mode)
+    # Switching wake-word training on in Settings → Configuration starts its
+    # worker now (it isn't started at boot while the setting is off); off
+    # is read by the worker's own tick.
+    def _start_wake_trainer() -> None:
+        if settings.wake_word_trainer_enabled:
+            from domovoi.plugins_runtime.workers import WORKERS as _W
+
+            _W.start_worker("core", "wake_word_trainer")
+
+    reapply.on_reapply("wake_word_trainer_enabled", _start_wake_trainer)
     # Saving the internet answer starts the local search helper (SearXNG)
     # for always / sometimes and stops it for never, in the background
     # (domovoi/searxng_service.py). At boot only the stop under never runs
@@ -244,6 +254,14 @@ def _register_core_reapply_hooks() -> None:
 
     reapply.on_reapply(
         "internet_access", searxng_service.schedule_reconcile, key="searxng"
+    )
+    # ...and stops the trainer's downloads: a "Turn on wake-word training"
+    # job (its build, the 18 GB download) and the update's image rebuild
+    # (domovoi/wake_trainer_setup.py, on_internet_answer).
+    from domovoi import wake_trainer_setup
+
+    reapply.on_reapply(
+        "internet_access", wake_trainer_setup.on_internet_answer, key="wake_trainer"
     )
     # Saving never also stops a room that is playing an internet station
     # and takes internet streams out of every room's queue: MPD fetches
@@ -478,6 +496,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from domovoi import searxng_service
 
         searxng_service.schedule_boot_stop()
+        # Under never, an image rebuild the update unit left running stops.
+        from domovoi import wake_trainer_setup
+
+        wake_trainer_setup.on_internet_answer()
     # §12 milestone: MPD image/room warm has been attempted (best-effort
     # by design) — plugin hooks with after="core.mpd_provisioner" run.
     _WORKERS_EARLY.mark_core_hook_done("core.mpd_provisioner")
@@ -813,6 +835,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # step: a step that overruns is cancelled and left behind, so no
         # plugin or worker can hold the stop open (domovoi/lifecycle.py).
         signal_shutdown("lifespan teardown")  # no-op after a signal
+        from domovoi.wake_trainer_setup import shutdown as wake_trainer_setup_shutdown
+
         teardown_started = asyncio.get_running_loop().time()
         await lifecycle.run_teardown(
             [
@@ -824,6 +848,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                  _STOP_WORKERS_SEC + 1.0),
                 ("core workers", lambda: WORKERS.stop_owner("core", timeout=_STOP_WORKERS_SEC),
                  _STOP_WORKERS_SEC + 1.0),
+                # A "Turn on wake-word training" job still building or
+                # downloading: stop its docker child and container.
+                ("wake-word training setup", wake_trainer_setup_shutdown, 3.0),
                 # Announcements still in flight stop here; their rows stay
                 # pending/sending and the next boot resumes them.
                 ("timer delivery", app.state.timer_delivery.shutdown, 2.0),
@@ -1278,9 +1305,11 @@ async def sounds_file(path: str, voice: str | None = None) -> FileResponse:
 # (*.bak), and any .env secret from ever leaving the host.
 SATELLITE_CODE_DIR = Path(settings.repo_dir) / "satellite"
 # Kept in sync with satellite_media/payload.py::_CODE_EXT_ALLOW — see the
-# note there on why ".example" matters.
+# note there on why ".example" matters. ".ps1" (2026-10-13) carries the
+# Windows satellite's installer in the bundle a Windows laptop downloads;
+# inert on a Pi, and a satellite's own code sync does not take it.
 _SAT_CODE_EXT_ALLOW = frozenset(
-    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".json", ".example"}
+    {".py", ".toml", ".txt", ".md", ".service", ".sh", ".ps1", ".json", ".example"}
 )
 
 
@@ -1343,6 +1372,51 @@ async def satellite_code_manifest_signed() -> dict[str, Any]:
     return identity.signed_manifest(server_identity.CODE_CHANNEL, manifest)
 
 
+@app.get("/v1/satellite-code/bundle.tar.gz")
+async def satellite_code_bundle() -> FastAPIResponse:
+    """The satellite tree as one deterministic ``.tar.gz`` — what a spare
+    computer's install command downloads (Settings → Satellites → Add a
+    spare device). The same files as the manifest above, under
+    ``satellite/``. The command runs it only after matching its SHA-256
+    against the digest the dashboard quoted
+    (``/v1/satellite-code/bundle.sha256``), so this is safe to serve as
+    openly as the rest of the channel. 423 while the container guard's
+    freeze is on. Declared before the catch-all so the literal wins."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle
+
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return FastAPIResponse(
+        content=bundle.data,
+        media_type="application/gzip",
+        headers={
+            "Content-Disposition": 'attachment; filename="domovoi-satellite.tar.gz"',
+            "X-Content-SHA256": bundle.sha256,
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.get("/v1/satellite-code/bundle.sha256")
+async def satellite_code_bundle_digest() -> dict[str, Any]:
+    """The bundle's SHA-256 and size: what the dashboard writes into the
+    install command it shows. Public, like the bundle itself."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_bundle
+
+    bundle = await asyncio.to_thread(
+        satellite_bundle.current, SATELLITE_CODE_DIR, _is_allowed_satellite_code
+    )
+    return {
+        "sha256": bundle.sha256,
+        "size": len(bundle.data),
+        "files": bundle.files,
+        "path": "/v1/satellite-code/bundle.tar.gz",
+    }
+
+
 @app.get("/v1/satellite-code/{path:path}")
 async def satellite_code_file(path: str) -> FileResponse:
     """Serve one allowlisted file from satellite/. Guarded against
@@ -1359,6 +1433,59 @@ async def satellite_code_file(path: str) -> FileResponse:
     except ValueError:
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(target, media_type="application/octet-stream")
+
+
+# ─── The Windows satellite's runtime (spare devices, 2026-10-13) ──────────
+# The embeddable Python and the win_amd64 wheels a Windows laptop's install
+# command needs, pinned file by file in satellite/windows-runtime.json and
+# fetched into this server's cache only when an admin asks
+# (domovoi/satellite_windows.py). Served openly on the LAN, like the code
+# bundle: public files the installer checks byte for byte against the lock
+# it got from the bundle whose digest the dashboard quoted.
+
+
+def _windows_lock() -> dict[str, Any]:
+    from domovoi import satellite_windows
+
+    try:
+        return satellite_windows.load_lock(SATELLITE_CODE_DIR / satellite_windows.LOCK_NAME)
+    except satellite_windows.LockError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+
+
+@app.get("/v1/satellite-windows/files/{name}")
+async def satellite_windows_file(name: str) -> FileResponse:
+    """One file of the Windows runtime, if the lock lists it and the cached
+    bytes are the pinned ones; 404 otherwise (the installer then fetches
+    the same pinned file upstream). 423 while the container guard's freeze
+    is on."""
+    await container_freeze.require_unfrozen("satellite_channel", public=True)
+    from domovoi import satellite_windows
+
+    lock = _windows_lock()
+    path = await asyncio.to_thread(satellite_windows.cached_file, lock, name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="not cached on this server")
+    return FileResponse(path, media_type="application/octet-stream")
+
+
+@app.get("/v1/admin/satellite-windows", dependencies=[Depends(require_admin_read)])
+async def admin_satellite_windows() -> dict[str, Any]:
+    """Whether this server holds every Windows runtime file, and the fetch's state."""
+    from domovoi import satellite_windows
+
+    return await asyncio.to_thread(satellite_windows.status, _windows_lock())
+
+
+@app.post("/v1/admin/satellite-windows/fetch", dependencies=[Depends(require_admin_mutation)])
+async def admin_satellite_windows_fetch() -> dict[str, Any]:
+    """Start fetching the Windows runtime (python.org and PyPI, ~95 MB,
+    every file held to its pin). Answers at once; poll the status."""
+    from domovoi import satellite_windows
+
+    lock = _windows_lock()
+    started = satellite_windows.start_fetch(lock)
+    return {"started": started, **(await asyncio.to_thread(satellite_windows.status, lock))}
 
 
 # ─── Satellite plugin-payload channel ──────────────────────────────────────
@@ -1477,6 +1604,32 @@ async def wake_models_file(path: str) -> FileResponse:
     return FileResponse(target, media_type="application/octet-stream")
 
 
+# A fifth file channel, for spare-device satellites (an Android phone in room
+# mode): the openWakeWord base models the satellite media cache holds, each
+# matching its pin (domovoi/wake_base_models.py). Signed only — nothing older
+# than the signature reads it — and only verified, pinned .onnx files are
+# listed or served.
+@app.get("/v1/wake-base/manifest.sig")
+async def wake_base_manifest_signed() -> dict[str, Any]:
+    """``{name: sha256}`` of the served base models, in a signed envelope."""
+    from domovoi import wake_base_models
+
+    manifest = await asyncio.to_thread(wake_base_models.served_models)
+    identity = server_identity.load_or_create()
+    return identity.signed_manifest(wake_base_models.WAKE_BASE_CHANNEL, manifest)
+
+
+@app.get("/v1/wake-base/{name}")
+async def wake_base_file(name: str) -> FileResponse:
+    """One base model, by the name the manifest lists; 404 otherwise."""
+    from domovoi import wake_base_models
+
+    target = await asyncio.to_thread(wake_base_models.model_path, name)
+    if target is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target, media_type="application/octet-stream")
+
+
 # ─── Admin endpoints (used by the web management UI) ─────────────────────
 # Surface the core's *running-process* state to the web backend
 # (which lives in a different process and can't reach `app.state`
@@ -1575,6 +1728,13 @@ async def admin_snapshot() -> dict[str, Any]:
             for room, sess in app.state.active_sessions.items()
             if (board := getattr(sess, "board", None))
         },
+        # Stored settings a connected satellite could not use and replaced
+        # with its profile's default (from its hello); absent when none.
+        "satellite_settings_ignored": {
+            room: notes
+            for room, sess in app.state.active_sessions.items()
+            if (notes := getattr(sess, "settings_ignored", None))
+        },
         # Per-room screen/kiosk state ({on, kiosk_alive, brightness,
         # idle_mode}) video satellites report via display_status — drives
         # the dashboard's Display block and dead-kiosk warning.
@@ -1615,6 +1775,12 @@ async def admin_snapshot() -> dict[str, Any]:
         # reason: the web hop refuses a guest itself while it is off, and
         # its own settings copy goes stale the moment Settings saves it.
         "guest_queue_editing": bool(settings.guest_queue_editing),
+        # How long after the admin password was entered a reloaded
+        # dashboard tab may take its sign-in back (POST /api/auth/resume on
+        # the web, owner decision 2026-10-14). Live here for the same
+        # reason: the web decides every resume, and its own settings copy
+        # goes stale the moment Settings saves this.
+        "admin_reload_window_min": int(settings.admin_reload_window_min),
         # The opt-in MusicBrainz alias fetch's live state (off / offline /
         # running / done ...), for the dashboard's "Also-called names" card.
         "music_alias_fetch": alias_fetch_status(),
@@ -2290,8 +2456,8 @@ class _AdminChatToolBody(BaseModel):
 
 @app.get(
     "/v1/admin/device-token",
-    # Security-tier READ: the household token is a credential. Bearer or
-    # the dashboard cookie renders it; 501 before setup.
+    # Security-tier READ: the household token is a credential. Bearer-only
+    # (the dashboard cookie reaches every port of the host); 501 before setup.
     dependencies=[Depends(require_admin_security_read)],
 )
 async def admin_get_device_token() -> dict[str, Any]:
@@ -2642,6 +2808,151 @@ async def admin_wake_score(body: _AdminWakeScoreBody) -> dict[str, Any]:
         raise HTTPException(status_code=501, detail=str(e)) from e
 
 
+# ─── Wake-word training: Settings → Wake Words → "Turn on" ────────────────
+
+
+@app.get(
+    "/v1/admin/wake/trainer",
+    # An admin READ: the dashboard cookie may render it. It names the
+    # server's free disk, memory and GPUs, nothing more.
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_trainer_status() -> dict[str, Any]:
+    """Whether wake-word training is on, the setup job's progress or the
+    error it stopped on, and what training needs against what this server
+    has (disk, download, memory, Docker, GPU or CPU and the minutes per
+    word), with the reasons it would refuse (domovoi/wake_trainer_setup.py)."""
+    from domovoi import wake_trainer_setup
+
+    return await wake_trainer_setup.status()
+
+
+class _AdminWakeTrainerEnableBody(BaseModel):
+    # A CPU-only server (or one whose GPU Docker can't reach) trains for
+    # over an hour a word and slows the voice pipeline meanwhile: the admin
+    # says yes to that separately.
+    cpu_ok: bool = False
+    # The Windows install can't see C:'s free space: the admin confirms it.
+    disk_ok: bool = False
+
+
+@app.post(
+    "/v1/admin/wake/trainer/enable",
+    # Security tier, like a config write: it builds and runs a Docker image
+    # as the service user and writes WAKE_WORD_TRAIN_COMMAND into .env.
+    # Bearer-only, 501 before setup.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_wake_trainer_enable(body: _AdminWakeTrainerEnableBody) -> dict[str, Any]:
+    """Turn wake-word training on: build the trainer image, check the GPU,
+    download the training data, then switch the two settings on and start
+    the worker, as one background job; returns at once with the status
+    (the page polls ``GET /v1/admin/wake/trainer``). 409 with the reason
+    when it can't start (internet turned off, too little disk or memory, no
+    Docker, a CPU-only server without ``cpu_ok``, a job or a training
+    already running)."""
+    from domovoi import wake_trainer_setup
+
+    try:
+        return await wake_trainer_setup.start(cpu_ok=body.cpu_ok, disk_ok=body.disk_ok)
+    except wake_trainer_setup.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/admin/wake/trainer/footprint",
+    dependencies=[Depends(require_admin_read)],
+)
+async def admin_wake_trainer_footprint() -> dict[str, Any]:
+    """What "Turn off and free the space" would remove, as Docker sizes it:
+    the trainer image and the cache volume (bytes; null where Docker can't
+    say)."""
+    from domovoi import wake_trainer_setup
+
+    return await asyncio.to_thread(wake_trainer_setup.footprint)
+
+
+@app.post(
+    "/v1/admin/wake/trainer/disable",
+    # Security tier, like turning it on: it changes two settings and
+    # removes Docker images and volumes.
+    dependencies=[Depends(require_admin_security)],
+)
+async def admin_wake_trainer_disable() -> dict[str, Any]:
+    """Turn wake-word training off and free the space: the two settings
+    off, the trainer image, its build cache and the cache volume (training
+    data, every word's training files) removed. Trained models and recorded
+    clips stay; queued words go back to "recording". 409 while a setup job
+    or a training runs."""
+    from domovoi import wake_trainer_setup
+
+    try:
+        return await wake_trainer_setup.turn_off()
+    except wake_trainer_setup.Refused as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+class _AdminWakeWordIdBody(BaseModel):
+    wake_word_id: int = Field(..., ge=1)
+
+
+@app.post(
+    "/v1/admin/wake/train/stop",
+    # Admin tier, like recording and pushing.
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_wake_train_stop(body: _AdminWakeWordIdBody) -> dict[str, Any]:
+    """Stop a word's training: the running one (its container goes, and
+    the copies of the recordings with it) or a queued one. Either way the
+    word goes back to "recording" with its clips, not queued again. 404 no
+    such word, 409 when it isn't training."""
+    from domovoi.db.repositories import WakeWordsRepository
+    from domovoi.workers import wake_word_trainer as wwt
+
+    async with session_scope() as s:
+        row = await WakeWordsRepository(s).get(body.wake_word_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"wake word {body.wake_word_id} not found")
+    if row["status"] != "training":
+        raise HTTPException(status_code=409,
+                            detail=f"wake word {body.wake_word_id} is not training")
+    if wwt.request_stop(body.wake_word_id):
+        return {"stopping": True, "wake_word_id": body.wake_word_id}
+    async with session_scope() as s:
+        stopped = await WakeWordsRepository(s).mark_stopped(body.wake_word_id)
+        await s.execute(text("SELECT pg_notify('wake_words_changed', :p)"),
+                        {"p": str(body.wake_word_id)})
+    return {"stopping": False, "stopped": stopped, "wake_word_id": body.wake_word_id}
+
+
+class _AdminWakeForgetBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=80, pattern=r"^[a-z0-9_]+$")
+
+
+@app.post(
+    "/v1/admin/wake/forget",
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def admin_wake_forget(body: _AdminWakeForgetBody) -> dict[str, Any]:
+    """A deleted wake word's training files (synthetic clips, features, any
+    copies of its recordings) leave the trainer's cache volume; a training
+    of it is stopped first. The dashboard calls this after a delete; the
+    worker's first sweep after a start removes whatever a missed call
+    left. Runs in the background."""
+    from domovoi.workers import wake_word_trainer as wwt
+
+    task = asyncio.get_running_loop().create_task(
+        asyncio.to_thread(wwt.forget_word, body.slug),
+        name=f"wake-forget-{body.slug}",
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"scheduled": True, "slug": body.slug}
+
+
+_BACKGROUND_TASKS: set = set()
+
+
 @app.get(
     "/v1/admin/satellite/{room_id}/config",
     # Device READ tier (2026-10-08, REV-11), like the dashboard's proxy:
@@ -2713,6 +3024,7 @@ async def admin_update_satellite_config(
     from domovoi.satellite_config_schema import (
         FIELD_BY_NAME,
         coerce_and_validate,
+        spec_for_board,
     )
 
     target = app.state.active_sessions.get(room_id)
@@ -2741,7 +3053,9 @@ async def admin_update_satellite_config(
             rejected[name] = "this satellite doesn't have this setting yet — upgrade it first"
             continue
         try:
-            accepted[name] = coerce_and_validate(spec, raw)
+            # By the satellite's own rule for its board: a Windows PC's
+            # device names are Windows ones, not ALSA ones.
+            accepted[name] = coerce_and_validate(spec_for_board(spec, getattr(target, "board", None)), raw)
         except ValueError as e:
             rejected[name] = str(e)
 

@@ -37,6 +37,7 @@ import logging
 import os
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -162,6 +163,74 @@ def read_soc_temp(path: str | os.PathLike[str] = "/sys/class/thermal/thermal_zon
         return None
 
 
+# Statuses the kernel reports for a battery (power_supply class).
+_ON_CHARGER_STATUSES = ("Charging", "Full", "Not charging")
+
+
+def read_battery(root: str | os.PathLike[str] = "/sys/class/power_supply") -> dict[str, Any]:
+    """A spare laptop's battery for the health sample, or ``{}`` when the
+    machine has none (every Pi): ``{"battery": {percent, charging,
+    on_power}}``, the one shape the core keeps and a phone in room mode
+    sends too. ``percent`` 0-100 (the mean when there are two packs);
+    ``charging`` while the level goes up; ``on_power`` while the charger
+    is plugged in ("Not charging" on mains is a battery held full or at a
+    charge limit). Either flag is None when the kernel can't say.
+
+    System batteries only: a wireless mouse's or a phone's battery
+    (``scope`` = Device) is not the laptop's."""
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return {}
+    levels: list[int] = []
+    statuses: list[str] = []
+    mains: list[bool] = []
+    for name in entries:
+        base = os.path.join(root, name)
+        kind = (_read_text(os.path.join(base, "type")) or "").strip()
+        if kind in ("Mains", "USB", "USB_C", "USB_PD"):
+            online = (_read_text(os.path.join(base, "online")) or "").strip()
+            if online in ("0", "1"):
+                mains.append(online == "1")
+            continue
+        if kind != "Battery":
+            continue
+        if (_read_text(os.path.join(base, "scope")) or "").strip().lower() == "device":
+            continue
+        try:
+            level = int((_read_text(os.path.join(base, "capacity")) or "").strip())
+        except ValueError:
+            continue
+        if 0 <= level <= 100:
+            levels.append(level)
+            statuses.append((_read_text(os.path.join(base, "status")) or "").strip())
+    if not levels:
+        return {}
+    known = [st for st in statuses if st in ("Charging", "Discharging", "Full", "Not charging")]
+    charging: bool | None = ("Charging" in known) if known else None
+    if mains:
+        on_power: bool | None = any(mains)
+    elif "Discharging" in known:
+        on_power = False
+    elif known and all(st in _ON_CHARGER_STATUSES for st in known):
+        on_power = True
+    else:
+        on_power = None
+    return {"battery": {"percent": round(sum(levels) / len(levels)),
+                        "charging": charging, "on_power": on_power}}
+
+
+def read_battery_here() -> dict[str, Any]:
+    """This machine's battery in the health shape, whatever the OS: the
+    kernel's power_supply class on Linux, ``GetSystemPowerStatus`` on
+    Windows (satellite/win32.py). ``{}`` without one."""
+    if sys.platform == "win32":
+        from satellite import win32
+
+        return win32.power_status()
+    return read_battery()
+
+
 def count_fds(path: str | os.PathLike[str] = "/proc/self/fd") -> int | None:
     try:
         return len(os.listdir(path))
@@ -244,7 +313,15 @@ class CpuMeter:
 
 def run_tool(argv: list[str], timeout: float = 5.0) -> str | None:
     """Run a read-only tool with stdout/stderr captured and closed. ``None``
-    when it is missing, fails, or times out — never an exception."""
+    when it is missing, fails, or times out — never an exception.
+
+    Never on Windows: the tools are Linux ones (``ip``, ``vcgencmd``,
+    ``nmcli``) run by bare name, and Windows looks for a bare name in the
+    program's folder, the current folder and PATH before System32 — a
+    planted ``ip.exe`` would run as the satellite's account every sample
+    (security review of wf/sat-windows)."""
+    if sys.platform == "win32":
+        return None
     try:
         result = subprocess.run(
             argv, capture_output=True, text=True, timeout=timeout,
@@ -524,6 +601,9 @@ class Sampler:
     seq: int = 0
     # The device whose link state is asked of NetworkManager.
     wifi_device: str = "wlan0"
+    # Where the battery comes from: None reads <sys_root>/class/power_supply
+    # (Linux); a Windows engine passes satellite.win32.power_status.
+    battery_reader: Callable[[], dict[str, Any]] | None = None
     # `vcgencmd` is absent on anything but a Pi, `nmcli` on a hand-built
     # unit: after TOOL_MISS_LATCH misses in a row a tool is left alone for
     # TOOL_RETRY_SEC, so such a board does not spawn a failing process every
@@ -569,9 +649,14 @@ class Sampler:
         nm: dict[str, Any] | None = self._ask(
             "nmcli", now, lambda: read_nm_state(self.run, self.wifi_device)
         )
+        # On Windows run_tool runs none of these Linux tools (see there).
         routes = self.run(["ip", "route"], timeout=5.0)
         gateway = parse_default_gateway(routes)
+        # Only on a machine with a battery: a Pi's sample gains no keys.
+        battery = (self.battery_reader() if self.battery_reader is not None
+                   else read_battery(os.path.join(self.sys_root, "class/power_supply")))
         return {
+            **battery,
             "rss_kb": status["rss_kb"],
             "hwm_kb": status["hwm_kb"],
             "threads": status["threads"],

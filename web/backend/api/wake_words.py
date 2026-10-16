@@ -8,7 +8,7 @@ phrase), record clips on a chosen room, kick off training once enough
 clips are captured, set the default, rename, tune the detection threshold,
 push a trained model to a satellite, and delete.
 
-The load-bearing identifier is the ``slug`` (= ``voice_slug(name)``): the
+The load-bearing identifier is the ``slug`` (= ``wake_slug(name)``): the
 served ``<slug>.onnx`` filename, the Pi's effective wake word, the
 openWakeWord prediction-dict key, and the model file stem all equal it.
 We derive it once on create so they never disagree — a mismatch and the
@@ -45,9 +45,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from domovoi.admin_auth import require_admin_mutation, require_device_read
+from domovoi.admin_auth import (
+    require_admin_mutation,
+    require_admin_read,
+    require_admin_security,
+    require_device_read,
+)
 from domovoi import wake_clip_quality as wq
-from domovoi.canned_sounds import voice_slug
+from domovoi.canned_sounds import wake_slug
 from domovoi.config import settings
 from domovoi.db.repositories import WakeWordsRepository
 from domovoi.models import MAX_WAKE_PHRASE_CHARS, WAKE_PHRASE_PATTERN
@@ -55,6 +60,7 @@ from web.backend.db import session_scope
 from web.backend.domovoi_client import (
     auth_forward_headers,
     bridge_response,
+    get_admin,
     post_admin,
 )
 
@@ -241,11 +247,13 @@ async def list_wake_words() -> list[WakeWord]:
 )
 async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
     """Register a new wake word in the ``recording`` status. The slug is
-    derived from the name (``voice_slug``) and is the load-bearing runtime
-    identifier; a name OR slug collision raises ``IntegrityError`` → 409."""
+    derived from the name (``wake_slug``: ``voice_slug``, never a Windows
+    device name, which no satellite would sync) and is the load-bearing
+    runtime identifier; a name OR slug collision raises ``IntegrityError`` →
+    409."""
     name = payload.name.strip()
     phrase = payload.phrase.strip()
-    slug = voice_slug(name)
+    slug = wake_slug(name)
     threshold = payload.threshold if payload.threshold is not None else 0.5
     try:
         async with session_scope() as s:
@@ -270,6 +278,72 @@ async def create_wake_word(payload: WakeWordCreate) -> WakeWord:
         "status": "recording", "source_room_id": payload.source_room_id,
         "clip_count": 0, "error": None,
     })
+
+
+# ─── Training on/off: "Turn on wake-word training" ─────────────────────────
+# The core owns it (it builds and runs a Docker image as the service user
+# and writes two settings; domovoi/wake_trainer_setup.py), so these proxy
+# /v1/admin/wake/trainer* with the caller's credentials. Declared before
+# the /{wake_word_id} routes.
+
+
+class TrainerEnableBody(BaseModel):
+    # Yes to training on the CPU (over an hour a word; voice slower meanwhile).
+    cpu_ok: bool = False
+    # The Windows install can't see C:'s free space: the admin confirms it.
+    disk_ok: bool = False
+
+
+@router.get("/trainer", dependencies=[Depends(require_admin_read)])
+async def trainer_status(request: Request):
+    """Whether training is on, the setup job's progress or its error, and
+    what training needs against what the server has, with any refusal."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/trainer", timeout=30.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/trainer/enable", dependencies=[Depends(require_admin_security)])
+async def trainer_enable(body: TrainerEnableBody, request: Request):
+    """Start "Turn on wake-word training" on the core: 200 with the status
+    (the job runs in the background), 409 with the reason it can't."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/trainer/enable", {"cpu_ok": body.cpu_ok, "disk_ok": body.disk_ok},
+        timeout=60.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.get("/trainer/footprint", dependencies=[Depends(require_admin_read)])
+async def trainer_footprint(request: Request):
+    """What "Turn off and free the space" would remove, as Docker sizes it."""
+    status, payload = await get_admin(
+        "/v1/admin/wake/trainer/footprint", timeout=150.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/trainer/disable", dependencies=[Depends(require_admin_security)])
+async def trainer_disable(request: Request):
+    """Turn training off and free the space (the core removes the trainer
+    image, its build cache and the cache volume); 409 while it is busy."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/trainer/disable", {}, timeout=600.0,
+        headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
+
+
+@router.post("/{wake_word_id}/train/stop", dependencies=[Depends(require_admin_mutation)])
+async def train_stop(wake_word_id: int, request: Request):
+    """Stop this word's training (running or queued): it goes back to
+    "recording" with its clips. Proxies the core, which owns the run."""
+    status, payload = await post_admin(
+        "/v1/admin/wake/train/stop", {"wake_word_id": wake_word_id},
+        timeout=90.0, headers=auth_forward_headers(request),
+    )
+    return bridge_response(status, payload)
 
 
 @router.post("/{wake_word_id}/record/start", dependencies=[Depends(require_admin_mutation)])
@@ -328,7 +402,7 @@ async def train_wake_word(wake_word_id: int) -> WakeWord:
                 status_code=409,
                 detail=(
                     f"wake word {wake_word_id} can't be trained — it must be in "
-                    f"'recording' with at least {min_clips} clips"
+                    f"'recording' or 'failed' with at least {min_clips} clips"
                 ),
             )
         row = await repo.get(wake_word_id)
@@ -559,7 +633,7 @@ async def push_wake_word(wake_word_id: int, body: RoomBody, request: Request):
 
 
 @router.delete("/{wake_word_id}", status_code=204, dependencies=[Depends(require_admin_mutation)])
-async def delete_wake_word(wake_word_id: int) -> None:
+async def delete_wake_word(wake_word_id: int, request: Request) -> None:
     async with session_scope() as s:
         repo = WakeWordsRepository(s)
         removed = await repo.delete(wake_word_id)
@@ -591,3 +665,8 @@ async def delete_wake_word(wake_word_id: int) -> None:
         import shutil
 
         shutil.rmtree(cdir, ignore_errors=True)
+    # Its training files in the trainer's cache volume (features, synthetic
+    # clips, any copies of the recordings) go too; the core owns Docker.
+    # Best effort: the worker's sweep after its next start catches a miss.
+    await post_admin("/v1/admin/wake/forget", {"slug": slug}, timeout=10.0,
+                     headers=auth_forward_headers(request))

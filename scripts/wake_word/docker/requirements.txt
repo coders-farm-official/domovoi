@@ -1,6 +1,9 @@
-# Extra Python deps installed into the trainer image. The Dockerfile installs
-# these directly (RUN pip install ...) — this file is the human-readable
-# reference / single source of truth for the versions.
+# Extra Python deps installed into the trainer image: a readable list of what
+# the Dockerfile's RUN pip install lines install, and why. Nothing reads this
+# file at build time. The version every package actually gets (these and
+# everything they pull in) is held by constraints.txt, which the Dockerfile
+# applies to every pip install through PIP_CONSTRAINT; change a version
+# there, and keep this list in step with the Dockerfile.
 #
 # NOTE: torch/torchaudio are NOT listed here. On the default pytorch/pytorch
 # CUDA base they are already present (and reinstalling can pull a CPU-only wheel
@@ -16,7 +19,7 @@ soundfile                # WAV read/write + real-clip resampling
 scipy                    # resample_poly for 16 kHz conversion
 
 # openWakeWord training + export:
-huggingface_hub>=0.23    # snapshot_download of the ~7 GB feature dataset
+huggingface_hub>=0.23    # snapshot_download of the ~17.5 GB feature dataset
 onnx
 onnxruntime
 pyyaml                   # render/parse the training config

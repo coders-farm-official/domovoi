@@ -1,0 +1,6 @@
+# Spare computers only (satellite/scripts/install-pc.sh installs this after
+# requirements.txt): the tray's D-Bus client, for the StatusNotifierItem icon
+# and the desktop notifications (satellite/tray.py). Pure Python with an
+# optional compiled speed-up; MIT licensed. No GUI toolkit is installed: the
+# fallback window is Tkinter from the system's python3-tk.
+dbus-fast==2.46.4

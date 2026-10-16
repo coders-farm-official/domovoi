@@ -17,9 +17,12 @@
 # dashboard's "Restart Domovoi" is when nothing is waiting to load. Stop web
 # and core, start them, health-check them. No backup, no dependency sync, no
 # MPD rebuild, and the database is left alone: domovoi-db (compose up plus
-# Flyway) is restarted only when Postgres doesn't answer, or when the
+# Flyway) is restarted only when Postgres doesn't answer, when the
 # checkout ships a migration its Flyway history doesn't hold as applied
-# (plain_db_reason).
+# (plain_db_reason), or when the GPU step below restarted Docker. While web
+# and core are stopped, Docker's GPU runtime is set up as in step 6 of an
+# update; after the healthy start come steps 10-12 of an update (the search
+# helper, Ubuntu's jobs, the wake-word trainer image).
 #
 # Before either path, touching nothing: the checkout must be the pinned
 # upstream (DOMOVOI_UPSTREAM_URL / DOMOVOI_UPSTREAM_BRANCH, when set), and
@@ -56,14 +59,31 @@
 #   5. Rebuild the MPD image the way mpd_provisioner.py does if
 #      Dockerfile.mpd or mpd.conf changed, and remove the room containers so
 #      the core recreates them (same data volumes) from the new image.
-#   6. systemctl restart domovoi-db: compose up plus Flyway.
-#   7. Start core and web; both must answer their health endpoint within
+#   6. Docker's GPU runtime, where an NVIDIA GPU is visible
+#      (reconcile_gpu_runtime, scripts/linux/gpu-runtime.sh, the helper
+#      provision.sh runs too): the NVIDIA Container Toolkit installed when
+#      missing (never a driver; nothing downloaded under never) and the
+#      nvidia runtime in Docker's daemon.json, restarting Docker when that
+#      changed. Here, with core and web stopped, because a Docker restart
+#      bounces Postgres and the rooms' players (restart: unless-stopped, so
+#      they come back) and step 7 restarts domovoi-db after it. Never fatal
+#      and no rollback for it: a failure is a `warn` step; a step is recorded
+#      only when something changed (ok) or the helper failed (warn). A
+#      failure is not tried again for a day (the helper's last-failure
+#      record; its "not retried" adds no step), so a box where it can't be
+#      set up doesn't run apt-get update, or restart Docker, at every
+#      Restart; the dashboard's "Check the GPU and trainer again" leaves
+#      gpu-runtime-retry in the core's wake_trainer dir
+#      (~/.domovoi/wake_trainer), and the next run tries at once (--force)
+#      and removes it. DOMOVOI_MANAGE_GPU_RUNTIME=0 leaves it alone.
+#   7. systemctl restart domovoi-db: compose up plus Flyway.
+#   8. Start core and web; both must answer their health endpoint within
 #      DOMOVOI_UPDATE_HEALTH_TIMEOUT seconds.
-#   8. Every plugin that loaded before the update still loads: none that was
+#   9. Every plugin that loaded before the update still loads: none that was
 #      enabled and not at load_error in the plugins registry is at load_error
 #      now. The core keeps a failing plugin from taking it down, so its
 #      health endpoint stays green through one.
-#   9. The search helper (SearXNG) follows the internet answer: started for
+#  10. The search helper (SearXNG) follows the internet answer: started for
 #      INTERNET_ACCESS=always|sometimes, stopped for never, left alone while
 #      unanswered (reconcile_searxng). Never fatal: a failure is a `warn`
 #      step and the run stays ok. A healthy plain restart ends with it too.
@@ -71,7 +91,7 @@
 #      handed to a transient unit (domovoi-searxng-start), so a first start's
 #      image download never holds the update open; without systemd it is
 #      bounded by DOMOVOI_UPDATE_SEARXNG_TIMEOUT seconds (a `warn` when hit).
-#  10. Ubuntu's own background jobs follow the internet answer too
+#  11. Ubuntu's own background jobs follow the internet answer too
 #      (reconcile_os_jobs, scripts/linux/os-jobs.sh): for never the
 #      updaters, news and crash-report timers are masked, for always and
 #      sometimes what an earlier never masked is unmasked, and on WSL
@@ -80,15 +100,31 @@
 #      (warn). A healthy plain restart ends with it too, so an answer changed
 #      in Settings takes effect at the next Restart. DOMOVOI_MANAGE_OS_JOBS=0
 #      leaves the jobs alone.
+#  12. The wake-word trainer image is rebuilt when it is out of date
+#      (reconcile_wake_trainer): only where it exists (a household that
+#      switched training on; DOMOVOI_WAKE_TRAINER_IMAGE, else
+#      WAKE_TRAINER_IMAGE in domovoi/.env, else domovoi-wake-trainer:latest)
+#      and its org.domovoi.wake-trainer.src label is not the git tree id of
+#      the checkout's scripts/wake_word/docker (the core labels it
+#      the same way when it builds it). Built as the service user, by
+#      `docker build` of that directory; under systemd in a transient unit
+#      (domovoi-wake-trainer-build) the update does not wait for, without
+#      it in the foreground bounded by DOMOVOI_UPDATE_TRAINER_TIMEOUT. Not
+#      under never (the build downloads): a `warn` step says it is out of
+#      date. A registry's image (WAKE_TRAINER_IMAGE=ghcr.io/...: a name
+#      whose first part is a host) is left alone. Never fatal; a step only
+#      when it did something or could not. A healthy plain restart ends
+#      with it too. DOMOVOI_MANAGE_WAKE_TRAINER=0 leaves the image alone.
 #   Under INTERNET_ACCESS=never (read once, at the start) an update that
 #   would go online is refused before anything is touched: a dependency
 #   change (pip would download) or a Dockerfile.mpd change (docker build
 #   pulls the base image and runs apt). An mpd.conf-only change keeps the
 #   image and just recreates the rooms.
-#   On any failure in 3-8: stop both again, `git reset --keep` back to the
+#   On any failure in 3-9 (step 6 never fails a run, and what it set up
+#   stays): stop both again, `git reset --keep` back to the
 #   previous SHA, undo the dependency and MPD changes, restore the dump if
 #   flyway_schema_history or any plugin's plugin_<slug>.schema_history grew
-#   (the core applies plugin migrations at boot, so step 7 can run them),
+#   (the core applies plugin migrations at boot, so step 8 can run them),
 #   restore the <db>_test dump if a plugin ledger there grew, switch back
 #   on every plugin the failed boot's load errors switched off, restart,
 #   check health and plugins again, and record the new SHA as bad_sha so the
@@ -184,6 +220,30 @@ SEARXNG_START_UNIT=domovoi-searxng-start
 # for an administrator who manages apt's timers themselves.
 MANAGE_OS_JOBS=${DOMOVOI_MANAGE_OS_JOBS:-1}
 OS_JOBS=$SCRIPT_DIR/os-jobs.sh
+
+# Docker's way to an NVIDIA GPU (scripts/linux/gpu-runtime.sh, beside this
+# script). DOMOVOI_MANAGE_GPU_RUNTIME=0 (or false/no/off) leaves it alone,
+# for an administrator who sets the NVIDIA Container Toolkit up themselves.
+MANAGE_GPU_RUNTIME=${DOMOVOI_MANAGE_GPU_RUNTIME:-1}
+GPU_RUNTIME=$SCRIPT_DIR/gpu-runtime.sh
+# 1 once the GPU step restarted Docker in this run (domovoi-db then restarts).
+GPU_DOCKER_RESTARTED=0
+
+# The wake-word trainer image (scripts/wake_word/docker), rebuilt when it is
+# out of date and only where a household built it (switched training on).
+# DOMOVOI_MANAGE_WAKE_TRAINER=0 (or false/no/off) leaves it alone. The build
+# takes minutes (about 5 with its base image cached, 8 with the 3 GB base
+# to pull): under systemd (auto) it runs in a transient unit of its own
+# that the update does not wait for; 1 forces that, 0 runs it in the
+# foreground, bounded by DOMOVOI_UPDATE_TRAINER_TIMEOUT seconds.
+MANAGE_WAKE_TRAINER=${DOMOVOI_MANAGE_WAKE_TRAINER:-1}
+TRAINER_DETACH=${DOMOVOI_UPDATE_TRAINER_DETACH:-auto}
+TRAINER_TIMEOUT=${DOMOVOI_UPDATE_TRAINER_TIMEOUT:-1800}
+TRAINER_BUILD_UNIT=domovoi-wake-trainer-build
+TRAINER_DIR=scripts/wake_word/docker
+# The label that names the tree an image was built from: the git tree id of
+# TRAINER_DIR at the commit built (the core sets the same one).
+TRAINER_LABEL=org.domovoi.wake-trainer.src
 
 # Signed updates (docs/LINUX_HOST.md, "Signed updates"). While the
 # allowed-signers file exists, HEAD must carry an SSH signature by one of
@@ -504,10 +564,23 @@ on_exit() {
 
 # ─── Who owns the checkout, and where things live ────────────────────────
 
-# The last KEY=value for KEY in domovoi/.env, quotes stripped, or empty.
+# KEY's value in domovoi/.env as the core reads it, or empty: through the
+# checkout's own reader (python -m domovoi.config_env_writer --get KEY,
+# python-dotenv, as the service user, like internet_policy), so a quoted
+# value that spans lines is one value here too, never a KEY=value line of
+# its own (review of 2026-10-13: a bot name carrying a WAKE_TRAINER_IMAGE
+# line named the image root's update rebuilt). Needs VENV_DIR resolved.
+# Only when that reader can't answer (a checkout from before it, a venv
+# that doesn't run) is the file read line by line, as before, and the
+# journal says so: the last KEY=value, quotes stripped.
 dotenv_get() {
   local f=$REPO_DIR/domovoi/.env v
   [ -r "$f" ] || return 0
+  if v=$(as_user "$VENV_DIR/bin/python" -m domovoi.config_env_writer --get "$1" 2>/dev/null); then
+    printf '%s' "$v"
+    return 0
+  fi
+  log "domovoi/.env: $1 read line by line: this checkout's python -m domovoi.config_env_writer --get could not read it" >&2
   v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n 1 | tr -d '\r')
   v=${v%\"}; v=${v#\"}; v=${v%\'}; v=${v#\'}
   printf '%s' "$v"
@@ -1638,6 +1711,211 @@ reconcile_os_jobs() {
   return 0
 }
 
+# Where the dashboard's "Check the GPU and trainer again" leaves its flag
+# (gpu_runtime_retry_flag in domovoi/wake_trainer_setup.py): gpu-runtime-retry
+# in the core's wake_trainer dir, beside its wake_models dir (WAKE_MODELS_DIR
+# in domovoi/.env, else ~/.domovoi/wake_models of the service user). Empty
+# when that can't be told.
+gpu_retry_flag() {
+  local d home=""
+  d=$(dotenv_get WAKE_MODELS_DIR)
+  if [ -z "$d" ] || [[ $d == "~"* ]]; then
+    home=$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6) || home=""
+    [ -n "$home" ] || return 0
+    if [ -z "$d" ]; then d=$home/.domovoi/wake_models; else d=$home${d#\~}; fi
+  fi
+  [[ $d == /* ]] || return 0
+  d=${d%/}
+  printf '%s/wake_trainer/gpu-runtime-retry' "${d%/*}"
+}
+
+# Docker's way to an NVIDIA GPU (the NVIDIA Container Toolkit), set up by
+# scripts/linux/gpu-runtime.sh, the helper provision.sh runs too, where an
+# NVIDIA GPU is visible: so a box installed before it existed gets it at
+# its next update or Restart. The caller runs it while core and web are
+# stopped and before domovoi-db's restart, because a Docker restart bounces
+# Postgres and the rooms' players; GPU_DOCKER_RESTARTED says whether this
+# run restarted Docker. The helper downloads nothing under never. It never
+# fails the run and is never rolled back; a step is recorded only when the
+# helper changed something (ok) or failed (warn, with the helper's own
+# summary line as the detail, never a tool's raw output). No GPU, set up
+# already, or a recent failure the helper does not retry yet, adds nothing
+# to the result. The dashboard's retry flag (gpu_retry_flag) makes it try
+# at once. Callers run it as `reconcile_gpu_runtime || true`, so nothing in
+# it can end the run while the services are stopped.
+reconcile_gpu_runtime() {
+  local policy t0 out rc=0 summary flag=$UPDATE_DIR/gpu-runtime-restarted retry
+  local -a force=()
+  GPU_DOCKER_RESTARTED=0
+  case "$(printf '%s' "$MANAGE_GPU_RUNTIME" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "Docker's GPU runtime left alone (DOMOVOI_MANAGE_GPU_RUNTIME=$MANAGE_GPU_RUNTIME)"; return 0 ;;
+  esac
+  if [ ! -f "$GPU_RUNTIME" ]; then
+    log "no $GPU_RUNTIME: Docker's GPU runtime left as it is"
+    return 0
+  fi
+  # First the question that needs nothing else: most boxes have no NVIDIA
+  # GPU, and then nothing more happens (not even a look at the answer).
+  if ! out=$(bash "$GPU_RUNTIME" --detect 2>&1); then
+    log "$(printf '%s\n' "$out" | tail -n 1)"
+    return 0
+  fi
+  if ! policy=$(internet_policy); then
+    log "this checkout can't say the internet answer: Docker's GPU runtime left as it is"
+    return 0
+  fi
+  # Root only asks whether the flag is there; the service user's own file
+  # is removed as that user, once the helper ran.
+  retry=$(gpu_retry_flag)
+  if [ -n "$retry" ] && [ -e "$retry" ]; then
+    force=(--force)
+    log "the dashboard asked to check the GPU again ($retry): Docker's GPU runtime is tried now, whatever failed before"
+  fi
+  t0=$(now_ms)
+  log "step gpu-runtime"
+  rm -f "$flag"
+  set +e
+  out=$(bash "$GPU_RUNTIME" --internet "$policy" --restart-flag "$flag" ${force[@]+"${force[@]}"} 2>&1)
+  rc=$?
+  set -e
+  if [ -n "$out" ]; then printf '%s\n' "$out" | sed 's/^/    /'; fi
+  if [ -e "$flag" ]; then GPU_DOCKER_RESTARTED=1; fi
+  rm -f "$flag"
+  if [ "${#force[@]}" -gt 0 ] && ! as_user rm -f -- "$retry"; then
+    log "could not remove $retry: the next update or Restart tries Docker's GPU runtime at once again"
+  fi
+  summary=$(printf '%s\n' "$out" | sed -n 's/^gpu-runtime: //p' | tail -n 1)
+  if [ "$rc" -ne 0 ]; then
+    add_step gpu-runtime warn "$t0" "$(trunc "Docker's GPU runtime: ${summary:-the helper stopped (exit $rc)}" 600)"
+    log "step gpu-runtime failed (exit $rc); not fatal, the run goes on"
+  else
+    case $summary in
+      "no NVIDIA GPU visible"*|"already in place"*|"not installed: "*|"not retried: "*) ;;
+      *) add_step gpu-runtime ok "$t0" "$(trunc "${summary:-done}" 600)" ;;
+    esac
+  fi
+  if [ "$GPU_DOCKER_RESTARTED" = 1 ]; then log "Docker was restarted: domovoi-db is restarted after it"; fi
+  return 0
+}
+
+# Whether the trainer build goes to a transient systemd unit
+# (DOMOVOI_UPDATE_TRAINER_DETACH: auto = when systemd runs this host).
+trainer_detach() {
+  case "$(printf '%s' "$TRAINER_DETACH" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) return 1 ;;
+    1|true|yes|on) command -v systemd-run >/dev/null 2>&1 ;;
+    *) [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1 ;;
+  esac
+}
+
+# The wake-word trainer image, rebuilt when the checkout's
+# scripts/wake_word/docker is not what it was built from, the way the MPD
+# image follows Dockerfile.mpd. Only where the image exists: it is built
+# when a household switches training on (Settings, Wake Words), so a box
+# that never did pays nothing. What it was built from is its
+# org.domovoi.wake-trainer.src label, the git tree id of that directory
+# (the core sets the same label when it builds the image); a different or
+# missing one is a rebuild, as the service user (docker build of that
+# directory, tagged and labelled as the core does). A registry's image
+# (WAKE_TRAINER_IMAGE set to a published tag) is left alone: it is pulled,
+# never built here. Under never nothing is built (the build downloads its
+# base image and packages): a `warn` step says the image is out of date.
+# Under systemd the build is handed to a transient unit
+# (domovoi-wake-trainer-build) the update does not wait for, as the search
+# helper's first start is; without it, it runs in the foreground, bounded
+# by TRAINER_TIMEOUT. Never fatal; a step only when it built, started a
+# build, or could not.
+reconcile_wake_trainer() {
+  local image tree label policy t0 out rc=0 home group tmp
+  local -a build sd run
+  case "$(printf '%s' "$MANAGE_WAKE_TRAINER" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off) log "the wake-word trainer image left alone (DOMOVOI_MANAGE_WAKE_TRAINER=$MANAGE_WAKE_TRAINER)"; return 0 ;;
+  esac
+  image=${DOMOVOI_WAKE_TRAINER_IMAGE:-$(dotenv_get WAKE_TRAINER_IMAGE)}
+  image=${image:-domovoi-wake-trainer:latest}
+  if ! [[ $image =~ ^[a-z0-9][a-z0-9._/:@-]*$ ]]; then
+    add_step wake-trainer warn "$(now_ms)" "$(trunc "not rebuilt: '$image' (WAKE_TRAINER_IMAGE) is not an image name" 300)"
+    return 0
+  fi
+  # A name in a registry (its first part a host: a dot, a port or
+  # localhost, the way docker reads a reference) is a published image the
+  # household pulls (DOCKER_TRAINER.md): never rebuilt under its name here.
+  if [[ $image == */* ]]; then
+    case ${image%%/*} in
+      *.*|*:*|localhost)
+        log "$image is a registry's image: not rebuilt here (pull a newer one when scripts/wake_word/docker changes)"
+        return 0 ;;
+    esac
+  fi
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    log "no $image image: wake-word training is not switched on here, nothing to rebuild"
+    return 0
+  fi
+  # HEAD:<path> names the directory's tree (a peel such as ^{tree} would be
+  # read as part of the path).
+  if ! tree=$(git_as rev-parse -q --verify "HEAD:$TRAINER_DIR" 2>/dev/null) || [ -z "$tree" ] \
+      || [ "$(git_as cat-file -t "$tree" 2>/dev/null)" != tree ]; then
+    log "this checkout has no $TRAINER_DIR: $image left as it is"
+    return 0
+  fi
+  label=$(docker image inspect -f "{{ index .Config.Labels \"$TRAINER_LABEL\" }}" "$image" 2>/dev/null) || label=""
+  [ "$label" != "<no value>" ] || label=""
+  if [ "$label" = "$tree" ]; then
+    log "$image is built from this checkout's $TRAINER_DIR: nothing to rebuild"
+    return 0
+  fi
+  t0=$(now_ms)
+  log "step wake-trainer"
+  if ! policy=$(internet_policy); then
+    log "this checkout can't say the internet answer: $image not rebuilt"
+    return 0
+  fi
+  if [ "$policy" = never ]; then
+    add_step wake-trainer warn "$t0" "$image is out of date ($TRAINER_DIR changed) and was not rebuilt: the build downloads, and internet access is turned off; wake-word training may fail until it is rebuilt"
+    return 0
+  fi
+  build=(docker build --label "$TRAINER_LABEL=$tree" -t "$image" "$REPO_DIR/$TRAINER_DIR")
+  if trainer_detach; then
+    sd=(systemd-run --no-block --collect --quiet --unit="$TRAINER_BUILD_UNIT")
+    if [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != root ]; then
+      group=${RESULT_GROUP:-$(id -gn "$SERVICE_USER" 2>/dev/null || true)}
+      home=$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6) || home=""
+      sd+=(--uid="$SERVICE_USER")
+      if [ -n "$group" ]; then sd+=(--gid="$group"); fi
+      if [ -n "$home" ]; then sd+=(--setenv=HOME="$home"); fi
+    fi
+    sd+=(-p WorkingDirectory="$REPO_DIR")
+    if "${sd[@]}" "${build[@]}"; then
+      add_step wake-trainer ok "$t0" "rebuilding $image in the background ($TRAINER_BUILD_UNIT; journalctl -u $TRAINER_BUILD_UNIT): $TRAINER_DIR changed"
+    elif systemctl is-active --quiet "$TRAINER_BUILD_UNIT" 2>/dev/null; then
+      add_step wake-trainer ok "$t0" "$image is already rebuilding in the background ($TRAINER_BUILD_UNIT)"
+    else
+      add_step wake-trainer warn "$t0" "could not start the rebuild of $image ($TRAINER_BUILD_UNIT)"
+    fi
+    return 0
+  fi
+  run=()
+  if command -v timeout >/dev/null 2>&1; then run=(timeout "$TRAINER_TIMEOUT"); fi
+  if [ "$RUN_AS_ROOT" = 1 ] && [ "$SERVICE_USER" != root ]; then run+=(runuser -u "$SERVICE_USER" --); fi
+  tmp=$(mktemp) || return 0
+  set +e
+  (cd "$REPO_DIR" && ${run[@]+"${run[@]}"} "${build[@]}") >"$tmp" 2>&1
+  rc=$?
+  set -e
+  sed 's/^/    /' "$tmp"
+  if [ "$rc" -eq 124 ]; then
+    add_step wake-trainer warn "$t0" "the rebuild of $image did not finish within ${TRAINER_TIMEOUT}s (DOMOVOI_UPDATE_TRAINER_TIMEOUT); the next update or Restart tries again"
+  elif [ "$rc" -ne 0 ]; then
+    # docker build's output stays in the journal (printed above); the
+    # dashboard's Version card shows this sentence.
+    add_step wake-trainer warn "$t0" "the rebuild of $image failed (exit $rc): docker build's output is in the update's journal (journalctl -u domovoi-update); the next update or Restart tries again"
+  else
+    add_step wake-trainer ok "$t0" "$image rebuilt from this checkout's $TRAINER_DIR"
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
 migrations_grew() {
   [[ $MIGRATIONS_BEFORE =~ ^[0-9]+$ ]] && [[ $MIGRATIONS_AFTER =~ ^[0-9]+$ ]] \
     && [ "$MIGRATIONS_AFTER" -gt "$MIGRATIONS_BEFORE" ]
@@ -1658,6 +1936,12 @@ plain_restart() {
   DB_REASON=$(plain_db_reason)
   SERVICES_STOPPED=1
   run_step stop-services stop_services || failed=stop-services
+  # While core and web are stopped: a Docker restart bounces Postgres, and
+  # domovoi-db is then restarted before they start again.
+  if [ -z "$failed" ]; then reconcile_gpu_runtime || true; fi
+  if [ "$GPU_DOCKER_RESTARTED" = 1 ] && [ -z "$DB_REASON" ]; then
+    DB_REASON="Docker was restarted for its GPU runtime"
+  fi
   if [ -n "$DB_REASON" ]; then
     log "restarting domovoi-db: $DB_REASON"
     run_step migrate plain_restart_db || failed=${failed:-migrate}
@@ -1678,6 +1962,7 @@ plain_restart() {
     APPLIED_OK=1
     run_soft_step searxng reconcile_searxng
     reconcile_os_jobs
+    reconcile_wake_trainer || true
     finish ok
   else
     finish failed "$LAST_ERROR"
@@ -1760,6 +2045,9 @@ full_update() {
   if [ -z "$failed" ] && [ "$MPD_CHANGED" = 1 ]; then
     run_step rebuild-mpd rebuild_mpd || failed=rebuild-mpd
   fi
+  # While core and web are stopped, before domovoi-db's restart (which
+  # brings Postgres back after a Docker restart in any case).
+  if [ -z "$failed" ]; then reconcile_gpu_runtime || true; fi
   if [ -z "$failed" ]; then run_step migrate restart_db || failed=migrate; fi
   if [ -z "$failed" ]; then run_step start-services start_services || failed=start-services; fi
   if [ -z "$failed" ]; then
@@ -1777,6 +2065,7 @@ full_update() {
     APPLIED_OK=1
     run_soft_step searxng reconcile_searxng
     reconcile_os_jobs
+    reconcile_wake_trainer || true
     finish ok
     return
   fi
@@ -1884,8 +2173,9 @@ main() {
   # The unit starts in /, and the service user's commands (python -m pip
   # puts the cwd on sys.path) should run somewhere they can read.
   cd "$REPO_DIR"
-  resolve_core_state_dir
+  # The venv first: dotenv_get reads domovoi/.env through it.
   resolve_venv
+  resolve_core_state_dir
   resolve_mpd_names
 
   if ! HEAD_SHA=$(git_as rev-parse --verify HEAD) || ! is_sha "$HEAD_SHA"; then

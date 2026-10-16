@@ -294,6 +294,10 @@ class Prefs(
 
     fun isPaired(): Boolean = !_deviceToken.value.isNullOrBlank()
 
+    /** A household token for ANY server is on this phone (room mode then
+     *  needs a screen lock: roommode/RoomLockRules.kt). */
+    fun holdsHouseholdToken(): Boolean = deviceTokens.values.any { it.isNotBlank() }
+
     // ── Server identity pins (IdentityGate.PinStore) ───────────────────
 
     override fun pinFor(key: String): ServerIdentity.Pin? = _identityPins.value[key]

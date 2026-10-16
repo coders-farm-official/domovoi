@@ -55,6 +55,7 @@ Every optional outbound touchpoint, sourced from the code. One answer covers all
 | Synced lyrics (LRCLIB) — **off unless your internet answer is Yes or Sometimes** | A song's title, artist, album and length, for songs with no timed lyrics of their own (no `.lrc` beside them, none in their tags): one lookup per song, then again after a few weeks for songs LRCLIB didn't have (several hours the first time for 5,000 songs, about a night, longer when LRCLIB asks it to slow down). The lyrics that come back stay on the server, and with "Save lyrics as .lrc files" timed ones are also saved as a `.lrc` next to the song (never over a `.lrc` you made) | lrclib.net, about one request a second, only while the server is online | On when the internet answer is **Yes** or **Sometimes**, off when it is **No** or not answered. Settings → Configuration → Library → "Synced lyrics from LRCLIB" (`lyrics_lrclib_enabled` / `LYRICS_LRCLIB_ENABLED`) overrides the answer; switching it off stops it before its next request. Lyrics from `.lrc` files and the songs' own tags never touch the internet |
 | Podcasts | Feed polls + episode downloads; a show's name when you subscribe by voice or search in Discover; each show's artwork, once | Feeds you subscribe to; Apple's iTunes search | Automatic downloads follow the internet answer: on for **Yes**, off for **Sometimes**, **No** and not answered (`PODCAST_FEED_POLLER_ENABLED`). Search runs only when you ask. Show artwork is downloaded **by the server** and served to your browser and phone, which never contact the publisher |
 | Extra voices | Downloads of the other two Piper voices (about 130 MB) | Hugging Face | Off once the internet question is answered (any answer), unless `SEED_VOICE_CATALOG` is set in your `domovoi/.env` — which a server installed before October 2026 has (its old template wrote `SEED_VOICE_CATALOG=true`; Settings → Internet → **follow the answer again** hands it back). Not answered, it's on unless `SEED_VOICE_CATALOG=false` |
+| Wake-word training — **off until an admin turns it on** | The trainer image's build and its training data, about 22 GB, once; a rebuild when an update changes the trainer. On a box with an NVIDIA GPU, the install and the Linux update unit also fetch the NVIDIA Container Toolkit | Docker Hub, GitHub, PyPI and Ubuntu's archive (the build); Hugging Face and Backblaze B2 (the data); NVIDIA's apt repository (the toolkit) | Don't turn it on (Settings → Wake Words). Under **No** it can't be turned on, no training starts, and the update unit downloads none of it ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads)) |
 | Things an admin starts | Downloads, only when an admin clicks: **Pull the latest** (and, with the update unit, Python packages and the music image's Debian packages, and the search helper's image when it starts it), plugin installs, model installs, **Refresh caches** for satellite media | GitHub; PyPI and the PyTorch CPU index; Debian's mirrors; Docker Hub; the Ollama registry; Hugging Face (a new Whisper size) | Nothing runs on its own; don't click them. Under **No** they are greyed and the server refuses them |
 
 The install-time trust screen for any *third-party* plugin lists that plugin's own network behavior — see [What are plugins, and are they safe?](#what-are-plugins-and-are-they-safe)
@@ -109,6 +110,41 @@ A room *is* a satellite. To add one:
 
 Room names matter: intercom ("announce in the kitchen…") and drop-in ("drop in on the kitchen") address rooms by that `room_id`.
 
+## Can an old laptop or phone be a room?
+
+Yes. A spare **Linux laptop or mini PC** (Debian or Ubuntu) or a
+**Windows 10/11 laptop or PC** can be a room: in the dashboard, as admin,
+**Settings → Satellites → add a spare device**, name the room, and run the
+one-line command it shows on that computer (one for Linux, one for Windows
+PowerShell). It installs the satellite, makes sure it's talking to *your*
+server, and shows an approval code to type into the dashboard. A tray
+icon shows when its microphone is live and mutes it. An old **Android
+phone or tablet** joins through the app's room mode by scanning the QR code
+on the same card. Either is a real room: wake word, music, timers,
+announcements, and guests can control its music while it plays. What they
+don't do is the Pi-only part (LED ring, Wi-Fi self-healing, plugins that
+install something as root). Setup, power and battery advice:
+[Satellites on spare devices](SPARE_DEVICE_SATELLITES.md).
+
+## Why does Windows or my antivirus warn about the Windows satellite?
+
+The satellite's own code isn't signed yet (Coders Farm's signing is on
+hold), and its install command downloads and starts programs — exactly what
+antivirus software watches for. Python, which runs it, is signed by the
+Python Software Foundation, and the command runs nothing unless every file
+matches the SHA-256 your own dashboard quoted. Windows' microphone icon
+also stays on while it listens for the wake word: that is Windows telling
+you the truth. Details:
+[Windows laptops and PCs](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
+
+## Can the PC that runs Domovoi also be a room?
+
+Not with the spare-device installer: it refuses on the server PC. The
+server runs whether or not anyone is signed in, a room needs a signed-in
+account for the microphone, and two programs would compete for the sound
+devices. "Use this PC as a room" is planned as part of the server's own
+tray icon on Windows.
+
 ## Can another device on my network pretend to be one of my rooms?
 
 Not once the real one has connected. Each satellite generates a random **pairing token** on first boot (stored in `~/.domovoi/pairing_token`) and sends it when it connects. The server remembers only a hash of it and binds the room to that token the first time it sees one — *trust-on-first-use*. After that, a device connecting as `kitchen` must present the matching token or the server refuses it and closes the connection. So a random device that later tries to impersonate a paired room is turned away (it can't issue commands as that room, and can't receive that room's audio or drop-ins).
@@ -128,7 +164,7 @@ Yes. In the Android app, open a satellite's page and tap **drop in from this pho
 Those are two separate things:
 
 - **The name** — what Domovoi calls itself in speech and on screen — is the `BOT_NAME` setting (dashboard settings gear → Identity, takes effect on restart). Greeting and sample clips re-render with the new name.
-- **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Wake Words → record positive clips *on the actual satellite* (through its real mic), train, then push the model to a room. Training itself needs a Linux toolchain (WSL2 or Docker on your Windows server — see `scripts/wake_word/README.md` and `scripts/wake_word/DOCKER_TRAINER.md`), configured once via `WAKE_WORD_TRAINER_ENABLED` and `WAKE_WORD_TRAIN_COMMAND`.
+- **The wake word** — the phrase that opens the mic — defaults to `hey_jarvis`, one of openWakeWord's prebuilt models. You can switch among the other built-ins in the satellite config, or **train a custom one** ("Hey Domovoi" is the natural choice) entirely from the product: dashboard → Settings → Wake Words. Training runs on the server, in a Docker container. An admin turns it on once there (**Turn on wake-word training**: about 32 GB of disk, a download of about 22 GB, once, a server with 24 GB of memory; it builds the trainer and downloads its data, no shell needed). Then record positive clips *on the actual satellite* (through its real mic), press Train (about 20 minutes on an NVIDIA GPU, over an hour on the CPU, where it asks first because voice answers more slowly meanwhile), and push the model to a room. A model trained this way is for your household only: its training data's licences don't allow sharing it. Details: `scripts/wake_word/README.md`.
 
 ## Which voice does Domovoi speak with, and can I fix how it says a word?
 
@@ -309,6 +345,7 @@ All on machines you own:
 |---|---|
 | Conversations, intents, people/voice profiles, memories, playlists, timers, plugin data | Postgres — the `domovoi` database, in the `domovoi-pgdata` Docker volume, published on host port 6432 |
 | Server config & runtime artifacts | `~/.domovoi/` on the server — setup code, rendered voice clips (`sounds/`), wake-word models and training clips, uploaded Piper voices, album-art cache, per-plugin logs (`logs/`), podcasts, audiobooks |
+| Wake-word training data (once training is on) | The Docker volume `domovoi_oww_cache`: the downloaded training data, and per wake word its synthetic clips and the features computed for it (copies of the recorded clips are removed after each run) |
 | Service settings | `domovoi/.env` next to the code |
 | Music | `MUSIC_DIR` (default `~/Music`) |
 | Documents (office pages) | `DOCUMENTS_DIR` (default `~/Documents`) |
@@ -360,7 +397,7 @@ Restore on a new machine: install Domovoi, start Postgres, restore the dump (`do
 
 **Either. Pick by what the box is.**
 
-**Linux** is the better host for a dedicated always-on machine, and it's where the project is heading. A headless install leaves several GB more RAM for models, wake-word training runs natively instead of bridging through WSL2, `ffmpeg`/`fpcalc`/`mpg123` are one `apt install`, and autostart is a systemd unit instead of a scheduled-task workaround. Setup: [LINUX_HOST.md](LINUX_HOST.md).
+**Linux** is the better host for a dedicated always-on machine, and it's where the project is heading. A headless install leaves several GB more RAM for models, wake-word training runs on the box's own Docker Engine (turned on from the dashboard, the GPU runtime set up by the install), `ffmpeg`/`fpcalc`/`mpg123` are one `apt install`, and autostart is a systemd unit instead of a scheduled-task workaround. Setup: [LINUX_HOST.md](LINUX_HOST.md).
 
 **Windows** remains fully supported and is the better choice when the server is also the household's gaming PC — for many homes that machine already has the best GPU in the house, and Domovoi is built to run well on it rather than demanding a separate Linux box. It carries genuine Windows-specific engineering: CUDA DLL preloading for Whisper (`domovoi/bootstrap.py`), Docker Desktop networking, console-encoding-safe setup codes, and a SAPI voice as the last TTS fallback.
 

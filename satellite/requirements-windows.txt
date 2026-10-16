@@ -1,0 +1,8 @@
+# Windows satellites only (the windows_pc profile), on top of requirements.txt:
+# the MP3 decoder for music, the greetings and the offline clip
+# (satellite/win_player.py). pyminiaudio is MIT; the miniaudio/dr_mp3 C code
+# it wraps is public domain or MIT-0. Nothing here or in requirements.txt is
+# installed by pip resolving on a Windows laptop: the exact wheels, with their
+# SHA-256, are pinned in satellite/windows-runtime.json, which
+# scripts/dev/windows_runtime_lock.py writes from these two files.
+miniaudio==1.71

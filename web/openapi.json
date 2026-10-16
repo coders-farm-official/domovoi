@@ -12,7 +12,7 @@
           "auth"
         ],
         "summary": "Auth Status",
-        "description": "Open probe the dashboard uses to decide setup-vs-login-vs-quiet.\n``authenticated`` reflects the cookie OR a Bearer (GET state).",
+        "description": "Open probe the dashboard uses to decide setup-vs-login-vs-quiet.\n``authenticated`` reflects the cookie OR a Bearer (GET state).\n\n``resume_in_sec`` / ``resume_until`` are set while THIS browser's\nsession cookie is inside its reload window \u2014 what tells a reloaded\npage to ask ``POST /resume`` for its sign-in back, and what the\nSettings Admin card says it lasts until. Read-only: nothing slides.",
         "operationId": "auth_status_api_auth_status_get",
         "responses": {
           "200": {
@@ -20,9 +20,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Auth Status Api Auth Status Get"
                 }
@@ -105,6 +103,26 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/resume": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Auth Resume",
+        "description": "Give a reloaded dashboard page its admin sign-in back (owner\ndecision 2026-10-14).\n\nThe page's Bearer lived in its memory and the reload forgot it; the\nHttpOnly session cookie the sign-in set survived. The cookie is not the\nBearer, but the session row keeps the Bearer wrapped under it\n(:func:`domovoi.admin_auth.resume_session`), so this hands the\nsession's own Bearer back \u2014 nothing new is minted \u2014 when ALL of these\nhold:\n\n* ``X-Requested-With`` (the dependency, and the process-wide write\n  backstop in front of it): a cross-site page cannot send it without\n  a preflight this server refuses;\n* the request is same-origin (:func:`same_origin`): not another port\n  on this host, not a second dashboard through the server switcher;\n* the cookie names a live session (not revoked, signed out, expired or\n  past the 90-day cap) whose ``signed_in_at`` is less than\n  ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).\n\n403 for the first two, 401 for the rest; nothing about the session\nchanges on a refusal. A success slides the session's expiry like any\nuse of it does, and says when the window ends. The cookie is not\nre-set: it is the one the sign-in set, unchanged.",
+        "operationId": "auth_resume_api_auth_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -206,7 +224,7 @@
           "auth"
         ],
         "summary": "Auth Change Password",
-        "description": "Change the admin password (old password re-verified, \u00a77.2).\nMutation \u21d2 Bearer-only. Every OTHER session is revoked: a token\nminted under the old password does not survive it; the calling\nsession stays logged in.",
+        "description": "Change the admin password (old password re-verified, \u00a77.2).\nMutation \u21d2 Bearer-only. Every OTHER session is revoked: a token\nminted under the old password does not survive it \u2014 and with it any\nreload window it had (``POST /resume``); the calling session stays\nlogged in, and having just proved the password, its own reload window\nstarts again.",
         "operationId": "auth_change_password_api_auth_password_post",
         "requestBody": {
           "content": {
@@ -250,7 +268,7 @@
           "auth"
         ],
         "summary": "Auth Device Token",
-        "description": "The household device token for the settings page and for enrolling\na phone. Same table and same gate as the core's\n``GET /v1/admin/device-token``: Bearer or cookie renders it, 401\notherwise, 501 before setup.",
+        "description": "The household device token for the settings page and for enrolling\na phone. Same table and same gate as the core's\n``GET /v1/admin/device-token``: Bearer-only (the cookie alone is 403 \u2014\nit reaches every port of this host), 401 otherwise, 501 before setup.",
         "operationId": "auth_device_token_api_auth_device_token_get",
         "responses": {
           "200": {
@@ -4463,6 +4481,86 @@
         }
       }
     },
+    "/api/satellites/enrolment": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Spare Device Enrolment",
+        "description": "The enrolment payload for a spare device, the install command for a\nLinux laptop, and the parts the page shows beside them (the room id the\ndevice will connect as, the fingerprint to compare with Settings \u2192\nAbout, a warning when the room is taken). 422 for a room name or an\naddress the payload can't carry \u2014 one off the home network included,\nso a loopback address found on a box with no LAN is said, not handed\nout (``{reason, message}``); 503\nwhen the Domovoi server is not answering or has no identity; 423 while\nthe container guard holds the satellite channel.",
+        "operationId": "spare_device_enrolment_api_satellites_enrolment_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpareDeviceEnrolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-runtime": {
+      "get": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Runtime Status",
+        "description": "Whether the core holds every file of the Windows satellite's runtime\n(``ready``, ``missing``, ``bytes_total``, ``bytes_cached``, ``fetch``).",
+        "operationId": "windows_runtime_status_api_satellites_windows_runtime_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/satellites/windows-runtime/fetch": {
+      "post": {
+        "tags": [
+          "satellites"
+        ],
+        "summary": "Windows Runtime Fetch",
+        "description": "Start fetching the Windows satellite's runtime onto the core.",
+        "operationId": "windows_runtime_fetch_api_satellites_windows_runtime_fetch_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/satellites/approvals/{room_id}/approve": {
       "post": {
         "tags": [
@@ -7375,7 +7473,7 @@
           "wake-words"
         ],
         "summary": "Create Wake Word",
-        "description": "Register a new wake word in the ``recording`` status. The slug is\nderived from the name (``voice_slug``) and is the load-bearing runtime\nidentifier; a name OR slug collision raises ``IntegrityError`` \u2192 409.",
+        "description": "Register a new wake word in the ``recording`` status. The slug is\nderived from the name (``wake_slug``: ``voice_slug``, never a Windows\ndevice name, which no satellite would sync) and is the load-bearing\nruntime identifier; a name OR slug collision raises ``IntegrityError`` \u2192\n409.",
         "operationId": "create_wake_word_api_wake_words_post",
         "requestBody": {
           "content": {
@@ -7395,6 +7493,147 @@
                 "schema": {
                   "$ref": "#/components/schemas/WakeWord"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Status",
+        "description": "Whether training is on, the setup job's progress or its error, and\nwhat training needs against what the server has, with any refusal.",
+        "operationId": "trainer_status_api_wake_words_trainer_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/enable": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Enable",
+        "description": "Start \"Turn on wake-word training\" on the core: 200 with the status\n(the job runs in the background), 409 with the reason it can't.",
+        "operationId": "trainer_enable_api_wake_words_trainer_enable_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrainerEnableBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/footprint": {
+      "get": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Footprint",
+        "description": "What \"Turn off and free the space\" would remove, as Docker sizes it.",
+        "operationId": "trainer_footprint_api_wake_words_trainer_footprint_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/trainer/disable": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Trainer Disable",
+        "description": "Turn training off and free the space (the core removes the trainer\nimage, its build cache and the cache volume); 409 while it is busy.",
+        "operationId": "trainer_disable_api_wake_words_trainer_disable_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wake-words/{wake_word_id}/train/stop": {
+      "post": {
+        "tags": [
+          "wake-words"
+        ],
+        "summary": "Train Stop",
+        "description": "Stop this word's training (running or queued): it goes back to\n\"recording\" with its clips. Proxies the core, which owns the run.",
+        "operationId": "train_stop_api_wake_words__wake_word_id__train_stop_post",
+        "parameters": [
+          {
+            "name": "wake_word_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Wake Word Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -12033,7 +12272,7 @@
           "models"
         ],
         "summary": "Delete Installed",
-        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.",
+        "description": "Delete an installed Ollama model from disk (``/api/delete``).\nAdmin tier: it removes a model the household is using.\n\nWhen Ollama refuses, the detail is Ollama's own reason (\"model 'x' not\nfound\"), not httpx's message: that was a status line, the URL and a\nlink to MDN, which is what the Models page put in front of the person\n(2026-10-13).",
         "operationId": "delete_installed_api_models__name__delete",
         "parameters": [
           {
@@ -18303,6 +18542,20 @@
                 "type": "null"
               }
             ]
+          },
+          "settings_ignored": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Settings Ignored"
           }
         },
         "type": "object",
@@ -18737,6 +18990,34 @@
           "rows"
         ],
         "title": "SheetWriteRequest"
+      },
+      "SpareDeviceEnrolRequest": {
+        "properties": {
+          "room": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Room"
+          },
+          "core": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core"
+          }
+        },
+        "type": "object",
+        "required": [
+          "room"
+        ],
+        "title": "SpareDeviceEnrolRequest",
+        "description": "Settings \u2192 Satellites \u2192 Add a spare device: the room the laptop or\nphone will be, and optionally the core address it should dial when the\none this server finds for itself is not the one the LAN reaches (a\nsecond network card). The answer is the enrolment payload, the Linux\ninstall command and what the QR code carries."
       },
       "SubscribeRequest": {
         "properties": {
@@ -19555,6 +19836,22 @@
         "type": "object",
         "title": "TrackPatch",
         "description": "Partial update for a ``library_tracks`` row: the ``favorited``\nflag, and the title / artist / album a person corrects from the\ntrack drawer (F-024). Only fields actually sent are written; a\nmetadata edit also stamps ``enriched_at`` so the enricher's next\nsweep (which touches unenriched rows only) can't overwrite a hand\ncorrection."
+      },
+      "TrainerEnableBody": {
+        "properties": {
+          "cpu_ok": {
+            "type": "boolean",
+            "title": "Cpu Ok",
+            "default": false
+          },
+          "disk_ok": {
+            "type": "boolean",
+            "title": "Disk Ok",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "TrainerEnableBody"
       },
       "UploadResponse": {
         "properties": {

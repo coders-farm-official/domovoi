@@ -53,6 +53,14 @@ them server configuration rather than a request parameter: they are set
 in the environment or ``.env`` by whoever owns the machine, and a
 compromised dashboard session cannot widen either gate. Do not add
 them here.
+
+The same goes for ``wake_word_train_command`` and the trainer's
+``WAKE_TRAINER_IMAGE`` / ``WAKE_TRAINER_DOCKER`` / volume names: what
+they name is run by the core as its service user (a program, a Docker
+image), so an HTTP write would be code execution. The dashboard's "Turn
+on wake-word training" (``domovoi/wake_trainer_setup.py``) writes the
+command itself, always the repo's own wrapper; the trainer's numbers
+(samples, steps, CPUs, memory, time limit) are here.
 """
 
 from __future__ import annotations
@@ -601,6 +609,71 @@ EDITABLE_FIELDS: list[FieldSpec] = [
     ),
 
     # ─── Advanced (folded + warning) ───────────────────────────────────
+    # Wake-word training (domovoi/wake_trainer_setup.py,
+    # scripts/wake_word/train_wake_word.py). Read at each training, so
+    # 'hot'. The command itself is NOT here: whatever it names runs as the
+    # service user, so it stays server configuration (see the module
+    # docstring); "Turn on wake-word training" writes it.
+    FieldSpec(
+        "wake_word_trainer_enabled", "Wake-word training", "Wake words",
+        "Train the wake words recorded in Settings → Wake Words. Turn it on "
+        "with Settings → Wake Words → \"Turn on wake-word training\", which "
+        "builds the trainer and downloads its training data first; switched "
+        "on here without that, every training fails with \"image not "
+        "found\". Off: no new training starts (one already running "
+        "finishes). Applies immediately.",
+        "bool", section="advanced", tier="reapply", needs_internet=True,
+    ),
+    FieldSpec(
+        "wake_word_train_timeout_sec", "Training time limit", "Wake words",
+        "How long one wake word may train before it is stopped and marked "
+        "failed. 0 (the default) sizes it to this server: an hour on a GPU "
+        "(a word takes about 20 minutes, 26 the first time), two hours or "
+        "more on the CPU (about 75 minutes a word on 8 cores). Raise it "
+        "with more samples below.",
+        "int", section="advanced", tier="hot", min=0, max=86400, unit="sec",
+    ),
+    FieldSpec(
+        "wake_trainer_n_samples", "Synthetic clips per wake word", "Wake words",
+        "How many synthetic recordings of the phrase training generates. "
+        "0 = the trainer's 5000. 20000 or more cuts near-miss false wakes "
+        "(\"hey dominic\" for \"hey domovoi\") and adds about 15 minutes on "
+        "a GPU, much more on the CPU: raise the time limit with it.",
+        "int", section="advanced", tier="hot", min=0, max=100000,
+    ),
+    FieldSpec(
+        "wake_trainer_n_samples_val", "Synthetic validation clips", "Wake words",
+        "Synthetic recordings held back to check the model while it "
+        "trains. 0 = the trainer's 1000.",
+        "int", section="advanced", tier="hot", min=0, max=20000,
+    ),
+    FieldSpec(
+        "wake_trainer_steps", "Training steps", "Wake words",
+        "0 = the trainer's 50000. Fewer is faster and usually worse.",
+        "int", section="advanced", tier="hot", min=0, max=500000,
+    ),
+    FieldSpec(
+        "wake_trainer_real_target_fraction", "Share of recorded clips", "Wake words",
+        "How much of the positive set is copies of the clips recorded on "
+        "your satellites (each copy gets different room echo and noise). "
+        "0 = the trainer's 0.2. More only helps with many varied "
+        "recordings; with few it learns those exact takes.",
+        "float", section="advanced", tier="hot", min=0, max=0.9,
+    ),
+    FieldSpec(
+        "wake_trainer_cpus", "CPUs for training", "Wake words",
+        "How many CPUs a training may use. 0 = all but a quarter of them, "
+        "at least two left for the voice pipeline. Training always gets "
+        "the CPU last when voice needs it.",
+        "float", section="advanced", tier="hot", min=0, max=256,
+    ),
+    FieldSpec(
+        "wake_trainer_memory_gb", "Memory for training", "Wake words",
+        "The most memory a training may use, in GB. It needed about 9.3 GB "
+        "at the defaults; a run that needs more than this stops with an "
+        "out-of-memory error instead of slowing the whole server down.",
+        "int", section="advanced", tier="hot", min=4, max=256, unit="GB",
+    ),
     FieldSpec(
         "database_url", "Database URL", "Connections",
         "PostgreSQL connection string the Domovoi server uses for ALL state. "
@@ -855,6 +928,20 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "playback. Applies immediately.",
         "bool", tier="hot",
     ),
+    # 'hot' holds for the web process too, like guest_queue_editing above:
+    # the web reads the live value from the core's snapshot.
+    FieldSpec(
+        "admin_reload_window_min", "Stay signed in after a reload", "Security",
+        "How long after you enter the admin password a reload of the "
+        "dashboard, or a new tab in the same browser, keeps you signed in "
+        "with no password prompt. Counted from when you signed in, not "
+        "from when you last did something. Only the browser you signed in "
+        "with gets it back, and signing out ends it at once. After it, a "
+        "reload can still look at everything but asks for the password "
+        "before changing anything. 0 = every reload asks again. Applies "
+        "immediately.",
+        "int", tier="hot", min=0, max=1440, unit="min",
+    ),
     FieldSpec(
         "satellite_adoption_enabled", "USB satellite adoption", "Security",
         "Scan the Domovoi server's USB ports for unprovisioned satellites "
@@ -918,6 +1005,14 @@ def coerce_and_validate(spec: FieldSpec, value: object) -> object:
             raise ValueError("expected a number")
     elif t in ("str", "choice"):
         coerced = str(value)
+        # A newline would end the .env line early: the text after it reads
+        # as a setting of its own to every line-based reader (review of
+        # 2026-10-13). No setting needs a control character.
+        from domovoi.config_env_writer import control_character
+
+        bad = control_character(coerced)
+        if bad is not None:
+            raise ValueError(f"can't hold a control character ({bad})")
     else:  # pragma: no cover — guarded by the registry's Literal type
         raise ValueError(f"unknown field type {t!r}")
 

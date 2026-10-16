@@ -397,6 +397,8 @@ app/src/main/java/com/domovoi/app/
 ├── assistant/             # on-device assistant: model catalog, store, download job, engine, conversations
 ├── net/                   # ApiClient (data.js analog), StateBus (/ws/state), rememberApi hooks
 ├── alerts/                # timer/reminder notifications + the local alarm mirror (process-wide)
+├── audio/MicArbiter.kt    # one microphone owner: room mode, drop-in, chat mic, assistant
+├── roommode/              # this device as a room satellite (see "Room mode")
 ├── data/Prefs.kt          # DataStore-backed settings
 ├── player/                # PlayItem, PlayerController (player.jsx analog), PlaybackService
 └── ui/
@@ -545,6 +547,80 @@ leaves the home network). What the phone does, exactly:
   requests went through (`allowed=NOT_IN_BACKGROUND effective=NONE`
   while it ran), posted the fire it had missed and armed the new timer;
   in forced Doze the exact tick did the same (see above).
+
+## Room mode
+
+A spare phone or tablet as a room satellite (the person's guide:
+[docs/SPARE_DEVICE_SATELLITES.md](../docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
+It speaks the satellite protocol on the core's `/v1/stream/{room}`
+(docs/uml/satellite-protocol.md) in Kotlin; it does not run the Pi's
+Python. Package `roommode/` (not `satellite/`, which would sit beside
+`ui/screens/satellites/`), plus `audio/MicArbiter.kt`.
+
+| File | What |
+|---|---|
+| `RoomSetupActivity.kt` | The way in: the "Domovoi Room" launcher alias, Settings → Satellites → "Use this device as a room", a `domovoi-room:` link. The explainer (scrolled to its end), the mic and notification permissions, the room code (scanned with `RoomScanner.kt`, CameraX + ZXing, or pasted) |
+| `RoomEnrolment.kt` | The room code: `domovoi-room:1?core=…&fp=…&room=…`, percent-encoded UTF-8; the room name to a room id (`^[a-z][a-z0-9_]{0,31}$`) |
+| `RoomStore.kt` | What a room phone keeps; the room key sealed under its own Keystore key; `active` (the normal app is locked) and `running` (resume after a reboot) |
+| `RoomIdentity.kt` | `verify_server`'s port (the address-bound `/v1/health` proof, before every connect) and signed file lists (`signature_v2`, freshness) |
+| `RoomProtocol.kt`, `CaptureMachine.kt`, `HealthSample.kt`, `RoomSessionRules.kt` | Frames, the capture loop frame by frame (pause hints, `end_capture`, follow-ups), the health sample, what the refusals mean. Pure |
+| `WakeDetector.kt`, `OrtModels.kt` | openWakeWord's streaming pipeline (melspectrogram → embedding → wake model) and Silero VAD, on ONNX Runtime: the runtime the phone voice already ships for all four ABIs |
+| `RoomModels.kt`, `RoomSounds.kt` | The models (`/v1/wake-base`, pinned like the core's `OWW_MODEL_FILES`; `/v1/wake-models`) and the clips (`/v1/sounds`), each from a signed list |
+| `RoomEngine.kt` | The room: the connect loop, the listening thread (wake, acknowledgement, capture, reply, follow-ups, drop-in relay), the core's frames, health |
+| `RoomMic.kt`, `RoomAudio.kt`, `RoomNetwork.kt`, `RoomDevice.kt` | The mic through `assistant/MicCapture.kt`'s `AndroidMic` (and "mic blocked": two seconds of exact zeros), the speaker / clips / music / volume, the Wi-Fi-bound client with no token interceptor, battery and Wi-Fi facts |
+| `RoomService.kt` | The foreground service (microphone + mediaPlayback, Wi-Fi lock, partial wake lock), its notification, the after-reboot "tap to resume" |
+| `RoomModeActivity.kt`, `RoomStatusText.kt` | The room display: own task, dark, drifting; ring, mic chip, Mute, Exit behind `KeyguardManager` |
+
+Rules it keeps:
+
+- **Room key only.** No household token: room mode's client has no token
+  interceptor and follows no redirect; while room mode is on the app's
+  client puts the token on nothing (`net/HouseholdLock.kt`, checked by
+  `DeviceAuthInterceptor` and `tokenForDownload`), the state socket is
+  closed, the timer sync and mirrored alarms are stopped, token-bearing
+  downloads are cancelled, and `MainActivity` sends everyone to the room
+  screen (and leaves Recents).
+- **Exit behind the unlock.** A phone holding a household token needs a
+  screen lock to be a room (`RoomLockRules.kt`); leaving offers keep or
+  forget.
+- **Old phones.** Works in the armeabi-v7a APK and from Android 8: it uses
+  ONNX Runtime only, never LiteRT-LM or sherpa-onnx (the assistant's).
+- **One mic owner** (`audio/MicArbiter.kt`): room mode, the phone drop-in
+  call, the chat mic and the assistant; room mode excludes the others for
+  as long as it is on.
+- **`supports` says exactly what it handles** (`RoomProtocol.supports`):
+  `speech_pause`, `capture_control`, `announce_after_session_end`,
+  `wake_models`, `sounds`, and `full_duplex` only where
+  `AcousticEchoCanceler.isAvailable()`. Never `chat_mode`.
+
+Tests: `app/src/test/java/com/domovoi/app/roommode/`,
+`audio/MicOwnershipTest.kt` and `net/HouseholdLockTest.kt` (JVM).
+`RoomGuardsTest` pins the guards in Android entry points by reading the
+compiled classes (mute, the sticky restart, the drop-in's echo canceller,
+the normal app's redirect, the lock rule); `RoomNetworkTest` that no
+redirect is followed; `RoomModelsTest` the freshness, pin and body checks.
+`RoomProtocolTest` reads
+`docs/uml/satellite-fixtures.json` (the core's and the Pi's tests read it
+too); `RoomEnrolmentTest` reads `docs/uml/spare-device-enrol-fixture.json`
+(`satellite/enrolment.py` and the dashboard's tests read it too) and must
+match every case; `RoomIdentityTest`
+checks a health answer and an envelope the core's own code signed;
+`RoomRulesTest` checks the app's model pins against
+`domovoi/satellite_media/fetchers.py`. The wake-word parity test runs the
+real models (not in the repo: their licence) against openWakeWord's own
+scores when pointed at them:
+
+```bash
+./gradlew :app:testDebugUnitTest -Pdomovoi.oww.dir=<openwakeword>/resources/models \
+  -Pdomovoi.room.clips=<folder with hey_jarvis.wav, what_time.wav and their .oww.json scores>
+```
+
+**Debug builds** carry a test feed for the emulator (`src/debug/`,
+`DebugFeedReceiver`): `adb shell am broadcast -a com.domovoi.app.debug.ROOM_FEED
+-n com.domovoi.app/.roommode.DebugFeedReceiver --ez on true` makes the
+room's mic play queued raw PCM (16 kHz mono) from the app's external
+`files/feed/` (`--es play <file>`) instead of the microphone. Only a sender
+holding `DUMP` (adb's shell) reaches it; a release APK does not contain it.
 
 ## Capability gating (plugins)
 

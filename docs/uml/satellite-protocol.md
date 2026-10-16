@@ -63,7 +63,7 @@ sequenceDiagram
 | `barge_in` | — | Sent during TTS playback; cancels the in-flight response task. |
 | `noisy_capture` | — | The Pi's noise-gate auto-tune found the capture unusably loud and bailed. The server answers with a stock apology TTS instead of transcribing. |
 | `wifi_status` | `rx_mbits`, `tx_mbits`, `ssid`, `signal_dbm?`, `mode?` | Periodic link self-report (60 s default), cached per room for the "how's your wifi?" diagnostic and the dashboard. Since 2026-10-12: `signal_dbm` (the received signal, -120..0; what the dashboard colours by: at or above -60 good, -60 to -70 fair, below -70 weak — the rates are of the last frame, and an idle link reads the 1 Mbit/s beacon rate) and `mode` (`managed`, or `ap` while the radio hosts the setup hotspot). New fields on an existing frame: an older core ignores them, an older satellite omits them. |
-| `health` | `seq`, `ts`, `rss_kb`, `hwm_kb`, `threads`, `fds`, `cpu_pct`, `sys_cpu_pct`, `load1/5/15`, `mem_free_kb`, `mem_avail_kb`, `swap_free_kb`, `soc_temp_c`, `throttled`, `throttled_flags`, `uptime_s`, `proc_uptime_s`, `boot_id`, `nm_state`, `gateway`, `gateway_ok`, `default_route`, `core_ok`, `core_host_ok`, `mic_expected`, `mic_fps`, `mic_q`, `playback_q`, `send_q`, `wake_loop_age_s`, `idle`, `ws`, `ws_down_for_s`, `reconnects`, `wifi`, `log_ring`, `log_spool`, `battery?`, `mic_blocked?`, `reboot_needed?`, `net_step?`, `hostname?` | **Only when `ready.features` lists `"health"`** (2026-10-09). The satellite's health sample, one a minute (`[health] sample_interval_sec`), at most 4 KB: process memory and fds, CPU, load, free memory, SoC temperature and the `vcgencmd get_throttled` flags, uptime and the kernel's boot id, mic frames per second and the wake loop's heartbeat age (the two self-checks that catch a deaf-but-online unit), queue depths, the WebSocket state and reconnects since boot, the Wi-Fi link and NetworkManager state, whether the default gateway answers (`gateway_ok`: TCP on 53/80/443, a refusal counts, else an ICMP echo), whether there is a default route at all (`default_route`), and whether the core accepts a TCP connect (`core_ok`) or its host answers at all (`core_host_ok`, a refusal counts). Every host fact is optional (`null` when the file or tool is missing). The core keeps the latest per room — and does not drop it when the room disconnects, since the last sample before an outage is the point — stores 24 h per room (V022; at most one row per 20 s per session) and logs every tenth at INFO. Numbers and short strings only, never speech. A spare device (2026-10-12) may add `battery` (`{percent, charging, on_power}`, percent 0–100) and `mic_blocked` (true when the OS hands the mic silence — Android's mic privacy toggle); a Pi sends neither. The dashboard shows them in the room's health block. Since 2026-10-12 `wifi` may carry `signal_dbm` and `mode` (as in `wifi_status`), and `reboot_needed` says why the satellite wants one reboot (it was upgraded, and the network settings root applies at boot are not in place yet; `null` when nothing is pending). Since the same day's follow-up a satellite also sends `net_step`, what that boot-time step did on this boot (`{state, detail, when, at, version, early?}`; `state` one of `applied`, `unchanged`, `skipped`, `failed`, `not_run`, `not_installed`, `running`; `detail` at most 240 characters; `version` 0–10000, else `null`; `early`, when there is something to say, how the unit that sets the name before the network stands, at most 200 characters; an unknown state is dropped), and `hostname`, the unit's host name now (a DNS-style name of at most 64 characters, else dropped). Any other key is dropped, as always. |
+| `health` | `seq`, `ts`, `rss_kb`, `hwm_kb`, `threads`, `fds`, `cpu_pct`, `sys_cpu_pct`, `load1/5/15`, `mem_free_kb`, `mem_avail_kb`, `swap_free_kb`, `soc_temp_c`, `throttled`, `throttled_flags`, `uptime_s`, `proc_uptime_s`, `boot_id`, `nm_state`, `gateway`, `gateway_ok`, `default_route`, `core_ok`, `core_host_ok`, `mic_expected`, `mic_fps`, `mic_q`, `playback_q`, `send_q`, `wake_loop_age_s`, `idle`, `ws`, `ws_down_for_s`, `reconnects`, `wifi`, `log_ring`, `log_spool`, `battery?`, `mic_blocked?`, `reboot_needed?`, `net_step?`, `hostname?` | **Only when `ready.features` lists `"health"`** (2026-10-09). The satellite's health sample, one a minute (`[health] sample_interval_sec`), at most 4 KB: process memory and fds, CPU, load, free memory, SoC temperature and the `vcgencmd get_throttled` flags, uptime and the kernel's boot id, mic frames per second and the wake loop's heartbeat age (the two self-checks that catch a deaf-but-online unit), queue depths, the WebSocket state and reconnects since boot, the Wi-Fi link and NetworkManager state, whether the default gateway answers (`gateway_ok`: TCP on 53/80/443, a refusal counts, else an ICMP echo), whether there is a default route at all (`default_route`), and whether the core accepts a TCP connect (`core_ok`) or its host answers at all (`core_host_ok`, a refusal counts). Every host fact is optional (`null` when the file or tool is missing). The core keeps the latest per room — and does not drop it when the room disconnects, since the last sample before an outage is the point — stores 24 h per room (V022; at most one row per 20 s per session) and logs every tenth at INFO. Numbers and short strings only, never speech. A spare device sends its battery as one object, laptop and phone alike: `battery` = `{percent, charging, on_power}` (percent 0–100; `charging` true while the level goes up; `on_power` true while the charger is plugged in, which is also what a battery held full or at a charge limit looks like), and leaves it out when it has no battery (S0, 2026-10-12; S1 2026-10-13 is what sends it: a laptop from `/sys/class/power_supply`). It may add `mic_blocked` (true when the OS hands the mic silence — Android's mic privacy toggle). A Pi sends neither. The dashboard shows them in the room's health block, and asks for a charge limit when a battery sits at 98 % or more on the charger. Since 2026-10-12 `wifi` may carry `signal_dbm` and `mode` (as in `wifi_status`), and `reboot_needed` says why the satellite wants one reboot (it was upgraded, and the network settings root applies at boot are not in place yet; `null` when nothing is pending). Since the same day's follow-up a satellite also sends `net_step`, what that boot-time step did on this boot (`{state, detail, when, at, version, early?}`; `state` one of `applied`, `unchanged`, `skipped`, `failed`, `not_run`, `not_installed`, `running`; `detail` at most 240 characters; `version` 0–10000, else `null`; `early`, when there is something to say, how the unit that sets the name before the network stands, at most 200 characters; an unknown state is dropped), and `hostname`, the unit's host name now (a DNS-style name of at most 64 characters, else dropped). Any other key is dropped, as always. |
 | `log_push` | `lines`, `offline`, `dropped?` | **Only when `ready.features` lists `"log_push"`** (2026-10-09). Log lines for the per-room log the core retains on disk (1 MB per room plus one rotation, under `satellite_logs_dir`). On reconnect the satellite sends what it spooled to `~/.domovoi/log-spool.txt` while it was disconnected (256 KB ring file) as frames flagged `offline: true`, then clears the spool; while connected it sends the lines logged since the last push every 30 s (`[health] log_push_interval_sec`). At most 32 KB a frame; a push that would exceed it drops lines and says how many in `dropped`. The core prefixes each line with its receive time and `[offline]` for spooled lines, and rate-limits per room (a burst for the spool, a trickle for the live push); over budget is dropped quietly, never answered with `error`. |
 | `volume_status` | `level` (0–100) | Current hardware output volume, on connect and after each `set_volume`. Lets relative "turn it up" work against the real level. |
 | `voice_status` | `voice` | Which registered voice this room speaks in, on connect and after `set_voice`. |
@@ -93,7 +93,7 @@ sequenceDiagram
 | `stop_wake_recording` | — | Leave clip-recording mode early (dashboard Stop). |
 | `set_wake_word` | `slug` | Push a trained model: the Pi writes the slug to its wake sidecar (`~/.domovoi/wake`), syncs the model from `/v1/wake-models`, and self-restarts. The slug is simultaneously the model file stem, the effective wake word, and the openWakeWord prediction key. |
 | `wake_models_changed` | — | Served wake models changed; the Pi re-syncs its `~/.domovoi/wake_models` cache. |
-| `set_config` | `changes` (flat `section.key` map) | Push dashboard-edited config: the Pi merges into `config.toml` (preserving comments), validates, writes a `.bak`, and self-restarts. |
+| `set_config` | `changes` (flat `section.key` map) | Push dashboard-edited config: the Pi merges into `config.toml` (preserving comments), validates, writes a `.bak`, and self-restarts. Every satellite takes only the settings the dashboard's form lists, by exact key, and refuses an audio device name that is not a plain ALSA device (`satellite/remote_config.py`, `satellite/alsa_names.py`); a spare computer also refuses `wifi.`, `leds.`, `mic_gain.` and `display.`. |
 | `set_display` | `action: "on" \| "off" \| "restart_kiosk"` | **Video satellites only** (the admin endpoint refuses other rooms with `409`). Switch the panel's power via the configured `[display] power_method` (wlopm → xset → backlight under `auto`), or bounce `domovoi-kiosk.service`. The Pi applies and re-reports via `display_status`. |
 | `restart` | — | Ask the satellite to restart its own systemd service (`domovoi-satellite.service`), draining TTS playback first. |
 | `upgrade` | `expected_sha`, `manifest_path`, `files_base`, `reconnect_timeout_sec` | Self-serve code sync: tarball the current tree (rollback backup), mirror the manifest (per-file sha256 verification), record `expected_sha`, restart. If the Pi doesn't reconnect within the timeout, its on-Pi watchdog rolls back to the tarball. |
@@ -173,17 +173,118 @@ methods refuse again underneath (`satellite_abilities.NotDeclared`), so no
 path reaches the socket.
 
 **Shared fixtures.** [`satellite-fixtures.json`](satellite-fixtures.json)
-holds a 2-Mic HAT Pi, an XVF3800 Pi, a `linux_pc` and an `android_room`:
+holds a 2-Mic HAT Pi, an XVF3800 Pi, a `linux_pc`, a `windows_pc` and an
+`android_room`:
 each one's `hello`, the `ready` the core answers a paired one with (minus
 `bot_name`), a `health` frame and what the core keeps of it, and what the
 core may send it (`frames_sent` / `frames_never`, the `upgrade` extra
 field, the settings sections hidden, the `pi_action`s kept, the dashboard
 actions offered). The core's tests (`domovoi/tests/test_satellite_supports.py`)
 and the Pi client's (`satellite/tests/test_protocol_fixtures.py`) read it,
-and the Android room mode's JVM tests are meant to, so the implementations
-can't drift apart. The `linux_pc` and `android_room` entries are drafts
-for S1 and S3; change them with the code that sends them. Tokens and codes
-in it are placeholders.
+and the Android room mode's JVM tests (`android/.../roommode/RoomProtocolTest.kt`)
+do too, so the implementations can't drift apart. The `android_room` entry
+is what the app's room mode sends on a phone with an echo canceller (one
+without leaves `full_duplex` out, and so gets no drop-ins); the `linux_pc`
+and `windows_pc` entries are what a spare Linux or Windows computer sends
+(`satellite/pc_engine.py` `hello_fields()`). Change them with the code that
+sends them. Tokens and codes in it are placeholders.
+
+A phone in room mode runs openWakeWord on ONNX Runtime with the same
+models as a Pi; it fetches the base models from the core's signed
+`/v1/wake-base` channel (docs/API_REFERENCE.md) and a pushed wake word from
+`/v1/wake-models`, as a Pi does.
+
+## Enrolling a spare device (`domovoi-room:1`)
+
+Spare-device satellites (S1, 2026-10-13). A Linux laptop or a phone in
+room mode is told which core it belongs to by an **enrolment payload**, a
+URI the dashboard shows under Settings → Satellites → **Add a spare
+device** (admin only): inside a one-line Linux install command, and as a QR
+code for a phone.
+
+```
+domovoi-room:1?core=<core base URL>&fp=<server fingerprint>&room=<room name>
+```
+
+* `core`: the core's base URL as the device dials it, `http` or `https`
+  only (e.g. `http://192.168.0.117:6370`), and on the home network: an
+  RFC 1918 IPv4 address, an IPv6 unique-local or link-local one, or a name
+  ending in `.local`, `.home.arpa`, `.lan` or `.internal` (the core's own
+  LAN names) — never loopback, a public address or
+  a public name, https or not, so a code shown on some web page cannot send
+  a room's microphone out of the house (`not_home_network`). The satellite
+  socket is the same host and port with `ws`/`wss`.
+* `fp`: the core's Ed25519 fingerprint as `satellite/server_identity.py`
+  writes it (`SHA256:` and 43 characters of unpadded base64).
+* `room`: the room name as typed (at most 64 code points). The device
+  connects as the room id derived from it, which always meets the core's
+  own rule `^[a-z][a-z0-9_]{0,31}$` (`satellite/enrolment.py`
+  `room_id_for`: NFKD, combining marks and apostrophes dropped, ASCII
+  lower-case, every other run of characters one `_`, `room_` in front of a
+  leading digit), so "Kid's Room & Den" is `kids_room_den` and "2nd
+  Bedroom" `room_2nd_bedroom`.
+
+Every value is percent-encoded UTF-8, and a `+` is a plus sign, never a
+space (this is a URI, not a form). Unknown keys are ignored; a key given
+twice is refused. **The payload carries no secret**: it adds the pin, not
+an approval. The device holds the core to `fp` from its first connect
+(the address-bound `/v1/health` challenge, before anything is written),
+and is still parked until someone types its approval code in the
+dashboard, exactly like a Pi.
+
+The grammar, the reason codes a refusal carries (`not_enrolment`,
+`unsupported_version`, `malformed`, `missing_core`, `missing_fp`,
+`missing_room`, `bad_core`, `not_home_network`, `bad_fp`, `bad_room`) and
+83 worked cases
+(valid and invalid, with the room ids) are in
+[`spare-device-enrol-fixture.json`](spare-device-enrol-fixture.json). The
+Python parser (`satellite/tests/test_enrolment.py`) and the Android room
+mode's Kotlin parser are both tested against it. What the install command
+does with it, and why it is safe enough on a LAN without TLS:
+[../SPARE_DEVICE_SATELLITES.md](../SPARE_DEVICE_SATELLITES.md) and
+[../SECURITY_PRIVACY.md](../SECURITY_PRIVACY.md).
+
+## The local control channel (engine ↔ tray)
+
+Spare-device satellites (S1, 2026-10-13). Not part of the wire protocol
+with the core: this is how programs on the satellite's own machine talk to
+the running engine. On a laptop the engine runs headless (a `systemd
+--user` service, or a system service on a headless box) and an optional
+tray shows it; the CLI (`python -m satellite.client --status`,
+`--approval-code`, `--mute`, `--unmute`, `--pending`, `--approve`,
+`--decline`) and the installer use the same channel.
+
+* **Transport.** Linux: the Unix socket `~/.domovoi/control.sock`, made
+  0600 inside the 0700 config dir; a peer whose uid (`SO_PEERCRED`) is
+  neither the engine's nor root is closed at once. Off on the Pi profiles
+  (a Pi is exactly as before); on for `generic_pc`. Windows (`windows_pc`,
+  2026-10-13): the named pipe `\\.\pipe\domovoi-satellite-<account SID>`
+  with the same framing (`satellite/control_win.py`): a DACL granting that
+  account alone, `PIPE_REJECT_REMOTE_CLIENTS`, the name claimed with
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`, and each end refusing a peer process of
+  another account.
+* **Framing.** UTF-8 JSON, one object per line, at most 16 KiB. A request
+  is `{"verb": …, "req": <optional id, echoed>, …arguments}` and gets
+  exactly one response line, in order: `{"ok": true, …}` or `{"ok": false,
+  "error": <code>, "message": …}`. `watch` then keeps the connection and
+  adds `{"event": "status", …}` lines on every change — the tray's
+  mic-live indicator rides on it.
+* **Verbs.** `status`, `watch`, `mute`, `unmute`, `volume` (read, or
+  `level` / `delta`), `code` (the approval code while waiting), `logs-path`,
+  `identify` (play the chime), and for the "ask me" permission `approve` /
+  `decline` a pending `update`, `restart`, `config` or `wake_word`.
+* **Engine seams** (`satellite/engine_platform.py`): the player argv
+  (`AudioOut`; on Windows `python -m satellite.win_player`, with the wake
+  acknowledgement played inside the engine), the volume (`VolumeBackend`:
+  amixer on a Pi, `wpctl` / `pactl` on a desktop, Core Audio on Windows),
+  the self-restart (`ServiceControl`: sudo'd `systemctl` on a Pi, exit 75
+  on a laptop, which its unit — or on Windows its supervisor,
+  `satellite/win_service.py` — restarts) and the control transport. A Pi's
+  are byte for byte what they were.
+
+The verbs, errors, status fields and worked exchanges are in
+[`satellite-control-fixture.json`](satellite-control-fixture.json), which
+`satellite/tests/test_control_protocol.py` holds `satellite/control.py` to.
 
 ## Adding to the protocol
 

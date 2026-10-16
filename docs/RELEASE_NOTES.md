@@ -4,6 +4,333 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-14 — A reload no longer signs the admin out
+
+Server update (core, dashboard and a database migration, V028); the
+update applies the migration.
+
+* **Reloading the dashboard keeps you signed in for an hour.** For 60
+  minutes after you enter the admin password in a browser, a reload, or
+  a new tab in that browser, is fully signed in: no password prompt, and
+  saving settings, restarting, plugins and the rest all work as before
+  the reload. The hour counts from when you signed in, not from when you
+  last did something. After it, a reload is **view only** as before, and
+  the first change asks for the password.
+* **Only that browser, only that sign-in.** Another phone or computer
+  still needs the password, and **sign out** ends it at once (so do
+  revoking the session and changing the password from another device).
+  On a computer other people use, sign out when you're done.
+* **The Admin card says until when** ("keeps you signed in until 14:32"),
+  once, with no countdown; the sidebar says **Admin** rather than
+  **Admin (view only)** while it lasts.
+* **Settings → Configuration → Security → Stay signed in after a reload**
+  sets the minutes (0 to 1440); **0** is the old behaviour, where every
+  reload is view only.
+* **Sign in once after updating.** The dashboard's sign-in cookie is now a
+  secret of its own rather than the admin token itself (a browser sends a
+  cookie to every port of the server, so other services there used to see
+  the token). A browser signed in before the update therefore shows
+  **signed out** after its next reload; sign in once and it is back, with
+  the hour. A tab you haven't reloaded stays signed in.
+* **The household token and the command recordings need the sign-in in
+  the tab.** A tab reloaded more than the hour after you signed in (view
+  only) no longer shows them; it says "sign in again" there instead. Inside
+  the hour a reload is signed in and shows them as before.
+* **A sign-out that didn't reach the server says so** ("Not signed out —
+  the Domovoi server did not answer … try again") instead of showing
+  signed out while the server still had you signed in.
+* **API:** `POST /api/auth/resume` (new), and `GET /api/auth/status`,
+  `POST /api/auth/login` and `/setup` now also answer
+  `reload_window_min`, `resume_until` and `resume_in_sec`
+  ([API_REFERENCE.md](API_REFERENCE.md) §3.1,
+  [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#staying-signed-in-across-a-reload)).
+
+## 2026-10-13 — Wake-word training: turn it on in Settings, train on the GPU
+
+Server and dashboard update; no migration. A Linux server or the Windows
+install with an NVIDIA GPU also gets the NVIDIA Container Toolkit at its
+next update. What changes:
+
+* **Training is switched on from the dashboard.** Settings → Wake Words has
+  a **Wake-word training** card (admin). Off, it lists what training needs
+  against this server: about 32 GB of disk the first time, a download of
+  about 22 GB, once, a server with 24 GB of memory, and the time per
+  word (about 20 minutes on an NVIDIA GPU, about 75 on 8 CPU cores). It
+  refuses, saying why, when the internet answer is **No**, the disk or
+  memory is short, or Docker isn't running. **Turn on wake-word training**
+  builds the trainer image, checks the GPU, downloads the training data and
+  switches training on, in the background, with progress and errors that
+  stay; no shell, no restart. Before, training had to be set up by hand
+  (`WAKE_WORD_TRAINER_ENABLED`, `WAKE_WORD_TRAIN_COMMAND`), which the
+  Windows install couldn't do at all. **Train** is greyed until training is
+  on.
+* **"Hey Domovoi" trains.** A phrase with a word openWakeWord's dictionary
+  lacks ("domovoi", "domo") failed every run: the model upstream downloads
+  for such words is no longer served. The core now sends the phrase's
+  pronunciations from Domovoi's own phonemizer, the "say it like" list
+  first (Domovoi = DOH-moe-voy); espeak-ng inside the trainer image covers
+  only a word it sent nothing for. Training again on a new set of clips now
+  uses them (it reused the first run's features), and under WSL a training
+  lands on the card it picked (it took the first card whatever it chose).
+* **A training never outlives its run.** A time limit, a cancel or a core
+  shutdown left the training container running, and the next try started a
+  second one. The container is now named and labelled, a leftover is
+  removed before each run, the wrapper removes its container at its
+  deadline and when told to stop, and the core sweeps once after each
+  start. A word cut off by a restart stays queued and trains again
+  afterwards. Each word's whole output is kept in
+  `~/.domovoi/wake_trainer/logs/<slug>.log`. A word that is training has a
+  **Stop training** button (it goes back to *recording* with its clips).
+* **No copy of a recording is left behind.** The copies of the recorded
+  clips a run makes in the trainer's cache volume go however the run ends,
+  stopped and timed out included (the container gets a stop signal and a
+  grace period first); a run killed outright is scrubbed by the next stop,
+  run or start, and deleting a wake word removes its training files.
+  **Turn off and free the space** removes the trainer and its data, after
+  showing their size.
+* **Voice keeps priority while a word trains.** The container is capped
+  (all but a quarter of the CPUs, a low CPU weight, 12 GB of memory with no
+  swap) and lowers its own priority; on a GPU server it takes the least
+  busy card, away from the chat model. A CPU-only server asks before
+  training is turned on and before each **Train**, with the estimate and
+  "voice answers more slowly".
+* **New settings** in Settings → Configuration → Wake words (advanced):
+  training on or off, the **Training time limit** (a fixed hour before; now
+  sized to the server unless set: an hour on a GPU, at least two on the
+  CPU), synthetic clips, validation clips, steps, the share of recorded
+  clips, CPUs and memory. Every `WAKE_TRAINER_*` line in `domovoi/.env`
+  now reaches the trainer; the systemd drop-in the docs used to ask for is
+  no longer needed. The command, the image and the docker binary stay out
+  of the dashboard on purpose: they name what runs as the service user.
+* **The trainer image is pinned:** the base image by digest, openWakeWord
+  and piper-sample-generator by commit, every Python package by version
+  (`scripts/wake_word/docker/constraints.txt`), the synthetic voice and the
+  feature models by SHA-256. The training data is pinned too: the two
+  Hugging Face datasets at fixed commits, the feature files and the
+  background zips by SHA-256 (a cache filled before checks once, about a
+  minute).
+* **Set up for the GPU, a training needs the GPU:** when Docker can't reach
+  it any more, the word fails saying so instead of training for over an
+  hour on the CPU under the GPU's time limit.
+* **A setting can't hold a newline any more** (Settings → Configuration, and
+  any `.env` write): a line-based reader saw the text after it as a setting
+  of its own. The update unit reads `domovoi/.env` the way the core does.
+* **The NVIDIA Container Toolkit** on a Linux server or the Windows install,
+  only where an NVIDIA GPU is visible (`scripts/linux/gpu-runtime.sh`):
+  NVIDIA's apt repository with its key checked against a pinned
+  fingerprint, the toolkit at 1.20.1-1 (not held), the `nvidia` runtime in
+  Docker's configuration and a Docker restart; never a driver. A fresh
+  install runs it as `provision.sh`'s new `gpu-runtime` step, an existing
+  one at its next update or **Restart Domovoi**, while core and web are
+  stopped (Postgres and the rooms' players restart once). A try that fails
+  waits a day before the next (no `apt-get update` and Docker restart at
+  every Restart), unless the admin presses **Turn on** or **Check the GPU
+  and trainer again** first. Under **No** the update downloads nothing, and
+  answering **No** stops a download or rebuild already running; `DOMOVOI_MANAGE_GPU_RUNTIME=0` in
+  `/etc/default/domovoi-update` leaves it alone. The update unit also
+  rebuilds the trainer image after an update that changes it, only where a
+  household built it (`DOMOVOI_MANAGE_WAKE_TRAINER=0` leaves it alone).
+  docs/LINUX_HOST.md, "Wake-word training".
+* **Licence:** a model trained at home is for that household. It can't be
+  shipped as a Domovoi default or shared, because the training data is
+  non-commercial (`scripts/wake_word/README.md`, section 5).
+* API: `GET /v1/admin/wake/trainer` and `GET /v1/admin/wake/trainer/footprint`
+  (admin reads), `POST /v1/admin/wake/trainer/enable` and
+  `POST /v1/admin/wake/trainer/disable` (security tier: Bearer only, 501
+  before setup, 409 with the reason), `POST /v1/admin/wake/train/stop` and
+  `POST /v1/admin/wake/forget` (admin), and the dashboard's
+  `/api/wake-words/trainer`, `/trainer/footprint`, `/trainer/enable`,
+  `/trainer/disable` and `/{id}/train/stop` (docs/API_REFERENCE.md).
+
+**What to do:** on a server with an NVIDIA GPU, update first (**Pull the
+latest**, then **Restart to apply changes**), so Docker can reach the card.
+Then, as the admin, Settings → Wake Words → **Turn on wake-word training**,
+confirm, and wait: about 13 minutes on a fast line for the build and the
+data download (you can leave the page). Create a wake word, record at least 15 clips on a
+satellite (hundreds for an XVF3800), **Train** (about 20 minutes on the
+GPU), and push it to a room. On the Windows install Domovoi can't see the
+system drive's free space: the card asks you to confirm that C: has at
+least 40 GB free (docs/WINDOWS_HOST.md, "Training wake words"); until the
+installer is re-pinned past this release, a new Windows install also gets
+the NVIDIA Container Toolkit at its first update, not during Setup.
+A trainer set up by hand keeps working: its time limit is now two hours
+unless you set one.
+
+## 2026-10-13 — Android: a spare phone or tablet as a room (room mode)
+
+Server and Android update; no migration, no satellite upgrade.
+
+* **An old phone or tablet can be a room.** On its charger, it listens for
+  the wake word, answers, plays the room's music, takes announcements and
+  (on phones with an echo canceller) drop-ins, like a Pi satellite. Open
+  **Domovoi Room** (a second icon the app adds) or Settings → Satellites →
+  **Use this device as a room**, read the explainer, allow the
+  microphone, scan or paste the room code from the dashboard, and approve
+  the six-digit code the phone shows. Guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode).
+* **Before the first phone room: refresh the satellite media caches once**
+  (dashboard, Settings → Satellites → prepare satellite media → Refresh
+  caches; needs the internet). The phone runs the same openWakeWord models
+  as a Pi and fetches them from the server's new signed `/v1/wake-base`
+  channel, which serves only what that cache holds. Without it the room
+  connects but says the server has no wake-word models yet.
+* **A room phone holds only its room's own key** and the server's pinned
+  fingerprint, never the household pairing. On a phone that is also a
+  household device, the normal app is locked while it is a room, the
+  household's timers, live updates and downloads stop on it, and leaving
+  takes the phone's PIN, pattern or fingerprint: such a phone **needs a
+  screen lock to be a room**. Leaving offers to keep the room or forget it
+  ([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#a-room-phone-android-room-mode)).
+* **A room's server must be on the home network** (a private address, or a
+  `.local`, `.home.arpa`, `.lan` or `.internal` name), https or not: a room
+  code naming anything else is refused.
+* **It works on 32-bit phones and from Android 8.0** (the armeabi-v7a APK
+  too): room mode uses none of the on-device assistant's libraries.
+* **What Android asks of it:** a notification and the green mic dot for as
+  long as it listens; after a restart, one tap on "tap to resume"; the
+  microphone privacy toggle makes it deaf, and the screen and the
+  dashboard then say **mic blocked**.
+* **The app's other microphone users take turns:** a phone drop-in call,
+  the chat mic and the on-device assistant now say "the microphone is in
+  use by …" instead of being silenced by Android when another one has it.
+* Building: CameraX and ZXing's core (Apache-2.0) join the app for the
+  room code's scanner. The dashboard side of "add a spare device" (the
+  room code and its QR) is in the Linux spare-device notes below.
+
+## 2026-10-13 — A spare Windows laptop or PC can be a room
+
+Server, dashboard and satellite update; no migration. Pis and Linux laptops
+are unchanged.
+
+* **Settings → Satellites → add a spare device** now gives a **one-line
+  command for Windows PowerShell** too. Paste it on a Windows 10/11 PC
+  (64-bit), signed in as the person whose account it will run in, in a
+  normal (not administrator) window. It installs **for that account only,
+  with no administrator rights**, into `%LOCALAPPDATA%\Domovoi\Satellite`,
+  starts at sign-in and **stops at sign-out**. Guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs).
+* **Unsigned for now**: the satellite's code carries no signature (Python
+  itself is signed by its foundation). Antivirus may warn about a command
+  that downloads and starts programs; the card and the guide say so.
+* **The same trust model as Linux**: the bundle runs only if its SHA-256 is
+  the quoted one, the server proves its fingerprint before anything is
+  written, and the Python and every library are pinned by SHA-256 in
+  `satellite/windows-runtime.json`. The server can fetch them once (**get
+  the Windows files** on the card, ~96 MB from python.org and PyPI, each
+  file checked) and serve them to laptops at
+  `/v1/satellite-windows/files/…`; otherwise a laptop downloads the same
+  pinned files itself.
+* **Never on the PC that runs the server**: the installer refuses there.
+  "Use this PC as a room" will come with the server's own tray.
+* **A tray icon** (filled red while audio leaves for the server, mute, the
+  approval code, Allow / Not now for "ask me" with every change listed),
+  power questions (plugged-in sleep and lid, each default No, undone on
+  uninstall), and **Installed apps → Uninstall**.
+* A Windows satellite looks for a server that moved by its name and
+  address only, never by sweeping the network (new `[pc] server_search`:
+  `sweep`, `names`, `address`).
+* The satellite code channel carries `.ps1` files now (the installer); a
+  Pi downloads none of them.
+* A Windows satellite **refuses to start** on a `config.toml` value it
+  won't use (a device name that is not "default", a number or a plain
+  name; an unknown setting), like a Linux laptop: the tray shows *Domovoi
+  satellite didn't start* and the line to fix, and it stays stopped until
+  **Start satellite**. It sends no `settings_ignored` (that is a Pi's).
+* Fixed: retiring a room and then adding a room with the same name in the
+  same server session left the new room's music player without its record,
+  so the next retire left its container behind.
+* Every satellite: a sound or wake-word list can write only inside its own
+  cache, and only sound files / wake-word models; a path with a drive
+  letter, a colon, a backslash or one leading out through a link is
+  refused (it could reach a Windows PC's Startup folder).
+* A Windows satellite whose control pipe is already taken by another
+  program stops and says why in the tray, rather than listening with a
+  tray that can't see or mute it.
+* **A Windows satellite brings Microsoft's Visual C++ runtime** (14.44;
+  the wake word's onnxruntime needs it and doesn't carry it): Microsoft's
+  own copies, from the `msvc-runtime` wheel, pinned in the lock and placed
+  beside the satellite's Python — no administrator, nothing for the rest of
+  the PC. They are updated with Domovoi's lock, not by Windows Update. The
+  installer also says when Smart App Control is on or in evaluation: it may
+  block parts of the satellite that aren't signed yet.
+
+## 2026-10-13 — A spare Linux laptop or mini PC can be a room
+
+Server, dashboard and satellite update; no migration. Pis are unchanged.
+
+* **Settings → Satellites → add a spare device** (admin): name the room and
+  get a **one-line install command** for a Debian or Ubuntu laptop or mini
+  PC, and a **QR code** of the same enrolment code for a phone's room mode.
+  The code is not a password: the device still waits for its approval code
+  in the dashboard, like a Pi. Guide:
+  [SPARE_DEVICE_SATELLITES.md](SPARE_DEVICE_SATELLITES.md).
+* **The command checks what it runs**: it runs the download only if its
+  SHA-256 is the one the dashboard quoted, and the installer makes the
+  server prove its fingerprint before it writes anything; the device is
+  pinned to that server from then on and won't run unpinned. The command
+  itself is only as trustworthy as the dashboard page it is shown on, which
+  is plain HTTP on the LAN: before running it, check that it downloads from
+  your server's address and that its `fp=` is the fingerprint under
+  **Settings → About** on another device. Make a fresh command after
+  updating Domovoi (an old one refuses the new download). The server
+  address in a code must be on the home network.
+* **Python packages from a hash-pinned list** (`satellite/locks/`, one per
+  Python version and machine): pip takes only the files whose SHA-256 the
+  list names, and builds nothing from source.
+* **Uninstall from root's own copy**,
+  `bash /usr/local/lib/domovoi-satellite/install-pc.sh --uninstall` in the
+  satellite's account, or, for a dedicated account, from your
+  administrator's account with `sudo … --uninstall --account <its account>`.
+  The installer and uninstaller fix their PATH and name every tool in full.
+  It acts only
+  on the paths written into it and on root's own record of what it
+  changed, never on anything the satellite's account can write.
+  `--purge` removes the satellite's files (root's copy of its purger, under
+  the system's Python: never the satellite's own code), and the installer
+  refuses an account that already runs a Domovoi server. On a desktop every
+  sudo step comes first; sudo then forgets the password before the
+  satellite's code runs, in a fresh venv and a session with no terminal.
+* **A spare computer whose settings don't load stays stopped** (exit 78)
+  instead of restarting every few seconds, and its tray and
+  `python -m satellite.client --status` say why.
+* **The dashboard refuses a satellite setting the satellite would refuse**
+  (an ALSA device name that is not a plain one, text over 120 characters
+  or with a line break), with the reason, instead of "sent".
+* **The laptop asks you** whether the server may update and restart it on
+  its own ("automatic", like a Pi) or must wait for your OK in the tray
+  ("ask me"). Either way it gets **no root helpers**: no Wi-Fi re-joins, no
+  clock setting, and **plugins that install something as root on a
+  satellite stay Pi-only** for now. The dashboard doesn't offer those for
+  a laptop.
+* **A tray icon** shows when the microphone is live (filled red), mutes it,
+  shows the approval code and the waiting updates; plain GNOME gets the
+  same controls in a small window from the app menu. Headless boxes use
+  `python -m satellite.client --status|--approval-code|--mute|--unmute`.
+* **Battery in a room's health block** (a laptop's level, charging, on the
+  charger), with a nudge to set a charge limit when it sits full on the
+  charger. The installer offers one (and lid/sleep settings), each asked,
+  each defaulting to No.
+* The core serves the satellite code as one file too
+  (`/v1/satellite-code/bundle.tar.gz` and its `bundle.sha256`), open like
+  the rest of the satellite channel and held by the container guard's
+  freeze.
+* Satellite media prep now evaluates `satellite/requirements.txt`'s
+  platform markers for the board it prepares (the `onnxruntime==1.20.0`
+  pin and `spidev` are ARM-only lines now); a Pi card gets what it got.
+* **Every satellite, Pis included: tighter settings from the server.** A
+  settings change from the server may name only the settings the
+  dashboard's form has, by their exact name (a near-miss such as a trailing
+  space is refused, not tidied up), and never the pinned server, its
+  address or the device section. An audio device name, from the server or
+  in `config.toml`, must be a plain ALSA device (`hw:1,0`,
+  `plughw:CARD=Device`, `default`, …): one that makes ALSA run a command
+  is refused, and so is the player's use of one. A **Pi** whose stored
+  config already names one (no SSH to fix it) starts on its board's
+  default for that setting and says so: **"a setting ignored"** on its
+  dashboard card and in its health block. A spare computer refuses to
+  start instead and says why (it has a terminal). A satellite's sound sync
+  now prunes only the clips it put there.
+
 ## 2026-10-13 — Android: talk to Domovoi on the phone
 
 New Android build only; nothing changes on the server.

@@ -49,18 +49,23 @@ from satellite import (
     chime,
     code_sync,
     config_writer,
+    debug_audio,
     devices,
     discovery,
     display_power,
+    engine_platform,
     kiosk,
     health,
     log_buffer,
     log_spool,
     net_settings,
+    pc_engine,
+    remote_config,
     sound_sync,
     wake_model_sync,
     wifi_profiles,
 )
+from satellite import alsa_names, not_started
 from satellite._resample import StreamingResampler
 from satellite.devices import DeviceProfile
 from satellite.leds import LEDConfig, LEDController
@@ -181,6 +186,13 @@ def _hostname() -> str | None:
         return socket.gethostname()[:64] or None
     except OSError:
         return None
+
+
+def _reboot_helper_installed(cfg: Any) -> bool:
+    """Whether the root reboot helper is there to ask. Never on a Windows
+    satellite: the POSIX path would be a file at the root of the system
+    drive, which any account can create."""
+    return not engine_platform.is_windows_pc(cfg) and REBOOT_HELPER.exists()
 
 
 def _hard_exit(code: int) -> None:
@@ -587,6 +599,31 @@ class Config:
     health_log_push_interval_sec: float = 30.0
     health_mic_silence_sec: float = 30.0
     health_heartbeat_stale_sec: float = 60.0
+    # Spare computers (generic_pc, S1 2026-10-13); inert on a Pi.
+    # [satellite] room_name: the name it was enrolled with (the tray shows
+    # it; room_id is what it connects as).
+    room_name: str = ""
+    # [pc] permissions: "automatic" (updates and restarts from the core run
+    # on arrival, like a Pi) or "ask" (they wait for the person's OK).
+    permissions: str = "automatic"
+    # [audio] volume_backend: "" = the profile's (amixer on a Pi, "auto"
+    # on a PC: wpctl, then pactl, then amixer).
+    volume_backend: str = ""
+    # [control] enabled: the local control socket; None = the profile's
+    # (on for generic_pc, off on a Pi).
+    control_enabled: bool | None = None
+    # [device] full_duplex on generic_pc: a USB speakerphone that cancels
+    # its own echo. None = the profile's (no).
+    full_duplex_override: bool | None = None
+    # [pc] server_search: how a spare computer looks for a core that moved
+    # ("sweep", "names", "address"; "" = the profile's, pc_engine.server_search).
+    server_search: str = ""
+    # Stored settings a Pi could not use and replaced with its profile's
+    # default at load (see _refuse_or_ignore): said in the hello and in every
+    # health sample, so the dashboard shows it. Empty on a healthy config,
+    # and always on a spare computer (Windows too): it refuses such a value
+    # at load instead.
+    settings_ignored: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -661,6 +698,83 @@ class Config:
                 f"Valid values: {', '.join(ACK_MODES)}."
             )
         speech_pause_ms = _speech_pause_ms(listen.get("speech_pause_ms"))
+        # Settings this branch checks at load (2026-10-13). A spare computer
+        # refuses a bad one and does not start: it has a terminal and a
+        # person at it, and a silent default could undo what they chose. A
+        # Pi has neither (no SSH): it logs loudly, uses its profile's
+        # default for that key, and says so in its hello and health, rather
+        # than never starting until its card is reflashed.
+        ignored: list[str] = []
+        on_pc = profile.name in engine_platform.PC_PROFILES
+
+        def _refuse_or_ignore(ok: bool, value: Any, default: Any, problem: str, note: str) -> Any:
+            if ok:
+                return value
+            if on_pc:
+                raise ValueError(problem)
+            log.error("config: %s; using the %s profile's default %r instead", problem, profile.name, default)
+            ignored.append(note)
+            return default
+
+        pc = d.get("pc", {})
+        permissions = str(pc.get("permissions", "automatic"))
+        permissions = _refuse_or_ignore(
+            permissions in ("automatic", "ask"), permissions, "automatic",
+            f"unknown [pc] permissions {permissions!r}. Valid values: automatic, ask.",
+            "[pc] permissions setting ignored: not automatic or ask")
+        volume_backend = str(audio.get("volume_backend", "") or "")
+        volume_backend = _refuse_or_ignore(
+            not volume_backend or volume_backend in engine_platform.VOLUME_BACKENDS, volume_backend, "",
+            f"unknown [audio] volume_backend {volume_backend!r}. Valid values: "
+            f"{', '.join(engine_platform.VOLUME_BACKENDS)}.",
+            "volume backend setting ignored: not a known backend")
+        control_enabled = d.get("control", {}).get("enabled")
+        fd_override = d.get("device", {}).get("full_duplex")
+        # Device names that reach aplay -D / mpg123 -a / amixer: an ALSA
+        # name can be a pipe to a shell command (file:"|cmd"), so only plain
+        # hardware-facing names are taken (satellite/alsa_names.py). The
+        # players check again at the moment of use, and set_config refuses
+        # such a name before it is ever written. On Windows the names reach
+        # PortAudio and the player instead: only "default", a device number
+        # or a plain name (devices.valid_windows_device); a bad one is
+        # refused at load like any spare computer's setting (a person is at
+        # the keyboard, and the tray says why it did not start).
+        music_device = str(music.get("alsa_device", profile.music_alsa_device))
+        input_device = audio.get("input_device")
+        output_device = audio.get("output_device")
+        if profile.name == "windows_pc":
+            for where, value in (("[audio] input_device", input_device),
+                                 ("[audio] output_device", output_device),
+                                 ("[music] alsa_device", music_device)):
+                if not devices.valid_windows_device(value):
+                    raise ValueError(
+                        f"{where} {str(value)[:40]!r} is not a Windows audio device: use "
+                        '"default", a device number, or a name from --list-devices'
+                    )
+        else:
+            music_device = _refuse_or_ignore(
+                alsa_names.safe_pcm(music_device), music_device, profile.music_alsa_device,
+                f"[music] alsa_device {music_device!r} is not a plain ALSA device name "
+                "(e.g. default, hw:1,0, plughw:CARD=Array,DEV=0)",
+                "music device setting ignored: not a plain ALSA name")
+        mixer_card = str(audio.get("output_mixer_card", profile.output_mixer_card))
+        mixer_card = _refuse_or_ignore(
+            alsa_names.safe_card(mixer_card), mixer_card, str(profile.output_mixer_card),
+            f"[audio] output_mixer_card {mixer_card!r} is not a card index or name",
+            "output mixer card setting ignored: not a card index or name")
+        mixer_control = (str(audio["output_mixer_control"]) if audio.get("output_mixer_control")
+                         else profile.output_mixer_control)
+        mixer_control = _refuse_or_ignore(
+            mixer_control is None or alsa_names.safe_control(mixer_control), mixer_control,
+            profile.output_mixer_control,
+            f"[audio] output_mixer_control {mixer_control!r} is not a mixer control name",
+            "output mixer control setting ignored: not a mixer control name")
+        server_search = str(pc.get("server_search", "") or "")
+        if server_search and server_search not in pc_engine.SERVER_SEARCH:
+            raise ValueError(
+                f"unknown [pc] server_search {server_search!r}. Valid values: "
+                f"{', '.join(pc_engine.SERVER_SEARCH)}."
+            )
         return cls(
             room_id=str(sat.get("room_id", "kitchen")),
             domovoi_url=str(sat.get("domovoi_url", "ws://domovoi.local:6370")),
@@ -671,8 +785,8 @@ class Config:
             wake_threshold=float(wake.get("threshold", 0.5)),
             wake_word_model_path=Path(wake_model).expanduser() if wake_model else None,
             wake_ack_mode=ack_mode,
-            input_device=audio.get("input_device"),
-            output_device=audio.get("output_device"),
+            input_device=input_device,
+            output_device=output_device,
             vad_aggressiveness=int(listen.get("vad_aggressiveness", 2)),
             silence_timeout=float(listen.get("silence_timeout", 1.2)),
             max_record_seconds=float(listen.get("max_record_seconds", 30)),
@@ -705,7 +819,7 @@ class Config:
             # key is read but ignored — silently dropped on next config
             # rewrite.
             noise_gate_noisy_capture_dbfs=float(gate.get("noisy_capture_dbfs", -10.0)),
-            music_alsa_device=str(music.get("alsa_device", profile.music_alsa_device)),
+            music_alsa_device=music_device,
             # Boot-time mic-gain auto-tune. Walks ALSA's PGA Capture
             # Volume up or down so ambient lands in a dBFS window the
             # noise-gate auto-tune (which runs immediately after) can
@@ -769,12 +883,8 @@ class Config:
             # Hardware output-volume mixer (driven by the server's
             # volume commands). Card + control default per device profile;
             # override in [audio] for a non-standard board.
-            output_mixer_card=str(audio.get("output_mixer_card", profile.output_mixer_card)),
-            output_mixer_control=(
-                str(audio["output_mixer_control"])
-                if audio.get("output_mixer_control")
-                else profile.output_mixer_control
-            ),
+            output_mixer_card=mixer_card,
+            output_mixer_control=mixer_control,
             # How often the wake greeting (ack_mode "greeting") is one of the
             # funny lines. [greeting] enabled is read above, only to derive
             # ack_mode for a config that predates it; [greeting] reply_wait,
@@ -793,7 +903,7 @@ class Config:
             # WiFi self-heal — see [wifi] in the example config for the
             # incident this defends against. Defaults are tuned for the
             # 2.4 GHz Pi Zero 2 W radio on a typical home network.
-            wifi_enabled=bool(wifi.get("enabled", True)),
+            wifi_enabled=bool(wifi.get("enabled", getattr(profile, "wifi_enabled_default", True))),
             wifi_poll_interval_sec=float(wifi.get("poll_interval_sec", 60.0)),
             wifi_min_healthy_mbits=float(wifi.get("min_healthy_mbits", 5.0)),
             wifi_cooldown_sec=float(wifi.get("cooldown_sec", 300.0)),
@@ -819,6 +929,13 @@ class Config:
             health_log_push_interval_sec=max(5.0, float(healthc.get("log_push_interval_sec", 30.0))),
             health_mic_silence_sec=float(healthc.get("mic_silence_sec", 30.0)),
             health_heartbeat_stale_sec=float(healthc.get("heartbeat_stale_sec", 60.0)),
+            room_name=str(sat.get("room_name", "") or ""),
+            permissions=permissions,
+            settings_ignored=tuple(ignored),
+            volume_backend=volume_backend,
+            control_enabled=control_enabled if isinstance(control_enabled, bool) else None,
+            full_duplex_override=fd_override if isinstance(fd_override, bool) else None,
+            server_search=server_search,
         )
 
 
@@ -1065,7 +1182,7 @@ def _signal_player(proc: Any, *, kill: bool = False) -> None:
 
 # ─── Satellite ────────────────────────────────────────────────────────────
 
-class Satellite:
+class Satellite(pc_engine.SpareDeviceEngine):
     """Owns the audio I/O threads + the WebSocket connection.
 
     Threads:
@@ -1414,6 +1531,11 @@ class Satellite:
         self._kiosk_alive: bool | None = None
         self._kiosk_thread: threading.Thread | None = None
 
+        # A spare computer's half (satellite/pc_engine.py): mute, the
+        # connection state the tray shows, "ask me" approvals, the control
+        # channel. Inert on a Pi.
+        self._pc_init()
+
     # ── Mic ingestion ─────────────────────────────────────────────────
 
     def _start_voice_input(self, *, fatal: bool) -> bool:
@@ -1447,7 +1569,11 @@ class Satellite:
             if self._voice_input_started or self._voice_gate_closed:
                 return False
             try:
-                self._start_mic()
+                # Muted from this device (a spare computer, kept across
+                # restarts): the mic thread starts, the stream does not;
+                # unmute opens it.
+                if not getattr(self, "_muted", False):
+                    self._start_mic()
                 # Under the SAME guard as the stream, and the flag is set
                 # only once both are up. A half-start is the shape that
                 # hurts: `Thread.start()` raises "can't start new thread"
@@ -1557,7 +1683,8 @@ class Satellite:
             if not self._voice_gate_closed:
                 return
             self._voice_gate_closed = False
-            if self._voice_input_started and self._input_stream is None:
+            if (self._voice_input_started and self._input_stream is None
+                    and not getattr(self, "_muted", False)):
                 try:
                     self._start_mic()
                 except Exception as e:
@@ -1687,7 +1814,8 @@ class Satellite:
                 _enqueue(frame)
 
         try:
-            self._input_stream = sd.RawInputStream(
+            self._input_stream = debug_audio.input_stream(
+                sd,
                 samplerate=SAMPLE_RATE,
                 channels=channels,
                 dtype=dev.capture_dtype,
@@ -2170,14 +2298,7 @@ class Satellite:
             #                       and adds imperceptible pause/stop
             #                       latency for music.
             proc = subprocess.Popen(
-                [
-                    "mpg123", "-q",
-                    "-b", "1024",
-                    "--devbuffer", "1.0",
-                    "-o", "alsa",
-                    "-a", self.cfg.music_alsa_device,
-                    url,
-                ],
+                self._platform.audio_out.stream_argv(self.cfg.music_alsa_device, url),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -2471,11 +2592,9 @@ class Satellite:
             if clip is None:
                 log.info("wake ack: no greeting clips here yet; listening at once")
                 return
-            argv = [
-                "mpg123", "-q",
-                *_volume.mpg123_scale_args(self.cfg.tts_playback_gain),
-                "-o", "alsa", "-a", device, str(clip),
-            ]
+            argv = self._platform.audio_out.mp3_argv(
+                device, str(clip), self.cfg.tts_playback_gain
+            )
             cap, what = _ACK_GREETING_CAP_SEC, clip.name
         else:
             try:
@@ -2485,7 +2604,7 @@ class Satellite:
             except OSError as e:
                 log.warning("wake ack: could not write the chime (%s); listening at once", e)
                 return
-            argv = ["aplay", "-q", "-D", device, str(path)]
+            argv = self._platform.audio_out.wav_argv(device, str(path))
             cap, what = _ACK_CHIME_CAP_SEC, "chime"
         played = self._play_ack(argv, cap)
         if played is None:
@@ -2569,8 +2688,11 @@ class Satellite:
         would be false here."""
         self._stop_ack()  # never two at once
         t0 = time.monotonic()
+        # A platform whose player is slow to start plays the acknowledgement
+        # in-process instead (Windows: engine_platform.WindowsAudioOut).
+        spawn = getattr(self._platform.audio_out, "spawn_ack", None)
         try:
-            proc = subprocess.Popen(
+            proc = spawn(argv) if spawn is not None else subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -2764,7 +2886,8 @@ class Satellite:
             # sentence pipelining handles the inter-sentence gap.
             rate = src_sr if device_rate is None else device_rate
             try:
-                out_stream = sd.RawOutputStream(
+                out_stream = debug_audio.output_stream(
+                    sd,
                     samplerate=rate, channels=1, dtype="int16",
                     device=self.cfg.output_device,
                 )
@@ -2787,7 +2910,8 @@ class Satellite:
                     "default %d Hz", device_rate, e, rate,
                 )
                 try:
-                    out_stream = sd.RawOutputStream(
+                    out_stream = debug_audio.output_stream(
+                        sd,
                         samplerate=rate, channels=1, dtype="int16",
                         device=self.cfg.output_device,
                     )
@@ -3293,47 +3417,45 @@ class Satellite:
         )
         return False
 
+    @property
+    def _platform(self) -> "engine_platform.Platform":
+        """This engine's platform seams (satellite/engine_platform.py): the
+        player argv, the volume control, how it restarts itself. Made on
+        first use, so a Satellite a test builds without __init__ has them
+        too; a Pi gets exactly what it always had."""
+        plat = self.__dict__.get("_platform_seams")
+        if plat is None:
+            plat = engine_platform.for_profile(self.cfg, request_exit=self._request_exit)
+            self.__dict__["_platform_seams"] = plat
+        return plat
+
+    def _request_exit(self, code: int) -> None:
+        """End the process with ``code`` once shutdown has run. A laptop
+        restarts itself this way (engine_platform.EXIT_RESTART): its unit
+        starts the engine again, and no privilege is needed."""
+        self.exit_code = code
+        self.shutdown_event.set()
+        loop = getattr(self, "loop", None)
+        event = getattr(self, "_async_shutdown", None)
+        if loop is not None and event is not None:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                pass
+
     def _restart_service(self) -> bool:
-        """Restart this satellite's own systemd service to apply a config
-        change that needs a fresh process (e.g. an audio-device or LED
-        change pushed from the web UI).
+        """Restart this satellite's own service to apply a config change
+        that needs a fresh process (e.g. an audio-device or LED change
+        pushed from the web UI), or new code.
 
-        Runs `sudo -n /usr/bin/systemctl --no-block restart
-        domovoi-satellite.service`. `--no-block` is load-bearing: a plain
-        synchronous `systemctl restart` issued from INSIDE the unit being
-        restarted shares that unit's cgroup, so systemd can SIGTERM this
-        very process mid-job and leave the service stopped. `--no-block`
-        hands the job to systemd (PID 1), which finishes the restart even
-        after we're killed.
-
-        Returns True when systemctl accepts the job. False on any failure —
-        a missing/incorrect sudoers entry (password prompt), missing
-        binary, timeout, non-zero exit. The matching sudoers line is in
-        `satellite/PROVISIONING.md` (self-restart section).
+        A Pi runs `sudo -n /usr/bin/systemctl --no-block restart
+        domovoi-satellite.service` (the self-restart sudoers line in
+        `satellite/PROVISIONING.md`); a laptop exits with
+        engine_platform.EXIT_RESTART and its unit starts it again. Returns
+        True when the restart is on its way, False when it could not be
+        asked for (a missing sudoers line, a missing binary, a timeout).
         """
-        try:
-            result = subprocess.run(
-                ["sudo", "-n", "/usr/bin/systemctl", "--no-block",
-                 "restart", "domovoi-satellite.service"],
-                capture_output=True, text=True, timeout=10.0,
-            )
-        except FileNotFoundError as e:
-            log.warning("self-restart: missing binary (%s)", e)
-            return False
-        except subprocess.TimeoutExpired:
-            log.warning("self-restart: systemctl timed out after 10s")
-            return False
-        if result.returncode == 0:
-            log.info("self-restart: restart queued — the service will bounce now")
-            return True
-        log.warning(
-            "self-restart failed: rc=%d stdout=%r stderr=%r. Check the "
-            "self-restart sudoers entry in PROVISIONING.md — `sudo -n "
-            "/usr/bin/systemctl --no-block restart domovoi-satellite.service` "
-            "must succeed without prompting for a password.",
-            result.returncode, result.stdout.strip(), result.stderr.strip(),
-        )
-        return False
+        return self._platform.service.restart()
 
     def _emit_wifi_status(self, link: dict[str, Any]) -> None:
         """Push the latest link sample to the server. No-op when
@@ -3432,7 +3554,12 @@ class Satellite:
         barge-in, chat or a drop-in call, all of which read the same live
         stream. A stream that is None here (a reopen that failed) is one
         that should be live and is not."""
-        return bool(self._voice_input_started and not getattr(self, "_voice_gate_closed", False))
+        return bool(
+            self._voice_input_started
+            and not getattr(self, "_voice_gate_closed", False)
+            # Muted from the device: the stream is closed on purpose.
+            and not getattr(self, "_muted", False)
+        )
 
     def _hcfg(self, name: str, default: Any) -> Any:
         """A [health] setting, with its default for a Config built without
@@ -3460,6 +3587,11 @@ class Satellite:
     _net_step: dict[str, Any] | None = None
 
     def _check_net_settings(self) -> None:
+        if engine_platform.is_windows_pc(getattr(self, "cfg", None)):
+            # Root's record lives under /var/lib on a Linux box; on Windows
+            # that path is the system drive's root, writable by anyone.
+            self._net_step, self._net_reboot_needed = None, None
+            return
         try:
             mtime: float | None = net_settings.REPORT_PATH.stat().st_mtime
         except OSError:
@@ -3549,6 +3681,10 @@ class Satellite:
         down_for = None if since is None else round(now - since, 1)
         send_q = self.send_q
         return {
+            # Stored settings this Pi replaced with its profile's default at
+            # load; absent when there are none.
+            **({"settings_ignored": list(self.cfg.settings_ignored)}
+               if getattr(self.cfg, "settings_ignored", ()) else {}),
             "mic_expected": self._health_mic_expected(),
             "mic_fps": fps,
             "mic_q": self.raw_q.qsize(),
@@ -3787,7 +3923,7 @@ class Satellite:
             last_reboot_note=self._health_last_reboot_note,
             escalate_after=float(self._hcfg("no_server_escalate_min", 5.0)) * 60.0,
             reboot_after=float(self._hcfg("reboot_after_min", 15.0)) * 60.0,
-            reboot_helper=REBOOT_HELPER.exists(),
+            reboot_helper=_reboot_helper_installed(self.cfg),
             mic_silence_limit=float(self._hcfg("mic_silence_sec", 30.0)),
             heartbeat_limit=float(self._hcfg("heartbeat_stale_sec", 60.0)),
         )
@@ -3908,6 +4044,10 @@ class Satellite:
             # the approval refusal reaching the microphone.
             if not self._voice_input_started or getattr(self, "_voice_gate_closed", False):
                 return
+            # Muted from the device (a spare computer): closed on purpose,
+            # and a mute that landed after the check decided must win.
+            if getattr(self, "_muted", False):
+                return
             self._stop_mic()
             try:
                 self._start_mic()
@@ -3926,6 +4066,10 @@ class Satellite:
         log.warning("self-check: capture stream reopened (%s)", reason)
 
     def _health_reboot(self, reason: str) -> None:
+        if not _reboot_helper_installed(self.cfg):
+            log.warning("self-check: a reboot is called for (%s), but this device has no "
+                        "reboot helper; not rebooting", reason)
+            return
         if self._health_budget is not None:
             self._health_budget.record("reboot", reason)
         previous = self._last_health.last_exit_reason if self._last_health is not None else None
@@ -4004,7 +4148,9 @@ class Satellite:
     # cache (and relative "turn it up" bumps) track the real value.
 
     def _emit_volume_status(self, level: int) -> None:
+        self._last_volume = int(level)
         self._emit_text({"type": "volume_status", "level": int(level)})
+        self._control_notify()
 
     def _emit_voice_status(self) -> None:
         """Tell the server which registered voice we speak in, so it
@@ -4125,19 +4271,37 @@ class Satellite:
         this satellite doesn't have) is refused here, with nothing written,
         rather than written and then crash-looping the service. Anything
         wrong past that, the .bak is the SSH-side manual escape."""
+        # Only the settings the dashboard edits, as exact keys, with plain
+        # values (satellite/remote_config.py) — on every board: never the
+        # pin, the server address, the room, the profile or a program path.
+        changes, refused = remote_config.screen(
+            changes, pc=pc_engine.is_pc(getattr(self, "cfg", None)),
+            windows=engine_platform.is_windows_pc(getattr(self, "cfg", None)))
+        if refused:
+            log.warning("set_config: refusing %s (not a setting the dashboard may change here)",
+                        ", ".join(sorted(refused)))
+        if not changes:
+            return
         try:
             original = CONFIG_PATH.read_text(encoding="utf-8")
         except OSError as e:
             log.warning("set_config: can't read %s: %s", CONFIG_PATH, e)
             return
-        merged = config_writer.apply_changes(original, changes)
         try:
-            Config.from_toml(tomllib.loads(merged))
+            merged = config_writer.apply_changes(original, changes)
+            loaded = Config.from_toml(tomllib.loads(merged))
         except Exception as e:
             log.error(
                 "set_config: merged config doesn't load (%s); aborting, "
                 "nothing written", e,
             )
+            return
+        # A Pi loads a stored value it can't use on its profile's default
+        # (and says so); a change must not be the one that makes it do that.
+        newly = set(loaded.settings_ignored) - set(getattr(getattr(self, "cfg", None), "settings_ignored", ()) or ())
+        if newly:
+            log.error("set_config: the change would be ignored at load (%s); aborting, nothing written",
+                      "; ".join(sorted(newly)))
             return
         backup = CONFIG_PATH.with_name(CONFIG_PATH.name + ".bak")
         try:
@@ -4153,35 +4317,20 @@ class Satellite:
         self._restart_service()
 
     def _read_output_volume(self) -> int | None:
-        """Current hardware output volume %, or None if no control is
-        configured for this board or amixer can't read it."""
-        ctrl = self.cfg.output_mixer_control
-        if not ctrl:
-            return None
-        try:
-            r = subprocess.run(
-                _volume.get_command(self.cfg.output_mixer_card, ctrl),
-                capture_output=True, text=True, timeout=5.0,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning("amixer get for volume failed: %s", e)
-            return None
-        if r.returncode != 0:
-            log.warning(
-                "amixer get %r on card %s failed: %s",
-                ctrl, self.cfg.output_mixer_card, r.stderr.strip()[:120],
-            )
-            return None
-        return _volume.parse_volume_percent(r.stdout)
+        """Current output volume %, or None if this device has no volume
+        control the engine drives (a Pi board with no mixer control
+        configured) or it can't be read. A Pi's is an amixer control; a
+        laptop's the sound server's default sink."""
+        return self._platform.volume.get()
 
     def _apply_output_volume(self, level: int) -> None:
-        """Set the hardware output volume, then re-read and report it so the
-        server's cache reflects the real level. Best-effort — a board
-        with no configured control, or an amixer failure, is logged and
-        skipped, never raised (a failed volume change must not take down the
-        receiver path)."""
-        ctrl = self.cfg.output_mixer_control
-        if not ctrl:
+        """Set the output volume, then re-read and report it so the server's
+        cache reflects the real level. Best-effort — a board with no
+        configured control, or a failed call, is logged and skipped, never
+        raised (a failed volume change must not take down the receiver
+        path)."""
+        backend = self._platform.volume
+        if not backend.available():
             log.info(
                 "set_volume ignored: no [audio] output_mixer_control configured "
                 "for device profile %r. Set it to this board's ALSA playback "
@@ -4190,26 +4339,19 @@ class Satellite:
             )
             return
         level = _volume.clamp(level)
-        try:
-            r = subprocess.run(
-                _volume.set_command(self.cfg.output_mixer_card, ctrl, level),
-                capture_output=True, text=True, timeout=5.0,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.warning("amixer set for volume failed: %s", e)
+        if not backend.set(level):
             return
-        if r.returncode != 0:
-            log.warning(
-                "amixer set %r=%d%% on card %s failed: %s",
-                ctrl, level, self.cfg.output_mixer_card, r.stderr.strip()[:120],
-            )
-            return
-        log.info(
-            "output volume set to %d%% (%s on card %s)",
-            level, ctrl, self.cfg.output_mixer_card,
-        )
+        log.info("output volume set to %d%% (%s)", level, self._volume_label())
         actual = self._read_output_volume()
         self._emit_volume_status(actual if actual is not None else level)
+
+    def _volume_label(self) -> str:
+        backend = self._platform.volume
+        chosen = getattr(backend, "chosen", None)
+        backend = (chosen() if callable(chosen) else None) or backend
+        if isinstance(backend, engine_platform.AmixerVolume):
+            return f"{backend.control} on card {backend.card}"
+        return f"the default sink, through {backend.name}"
 
     def _core_probe(self, timeout: float = 3.0) -> str | None:
         """How the core answers a TCP connect right now: ``"accepted"``,
@@ -4496,13 +4638,9 @@ class Satellite:
         self._leds.set_state("error")
         try:
             result = subprocess.run(
-                [
-                    "mpg123", "-q",
-                    *_volume.mpg123_scale_args(self.cfg.tts_playback_gain),
-                    "-o", "alsa",
-                    "-a", self.cfg.music_alsa_device,
-                    str(mp3_path),
-                ],
+                self._platform.audio_out.mp3_argv(
+                    self.cfg.music_alsa_device, str(mp3_path), self.cfg.tts_playback_gain
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -4651,7 +4789,15 @@ class Satellite:
         # files and stage any root work (apt/post-install) via the sudoers
         # helper. STRICTLY best-effort: a payload failure never blocks the
         # code upgrade (plugins degrade; the satellite runs).
+        # A device whose hello did not list `plugin_payloads` (a spare
+        # computer: no root helper) is sent `"plugin_payloads": false`, and
+        # applies none: the payloads run as root on a Pi.
+        skip_payloads = payload.get("plugin_payloads") is False or pc_engine.is_pc(self.cfg)
+        if skip_payloads:
+            log.info("upgrade: plugin payloads not applied on this device (none declared)")
         try:
+            if skip_payloads:
+                raise _SkipPayloads()
             from satellite import plugin_sync
 
             psync = plugin_sync.sync_plugin_payloads(
@@ -4660,6 +4806,8 @@ class Satellite:
             )
             if psync["root_work"]:
                 plugin_sync.request_root_apply(psync["meta"], psync["root_work"])
+        except _SkipPayloads:
+            pass
         except Exception as e:  # noqa: BLE001 — degrade, never block the upgrade
             log.warning("upgrade: plugin payload sync failed (continuing): %s", e)
 
@@ -4726,10 +4874,11 @@ class Satellite:
         satellite no longer runs (and the next prune baseline is the real prior
         manifest, not the failed one). Best-effort; every step is guarded."""
         for rel in added_files or []:
-            if not code_sync._safe_rel(rel) or Path(rel).suffix not in CODE_EXT_ALLOW:
+            added = code_sync.safe_dest(SATELLITE_ROOT, rel)
+            if added is None or Path(rel).suffix not in CODE_EXT_ALLOW:
                 continue
             try:
-                (SATELLITE_ROOT / rel).unlink(missing_ok=True)
+                added.unlink(missing_ok=True)
             except OSError:
                 pass
         try:
@@ -5585,7 +5734,7 @@ class Satellite:
         full_duplex = bool(payload.get("full_duplex", False))
         # Defence in depth: the server already gates on AEC, but never
         # open the mic-while-playing on a board that would howl.
-        if not full_duplex or not self.cfg.device.supports_full_duplex:
+        if not full_duplex or not pc_engine.full_duplex(self.cfg):
             log.warning("dropin_start refused: room lacks full-duplex AEC")
             self._emit_text({"type": "dropin_end"})
             return
@@ -5659,7 +5808,7 @@ class Satellite:
             log.warning("chat_start refused: another open-mic mode is already active")
             self._emit_text({"type": "chat_end", "reason": "busy"})
             return
-        if not self.cfg.device.supports_full_duplex:
+        if not pc_engine.full_duplex(self.cfg):
             log.warning(
                 "chat_start refused: this board lacks full-duplex AEC; "
                 "an open-mic conversation would capture its own TTS"
@@ -6382,6 +6531,8 @@ class Satellite:
         this is called from the receiver loop. Throttled per process so a
         flapping link re-syncs at most every few hours.
         """
+        if pc_engine.is_pc(self.cfg):
+            return      # its own clock and zone; no root helper, none declared
         now = time.monotonic()
         last = self._time_synced_at
         if last is not None and now - last < self._TIME_SYNC_MIN_INTERVAL_SEC:
@@ -6599,6 +6750,11 @@ class Satellite:
             # cut off, so we never gave the user the heads-up and
             # shouldn't silently kick the WS.
             pi_action = payload.get("pi_action")
+            if pi_action == "restart" and not interrupted and self._held(
+                "restart", "a restart asked for by voice",
+                lambda: self._deferred_pi_action("restart", None),
+            ):
+                pi_action = None
             if pi_action and not interrupted:
                 pi_action_arg = payload.get("pi_action_arg")
                 threading.Thread(
@@ -6679,6 +6835,9 @@ class Satellite:
             # first (via _deferred_pi_action), so we don't cut a response
             # off mid-sentence before bouncing.
             log.info("restart requested by server")
+            if self._held("restart", "the core asked for a restart",
+                          lambda: self._deferred_pi_action("restart", None)):
+                return
             threading.Thread(
                 target=self._deferred_pi_action,
                 args=("restart", None),
@@ -6690,6 +6849,23 @@ class Satellite:
             # (preserving comments), validate, back up, and restart to apply.
             # Run on a worker thread — it ends in a service restart.
             changes = payload.get("changes")
+            if isinstance(changes, dict) and changes:
+                changes, refused = remote_config.screen(
+                    changes, pc=pc_engine.is_pc(self.cfg), windows=engine_platform.is_windows_pc(self.cfg))
+                if refused:
+                    log.warning("set_config: refusing %s (not a setting the dashboard may "
+                                "change here)", ", ".join(sorted(refused)))
+                if not changes:
+                    return
+            # "Ask me": held with every change spelled out, so the person
+            # reads all of them before allowing any (remote_config caps
+            # how many and how long, so the list is always shown whole).
+            if isinstance(changes, dict) and changes and self._held(
+                "config", f"{len(changes)} setting(s) from the dashboard",
+                lambda c=dict(changes): self._apply_config_changes(c),
+                details=remote_config.describe(changes),
+            ):
+                return
             if isinstance(changes, dict) and changes:
                 log.info("set_config: %d change(s) from server", len(changes))
                 threading.Thread(
@@ -6772,11 +6948,21 @@ class Satellite:
                 code = _remember_approval_code(payload.get("code"))
                 if code:
                     _setup_status("say-code", code)
+                if pc_engine.is_pc(self.cfg):
+                    # No root helper to say it: the terminal (only a real
+                    # one, never the journal), the tray and the CLI show it.
+                    self._approval_code = code
+                    self._approval_pending = True
+                    self._set_conn("awaiting_approval")
+                    pc_engine.show_code_on_tty(code, self.cfg.room_name or self.cfg.room_id)
                 log.info(
                     "waiting for approval on the dashboard (code %s)",
                     "".join("*" for _ in code) if code else "unknown",
                 )
                 return
+            if payload.get("reason") in pc_engine.REFUSALS:
+                self._approval_pending = False
+                self._set_conn("refused", str(payload.get("message") or payload.get("reason")))
             self._leds.set_state("error")
             log.error("server error: %s", payload.get("message"))
             # Treat error like a terminal response so the mic thread
@@ -6801,6 +6987,13 @@ class Satellite:
             # Run on a worker thread — it does blocking HTTP + a tarball
             # backup + a service restart and must not stall the event loop.
             log.info("upgrade requested by server")
+            if self._held(
+                "update",
+                f"new satellite code ({_read_synced_sha() or 'unknown'} → "
+                f"{payload.get('expected_sha') or 'latest'})",
+                lambda p=dict(payload): self._apply_upgrade(p),
+            ):
+                return
             threading.Thread(
                 target=self._apply_upgrade,
                 args=(payload,),
@@ -6855,6 +7048,11 @@ class Satellite:
             # it does blocking HTTP + a service restart and must not stall the
             # asyncio receiver loop.
             slug = payload.get("slug")
+            if self._held(
+                "wake_word", f"the wake word {slug!r} pushed to this room",
+                lambda s_=slug, t_=payload.get("threshold"): self._apply_wake_switch(s_, t_),
+            ):
+                return
             threading.Thread(
                 target=self._apply_wake_switch,
                 args=(slug, payload.get("threshold")),
@@ -6912,6 +7110,73 @@ class Satellite:
         else:
             log.debug("unknown text frame type=%r", t)
 
+    def _hello_frame(self) -> dict[str, Any]:
+        """The `hello` this device opens every session with."""
+        hello: dict[str, Any] = {
+            "type": "hello",
+            "room_id": self.cfg.room_id,
+            # The EFFECTIVE wake word — the sidecar slug a dashboard
+            # push installed, else the [wake] config — so the
+            # server's per-room view matches what we listen for.
+            "wake_word": _effective_wake_word(self.cfg),
+            # Version LABEL of the last applied self-upgrade (Feature
+            # 10), so the dashboard can show which code this room runs.
+            # None until the first upgrade lands. Supersedes the old
+            # hard-coded client_version.
+            "synced_sha": _read_synced_sha(),
+            # Whether this board has on-chip AEC (full duplex), so the
+            # server can gate drop-in / open-mic modes per room.
+            "supports_full_duplex": self.cfg.device.supports_full_duplex,
+            # Per-device pairing token (V002 WS auth). Generated on
+            # first boot; the server binds this room to its sha256 on
+            # first sight (trust-on-first-use) and refuses a later
+            # mismatch. None only if the sidecar couldn't be read/written
+            # (degrades to a tokenless older-style hello).
+            "pairing_token": _effective_pairing_token(),
+            "approval_code": _effective_approval_code(),
+            # Satellite kind ("voice" | "video") — drives which
+            # per-type controls the dashboard offers, and is
+            # persisted server-side for offline display.
+            "sat_type": self.cfg.sat_type,
+            # Whether the voice-input stack is running (false on
+            # mic-less builds) — the server refuses wake-recording /
+            # drop-in / chat for mic-disabled rooms.
+            "mic_enabled": self.cfg.mic_enabled,
+            # This client reports its own pauses (`speech_pause` /
+            # `speech_resume`) and each capture's last voiced frame
+            # whenever the core's `ready` lists the feature, so the
+            # core can transcribe at the first pause and know
+            # exactly whether that transcript covers everything
+            # said. An older core ignores the field.
+            "speech_pause": True,
+            # This client stops a capture on `end_capture` — the
+            # core's early commit. Only a client that says so is
+            # ever ended early; [listen] early_commit=false opts
+            # this room out.
+            "capture_control": self.cfg.early_commit,
+            # A response_start ends whatever stop_playback was
+            # stopping (see _handle_text_frame), so an announcement
+            # after a reconnect or a failed turn plays. The core
+            # warns in its journal for a satellite that does not
+            # say so: it records such announcements as spoken.
+            "announce_after_session_end": True,
+        }
+        # The previous life's last-health record, carried until a
+        # core acknowledges it with `ready` (an older core ignores
+        # the field: it is a new key on an existing message).
+        if self._prev_health is not None:
+            hello["prev_health"] = self._prev_health
+        # A spare computer says what it is and what it can do (its board and
+        # its `supports` list), so the core never sends it a Pi-only frame.
+        # A Pi sends neither key: that is what keeps it exactly as before.
+        if pc_engine.is_pc(self.cfg):
+            hello.update(pc_engine.hello_fields(self.cfg))
+        # A stored setting a Pi could not use (it runs on its profile's
+        # default instead): the dashboard's row says so from the hello on.
+        if getattr(self.cfg, "settings_ignored", ()):
+            hello["settings_ignored"] = list(self.cfg.settings_ignored)
+        return hello
+
     async def _run_session(self) -> None:
         assert self._async_shutdown is not None
         url = self.cfg.domovoi_url.rstrip("/") + f"/v1/stream/{self.cfg.room_id}"
@@ -6919,7 +7184,12 @@ class Satellite:
         # it belongs to, and "the address we wrote down once" is not proof
         # of that. A refusal here falls through to the caller's reconnect
         # backoff — the same path a server that is merely down takes.
+        self._set_conn("connecting")
         if not await asyncio.to_thread(_verify_server_identity, self.cfg):
+            failure = _LAST_IDENTITY_FAILURE or "the server could not prove who it is"
+            self._set_conn(
+                "offline" if failure.startswith("could not reach") else "unpinned", failure
+            )
             raise ConnectionError(
                 f"{url} did not prove it is this device's Domovoi server"
             )
@@ -6948,60 +7218,7 @@ class Satellite:
                 # that started during this one.
                 self._offline_drops = 0
                 self._offline_drop_last_log = 0.0
-                hello: dict[str, Any] = {
-                    "type": "hello",
-                    "room_id": self.cfg.room_id,
-                    # The EFFECTIVE wake word — the sidecar slug a dashboard
-                    # push installed, else the [wake] config — so the
-                    # server's per-room view matches what we listen for.
-                    "wake_word": _effective_wake_word(self.cfg),
-                    # Version LABEL of the last applied self-upgrade (Feature
-                    # 10), so the dashboard can show which code this room runs.
-                    # None until the first upgrade lands. Supersedes the old
-                    # hard-coded client_version.
-                    "synced_sha": _read_synced_sha(),
-                    # Whether this board has on-chip AEC (full duplex), so the
-                    # server can gate drop-in / open-mic modes per room.
-                    "supports_full_duplex": self.cfg.device.supports_full_duplex,
-                    # Per-device pairing token (V002 WS auth). Generated on
-                    # first boot; the server binds this room to its sha256 on
-                    # first sight (trust-on-first-use) and refuses a later
-                    # mismatch. None only if the sidecar couldn't be read/written
-                    # (degrades to a tokenless older-style hello).
-                    "pairing_token": _effective_pairing_token(),
-                    "approval_code": _effective_approval_code(),
-                    # Satellite kind ("voice" | "video") — drives which
-                    # per-type controls the dashboard offers, and is
-                    # persisted server-side for offline display.
-                    "sat_type": self.cfg.sat_type,
-                    # Whether the voice-input stack is running (false on
-                    # mic-less builds) — the server refuses wake-recording /
-                    # drop-in / chat for mic-disabled rooms.
-                    "mic_enabled": self.cfg.mic_enabled,
-                    # This client reports its own pauses (`speech_pause` /
-                    # `speech_resume`) and each capture's last voiced frame
-                    # whenever the core's `ready` lists the feature, so the
-                    # core can transcribe at the first pause and know
-                    # exactly whether that transcript covers everything
-                    # said. An older core ignores the field.
-                    "speech_pause": True,
-                    # This client stops a capture on `end_capture` — the
-                    # core's early commit. Only a client that says so is
-                    # ever ended early; [listen] early_commit=false opts
-                    # this room out.
-                    "capture_control": self.cfg.early_commit,
-                    # A response_start ends whatever stop_playback was
-                    # stopping (see _handle_text_frame), so an announcement
-                    # after a reconnect or a failed turn plays. The core
-                    # warns in its journal for a satellite that does not
-                    # say so: it records such announcements as spoken.
-                    "announce_after_session_end": True,
-                }
-                # The previous life's last-health record, carried until a
-                # core acknowledges it with `ready` (an older core ignores
-                # the field: it is a new key on an existing message).
-                if self._prev_health is not None:
-                    hello["prev_health"] = self._prev_health
+                hello = self._hello_frame()
                 await ws.send(json.dumps(hello))
                 # WS is back up. Mark the disconnect window closed and
                 # clear the degraded flag — the watcher will re-arm if
@@ -7086,6 +7303,9 @@ class Satellite:
         listening since boot — resyncs right here, exactly as before.
         """
         _remember_approved()
+        self._approval_code = None
+        self._approval_pending = False
+        self._set_conn("connected")
         # Before the opener, because this is the frame that says the core
         # accepts this device: if an earlier `awaiting_approval` tore
         # capture down because the refusal could not be recorded, this is
@@ -7139,6 +7359,8 @@ class Satellite:
         in `__init__`) rather than piling into a queue nothing drains.
         """
         log.info("session ended; signaling mic thread to drop back to wake-word listen")
+        if getattr(self, "_conn_state", None) == "connected":
+            self._set_conn("offline", "the session with the core ended")
         # First, so a frame the mic thread emits while the rest of this
         # runs is dropped rather than queued. Idempotent: on a failed
         # reconnect this runs with the queue already gone.
@@ -7238,6 +7460,12 @@ class Satellite:
             )
 
         self._leds.start()
+        # The local control channel (a spare computer's tray and CLI). A
+        # Windows engine that can't claim it asks to exit (78): it leaves
+        # here, before the microphone opens.
+        await self._start_control()
+        if self.shutdown_event.is_set():
+            return
         # Voice-off seam: a mic-less build ([mic] enabled=false, the video
         # kiosk default) skips capture AND the mic thread — the wake model
         # only ever loads inside _mic_thread_run, so this also skips the
@@ -7305,7 +7533,9 @@ class Satellite:
         LOG_SPOOL_HANDLER.set_mode("offline")
         if self._hcfg("enabled", False):
             self._last_health = health.LastHealth(LAST_HEALTH_PATH)
-            self._health_sampler = health.Sampler()
+            self._health_sampler = health.Sampler(
+                battery_reader=health.read_battery_here if sys.platform == "win32" else None,
+            )
             try:
                 self._prev_health = self._last_health.take_previous()
             except Exception as e:  # noqa: BLE001
@@ -7362,6 +7592,8 @@ class Satellite:
                         await asyncio.to_thread(self._note_session_ended_before_ready)
                 except (OSError, websockets.WebSocketException) as e:
                     log.warning("connection lost: %s", e)
+                    if getattr(self, "_conn_state", None) not in ("unpinned",):
+                        self._set_conn("offline", str(e))
                     unreachable += 1
                     # One offline_diag entry per failed connect, on a
                     # worker: the sidecar write must not stall the loop.
@@ -7429,6 +7661,7 @@ class Satellite:
                 )
                 self._health_write()
             self._leds.stop()
+            await self._stop_control()
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────
@@ -7805,6 +8038,11 @@ def _setup_status(state: str, *args: str) -> None:
     because of it, and on a hand-built unit the helper simply isn't there.
     """
     helper = "/usr/local/sbin/domovoi-status"
+    if sys.platform == "win32":
+        # No root helper on Windows, and that POSIX path would name a file
+        # at the root of the system drive, where any account may create
+        # one: never run it (and never hand it the approval code).
+        return
     try:
         if not os.access(helper, os.X_OK):
             return
@@ -8163,6 +8401,13 @@ def _forget_approved() -> bool:
 # Set once per process when an unpinned device meets a core that has no
 # identity at all — see _verify_server_identity.
 _SERVER_HAS_NO_IDENTITY = False
+# Why the last identity check refused (for a spare computer's status), or
+# None after one that passed.
+_LAST_IDENTITY_FAILURE: str | None = None
+
+
+class _SkipPayloads(Exception):
+    """Internal: the upgrade applies no plugin payloads on this device."""
 
 
 def _pinned_fingerprint(cfg: "Config") -> tuple[str | None, str]:
@@ -8186,8 +8431,10 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
     identity it meets and returns True, so a device prepared before
     identities keeps connecting exactly as it did. From then on the
     recorded fingerprint is the pin, and a different one is refused."""
-    global _SERVER_HAS_NO_IDENTITY
+    global _SERVER_HAS_NO_IDENTITY, _LAST_IDENTITY_FAILURE
     from satellite import server_identity, sound_sync
+
+    _LAST_IDENTITY_FAILURE = None
 
     expected, source = _pinned_fingerprint(cfg)
     if not expected and _SERVER_HAS_NO_IDENTITY:
@@ -8206,6 +8453,7 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
                 "refusing to connect to %s: %s (pinned from %s)",
                 http_base, e, source,
             )
+            _LAST_IDENTITY_FAILURE = str(e)
             return False
         # An older core. Refusing here would strand every device in the
         # field the moment this code lands.
@@ -8218,6 +8466,7 @@ def _verify_server_identity(cfg: "Config", *, opener=None) -> bool:
                 "refusing to connect to %s: %s (pinned from %s)",
                 http_base, e, source,
             )
+            _LAST_IDENTITY_FAILURE = str(e)
             return False
         # Unreachable, or an answer we could not make sense of. Nothing to
         # compare against either way, so this is the server's problem to
@@ -8276,8 +8525,13 @@ def _locate_server(cfg: "Config") -> "tuple[Any, bool, str | None]":
         return None, is_auto, configured
     pending, _pending_fp = server_identity.read_pending_server()
     last_known = pending if is_auto else configured
+    # A spare computer may ask for less than the Pi's full order
+    # ([pc] server_search): no /24 sweep ("names", windows_pc's default),
+    # or only its enrolled address ("address").
+    search = pc_engine.server_search(cfg)
     found = discovery.locate(
-        names=discovery.server_names(),
+        names=() if search == "address" else discovery.server_names(),
+        scan=search == "sweep",
         last_known=last_known,
         expected_fingerprint=expected,
         # A refusal at the last-known address: its machine is there and not
@@ -8286,6 +8540,21 @@ def _locate_server(cfg: "Config") -> "tuple[Any, bool, str | None]":
         refused=lambda host, port: health.probe_service(host, port, timeout=2.0) == "refused",
     )
     return found, is_auto, last_known
+
+
+def _names_a_pc_profile(config_path: Path) -> bool:
+    """Whether the config file names a spare-computer profile, even when it
+    does not load (a TOML error included)."""
+    try:
+        text = Path(config_path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        profile = str(tomllib.loads(text).get("device", {}).get("profile", ""))
+        return profile in engine_platform.PC_PROFILES
+    except (ValueError, AttributeError):
+        return any(re.search(rf"(?m)^\s*profile\s*=\s*[\"']{re.escape(name)}[\"']", text)
+                   for name in engine_platform.PC_PROFILES)
 
 
 def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) -> None:
@@ -8297,6 +8566,12 @@ def _adopt_located(cfg: "Config", config_path: Path, found: Any, is_auto: bool) 
     from satellite import config_writer, server_identity
 
     previous = (cfg.domovoi_url or "").strip()
+    if found.url != previous and pc_engine.is_pc(cfg) and not pc_engine.home_network_url(found.url):
+        # A spare computer's server moves only within the home network,
+        # like the enrolment code that named it: the pin proves who
+        # answers, this keeps where its microphone may stream.
+        log.warning("not moving to %s (found by %s): not on the home network", found.url, found.via)
+        return
     cfg.domovoi_url = found.url
     if found.url == previous:
         return
@@ -8388,7 +8663,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-devices", action="store_true", help="Print sounddevice IDs and exit.")
     parser.add_argument("--input-device", type=int, default=None, help="Override input_device from config.")
     parser.add_argument("--output-device", type=int, default=None, help="Override output_device from config.")
+    pc_engine.add_cli_arguments(parser)
     args = parser.parse_args(argv)
+
+    # Talking to the satellite that is already running (a spare computer's
+    # tray-less CLI): answered through its control channel, nothing started.
+    if pc_engine.wants_cli(args):
+        return pc_engine.cli(args)
 
     if args.list_devices:
         _list_devices()
@@ -8415,13 +8696,67 @@ def main(argv: list[str] | None = None) -> int:
     if not _ensure_config(args.config):
         return 2
 
-    cfg = Config.load(args.config)
+    try:
+        cfg = Config.load(args.config)
+    except ValueError as e:
+        # A spare computer whose settings don't load stays stopped (exit 78:
+        # its unit does not restart it every few seconds, a Windows one's
+        # supervisor leaves it stopped and keeps this line for the tray's
+        # notification) and says why to its tray and CLI. A Pi raises as it
+        # always did; a Pi has no load-time refusal of its own settings left
+        # that it can't fall back from.
+        if not _names_a_pc_profile(args.config):
+            raise
+        reason = f"its settings in {args.config} don't load: {e}"
+        print(f"domovoi-satellite: not starting: {reason}", file=sys.stderr)
+        not_started.note(reason)
+        return engine_platform.EXIT_UNPINNED
     if args.input_device is not None:
         cfg.input_device = args.input_device
     if args.output_device is not None:
         cfg.output_device = args.output_device
 
     logging.basicConfig(level=cfg.log_level, format=LOG_FORMAT)
+    # An enrolled spare computer never trusts the first server that
+    # answers: no pinned identity, no satellite. Its unit does not restart
+    # it for this exit code (RestartPreventExitStatus).
+    # On Windows the satellite is always the windows_pc profile (its player,
+    # its volume, its pipe, the gates on POSIX paths that would name files
+    # anyone can create at the root of the system drive); windows_pc runs
+    # nowhere else.
+    if engine_platform.is_windows_pc(cfg) != (sys.platform == "win32"):
+        want = "windows_pc" if sys.platform == "win32" else "a Pi profile or generic_pc"
+        log.error("not starting: [device] profile %r does not run on %s", cfg.device.name, sys.platform)
+        print(f"domovoi-satellite: [device] profile = {cfg.device.name!r} does not run on "
+              f"{sys.platform}; use {want}", file=sys.stderr)
+        if sys.platform != "win32":
+            return 2
+        not_started.note(f"[device] profile = {cfg.device.name!r} does not run on Windows; use windows_pc")
+        return engine_platform.EXIT_CONFIG
+    if sys.platform == "win32":
+        # The wake word's onnxruntime needs Microsoft's C++ runtime, which
+        # Windows does not always have: say so plainly (exit 78, the tray's
+        # notification) rather than a "DLL load failed" traceback later.
+        problem = engine_platform.windows_runtime_problem(
+            Path(sys.executable).resolve().parent,
+            Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32")
+        if problem:
+            log.error("not starting: %s", problem)
+            print(f"domovoi-satellite: not starting: {problem}", file=sys.stderr)
+            not_started.note(problem)
+            return engine_platform.EXIT_CONFIG
+    if pc_engine.is_pc(cfg):
+        pinned, detail = pc_engine.require_pin(cfg)
+        shared = pc_engine.core_account(CONFIG_DIR)
+        if not pinned or shared:
+            detail = shared or detail
+            log.error("not starting: %s", detail)
+            print(f"domovoi-satellite: {detail}", file=sys.stderr)
+            not_started.note(detail)
+            return engine_platform.EXIT_UNPINNED
+        not_started.note(None)
+        log.info("spare computer (%s): pinned to %s; updates %s",
+                 cfg.device.name, detail, cfg.permissions)
     # Mirror everything into the in-memory ring the dashboard reads. On the
     # ROOT logger, so third-party output lands there too — websockets'
     # connection errors and sounddevice's PortAudio complaints are exactly
@@ -8468,7 +8803,13 @@ def main(argv: list[str] | None = None) -> int:
     # A shutdown someone ASKED for exits 0; one forced by a startup failure
     # exits non-zero so systemd retries it. The unit is Restart=on-failure,
     # so this return value is the difference between a satellite that keeps
-    # trying and one that is simply gone.
+    # trying and one that is simply gone. A laptop that restarts itself
+    # leaves with the code it asked for (engine_platform.EXIT_RESTART),
+    # which its unit answers by starting it again.
+    exit_code = getattr(sat, "exit_code", None)
+    if exit_code is not None:
+        log.info("exiting with %d (%s)", exit_code, sat._platform.service.describe())
+        return int(exit_code)
     if getattr(sat, "fatal_error", None):
         log.error("exiting non-zero so systemd retries: %s", sat.fatal_error)
         return 1

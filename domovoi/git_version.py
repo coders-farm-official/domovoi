@@ -527,9 +527,14 @@ _STEP_FIELDS = ("name", "status", "duration_sec")
 # A `warn` step of these keeps its detail, trimmed the way the signature
 # object is: the script writes these details itself ("lock not applied:
 # <why>; ...", what env-secrets added, os-jobs' "could not mask ..." lines),
-# never a tool's raw output, and they are what an owner must see. Every other detail (failed steps' output
-# tails, the search helper's docker output) stays on the box.
-_WARN_DETAIL_STEPS = frozenset({"sync-deps", "rollback-deps", "env-secrets", "os-jobs"})
+# never a tool's raw output, and they are what an owner must see; so are
+# gpu-runtime's (scripts/linux/gpu-runtime.sh's own summary line) and
+# wake-trainer's (a sentence of apply-update.sh's). Every other detail
+# (failed steps' output tails, the search helper's docker output) stays on
+# the box.
+_WARN_DETAIL_STEPS = frozenset(
+    {"sync-deps", "rollback-deps", "env-secrets", "os-jobs", "gpu-runtime", "wake-trainer"}
+)
 _WARN_DETAIL_MAX_CHARS = 300
 _ERROR_MAX_CHARS = 500
 # apply-update.sh before 2026-09-30 printed a negative duration as

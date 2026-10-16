@@ -15,6 +15,20 @@ the password behind the per-source exponential backoff and mints a
 set the ``SameSite=Strict`` ``HttpOnly`` cookie so plain GET page loads
 render authenticated state — mutations everywhere accept ONLY
 ``Authorization: Bearer`` (the dashboard JS holds the token in memory).
+The cookie is a secret of its own, never the Bearer
+(:func:`domovoi.admin_auth.issue_session_cookie`): a browser sends a
+cookie to every port of its host, so whatever else runs on the box sees
+it.
+
+A reload forgets that in-memory token. For ``ADMIN_RELOAD_WINDOW_MIN``
+(default 60) minutes after the password was entered, ``POST /resume``
+gives the page holding the cookie its session's token back — owner
+decision 2026-10-14, "refreshing should not lose admin on the same
+machine, same session". It answers only a same-origin request
+(:func:`same_origin`) carrying ``X-Requested-With``, and only for the
+cookie's own session inside its window
+(:func:`domovoi.admin_auth.resume_session`). ``GET /status`` says whether
+this browser can (``resume_in_sec``), so the page asks only when it can.
 
 v1 runs over plain LAN HTTP (TLS is on the documented hardening
 backlog), so the cookie is NOT marked ``Secure``.
@@ -29,20 +43,130 @@ endpoints, so either process answers identically.
 from __future__ import annotations
 
 import logging
+from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from domovoi import admin_auth
+from domovoi.config import settings as core_settings
 from domovoi.host_kind import host_kind
+from web.backend.api.csrf_guard import require_requested_with
 from web.backend.db import session_scope
+from web.backend.domovoi_client import get_cached_snapshot
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE_MAX_AGE_SEC = admin_auth.SESSION_TTL_DAYS * 86400
+
+
+# The last live window the core's snapshot carried, clamped; None until the
+# first one arrives after this process started.
+_last_live_window: int | None = None
+
+
+def reload_window_min() -> int:
+    """The live ``ADMIN_RELOAD_WINDOW_MIN``, in minutes (0 = off).
+
+    Edited through the core (Settings → Configuration, tier ``hot``),
+    which mutates the CORE's settings; this process's copy is whatever
+    ``.env`` said when it booted. So the value comes from the core's
+    snapshot (refreshed every 1.5 s), clamped to 0..1440; a value that is
+    not a whole number is not a value.
+
+    While the snapshot is missing (the core down, restarting, or slow to
+    answer one poll) the answer may only get SMALLER, never wider than what
+    an admin last set (review finding 2): the smaller of this process's
+    boot-time copy and the last live value seen, and 0 — no resume — when
+    no live value has been seen since this process started. An admin who
+    turned it off is not turned back on by a core restart."""
+    global _last_live_window
+    live = (get_cached_snapshot() or {}).get("admin_reload_window_min")
+    if isinstance(live, int) and not isinstance(live, bool):
+        _last_live_window = admin_auth.clamp_reload_window(live)
+        return _last_live_window
+    if _last_live_window is None:
+        return 0
+    return min(
+        _last_live_window,
+        admin_auth.clamp_reload_window(core_settings.admin_reload_window_min),
+    )
+
+
+def _resume_fields(
+    window: int, resume: admin_auth.ResumeWindow | None
+) -> dict[str, Any]:
+    """What every auth answer says about the reload window: its length,
+    and — when this browser's session is inside it — when it ends
+    (``resume_until``, the server's clock) and how many seconds are left
+    (``resume_in_sec``, what a browser counts from). ``None`` for both
+    when there is nothing to resume."""
+    fields: dict[str, Any] = {
+        "reload_window_min": window,
+        "resume_until": None,
+        "resume_in_sec": None,
+    }
+    if resume is not None:
+        fields.update(resume.as_json())
+    return fields
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin_tuple(scheme: str, netloc: str) -> tuple[str, str, int] | None:
+    scheme = (scheme or "").lower()
+    if scheme not in _DEFAULT_PORTS or not netloc:
+        return None
+    try:
+        parts = urlsplit(f"//{netloc}")
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:  # a port that is not a number
+        return None
+    if not host:
+        return None
+    return scheme, host, port if port is not None else _DEFAULT_PORTS[scheme]
+
+
+def same_origin(request: Request) -> bool:
+    """Did a page on THIS origin send this request?
+
+    A browser puts ``Origin`` on every POST it makes, same-origin ones
+    included, and no page can choose its value; it must be exactly the
+    scheme, host and port this request was addressed to (the request's
+    scheme and its ``Host``). A browser that leaves ``Origin`` off still
+    sends ``Sec-Fetch-Site``, which must then say ``same-origin``; when it
+    sends both, both must agree. A request with neither is refused — the
+    resume exists for the dashboard page, and every browser it supports
+    sends at least one.
+
+    Why this on top of ``SameSite=Strict`` and ``X-Requested-With``: a
+    "site" is a host, not a port. Another service on this box, or a second
+    Domovoi dashboard reached through the server switcher, is same-site,
+    so the browser brings this cookie to it, and the CORS allowance for
+    the server switcher would let that page read the answer — the token."""
+    fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if fetch_site and fetch_site != "same-origin":
+        return False
+    origin = (request.headers.get("origin") or "").strip()
+    if not origin:
+        return fetch_site == "same-origin"
+    if origin.lower() == "null":
+        return False
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return False
+    if parts.path not in ("", "/") or parts.query or parts.fragment or parts.username:
+        return False
+    theirs = _origin_tuple(parts.scheme, parts.netloc)
+    ours = _origin_tuple(request.url.scheme, request.headers.get("host") or "")
+    return theirs is not None and theirs == ours
 
 
 def setup_code_refusal() -> str:
@@ -66,10 +190,13 @@ def setup_code_refusal() -> str:
     )
 
 
-def _set_session_cookie(response: JSONResponse, token: str) -> None:
+def _set_session_cookie(response: JSONResponse, cookie: str) -> None:
+    """The browser's session cookie: the secret
+    :func:`domovoi.admin_auth.issue_session_cookie` minted for it, never the
+    Bearer (every port on this host receives it)."""
     response.set_cookie(
         admin_auth.COOKIE_NAME,
-        token,
+        cookie,
         max_age=COOKIE_MAX_AGE_SEC,
         httponly=True,
         samesite="strict",
@@ -95,15 +222,27 @@ class PasswordChangeRequest(BaseModel):
 
 
 @router.get("/status")
-async def auth_status(request: Request) -> dict[str, bool]:
+async def auth_status(request: Request) -> dict[str, Any]:
     """Open probe the dashboard uses to decide setup-vs-login-vs-quiet.
-    ``authenticated`` reflects the cookie OR a Bearer (GET state)."""
+    ``authenticated`` reflects the cookie OR a Bearer (GET state).
+
+    ``resume_in_sec`` / ``resume_until`` are set while THIS browser's
+    session cookie is inside its reload window — what tells a reloaded
+    page to ask ``POST /resume`` for its sign-in back, and what the
+    Settings Admin card says it lasts until. Read-only: nothing slides."""
+    window = reload_window_min()
+    resume = None
     async with session_scope() as s:
         setup_complete = await admin_auth.has_admin_auth(s)
         result = await admin_auth.check_admin_request(request, s)
+        if result in ("ok", "cookie-only"):
+            resume = await admin_auth.resume_deadline(
+                s, admin_auth.cookie_token(request), window
+            )
     return {
         "setup_complete": setup_complete,
         "authenticated": result in ("ok", "cookie-only"),
+        **_resume_fields(window, resume),
     }
 
 
@@ -128,11 +267,14 @@ async def auth_setup(body: SetupRequest, request: Request) -> JSONResponse:
         # The household device token was readable by anyone on the LAN
         # during the pre-setup window; a fresh one starts with the admin.
         device_token = await admin_auth.rotate_device_token(s)
+        cookie = await admin_auth.issue_session_cookie(s, token)
+        window = reload_window_min()
+        resume = await admin_auth.resume_deadline(s, cookie, window)
     admin_auth.LOGIN_BACKOFF.record_success(source)
     admin_auth.delete_setup_code()
     admin_auth.write_device_token_file(device_token)
-    response = JSONResponse({"ok": True, "token": token})
-    _set_session_cookie(response, token)
+    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
+    _set_session_cookie(response, cookie)
     return response
 
 
@@ -150,9 +292,69 @@ async def auth_login(body: LoginRequest, request: Request) -> JSONResponse:
             admin_auth.LOGIN_BACKOFF.record_failure(source)
             raise HTTPException(status_code=401, detail="wrong password")
         token = await admin_auth.create_session(s, label=body.label)
+        cookie = await admin_auth.issue_session_cookie(s, token)
+        window = reload_window_min()
+        resume = await admin_auth.resume_deadline(s, cookie, window)
     admin_auth.LOGIN_BACKOFF.record_success(source)
-    response = JSONResponse({"ok": True, "token": token})
-    _set_session_cookie(response, token)
+    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
+    _set_session_cookie(response, cookie)
+    return response
+
+
+_RESUME_CROSS_SITE_DETAIL = (
+    "a sign-in is only resumed for this dashboard's own page — this request "
+    "came from another origin"
+)
+_RESUME_NO_COOKIE_DETAIL = "no admin sign-in in this browser to resume — sign in"
+_RESUME_CLOSED_DETAIL = (
+    "this browser's admin sign-in can't be resumed — it ended, or it is "
+    "more than the reload window old; sign in again"
+)
+
+
+@router.post("/resume", dependencies=[Depends(require_requested_with)])
+async def auth_resume(request: Request) -> JSONResponse:
+    """Give a reloaded dashboard page its admin sign-in back (owner
+    decision 2026-10-14).
+
+    The page's Bearer lived in its memory and the reload forgot it; the
+    HttpOnly session cookie the sign-in set survived. The cookie is not the
+    Bearer, but the session row keeps the Bearer wrapped under it
+    (:func:`domovoi.admin_auth.resume_session`), so this hands the
+    session's own Bearer back — nothing new is minted — when ALL of these
+    hold:
+
+    * ``X-Requested-With`` (the dependency, and the process-wide write
+      backstop in front of it): a cross-site page cannot send it without
+      a preflight this server refuses;
+    * the request is same-origin (:func:`same_origin`): not another port
+      on this host, not a second dashboard through the server switcher;
+    * the cookie names a live session (not revoked, signed out, expired or
+      past the 90-day cap) whose ``signed_in_at`` is less than
+      ``ADMIN_RELOAD_WINDOW_MIN`` minutes ago (0 = never).
+
+    403 for the first two, 401 for the rest; nothing about the session
+    changes on a refusal. A success slides the session's expiry like any
+    use of it does, and says when the window ends. The cookie is not
+    re-set: it is the one the sign-in set, unchanged."""
+    if not same_origin(request):
+        log.info(
+            "refused a sign-in resume from another origin (Origin %r, Sec-Fetch-Site %r)",
+            request.headers.get("origin"), request.headers.get("sec-fetch-site"),
+        )
+        raise HTTPException(status_code=403, detail=_RESUME_CROSS_SITE_DETAIL)
+    cookie = admin_auth.cookie_token(request)
+    if cookie is None:
+        raise HTTPException(status_code=401, detail=_RESUME_NO_COOKIE_DETAIL)
+    window = reload_window_min()
+    async with session_scope() as s:
+        resumed = await admin_auth.resume_session(s, cookie, window)
+    if resumed is None:
+        raise HTTPException(status_code=401, detail=_RESUME_CLOSED_DETAIL)
+    token, resume = resumed
+    response = JSONResponse({"ok": True, "token": token, **_resume_fields(window, resume)})
+    # The answer is a credential: never kept by a cache on the way.
+    response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -177,9 +379,14 @@ async def auth_sessions(request: Request) -> dict:
     result = await admin_auth.check_admin_request(request)
     if result not in ("ok", "cookie-only"):
         raise HTTPException(status_code=401, detail="admin session required")
-    current = admin_auth.bearer_token(request) or admin_auth.cookie_token(request)
-    current_hash = admin_auth.token_sha256(current) if current else None
+    bearer = admin_auth.bearer_token(request)
     async with session_scope() as s:
+        # The Bearer's session, or the one the browser cookie names (the
+        # cookie is its own secret, not the token).
+        current_hash = (
+            admin_auth.token_sha256(bearer) if bearer
+            else await admin_auth.cookie_session_hash(s, admin_auth.cookie_token(request))
+        )
         sessions = await admin_auth.list_sessions(s)
     for entry in sessions:
         entry["current"] = entry["token_hash"] == current_hash
@@ -211,8 +418,10 @@ async def auth_change_password(
 ) -> dict:
     """Change the admin password (old password re-verified, §7.2).
     Mutation ⇒ Bearer-only. Every OTHER session is revoked: a token
-    minted under the old password does not survive it; the calling
-    session stays logged in."""
+    minted under the old password does not survive it — and with it any
+    reload window it had (``POST /resume``); the calling session stays
+    logged in, and having just proved the password, its own reload window
+    starts again."""
     result = await admin_auth.check_admin_request(request)
     if result == "cookie-only":
         raise HTTPException(
@@ -231,6 +440,7 @@ async def auth_change_password(
             raise HTTPException(status_code=401, detail="wrong password")
         await admin_auth.set_password(s, body.new_password)
         revoked = await admin_auth.revoke_other_sessions(s, keep)
+        await admin_auth.mark_signed_in(s, keep)
     return {"ok": True, "revoked_sessions": revoked}
 
 
@@ -244,8 +454,8 @@ async def auth_change_password(
 async def auth_device_token() -> dict:
     """The household device token for the settings page and for enrolling
     a phone. Same table and same gate as the core's
-    ``GET /v1/admin/device-token``: Bearer or cookie renders it, 401
-    otherwise, 501 before setup."""
+    ``GET /v1/admin/device-token``: Bearer-only (the cookie alone is 403 —
+    it reaches every port of this host), 401 otherwise, 501 before setup."""
     async with session_scope() as s:
         token = await admin_auth.ensure_device_token_row(s)
     return {"token": token, "header": admin_auth.DEVICE_TOKEN_HEADER}

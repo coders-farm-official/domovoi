@@ -50,9 +50,11 @@ async def test_require_admin_security_matrix(monkeypatch) -> None:
         assert (await c.get("/security-read", headers=bearer("admin-token"))).status_code == 200
         assert (await c.get("/security-read")).status_code == 401
     async with mini_client(cookies={COOKIE: "admin-token"}) as c:
-        # The cookie renders the read, never a mutation.
+        # The cookie alone opens nothing on the security tier: no
+        # mutation, and since 2026-10-14 no read either (it reaches every
+        # port of the host).
         assert (await c.post("/security")).status_code == 403
-        assert (await c.get("/security-read")).status_code == 200
+        assert (await c.get("/security-read")).status_code == 403
 
 
 @pytest.mark.asyncio

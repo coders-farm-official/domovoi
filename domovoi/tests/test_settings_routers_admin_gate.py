@@ -26,7 +26,7 @@ import web.backend.api.greetings as greetings_api
 import web.backend.api.voices as voices_api
 import web.backend.api.wake_words as wake_words_api
 from domovoi import admin_auth
-from domovoi.admin_auth import require_admin_mutation
+from domovoi.admin_auth import require_admin_mutation, require_admin_security
 from web.backend.main import app
 
 ROUTERS = {
@@ -38,13 +38,20 @@ ROUTERS = {
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
+#: The admin gates a mutation here may carry: the daily one, or the
+#: security tier (Bearer only too, and 501 before setup with no pre-setup
+#: grace), which "Turn on / off wake-word training" take (2026-10-13; pinned
+#: in test_route_auth_matrix).
+_GATES = (require_admin_mutation, require_admin_security)
+
+
 def _has_gate(route: APIRoute) -> bool:
-    """True when ``require_admin_mutation`` is anywhere in the route's
+    """True when an admin gate (``_GATES``) is anywhere in the route's
     resolved dependency tree (``dependencies=[Depends(...)]`` lands there)."""
     stack = list(route.dependant.dependencies)
     while stack:
         d = stack.pop()
-        if d.call is require_admin_mutation:
+        if d.call in _GATES:
             return True
         stack.extend(d.dependencies)
     return False
@@ -69,7 +76,7 @@ def test_every_mutation_route_carries_the_admin_gate(name: str) -> None:
     ungated = [
         f"{sorted(r.methods)} {r.path}" for r in mutations if not _has_gate(r)
     ]
-    assert ungated == [], f"{name}: mutations without require_admin_mutation: {ungated}"
+    assert ungated == [], f"{name}: mutations without an admin gate: {ungated}"
 
 
 @pytest.mark.parametrize("name", sorted(ROUTERS))
@@ -90,8 +97,9 @@ def test_the_expected_surface_is_what_got_gated() -> None:
     failure in the parametrized test above, not a silent shrink here."""
     counts = {name: len(_mutations(r)) for name, r in ROUTERS.items()}
     # voices: piper upload, patch, delete (the Edge registration was
-    # dropped on 2026-10-12)
-    assert counts == {"greetings": 3, "voices": 3, "wake_words": 12}
+    # dropped on 2026-10-12); wake_words gained trainer/enable,
+    # trainer/disable (security tier) and {id}/train/stop on 2026-10-13
+    assert counts == {"greetings": 3, "voices": 3, "wake_words": 15}
 
 
 # ─── HTTP: the gate through the real dependency, classifier stubbed ────────

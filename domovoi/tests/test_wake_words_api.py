@@ -39,6 +39,23 @@ def _clean_wake_words():
     yield
 
 
+@pytest.fixture(autouse=True)
+def core_calls(monkeypatch):
+    """The core is never reached from here (a live one may run on :6370 on a
+    dev box): ``post_admin`` answers "unreachable" and records the call.
+    The proxy tests below stub it again for their own answers."""
+    import web.backend.api.wake_words as wake_api
+
+    calls: list[tuple[str, dict]] = []
+
+    async def _unreachable(path, body=None, timeout=30.0, headers=None):
+        calls.append((path, body))
+        return 0, None
+
+    monkeypatch.setattr(wake_api, "post_admin", _unreachable)
+    return calls
+
+
 def _create(client: TestClient, name: str = "Hey Domovoi", phrase: str = "hey domovoi", **kw):
     body = {"name": name, "phrase": phrase, **kw}
     return client.post("/api/wake-words", json=body)
@@ -90,6 +107,28 @@ def test_create_persists_and_returns_full_row() -> None:
         # Shows up in the list.
         listing = client.get("/api/wake-words").json()
         assert [w["id"] for w in listing] == [payload["id"]]
+
+
+@requires_db
+@pytest.mark.parametrize("name,slug", [("Con", "con_word"), ("NUL", "nul_word"), ("com1", "com1_word"),
+                                       ("Aux!", "aux_word"), ("Console", "console"), ("Hey Con", "hey_con")])
+def test_a_wake_word_named_like_a_windows_device_gets_a_slug_every_satellite_takes(name, slug) -> None:
+    """Satellites refuse a synced file named con/aux/nul/com1... on every
+    board (Windows opens a device for it); the core never creates one."""
+    from satellite import sound_sync
+
+    with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
+        r = _create(client, name=name, phrase="hey there")
+        assert r.status_code == 201, r.text
+        assert r.json()["slug"] == slug
+    assert sound_sync._safe_rel(f"{slug}.onnx") and sound_sync._safe_rel(f"{slug}.onnx.json")
+
+
+def test_the_core_knows_the_satellite_s_device_names() -> None:
+    from domovoi import canned_sounds
+    from satellite import sound_sync
+
+    assert canned_sounds.WINDOWS_DEVICE_NAMES == sound_sync._DEVICE_NAMES
 
 
 @requires_db
@@ -225,14 +264,19 @@ def test_train_gated_on_selected_count(tmp_path, monkeypatch) -> None:
 
 
 @requires_db
-def test_delete_recording_row_succeeds() -> None:
+def test_delete_recording_row_succeeds(core_calls) -> None:
     with TestClient(app, headers={"X-Requested-With": "domovoi-tests"}) as client:
         wid = _create(client, name="Disposable", phrase="hey disposable").json()["id"]
         r = client.delete(f"/api/wake-words/{wid}")
+        # The core down: the delete still succeeds (the worker's sweep
+        # removes the training files after its next start).
         assert r.status_code == 204
         # Gone from the list.
         listing = client.get("/api/wake-words").json()
         assert all(w["id"] != wid for w in listing)
+    # Its training files in the trainer's cache volume are the core's to
+    # remove (review 2026-10-13: features and copies outlived the word).
+    assert core_calls == [("/v1/admin/wake/forget", {"slug": "disposable"})]
 
 
 @requires_db

@@ -19,9 +19,67 @@ mic-gain) sit behind the folded warning, exactly like the gear.
 
 from __future__ import annotations
 
-from domovoi.config_schema import FieldSpec, coerce_and_validate
+import dataclasses
+import re
 
-__all__ = ["EDITABLE_FIELDS", "FIELD_BY_NAME", "coerce_and_validate"]
+from domovoi.config_schema import FieldSpec
+from domovoi.config_schema import coerce_and_validate as _coerce_and_validate
+
+__all__ = ["EDITABLE_FIELDS", "FIELD_BY_NAME", "coerce_and_validate", "spec_for_board", "MAX_STRING"]
+
+#: The longest text value a satellite takes from the dashboard, and no
+#: control characters (satellite/remote_config.py MAX_STRING and _scalar; a
+#: test holds them equal). Checked here too, so the dashboard shows the
+#: error instead of "sent" for a value the satellite would refuse.
+MAX_STRING = 120
+
+# ALSA device names, as satellite/alsa_names.py takes them (a test holds the
+# two equal on a list of names). A PCM name is a small language: `file`,
+# `pipe` and friends make ALSA write files or run a command, so only plain
+# device names are accepted.
+_ALSA_TYPES = ("hw|plughw|sysdefault|default|plug|dmix|dsnoop|front|rear|center_lfe|side|"
+               "surround21|surround40|surround41|surround50|surround51|surround71|iec958|spdif|hdmi|usbstream")
+ALSA_PCM_PATTERN = (
+    r"(?!(?i:file|pipe|shm|tee|exec|ladspa|lfloat|share)\Z)[A-Za-z][A-Za-z0-9_-]{0,63}"
+    rf"|(?i:{_ALSA_TYPES}):[A-Za-z0-9_=,.-]{{1,64}}"
+    r"|bluealsa(?::DEV=(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?:,PROFILE=(?:a2dp|sco))?)?"
+)
+ALSA_CARD_PATTERN = r"[A-Za-z0-9_-]{1,32}"
+# A Windows satellite's device names reach PortAudio and its own player, not
+# ALSA: "default", a device number, or a plain name, as
+# satellite/devices.py valid_windows_device takes them (a test holds the two
+# equal). On that board they replace the ALSA rule for these three settings.
+WINDOWS_DEVICE_PATTERN = r"[A-Za-z0-9][A-Za-z0-9 ()._,:+\[\]-]{0,79}"
+WINDOWS_DEVICE_FIELDS = frozenset({"audio.input_device", "audio.output_device", "music.alsa_device"})
+WINDOWS_BOARDS = frozenset({"windows_pc"})
+ALSA_CONTROL_PATTERN = r"(?:[A-Za-z0-9 _.,()+-]{1,48})?"
+
+
+def spec_for_board(spec: FieldSpec, board: str | None) -> FieldSpec:
+    """``spec`` as the satellite on ``board`` checks it: a Windows
+    satellite's device names by the Windows rule (``Speakers (Realtek(R)
+    Audio)`` is one; an ALSA name like ``plughw:CARD=Array`` is not), every
+    other board's by the ALSA rule above."""
+    if board in WINDOWS_BOARDS and spec.name in WINDOWS_DEVICE_FIELDS:
+        return dataclasses.replace(
+            spec, pattern=WINDOWS_DEVICE_PATTERN,
+            pattern_help="a Windows audio device: default, a device number, or a name as "
+                         "`python -m satellite.client --list-devices` prints it (letters, digits, "
+                         "spaces and ()._,:+[]-)")
+    return spec
+
+
+def coerce_and_validate(spec: FieldSpec, value: object) -> object:
+    """The core's check (type, range, choices, pattern), and the satellite's
+    own limits on text: at most MAX_STRING characters, no control
+    characters."""
+    coerced = _coerce_and_validate(spec, value)
+    if isinstance(coerced, str):
+        if len(coerced) > MAX_STRING:
+            raise ValueError(f"at most {MAX_STRING} characters")
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in coerced):
+            raise ValueError("no control characters (a line break, a tab, ...)")
+    return coerced
 
 
 EDITABLE_FIELDS: list[FieldSpec] = [
@@ -237,18 +295,26 @@ EDITABLE_FIELDS: list[FieldSpec] = [
         "ALSA card (amixer -c) that carries the hardware volume control "
         "voice commands drive. XVF3800 default: 'Array'.",
         "str", section="advanced",
+        pattern=ALSA_CARD_PATTERN,
+        pattern_help="a card number or name (letters, digits, _ and -), e.g. 0 or Array",
     ),
     FieldSpec(
         "audio.output_mixer_control", "Volume mixer control", "Audio devices",
         "ALSA control name for the hardware volume (e.g. 'PCM'). Leave as-is "
         "unless your card uses a different control.",
         "str", section="advanced",
+        pattern=ALSA_CONTROL_PATTERN,
+        pattern_help="a mixer control name, e.g. PCM, Master or Speaker,0",
     ),
     FieldSpec(
         "music.alsa_device", "Music ALSA device", "Audio devices",
         "ALSA device mpg123 uses for music. Wrong = music routes to the "
-        "wrong card or doesn't play. XVF3800: pin to the array.",
+        "wrong card or doesn't play. XVF3800: pin to the array. A plain "
+        "device name only (default, hw:1,0, plughw:CARD=Array,DEV=0): the "
+        "satellite refuses one that makes ALSA write a file or run a command.",
         "str", section="advanced",
+        pattern=ALSA_PCM_PATTERN,
+        pattern_help="a plain ALSA device name, e.g. default, hw:1,0 or plughw:CARD=Array,DEV=0",
     ),
     FieldSpec(
         "leds.enabled", "Status LEDs", "LEDs",

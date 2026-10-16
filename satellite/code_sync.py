@@ -31,7 +31,7 @@ from pathlib import Path
 
 import requests
 
-from satellite.sound_sync import _safe_rel, _sha256, http_base_from_ws
+from satellite.sound_sync import _safe_rel, _sha256, http_base_from_ws, safe_dest
 
 log = logging.getLogger("satellite.code_sync")
 
@@ -39,6 +39,7 @@ log = logging.getLogger("satellite.code_sync")
 __all__ = [
     "_safe_rel",
     "_sha256",
+    "safe_dest",
     "http_base_from_ws",
     "fetch_manifest",
     "sync_code",
@@ -136,7 +137,10 @@ def sync_code(
         if Path(rel).suffix not in ext_allow:
             log.warning("code sync: skipping non-allowlisted path %r", rel)
             continue
-        dest = satellite_root / rel
+        dest = safe_dest(satellite_root, rel)
+        if dest is None:
+            log.warning("code sync: skipping a path that leads out of the code tree %r", rel)
+            continue
         if dest.is_file() and _sha256(dest) == sha:
             continue
         data = requests.get(f"{base}/v1/satellite-code/{rel}", timeout=timeout)
@@ -170,10 +174,11 @@ def _prune_within_previous(
     guards before unlink. Returns the list of pruned posix rel paths."""
     pruned: list[str] = []
     for rel in set(prev_manifest) - set(manifest):
-        if not _safe_rel(rel) or Path(rel).suffix not in ext_allow:
+        stale = safe_dest(satellite_root, rel)
+        if stale is None or Path(rel).suffix not in ext_allow:
             continue
         try:
-            (satellite_root / rel).unlink(missing_ok=True)
+            stale.unlink(missing_ok=True)
             pruned.append(rel)
         except OSError:
             pass
