@@ -155,6 +155,16 @@ const Pill = ({ tone = 'idle', live = false, children }) => (
   </span>
 );
 
+/* ---- Preview tag -------------------------------------------- */
+/* "preview" beside something that ships with 1.0 but isn't yet held to its
+   promise (owner decision 2, 2026-10-16): the Windows installer, the phone's
+   on-device assistant, spare computers and phones as rooms. A label, not a
+   control; the title says what it means. */
+const PREVIEW_MEANS = 'A preview: it works, but it has been tried on fewer devices than the rest of Domovoi and may still change.';
+const PreviewTag = () => (
+  <span className="preview-tag" title={PREVIEW_MEANS}>preview</span>
+);
+
 /* ---- Room chip ---------------------------------------------- */
 const RoomChip = ({ name, online }) => (
   <span className="room-chip">
@@ -3233,7 +3243,7 @@ const ContainerGuardBanner = () => {
 
 /* expose to other Babel scripts */
 Object.assign(window, {
-  Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, RoomChip, Avatar,
+  Icon, DomovoiGlyph, SleepingDomovoi, HeadphonesDomovoi, StatusDot, Pill, PreviewTag, PREVIEW_MEANS, RoomChip, Avatar,
   Card, Empty, Button, IconButton, Sidebar, Topbar, PageHeader, Stat, useToast, Tabs,
   CORE_NAV_ITEMS, buildNavItems, navItemsFor, PluginNavIcon, usePluginBadges,
   SHARED_SCREEN_HIDDEN, useSharedScreen,

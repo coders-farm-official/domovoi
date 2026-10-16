@@ -35,6 +35,7 @@ import com.domovoi.app.assistant.ModelCatalog
 import com.domovoi.app.assistant.ModelSetup
 import com.domovoi.app.ui.components.ConfirmDialog
 import com.domovoi.app.ui.components.DomovoiCard
+import com.domovoi.app.ui.components.PreviewLabel
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.fmtBytes
 import com.domovoi.app.ui.components.openWebLink
@@ -73,6 +74,7 @@ internal fun AssistantSetupPanel(ui: AssistantUi, actions: AssistantActions) {
             color = Domovoi.colors.fgMuted,
             modifier = Modifier.padding(top = 4.dp),
         )
+        PreviewLabel(Modifier.padding(top = 8.dp))
         Spacer(Modifier.height(12.dp))
         SectionLabel("what it downloads")
         Spacer(Modifier.height(4.dp))

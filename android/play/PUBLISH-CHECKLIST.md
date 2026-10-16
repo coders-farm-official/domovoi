@@ -195,9 +195,12 @@ checkout,
 powershell -NoProfile -ExecutionPolicy Bypass -File android\scripts\release.ps1
 ```
 It builds the arm64-v8a and armeabi-v7a APKs, signs them with **the same
-key**, checks them as a Domovoi server will, publishes the GitHub release
-`v1.0.0-rc1` with `gh` (a full release; `-Prerelease` marks it a pre-release), and writes `android/release.json`; then commit
-and push that file (`[skip ci]`). `-NoPublish` stops before GitHub. The
+key**, checks them as a Domovoi server will, commits and pushes
+`android/release.json` (`[skip ci]`), and publishes the GitHub release
+`v<versionName>` with `gh`, tagged at that commit (a full release, release
+candidates included; `-Prerelease` makes it a pre-release);
+`scripts/release/finish-release.ps1` then adds the Windows Setup, the
+checksums and the notes. `-NoPublish` stops before git and GitHub. The
 APKs and the Play bundle must share one `versionCode` sequence: a later
 build raises `versionCode` (`YYMMDDNN`) in `android/app/build.gradle.kts`
 before either script runs; both refuse to go backwards.

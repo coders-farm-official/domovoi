@@ -6,6 +6,10 @@ through the Android app's room mode. Each speaks the same protocol to the
 Domovoi server as a Pi, joins through the same approval code, and becomes a
 room like any other: wake word, answers, music, intercom, timers.
 
+**Spare devices as rooms are a preview** in Domovoi 1.0, labelled so on the
+dashboard's **add a spare device** card and in the app: they work, but have
+been tried on fewer devices than a Pi, and may still change.
+
 This page is for people setting one up. How it works underneath:
 [uml/satellite-protocol.md](uml/satellite-protocol.md) ("Enrolling a spare
 device", "The local control channel"); the security model:

@@ -98,6 +98,24 @@ fun Pill(text: String, tone: Tone = Tone.Idle, live: Boolean = false, modifier: 
     }
 }
 
+/** What "preview" means, beside a feature that ships with Domovoi 1.0 but
+ *  isn't yet held to its promise (owner decision 2, 2026-10-16): the
+ *  on-device assistant and room mode, in this app. */
+const val PREVIEW_MEANS: String = "It works, but it has been tried on fewer phones than the rest of Domovoi, and it may still change."
+
+/** A "preview" pill and what it means: a label, not a control. */
+@Composable
+fun PreviewLabel(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Pill("preview")
+        Text(PREVIEW_MEANS, style = MaterialTheme.typography.labelSmall, color = Domovoi.colors.fgMuted)
+    }
+}
+
 @Composable
 fun RoomChip(roomId: String?, modifier: Modifier = Modifier) {
     Row(

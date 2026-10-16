@@ -2671,7 +2671,9 @@ const SpareDeviceCard = ({ fire }) => {
                        background: 'none', border: 'none', padding: '14px 16px',
                        display: 'flex', alignItems: 'center', gap: 10, color: 'var(--fg)' }}>
         <Icon name="laptop" size={16}/>
-        <span style={{ fontSize: 14, fontWeight: 600, flex: 1 }}>add a spare device</span>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>add a spare device</span>
+        <PreviewTag/>
+        <span style={{ flex: 1 }}/>
         <span className="mono" style={{ fontSize: 11, color: 'var(--fg-faint)' }}>
           a Linux or Windows laptop or PC, or a phone
         </span>
@@ -2681,7 +2683,9 @@ const SpareDeviceCard = ({ fire }) => {
         <div style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: 12, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
             Name the room the device will be. It joins like a Pi: it waits above for its
-            approval code, and nothing in this command or code is a password.
+            approval code, and nothing in this command or code is a password. Spare computers
+            and phones as rooms are a preview: they work, but have been tried on fewer devices
+            than a Pi.
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input value={room} onChange={e => setRoom(e.target.value)} maxLength={64}

@@ -55,6 +55,7 @@ import androidx.core.content.ContextCompat
 import com.domovoi.app.DomovoiApplication
 import com.domovoi.app.audio.MicArbiter
 import com.domovoi.app.net.DeviceDownloads
+import com.domovoi.app.ui.components.PreviewLabel
 import com.domovoi.app.ui.theme.Domovoi
 import com.domovoi.app.ui.theme.DomovoiTheme
 import com.domovoi.app.ui.theme.ThemeMode
@@ -241,6 +242,8 @@ private fun Explainer(onStart: () -> Unit, onCancel: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp)) {
         Text("Use this device as a room", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.semantics { heading() })
+        Spacer(Modifier.height(6.dp))
+        PreviewLabel()
         Spacer(Modifier.height(8.dp))
         Column(Modifier.weight(1f).verticalScroll(scroll)) {
             EXPLAINER.forEachIndexed { i, (title, body) ->

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Builds the Windows installer test build.
+Builds the Windows installer (a preview).
 
 .DESCRIPTION
 1. DomovoiHost.exe and DomovoiSetupHelper.exe, with the C# compiler that

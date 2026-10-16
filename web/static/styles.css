@@ -1599,6 +1599,12 @@ a.home-att-row:hover { background: var(--brand-soft); }
   border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 7px;
 }
 .sat-not-offered { font-size: 11px; color: var(--fg-faint); margin-bottom: 6px; }
+/* "preview" (components.jsx PreviewTag): a small outlined word, no dot. */
+.preview-tag {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em; color: var(--fg-muted);
+  border: 1px dashed var(--border-strong, var(--border)); border-radius: var(--r-sm); padding: 1px 6px;
+}
 /* Settings → Phone bar (settings.jsx PhoneBarCard). */
 @media (max-width: 760px) {
   .phone-bar-edit .btn-icon { width: 44px; height: 44px; }

@@ -193,7 +193,7 @@ async def test_an_artist_search_sends_the_query_and_the_project_user_agent(monke
     assert call["url"] == "https://musicbrainz.org/ws/2/artist"
     assert call["params"] == {"query": 'artist:"deadmau5"', "fmt": "json", "limit": "5"}
     assert call["headers"]["User-Agent"] == (
-        "domovoi/1.0.0rc1 (+https://github.com/coders-farm-official/domovoi)"
+        "domovoi/1.0.0rc2 (+https://github.com/coders-farm-official/domovoi)"
     )
     assert call["headers"]["Accept"] == "application/json"
 

@@ -437,6 +437,78 @@ wrong unless that migration has never shipped anywhere.
 
 ---
 
+## Releasing
+
+A Domovoi release is one version for the whole project, and one tag:
+`v1.0.0-rc2`, `v1.0.0`, `v1.0.1`. The server, the dashboard, the
+satellites (they run the code their server hands them), the Android app
+and the Windows Setup all carry it; plugins keep their own. SemVer: the tag
+is `v` plus the version, `pyproject.toml` has its PEP 440 spelling
+(`1.0.0rc2`), Android's `versionName` the version itself and `versionCode`
+its own `YYMMDDNN` counter, which only goes up.
+`domovoi/tests/test_version_copies.py` holds every copy to `pyproject.toml`.
+Keep to fewer than ten release candidates (`rc10` sorts before `rc2`).
+
+Two branches: `main` carries every change; **`stable`** points at the
+latest release and only ever fast-forwards to one. Release candidates
+(`rcN`) are full GitHub releases (the suffix says what they are; owner
+decision 2026-10-15), tagged on `main`, and never move `stable`; only a
+version without a suffix does. A published tag never moves
+and is never deleted, and `stable` is never rewound or force-pushed: a bad
+release gets a warning in its notes and a patch release.
+
+Everything is built on the owner's PC; GitHub only hosts, and pushing a tag
+starts no workflow. Every pushed commit carries `[skip ci]`. In order:
+
+1. **The release commit** on `main`: the version in every copy (the test
+   above), the release notes, and `docs/release/v<version>.md` when the
+   release has a hand-written summary (the GitHub body; kept under 20 KB).
+2. **`android/scripts/release.ps1`** (or `.sh`) from a clean, pushed
+   checkout of `main`: builds and signs the APKs with the release key,
+   commits `android/release.json` on the commit they were built from (it
+   refuses if anything else was committed meanwhile), pushes that commit
+   and its tag `v<versionName>` together, and publishes the release on
+   that tag, as a full release marked Latest (release candidates too;
+   `-Prerelease` makes it a pre-release). `-NoPublish` is its dry run.
+   [android/README.md, "Publishing a release"](../android/README.md#publishing-a-release-the-app-every-domovoi-server-hands-out)
+   has the details.
+3. **`scripts/release/finish-release.ps1`** from a clean checkout at the
+   tag or after it, `origin` being the GitHub repository:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1 -NoPublish   # dry run
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\finish-release.ps1
+   ```
+
+   It checks the tag (an annotated one is fine), its `pyproject.toml`
+   version, that its commit is only `android/release.json` on the commit
+   the APKs were built from, the published APKs, and, for a version
+   without a suffix, that `stable` can fast-forward; nothing on GitHub
+   changes until all of that passes. Then it builds `DomovoiSetup.exe`
+   from the tag's own files: a clean worktree of the tag, where
+   `windows\build.ps1 -Pin <tag>` moves the Setup's pins to the tag's
+   commit and builds, and anything but `pins.iss` changed, or a bundled
+   `provision.sh`, is refused. No pins commit is needed; the pinned
+   `pins.iss` is kept beside the Setup. It writes one `SHA256SUMS` (LF)
+   for every file, sets the notes (`docs/release/v<version>.md`, or a
+   summary of the `docs/RELEASE_NOTES.md` entries since the previous tag
+   with links into the full file at the tag), uploads the Setup and
+   `SHA256SUMS`, checks every file on GitHub against `SHA256SUMS`, and
+   **last**, for a version without a suffix that GitHub doesn't mark a
+   pre-release, checks the tag on GitHub once more and pushes the commit
+   it checked, `git push origin <that SHA>:refs/heads/stable` (never
+   forced). Run again, it replaces the two files and leaves `stable` where
+   it is. `finish-release.sh` is the same for bash; it needs `--setup FILE`
+   (a Setup built that way) off Windows. `-NoPublish` leaves the files in
+   `windows\build\release\<tag>\`.
+
+The finished release holds the two APKs, `DomovoiSetup.exe` (not
+code-signed), `SHA256SUMS`, and notes naming the tag's commit, how the
+Setup was built and the app's signing certificate. Neither script
+touches a keystore or a password outside `release.ps1`'s own prompts.
+
+---
+
 ## Tags and the release branches never move back
 
 Every Domovoi server follows `stable` or `main` and fast-forwards only
@@ -456,6 +528,8 @@ Every Domovoi server follows `stable` or `main` and fast-forwards only
   commit made only on `stable`, or a `release/1.0` hotfix not merged back,
   leaves every server that switched channels unable to fast-forward until
   `main` holds it.
+
+---
 
 ## Publishing a plugin
 

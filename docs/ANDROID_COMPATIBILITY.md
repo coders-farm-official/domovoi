@@ -12,7 +12,7 @@ Android emulator; see [What was tested](#what-was-tested) for exactly how.
   every phone from about 2017 on), 32-bit ARM (`armeabi-v7a`, older and
   budget phones, Android Go), and the x86 / x86_64 used by emulators and a
   few Chromebooks and tablets.
-- **The on-device assistant needs a 64-bit phone** running the 64-bit
+- **The on-device assistant (a preview) needs a 64-bit phone** running the 64-bit
   app. Its engine, LiteRT-LM, is published for 64-bit processors only.
   Everything else is the same on every ABI.
 

@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.ui.components.DomovoiCard
+import com.domovoi.app.ui.components.PreviewLabel
 import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.theme.Domovoi
 
@@ -29,6 +30,8 @@ fun RoomModeEntryCard() {
             style = MaterialTheme.typography.bodyMedium,
             color = Domovoi.colors.fgMuted,
         )
+        Spacer(Modifier.height(6.dp))
+        PreviewLabel()
         Spacer(Modifier.height(10.dp))
         OutlinedButton(onClick = {
             context.startActivity(Intent(context, RoomSetupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

@@ -50,7 +50,7 @@ installed from the dashboard as a zip upload or a GitHub URL.
 > **Status: tested, and built in public.** Domovoi works today if you're
 > comfortable running your own server, and the easier ways in (an assistant
 > that runs on your phone, a Windows installer, rooms on spare laptops and
-> phones) are in early builds: see [Status and roadmap](#status-and-roadmap).
+> phones) are previews: see [Status and roadmap](#status-and-roadmap).
 > Ask questions in
 > [Discussions](https://github.com/coders-farm-official/domovoi/discussions).
 
@@ -118,7 +118,11 @@ We build Domovoi in public. Here's where it stands.
   your server's own page by scanning a QR code
   ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md#phones-and-tablets-room-mode)).
 
-**In early builds**
+**Previews**
+
+These ship with 1.0 and work, labelled *preview* wherever you choose them:
+they have been tried on fewer devices than the rest, aren't yet held to
+1.0's promise, and may still change.
 
 - **An assistant on your phone, no server needed.** The Android app's
   Assistant tab runs a model on the phone itself (Gemma 4 E2B on LiteRT-LM)
@@ -128,8 +132,8 @@ We build Domovoi in public. Here's where it stands.
   It answers the time and date from the phone's own clock. A bad reply can
   be reported (an email draft you send yourself), and its controls, like
   room mode's, are labelled for screen readers.
-- **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
-  server inside WSL2 on a Windows 11 PC. It is an unsigned test build;
+- **A Windows installer.** `DomovoiSetup.exe` puts the Linux
+  server inside WSL2 on a Windows 11 PC. It is not code-signed yet;
   download it from the
   [v1.0.0-rc1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1)
   ([Windows installer](docs/WINDOWS_HOST.md)).
@@ -157,7 +161,7 @@ We build Domovoi in public. Here's where it stands.
   works; it isn't built into Domovoi yet.
 - **The Android app on Google Play,** once Coders Farm's developer account
   is cleared.
-- **The Windows installer out of test,** so one download turns the household
+- **The Windows installer out of preview,** so one download turns the household
   gaming PC into a Domovoi server.
 - **"Hey Domovoi" as a default wake word.** A model trained at home can't be
   shipped to everyone: its training data isn't licensed for that. A shipped
@@ -285,7 +289,7 @@ Three ways in:
   ([Release channels](docs/LINUX_HOST.md#release-channels); before the
   first release, `main`):
   [Or let the script do it](docs/LINUX_HOST.md#or-let-the-script-do-it).
-- **Windows 11, the installer (test build).** `DomovoiSetup.exe` runs that
+- **Windows 11, the installer (preview).** `DomovoiSetup.exe` runs that
   same script inside a private WSL2 distro. It is unsigned; download it from
   the [v1.0.0-rc1 release](https://github.com/coders-farm-official/domovoi/releases/tag/v1.0.0-rc1),
   or build it with `windows\build.ps1`
@@ -378,14 +382,14 @@ Satellites** on the dashboard (as admin) to make it a room. Three routes:
   Hardware list, the two mic boards, and the by-hand route (installing the
   satellite client and pointing it at `ws://<server>:6370` yourself) are in
   the [Satellite hardware guide](docs/SATELLITE_HARDWARE.md).
-- **A spare Linux or Windows laptop or PC.** **Settings → Satellites → add
+- **A spare Linux or Windows laptop or PC** (preview). **Settings → Satellites → add
   a spare device**: type the room's name, press **make the code**, and run
   the one-line command it shows on that computer (an older Linux, or
   Fedora, openSUSE or Arch, gets the satellite's own Python). The computer
   checks it reached *your* server, then shows its approval code
   ([Linux](docs/SPARE_DEVICE_SATELLITES.md#linux-laptops-and-mini-pcs) ·
   [Windows](docs/SPARE_DEVICE_SATELLITES.md#windows-laptops-and-pcs)).
-- **An old phone or tablet** (Android 8.0 or later). The same **add a spare
+- **An old phone or tablet** (Android 8.0 or later; preview). The same **add a spare
   device** card shows a QR code: scan it with the phone's camera, and your
   server's page installs the Domovoi Android app (press **Download the app
   to this server** on the card once first) and opens it as that room. A
@@ -441,7 +445,7 @@ A Pi that still can't find it: edit `domovoi_url` in its
 from the server automatically.
 
 **The Windows installer** can't yet keep the data through an uninstall and
-reinstall onto it; that is not in the test build
+reinstall onto it; that is not in the preview
 ([Not in this build](docs/WINDOWS_HOST.md#not-in-this-build)).
 
 ---
@@ -502,7 +506,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 
 ## What each interface can do
 
-| | Voice satellites (Pi, spare computer) | Phone room mode | Web dashboard | Android app |
+| | Voice satellites (Pi; spare computer, preview) | Phone room mode (preview) | Web dashboard | Android app |
 |---|---|---|---|---|
 | Hands-free voice, wake word | ✅ the whole point | ✅ | — | — |
 | Barge-in (interrupt Domovoi mid-sentence) | ✅ off until you turn it on | — | — | — |
@@ -514,7 +518,7 @@ Deep dive: [Architecture](docs/ARCHITECTURE.md) ·
 | Library, playlists, podcasts, audiobooks, news | voice control | voice control | ✅ full management | ✅ dashboard parity |
 | Videos | — | — | ✅ | ✅ |
 | Text chat with Domovoi, pictures included | — | — | ✅ | ✅ |
-| An assistant that answers with no server | — | — | — | ✅ early build: 64-bit phones with 8 GB or more |
+| An assistant that answers with no server | — | — | — | ✅ preview: 64-bit phones with 8 GB or more |
 | Save music, podcasts & audiobooks to your device | — | — | ✅ browser download | ✅ via DownloadManager |
 | Calendar, documents, people & voice profiles | voice where it makes sense | voice where it makes sense | ✅ | ✅ |
 | Satellite management & per-room settings | — | — | ✅ edits a Pi's or spare computer's config remotely | ✅ view/manage |
@@ -561,8 +565,8 @@ The differences are deliberate:
   and its Server settings tab opens the dashboard.
   From a satellite's page it can also **drop into that room** — your phone
   joins the room's live two-way audio bridge directly, so you can talk to
-  whoever's there from anywhere on the network. Its **Assistant** tab (an
-  early build) answers on the phone itself, with no server; it is separate
+  whoever's there from anywhere on the network. Its **Assistant** tab (a
+  preview) answers on the phone itself, with no server; it is separate
   from Chat, which talks to your server.
 
 ---
@@ -608,6 +612,7 @@ Want to write one? Start at the
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | When the house spirit sulks — fixes for common problems |
 | [Home Assistant](docs/HOME_ASSISTANT.md) | No integration; running both side by side and spoken announcements from Home Assistant |
 | [Security & privacy](docs/SECURITY_PRIVACY.md) | Threat model, what leaves your network (and what never does) |
+| [Licences of what Domovoi downloads](docs/LICENSES.md) | Every model, voice and dataset a server, the app or the trainer downloads, its licence, and what that means for a household and for a redistributor |
 | [Container guard](docs/CONTAINER_GUARD.md) | Which Docker containers Domovoi watches, the alerts when one fails, and the freeze when one looks tampered with |
 | [Satellite hardware](docs/SATELLITE_HARDWARE.md) | Parts list and step-by-step Pi satellite build |
 | [Pi provisioning checklist](satellite/PROVISIONING.md) | Every command and gotcha for building a Pi satellite by hand |
@@ -620,7 +625,7 @@ Want to write one? Start at the
 | [Android app privacy policy](docs/PRIVACY_POLICY.md) | What the app keeps on the phone, what it sends and to whom (nothing reaches Coders Farm unless you email it) |
 | [Running without an NVIDIA GPU](docs/CPU_HOST.md) | CPU-host settings, model sizing, what gets slower and what doesn't |
 | [Running the server on Linux](docs/LINUX_HOST.md) | Linux install (one script or by hand), what differs from the Windows-first docs, systemd units, updates from the dashboard |
-| [The Windows installer (test build)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
+| [The Windows installer (preview)](docs/WINDOWS_HOST.md) | `DomovoiSetup.exe`: the Linux server in a private WSL2 distro, every change it makes on the PC and how uninstall undoes it |
 | [UML diagrams](docs/uml/) | Sequence and component diagrams |
 | [Release notes](docs/RELEASE_NOTES.md) | What changed, newest first, and what an operator has to do after an update |
 
@@ -659,5 +664,10 @@ The Android app's on-phone assistant runs Gemma 4 E2B (Apache-2.0) on
 LiteRT-LM (Apache-2.0), and listens with Moonshine and Silero VAD (both
 MIT) through sherpa-onnx (Apache-2.0). Room mode wakes with openWakeWord's
 models on ONNX Runtime (MIT).
+
+The question-answering model a server installs, `llama3.2:3b`, is under the
+Llama 3.2 Community License. Every model, voice and dataset Domovoi
+downloads, with its licence and what that means for a household and for
+anyone passing it on: [docs/LICENSES.md](docs/LICENSES.md).
 
 *May your stove stay warm and your wake word never misfire.* 🐈
