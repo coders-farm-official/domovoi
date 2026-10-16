@@ -1,33 +1,33 @@
 {
-  "about": "Signed by domovoi/server_identity.py with a throwaway key (functional-testing/room-mode/make_identity_fixture.py); public data only.",
-  "fingerprint": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
+  "about": "Signed by domovoi/server_identity.py with a throwaway key (scripts/dev/make_identity_fixture.py); public data only.",
+  "fingerprint": "SHA256:khGalZFciHk+GF1zzMJC5ZsLdoJlU8Avxg9Iu6FnceQ",
   "challenge": "3f9a1c0d5e7b2a4c6e8f0a1b2c3d4e5f",
-  "addr": "192.168.0.240:6370",
+  "addr": "192.168.1.30:6370",
   "health": {
     "status": "ok",
     "identity": {
       "algorithm": "ed25519",
-      "fingerprint": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
-      "public_key": "qvDjqrqlUyNof5tJphegfPIIF1Uzwu62kyRo9GMxDwc=",
+      "fingerprint": "SHA256:khGalZFciHk+GF1zzMJC5ZsLdoJlU8Avxg9Iu6FnceQ",
+      "public_key": "XDCz8peBZ7YxUUNZWqqz4Dpp7WaZjaNa2YLhjm7HZus=",
       "challenge": "3f9a1c0d5e7b2a4c6e8f0a1b2c3d4e5f",
-      "addr": "192.168.0.240:6370",
-      "signature": "Obe4oewhp8KdEc6rEIrZqm/Hkt2HBAyGdFk23CQCPCeoUHRZPQUsrfaisseAuDEPvrBltNYOK1m45jM+D7umAA=="
+      "addr": "192.168.1.30:6370",
+      "signature": "68wwNOeNhjBgAxArmnaVEAady2ckVbt4EkswbRzwm3Gn3pnaoRwAsNfZn1rznqNDS9eXrofYzYKfgoE95gvNDQ=="
     }
   },
   "health_unbound": {
     "status": "ok",
     "identity": {
       "algorithm": "ed25519",
-      "fingerprint": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
-      "public_key": "qvDjqrqlUyNof5tJphegfPIIF1Uzwu62kyRo9GMxDwc=",
+      "fingerprint": "SHA256:khGalZFciHk+GF1zzMJC5ZsLdoJlU8Avxg9Iu6FnceQ",
+      "public_key": "XDCz8peBZ7YxUUNZWqqz4Dpp7WaZjaNa2YLhjm7HZus=",
       "challenge": "3f9a1c0d5e7b2a4c6e8f0a1b2c3d4e5f",
-      "signature": "JcIiGzqukHh88CDlnHw4kws2BOhOb5ZsJrwxfkCijRZKOXk0Vj9bHr1DLrpjcz4fnSxWuqtri/QvgG1hL8eMCQ=="
+      "signature": "JqvfmeEcRbLhNokiv3hZy/zh2m0FOIyAFLybCqGSC0Ycp16jAdwFCzc7GpteiD4n43RzH0He92gQg5j64fS6AA=="
     }
   },
   "envelope": {
     "algorithm": "ed25519",
-    "fingerprint": "SHA256:LWkJXcK5ihhSQJiBnv9OddRsfntOVYlM6YKDAes6f2A",
-    "public_key": "qvDjqrqlUyNof5tJphegfPIIF1Uzwu62kyRo9GMxDwc=",
+    "fingerprint": "SHA256:khGalZFciHk+GF1zzMJC5ZsLdoJlU8Avxg9Iu6FnceQ",
+    "public_key": "XDCz8peBZ7YxUUNZWqqz4Dpp7WaZjaNa2YLhjm7HZus=",
     "channel": "satellite-wake-base",
     "manifest": {
       "melspectrogram.onnx": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
@@ -35,10 +35,10 @@
       "a/b\\c\n.mp3": "1111111111111111111111111111111111111111111111111111111111111111",
       "😀.mp3": "2222222222222222222222222222222222222222222222222222222222222222"
     },
-    "issued_at": 1791931459,
-    "serial": 1791931459,
-    "signature": "DoyS+ZvRMoH76i/XbsAF7mQJ/nZalVtLIy51d1rTccGhq7n9qm148w/u1QuRx7qH/9Y6PNSlmkxtbsZjWgEHBQ==",
-    "signature_v2": "qhUSd9b6UY62z+q5nUlZfbW3r8UxcLuTcwV5A0Bbn9rn4v4sBjaO0vYFKC6JfyE8EaxWPpkBGqx7P9KiZBIKCQ=="
+    "issued_at": 1792117922,
+    "serial": 1792117922,
+    "signature": "EGfoCl+YCaqMFdy+7dRcZlrkcPHAVkhkYYCj2qg2/8LiecumASvkY1YwaOVGdt5cdpbZtIQmDaidzJCQw7LbCQ==",
+    "signature_v2": "u3qNiGca+jAXuu07Qg88FbKz/3qDQZleEa2ewX8SLnX56hH7YH3jczMgTwDHyznMvoAItE45SWsnSbfVLA9/CQ=="
   },
   "manifest_digest": "1bed89a0b8f80e9b66dfcd8f07e02b1a53db687257986a3476a956a17781a654",
   "canonical_manifest": "{\"a/b\\\\c\\n.mp3\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"greetings/greet_été \\\"quoted\\\".mp3\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"melspectrogram.onnx\":\"ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f\",\"😀.mp3\":\"2222222222222222222222222222222222222222222222222222222222222222\"}"
