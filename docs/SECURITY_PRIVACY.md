@@ -1142,6 +1142,48 @@ said plainly:
   packages and the training data unpinned):
   [Wake-word training: the GPU runtime, the trainer image and what it downloads](#wake-word-training-the-gpu-runtime-the-trainer-image-and-what-it-downloads).
 
+### Signed updates: what they bound
+
+A Linux server (and the Windows install's distro) runs Domovoi out of a git
+checkout that belongs to the service user, and its update unit runs as
+root. Root takes nothing from that checkout but **the verified copy of a
+commit** ([LINUX_HOST.md, The update verifier](LINUX_HOST.md#the-update-verifier)):
+before every update or Restart, a root-owned verifier fetches HEAD into a
+mirror only root can write (every object checked; the checkout is read by
+`git upload-pack` running as the service user, never by root), verifies
+its SSH signature there while signed updates are enforced, and writes the
+commit's `scripts/linux` and `docs/LINUX_HOST.md` into
+`/run/domovoi-update/<sha>`, plain files only. The update script, its
+helpers, the units, the drop-ins and the verifier itself all come from
+that copy; so do `provision.sh`'s reads on every run. Root's git never
+follows a replacement object or a graft. Said plainly:
+
+- **With signed updates enforced** (`/etc/domovoi/allowed_signers`,
+  [LINUX_HOST.md, Signed updates](LINUX_HOST.md#signed-updates)), root runs
+  only commits signed by a listed key: neither an upstream compromise (a
+  stolen token, a merged pull request) nor code running as the service user
+  (the core, the dashboard, a plugin) can choose what the update runs as
+  root. An edited, hidden (`skip-worktree`) or symlinked file in the
+  working tree changes nothing; an unsigned commit is refused before any of
+  it runs.
+- **Without them** (the default until signing is switched on), the copy is
+  simply the commit HEAD names. Edits that aren't committed still change
+  nothing root runs, but anyone who can write the checkout (code running as
+  the service user included) can commit and move HEAD, and that commit
+  runs as root at the next Restart. Turning signing on is what closes it.
+- **What signing doesn't bound: the service user's own processes.** Code
+  running as the service user can still change the core, the dashboard and
+  the plugins that account runs (their code is in its checkout and its
+  home), and through them everything those can do. The verifier keeps that
+  code from root through the update, not from them.
+- **The `docker` group is root-equivalent.** The service user is in it
+  (Postgres, the music players and the helpers run in containers it
+  starts), so code running as that user can reach root through Docker
+  without any update. That is a property of Docker, not of the update
+  path, and the reason the update unit's own root steps were never the
+  only way in; it is why the service user must not be a login anyone
+  shares.
+
 ## What the admin password actually gates
 
 Verified against `domovoi/admin_auth.py`, `domovoi/auth.py`, and the route
