@@ -92,6 +92,9 @@ We build Domovoi in public. Here's where it stands.
   admin can restart a core that has stopped answering from the dashboard;
   the Satellites page then says the core is down instead of showing every
   room offline ([the loop watchdog](docs/LINUX_HOST.md#the-loop-watchdog)).
+  Its journal never holds the household token, and what people say shows
+  up there only as a word count unless you turn on debug logging
+  ([data at rest](docs/SECURITY_PRIVACY.md#data-at-rest)).
 - **Raspberry Pi satellites** put a voice in every room, with wake word,
   barge-in, and intercom and drop-in between rooms. The dashboard prepares
   a Pi's SD card, and you finish its setup from your phone over the Pi's
@@ -181,9 +184,9 @@ datacenter. Domovoi gives you that on your own Wi-Fi:
 - **Out of the box:** wake-word voice control in any room with a satellite —
   music, timers, reminders, questions, news, intercom ("tell the kitchen
   dinner's ready"), drop-in, voice notes. Domovoi learns who's speaking (say
-  "I'm Sarah" once) and can forget you on request. A web dashboard on your
-  LAN manages all of it, and an Android app brings the dashboard, a music
-  player and chat to your phone.
+  "I'm Sarah" once) and can forget you on request, when you ask in your
+  own voice. A web dashboard on your LAN manages all of it, and an Android
+  app brings the dashboard, a music player and chat to your phone.
 - **Hardware you need:** one always-on PC as the server, Linux or Windows.
   An NVIDIA GPU makes speech recognition fastest; without one it runs on the
   CPU ([Running without an NVIDIA GPU](docs/CPU_HOST.md)). Then, per room,
