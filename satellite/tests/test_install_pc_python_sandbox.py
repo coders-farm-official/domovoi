@@ -98,6 +98,7 @@ def _clean() -> None:
 def _stray_stages() -> list[str]:
     """Staging folders left behind: in /tmp, or in an account's home."""
     found = [p for p in Path("/tmp").glob("tmp.*") if (p / "x").exists() or any(p.glob("cpython-*"))]
+    found += list(Path("/tmp").glob("domovoi-python.*"))
     for home in (Path("/root"), *Path("/home").glob("*")):
         found += list(home.glob(".domovoi-python.*"))
     return [str(p) for p in found]
@@ -348,7 +349,7 @@ def test_a_library_planted_in_tmp_never_runs_for_an_account_whose_home_others_ca
     out = r.stdout + r.stderr
     assert "satellite's own Python" in r.stdout and f"proved it is {FP}" in r.stdout, out[-2000:]
     assert _markers() == [], ("the planted sitecustomize ran", _markers(), out[-1500:])
-    assert not list(Path("/tmp").glob("tmp.*/x")), "the staged copy is gone"
+    assert not list(Path("/tmp").glob("domovoi-python.*")), "the staged copy is gone"
 
 
 def test_a_planted_library_with_no_stdlib_does_not_break_the_install(tree, core, plant):

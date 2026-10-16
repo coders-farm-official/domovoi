@@ -640,6 +640,28 @@ private_dir() {  # private_dir DIR -> 0 when only root and this account can chan
   done
 }
 
+make_stage() {  # -> PYSTAGE: a new 0700 folder of this account's, reached through no link
+  # In the account's own home (root's for root) as the account database
+  # names it but by its resolved path, when no other account can change
+  # that or anything above it; else in /tmp, where the landmark is what
+  # keeps the search inside the tree. Checked again once it exists, and
+  # used only by that resolved path: a link in the home's path (one a
+  # folder others can write holds, say) can't be swapped under it
+  # (security review of wf/sat-pc-python, round 2).
+  local home real=""
+  home=$(/usr/bin/getent passwd "$(/usr/bin/id -un)" | /usr/bin/cut -d: -f6)
+  [ -z "$home" ] || real=$(cd -P -- "$home" 2>/dev/null && pwd -P) || real=""
+  if [ -n "$real" ] && private_dir "$real"; then
+    PYSTAGE=$(/usr/bin/mktemp -d "$real/.domovoi-python.XXXXXXXX")
+  else
+    PYSTAGE=$(/usr/bin/mktemp -d /tmp/domovoi-python.XXXXXXXX)
+  fi
+  [ "$(cd -P -- "$PYSTAGE" 2>/dev/null && pwd -P)" = "$PYSTAGE" ] \
+    && [ "$(/usr/bin/stat -c '%u %a' "$PYSTAGE")" = "$(/usr/bin/id -u) 700" ] \
+    && { [ "${PYSTAGE#/tmp/}" != "$PYSTAGE" ] || private_dir "$PYSTAGE"; } \
+    || die "the folder for the satellite's Python ($PYSTAGE) is not this account's alone, so nothing was installed" 1
+}
+
 landmark_zip() {  # landmark_zip -> an empty zip (its end record alone) on stdout
   printf 'PK\005\006'
   /usr/bin/head -c 18 /dev/zero
@@ -648,16 +670,7 @@ landmark_zip() {  # landmark_zip -> an empty zip (its end record alone) on stdou
 stage_pinned_python() {  # step 0: the pinned file, checked, unpacked in a private folder -> PY
   local f core home zip
   [ -x /usr/bin/curl ] || [ -x /usr/bin/wget ] || die "curl or wget is needed to download the satellite's Python" 2
-  # The account's own home (root's for root), from the account database,
-  # when no other account can change it or anything above it; else a new
-  # folder under /tmp (0700), where the landmark below is what keeps the
-  # search inside the tree.
-  home=$(/usr/bin/getent passwd "$(/usr/bin/id -un)" | /usr/bin/cut -d: -f6)
-  if [ -n "$home" ] && private_dir "$home"; then
-    PYSTAGE=$(/usr/bin/mktemp -d "$home/.domovoi-python.XXXXXXXX")
-  else
-    PYSTAGE=$(/usr/bin/mktemp -d)
-  fi
+  make_stage
   f=$PYSTAGE/$PIN_FILE
   say "This computer gets the satellite's own Python $PIN_VERSION ($((PIN_SIZE / 1000000)) MB, pinned by its SHA-256)..."
   core=$(payload_core)

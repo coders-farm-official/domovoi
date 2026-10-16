@@ -361,7 +361,101 @@ def test_the_staged_copy_gets_the_landmark_and_loses_dbm_before_it_runs():
     assert unpack < dbm < landmark < first_run < body.index('python_stays_home "$PYSTAGE/x/python"')
     assert 'zip=$PYSTAGE/x/python/lib/$(landmark_name)' in body
     # A private folder when the account has one, all the way up.
-    assert 'private_dir "$home"' in body and '/usr/bin/mktemp -d "$home/.domovoi-python.XXXXXXXX"' in body
+    assert "\n  make_stage\n" in body and "mktemp" not in body
+    stage = _function("make_stage")
+    # Created and used by the home's resolved path only, and checked again once it exists.
+    assert 'real=$(cd -P -- "$home" 2>/dev/null && pwd -P)' in stage and 'private_dir "$real"' in stage
+    assert '/usr/bin/mktemp -d "$real/.domovoi-python.XXXXXXXX"' in stage and '"$home/' not in stage
+    assert '[ "$(cd -P -- "$PYSTAGE" 2>/dev/null && pwd -P)" = "$PYSTAGE" ]' in stage
+
+
+def _fake_python(tmp_path: Path, prefix: str, os_file: str) -> Path:
+    py = tmp_path / "fakepy"
+    py.write_bytes(f"#!/bin/sh\nprintf '%s\\n%s\\n' {_sh_quote(prefix)} {_sh_quote(os_file)}\n".encode("ascii"))
+    py.chmod(0o755)
+    return py
+
+
+@pytest.mark.parametrize("prefix,os_file,ok", [
+    ("{tree}", "{tree}/lib/python3.14/os.py", True),
+    ("/tmp", "/tmp/lib/python3.14/os.py", False),                 # a library planted above the tree
+    ("{tree}", "/tmp/lib/python3.14/os.py", False),               # its prefix, someone else's library
+    ("{tree}/..", "{tree}/../lib/python3.14/os.py", False),
+    ("{tree}x", "{tree}x/lib/python3.14/os.py", False),           # a sibling folder is not the tree
+    ("{real}", "{real}/lib/python3.14/os.py", True),              # the tree by its resolved path
+])
+def test_python_stays_home_refuses_a_library_from_elsewhere(tmp_path, prefix, os_file, ok):
+    """The check that proves the landmark held (review mutant N3: forced to
+    succeed, it would let a planted library through unnoticed)."""
+    real = tmp_path / "real" / "python"
+    real.mkdir(parents=True)
+    tree = real
+    if sys.platform != "win32":
+        (tmp_path / "link").symlink_to(tmp_path / "real")
+        tree = tmp_path / "link" / "python"
+    elif "{real}" in prefix:
+        pytest.skip("no symlinks here")
+    t, r = _posix(tree), _posix(real)
+    py = _fake_python(tmp_path, prefix.format(tree=t, real=r), os_file.format(tree=t, real=r))
+    got = run(_function("python_stays_home") + f"\nPY={_sh_quote(_posix(py))}\npython_stays_home {_sh_quote(t)}; echo rc=$?")
+    assert got.stdout.strip() == ("rc=0" if ok else "rc=1"), (got.stdout, got.stderr)
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() != 0, reason="root (the sandbox) only: makes accounts")
+def test_the_stage_is_made_by_the_resolved_home_and_a_swapped_link_does_not_move_it(tmp_path):
+    """The review's home-link-check.sh: kid's home is reached through a
+    link in a folder anyone may write to (not sticky). The stage goes under
+    the resolved home and stays there when the link is swapped; a home
+    that is itself in such a folder falls back to /tmp."""
+    import pwd as _pwd
+
+    # Somewhere every account can reach (pytest's own folders are root's, 0700).
+    base = Path("/srv/domovoi-stage-test")
+    shutil.rmtree(base, ignore_errors=True)
+    base.mkdir(parents=True)
+    os.chmod(base, 0o755)
+    shared = base / "shared"
+    shared.mkdir()
+    os.chmod(shared, 0o777)
+    subprocess.run(["useradd", "-m", "-s", "/bin/bash", "kidlink"], check=True)
+    try:
+        real_home = Path(_pwd.getpwnam("kidlink").pw_dir)
+        (shared / "kidlink").symlink_to(real_home)
+        subprocess.run(["usermod", "-d", str(shared / "kidlink"), "kidlink"], check=True)
+        script = "\n".join([_function("private_dir"), _function("make_stage"), "make_stage", 'echo "stage=$PYSTAGE"',
+                            "/usr/bin/sleep 2", '[ -d "$PYSTAGE" ] && echo "still=$(cd -P "$PYSTAGE" && pwd -P)"',
+                            '/usr/bin/rm -rf "$PYSTAGE"'])
+        import time as _time
+
+        evil = base / "evil"
+        evil.mkdir()
+        os.chmod(evil, 0o777)
+        proc = subprocess.Popen(["runuser", "-u", "kidlink", "--", BASH, "-s"], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd="/")
+        proc.stdin.write('die() { echo "die: $*" >&2; exit 1; }\n' + script + "\n")
+        proc.stdin.close()
+        # While it holds its stage, another account swaps the link for one
+        # into a folder of its own.
+        _time.sleep(1)
+        (shared / "kidlink").unlink()
+        (shared / "kidlink").symlink_to(evil)
+        proc.wait(timeout=60)
+        out, err = proc.stdout.read(), proc.stderr.read()
+        stage = next((ln.split("=", 1)[1] for ln in out.splitlines() if ln.startswith("stage=")), "")
+        assert stage.startswith(str(real_home) + "/.domovoi-python."), (out, err)
+        assert f"still={stage}" in out and not list(evil.iterdir()), (out, err)
+        # A home that is itself in a folder others can write: /tmp, 0700.
+        subprocess.run(["usermod", "-d", str(shared / "realhome"), "kidlink"], check=True)
+        (shared / "realhome").mkdir()
+        shutil.chown(shared / "realhome", "kidlink")
+        got = subprocess.run(["runuser", "-u", "kidlink", "--", BASH, "-s"], input=(
+            'die() { echo "die: $*" >&2; exit 1; }\n' + _function("private_dir") + "\n" + _function("make_stage")
+            + '\nmake_stage; echo "stage=$PYSTAGE"; /usr/bin/stat -c %a "$PYSTAGE"; /usr/bin/rm -rf "$PYSTAGE"'),
+            capture_output=True, text=True, cwd="/", timeout=60)
+        assert "stage=/tmp/domovoi-python." in got.stdout and "\n700\n" in got.stdout + "\n", (got.stdout, got.stderr)
+    finally:
+        subprocess.run(["userdel", "-r", "kidlink"], capture_output=True)
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_the_landmark_is_an_empty_zip_named_for_the_pin(tmp_path):
@@ -403,9 +497,9 @@ def test_a_staged_python_that_does_not_run_as_pinned_stops_the_install(tmp_path)
     fake = tmp_path / "fake.tar.gz"
     fake.write_bytes(buf.getvalue())
     script = "\n".join([
-        *(_function(f) for f in ("pinned_ok", "private_dir", "landmark_zip", "landmark_name", "python_stays_home",
-                                 "ipv4_ok", "ipv6_first", "home_host", "core_normal", "payload_core",
-                                 "stage_pinned_python")),
+        *(_function(f) for f in ("pinned_ok", "private_dir", "make_stage", "landmark_zip", "landmark_name",
+                                 "python_stays_home", "ipv4_ok", "ipv6_first", "home_host", "core_normal",
+                                 "payload_core", "stage_pinned_python")),
         f'fetch_to() {{ /usr/bin/cp {fake} "$2"; }}',
         'SUDO_CHECK="" PAYLOAD=""',
         f"PIN_VERSION=3.14.8 PIN_FILE=fake.tar.gz PIN_SIZE={len(buf.getvalue())} "
@@ -587,3 +681,28 @@ def test_the_processor_is_checked_before_anything_is_downloaded():
     assert check < text.index('need_sudo\n$SUDO /usr/bin/install -d -o root -g root -m 0755 "$ROOT_LIB"')
     for flag in ("ssse3", "sse4_2", "popcnt", "cx16"):
         assert flag in _function("cpu_ok")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes and links")
+@pytest.mark.parametrize("made", ["link", "open", "fine"])
+def test_the_stage_is_checked_again_once_it_exists(tmp_path, made):
+    """make_stage's second look (review round 2): a folder that turns out to
+    be reached through a link, or not 0700, is refused before anything goes
+    in it. mktemp stands in for a swap between the making and the using."""
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    os.chmod(real, 0o700)
+    if made == "link":
+        (tmp_path / "link").symlink_to(real)
+        given = tmp_path / "link"
+    elif made == "open":
+        os.chmod(real, 0o755)
+        given = real
+    else:
+        given = real
+    stub = f'/usr/bin/mktemp() {{ echo {_sh_quote(str(given))}; }}\n/usr/bin/getent() {{ :; }}\n'
+    got = run(stub + _function("private_dir") + "\n" + _function("make_stage") + '\nmake_stage; echo "ok=$PYSTAGE"')
+    if made == "fine":
+        assert got.returncode == 0 and f"ok={real}" in got.stdout, (got.stdout, got.stderr)
+    else:
+        assert got.returncode == 1 and "is not this account's alone" in got.stderr, (got.stdout, got.stderr)
