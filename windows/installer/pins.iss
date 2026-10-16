@@ -33,15 +33,16 @@
 ;   this build's tree has it is packed inside DomovoiSetup.exe (nothing to
 ;   download), for a test build whose provision.sh is ahead of the pinned
 ;   commit. Builds pinned to fb62fa4 did this, for the --stop-before and
-;   start diagnostics fb62fa4's script lacked.
-; * not defined: downloaded from the pinned commit (ProvisionUrl). This
-;   build: 4d6b414's script, which has both (137,882 bytes, LF; GitHub raw
-;   served exactly these bytes on 2026-10-15).
+;   start diagnostics fb62fa4's script lacked. This build: 4d6b414's
+;   script plus the whisper step's PyAV-free import (wf/provision-whisper-
+;   nodeps; 4d6b414's own stops there on a fresh venv), 138,176 bytes, LF.
+;   Take it out once the commit pinned has that fix.
+; * not defined: downloaded from the pinned commit (ProvisionUrl).
 ; Either way ProvisionSha256 is checked by the helper and by DomovoiHost.
-; #define ProvisionBundled
+#define ProvisionBundled
 #define ProvisionSource "..\..\scripts\linux\provision.sh"
 #define ProvisionUrl "https://raw.githubusercontent.com/coders-farm-official/domovoi/" + DomovoiCommit + "/scripts/linux/provision.sh"
-#define ProvisionSha256 "b7b3e3188ded2474fb228ef62c0be3ff1890a1c4b840fe3c13ae54d01ca9679c"
+#define ProvisionSha256 "cb015f68ed1f2cadb6075088d952ab5315bcec9717c8a750942d9f57eee9c8fc"
 
 ; Ubuntu 26.04.1's official WSL image, 418,495,746 bytes ([verified]
 ; SHA256SUMS 2026-09-24, PLAN 4.13; matched again 2026-10-11).

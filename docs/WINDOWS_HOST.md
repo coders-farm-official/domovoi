@@ -101,7 +101,9 @@ that:
    (`windows/installer/pins.iss`). A build whose `provision.sh` is ahead of
    the pinned commit (`ProvisionBundled` in `pins.iss`) carries the script
    inside `DomovoiSetup.exe` instead; it is checked against its pin the
-   same way, and it still installs the pinned commit's code.
+   same way, and it still installs the pinned commit's code. The
+   v1.0.0-rc1 build does: `4d6b414`'s script stops at its Whisper download
+   on a new install, so Setup carries it with that fixed.
 6. **Turns on Virtual Machine Platform** and installs WSL 2.7.14 only if
    they are missing. If Windows needs a restart, Setup asks, and starts
    again by itself after you sign in.
