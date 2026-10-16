@@ -856,3 +856,44 @@ def test_the_started_satellite_gets_test_hooks_only_when_asked(monkeypatch, tmp_
     assert "--test-audio-hooks" not in seen[0] and seen[1][-1] == "--test-audio-hooks"
     text = (SCRIPTS / "install-windows.ps1").read_text(encoding="ascii")
     assert "if ($TestAudioHooks) { $argv += '--test-audio-hooks' }" in text
+
+
+# ─── the processor: x86-64-v2 for numpy 2.4+ (2026-10-15) ───────────────────
+
+@windows_only
+@pytest.mark.parametrize("missing,name", [("38", "SSE4.2"), ("36", "SSSE3"), ("14", "CMPXCHG16B")])
+def test_an_old_processor_is_refused_before_anything_is_downloaded(tmp_path, served, missing, name):
+    """numpy 2.4+ needs x86-64-v2; a Core 2 would install everything and
+    then fail at the first import. -TestCpuMissing (tests only) makes this
+    PC's processor lack one feature as IsProcessorFeaturePresent reports it."""
+    bundle = _bundle_copy(tmp_path, served)
+    payload = enrolment.build("http://192.168.0.117:6370", FP, "Den")
+    r = _ps(["-File", str(bundle / "satellite" / "scripts" / "install-windows.ps1"), payload,
+             "-InstallRoot", str(tmp_path / "S"), "-TestCorePcSignals", _signals(tmp_path, NOTHING),
+             "-TestCpuMissing", missing], timeout=90)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "this computer's processor is too old for Domovoi (needs roughly 2009 or newer" in r.stderr
+    assert name in r.stderr and "nothing was installed" in r.stderr
+    assert not (tmp_path / "S").exists() and not (bundle / "stage").exists() and served.requests == []
+
+
+@windows_only
+def test_this_pc_s_processor_passes_and_an_old_windows_that_cannot_say_is_not_refused(tmp_path):
+    """Windows before 10 2004 (build 19041) reports no SSSE3 or SSE4.2:
+    then only CMPXCHG16B is checked, and nothing is refused on a guess."""
+    for extra in ([], ["-TestCpuMissing", "38", "-TestWindowsBuild", "18363"]):
+        r = _ps(["-File", str(SCRIPTS / "install-windows.ps1"), "x", "-InstallRoot", str(tmp_path / "S"),
+                 "-TestCorePcSignals", _signals(tmp_path, NOTHING), *extra])
+        assert r.returncode == 2 and "processor" not in r.stderr, r.stdout + r.stderr
+        assert "not a usable enrolment code" in r.stderr or "give the enrolment code" in r.stderr, r.stderr
+
+
+def test_the_processor_check_comes_first_and_asks_windows_itself():
+    text = (SCRIPTS / "install-windows.ps1").read_text(encoding="ascii")
+    check = text.index("$cpuMissing = @(Get-MissingCpuFeatures)")
+    assert text.index("Is64BitOperatingSystem") < check < text.index("$principal = New-Object")
+    assert check < text.index("function Get-CorePcReason") and check < text.index("Getting Python")
+    body = text[text.index("function Get-MissingCpuFeatures"):check]
+    assert "IsProcessorFeaturePresent" in body and "'14' = 'CMPXCHG16B'" in body
+    assert "if ($build -ge 19041) { $features['36'] = 'SSSE3'; $features['38'] = 'SSE4.2' }" in body
+    assert "} catch {\n        return @()\n    }" in body          # Windows can't say: nothing refused

@@ -31,7 +31,12 @@ new install command.
   its install command is made and run again.
 * Refused, with the reason and the fix: a Debian upgraded from 10 without
   merged /usr (`sudo apt install usrmerge`), and a C library older than
-  glibc 2.28. **Debian 11's support ended in August 2026**; it installs,
+  glibc 2.28.
+* **A processor from before about 2009 is refused up front, on Linux and
+  Windows** ("this computer's processor is too old for Domovoi"): the
+  satellite's numpy (2.4 and later) needs x86-64-v2 (SSSE3, SSE4.2,
+  POPCNT, CMPXCHG16B), so a Core 2 used to install everything and then
+  fail at its first import. 64-bit ARM is not affected. **Debian 11's support ended in August 2026**; it installs,
   but prefer Debian 12.
 
 ## 2026-10-14 — A reload no longer signs the admin out

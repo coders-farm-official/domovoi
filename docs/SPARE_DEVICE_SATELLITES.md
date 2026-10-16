@@ -57,7 +57,10 @@ Mint 21**, with a desktop (GNOME, KDE, Xfce, …) or without one. **Fedora**,
 names (it was tried in their containers, not on their laptops). Other
 Debian-family systems (Pop!_OS, elementary, …) will probably work.
 x86-64 and 64-bit ARM, with a GNU C library from 2018 or later (glibc 2.28:
-Debian 10, Ubuntu 18.10, Fedora 29 and newer). An older Debian or Ubuntu
+Debian 10, Ubuntu 18.10, Fedora 29 and newer). An Intel or AMD processor
+from about 2009 or later (x86-64-v2: Intel Core i3/i5/i7 and later, AMD
+from 2011; not a Core 2 or an Athlon 64): the satellite's maths library
+needs it, and the installer says so before it downloads anything. An older Debian or Ubuntu
 needs nothing extra: see [Older Linux, and Fedora, openSUSE,
 Arch](#older-linux-and-fedora-opensuse-arch) below.
 
@@ -362,6 +365,7 @@ music player, which the container guard would otherwise keep expecting.
 | "not on the home network" | The address in the code is public or loopback. In the dashboard, tick **a different server address** and give the one your devices reach. |
 | `sha256sum: WARNING: 1 computed checksum did NOT match` | Domovoi was updated since the command was made (or the download was tampered with). Make a new command. |
 | "neither the Domovoi server nor GitHub gave the pinned Python" | This computer needs the satellite's own Python and couldn't get the exact file: your server hasn't fetched it and the laptop can't reach GitHub (or something on the way changed it). On the dashboard's add-a-spare-device card press **get the Linux Python**, or connect the laptop to the internet, and run the command again. |
+| "this computer's processor is too old for Domovoi" | The processor is from before about 2009 (a Core 2, an Athlon 64, a first Atom): the satellite's maths library (numpy) can't run on it. Nothing was installed. A Raspberry Pi satellite or a newer spare computer will do. |
 | "keeps its programs in /bin and /sbin" | A Debian upgraded from version 10 or older without merged /usr. `sudo apt install usrmerge`, then the command again. |
 | "installs its few packages with apt … dnf … zypper … pacman" | A Linux the installer doesn't know. Install PortAudio, mpg123, the ALSA utilities and (with a desktop) `pactl` with its own package manager, then run the command again with `--skip-packages` added at the end. |
 | Tray grey: "refused … paired to another device" | That room already has a satellite. Pick another name, or retire the old room in the dashboard first (or **Reset pairing** in its drawer if this device replaces it). |
@@ -515,7 +519,8 @@ and what the phone holds in [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#a-room-pho
 
 ## Windows laptops and PCs
 
-A Windows 10 or 11 laptop or PC (64-bit, Intel or AMD) can be a room for
+A Windows 10 or 11 laptop or PC (64-bit, Intel or AMD, a processor from
+about 2009 or later, as for Linux) can be a room for
 **the account that is signed in on it**: the satellite runs in that
 person's session, because that is where Windows lets a program use the
 microphone. Nothing is installed for other accounts, nothing needs an
