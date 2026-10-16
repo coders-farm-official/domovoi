@@ -208,6 +208,8 @@ There is no integration. Domovoi doesn't control lights, locks or thermostats, a
 
 Yes — voice profiles. Say "I'm Sarah" and confirm, and Domovoi enrolls your voice locally (a voice embedding, stored in your Postgres — no cloud). After that it recognizes who's speaking and personalizes: per-person memories ("remember that I…"), per-person news topics, and a "who am I?" you can ask any time. You can introduce someone else ("this is my friend Alex"), and "forget me" deletes a person's profile and voice data outright. Matching thresholds are tunable per household if siblings' voices collide.
 
+If a room doesn't recognize you yet, say "I'm Sarah" there too: Domovoi asks "I already know someone called Sarah. Is that you?", and a yes teaches it your voice in that room. A no adds you as a new Sarah; with two Sarahs Domovoi won't guess which one is speaking when the name is said, so give one of you a different name on the People page (an admin can rename anyone there), or use a full name ("I'm Sarah Lee") from the start.
+
 ## Who added that song, and can I stop someone adding more?
 
 Every room has one queue — MPD's, the thing its speaker actually plays from —

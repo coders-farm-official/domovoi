@@ -402,8 +402,40 @@ class ConversationLogRepository:
 
 
 class PeopleRepository:
+    #: The ``pg_advisory_xact_lock`` key every writer of a person's NAME
+    #: takes first (voice enrolment, the People page's rename): the
+    #: one-name-one-person rule is checked and the row written under it, so
+    #: two enrolments of one new name at the same moment can't both see
+    #: "nobody" and make two. Not a unique index: an install may already
+    #: hold two people with one name (a "no" to "is that you?", from before
+    #: the rule, or a parent
+    #: and child), and they stay until an admin renames or removes one.
+    NAME_LOCK_KEY = 0x646F6D6F6E616D65  # "domoname"
+
     def __init__(self, session: AsyncSession) -> None:
         self.s = session
+
+    async def lock_names(self) -> None:
+        """Hold :data:`NAME_LOCK_KEY` until this transaction ends."""
+        await self.s.execute(
+            text("SELECT pg_advisory_xact_lock(CAST(:k AS BIGINT))"),
+            {"k": self.NAME_LOCK_KEY},
+        )
+
+    async def rename(self, person_id: int, name: str) -> str:
+        """Call ``person_id`` ``name``, unless someone else is already
+        called that (case and surrounding space aside): ``"renamed"``,
+        ``"taken"`` or ``"missing"``. Under :meth:`lock_names`."""
+        await self.lock_names()
+        if await self.get(person_id) is None:
+            return "missing"
+        if any(pid != person_id for pid, _ in await self.find_by_name(name)):
+            return "taken"
+        await self.s.execute(
+            text("UPDATE people SET name = :name WHERE id = :id"),
+            {"id": person_id, "name": name},
+        )
+        return "renamed"
 
     async def create(self, *, name: str, notes: str | None = None) -> int:
         row = await self.s.execute(

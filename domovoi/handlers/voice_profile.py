@@ -36,9 +36,33 @@ From the app's chat mic (:func:`phone_chat_mic`; owner decision
     sample is a phone sample.
 
 Only the chat mic does this. A future "phone as a satellite" mode must
-neither create nor extend phone profiles. (On a satellite, "my name is X"
-for an X who exists still enrols a second X — the known duplicate-name
-gap, left as it is.)
+neither create nor extend phone profiles.
+
+One name, one person — everywhere (2026-10-15; the phone had it first).
+Nothing that enrols makes a second person with a name someone already
+has (case and surrounding space aside, ``PeopleRepository.find_by_name``)
+without asking first:
+
+  * "my name is X" at a satellite, for an X who exists and isn't who the
+    voice was matched as: "I already know someone called X. Is that
+    you?" (:meth:`VoiceProfileHandler._offer_room_voice`), answered by
+    the very next turn. Yes: it is X — this clip joins X's SATELLITE
+    samples, tagged with the room. No: a different X — a new person with
+    the name, from the same clip, at once ("Okay, I've added you as a new
+    X. …", owner decision 2026-10-15); the pair is then namesakes.
+  * the yes to "Did I get that right?" / "was that X?" (enrolment proper)
+    re-checks the name under ``PeopleRepository.lock_names``: someone
+    called X by then gets the sample instead of a twin.
+  * two or more people called X (left over from before this rule, a
+    "no" above, or a parent and child): nobody is guessed, and the answer
+    says what to do —
+    an admin renames or removes one on the People page
+    (:func:`_more_than_one`).
+  * "who am I" names the person the voice matched and, when someone else
+    has that name too, says so; a voice too close to two people says
+    whether they share a name (``Context.voice_candidates``).
+  * the People page's rename (``PATCH /api/people/{id}``) refuses a name
+    someone else has, under the same lock.
 
 Fully local (`requires_network="no"`); embedding + match are CPU-only,
 DB writes go to the same Postgres the rest of the system uses.
@@ -84,10 +108,11 @@ def phone_chat_mic(ctx: Context) -> bool:
     )
 
 
-#: How long "Add this phone's voice to X?" stays answerable, in seconds:
-#: as long as the phone's other follow-up, "did you mean …?"
-#: (handlers/music_choice.py CHOICE_TTL_SEC).
-PHONE_VOICE_ADD_TTL_SEC = 60.0
+#: How long "Add this phone's voice to X?" (and a satellite's "I already
+#: know someone called X. Is that you?") stays answerable, in seconds: as
+#: long as the other follow-up, "did you mean …?" (handlers/music_choice.py
+#: CHOICE_TTL_SEC).
+VOICE_ADD_TTL_SEC = 60.0
 
 #: The keys a parked enrolment question carries about where it was asked.
 _ORIGIN_KEY = "origin"
@@ -121,11 +146,21 @@ def _answered_where_asked(data: dict, ctx: Context) -> bool:
     return not phone_chat_mic(ctx)
 
 
+#: What an admin does about two people with one name, said at the end of
+#: every answer that won't guess between them.
+_SORT_IT_OUT = "An admin can rename or remove one of them on the People page."
+
+
 def _more_than_one(name: str) -> str:
     return (
         f"There's more than one {name}, so I won't guess which one is you. "
-        "An admin can sort them out on the People page."
+        f"{_SORT_IT_OUT} Then tell me your name again."
     )
+
+
+def _same_name(a: str, b: str) -> bool:
+    """``find_by_name``'s notion of one name, for names already read."""
+    return a.strip().lower() == b.strip().lower()
 
 
 # ─── Fast-path regexes ────────────────────────────────────────────────────
@@ -504,11 +539,14 @@ class VoiceProfileHandler(Handler):
     display = HandlerDisplay(label="Voice Profile", tone="info")
     confirmation_kinds = (
         "core.self_intro", "core.third_party_intro_confirm", "core.phone_voice_add",
+        "core.room_voice_add",
     )
-    # "Add this phone's voice to X?" is answered by the very next turn or
-    # not at all (handle_choice_reply): a choice, so the router hands it
-    # every next turn, and drops it when that turn is about something else.
-    choice_kinds = ("core.phone_voice_add",)
+    # "Add this phone's voice to X?" and a satellite's "I already know
+    # someone called X. Is that you?" are answered by the very next turn or
+    # not at all (handle_choice_reply): choices, so the router hands them
+    # every next turn, and drops them when that turn is about something
+    # else.
+    choice_kinds = ("core.phone_voice_add", "core.room_voice_add")
     requires_network = "no"
 
     tool_schema = {
@@ -619,6 +657,7 @@ class VoiceProfileHandler(Handler):
                 )
             return await self._enroll(
                 name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+                room_id=data.get(_ORIGIN_ROOM_KEY),
             )
         if kind == "core.third_party_intro_confirm":
             return await self._handle_third_party_confirm(
@@ -626,6 +665,8 @@ class VoiceProfileHandler(Handler):
             )
         if kind == "core.phone_voice_add":
             return await self._handle_phone_voice_add(data, affirmative, ctx, session)
+        if kind == "core.room_voice_add":
+            return await self._handle_room_voice_add(data, affirmative, ctx, session)
         # Unknown kind — fall through silently rather than spook the
         # user with a "what kind?" answer.
         return Response(
@@ -693,6 +734,7 @@ class VoiceProfileHandler(Handler):
             )
         response = await self._enroll(
             name, embedding, ctx, session, phone=_asked_on_the_phone(data),
+            room_id=data.get(_ORIGIN_ROOM_KEY),
         )
         try:
             await clear_third_party_expectation(session, ctx.session_id)
@@ -835,27 +877,30 @@ class VoiceProfileHandler(Handler):
                 )
 
         embedding = np.frombuffer(ctx.embedding_bytes, dtype=np.float32)
-        if phone_chat_mic(ctx):
-            # From the chat mic, a name someone already has is that person
-            # asking for their phone voice, not a second person.
-            try:
-                known = await PeopleRepository(session).find_by_name(name)
-            except Exception as e:
-                # Never guess "new person" here: that is the duplicate.
-                log.warning("PeopleRepository.find_by_name failed: %s", e)
-                return Response(
-                    text="Something went wrong there — try saying your name again.",
-                    session_id=ctx.session_id,
-                    matched_handler=self.name,
-                )
-            if len(known) > 1:
-                # Two people share the name (a parent and child, say):
-                # never guess whose voice this is.
-                return Response(
-                    text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
-                )
-            if known:
+        # A name someone already has is that person asking to be known by
+        # this voice too — from the chat mic or at a satellite — never a
+        # second person with the name.
+        try:
+            known = await PeopleRepository(session).find_by_name(name)
+        except Exception as e:
+            # Never guess "new person" here: that is the duplicate.
+            log.warning("PeopleRepository.find_by_name failed: %s", e)
+            return Response(
+                text="Something went wrong there — try saying your name again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        if len(known) > 1:
+            # Two people share the name (a parent and child, say, or a
+            # twin enrolled before this rule): never guess whose voice
+            # this is.
+            return Response(
+                text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
+            )
+        if known:
+            if phone_chat_mic(ctx):
                 return await self._offer_phone_voice(known[0], embedding, ctx, session)
+            return await self._offer_room_voice(known[0], embedding, ctx, session)
         try:
             await request_confirmation(
                 session,
@@ -897,7 +942,7 @@ class VoiceProfileHandler(Handler):
     ) -> Response:
         """ "my name is X" from the chat mic, for an X who exists: ask
         before adding this clip to X's phone samples. Only the NEXT press
-        in the thread answers it, within :data:`PHONE_VOICE_ADD_TTL_SEC`
+        in the thread answers it, within :data:`VOICE_ADD_TTL_SEC`
         (it is a choice kind, see :meth:`handle_choice_reply`): a turn
         about anything else drops the question."""
         person_id, name = known
@@ -905,7 +950,7 @@ class VoiceProfileHandler(Handler):
             **_confirmation_payload(name, embedding, "core.phone_voice_add"),
             **_origin(ctx),
             "person_id": int(person_id),
-            "expires_at": time.time() + PHONE_VOICE_ADD_TTL_SEC,
+            "expires_at": time.time() + VOICE_ADD_TTL_SEC,
         }
         try:
             await request_confirmation(
@@ -929,6 +974,187 @@ class VoiceProfileHandler(Handler):
             expect_followup=True,
         )
 
+    # ─── A satellite's voice for someone known ────────────────────────
+    async def _offer_room_voice(
+        self,
+        known: tuple[int, str],
+        embedding: np.ndarray,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """ "my name is X" at a satellite, for an X who exists but isn't
+        who this voice was matched as (a room they were never heard in, a
+        voice that drifted, or a mix-up with somebody else): ask before
+        adding this clip to X's SATELLITE samples for this room — the
+        phone's "Add this phone's voice to X?", in the room's words; a no
+        enrols a second X on purpose (:meth:`_enroll_namesake`), never
+        silently. Answered by the very next turn only, within
+        :data:`VOICE_ADD_TTL_SEC` (a choice kind)."""
+        person_id, name = known
+        payload = {
+            **_confirmation_payload(name, embedding, "core.room_voice_add"),
+            **_origin(ctx),
+            "person_id": int(person_id),
+            "expires_at": time.time() + VOICE_ADD_TTL_SEC,
+        }
+        try:
+            await request_confirmation(
+                session,
+                ctx.session_id,
+                kind="core.room_voice_add",
+                handler=self.name,
+                data=payload,
+            )
+        except Exception as e:
+            log.warning("couldn't park the room voice offer: %s", e)
+            return Response(
+                text="Something went wrong there — try saying your name again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        return Response(
+            text=f"I already know someone called {name}. Is that you?",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+            expect_followup=True,
+        )
+
+    async def _handle_room_voice_add(
+        self,
+        data: dict,
+        affirmative: bool,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """The answer to "I already know someone called X. Is that you?"
+        (owner decision 2026-10-15). Yes: it is that person — the clip from
+        the question's turn goes into X's SATELLITE samples, tagged with the
+        room it was asked in. No: a different X — a new person with the
+        name, enrolled from the same clip right away, and the People page
+        flags the pair (``namesakes``). Only from a satellite: a chat mic
+        never writes a satellite sample."""
+        name = str(data.get("name") or "")
+        if _asked_on_the_phone(data) or not _answered_where_asked(data, ctx):
+            return Response(text=_ELSEWHERE_TEXT, session_id=ctx.session_id, matched_handler=self.name)
+        try:
+            person_id = int(data.get("person_id"))
+        except (TypeError, ValueError):
+            person_id = None
+        embedding = _decode_b64_embedding(str(data.get("embedding_b64") or ""))
+        if person_id is None or embedding is None or not name:
+            return Response(
+                text="Something went wrong storing that — try saying your name again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        room_id = data.get(_ORIGIN_ROOM_KEY) or ctx.room_id
+        if not affirmative:
+            return await self._enroll_namesake(name, embedding, room_id, ctx, session)
+        return await self._add_room_sample(person_id, name, embedding, room_id, ctx, session)
+
+    async def _enroll_namesake(
+        self,
+        name: str,
+        embedding: np.ndarray,
+        room_id: str | None,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """The "no" to "I already know someone called X. Is that you?": a
+        new person called X, on purpose, with this clip as their satellite
+        sample for ``room_id``. The opt-out list first, under the name lock
+        like every enrolment. From then on "my name is X" from a voice
+        neither of them is matched as meets the two-namesakes refusal."""
+        if await self._is_denylisted(embedding, session):
+            return Response(
+                text="I wasn't able to save that voice profile.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        people = PeopleRepository(session)
+        try:
+            await people.lock_names()
+            others = await people.find_by_name(name)
+            person_id = await people.create(name=name)
+            await VoiceProfilesRepository(session).add(
+                person_id=person_id,
+                embedding=embedding.astype(np.float32).tobytes(),
+                model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                room_id=room_id,
+                sample_seconds=None,
+            )
+        except Exception as e:
+            log.warning("namesake enrollment failed for name=%s: %s", name, e)
+            return Response(
+                text=(
+                    "Something went wrong saving your voice — your name "
+                    "didn't get recorded."
+                ),
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        log.info("enrolled namesake person=%s id=%d (%d before)", name, person_id, len(others))
+        if not others:
+            # The other X was forgotten since the question: no pair to flag.
+            text = f"Got it, {name}."
+        else:
+            text = (
+                f"Okay, I've added you as a new {name}. An admin can give one of "
+                "you a different name on the People page."
+            )
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+
+    async def _add_room_sample(
+        self,
+        person_id: int,
+        name: str,
+        embedding: np.ndarray,
+        room_id: str | None,
+        ctx: Context,
+        session: AsyncSession,
+    ) -> Response:
+        """One clip into ``person_id``'s SATELLITE samples, tagged with
+        ``room_id``: the opt-out list first, then the person re-read (they
+        may have been forgotten since the question)."""
+        if await self._is_denylisted(embedding, session):
+            return Response(
+                text="I wasn't able to save that voice profile.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        try:
+            person = await PeopleRepository(session).get(person_id)
+        except Exception as e:
+            log.warning("room voice add: PeopleRepository.get failed: %s", e)
+            person = None
+        if person is None:
+            return Response(
+                text=f"I can't find {name} any more, so I didn't save that.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        try:
+            await VoiceProfilesRepository(session).add(
+                person_id=person_id,
+                embedding=embedding.astype(np.float32).tobytes(),
+                model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
+                room_id=room_id,
+                sample_seconds=None,
+            )
+        except Exception as e:
+            log.warning("room voice add failed for person_id=%s: %s", person_id, e)
+            return Response(
+                text="Something went wrong saving that — your voice wasn't added.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        log.info("room voice sample added: person_id=%d in room=%s", person_id, room_id)
+        return Response(
+            text=f"Done — I'll know your voice in this room now, {person[1]}.",
+            session_id=ctx.session_id,
+            matched_handler=self.name,
+        )
+
     async def handle_choice_reply(
         self,
         kind: str,
@@ -937,13 +1163,15 @@ class VoiceProfileHandler(Handler):
         ctx: Context,
         session: AsyncSession,
     ) -> Response | None:
-        """The next turn after "Add this phone's voice to X?" (the router
-        has already cleared the question). A yes or a no answers it, if it
-        comes in time; anything else is not about it, so the question is
-        dropped and the turn routed as usual (None)."""
+        """The next turn after "Add this phone's voice to X?" or "I already
+        know someone called X. Is that you?" (the router has already
+        cleared the question). A yes or a no answers it, if it comes in
+        time; anything else is not about it, so the question is dropped
+        and the turn routed as usual (None) — "no, I'm X Smith" is then
+        the self-introduction it reads as."""
         from domovoi.router import _parse_yes_no, strip_leading_filler
 
-        if kind != "core.phone_voice_add":
+        if kind not in self.choice_kinds:
             return None
         affirmative = _parse_yes_no(transcript)
         if affirmative is None:
@@ -960,6 +1188,8 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
+        if kind == "core.room_voice_add":
+            return await self._handle_room_voice_add(data, affirmative, ctx, session)
         return await self._handle_phone_voice_add(data, affirmative, ctx, session)
 
     async def _handle_phone_voice_add(
@@ -1102,11 +1332,14 @@ class VoiceProfileHandler(Handler):
         session: AsyncSession,
         *,
         phone: bool = False,
+        room_id: str | None = None,
     ) -> Response:
         """Save ``embedding`` as ``name``'s voice. ``phone``: the question
         was asked on a chat mic (its parked origin, never the answering
-        turn's), so the voice goes into the PHONE set, and a name someone
-        already has is not a new person."""
+        turn's), so the voice goes into the PHONE set; otherwise into the
+        SATELLITE set, tagged with ``room_id`` (where the question was
+        asked; this turn's room when the question didn't say). Either way
+        a name someone already has is not a new person."""
         # Denylist gate FIRST — applies to every enrollment path (self-intro
         # confirmation AND third-party intro confirmation). The response is
         # deliberately neutral: announcing "that voice opted out" would leak
@@ -1119,28 +1352,33 @@ class VoiceProfileHandler(Handler):
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        if phone:
-            # The phone set's no-duplicate rule, as "my name is" has it: a
-            # name someone already has gets this voice as a phone sample
-            # (the yes just given was to "is this X?"), two such people get
-            # a refusal, and only a new name makes a new person.
-            try:
-                known = await PeopleRepository(session).find_by_name(name)
-            except Exception as e:
-                log.warning("PeopleRepository.find_by_name failed: %s", e)
-                return Response(
-                    text="Something went wrong there — try the introduction again.",
-                    session_id=ctx.session_id,
-                    matched_handler=self.name,
-                )
-            if len(known) > 1:
-                return Response(
-                    text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
-                )
-            if known:
-                return await self._add_phone_sample(known[0][0], name, embedding, ctx, session)
+        room_id = room_id if room_id is not None else ctx.room_id
+        # One name, one person, as "my name is" has it: a name someone has
+        # (by now: the question may be a minute old) gets this voice as
+        # their sample, since the yes just given was to "is this X?"; two
+        # such people get a refusal; only a new name makes a new person.
+        # Checked and written under the name lock, so two enrolments of one
+        # new name at once make one person, not two.
+        people = PeopleRepository(session)
         try:
-            people = PeopleRepository(session)
+            await people.lock_names()
+            known = await people.find_by_name(name)
+        except Exception as e:
+            log.warning("PeopleRepository.find_by_name failed: %s", e)
+            return Response(
+                text="Something went wrong there — try the introduction again.",
+                session_id=ctx.session_id,
+                matched_handler=self.name,
+            )
+        if len(known) > 1:
+            return Response(
+                text=_more_than_one(name), session_id=ctx.session_id, matched_handler=self.name,
+            )
+        if known:
+            if phone:
+                return await self._add_phone_sample(known[0][0], name, embedding, ctx, session)
+            return await self._add_room_sample(known[0][0], name, embedding, room_id, ctx, session)
+        try:
             voice_profiles = VoiceProfilesRepository(session)
             person_id = await people.create(name=name)
             if phone:
@@ -1158,7 +1396,7 @@ class VoiceProfileHandler(Handler):
                     person_id=person_id,
                     embedding=embedding.astype(np.float32).tobytes(),
                     model=VoiceProfilesRepository.EMBEDDING_MODEL_TAG,
-                    room_id=ctx.room_id,
+                    room_id=room_id,
                     sample_seconds=None,
                 )
         except Exception as e:
@@ -1178,32 +1416,77 @@ class VoiceProfileHandler(Handler):
             matched_handler=self.name,
         )
 
+    async def _candidate_names(self, ctx: Context, session: AsyncSession) -> list[str]:
+        """The names of the people this voice was too close to tell apart
+        (``ctx.voice_candidates``), or [] when it wasn't, or one of them is
+        gone or unreadable."""
+        if len(ctx.voice_candidates) < 2:
+            return []
+        people = PeopleRepository(session)
+        names: list[str] = []
+        try:
+            for pid in ctx.voice_candidates:
+                row = await people.get(int(pid))
+                if row is None:
+                    return []
+                names.append(row[1])
+        except Exception as e:
+            log.warning("whoami: reading the candidates failed: %s", e)
+            return []
+        return names
+
     async def _whoami(self, ctx: Context, session: AsyncSession) -> Response:
         if ctx.person_id is None:
-            return Response(
-                text="I don't recognize your voice yet.",
-                session_id=ctx.session_id,
-                matched_handler=self.name,
-            )
+            names = await self._candidate_names(ctx, session)
+            if names and all(_same_name(n, names[0]) for n in names):
+                # The duplicate-name case at its plainest: two Kamrons with
+                # Kamron's voice, so neither can be named.
+                text = (
+                    f"Your voice matches more than one {names[0]}, so I can't tell "
+                    f"which one you are. {_SORT_IT_OUT}"
+                )
+            elif names:
+                text = (
+                    "Your voice is close to two people I know, so I won't guess "
+                    "which one you are. Tell me your name, and I'll learn your voice better."
+                )
+            else:
+                text = "I don't recognize your voice yet."
+            return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
+        people = PeopleRepository(session)
         try:
-            row = await PeopleRepository(session).get(ctx.person_id)
+            row = await people.get(ctx.person_id)
+            namesakes = await people.find_by_name(row[1]) if row is not None else []
         except Exception as e:
             log.warning("whoami: PeopleRepository.get failed: %s", e)
-            row = None
+            row, namesakes = None, []
         if row is None:
             return Response(
                 text="I don't recognize your voice yet.",
                 session_id=ctx.session_id,
                 matched_handler=self.name,
             )
-        return Response(
-            text=f"You're {row[1]}.",
-            session_id=ctx.session_id,
-            matched_handler=self.name,
-        )
+        text = f"You're {row[1]}."
+        if len(namesakes) > 1:
+            # The voice named one person, not a guess; but whoever asks
+            # can't tell which of the two that is.
+            text += f" I know more than one {row[1]}, though. {_SORT_IT_OUT}"
+        return Response(text=text, session_id=ctx.session_id, matched_handler=self.name)
 
     async def _forget(self, ctx: Context, session: AsyncSession) -> Response:
         if ctx.person_id is None:
+            if await self._candidate_names(ctx, session):
+                # Somebody known, but not one person: never guess whose
+                # profile to delete.
+                return Response(
+                    text=(
+                        "Your voice is close to two people I know, so I won't guess "
+                        "whose voice to forget. An admin can remove a person on the "
+                        "People page."
+                    ),
+                    session_id=ctx.session_id,
+                    matched_handler=self.name,
+                )
             return Response(
                 text="I don't have a voice profile for you to forget.",
                 session_id=ctx.session_id,

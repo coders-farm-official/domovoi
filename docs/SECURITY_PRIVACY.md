@@ -257,6 +257,25 @@ than enrolling a second X; a new name enrols into the phone set. Only the
 chat mic does this. An admin sees and deletes phone samples apart from
 satellite samples on the People page.
 
+**"My name is …" at a satellite** follows the same one-name-one-person
+rule (2026-10-15): for an X who exists, and who the voice was not matched
+as, the satellite asks "I already know someone called X. Is that you?",
+and a "yes" as the very next turn (within 60 s) adds that clip to X's
+**satellite** samples for that room; a "no" enrols a new person called X
+from that clip, and the People page flags the pair. Next
+to the learning from a run of confident matches, this is the one way a
+satellite sample is added to someone who already exists, and it rests on
+what the speaker says: a voice is not a password, and anyone in a room can
+claim a name — as anyone could already enrol a second X before. What it
+changes is that the clip joins X's voice (so the speaker may then be
+recognized as X, with X's memories and favorites) rather than starting a
+person of its own. An opted-out voice is never added, and an admin sees
+each sample with its room and date on the People page and deletes a wrong
+one there. Two people who already share a name are never guessed between:
+every path says so and leaves the choice to an admin, who renames
+(`PATCH /api/people/{id}`, admin tier; a name someone else has is refused)
+or removes one.
+
 A credential says *who* is calling, not that the room agreed. That is what
 `DROPIN_ACCEPT_MODE` is for: `auto` (the default) opens the target's
 microphone as soon as a call is placed, `confirm` asks first when the call
@@ -1151,6 +1170,7 @@ admin tier is code execution and configuration, not day-to-day use.
 | **Voices, greetings and wake words** (what every satellite says, in whose voice, and what it listens for; a Piper upload puts a model file on the server) | Dashboard: every `POST` / `PATCH` / `DELETE` under `/api/greetings`, `/api/voices` and `/api/wake-words` (including clip selection and deletion and the record / score / push proxies). Reads stay open. | Pre-setup grace. The core's own `/v1/admin/wake/*` (but for the training switch, the next row) and `/v1/admin/sounds/regenerate` stay daily tier (below); the dashboard is where the registry is edited, so that is where the gate sits. |
 | **Wake-word training on and off** (on: builds and runs a Docker image as the service user, downloads the training data, and writes `WAKE_WORD_TRAIN_COMMAND` into `.env`; off: writes the two settings off and removes the image, its build cache and the cache volume) | Core: `POST /v1/admin/wake/trainer/enable` and `POST /v1/admin/wake/trainer/disable`, Bearer-only. Their status, `GET /v1/admin/wake/trainer`, and what turning off would free, `GET /v1/admin/wake/trainer/footprint`, are admin **reads** (Bearer or cookie): they name the server's free disk, memory, Docker, GPUs and Docker's sizes, nothing more. Dashboard: `POST /api/wake-words/trainer/enable`, `POST /api/wake-words/trainer/disable`, `GET /api/wake-words/trainer` and `GET /api/wake-words/trainer/footprint`, at the same tiers, forwarding the caller's credentials. Stopping a training (`POST /v1/admin/wake/train/stop`, `POST /api/wake-words/{id}/train/stop`) and removing a deleted word's training files (`POST /v1/admin/wake/forget`) are the admin tier, like Train. | **Fails closed** — 501 until setup (the reads keep the pre-setup grace). |
 | **Deleting a person, a library track or a denylist entry** (the rows whose removal loses something the household cannot get back) | Dashboard: `DELETE /api/people/{id}` (cascades to that person's voice profiles), `DELETE /api/people/{id}/profiles/{profile_id}`, `DELETE /api/music/library/{track_id}` (with `?also_file=true` it unlinks the audio file too), `DELETE /api/denylist/{id}`. Listing and browsing them stays open. | Pre-setup grace. Same principle as file deletion above: delete is the verb that destroys something, so it answers to the operator even where the matching read does not. |
+| **Renaming a person** (who voice identification calls them, and the name "my name is …" finds them by) | Dashboard: `PATCH /api/people/{id}`. A name someone else already has is refused (`409`): one name, one person. | Pre-setup grace. Beside deleting one: it changes who the household's history, memories and favorites answer to. |
 | **Satellite restart, screen and config push** (bounces the Pi's service, drives its panel, rewrites its `config.toml`) | Dashboard: `POST /api/satellites/{room_id}/restart`, `POST /api/satellites/{room_id}/display`, `PATCH /api/satellites/{room_id}/config`. The core routes behind them (`/v1/admin/satellite/restart`, `/display`, `/{room_id}/config`) carry the same tier. | Pre-setup grace. Both hops name the tier, so the refusal lands at the first one rather than after the dashboard has already accepted the call. |
 | **Library sweeps and `git pull`** (long server-side jobs; one of them moves the code on disk) | Dashboard: `POST /api/music/library/reindex`, `POST /api/music/library/enrich`, `POST /api/config/version/pull`. The version *check* beside the pull is device tier — it fetches and reports, it never moves HEAD — and so is the version *read* (`GET /v1/admin/version`, `GET /api/config/version`), because beside the running commit it carries the update unit's last run, its error text included, and whether this host can restart itself (CORE-21). | Pre-setup grace. |
 | **Plugin mutations on the default tier** (every non-GET plugin route its author did not mark `@device_endpoint` or `@open_endpoint`) | Core: `/v1/plugins/<slug>/…`. Dashboard: `/api/plugins/<slug>/…`. For the bundled radio plugin that is the FCC bulk import (`POST /api/plugins/radio/fcc-import` and the core route it forwards to) — a long server-side job, like the library sweeps; its everyday mutations are device tier (above). | Pre-setup grace. |

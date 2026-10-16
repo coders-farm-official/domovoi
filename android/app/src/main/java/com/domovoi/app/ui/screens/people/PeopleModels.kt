@@ -9,7 +9,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
+import com.domovoi.app.net.ApiException
+import com.domovoi.app.net.DomovoiJson
 import com.domovoi.app.net.decode
+import com.domovoi.app.net.failureText
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -31,7 +34,58 @@ internal data class Person(
     val notes: String? = null,
     val voice_profile_count: Int = 0,
     val presence_tier: String? = null,
+    /** How many OTHER people have this name (case and spacing aside). Voice
+     *  enrolment makes a second person with a name only when asked to (a
+     *  "no" to "I already know someone called X. Is that you?"); people who
+     *  share one are never guessed between when the name is said, so the
+     *  page flags them until one is renamed or removed. */
+    val namesakes: Int = 0,
 )
+
+// ---------------------------------------------------------------------------
+// One name, one person (server: handlers/voice_profile.py, 2026-10-15) — the
+// web People page's PersonNamesakes and rename, for the phone.
+// ---------------------------------------------------------------------------
+
+/** The longest name the server takes (PersonRename, the enrolment limit). */
+internal const val PERSON_NAME_MAX = 60
+
+/** A typed name as the server keeps it: trimmed, whitespace runs as one space. */
+internal fun cleanPersonName(raw: String): String =
+    raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+
+/** Whether "save" means something: a non-empty name within the limit that
+ *  isn't the person's name already. */
+internal fun canRename(person: Person, raw: String): Boolean {
+    val name = cleanPersonName(raw)
+    return name.isNotEmpty() && name.length <= PERSON_NAME_MAX && name != person.name
+}
+
+/** Roster subtitle prefix that tells people with one name apart. */
+internal fun rosterNameTag(p: Person): String = if (p.namesakes > 0) "#${p.id} · same name · " else ""
+
+/** What the profile says about a shared name, or null when nobody shares it. */
+internal fun namesakeNote(p: Person): String? {
+    if (p.namesakes <= 0) return null
+    val n = p.name
+    return "${p.namesakes + 1} people are called $n. When someone says “my name is $n”, " +
+        "Domovoi won’t guess which one they are. If these are the same person, forget the " +
+        "extra one; they can then say “my name is $n” wherever Domovoi doesn’t know their " +
+        "voice yet. If they are different people, rename one of them."
+}
+
+/** Toast for a refused rename: the server's own reason for a name someone else
+ *  has (409), the usual failure text for anything else. */
+internal fun renameFailureText(e: Throwable): String {
+    if (e is ApiException && e.status == 409) {
+        val detail = runCatching {
+            ((DomovoiJson.parseToJsonElement(e.body) as? JsonObject)?.get("detail") as? JsonPrimitive)
+                ?.content
+        }.getOrNull()
+        if (!detail.isNullOrBlank()) return detail
+    }
+    return failureText("rename", e)
+}
 
 @Serializable
 internal data class PersonMemory(

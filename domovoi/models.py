@@ -64,6 +64,11 @@ class Context(BaseModel):
     person_id: int | None = None
     presence_tier: str | None = None  # "low" | "medium" | "high"
     embedding_bytes: bytes | None = None
+    # The people this voice was too close to tell apart (the identifier's
+    # "ambiguous", best first), so ``person_id`` is None although the voice
+    # is someone known. Empty otherwise. "Who am I" reads it to say when
+    # the two share a name (handlers/voice_profile.py).
+    voice_candidates: list[int] = Field(default_factory=list)
     # What opened the mic for this utterance: "wake_word", "barge_in",
     # "followup", or "push_to_talk" (None on non-satellite paths like
     # /v1/intent). Stamped from the `utterance_start` frame and persisted to

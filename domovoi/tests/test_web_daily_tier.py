@@ -147,6 +147,10 @@ ADMIN_TIER = [
     ("POST", "/api/documents/delete"),
     ("POST", "/api/documents/download-zip"),
     ("POST", "/api/files/delete"),
+    # renaming a person changes who the household's history and memories
+    # answer to, and is where two people with one name get told apart
+    # (one name, one person, 2026-10-15) — beside deleting one.
+    ("PATCH", "/api/people/{person_id}"),
 ]
 
 # FE-3: the video satellite's kiosk renders unattended, so its transport
@@ -286,6 +290,8 @@ ADMIN_FAMILIES = {
                          {"changes": {"volume": 3}}, "satellites", "post_admin"),
     "version-pull": ("POST", "/api/config/version/pull", None,
                      "config", "post_admin"),
+    "people-rename": ("PATCH", "/api/people/1", {"name": "Sam"},
+                      "people", "session_scope"),
 }
 
 _DEVICE_IDS = sorted(DEVICE_FAMILIES)

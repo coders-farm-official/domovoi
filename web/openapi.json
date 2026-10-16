@@ -3053,6 +3053,57 @@
           }
         }
       },
+      "patch": {
+        "tags": [
+          "people"
+        ],
+        "summary": "Rename Person",
+        "description": "Give a person another name \u2014 what voice ID calls them, and the name\n\"my name is \u2026\" finds them by.\n\nOne name, one person (handlers/voice_profile.py): a name someone ELSE\nalready has (case and surrounding space aside) is refused with 409:\nrenaming is how a pair of namesakes is told apart, never how one is\nmade.\nChanging only the case or spacing of a person's own name is fine.\nChecked and written under the same lock enrolment takes\n(``PeopleRepository.lock_names``). Admin tier, like deleting a person:\nit changes who the household's history and memories answer to.",
+        "operationId": "rename_person_api_people__person_id__patch",
+        "parameters": [
+          {
+            "name": "person_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Person Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonRename"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Person"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "people"
@@ -17150,6 +17201,11 @@
             ],
             "title": "Presence Tier",
             "default": "high"
+          },
+          "namesakes": {
+            "type": "integer",
+            "title": "Namesakes",
+            "default": 0
           }
         },
         "type": "object",
@@ -17159,6 +17215,21 @@
           "created_at"
         ],
         "title": "Person"
+      },
+      "PersonRename": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "PersonRename"
       },
       "PlayPlaylistRequest": {
         "properties": {

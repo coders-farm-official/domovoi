@@ -1,5 +1,6 @@
 package com.domovoi.app.ui.screens.people
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +33,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.domovoi.app.LocalApp
@@ -47,13 +51,16 @@ import com.domovoi.app.ui.components.isLive
 import com.domovoi.app.ui.components.relTime
 import com.domovoi.app.ui.theme.Domovoi
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * The right pane (expanded) / full-screen overlay (compact) for a selected
  * person: Profile / Memory / Sessions / Conversations tabs.
  *
- * Note: person rename is intentionally absent — PATCH /api/people/{id}
- * doesn't exist yet (the web page stubs it with a toast).
+ * Rename is PATCH /api/people/{id} (admin tier, as on the web page): a name
+ * somebody else has is refused (409) with the server's reason. Someone who
+ * shares a name with another person is flagged ([namesakeNote]).
  */
 @Composable
 internal fun PersonDetail(
@@ -62,6 +69,7 @@ internal fun PersonDetail(
     onBack: () -> Unit,
     onForgotten: () -> Unit,
     modifier: Modifier = Modifier,
+    onRenamed: () -> Unit = {},
 ) {
     val app = LocalApp.current
     val toast = LocalToast.current
@@ -69,6 +77,7 @@ internal fun PersonDetail(
     val detail = rememberPersonDetail(person.id)
     var tab by remember(person.id) { mutableIntStateOf(0) }
     var confirmForget by remember(person.id) { mutableStateOf(false) }
+    var renaming by remember(person.id) { mutableStateOf(false) }
 
     DomovoiCard(modifier, padding = 0) {
         if (compact) {
@@ -132,6 +141,7 @@ internal fun PersonDetail(
                     sessionCount = detail.sessions.size,
                     turnCount = detail.conversations.size,
                     onForget = { confirmForget = true },
+                    onRename = { renaming = true },
                 )
                 1 -> MemoryTab(person, detail)
                 2 -> SessionsTab(person, detail)
@@ -159,6 +169,26 @@ internal fun PersonDetail(
             onDismiss = { confirmForget = false },
         )
     }
+
+    if (renaming) {
+        RenameDialog(
+            person = person,
+            onSave = { name ->
+                scope.launch {
+                    runCatching {
+                        app.api.patch("/api/people/${person.id}", buildJsonObject { put("name", name) })
+                    }
+                        .onSuccess {
+                            renaming = false
+                            toast("renamed to $name")
+                            onRenamed()
+                        }
+                        .onFailure { toast(renameFailureText(it)) }
+                }
+            },
+            onDismiss = { renaming = false },
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +201,7 @@ private fun ProfileTab(
     sessionCount: Int,
     turnCount: Int,
     onForget: () -> Unit,
+    onRename: () -> Unit,
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -192,13 +223,31 @@ private fun ProfileTab(
                         color = Domovoi.colors.fg,
                     )
                     if (isLive(person.last_seen_at)) Pill("live", Tone.Ok, live = true)
+                    if (person.namesakes > 0) Pill("same name", Tone.Warn)
                 }
                 Text(
                     "person · #${person.id} · added ${relTime(person.created_at)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = Domovoi.colors.fgMuted,
                 )
+                TextButton(
+                    onClick = onRename,
+                    modifier = Modifier.semantics { contentDescription = "rename ${person.name}" },
+                ) { Text("rename", color = Domovoi.colors.brand) }
             }
+        }
+
+        namesakeNote(person)?.let { note ->
+            Text(
+                note,
+                style = MaterialTheme.typography.bodySmall,
+                color = Domovoi.colors.fg,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(MaterialTheme.shapes.small)
+                    .background(Domovoi.colors.warnSoft)
+                    .padding(12.dp),
+            )
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -244,6 +293,48 @@ private fun ProfileTab(
 }
 
 // ---------------------------------------------------------------------------
+// Rename (web ProfileTab's rename box).
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun RenameDialog(
+    person: Person,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember(person.id) { mutableStateOf(person.name) }
+    val ok = canRename(person, text)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Domovoi.colors.raised,
+        title = { Text("Rename ${person.name}", style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "What Domovoi calls them, and the name “my name is …” finds them by. " +
+                        "A name someone else has is taken.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Domovoi.colors.fgMuted,
+                )
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { if (it.length <= PERSON_NAME_MAX) text = it },
+                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "new name" },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            Button(enabled = ok, onClick = { onSave(cleanPersonName(text)) }) { Text("save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("cancel", color = Domovoi.colors.fgMuted) }
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Type-the-name-to-confirm cascade-delete dialog (web ConfirmForget).
 // ---------------------------------------------------------------------------
 
@@ -262,7 +353,10 @@ private fun ConfirmForgetDialog(
         onDismissRequest = onDismiss,
         containerColor = Domovoi.colors.raised,
         title = {
-            Text("Forget ${person.name}?", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Forget ${person.name}" + (if (person.namesakes > 0) " (#${person.id})" else "") + "?",
+                style = MaterialTheme.typography.titleMedium,
+            )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

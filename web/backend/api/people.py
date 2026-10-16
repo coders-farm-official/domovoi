@@ -6,9 +6,10 @@ holds their embedding samples (multiple per person allowed for
 re-enrollment / different rooms / etc.). The denylist is a
 sibling concept and lives at ``/api/denylist`` via ``denylist.py``.
 
-All endpoints here are read-only or destructive against Postgres; they
-touch no live state in the Domovoi server, so they work whether the
-Domovoi server process is running or not.
+All endpoints here read or write Postgres only (a rename is the one
+write that isn't a delete or a memory/favorite edit); they touch no live
+state in the Domovoi server, so they work whether the Domovoi server
+process is running or not.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from domovoi.admin_auth import (
     require_device_read,
 )
 from domovoi.config import settings as core_settings
+from domovoi.db.repositories import PeopleRepository
 from web.backend.db import session_scope
 from web.backend.schemas import (
     ConversationTurn,
@@ -34,6 +36,7 @@ from web.backend.schemas import (
     MemoryCreate,
     MemoryPatch,
     Person,
+    PersonRename,
     PreferencesPatch,
     Session,
     VoiceNote,
@@ -89,7 +92,10 @@ async def list_people() -> list[Person]:
             text(
                 """
                 SELECT p.id, p.name, p.created_at, p.last_seen_at, p.notes,
-                       COALESCE(vc.profile_count, 0) AS profile_count
+                       COALESCE(vc.profile_count, 0) AS profile_count,
+                       (SELECT COUNT(*) FROM people o
+                         WHERE o.id <> p.id
+                           AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes
                 FROM people p
                 LEFT JOIN (
                     SELECT person_id, COUNT(*) AS profile_count
@@ -110,7 +116,10 @@ async def get_person(person_id: int) -> Person:
             text(
                 """
                 SELECT p.id, p.name, p.created_at, p.last_seen_at, p.notes,
-                       COALESCE(vc.profile_count, 0) AS profile_count
+                       COALESCE(vc.profile_count, 0) AS profile_count,
+                       (SELECT COUNT(*) FROM people o
+                         WHERE o.id <> p.id
+                           AND lower(btrim(o.name)) = lower(btrim(p.name))) AS namesakes
                 FROM people p
                 LEFT JOIN (
                     SELECT person_id, COUNT(*) AS profile_count
@@ -126,6 +135,42 @@ async def get_person(person_id: int) -> Person:
     if result is None:
         raise HTTPException(status_code=404, detail=f"person {person_id} not found")
     return _row_to_person(result)
+
+
+@router.patch(
+    "/{person_id}", response_model=Person,
+    dependencies=[Depends(require_admin_mutation)],
+)
+async def rename_person(person_id: int, payload: PersonRename) -> Person:
+    """Give a person another name — what voice ID calls them, and the name
+    "my name is …" finds them by.
+
+    One name, one person (handlers/voice_profile.py): a name someone ELSE
+    already has (case and surrounding space aside) is refused with 409:
+    renaming is how a pair of namesakes is told apart, never how one is
+    made.
+    Changing only the case or spacing of a person's own name is fine.
+    Checked and written under the same lock enrolment takes
+    (``PeopleRepository.lock_names``). Admin tier, like deleting a person:
+    it changes who the household's history and memories answer to.
+    """
+    name = " ".join(payload.name.split())
+    if not name or not name.isprintable():
+        raise HTTPException(status_code=422, detail="Give the person a name.")
+    async with session_scope() as s:
+        outcome = await PeopleRepository(s).rename(person_id, name)
+    if outcome == "missing":
+        raise HTTPException(status_code=404, detail=f"person {person_id} not found")
+    if outcome == "taken":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Someone else is already called {name}. Voice ID can't tell two "
+                "people with one name apart when the name is said, so pick "
+                "another (add a surname or use a nickname)."
+            ),
+        )
+    return await get_person(person_id)
 
 
 # ─── Sessions / conversations / notes / profiles ──────────────────────────
@@ -665,6 +710,7 @@ def _row_to_person(r: Any) -> Person:
         notes=r[4],
         voice_profile_count=int(r[5]),
         presence_tier=_presence_tier_for(r[3]),
+        namesakes=int(r[6]) if len(r) > 6 else 0,
     )
 
 
