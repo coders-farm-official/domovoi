@@ -167,6 +167,11 @@
 
 set -euo pipefail
 
+# Every git this script runs reads objects as they are: no refs/replace and
+# no grafts. Both live in the service user's .git, and with them an unsigned
+# commit could pass for a signed one under its SHA (rc2 review C3).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 REPO_DIR=${DOMOVOI_REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}
@@ -911,7 +916,7 @@ norm_url() {
 # the dashboard's channel switch (Settings > Version) works and no other
 # branch does.
 check_upstream() {
-  local t0 url up want b ok
+  local t0 url up want b ok applied warned
   local -a branches=()
   [ -n "$UPSTREAM_URL" ] || [ -n "$UPSTREAM_BRANCH" ] || return 0
   t0=$(now_ms)
@@ -948,6 +953,17 @@ check_upstream() {
     done
     if [ "$ok" = 0 ]; then
       want=$(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')
+      # The commit this box last applied, and so already ran: a pinned
+      # branch rewound past it upstream (a force-push) must not stop a plain
+      # restart for ever (rc2 review C2). It restarts with a warning; an
+      # update to anything else is still refused below.
+      applied=$(read_sha_file "$APPLIED_FILE" 2>/dev/null) || applied=""
+      if [ -n "$applied" ] && [ "$applied" = "$HEAD_SHA" ]; then
+        warned="HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($want) as this box last fetched them, upstream rewritten?; it is the commit this box last applied, so this restart goes on, and no update will until a pinned branch holds it again"
+        log "WARNING: $warned"
+        add_step upstream warn "$t0" "$warned"
+        return 0
+      fi
       add_step upstream refused "$t0" "HEAD ${HEAD_SHA:0:12} is on none of $want"
       finish refused "HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($want) as this box last fetched them (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
       return 1

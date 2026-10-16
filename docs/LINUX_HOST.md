@@ -264,8 +264,9 @@ only ([Release channels](#release-channels)). Before the repository's first
 release there is no `stable` branch yet; the script then installs `main`,
 follows it, and says so, and the Version card says when the first release
 is out. `--ref` picks something else: a branch (`--ref main`), a release
-tag (`--ref v1.0.0`, read as a tag only, never a branch of that name) or a
-full commit SHA (that commit only); with a tag or a SHA, `--track-branch`
+tag (`--ref v1.0.0`, read as a tag only, never a branch of that name; any
+other name is the tag of that name when there is one, `stable` and `main`
+always the branches) or a full commit SHA (that commit only); with a tag or a SHA, `--track-branch`
 names the channel it follows (default `stable`). After the checkout, HEAD
 must be the commit `--ref` named, or nothing is installed. On top
 of the manual steps it pre-downloads what the core would otherwise fetch
@@ -1525,10 +1526,11 @@ asked for `stable` before there was one follows `main` (it remembers what
 was asked for, `git config domovoi.intendedChannel stable`), and the
 Version card says so once the first release is out.
 
-Tags are fetched explicitly (`git fetch --tags`). A published tag never
-moves; if one upstream ever did, git refuses to overwrite the local copy
-("would clobber existing tag"), and the check and the pull show that error
-instead of moving.
+The branches are fetched first, then the tags on their own (never
+forced). A published tag never moves; if one upstream ever did, git keeps
+this box's copy ("would clobber existing tag"), and the card shows a
+warning that a version label may be off. The check, the pull and the
+switch go on: one moved tag never stops a box from updating.
 
 To follow a channel by hand, on a box without the dashboard:
 
@@ -1757,6 +1759,15 @@ checks that HEAD itself is on one of the pinned branches as this box last
 fetched them (the tracking branch is the service user's config), on the
 plain restart too, and the core's check and pull compare with, and merge,
 `refs/remotes/origin/<branch>` by name rather than the checkout's `@{u}`.
+If a pinned branch was rewritten upstream past this box's HEAD, the commit
+the box last applied still restarts (with an `upstream` warning on the
+Version card); an update to anything else is refused until the branch
+holds it again. The pin catches mistakes, not an adversary: those refs
+live in the service user's own `.git`, which that account can rewrite, so
+only [signed updates](#signed-updates) bound what root runs. Root's git
+calls (here, in `provision.sh` and in the installer) ignore `refs/replace`
+and grafts (`GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`), so a
+signature check always sees the commit HEAD names.
 Keep the file readable by the service user (`0644`; it holds no secrets):
 the core reads the pin and the signers path from it, and while it can't,
 the dashboard offers no channel switch and says why. All four settings are optional and read from that

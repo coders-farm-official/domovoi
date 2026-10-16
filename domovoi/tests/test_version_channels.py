@@ -493,6 +493,16 @@ def test_the_channel_asked_for_is_remembered_and_the_switch_updates_it(repos):
     assert _run(git_version.version_state())["channel_intended"] is None
 
 
+def test_a_tag_named_like_the_branch_does_not_hide_the_channel(repos):
+    """A tag "stable" makes git shorten the branch to "heads/stable"; the
+    channel is still read from the full name."""
+    _, server, _ = repos
+    assert _run(git_version.switch_channel("stable"))["ok"] is True
+    _git(server, "tag", "stable", "HEAD")
+    assert git_version.tracking()["channel"] == "stable"
+    assert _run(git_version.version_state())["channel"] == "stable"
+
+
 def test_refused_while_an_update_runs(repos, monkeypatch):
     monkeypatch.setattr(self_restart, "underway", lambda *a, **k: True)
     res = _run(git_version.switch_channel("stable"))

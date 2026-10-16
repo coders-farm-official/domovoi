@@ -3319,18 +3319,75 @@ case_upstream_pin_refuses_a_head_on_no_pinned_branch() {
   g branch -q --set-upstream-to origin/stable stable
   UPSTREAM_BRANCH="stable main" run_update
   check "past the release, on main: ok" eq "$(field status)" '"ok"'
-  # Pinned to stable alone, the same box is on no pinned branch.
+  # Pinned to stable alone, the same box is on no pinned branch; HEAD is
+  # what the first run applied, so it restarts with a warning (C2).
   : >"$STATE/calls.log"
   UPSTREAM_BRANCH=stable run_update
-  check "stable alone: refused" eq "$(field status)" '"refused"'
-  check "says why" eq "$(field error | grep -c "HEAD ${sha_b:0:12} is on none of the pinned branches (origin/stable)")" 1
-  check "nothing stopped" not_called "systemctl stop"
+  check "stable alone: a warned restart" eq "$(field status)" '"ok"'
+  check "an upstream step, warn" step_is upstream warn
+  check "says why" grep -qF "HEAD ${sha_b:0:12} is on none of the pinned branches (origin/stable)" "$RESULT"
   # A commit of its own, never pushed: refused under both channels.
   printf 'print("c")\n' >"$REPO/domovoi/app.py"
   commit_all "C: local only" >/dev/null
   UPSTREAM_BRANCH="stable main" run_update
   check "local commit: refused" eq "$(field status)" '"refused"'
   check "names both" eq "$(field error | grep -c 'is on none of the pinned branches (origin/stable, origin/main)')" 1
+  end_case
+}
+
+# rc2 review C2: a pinned branch force-pushed back past this box's HEAD
+# (upstream rewritten) must not stop a plain restart for ever. HEAD is the
+# commit this box last applied: it restarts, with a warning the card shows.
+# Anything else off the pinned branches is still refused.
+case_a_rewound_upstream_still_restarts() {
+  new_case a_rewound_upstream_still_restarts
+  local bare; bare=$(add_upstream)
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  g push -q origin main 2>/dev/null
+  mkdir -p "$UPD" && echo "$sha_b" >"$UPD/applied_sha"
+  git -C "$bare" update-ref refs/heads/main "$SHA_A"
+  g fetch -q origin 2>/dev/null
+  UPSTREAM_BRANCH="stable main" run_update
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a plain restart" eq "$(field mode)" '"restart"'
+  check "an upstream step, warn" step_is upstream warn
+  check "it says why" grep -qF "is the commit this box last applied, so this restart goes on" "$RESULT"
+  check "restarted" called "systemctl start domovoi-core.service domovoi-web.service"
+  # A new commit of its own on top: an update to it is refused.
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: local only" >/dev/null
+  : >"$STATE/calls.log"
+  UPSTREAM_BRANCH="stable main" run_update
+  check "C: refused" eq "$(field status)" '"refused"'
+  check "C: nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+# rc2 review C3: root's git ignores the service user's refs/replace. HEAD
+# is an unsigned commit "replaced" by a signed one, the index reset and its
+# changes hidden with skip-worktree: with signing enforced, refused.
+case_a_replace_ref_never_passes_an_enforced_signature() {
+  new_case a_replace_ref_never_passes_an_enforced_signature
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  write_signing_keys "$CASE/keys"
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  printf 's\n' >"$REPO/review-s.txt"
+  local sha_s; sha_s=$(commit_signed "$CASE/keys/owner" "S: signed")
+  printf 'print("unsigned code")\n' >"$REPO/domovoi/app.py"
+  local sha_u; sha_u=$(commit_all "U: unsigned")
+  g replace "$sha_u" "$sha_s"
+  g reset -q
+  g diff --name-only | while read -r f; do g update-index --skip-worktree "$f"; done
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+  SIGNERS=$CASE/keys/allowed_signers run_update "$CASE/rootbin"
+  check "HEAD is the unsigned commit" eq "$(g rev-parse HEAD)" "$sha_u"
+  check "refused" eq "$(field status)" '"refused"'
+  check "not verified" test "$(sig_field status)" != '"verified"'
+  check "nothing stopped" not_called "systemctl stop"
+  check "applied_sha untouched" file_is "$UPD/applied_sha" "$SHA_A"
   end_case
 }
 
@@ -3936,6 +3993,8 @@ CASES=(
   case_upstream_pin_that_matches_goes_on
   case_upstream_pin_of_both_channels_takes_either
   case_upstream_pin_refuses_a_head_on_no_pinned_branch
+  case_a_rewound_upstream_still_restarts
+  case_a_replace_ref_never_passes_an_enforced_signature
   case_gpu_runtime_installed_while_the_services_are_stopped
   case_gpu_runtime_under_never_downloads_nothing
   case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database

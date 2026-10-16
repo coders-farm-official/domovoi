@@ -164,6 +164,11 @@
 # without the other makes the script refuse to run. Never set them on a host.
 
 set -Eeuo pipefail
+
+# Every git this script runs reads objects as they are: no refs/replace and
+# no grafts, so HEAD's signature check sees the commit it names (rc2 review
+# C3; the checkout's .git is the service user's).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
 umask 022
 
 PROG=provision
@@ -477,7 +482,11 @@ skipped, a killed run resumes, a changed option re-runs what it feeds.
                         local path or git bundle works too)
   --ref REF             a branch, tag or full commit SHA to install (default:
                         stable, the latest release; main while the
-                        repository has no stable branch yet)
+                        repository has no stable branch yet). Read by its
+                        shape: a full SHA is that commit, v<digit>... and
+                        tags/NAME a tag, refs/heads/NAME a branch; stable and
+                        main are always the branches; any other name is the
+                        tag of that name when there is one, else the branch
   --track-branch NAME   for a tag or SHA: the branch the checkout follows for
                         updates (default: stable; main without one). REF must
                         be on its history, or newer than it on the same line
@@ -1403,13 +1412,16 @@ verify_head() {
   log "HEAD $HEAD_SHA is signed by $(git "${cfg[@]}" -C "$dir" log -1 --format=%GS HEAD)"
 }
 
-# ref_kind REF: how --ref is read, by its shape alone, so a branch can never
+# ref_kind REF: how --ref is read, by its shape, so a branch can never
 # stand in for a tag or a commit of the same name (delta security review
 # 2026-10-16, S3: a branch named v1.0.0, or like the pinned SHA, used to be
-# preferred). Prints "sha SHA", "tag NAME" or "branch NAME":
+# preferred). Prints "sha SHA", "tag NAME", "branch NAME" or "name NAME":
 #   a full commit SHA (40 or 64 hex digits)     the commit object, nothing else
 #   refs/tags/NAME, tags/NAME, or v<digit>...   the tag refs/tags/NAME only
-#   refs/heads/NAME, or any other name           origin's branch NAME only
+#   refs/heads/NAME, stable or main             origin's branch NAME only
+#   any other name                              "name": the tag of that name
+#                                               when the clone has one, else
+#                                               the branch (rc2 review C7)
 ref_kind() {
   local r=$1
   if [[ $r =~ ^[0-9a-f]{40}$ ]] || [[ $r =~ ^[0-9a-f]{64}$ ]]; then echo "sha $r"
@@ -1417,7 +1429,8 @@ ref_kind() {
   elif [[ $r == tags/* ]]; then echo "tag ${r#tags/}"
   elif [[ $r == refs/heads/* ]]; then echo "branch ${r#refs/heads/}"
   elif [[ $r =~ ^v[0-9] ]]; then echo "tag $r"
-  else echo "branch $r"; fi
+  elif [ "$r" = stable ] || [ "$r" = main ]; then echo "branch $r"
+  else echo "name $r"; fi
 }
 
 # A tag this box was installed from, and its commit, kept beside the step
@@ -1463,6 +1476,9 @@ checkout_ref() {
     fi
   fi
   read -r kind name <<<"$(ref_kind "$ref")"
+  if [ "$kind" = name ]; then
+    if gd "$d" rev-parse -q --verify "refs/tags/$name^{commit}" >/dev/null; then kind=tag; else kind=branch; fi
+  fi
   case $kind in
     branch)
       sha=$(gd "$d" rev-parse -q --verify "refs/remotes/origin/$name^{commit}") \
@@ -2999,6 +3015,9 @@ do_update_unit() {
     else warn "/etc/default/domovoi-update sets DOMOVOI_USE_LOCK=$have, left as it is: updates re-sync through pip's resolver, which checks no hashes, though this box was installed from the lock"; fi
   fi
   # The channel pin, the same way (a symlinked file is left alone above).
+  if [ -L "$UPDATE_DEFAULTS" ] && ! channel_pin_set; then
+    warn "/etc/default/domovoi-update is a symlink, left as it is: no channel pin (DOMOVOI_UPSTREAM_BRANCH=\"stable main\") written through it, so updates follow whatever branch the checkout tracks; add the line to the file it points to (docs/LINUX_HOST.md, Release channels)"
+  fi
   if [ ! -L "$UPDATE_DEFAULTS" ]; then
     up=$(checkout_upstream)
     if channel_pin_set; then

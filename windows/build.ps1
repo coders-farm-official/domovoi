@@ -101,12 +101,12 @@ function Set-Pins([string]$Ref, [string]$Channel, [string]$File) {
     else { throw "-Pin takes a release tag (v1.0.0) or a full 40-character commit SHA, never a branch: $Ref" }
     $sha = Invoke-GitText $git @('-C', $repo, 'rev-parse', '--verify', '--quiet', $spec)
     if ($sha -notmatch '^[0-9a-f]{40}$') { throw "$Ref is not a commit in this clone (git fetch --tags first)" }
-    $hasMain = $true
-    try { [void](Invoke-GitText $git @('-C', $repo, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main')) } catch { $hasMain = $false }
-    if ($hasMain) {
-        try { [void](Invoke-GitBytes $git @('-C', $repo, 'merge-base', '--is-ancestor', $sha, 'refs/remotes/origin/main')) }
-        catch { throw "$Ref ($sha) is not on origin/main's history, so a household's updates could never fast-forward from it" }
-    }
+    # On origin/main's history, as this clone last fetched it; a clone
+    # without origin/main can't tell, so it doesn't pin (rc2 review C9).
+    try { [void](Invoke-GitText $git @('-C', $repo, 'rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main')) }
+    catch { throw "this clone has no origin/main to check $Ref against (git fetch origin first)" }
+    try { [void](Invoke-GitBytes $git @('-C', $repo, 'merge-base', '--is-ancestor', $sha, 'refs/remotes/origin/main')) }
+    catch { throw "$Ref ($sha) is not on origin/main's history, so a household's updates could never fast-forward from it" }
     $tags = Invoke-GitText $git @('-C', $repo, 'tag', '--points-at', $sha, '--list', 'v[0-9]*')
     if ($Channel -eq 'stable' -and -not $tags) {
         throw "$Ref ($sha) is not a release: no v* tag names it, so the stable channel would not hold it. Pin the release's tag, or pass -Channel main"

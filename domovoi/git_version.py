@@ -424,8 +424,11 @@ def tracking() -> dict:
     try:
         intended = _config("domovoi.intendedChannel")
         out["intended"] = intended if intended in CHANNELS else None
-        head = _run("symbolic-ref", "--short", "-q", "HEAD")
-        branch = head.stdout.strip() if head.returncode == 0 else ""
+        # The full name, not --short: a tag of the same name (a tag
+        # "stable") would make git shorten it to "heads/stable".
+        head = _run("symbolic-ref", "-q", "HEAD")
+        full = head.stdout.strip() if head.returncode == 0 else ""
+        branch = full.removeprefix("refs/heads/") if full.startswith("refs/heads/") else ""
         if not branch or not _BRANCH_RE.match(branch):
             return out
         out["branch"] = branch
@@ -926,6 +929,9 @@ _WARN_DETAIL_STEPS = frozenset(
         "wake-trainer",
         "core-restart",
         "journal",
+        # "HEAD ... is on none of the pinned branches ...; it is the commit
+        # this box last applied, so this restart goes on" (rc2 review C2).
+        "upstream",
     }
 )
 _WARN_DETAIL_MAX_CHARS = 300
