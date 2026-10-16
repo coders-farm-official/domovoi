@@ -38,8 +38,9 @@ HOME_FILES = ["web/static/components.jsx", "web/static/satellite_media.jsx",
 
 NOW = datetime.now(timezone.utc)
 HEARD = (NOW - timedelta(minutes=12)).isoformat()
-# The scenarios are built at import; the cards render later (a minute
-# later under a busy -n 4 run), so 12m or 13m.
+# The scenarios are built at import and rendered minutes later in a full
+# run, so the fixture moves these times to the moment it renders; the
+# render itself can still cross a minute.
 _HEARD_12M = re.compile(r"last heard 1[23]m ago")
 ALLOCATED = (NOW - timedelta(days=19)).isoformat()
 
@@ -186,7 +187,11 @@ def driven(tmp_path_factory) -> dict:
     node = shutil.which("node")
     assert node, "node is required to drive web/static JSX (see jsxcheck)"
     spec = tmp_path_factory.mktemp("core-down") / "scenarios.json"
-    spec.write_text(json.dumps(SCENARIOS), encoding="utf-8")
+    now = datetime.now(timezone.utc)
+    spec.write_text(json.dumps(SCENARIOS)
+                    .replace(HEARD, (now - timedelta(minutes=12)).isoformat())
+                    .replace(ALLOCATED, (now - timedelta(days=19)).isoformat()),
+                    encoding="utf-8")
     proc = subprocess.run([node, str(HARNESS), str(REPO_ROOT), f"@{spec}"],
                           capture_output=True, text=True, encoding="utf-8", timeout=240)
     assert proc.returncode == 0, proc.stderr
