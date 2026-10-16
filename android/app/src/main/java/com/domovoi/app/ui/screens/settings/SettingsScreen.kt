@@ -44,6 +44,7 @@ import com.domovoi.app.ui.screens.satellites.SatellitesScreen
 import com.domovoi.app.ui.shell.LocalSettingsTabRequest
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.theme.Domovoi
+import com.domovoi.app.update.AboutAppUpdateCard
 
 /**
  * Settings — the settings that belong to this phone, split into tabs, and
@@ -263,6 +264,7 @@ private fun AboutPanel(navigate: (Route) -> Unit) {
                 }
             }
         }
+        item { AboutAppUpdateCard() }
         item { ProblemReportsCard() }
         item { AssistantBenchmarkCard() }
         item { PrivacyCard() }

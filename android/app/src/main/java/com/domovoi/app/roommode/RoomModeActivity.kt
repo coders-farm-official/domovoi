@@ -78,6 +78,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.domovoi.app.DomovoiApplication
 import com.domovoi.app.MainActivity
+import com.domovoi.app.update.AppUpdate
+import com.domovoi.app.update.AppUpdateNotice
+import com.domovoi.app.update.AppUpdates
+import com.domovoi.app.update.InstallFacts
+import com.domovoi.app.update.noticeFor
+import com.domovoi.app.update.openInBrowser
 import com.domovoi.app.ui.theme.DomovoiDarkColors
 import com.domovoi.app.ui.theme.DomovoiTheme
 import com.domovoi.app.ui.theme.ThemeMode
@@ -138,6 +144,16 @@ class RoomModeActivity : ComponentActivity() {
                 var running by remember { mutableStateOf(store.running) }
                 LaunchedEffect(engine) { running = RoomStore(this@RoomModeActivity).running }
                 BackHandler { /* a room stays a room: Exit is the way out */ }
+                // A newer app on the core (update/AppUpdate.kt): one faint line.
+                val dismissals = remember { AppUpdates.dismissals(this@RoomModeActivity) }
+                val dismissed by dismissals.dismissed.collectAsState()
+                val offer = status?.appOffer
+                val updateState = remember(offer) {
+                    offer?.let { AppUpdate.decide(InstallFacts.read(this@RoomModeActivity), it) }
+                }
+                val update = updateState?.takeIf { AppUpdate.shows(it, dismissed) }?.let { st ->
+                    noticeFor(st, onOpen = { openUpdate(it) }) { dismissals.dismiss(st) }
+                }
                 RoomDisplay(
                     label = store.enrolment?.roomLabel ?: "room",
                     status = status,
@@ -154,6 +170,7 @@ class RoomModeActivity : ComponentActivity() {
                     onSetLock = { openLockSettings() },
                     onCheckNow = { engine?.retryNow() },
                     onExit = { askToLeave() },
+                    update = update,
                 )
                 when (dialog) {
                     Dialog.CONFIRM_NO_LOCK -> AlertDialog(
@@ -211,6 +228,20 @@ class RoomModeActivity : ComponentActivity() {
             .onFailure { runCatching { startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } }
     }
 
+    /** The update's page in the browser, after the phone's unlock when the
+     *  room screen is showing over the lock screen. */
+    private fun openUpdate(link: String) {
+        val km = getSystemService(KeyguardManager::class.java)
+        val open = { openInBrowser(this, link); Unit }
+        if (km?.isKeyguardLocked == true) {
+            km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
+                override fun onDismissSucceeded() = open()
+            })
+        } else {
+            open()
+        }
+    }
+
     private fun askToLeave() {
         when (RoomLockRules.exit(RoomDevice.holdsHouseholdToken(this), RoomDevice.deviceSecure(this))) {
             RoomLockRules.Exit.DEVICE_CREDENTIAL -> {
@@ -259,6 +290,9 @@ fun RoomDisplay(
     onSetLock: () -> Unit,
     onCheckNow: () -> Unit,
     onExit: () -> Unit,
+    /** A newer app on the core, if there is one to show: a faint line at
+     *  the foot of the screen, never in the way. */
+    update: AppUpdateNotice? = null,
 ) {
     val amber = DomovoiDarkColors.brand
     val red = DomovoiDarkColors.err
@@ -362,7 +396,26 @@ fun RoomDisplay(
             ) {
                 Text("exit room mode · hold", color = Text2, fontSize = 14.sp)
             }
+            if (update != null) {
+                Spacer(Modifier.height(gap))
+                Text(update.text, color = Text2, fontSize = 12.sp, textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    update.onGet?.let { RoomLink("update", it) }
+                    RoomLink("hide", update.onDismiss)
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun RoomLink(text: String, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick, role = Role.Button)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Text(text, color = Text2, fontSize = 13.sp, textDecoration = TextDecoration.Underline)
     }
 }
 

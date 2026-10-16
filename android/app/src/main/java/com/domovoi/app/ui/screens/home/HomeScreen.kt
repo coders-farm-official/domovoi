@@ -48,6 +48,8 @@ import com.domovoi.app.ui.shell.LocalOpenSettingsTab
 import com.domovoi.app.ui.shell.PhoneBar
 import com.domovoi.app.ui.shell.Route
 import com.domovoi.app.ui.shell.SidebarCounts
+import com.domovoi.app.update.AppUpdateCard
+import com.domovoi.app.update.rememberAppUpdateNotice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -280,6 +282,8 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
     val manual = rememberApi(firstRun) { a ->
         if (firstRun) ManualAnswer(runCatching { HomeApi.manual(a.api) }.getOrNull()) else null
     }
+    // A newer app on this server (update/AppUpdate.kt): one quiet card, or none.
+    val appUpdate = rememberAppUpdateNotice()
 
     // ── actions (device tier; a refusal routes the phone to pairing) ──
     val busy = remember { mutableStateMapOf<String, Boolean>() }
@@ -454,6 +458,7 @@ fun HomeScreen(navigate: (Route) -> Unit, counts: SidebarCounts = SidebarCounts(
             if (firstRun && hint != null) {
                 item(key = "firstrun") { HomeFirstRun(hintPhrase(hint.manual)) { navigate(Route.Manual) } }
             }
+            if (appUpdate != null) item(key = "app-update") { AppUpdateCard(appUpdate) }
             if (twoCol) {
                 item(key = "cols") {
                     Row(horizontalArrangement = Arrangement.spacedBy(gap)) {

@@ -4,6 +4,29 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Android app: "a newer app is available from your server"
+
+A new APK, and a small change to the server's join page (`/join`); no
+migration.
+
+* **The app says when its server has a newer release** than the one on
+  the phone: one quiet card on Home, "Domovoi 1.0.1 is available from
+  your server", with **get the update** (it opens the server's app page in
+  the browser, with this phone's APK, 64-bit or 32-bit, first) and
+  **dismiss** (hidden until the next release). It asks the household
+  server only, never the internet.
+* **If the server hasn't downloaded the release yet**, the card says an
+  admin can press **Download the app to this server** on the dashboard
+  (Settings → Devices). After a server update that changes
+  `android/release.json`, that press is still needed, as before.
+* **Never for a Google Play install** (Play updates it), a debug build, or
+  a copy signed with another key. Settings → About → App updates says
+  which, or "up to date".
+* **Room-mode phones** show it as a faint line at the foot of the room
+  screen (update, after the phone's unlock; or hide).
+* **The join page** takes `?abi=arm64-v8a|armeabi-v7a` (that APK first,
+  when the server holds it) and `?update=1` (worded as an update).
+
 ## 2026-10-15 — Android app: Android 16, report a reply, privacy, licences
 
 Android app only (a new APK); nothing changes on the server.

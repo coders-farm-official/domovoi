@@ -201,6 +201,40 @@ ones included, from some date in 2027. Register the publisher and
 `com.domovoi.app` with this key's certificate SHA-256 (the `cert_sha256` in
 `release.json`) well before then.
 
+### "A newer app is available from your server"
+
+The app tells its person when the server it is connected to hands out a
+newer release than the one installed (`update/AppUpdate.kt`). It asks
+**that server only**, never the internet: the dashboard's open
+`GET /api/devices/android-app` (the core's `GET /v1/android-app` plus
+`join_url`), at most every half hour; a room-mode phone asks the core it
+proved, after connecting and then every six hours.
+
+- **Newer** means the release's `version_code` is above the installed
+  `versionCode`.
+- **Never for a Google Play install** (installer `com.android.vending`,
+  from `getInstallSourceInfo`): Play updates it. **Never for a debug
+  build** (`FLAG_DEBUGGABLE`): Settings → About says "Debug build" and the
+  server isn't asked. Never when the release's `cert_sha256` is not one of
+  this install's signing certificates (a self-built copy): About says why.
+- **Which APK:** the first of the phone's own ABIs (`Build.SUPPORTED_ABIS`,
+  most preferred first) that the release carries, never a lesser one, so a
+  64-bit phone isn't moved to the 32-bit app.
+- **What the person sees:** on Home, one quiet card ("Domovoi 1.0.1 is
+  available from your server"), **get the update** and **dismiss**. Get
+  the update opens the server's join page in the browser as
+  `/join?abi=<abi>&update=1` (`domovoi/join_page/join.js` puts that APK
+  first and words the page as an update); the phone's installer does the
+  rest. When the server knows the release but holds no checked copy for
+  this phone yet, the card says an admin can press **Download the app to
+  this server** (Settings → Devices) and has no button.
+- **Dismiss** hides it until a newer release; a "not on the server yet"
+  card dismissed comes back once, when the file arrives. Settings → About →
+  App updates always shows where things stand.
+- **Room mode:** a faint line at the foot of the room screen, never a
+  dialog: **update** (after the phone's unlock when the room shows over
+  the lock screen) and **hide**.
+
 ## First run / offline-local mode
 
 Without a configured server (or with one out of reach) the app runs in
