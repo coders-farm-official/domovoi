@@ -51,9 +51,15 @@ address it found isn't usable (a server with several network cards), tick
 
 ## Linux laptops and mini PCs
 
-Tested on **Debian 12 and 13** and **Ubuntu 24.04**, with a desktop
-(GNOME, KDE, Xfce, …) or without one. Other Debian-family systems will
-probably work; others are not covered. x86-64 and 64-bit ARM.
+Tested on **Debian 11, 12 and 13**, **Ubuntu 22.04 and 24.04** and **Linux
+Mint 21**, with a desktop (GNOME, KDE, Xfce, …) or without one. **Fedora**,
+**openSUSE** and **Arch** work too: the installer knows their package
+names (it was tried in their containers, not on their laptops). Other
+Debian-family systems (Pop!_OS, elementary, …) will probably work.
+x86-64 and 64-bit ARM, with a GNU C library from 2018 or later (glibc 2.28:
+Debian 10, Ubuntu 18.10, Fedora 29 and newer). An older Debian or Ubuntu
+needs nothing extra: see [Older Linux, and Fedora, openSUSE,
+Arch](#older-linux-and-fedora-opensuse-arch) below.
 
 **An old Windows 10 laptop** can be a room as it is
 ([Windows](#windows-laptops-and-pcs), below). One that can't run Windows 11
@@ -98,9 +104,10 @@ you agree to). In order, it:
 2. asks **what the server may do on its own** (below);
 3. puts its uninstaller in `/usr/local/lib/domovoi-satellite` (root's own
    copy, which the satellite can't change);
-4. installs the few packages it needs (`python3-venv`, `libportaudio2`,
-   `mpg123`, `alsa-utils`; with a desktop `python3-tk` and
-   `pulseaudio-utils`);
+4. installs the few packages it needs (PortAudio, `mpg123`, the ALSA
+   utilities, with a desktop `pactl`; on Debian and Ubuntu with their own
+   Python also `python3-venv` and, with a desktop, `python3-tk`), with
+   apt, dnf, zypper or pacman;
 5. sets up the satellite in `~/.local/share/domovoi-satellite` (its own
    Python environment, from a list in which every package file is pinned
    by its SHA-256, and the wake-word models, each checked the same way),
@@ -115,10 +122,65 @@ you agree to). In order, it:
 
 It refuses an account that already runs a Domovoi server (one whose
 `~/.domovoi` holds the server's key): use another account, or headless
-mode. Python 3.11 to 3.14 on x86-64 (and 3.11 to 3.13 on 64-bit ARM) have a
-pinned list; on anything else it stops before installing and says so.
+mode.
 
 About ten minutes on a fresh install, mostly downloads.
+
+### Older Linux, and Fedora, openSUSE, Arch
+
+The satellite needs Python 3.11 or newer. A **Debian or Ubuntu that has
+it** (Debian 12 and 13, Ubuntu 24.04 and later, Mint 22) uses its own.
+**Everything else gets the satellite's own Python**, with nothing for you
+to do: Ubuntu 22.04 and Mint 21 (their Python is 3.10), Debian 11 (3.9),
+and Fedora, openSUSE and Arch whatever their Python. The installer says
+which, before it starts:
+
+```
+Ubuntu 22.04.5 LTS: its Python is 3.10.12, older than the 3.11 the satellite needs.
+This computer gets the satellite's own Python 3.14.8 (36 MB, pinned by its SHA-256)...
+  from the Domovoi server
+```
+
+* **Which Python.** CPython 3.14.8 on x86-64 and 3.13.16 on 64-bit ARM,
+  built by the python-build-standalone project (Astral) to run on any Linux
+  with glibc 2.17 or newer. The exact file is pinned by its size and SHA-256
+  in `satellite/locks/linux-python.txt`; the installer checks it before it
+  unpacks anything, and refuses any other.
+* **Where it comes from.** Your Domovoi server, if an admin pressed **get
+  the Linux Python** on the add-a-spare-device card (66 MB for both
+  kinds of computer, once); otherwise the laptop downloads the same file
+  from GitHub itself. The satellite's libraries come from PyPI either way,
+  as on any laptop.
+* **Where it goes.** `/usr/local/lib/domovoi-satellite/python`, owned by
+  root, beside root's copy of the uninstaller: the satellite's account can
+  use it but not change it, as with the system's own `/usr/bin/python3`.
+  Uninstalling removes it.
+* **What's in it, licence-wise.** CPython (PSF licence) and permissive
+  libraries only: OpenSSL (Apache-2.0), libffi, expat, libX11 (MIT), SQLite
+  (public domain), zlib, bzip2, xz, zstd, mpdecimal, libuuid, ncurses,
+  libedit (in place of GNU readline), Tcl/Tk. No GNU readline and no GDBM.
+  Its `dbm` module's Berkeley DB (a copyleft licence) is deleted at install;
+  the satellite never uses it.
+* **Updates.** Your system's package manager doesn't update it. A Domovoi
+  update can pin a newer one; it reaches a laptop when you make a new
+  command and run it again (the settings and the approval are kept).
+* `--python system` or `--python pinned` forces the choice (`system` only
+  on Debian and Ubuntu with 3.11 or newer).
+
+The **system packages** still come from the computer's own package
+manager: apt on the Debian family, dnf on Fedora, zypper on openSUSE,
+pacman on Arch (bring an Arch system up to date with `sudo pacman -Syu`
+first). On any other Linux the installer stops and lists what to install;
+install PortAudio, mpg123, the ALSA utilities and (with a desktop)
+`pactl` yourself, then run the command again with `--skip-packages`.
+
+Two systems it refuses, saying why: a **Debian upgraded from 10 or older
+without merged /usr** (its programs still in `/bin`; `sudo apt install
+usrmerge` converts it, and Debian needs that before its next upgrade
+anyway), and one with a C library older than glibc 2.28 or no glibc at all
+(Alpine). **Debian 11's support ended in August 2026**: its packages still
+install from Debian's archive for now, but it gets no more security
+updates, so prefer Debian 12 on a laptop you reinstall anyway.
 
 ### 3. Approve it
 
@@ -299,6 +361,9 @@ music player, which the container guard would otherwise keep expecting.
 | "did not prove it is the one in the code" | The address answered, but not with your server's key: a different machine, or an old Domovoi. Make a new code from the dashboard you mean, and compare the fingerprint with **Settings → About**. |
 | "not on the home network" | The address in the code is public or loopback. In the dashboard, tick **a different server address** and give the one your devices reach. |
 | `sha256sum: WARNING: 1 computed checksum did NOT match` | Domovoi was updated since the command was made (or the download was tampered with). Make a new command. |
+| "neither the Domovoi server nor GitHub gave the pinned Python" | This computer needs the satellite's own Python and couldn't get the exact file: your server hasn't fetched it and the laptop can't reach GitHub (or something on the way changed it). On the dashboard's add-a-spare-device card press **get the Linux Python**, or connect the laptop to the internet, and run the command again. |
+| "keeps its programs in /bin and /sbin" | A Debian upgraded from version 10 or older without merged /usr. `sudo apt install usrmerge`, then the command again. |
+| "installs its few packages with apt … dnf … zypper … pacman" | A Linux the installer doesn't know. Install PortAudio, mpg123, the ALSA utilities and (with a desktop) `pactl` with its own package manager, then run the command again with `--skip-packages` added at the end. |
 | Tray grey: "refused … paired to another device" | That room already has a satellite. Pick another name, or retire the old room in the dashboard first (or **Reset pairing** in its drawer if this device replaces it). |
 | Tray grey: "failed the identity check" | The server at the saved address isn't yours any more (moved, or something else answers there). It never connects to it. Re-run the install command made by your dashboard. |
 | It doesn't start: "no pinned Domovoi server identity" | A spare computer never trusts the first server that answers. Re-run the install command from the dashboard. |
