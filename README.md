@@ -102,6 +102,9 @@ We build Domovoi in public. Here's where it stands.
   memory or more ([Android compatibility](docs/ANDROID_COMPATIBILITY.md)).
 - **A Windows installer, as a test build.** `DomovoiSetup.exe` puts the Linux
   server inside WSL2 on a Windows 11 PC ([Windows installer](docs/WINDOWS_HOST.md)).
+- **Satellites on spare devices.** A Linux or Windows laptop or PC, or an old
+  phone or tablet through the Android app's room mode, can be a room instead
+  of a Raspberry Pi ([spare-device satellites](docs/SPARE_DEVICE_SATELLITES.md)).
 
 **Coming next**
 
@@ -109,9 +112,6 @@ We build Domovoi in public. Here's where it stands.
    airplane mode.
 2. **The Windows installer out of test,** so one download turns the household
    gaming PC into a Domovoi server.
-3. **A voice in every room with what you already own.** Satellites on an old
-   laptop running Linux or on an old Android phone or tablet, alongside the
-   Raspberry Pi, plus a step-by-step guide for each.
 
 **How it's built.** Domovoi is written with AI coding agents and held to the
 same bar Coders Farm teaches: automated tests, review, and a written
