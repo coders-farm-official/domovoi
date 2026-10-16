@@ -4,6 +4,24 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — Android app: the benchmark moves behind developer options
+
+Android app only (a new APK); nothing changes on the server.
+
+* **The on-device assistant benchmark is no longer in Settings → About for
+  everyone.** It is a developer's tool, now under **developer options**:
+  tap **app version** in Settings → About (or, with no server, the gear's
+  **About this app**) seven times; from the third tap a toast counts down,
+  the seventh says "Developer options on", and a **Developer options**
+  section at the end of the page holds the benchmark and a switch that
+  turns them off again. The phone remembers the choice. Release builds
+  start with them off, debug builds on. The assistant's reply timings
+  (long-press a reply) and the model settings' "last stop" timing show
+  only with them on, too. Results and downloaded models are untouched.
+* On a 32-bit install (no on-device assistant) there are no developer
+  options: the version line is plain text. A 64-bit phone running the
+  32-bit app still says, in About, which app has the assistant.
+
 ## 2026-10-15 — Android app: Android 16, report a reply, privacy, licences
 
 Android app only (a new APK); nothing changes on the server.
