@@ -101,7 +101,50 @@ def test_unit_is_the_docs_unit():
 
 
 def test_unit_names_the_checkout_it_updates():
-    assert "ExecStart=/bin/bash /srv/dv/scripts/linux/apply-update.sh" in _script_unit("/srv/dv")
+    assert "Environment=DOMOVOI_REPO_DIR=/srv/dv\n" in _script_unit("/srv/dv")
+
+
+def test_unit_runs_nothing_of_the_checkout():
+    """Delta security review 2026-10-16, S4: root runs the root-owned
+    verifier, which runs the verified copy; no Exec line names a file of the
+    checkout."""
+    unit = _script_unit("/srv/dv")
+    execs = [line for line in unit.splitlines() if line.startswith("Exec")]
+    assert execs == [
+        "ExecStartPre=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh prepare",
+        "ExecStart=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh run",
+    ]
+    assert "RuntimeDirectory=domovoi-update\n" in unit
+    # Kept from before the verifier: the update's type and its time bound.
+    assert "Type=oneshot\n" in unit and "TimeoutStartSec=30min" in unit
+    # The path the unit runs is the one the script installs, and the one
+    # apply-update.sh keeps current.
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "VERIFIER_FILE=$ROOT/usr/local/lib/domovoi-update/verify-update.sh\n" in text
+    apply = (REPO_ROOT / "scripts" / "linux" / "apply-update.sh").read_text(encoding="utf-8")
+    assert "VERIFIER_INSTALLED=$TEST_ROOT/usr/local/lib/domovoi-update/verify-update.sh\n" in apply
+
+
+def test_apply_update_moves_exactly_the_old_unit():
+    """apply-update.sh replaces the unit without asking only when it is the
+    one every earlier install-update-unit.sh wrote (one shape, 2026-09-25 to
+    the verifier); the harness's legacy_unit is the same text."""
+    old = textwrap.dedent("""\
+        [Unit]
+        Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)
+        After=docker.service network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        EnvironmentFile=-/etc/default/domovoi-update
+        ExecStart=/bin/bash $REPO_DIR/scripts/linux/apply-update.sh
+        TimeoutStartSec=30min""")
+    apply = (REPO_ROOT / "scripts" / "linux" / "apply-update.sh").read_text(encoding="utf-8")
+    m = re.search(r"^legacy_unit_text\(\) \{\n  printf '%s\\n' (.*?)\n\}$", apply, re.M | re.S)
+    assert m, "legacy_unit_text() not found"
+    parts = re.findall(r"""'([^']*)'|"([^"]*)\"""", m.group(1))
+    assert "\n".join(a or b for a, b in parts) == old
 
 
 @requires_bash

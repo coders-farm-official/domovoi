@@ -310,7 +310,7 @@ commit_all() { g add -A >/dev/null && g commit -q -m "$1" && g rev-parse HEAD; }
 
 # new_case NAME: a repo at commit B with the core running commit A, the
 # shims, a venv, and an empty fake root. Sets CASE, REPO, STATE, ROOT, VENV,
-# UPD, UNIT, SUDOERS, SHA_A, SHA_B and exports the shim env.
+# UPD, UNIT, SUDOERS, VERIFIER, SHA_A, SHA_B and exports the shim env.
 new_case() {
   CASE_NAME=$1
   CASE_FAILED=0
@@ -322,6 +322,7 @@ new_case() {
   UPD=$ROOT/var/lib/domovoi-update
   UNIT=$ROOT/etc/systemd/system/domovoi-update.service
   SUDOERS=$ROOT/etc/sudoers.d/domovoi-update
+  VERIFIER=$ROOT/usr/local/lib/domovoi-update/verify-update.sh
   mkdir -p "$REPO/scripts/linux" "$REPO/domovoi" "$STATE" "$CASE/tmp" \
     "$ROOT/run/systemd/system" "$ROOT/etc/systemd/system" "$ROOT/etc/sudoers.d" "$ROOT/usr/bin"
   printf '#!/bin/sh\nexit 0\n' >"$ROOT/usr/bin/systemctl"
@@ -397,13 +398,19 @@ expected_unit() {
     '' \
     '[Service]' \
     'Type=oneshot' \
+    "Environment=DOMOVOI_REPO_DIR=$REPO" \
     'EnvironmentFile=-/etc/default/domovoi-update' \
-    "ExecStart=/bin/bash $REPO/scripts/linux/apply-update.sh" \
+    'RuntimeDirectory=domovoi-update' \
+    'ExecStartPre=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh prepare' \
+    'ExecStart=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh run' \
     'TimeoutStartSec=30min'
 }
 
+# The verifier this script installs: its sibling.
+VERIFIER_SRC=$HERE/../update-verifier.sh
+
 nothing_installed() {
-  absent "$UNIT" && absent "$SUDOERS" && absent "$UPD/applied_sha" \
+  absent "$UNIT" && absent "$SUDOERS" && absent "$UPD/applied_sha" && absent "$VERIFIER" \
     && none_start "install " && not_called "daemon-reload" && not_called "chown"
 }
 
@@ -429,6 +436,12 @@ case_fresh_install() {
   check "records the running SHA in full, not HEAD" file_is "$UPD/applied_sha" "$SHA_A"
   check "creates the state dir 0755 root:root" called "install -d -m 0755 -o root -g root $UPD"
   check "the unit is the doc's" eq "$(cat "$UNIT")" "$(expected_unit)"
+  check "the verifier is in place, this script's sibling" cmp -s "$VERIFIER" "$VERIFIER_SRC"
+  check "installed 0755 root:root, from a mktemp name" \
+    starts "install -m 0755 -o root -g root .*/usr/local/lib/domovoi-update/\.verify-update\.sh\.[A-Za-z0-9]\{6\}$"
+  check "its directory 0755 root:root" called "install -d -m 0755 -o root -g root $ROOT/usr/local/lib/domovoi-update"
+  check "the verifier goes in before the unit" before "/.verify-update.sh." "/.domovoi-update.service."
+  check "and after the grant is verified" before "sudo -n -l" "/.verify-update.sh."
   check "the grant is the doc's one rule" eq "$(cat "$SUDOERS")" "$RULE"
   check "grant installed 0440 root:root" called "install -m 0440 -o root -g root"
   check "unit installed 0644 root:root, from a mktemp name" \
@@ -508,6 +521,7 @@ case_unit_in_place_but_not_loaded() {
   mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
   expected_unit >"$UNIT"
   echo "$RULE" >"$SUDOERS"
+  mkdir -p "$(dirname "$VERIFIER")" && cp "$VERIFIER_SRC" "$VERIFIER"
   run_install
   check "exit 0" eq "$RC" 0
   check "nothing installed" none_start "install "
@@ -1011,7 +1025,9 @@ case_unit_write_fails_takes_the_grant_back() {
   check "no unit" absent "$UNIT"
   check "the grant is taken back" absent "$SUDOERS"
   check "and says so" said "undone: removed the new $SUDOERS"
-  check "no temp files left" eq "$(ls -A "$ROOT/etc/sudoers.d" "$ROOT/etc/systemd/system" | grep -c '^\.')" 0
+  check "the verifier is taken back" absent "$VERIFIER"
+  check "and says so too" said "undone: removed the new $VERIFIER"
+  check "no temp files left" eq "$(ls -A "$ROOT/etc/sudoers.d" "$ROOT/etc/systemd/system" "$(dirname "$VERIFIER")" | grep -c '^\.')" 0
   check "the baseline stays" file_is "$UPD/applied_sha" "$SHA_A"
   check "and is the one change reported" said "Changed before the stop:"
   end_case
@@ -1340,7 +1356,168 @@ case_defaults_file_the_service_user_cannot_read_is_said() {
   end_case
 }
 
+
+# ─── The update verifier (delta security review 2026-10-16, S4) ──────────
+
+case_verifier_replaced_and_put_back_on_a_stop() {
+  new_case verifier_replaced_and_put_back_on_a_stop
+  mkdir -p "$(dirname "$VERIFIER")"
+  printf '#!/bin/bash\necho an older verifier\n' >"$VERIFIER"
+  : >"$STATE/install-fail-unit"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "the older verifier is back" eq "$(cat "$VERIFIER")" "$(printf '#!/bin/bash\necho an older verifier')"
+  check "says so" said "undone: put the previous $VERIFIER back"
+  rm -f "$STATE/install-fail-unit"
+  : >"$STATE/calls.log"
+  run_install
+  check "then: exit 0" eq "$RC" 0
+  check "then: replaced by this script's sibling" cmp -s "$VERIFIER" "$VERIFIER_SRC"
+  check "then: no copy left beside it" eq "$(ls -A "$(dirname "$VERIFIER")" | tr '\n' ' ')" "verify-update.sh "
+  end_case
+}
+
+case_verifier_dir_writable_by_others_stops() {
+  new_case verifier_dir_writable_by_others_stops
+  mkdir -p "$ROOT/usr/local"
+  echo "$ROOT/usr/local" >"$STATE/insecure-paths"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says which" said "$ROOT/usr/local can be written by a user other than root"
+  check "and what root keeps there" said "The update unit runs $VERIFIER as root before every update."
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_verifier_symlink_stops() {
+  new_case verifier_symlink_stops
+  mkdir -p "$(dirname "$VERIFIER")"
+  ln -s /tmp/elsewhere "$VERIFIER"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says so" said "$VERIFIER is a symlink; not writing through it"
+  check "no unit" absent "$UNIT"
+  end_case
+}
+
+case_verifier_must_be_beside_the_script() {
+  new_case verifier_must_be_beside_the_script
+  mkdir -p "$CASE/lone"
+  cp "$SCRIPT" "$CASE/lone/install-update-unit.sh"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$CASE/lone/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  check "exit 1" eq "$RC" 1
+  check "says what is missing" said "there is no update-verifier.sh beside this script ($CASE/lone/update-verifier.sh)"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_print_unit_needs_no_root() {
+  new_case print_unit_needs_no_root
+  echo 1000 >"$STATE/uid"
+  run_install --print-unit --repo "$REPO"
+  check "exit 0" eq "$RC" 0
+  check "prints the unit for that checkout" eq "$(cat "$CASE/output.log")" "$(expected_unit)"
+  check "calls nothing" eq "$(wc -c <"$STATE/calls.log" | tr -d ' ')" 0
+  run_install --print-unit --repo relative/path
+  check "a relative checkout: exit 2" eq "$RC" 2
+  run_install --print-unit
+  check "no checkout: exit 2" eq "$RC" 2
+  end_case
+}
+
+
+not() { ! "$@"; }
+
+# Review of the root verifier, 2026-10-16, R1: the documented re-run, sudo
+# bash /opt/domovoi/scripts/linux/install-update-unit.sh, installed the
+# checkout's own update-verifier.sh, edited or not, as root's verifier.
+# With a verifier in place, the checkout's installer makes the verified
+# copy of HEAD with it and runs that copy's installer instead.
+case_from_the_checkout_runs_the_verified_copy() {
+  new_case from_the_checkout_runs_the_verified_copy
+  mkdir -p "$REPO/scripts/linux/units"
+  cp "$HERE"/../*.sh "$REPO/scripts/linux/"
+  cp "$HERE"/../units/* "$REPO/scripts/linux/units/"
+  local sha_c; sha_c=$(commit_all "C: the real scripts")
+  # The core runs C (the version the installer records as the baseline).
+  printf '{"running_sha":"%s"}\n' "$sha_c" >"$STATE/version.json"
+  mkdir -p "$(dirname "$VERIFIER")"
+  cp "$VERIFIER_SRC" "$VERIFIER"
+  # The service user edits the verifier beside the installer, no commit.
+  sed -i "2i echo PLANTED-R1 >>$CASE/ran-verifier" "$REPO/scripts/linux/update-verifier.sh"
+  cat >"$CASE/bin/runuser" <<'SH'
+#!/usr/bin/env bash
+echo "runuser $*" >>"$SHIM_STATE/calls.log"
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+SH
+  chmod +x "$CASE/bin/runuser"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$REPO/scripts/linux/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  local copy=$ROOT/run/domovoi-update-install/$sha_c
+  check "exit 0" eq "$RC" 0
+  check "says it makes the copy with the installed verifier" said "this script is the checkout's own: making the verified copy of HEAD with $VERIFIER"
+  check "and runs that copy's installer" said "Running the verified copy instead: bash $copy/scripts/linux/install-update-unit.sh"
+  check "the checkout read by upload-pack as the service user" called "runuser -u tester -- git upload-pack"
+  check "the verifier is still the commit's" cmp -s "$VERIFIER" "$VERIFIER_SRC"
+  check "not the edited one" not grep -q PLANTED-R1 "$VERIFIER"
+  check "which never ran" test ! -e "$CASE/ran-verifier"
+  check "the unit is in place" eq "$(cat "$UNIT")" "$(expected_unit)"
+  check "and the grant" eq "$(cat "$SUDOERS")" "$RULE"
+  # Without a verifier (the very first install) it runs as it is.
+  rm -rf "$ROOT/usr/local/lib/domovoi-update" "$UNIT" "$SUDOERS" "$ROOT/run/domovoi-update-install"
+  g checkout -q -- scripts/linux/update-verifier.sh
+  : >"$STATE/calls.log"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$REPO/scripts/linux/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  check "first install: exit 0" eq "$RC" 0
+  check "first install: from the checkout, no copy" not said "Running the verified copy instead"
+  check "first install: the verifier is the checkout's" cmp -s "$VERIFIER" "$REPO/scripts/linux/update-verifier.sh"
+  end_case
+}
+
+case_from_the_checkout_stops_when_the_verifier_refuses() {
+  new_case from_the_checkout_stops_when_the_verifier_refuses
+  mkdir -p "$REPO/scripts/linux/units"
+  cp "$HERE"/../*.sh "$REPO/scripts/linux/"
+  cp "$HERE"/../units/* "$REPO/scripts/linux/units/"
+  commit_all "C: the real scripts" >/dev/null
+  mkdir -p "$(dirname "$VERIFIER")"
+  cp "$VERIFIER_SRC" "$VERIFIER"
+  # A link in the commit: the copy refuses, and so does the installer.
+  rm "$REPO/scripts/linux/units/journald-domovoi.conf"
+  ln -s /etc/shadow "$REPO/scripts/linux/units/journald-domovoi.conf"
+  commit_all "D: a link" >/dev/null
+  cat >"$CASE/bin/runuser" <<'SH'
+#!/usr/bin/env bash
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+SH
+  chmod +x "$CASE/bin/runuser"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$REPO/scripts/linux/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  check "exit 1" eq "$RC" 1
+  check "says the verifier refused" said "the update verifier refused to copy HEAD of $REPO"
+  check "and why" said "is a symbolic link"
+  check "nothing installed but the verifier there before" eq "$(absent "$UNIT" && absent "$SUDOERS" && echo none)" none
+  end_case
+}
+
 CASES=(
+  case_from_the_checkout_runs_the_verified_copy
+  case_from_the_checkout_stops_when_the_verifier_refuses
+  case_verifier_replaced_and_put_back_on_a_stop
+  case_verifier_dir_writable_by_others_stops
+  case_verifier_symlink_stops
+  case_verifier_must_be_beside_the_script
+  case_print_unit_needs_no_root
   case_fresh_install
   case_idempotent_rerun
   case_existing_files_replaced_and_kept

@@ -142,9 +142,11 @@ def test_ollama_unit_is_the_docs_unit():
 
 def test_units_come_from_the_shipped_files():
     """No second copy of the domovoi units: provision.sh installs
-    scripts/linux/units/*.service, rewriting only paths and the user."""
+    scripts/linux/units/*.service, rewriting only paths and the user, from
+    the verified copy of the commit (never the working tree; delta security
+    review 2026-10-16, S4)."""
     script = SCRIPT.read_text(encoding="utf-8")
-    assert '"$CHECKOUT/scripts/linux/units/$1"' in script
+    assert '"$(src_file "scripts/linux/units/$1")"' in script
     assert "ExecStart=/opt/domovoi/.venv/bin/python" not in script
     for unit in ("domovoi-db.service", "domovoi-core.service", "domovoi-web.service"):
         assert (REPO_ROOT / "scripts" / "linux" / "units" / unit).is_file()

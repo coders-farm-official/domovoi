@@ -751,8 +751,27 @@ run_update() {
   if [ -n "${MANAGE_JOURNAL:-}" ]; then journal_env=(DOMOVOI_MANAGE_JOURNAL="$MANAGE_JOURNAL"); fi
   # Unset, EPOCHREALTIME is an ordinary (empty) variable in that shell.
   if [ "${NO_BASH_CLOCK:-0}" = 1 ]; then run=(bash -c 'unset EPOCHREALTIME; . "$0"' "$SCRIPT"); fi
+  # The script as the update verifier runs it (scripts/linux/update-verifier.sh):
+  # this tree's scripts/linux as the verified copy of the case's HEAD, the
+  # checkout itself standing in for the verifier's mirror. VERIFIED=0
+  # starts it the old way instead (as a unit from before the verifier, or a
+  # run by hand), for the cases about the verifier itself; VERIFIED_SHA
+  # overrides the commit it is told it is.
+  # UNIT=1 runs what domovoi-update.service runs now instead: the
+  # verifier's prepare (ExecStartPre), then its run (ExecStart); UNIT=prepare
+  # or UNIT=run one of them.
+  local verifier=$HERE/../update-verifier.sh
+  case ${UNIT:-0} in
+    1) run=(bash -c 'bash "$0" prepare && exec bash "$0" run' "$verifier") ;;
+    prepare|run) run=(bash "$verifier" "$UNIT") ;;
+  esac
+  local verified_env=() head_now
+  if [ "${VERIFIED:-1}" = 1 ] && [ "${UNIT:-0}" = 0 ] && head_now=$(git -C "$REPO" rev-parse -q --verify HEAD 2>/dev/null); then
+    verified_env=(DOMOVOI_VERIFIED_SHA="${VERIFIED_SHA:-$head_now}" DOMOVOI_VERIFIED_DIR="$(cd "$HERE/../../.." && pwd)")
+  fi
   RC=0
-  env -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
+  env -u DOMOVOI_VERIFIED_SHA -u DOMOVOI_VERIFIED_DIR -u DOMOVOI_VERIFIED_MIRROR \
+    -u DOMOVOI_VENV -u DOMOVOI_MANAGE_SEARXNG -u DOMOVOI_REVOKED_SIGNERS \
     -u DOMOVOI_UPSTREAM_URL -u DOMOVOI_UPSTREAM_BRANCH -u DOMOVOI_USE_LOCK -u DOMOVOI_MANAGE_OS_JOBS \
     -u DOMOVOI_MANAGE_GPU_RUNTIME -u DOMOVOI_MANAGE_WAKE_TRAINER -u DOMOVOI_WAKE_TRAINER_IMAGE \
     -u DOMOVOI_MANAGE_JOURNAL PATH="$path" \
@@ -765,6 +784,8 @@ run_update() {
     ${osjobs_env[@]+"${osjobs_env[@]}"} \
     ${gpu_env[@]+"${gpu_env[@]}"} \
     ${journal_env[@]+"${journal_env[@]}"} \
+    ${verified_env[@]+"${verified_env[@]}"} \
+    DOMOVOI_UPDATE_RUN_DIR="$CASE/run" \
     DOMOVOI_ALLOWED_SIGNERS="${SIGNERS:-$CASE/no-allowed-signers}" \
     DOMOVOI_UPDATE_DIR="$UPD" \
     DOMOVOI_USER=tester \
@@ -2010,7 +2031,7 @@ case_searxng_started_after_a_healthy_restart() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "reads the answer the core's way" called "python -m domovoi.egress --print-policy"
-  check "starts the search helper" called "docker compose -f $REPO/domovoi/docker-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "starts the search helper" called "docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
   check "only after health" before "curl http://127.0.0.1:6369/api/health" "docker compose"
   check "a searxng step, ok" step_is searxng ok
   check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
@@ -2141,7 +2162,7 @@ case_searxng_start_detached_under_systemd() {
   SEARXNG_DETACH=1 run_update "$CASE/sdbin"
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
-  check "handed to a transient unit" called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start docker compose -f $REPO/domovoi/docker-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "handed to a transient unit" called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
   check "the update did not run compose itself" eq "$(grep -c '^docker compose' "$STATE/calls.log")" 0
   check "a searxng step, ok" step_is searxng ok
   check "says it starts in the background" eq "$(grep -c 'in the background' "$RESULT")" 1
@@ -3121,7 +3142,7 @@ case_signed_head_verifies_as_root_before_anything_runs() {
   check "the result says verified" eq "$(sig_field status)" '"verified"'
   check "and who" eq "$(sig_field signer)" '"owner@example.invalid"'
   check "and that it is enforced" eq "$(sig_field enforced)" true
-  check "root verified HEAD itself" called "git -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
+  check "root verified HEAD itself" called "git -c advice.graftFileDeprecated=false -c safe.directory=$REPO -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
   check "with the programs pinned" called "-c gpg.ssh.program=ssh-keygen -c gpg.program=gpg"
   check "and verify-commit on the exact HEAD" called "verify-commit $sha_b"
   check "not through runuser" not_called "runuser -u tester -- git -c safe.directory"
@@ -3878,6 +3899,487 @@ case_dotenv_is_read_the_way_the_core_reads_it() {
   end_case
 }
 
+# ─── the update verifier (scripts/linux/update-verifier.sh) ─────────────
+#
+# Delta security review 2026-10-16, S4 / REV-10: root ran and installed
+# files from the service user's working tree. These cases run what
+# domovoi-update.service runs now (run_unit: the verifier's prepare, then
+# its run, as root) against a checkout the service user has tampered with,
+# and check that nothing of the tampering reaches root.
+
+# with_scripts: commit A gains this tree's scripts/linux (what the verifier
+# copies out of a commit; its tests stay out), as a real checkout has it;
+# applied_sha is that commit, so a run is a plain restart.
+with_scripts() {
+  mkdir -p "$REPO/scripts/linux/units"
+  cp "$HERE"/../*.sh "$HERE/../provision-manifest.conf" "$REPO/scripts/linux/"
+  cp "$HERE"/../units/* "$REPO/scripts/linux/units/"
+  SHA_A=$(commit_all "A: with scripts/linux")
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+}
+
+# run_unit: the update the way domovoi-update.service runs it now, as root.
+run_unit() { UNIT=${UNIT:-1} VERIFIED=0 run_update "$CASE/rootbin"; }
+
+# plant FILE MARK: the service user edits FILE in the checkout, without a
+# commit, so that whoever runs it leaves MARK behind.
+plant() { sed -i "2i echo planted >>$CASE/$2" "$1"; }
+planted_ran() { [ -e "$CASE/$1" ]; }
+not() { ! "$@"; }
+
+# The verified copy of commit $1, and whether the run went on from it.
+copy_of() { printf '%s/run/%s' "$CASE" "$1"; }
+ran_from_copy() { grep -qF "running $(copy_of "$1")/scripts/linux/apply-update.sh" "$CASE/output.log"; }
+apply_ran() { grep -q '^apply-update: ' "$CASE/output.log"; }
+
+# Every git call on the checkout went through runuser: root's own git
+# looked only at its mirror.
+root_git_never_in_the_checkout() {
+  local n_root n_user
+  n_root=$(grep -c "^git -C $REPO " "$STATE/calls.log")
+  n_user=$(grep -c "^runuser -u tester -- git -C $REPO " "$STATE/calls.log")
+  [ "$n_root" = "$n_user" ] || { echo "      $n_root git calls on the checkout, $n_user of them as the service user"; return 1; }
+  ! grep -qF "safe.directory=$REPO" "$STATE/calls.log" || { echo "      root's git opened the checkout"; return 1; }
+}
+
+case_verifier_runs_the_commit_not_the_edited_tree() {
+  new_case verifier_runs_the_commit_not_the_edited_tree
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  os_units apt-daily.timer
+  echo never >"$STATE/internet-policy"
+  plant "$REPO/scripts/linux/apply-update.sh" ran-apply-update
+  plant "$REPO/scripts/linux/os-jobs.sh" ran-os-jobs
+  plant "$REPO/scripts/linux/gpu-runtime.sh" ran-gpu-runtime
+  plant "$REPO/scripts/linux/install-update-unit.sh" ran-install-update-unit
+  plant "$REPO/scripts/linux/update-verifier.sh" ran-verifier
+  check "git status sees the edits" test -n "$(g status --porcelain --untracked-files=no)"
+  run_unit
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "a plain restart" eq "$(field mode)" '"restart"'
+  check "ran the verified copy of HEAD" ran_from_copy "$SHA_A"
+  check "the edited apply-update.sh never ran" not planted_ran ran-apply-update
+  check "the edited os-jobs.sh never ran" not planted_ran ran-os-jobs
+  check "the edited gpu-runtime.sh never ran" not planted_ran ran-gpu-runtime
+  check "the edited install-update-unit.sh never ran" not planted_ran ran-install-update-unit
+  check "the edited verifier never ran" not planted_ran ran-verifier
+  check "the commit's os-jobs.sh ran instead" step_is os-jobs ok
+  check "and did its job" os_masked apt-daily.timer
+  check "the copy holds the commit's os-jobs.sh" cmp -s "$(copy_of "$SHA_A")/scripts/linux/os-jobs.sh" "$HERE/../os-jobs.sh"
+  check "the copy holds no tests" test ! -e "$(copy_of "$SHA_A")/scripts/linux/tests"
+  check "the checkout was read by upload-pack as the service user" called "runuser -u tester -- git upload-pack"
+  check "root's git only in its mirror" root_git_never_in_the_checkout
+  check "signing not enforced: HEAD said unsigned" eq "$(sig_field status)" '"unsigned"'
+  check "the mirror checks objects" eq "$(git -C "$UPD/mirror.git" config transfer.fsckObjects)" true
+  end_case
+}
+
+case_verifier_journal_drop_in_never_follows_a_link() {
+  new_case verifier_journal_drop_in_never_follows_a_link
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  rm -f "$CASE/journald/50-domovoi.conf"
+  printf 'root-only-secret-line\n' >"$CASE/secret"
+  chmod 0600 "$CASE/secret"
+  rm "$REPO/scripts/linux/units/journald-domovoi.conf"
+  ln -s "$CASE/secret" "$REPO/scripts/linux/units/journald-domovoi.conf"
+  run_unit
+  local f=$CASE/journald/50-domovoi.conf
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the drop-in was installed" step_is journal ok
+  check "from the commit" cmp -s "$f" "$HERE/../units/journald-domovoi.conf"
+  check "nothing of the link's target" not grep -q root-only-secret "$f"
+  end_case
+}
+
+case_verifier_skip_worktree_edit_has_no_effect() {
+  new_case verifier_skip_worktree_edit_has_no_effect
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  os_units apt-daily.timer
+  echo never >"$STATE/internet-policy"
+  g update-index --skip-worktree scripts/linux/os-jobs.sh
+  plant "$REPO/scripts/linux/os-jobs.sh" ran-os-jobs
+  check "git status hides the edit" eq "$(g status --porcelain --untracked-files=no)" ""
+  run_unit
+  check "plain restart: status ok" eq "$(field status)" '"ok"'
+  check "plain restart: the hidden edit never ran" not planted_ran ran-os-jobs
+  check "plain restart: the commit's os-jobs.sh did" os_masked apt-daily.timer
+  # A real update over the hidden edit: refused, before anything stops.
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  g add domovoi/app.py && g commit -q -m "B: app"
+  local sha_b; sha_b=$(g rev-parse HEAD)
+  : >"$STATE/calls.log"
+  run_unit
+  check "update: refused" eq "$(field status)" '"refused"'
+  check "update: says why" grep -qF 'hidden from git status (skip-worktree or assume-unchanged)' "$RESULT"
+  check "update: names the file" grep -qF 'S scripts/linux/os-jobs.sh' "$RESULT"
+  check "update: a refused preflight" step_is preflight refused
+  check "update: nothing stopped" not_called "systemctl stop"
+  check "update: still not run" not planted_ran ran-os-jobs
+  check "update: applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
+  check "update: to B" eq "$(field to_sha)" "\"$sha_b\""
+  end_case
+}
+
+case_verifier_refuses_a_link_in_the_commit() {
+  new_case verifier_refuses_a_link_in_the_commit
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  rm "$REPO/scripts/linux/units/journald-domovoi.conf"
+  ln -s /etc/shadow "$REPO/scripts/linux/units/journald-domovoi.conf"
+  local sha_b; sha_b=$(commit_all "B: a symlink root would follow")
+  check "the commit holds a link" eq "$(g ls-tree HEAD scripts/linux/units/journald-domovoi.conf | cut -c1-6)" 120000
+  run_unit
+  check "exit 1" eq "$RC" 1
+  check "status failed" eq "$(field status)" '"failed"'
+  check "a failed verify step" step_is verify failed
+  check "says why" grep -qF 'scripts/linux/units/journald-domovoi.conf is a symbolic link' "$RESULT"
+  check "to B" eq "$(field to_sha)" "\"$sha_b\""
+  check "apply-update.sh never ran" not apply_ran
+  check "nothing stopped" not_called "systemctl stop"
+  check "no copy left" test ! -e "$(copy_of "$sha_b")"
+  check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+# A signed A, the signers file in place, the stat shim saying it is root's.
+signed_box() {
+  write_signing_keys "$CASE/keys"
+  with_scripts
+  printf 'signed\n' >"$REPO/signed.txt"
+  SHA_S=$(commit_signed "$CASE/keys/owner" "S: signed")
+  echo "$SHA_S" >"$UPD/applied_sha"
+  write_root_shims "$CASE/rootbin"
+  write_stat_shim "$CASE/rootbin"
+  echo "$CASE/keys/allowed_signers" >"$STATE/signers-path"
+}
+
+case_verifier_refuses_an_unsigned_head_when_enforced() {
+  new_case verifier_refuses_an_unsigned_head_when_enforced
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  signed_box
+  plant "$REPO/scripts/linux/apply-update.sh" ran-apply-update
+  plant "$REPO/scripts/linux/os-jobs.sh" ran-os-jobs
+  local sha_u; sha_u=$(commit_all "U: unsigned, with edited scripts")
+  SIGNERS=$CASE/keys/allowed_signers run_unit
+  check "exit 1" eq "$RC" 1
+  check "status refused" eq "$(field status)" '"refused"'
+  check "a refused signature step" step_is signature refused
+  check "the result's signature" eq "$(sig_field status)" '"unsigned"'
+  check "enforced" eq "$(sig_field enforced)" true
+  check "says how to fix it" grep -qF 'signed updates are enforced by' "$RESULT"
+  check "from the applied commit" eq "$(field from_sha)" "\"$SHA_S\""
+  check "to the unsigned one" eq "$(field to_sha)" "\"$sha_u\""
+  check "verified in the mirror" called "-C $UPD/mirror.git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c advice.graftFileDeprecated=false -c gpg.ssh.allowedSignersFile=$CASE/keys/allowed_signers"
+  check "apply-update.sh never ran" not apply_ran
+  check "nothing of the commit ran" not planted_ran ran-apply-update
+  check "nor its os-jobs.sh" not planted_ran ran-os-jobs
+  check "nothing stopped" not_called "systemctl stop"
+  check "no copy made" test ! -e "$(copy_of "$sha_u")"
+  end_case
+}
+
+case_verifier_signed_head_runs_the_signed_copy() {
+  new_case verifier_signed_head_runs_the_signed_copy
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  signed_box
+  plant "$REPO/scripts/linux/apply-update.sh" ran-apply-update
+  plant "$REPO/scripts/linux/gpu-runtime.sh" ran-gpu-runtime
+  SIGNERS=$CASE/keys/allowed_signers run_unit
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "verified" eq "$(sig_field status)" '"verified"'
+  check "enforced" eq "$(sig_field enforced)" true
+  check "ran the signed copy" ran_from_copy "$SHA_S"
+  check "the uncommitted edits never ran" not planted_ran ran-apply-update
+  check "nor the gpu helper's" not planted_ran ran-gpu-runtime
+  check "apply-update's own checks in the mirror" called "safe.directory=$UPD/mirror.git"
+  check "root's git only in its mirror" root_git_never_in_the_checkout
+  end_case
+}
+
+# rc2 review C3: a refs/replace in the service user's repository makes git
+# read another commit for the one HEAD names. Root's mirror never gets it,
+# and root's git never follows one.
+case_verifier_ignores_the_checkouts_replace_refs() {
+  new_case verifier_ignores_the_checkouts_replace_refs
+  if ! have_ssh_signing; then skip_case "no ssh-keygen -Y on this box"; return; fi
+  signed_box
+  os_units apt-daily.timer
+  echo never >"$STATE/internet-policy"
+  g checkout -q -b elsewhere "$SHA_A"
+  plant "$REPO/scripts/linux/os-jobs.sh" ran-os-jobs
+  g add -A && g commit -q -m "X: unsigned, another tree"
+  local sha_x; sha_x=$(g rev-parse HEAD)
+  g checkout -q main
+  g replace "$SHA_S" "$sha_x"
+  check "the checkout's git now reads X for S" bash -c 'git -C "$1" show "$2:scripts/linux/os-jobs.sh" | grep -q planted' _ "$REPO" "$SHA_S"
+  check "HEAD still names S" eq "$(g rev-parse HEAD)" "$SHA_S"
+  SIGNERS=$CASE/keys/allowed_signers run_unit
+  check "status ok" eq "$(field status)" '"ok"'
+  check "verified: S's own signature" eq "$(sig_field status)" '"verified"'
+  check "ran the copy of S" ran_from_copy "$SHA_S"
+  check "the copy is S's tree, not X's" cmp -s "$(copy_of "$SHA_S")/scripts/linux/os-jobs.sh" "$HERE/../os-jobs.sh"
+  check "X's os-jobs.sh never ran" not planted_ran ran-os-jobs
+  check "S's did" os_masked apt-daily.timer
+  check "no replace ref in the mirror" eq "$(git -C "$UPD/mirror.git" for-each-ref refs/replace)" ""
+  # And were one, or a graft, ever in the mirror itself: root's git reads
+  # past both (GIT_NO_REPLACE_OBJECTS, GIT_GRAFT_FILE), the verifier's and
+  # apply-update.sh's alike.
+  git -C "$UPD/mirror.git" fetch -q "$REPO" "refs/heads/elsewhere:refs/heads/x"
+  git -C "$UPD/mirror.git" replace "$SHA_S" "$sha_x"
+  printf '%s\n' "$SHA_S" >"$UPD/mirror.git/info/grafts"
+  rm -f "$OSROOT/etc/systemd/system/apt-daily.timer"
+  : >"$STATE/calls.log"
+  SIGNERS=$CASE/keys/allowed_signers run_unit
+  check "planted in the mirror: status ok" eq "$(field status)" '"ok"'
+  check "planted in the mirror: still S's signature" eq "$(sig_field status)" '"verified"'
+  check "planted in the mirror: still S's tree" cmp -s "$(copy_of "$SHA_S")/scripts/linux/os-jobs.sh" "$HERE/../os-jobs.sh"
+  check "planted in the mirror: X's os-jobs.sh never ran" not planted_ran ran-os-jobs
+  end_case
+}
+
+case_verifier_head_moved_after_the_copy_is_refused() {
+  new_case verifier_head_moved_after_the_copy_is_refused
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  UNIT=prepare run_unit
+  check "prepare: exit 0" eq "$RC" 0
+  check "prepare: the copy is there" test -f "$(copy_of "$SHA_A")/scripts/linux/apply-update.sh"
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: pulled between the two steps")
+  : >"$STATE/calls.log"
+  UNIT=run run_unit
+  check "run: exit 1" eq "$RC" 1
+  check "run: refused" eq "$(field status)" '"refused"'
+  check "run: a refused verify step" step_is verify refused
+  check "run: says why" grep -qF "the checkout moved to ${sha_b:0:12} after the update verifier copied ${SHA_A:0:12}" "$RESULT"
+  check "run: nothing stopped" not_called "systemctl stop"
+  check "run: applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
+  end_case
+}
+
+# The legacy unit (ExecStart=/bin/bash <checkout>/scripts/linux/apply-update.sh)
+# starts the checkout's script, which hands over to the verifier; that run
+# moves the unit and the verifier into place, from the verified copy.
+legacy_unit() {
+  printf '%s\n' '[Unit]' \
+    'Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)' \
+    'After=docker.service network-online.target' \
+    'Wants=network-online.target' \
+    '' \
+    '[Service]' \
+    'Type=oneshot' \
+    'EnvironmentFile=-/etc/default/domovoi-update' \
+    "ExecStart=/bin/bash $REPO/scripts/linux/apply-update.sh" \
+    'TimeoutStartSec=30min'
+}
+
+case_verifier_an_old_unit_hands_over_and_is_moved() {
+  new_case verifier_an_old_unit_hands_over_and_is_moved
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  local unit=$OSROOT/etc/systemd/system/domovoi-update.service
+  local installed=$OSROOT/usr/local/lib/domovoi-update/verify-update.sh
+  mkdir -p "$(dirname "$unit")"
+  legacy_unit >"$unit"
+  plant "$REPO/scripts/linux/os-jobs.sh" ran-os-jobs
+  os_units apt-daily.timer
+  echo never >"$STATE/internet-policy"
+  VERIFIED=0 run_update "$CASE/rootbin"
+  check "exit 0" eq "$RC" 0
+  check "status ok" eq "$(field status)" '"ok"'
+  check "handed over to the verifier" grep -qF "started without the update verifier: handing over to $(cd "$HERE/.." && pwd)/update-verifier.sh" "$CASE/output.log"
+  check "and went on from the copy" ran_from_copy "$SHA_A"
+  check "the checkout's edited os-jobs.sh never ran" not planted_ran ran-os-jobs
+  check "the verifier is in place, the commit's" cmp -s "$installed" "$HERE/../update-verifier.sh"
+  check "the unit is the new one" eq "$(cat "$unit")" "$(bash "$HERE/../install-update-unit.sh" --print-unit --repo "$REPO")"
+  check "which runs the verifier first" grep -qx 'ExecStartPre=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh prepare' "$unit"
+  check "systemd reloaded it" called "systemctl daemon-reload"
+  check "an ok step says so" step_is update-unit ok
+  # From now on the unit's own two steps: nothing left to move.
+  : >"$STATE/calls.log"
+  run_unit
+  check "next run: ok" eq "$(field status)" '"ok"'
+  check "next run: no handing over" not grep -qF "handing over" "$CASE/output.log"
+  check "next run: no update-unit step" eq "$(grep -c '"update-unit"' "$RESULT")" 0
+  check "next run: no reload" not_called "systemctl daemon-reload"
+  end_case
+}
+
+# A unit changed by hand (review of the root verifier, 2026-10-16): left
+# as it was, every run of it would start with the checkout's own script as
+# root. It is replaced too, kept beside it first, and a warn step says where.
+case_verifier_a_unit_changed_by_hand_is_replaced_and_kept() {
+  new_case verifier_a_unit_changed_by_hand_is_replaced_and_kept
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  local unit=$OSROOT/etc/systemd/system/domovoi-update.service
+  mkdir -p "$(dirname "$unit")"
+  { legacy_unit; echo 'Environment=EXTRA=1'; } >"$unit"
+  local before; before=$(cat "$unit")
+  VERIFIED=0 run_update "$CASE/rootbin"
+  check "status ok" eq "$(field status)" '"ok"'
+  check "ran from the copy" ran_from_copy "$SHA_A"
+  check "the unit is the new one" eq "$(cat "$unit")" "$(bash "$HERE/../install-update-unit.sh" --print-unit --repo "$REPO")"
+  check "the old one kept beside it" eq "$(cat "$unit".bak-*)" "$before"
+  check "under a name systemd ignores" eq "$(ls "$(dirname "$unit")" | grep -c '^domovoi-update\.service\.bak-[0-9]\{8\}T[0-9]\{6\}Z$')" 1
+  check "a warn step says where" grep -qF "so it is kept as $unit.bak-" "$RESULT"
+  check "systemd reloaded it" called "systemctl daemon-reload"
+  # The next run is the verifier's from the start: nothing more to move.
+  : >"$STATE/calls.log"
+  run_unit
+  check "next run: ok" eq "$(field status)" '"ok"'
+  check "next run: no update-unit step" eq "$(grep -c '"update-unit"' "$RESULT")" 0
+  check "next run: one kept copy still" eq "$(ls "$(dirname "$unit")" | grep -c '^domovoi-update\.service\.bak-')" 1
+  end_case
+}
+
+# Review of the root verifier, 2026-10-16: root's own docker compose read
+# the checkout's compose file (and .env) when it started the search helper.
+# Now the compose file is the verified copy's, and compose runs as the
+# service user (in the docker group already), the transient unit too.
+case_verifier_searxng_starts_from_the_copy_as_the_service_user() {
+  new_case verifier_searxng_starts_from_the_copy_as_the_service_user
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  mkdir -p "$REPO/domovoi"
+  cp "$HERE/../../../domovoi/docker-compose.yml" "$REPO/domovoi/docker-compose.yml"
+  SHA_A=$(commit_all "A: with the compose file")
+  echo "$SHA_A" >"$UPD/applied_sha"
+  # The service user's edit, not committed: the helper with the host's /.
+  printf '    privileged: true\n    volumes: ["/:/host"]\n' >>"$REPO/domovoi/docker-compose.yml"
+  echo always >"$STATE/internet-policy"
+  run_unit
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the search helper started" step_is searxng ok
+  check "as the service user, from the copy's compose file" \
+    called "runuser -u tester -- docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "which is the commit's" cmp -s "$UPD/searxng-compose.yml" "$HERE/../../../domovoi/docker-compose.yml"
+  check "and not the edited one" not grep -q privileged "$UPD/searxng-compose.yml"
+  check "root's docker never ran compose on the checkout's file" not_called "docker compose -f $REPO/domovoi/docker-compose.yml"
+  check "nor compose at all as root" eq "$(grep -c '^docker compose' "$STATE/calls.log")" "$(grep -c '^runuser -u tester -- docker compose' "$STATE/calls.log")"
+  check "the file root keeps is root's and readable" eq "$(stat -c %a "$UPD/searxng-compose.yml")" 644
+  # Detached under systemd: the transient unit runs as the service user too.
+  write_systemd_run "$CASE/rootbin"
+  : >"$STATE/calls.log"
+  SEARXNG_DETACH=1 run_unit
+  check "detached: ok" eq "$(field status)" '"ok"'
+  check "detached: a transient unit as the service user" \
+    called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start --uid=tester"
+  check "detached: in the checkout, from the copy's compose file" \
+    called "-p WorkingDirectory=$REPO docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  end_case
+}
+
+# Bounds on the mirror fetch (review of the root verifier): a pack bigger
+# than DOMOVOI_VERIFY_FETCH_MAX_KB a file, or a fetch that outlasts
+# DOMOVOI_VERIFY_FETCH_TIMEOUT, refuses the run instead of filling root's
+# disk or holding the update for its 30 minutes.
+case_verifier_fetch_is_bounded() {
+  new_case verifier_fetch_is_bounded
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  DOMOVOI_VERIFY_FETCH_MAX_KB=1 run_unit
+  check "size: exit 1" eq "$RC" 1
+  check "size: failed at verify" step_is verify failed
+  check "size: says it passed its bounds" grep -qF "failed (or passed its bounds: 900s, 1 KB a file)" "$RESULT"
+  check "size: apply-update.sh never ran" not apply_ran
+  # An upload-pack that never answers.
+  mkdir -p "$CASE/slowbin"
+  cat >"$CASE/slowbin/runuser" <<'SH'
+#!/usr/bin/env bash
+echo "runuser $1 $2 -- ${*:4}" >>"$SHIM_STATE/calls.log"
+shift 3
+case " $* " in *" upload-pack "*) exec sleep 60 ;; esac
+exec "$@"
+SH
+  chmod +x "$CASE/slowbin/runuser"
+  rm -rf "$UPD/mirror.git"
+  local t0=$SECONDS
+  DOMOVOI_VERIFY_FETCH_TIMEOUT=2 UNIT=1 VERIFIED=0 run_update "$CASE/slowbin:$CASE/rootbin"
+  check "time: exit 1" eq "$RC" 1
+  check "time: failed at verify" step_is verify failed
+  check "time: within its bound, not the sleep's" test "$((SECONDS - t0))" -lt 30
+  check "time: apply-update.sh never ran" not apply_ran
+  end_case
+}
+
+case_verifier_update_and_rollback_through_the_copy() {
+  new_case verifier_update_and_rollback_through_the_copy
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  printf '[project]\nname = "domovoi"\nversion = "1"\ndependencies = ["httpx"]\n' >"$REPO/pyproject.toml"
+  local sha_b; sha_b=$(commit_all "B: deps")
+  run_unit
+  check "update: ok" eq "$(field status)" '"ok"'
+  check "update: mode update" eq "$(field mode)" '"update"'
+  check "update: ran the copy of B" ran_from_copy "$sha_b"
+  check "update: deps synced as the service user" called "runuser -u tester -- $CASE/venv/bin/python -m pip"
+  check "update: applied_sha is B" file_is "$UPD/applied_sha" "$sha_b"
+  printf 'raise SystemExit("broken")\n' >"$REPO/domovoi/app.py"
+  local sha_c; sha_c=$(commit_all "C: broken")
+  echo "$sha_c" >"$STATE/curl-fail-when-head"
+  : >"$STATE/calls.log"
+  run_unit
+  check "rollback: rolled_back" eq "$(field status)" '"rolled_back"'
+  check "rollback: ran the copy of C" ran_from_copy "$sha_c"
+  check "rollback: the checkout is back on B" eq "$(g rev-parse HEAD)" "$sha_b"
+  check "rollback: as the service user" called "runuser -u tester -- git -C $REPO reset --keep $sha_b"
+  check "rollback: bad_sha is C" file_is "$UPD/bad_sha" "$sha_c"
+  check "rollback: applied_sha is B" file_is "$UPD/applied_sha" "$sha_b"
+  # The next Restart verifies and runs B again.
+  rm -f "$STATE/curl-fail-when-head"
+  : >"$STATE/calls.log"
+  run_unit
+  check "after: ok" eq "$(field status)" '"ok"'
+  check "after: a plain restart of B" eq "$(field mode)" '"restart"'
+  check "after: from the copy of B" ran_from_copy "$sha_b"
+  check "after: the bad commit stays marked" eq "$(field bad_sha)" "\"$sha_c\""
+  end_case
+}
+
+# transfer.fsckObjects: an object that isn't well-formed never gets into
+# root's mirror, so nothing of that commit runs.
+case_verifier_mirror_checks_every_object() {
+  new_case verifier_mirror_checks_every_object
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  local tree bad
+  tree=$(g rev-parse "HEAD^{tree}")
+  bad=$(printf 'tree %s\nparent %s\nauthor A <a@example.invalid> 1700000000 +99999\ncommitter A <a@example.invalid> 1700000000 +0000\n\nbroken timezone\n' "$tree" "$SHA_A" \
+    | g hash-object -t commit -w --literally --stdin)
+  g update-ref refs/heads/main "$bad"
+  check "HEAD is the broken commit" eq "$(g rev-parse HEAD)" "$bad"
+  run_unit
+  check "exit 1" eq "$RC" 1
+  check "status failed" eq "$(field status)" '"failed"'
+  check "a failed verify step" step_is verify failed
+  check "the fetch said why" grep -qF 'git fetch of' "$RESULT"
+  check "the object is not in the mirror" not git -C "$UPD/mirror.git" cat-file -e "$bad"
+  check "apply-update.sh never ran" not apply_ran
+  check "nothing stopped" not_called "systemctl stop"
+  end_case
+}
+
+case_verifier_refuses_a_state_dir_others_can_write() {
+  new_case verifier_refuses_a_state_dir_others_can_write
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  chmod 0777 "$UPD"
+  run_unit
+  check "exit 1" eq "$RC" 1
+  check "says why" grep -qF "can be changed by a user other than root" "$CASE/output.log"
+  check "no mirror made" test ! -e "$UPD/mirror.git"
+  check "no result written there" test ! -e "$UPD/last-result.json"
+  check "apply-update.sh never ran" not apply_ran
+  check "nothing stopped" not_called "systemctl stop"
+  RESULT=""
+  end_case
+}
+
 CASES=(
   case_noop_restart
   case_core_restart_drop_in_for_a_unit_that_would_stay_down
@@ -4009,6 +4511,21 @@ CASES=(
   case_wake_trainer_not_rebuilt_under_never
   case_wake_trainer_image_names_and_registry_images
   case_dotenv_is_read_the_way_the_core_reads_it
+  case_verifier_runs_the_commit_not_the_edited_tree
+  case_verifier_journal_drop_in_never_follows_a_link
+  case_verifier_skip_worktree_edit_has_no_effect
+  case_verifier_refuses_a_link_in_the_commit
+  case_verifier_refuses_an_unsigned_head_when_enforced
+  case_verifier_signed_head_runs_the_signed_copy
+  case_verifier_ignores_the_checkouts_replace_refs
+  case_verifier_head_moved_after_the_copy_is_refused
+  case_verifier_an_old_unit_hands_over_and_is_moved
+  case_verifier_a_unit_changed_by_hand_is_replaced_and_kept
+  case_verifier_searxng_starts_from_the_copy_as_the_service_user
+  case_verifier_fetch_is_bounded
+  case_verifier_update_and_rollback_through_the_copy
+  case_verifier_mirror_checks_every_object
+  case_verifier_refuses_a_state_dir_others_can_write
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

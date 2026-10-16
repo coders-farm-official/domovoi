@@ -458,6 +458,18 @@ install checked out is one Setup pinned (`provision.sh` also refuses a
 otherwise. Repairs of an install that passed that check keep whatever the
 dashboard's updates moved it to.
 
+Inside the distro, updates run as root exactly as on a Linux server, and
+so does what keeps them honest: the update unit's root-owned verifier
+copies each commit out of a mirror only root can write, verifies its
+signature there once signed updates are switched on, and the update runs
+from that copy, never from the checkout the service user (`domovoi`, the
+core, the dashboard, the plugins) can write ([LINUX_HOST.md, The update
+verifier](LINUX_HOST.md#the-update-verifier)). `provision.sh` reads the
+checkout the same way on every run, a repair by Setup included. A distro
+installed before 2026-10-16 moves over by itself at its next **Restart
+Domovoi** after pulling this change; until Setup is rebuilt on a commit
+that has it, a fresh install's first update does the same.
+
 ## Building it
 
 From a Windows PowerShell 5.1 prompt in the repository:

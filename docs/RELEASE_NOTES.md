@@ -4,6 +4,68 @@ Newest first. Only things an operator has to KNOW go here — a change that
 needs an action, changes an answer a client depends on, or is invisible in
 a way that would otherwise get reported as a bug.
 
+## 2026-10-16 — The update unit runs a verified copy of each commit, never the checkout
+
+Server update (the update unit's scripts and `provision.sh`; no migration,
+nothing to do by hand). Delta security review 2026-10-16, S4 / REV-10.
+
+* **Root no longer runs anything from the working tree.** Before every
+  update or Restart, `domovoi-update.service`'s new `ExecStartPre`, a
+  root-owned verifier (`/usr/local/lib/domovoi-update/verify-update.sh`,
+  from `scripts/linux/update-verifier.sh`), fetches HEAD into a mirror only
+  root can write (`/var/lib/domovoi-update/mirror.git`, every object
+  checked, read from the checkout by `git upload-pack` as the service
+  user), verifies its signature there while signed updates are enforced,
+  and writes the commit's `scripts/linux` and `docs/LINUX_HOST.md` into
+  `/run/domovoi-update/<sha>`; the update runs from there. An edited,
+  `skip-worktree`-hidden or symlinked file in the checkout (code running as
+  the service user could make one) changes nothing root runs; with signing
+  on, nothing unsigned runs as root at all. Root's git follows no
+  replacement object or graft (rc2 review C3).
+  ([LINUX_HOST.md, The update verifier](LINUX_HOST.md#the-update-verifier))
+* **Existing boxes move over by themselves**: the first **Restart to apply
+  changes** after pulling this still starts the old unit, whose
+  `apply-update.sh` (the checkout's, one last time) hands over to the
+  verifier; that run installs the verifier and replaces the unit
+  (`ExecStartPre`/`ExecStart` through the verifier,
+  `Environment=DOMOVOI_REPO_DIR`, `RuntimeDirectory=domovoi-update`; still
+  `Type=oneshot`, `TimeoutStartSec=30min`) and **last update** shows an
+  `update-unit` step. A unit edited by hand is replaced too, kept beside it
+  as `domovoi-update.service.bak-<time>` (a `warn` step says where). The
+  first run fetches the whole history into the mirror once (about 30 MB,
+  some seconds); the fetch is bounded (`DOMOVOI_VERIFY_FETCH_TIMEOUT`,
+  `DOMOVOI_VERIFY_FETCH_MAX_KB`).
+* **`install-update-unit.sh` run from the checkout re-runs itself from the
+  verified copy** once the box has a verifier (it says so), so a by-hand
+  re-run can't install the checkout's own `update-verifier.sh`; the docs'
+  by-hand commands all use `verify-update.sh export`. **The search
+  helper** starts from the copy's compose file, by `docker compose`
+  running as the service user.
+* **New refusals**, before anything is touched: a commit with a symbolic
+  link or a submodule under `scripts/linux` (`failed`, step `verify`); a
+  HEAD that moved between the verifier's copy and the update (`refused`,
+  restart again); a full update over tracked files hidden from `git
+  status` by `skip-worktree` or `assume-unchanged` (`refused`, like local
+  changes). A signature refusal now comes from the verifier, with the same
+  `signature` step and result as before.
+* **`provision.sh` reads the checkout through the same copy** on every
+  run, re-runs and the Windows installer's repairs included
+  (`/run/domovoi-provision/<sha>`, removed when it ends): the pin manifest,
+  the Ollama pin, the units, the journald drop-in, `os-jobs.sh`,
+  `gpu-runtime.sh` and `install-update-unit.sh`. A re-run with signing
+  enforced and an unverified HEAD stops before using any of it. A dry run
+  makes its copy in its own temp dir. The room image's `docker build` in an
+  update now runs as the service user.
+* **What still isn't bounded** (SECURITY_PRIVACY.md, Signed updates: what
+  they bound): without signing, anyone who can write the checkout can
+  commit, and that commit runs as root at the next Restart; code running as
+  the service user still changes the core, the dashboard and the plugins
+  that account runs; and the `docker` group the service user is in is
+  root-equivalent on its own.
+* **Windows installer:** Setup is still pinned to 606829c, whose
+  `provision.sh` predates the verifier; a fresh install moves over at its
+  first update, and the next `build.ps1 -Pin` brings the new `provision.sh`.
+
 ## 2026-10-16 — Release channels: stable and main; the version is a release label
 
 Server update (core, dashboard, the update unit's scripts; no migration).

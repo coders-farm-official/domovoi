@@ -1162,7 +1162,10 @@ looks like a broken release (the V013 device-token table was the first
 time this bit).
 
 A fourth unit closes that gap. `domovoi-update.service` is a root oneshot
-that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh).
+that runs [`scripts/linux/apply-update.sh`](../scripts/linux/apply-update.sh),
+never from the checkout itself: its root-owned verifier first copies the
+commit HEAD names out of a mirror only root can write, and the update runs
+from that copy ([The update verifier](#the-update-verifier)).
 On a box that already runs the three units, one command installs it: see
 [One-time upgrade for existing installs](#one-time-upgrade-for-existing-installs).
 Once it's installed, the panel's **Restart to apply changes** and
@@ -1198,7 +1201,9 @@ does this:
    does not verify against the root-owned allowed-signers file (both in
    [Signed updates](#signed-updates); the first check runs before step 1,
    on the plain restart too). Refuse, touching nothing, if tracked files
-   have uncommitted changes. A rollback could not restore that tree.
+   have uncommitted changes, or are hidden from `git status` by a
+   `skip-worktree` or `assume-unchanged` flag (`git update-index`), whose
+   changes it can't see. A rollback could not restore that tree.
    Untracked files are fine. Stop, touching nothing, if the dependencies
    changed but the service user can't write the venv (step 5 would fail,
    and so would its rollback).
@@ -1376,28 +1381,128 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=DOMOVOI_REPO_DIR=/opt/domovoi
 EnvironmentFile=-/etc/default/domovoi-update
-ExecStart=/bin/bash /opt/domovoi/scripts/linux/apply-update.sh
+RuntimeDirectory=domovoi-update
+ExecStartPre=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh prepare
+ExecStart=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh run
 TimeoutStartSec=30min
 ```
 
 No `User=`: it runs as root, because it has to stop and start the other
 units and read the database dump. It has no `[Install]` section either:
-nothing starts it at boot, only the button or you.
+nothing starts it at boot, only the button or you. Nothing in it names a
+file of the checkout: `ExecStartPre` makes the verified copy of HEAD in
+`/run/domovoi-update/<sha>` (`RuntimeDirectory=`, gone when the run ends)
+and `ExecStart` runs that copy's `apply-update.sh` ([The update
+verifier](#the-update-verifier)). The script keeps root away from the tree
+too: git, pip and the room image's `docker build` run as the service user
+through `runuser`, and root's own files live in `/var/lib/domovoi-update`,
+which the service user can read but not write.
 
-Root runs the script straight from the checkout, which the service user can
-write. That doesn't give the service user anything new: it is already in
-the `docker` group, which is root-equivalent. The script also keeps root
-away from the tree: git and pip run as the service user through
-`runuser`, and root's own files live in `/var/lib/domovoi-update`, which the
-service user can read but not write.
-
-What that does not bound is upstream. The script root runs is whatever
-the pull brought, so a compromise of the repository's `main` (a stolen
-token, a merged pull request) would be root on this box at its next
+What that does not bound is upstream. The copy root runs is whatever
+commit the pull brought, so a compromise of the repository's `main` (a
+stolen token, a merged pull request) would be root on this box at its next
 **Restart to apply changes**, with no LAN access or credential needed.
 The bound is a signature: see [Signed updates](#signed-updates). Until
 you set it up, every pull and every update says so.
+
+### The update verifier
+
+[`scripts/linux/update-verifier.sh`](../scripts/linux/update-verifier.sh),
+installed root-owned as `/usr/local/lib/domovoi-update/verify-update.sh`,
+is the only way root takes code from the checkout (delta security review
+2026-10-16, S4). The checkout belongs to the service user, and so does
+everything running as that user: the core, the dashboard, every plugin. Code
+running there could edit the checkout, commit or not (an edit hidden from
+`git status` by `git update-index --skip-worktree` included), swap a file
+for a symbolic link, or plant a `refs/replace`, and before the verifier
+root ran `apply-update.sh`, `os-jobs.sh` and `gpu-runtime.sh` and copied
+the journald drop-in straight from that tree at the next Restart, signed
+updates or not. Now, before every run (`ExecStartPre`):
+
+1. HEAD is fetched into a bare mirror only root can write,
+   `/var/lib/domovoi-update/mirror.git`, with `transfer.fsckObjects`: every
+   object is checked as it comes in. The other end of the fetch, `git
+   upload-pack`, runs as the service user; root reads nothing of the
+   checkout itself, not its files, its object store or its config, and its
+   git never follows a replacement object or a graft. The first run copies
+   the whole history (about 30 MB, ten seconds or so); later ones only
+   what's new.
+2. While signed updates are enforced, the commit must verify there
+   ([Signed updates](#signed-updates)), or the run is `refused` before any
+   of it runs, and **last update** says why.
+3. `scripts/linux` (the verifier itself, `apply-update.sh`, `os-jobs.sh`,
+   `gpu-runtime.sh`, `install-update-unit.sh`, the units and drop-ins, the
+   pin manifest; not its tests) and `docs/LINUX_HOST.md` are written out of
+   the mirror with `git archive` into `/run/domovoi-update/<sha>`: plain
+   files only (a symbolic link or a submodule there refuses the run),
+   root's, `0755` directories.
+
+`ExecStart` then runs that copy's `apply-update.sh`, which refuses if HEAD
+moved since the copy was made (restart again to apply what is checked out
+now) and runs its signature and branch checks in the mirror. Everything
+root runs or installs after that (the helpers, the journald drop-in, the
+verifier and the unit themselves) is the copy's.
+
+What it bounds and what it doesn't: with signed updates enforced, root
+runs only commits you signed, whatever happens to the working tree. Without
+them, the copy is simply the commit HEAD names: an uncommitted or hidden
+edit changes nothing root runs, but code running as the service user can
+still make a commit and move HEAD to it, and that runs as root at the next
+Restart. That is what signing is for. And code running as the service user
+still runs the core, the dashboard and the plugins it can edit: the
+verifier keeps it from root through the update, not from them. (The
+service user is also in the `docker` group, which is root-equivalent on
+its own; see [SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#signed-updates-what-they-bound).)
+
+**Existing installs** need nothing done by hand: the first **Restart to
+apply changes** after pulling this runs the old unit's `apply-update.sh`
+from the checkout one last time, and that script hands over to the
+verifier beside it, which makes the copy and goes on from it; the copy's
+`apply-update.sh` then puts the verifier in place and replaces the unit
+with the one above (a `update-unit` step in **last update** says so). A
+unit someone changed by hand is replaced the same way, after a copy of it
+is kept beside it as `domovoi-update.service.bak-<time>` (a name systemd
+ignores; the `warn` step says where): put any change of yours back as a
+drop-in in `/etc/systemd/system/domovoi-update.service.d/`.
+
+The search helper is started from the copy's `domovoi/docker-compose.yml`
+(kept for it as `/var/lib/domovoi-update/searxng-compose.yml`), by `docker
+compose` running as the service user, in the foreground or in its
+transient unit; the project directory (`domovoi/.env`, `domovoi/searxng`)
+is the checkout's, read by that user.
+
+The fetch into the mirror is bounded: `DOMOVOI_VERIFY_FETCH_TIMEOUT`
+seconds (default 900) and `DOMOVOI_VERIFY_FETCH_MAX_KB` per file it
+writes (default 2097152, 2 GB), in `/etc/default/domovoi-update`; past
+either, the run fails at `verify` with nothing changed.
+
+`provision.sh` does the same on every run, re-runs included: right after
+its checkout step it makes the verified copy (the same code, carried in
+`provision.sh` itself) in `/run/domovoi-provision/<sha>` and reads the pin
+manifest, the Ollama pin, the units, the drop-ins and its helpers only from
+there; the files it only hashes or reads a line of (the locks, the compose
+file) it reads as the service user.
+
+**By hand, run root's scripts from a verified copy, never from the
+checkout.** The installed verifier makes one (`export`); before the first
+install there is none yet, and the checkout's own `update-verifier.sh`
+makes it, as trusted as the checkout itself at that moment. Every command
+on this page that runs `install-update-unit.sh` or `provision.sh` by hand
+takes this form:
+
+```bash
+V=/usr/local/lib/domovoi-update/verify-update.sh
+sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
+sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
+```
+
+Run from inside the checkout on a box that has the verifier,
+`install-update-unit.sh` does this itself: it says so, makes the copy with
+the installed verifier and runs that copy's installer with the same
+options. Only the very first install runs it from the checkout as it is.
 
 **`/etc/default/domovoi-update`** is optional. Every setting defaults to the
 layout on this page, so you only need the file to change one:
@@ -1405,7 +1510,7 @@ layout on this page, so you only need the file to change one:
 ```bash
 # Service user. Default: User= of domovoi-core.service, else the owner of the checkout.
 # DOMOVOI_USER=domovoi
-# Default: the checkout the script lives in.
+# The checkout. The unit sets it (Environment=); if set here too, it must name the same one.
 # DOMOVOI_REPO_DIR=/opt/domovoi
 # Default: the venv domovoi-core.service's ExecStart runs from, else <checkout>/.venv.
 # DOMOVOI_VENV=/opt/domovoi/.venv
@@ -1463,6 +1568,9 @@ layout on this page, so you only need the file to change one:
 # DOMOVOI_UPDATE_TRAINER_TIMEOUT=1800
 # 0: leave the journal where it is (The loop watchdog). Default: kept on disk (journald's own size limits).
 # DOMOVOI_MANAGE_JOURNAL=1
+# The update verifier's fetch into root's mirror (The update verifier): seconds, and KB a file.
+# DOMOVOI_VERIFY_FETCH_TIMEOUT=900
+# DOMOVOI_VERIFY_FETCH_MAX_KB=2097152
 ```
 
 **The sudoers grant.** The button needs one more single-command rule,
@@ -1603,7 +1711,10 @@ from it first:
 
    ```bash
    echo 'DOMOVOI_USE_LOCK=1' | sudo tee -a /etc/default/domovoi-update
-   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+   V=/usr/local/lib/domovoi-update/verify-update.sh
+   sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+   COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
+   sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
    ```
 
    It reports `dependency lock: on` when an update would install from
@@ -1642,11 +1753,12 @@ repository's `main` on GitHub (a stolen token, a compromised laptop, a
 merged pull request that edits `scripts/linux/apply-update.sh`,
 `domovoi/Dockerfile.mpd` or `pyproject.toml`) is root on every Linux
 install at its next **Restart to apply changes**: the update unit runs the
-pulled checkout's own script as root, and the attacker needs no LAN access
+pulled commit's own scripts as root, and the attacker needs no LAN access
 and no credential to get there. Signing closes that. Every commit on
 `main` carries an SSH signature by one of your keys, the box holds the
-list of those keys in a file only root can write, and nothing from a
-checkout that does not verify runs as root.
+list of those keys in a file only root can write, and nothing of a commit
+that does not verify runs as root ([The update verifier](#the-update-verifier)
+makes sure root never runs the working tree instead).
 
 **Enforcement is the file.** While `/etc/domovoi/allowed_signers` exists,
 both halves of the pipeline check against it and refuse otherwise. While it
@@ -1662,22 +1774,22 @@ enforcement off again. Two checks, in this order:
   is refused with `pulled: false` and the tree never moves. This is the
   gate for the dashboard path: the code doing the checking is the code
   already loaded, which the pull cannot change.
-- **Before anything runs as root** (`apply-update.sh`, every run, the
-  plain restart as much as the full update): root runs `git verify-commit
-  HEAD` itself, not through `runuser` and not taking the core's word for
-  it, with the signers file and every program git could be told to run
-  pinned on the command line (the checkout's `.git/config` belongs to the
-  service user, and a `gpg.ssh.program` in it would otherwise choose what
-  root executes). A HEAD that does not verify is `refused`, nothing
-  stopped or changed, and the result says what to do. The signers file
-  must be a plain file owned by root that no one else can write, or it is
-  refused as well.
+- **Before anything runs as root** (the update verifier, every run, the
+  plain restart as much as the full update): root fetches HEAD into its own
+  mirror and runs `git verify-commit` there itself, not through `runuser`
+  and not taking the core's word for it, with the signers file and every
+  program git could be told to run pinned on the command line, and no
+  replacement object or graft followed. A HEAD that does not verify is
+  `refused`, nothing of it run, nothing stopped or changed, and the result
+  says what to do. The signers file must be a plain file owned by root that
+  no one else can write, or it is refused as well. The copy's
+  `apply-update.sh` checks again, in the same mirror, and records the
+  verdict as the `signature` step.
 
-What this does not cover: a tree already moved to an unverified commit by
-a pull that skipped the core (`git pull` by hand as the service user) has
-already replaced the script root runs, and a check inside that script is
-no check at all. Pull through the dashboard, or by hand with the same
-check git offers:
+So a tree moved to an unverified commit by a pull that skipped the core
+(`git pull` by hand as the service user) is refused at the next Restart
+too, before anything of it runs. Pull through the dashboard, or by hand
+with the same check git offers, so the pull itself is refused instead:
 
 ```bash
 sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers pull --ff-only --verify-signatures
@@ -1686,8 +1798,12 @@ sudo -u domovoi git -C /opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/a
 (After a pull by hand, run `env_bootstrap --repair` before you restart
 anything yourself; see [Helper-container secrets](#two-more-linux-notes).)
 
-The service user is in the `docker` group and so root-equivalent already;
-signing bounds *upstream*, not the service user.
+With signing enforced and the verifier in the unit, that bound holds
+against code running as the service user too, as far as the update goes:
+whatever it does to the working tree, root runs only signed commits. It
+still runs the core, the dashboard and the plugins it can edit, and the
+service user is in the `docker` group, which is root-equivalent on its own
+([SECURITY_PRIVACY.md](SECURITY_PRIVACY.md#signed-updates-what-they-bound)).
 
 **Set it up.** On the machine you commit from (once per machine):
 
@@ -1726,15 +1842,19 @@ sudo chmod 0644 /etc/domovoi/allowed_signers
 ```
 
 Then check that HEAD verifies the way the unit will, before the next
-update has to:
+update has to: the verifier itself, which makes a copy and changes nothing
+else, then the installer's pre-flight from that copy:
 
 ```bash
-sudo git -C /opt/domovoi -c safe.directory=/opt/domovoi -c gpg.ssh.allowedSignersFile=/etc/domovoi/allowed_signers verify-commit HEAD
-sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
+V=/usr/local/lib/domovoi-update/verify-update.sh
+sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
+sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
 ```
 
-The first prints `Good "git" signature for alex with ED25519 key ...`.
-The second reports `signed updates enforced: HEAD ... is signed by alex`,
+The `export` says `HEAD is signed by alex (SHA256:...), listed in /etc/domovoi/allowed_signers`
+(or `refused:` and why) and prints the copy's directory.
+The installer's pre-flight reports `signed updates enforced: HEAD ... is signed by alex`,
 or stops, changing nothing, if HEAD would be refused. If the checkout is
 still on a commit from before you started signing, pull a signed one first
 (**Pull the latest** verifies it), then restart. Several people can sign:
@@ -1770,6 +1890,14 @@ only [signed updates](#signed-updates) bound what root runs. Root's git
 calls (here, in `provision.sh` and in the installer) ignore `refs/replace`
 and grafts (`GIT_NO_REPLACE_OBJECTS=1`, `GIT_GRAFT_FILE=/dev/null`), so a
 signature check always sees the commit HEAD names.
+Until signed updates are switched on, the pin catches a mistake (a
+checkout pointed at the wrong branch), not code on the box: the branches
+it checks HEAD against are the ones the checkout last fetched, copied into
+root's mirror from the checkout, and the service user can rewrite those
+(the review of the root verifier, case R4). With signing enforced it is
+the signature that bounds what runs. What signing doesn't block yet
+(planned with 1.1's signed releases): moving HEAD back to an older commit
+that was signed too.
 Keep the file readable by the service user (`0644`; it holds no secrets):
 the core reads the pin and the signers path from it, and while it can't,
 the dashboard offers no channel switch and says why. All four settings are optional and read from that
@@ -1808,13 +1936,18 @@ first server. One command sets it up. Over SSH, as your admin user:
    something restarts it, and that old SHA is the one the installer records
    as the rollback baseline.
 
-2. Run the installer. `--dry-run` says what it would do and changes
-   nothing; `--apply` goes on to run the update once, the way the button
-   will:
+2. Run the installer, from a verified copy of the checkout
+   ([The update verifier](#the-update-verifier)). `--dry-run` says what it
+   would do and changes nothing (the copy and the mirror it comes from are
+   root's own cache); `--apply` goes on to run the update once, the way the
+   button will:
 
    ```bash
-   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --dry-run
-   sudo bash /opt/domovoi/scripts/linux/install-update-unit.sh --apply
+   V=/usr/local/lib/domovoi-update/verify-update.sh
+   sudo test -f "$V" || V=/opt/domovoi/scripts/linux/update-verifier.sh   # before the first install only
+   COPY=$(sudo DOMOVOI_REPO_DIR=/opt/domovoi bash "$V" export /run/domovoi-update-install)
+   sudo bash "$COPY/scripts/linux/install-update-unit.sh" --dry-run
+   sudo bash "$COPY/scripts/linux/install-update-unit.sh" --apply
    ```
 
 It does what the manual steps below do, after checking that the box can
@@ -1852,7 +1985,10 @@ take them:
   checks the whole configuration, and if that fails the previous state is
   put back. Then it asks sudo, as the service user, exactly what the core
   asks before it offers the button.
-- **Installs the unit** exactly as shown above, and runs
+- **Installs the update verifier**, `scripts/linux/update-verifier.sh`
+  from beside the installer, as `/usr/local/lib/domovoi-update/verify-update.sh`
+  (0755, root's; it stops if anyone but root can write that directory or
+  one above it), then **the unit** exactly as shown above, and runs
   `systemctl daemon-reload`. The unit goes in after the grant is verified,
   because the core offers the full update as soon as it sees the unit file,
   and without the grant the button would stop working instead of falling
@@ -1861,8 +1997,8 @@ take them:
   and prints the status from `last-result.json`. Step 4 below says what
   each status means.
 
-If it stops after it has put the grant or the unit in place (a failed
-check, a failed write, Ctrl-C), it takes both back, so the Restart button
+If it stops after it has put the grant, the verifier or the unit in place
+(a failed check, a failed write, Ctrl-C), it takes them back, so the Restart button
 keeps doing what it did before. The recorded baseline stays: it is still
 the SHA the core runs, and a later run couldn't learn it once something
 restarts the core.
@@ -1887,6 +2023,11 @@ From then on, **Pull the latest** followed by **Restart to apply changes**
 runs the whole pipeline, and **last update** in the version panel shows how
 it went. The old restart rule in `/etc/sudoers.d/domovoi-restart` can stay.
 It's used only if the unit is ever removed or masked.
+
+A box whose update unit predates the verifier (installed before
+2026-10-16) needs none of this again: its next **Restart to apply changes**
+moves it over by itself ([The update verifier](#the-update-verifier),
+"Existing installs").
 
 #### By hand
 
@@ -1916,9 +2057,14 @@ in this order.
    sudo -u domovoi git -C /opt/domovoi pull --ff-only
    ```
 
-3. Install the unit and the grant:
+3. Install the verifier, the unit and the grant. The verifier comes from
+   the checkout this once (look at it first if anything but you could have
+   written there); from then on every update replaces it with the verified
+   copy's:
 
    ```bash
+   sudo install -d -m 0755 -o root -g root /usr/local/lib/domovoi-update
+   sudo install -m 0755 -o root -g root /opt/domovoi/scripts/linux/update-verifier.sh /usr/local/lib/domovoi-update/verify-update.sh
    sudo tee /etc/systemd/system/domovoi-update.service >/dev/null <<'EOF'
    [Unit]
    Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)
@@ -1927,8 +2073,11 @@ in this order.
 
    [Service]
    Type=oneshot
+   Environment=DOMOVOI_REPO_DIR=/opt/domovoi
    EnvironmentFile=-/etc/default/domovoi-update
-   ExecStart=/bin/bash /opt/domovoi/scripts/linux/apply-update.sh
+   RuntimeDirectory=domovoi-update
+   ExecStartPre=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh prepare
+   ExecStart=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh run
    TimeoutStartSec=30min
    EOF
    echo 'domovoi ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start domovoi-update.service' >/tmp/domovoi-update.sudoers
@@ -1956,7 +2105,9 @@ in this order.
    once the cause is fixed, pull again (step 2) and repeat this step by
    hand. `refused` means nothing was changed because the tree is not one
    the unit will apply: tracked files in `/opt/domovoi` have local changes
-   (commit or stash them as `domovoi`), or HEAD does not verify against
+   (commit or stash them as `domovoi`), or some are hidden from `git
+   status` (`git update-index --no-skip-worktree --no-assume-unchanged
+   FILE` as `domovoi` shows them again), or HEAD does not verify against
    the allowed-signers file, or the checkout is not the pinned upstream
    ([Signed updates](#signed-updates)); the `error` says which, and you
    repeat this step once it's fixed.

@@ -35,17 +35,34 @@
 #      after visudo -cf passed on a copy, then visudo -c on the whole
 #      configuration. Then the grant is checked as the service user with
 #      the probe the core itself runs (sudo -n -l, domovoi/self_restart.py).
-#   4. /etc/systemd/system/domovoi-update.service, exactly as the doc gives
-#      it, and systemctl daemon-reload. The unit goes in after the grant is
-#      verified, not before: the core offers the full update as soon as it
-#      sees the unit file, and without the grant its Restart button would
-#      stop working instead of falling back to the plain bounce.
+#   4. The update verifier, /usr/local/lib/domovoi-update/verify-update.sh
+#      (0755, root's; scripts/linux/update-verifier.sh beside this script),
+#      then /etc/systemd/system/domovoi-update.service, exactly as the doc
+#      gives it, and systemctl daemon-reload. The unit runs the verifier
+#      before every update (ExecStartPre) and the update from the verified
+#      copy it makes (ExecStart): root never runs the checkout's own files
+#      (delta security review 2026-10-16, S4). The unit goes in after the
+#      grant is verified, not before: the core offers the full update as
+#      soon as it sees the unit file, and without the grant its Restart
+#      button would stop working instead of falling back to the plain
+#      bounce.
 #   5. With --fix-ownership, the chown of the venv.
 #   6. With --apply: systemctl start domovoi-update.service, which waits
 #      for the run, then the status from its last-result.json.
 #
+# Run from inside the checkout it installs for (sudo bash
+# /opt/domovoi/scripts/linux/install-update-unit.sh) on a box that has the
+# verifier already, it runs none of that: the checkout is the service
+# user's, and so would be the verifier this put in place. It asks the
+# installed verifier for the verified copy of HEAD (verify-update.sh export)
+# and runs that copy's install-update-unit.sh instead, with the same
+# options (delta review of the root verifier, 2026-10-16). Only the very
+# first install, before there is any verifier, runs from the checkout as
+# it is.
+#
 # A stop anywhere in 3 and 4, expected or not (a failed check, a failed
-# write, Ctrl-C), takes back the grant and the unit this run put there, so
+# write, Ctrl-C), takes back the grant, the verifier and the unit this run
+# put there, so
 # the Restart button keeps doing what it did before. The baseline from 2
 # stays: it is the SHA the core runs now, which a later run could no longer
 # learn once something restarts the core.
@@ -79,9 +96,13 @@ set -euo pipefail
 # no grafts. Both live in the service user's .git, and with them an unsigned
 # commit could pass for a signed one under its SHA (rc2 review C3).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+# And without the hint git prints for that graft file, in every git it
+# starts (the service user's included): one config entry, from the environment.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
 
 PROG=install-update-unit
-SCRIPT_PATH=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_PATH=$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")
 ORIG_ARGS=("$@")
 
 ROOT=""
@@ -110,6 +131,10 @@ SYSTEMCTL_PATH=/usr/bin/systemctl
 GRANT_ARGV=("$SYSTEMCTL_PATH" --no-block start "$UNIT_NAME")
 
 UNIT_FILE=$ROOT/etc/systemd/system/$UNIT_NAME
+# The verifier the unit runs (scripts/linux/update-verifier.sh), and where
+# it goes: a fixed path, root's, outside the checkout.
+VERIFIER_FILE=$ROOT/usr/local/lib/domovoi-update/verify-update.sh
+VERIFIER_SRC=$SCRIPT_DIR/update-verifier.sh
 SUDOERS_FILE=$ROOT/etc/sudoers.d/domovoi-update
 DEFAULTS_FILE=$ROOT/etc/default/domovoi-update
 DEFAULT_UPDATE_DIR=/var/lib/domovoi-update
@@ -135,6 +160,7 @@ NEED_CHOWN=0
 SUDOERS_RULE=""
 SUDOERS_STATE=""
 UNIT_STATE=""
+VERIFIER_STATE=""
 LAST_BACKUP=""
 NOT_ROOT_ONLY=""
 TMPD=""
@@ -144,7 +170,9 @@ DONE=()          # what this run changed, for the summary and for a stop
 # there is nothing to take back.
 GRANT_UNDO=""
 UNIT_UNDO=""
+VERIFIER_UNDO=""
 REPORTED=0       # a stop, or the --apply result, has already said how it ended
+PRINT_UNIT=0
 PHASE=""         # "apply" while the update runs
 
 usage() {
@@ -167,6 +195,8 @@ upgrade for existing installs", has the detail.
   --core-url URL    where the core answers, on this box: http://127.0.0.1,
                     localhost or [::1], with a port (default:
                     http://127.0.0.1:6370)
+  --print-unit      print the unit for --repo and stop (no root needed;
+                    apply-update.sh moves an older unit to it)
   -h, --help        this text
 EOF
 }
@@ -262,6 +292,17 @@ undo_changes() {
     else
       err "  NOT undone: $UNIT_FILE is the new one; the previous one is $how. Run:"
       err "    sudo cp -p $how $UNIT_FILE && sudo systemctl daemon-reload"
+    fi
+  fi
+  if [ -n "$VERIFIER_UNDO" ]; then
+    how=$VERIFIER_UNDO
+    VERIFIER_UNDO=""
+    if restore_file "$VERIFIER_FILE" "$how" 0755; then
+      forget "installed $VERIFIER_FILE"
+      if [ "$how" = remove ]; then err "  undone: removed the new $VERIFIER_FILE"
+      else err "  undone: put the previous $VERIFIER_FILE back"; fi
+    else
+      err "  NOT undone: $VERIFIER_FILE is the new one (harmless without the unit)"
     fi
   fi
   if [ -n "$GRANT_UNDO" ]; then
@@ -381,8 +422,12 @@ keep_copy() {
 }
 
 # The unit exactly as docs/LINUX_HOST.md gives it ("Updates from the
-# dashboard"), with this checkout's path in ExecStart.
-# domovoi/tests/test_install_update_unit_script.py holds the two together.
+# dashboard"), with this checkout's path in DOMOVOI_REPO_DIR. The verifier
+# (ExecStartPre) copies the commit HEAD names out of a root-owned mirror
+# into /run/domovoi-update/<sha> (RuntimeDirectory=, removed when the run
+# ends), and ExecStart runs that copy's apply-update.sh: nothing in it
+# names a file of the checkout. domovoi/tests/test_install_update_unit_script.py
+# holds this, the doc and apply-update.sh's reconcile_update_unit together.
 unit_text() {
   cat <<EOF
 [Unit]
@@ -392,8 +437,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=DOMOVOI_REPO_DIR=$REPO
 EnvironmentFile=-/etc/default/domovoi-update
-ExecStart=/bin/bash $REPO/scripts/linux/apply-update.sh
+RuntimeDirectory=domovoi-update
+ExecStartPre=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh prepare
+ExecStart=/bin/bash /usr/local/lib/domovoi-update/verify-update.sh run
 TimeoutStartSec=30min
 EOF
 }
@@ -901,6 +949,56 @@ check_sudoers() {
   esac
 }
 
+# Run from inside the checkout, with a verifier installed: go on from the
+# verified copy of HEAD instead (see the header). Nothing is changed before
+# this: the copy is root's own cache (the mirror, a directory under /run).
+run_from_copy() {
+  local here repo dir s
+  local -a venv=()
+  [ -f "$VERIFIER_FILE" ] && [ ! -L "$VERIFIER_FILE" ] || return 0
+  here=$(canon "$SCRIPT_DIR")
+  repo=$(canon "$REPO")
+  case $here/ in "$repo"/*) ;; *) return 0 ;; esac
+  venv=(DOMOVOI_REPO_DIR="$REPO")
+  if [ -n "$SVC_USER" ]; then venv+=(DOMOVOI_USER="$SVC_USER"); fi
+  for s in DOMOVOI_UPDATE_DIR DOMOVOI_ALLOWED_SIGNERS DOMOVOI_REVOKED_SIGNERS DOMOVOI_USER; do
+    if [ -n "$(defaults_get "$s")" ]; then
+      case $s in DOMOVOI_USER) [ -n "$SVC_USER" ] || venv+=("$s=$(defaults_get "$s")") ;; *) venv+=("$s=$ROOT$(defaults_get "$s")") ;; esac
+    fi
+  done
+  if [ -n "$ROOT" ]; then venv+=(DOMOVOI_PROVISION_ROOT="$ROOT" DOMOVOI_PROVISION_TEST_HARNESS=1); fi
+  line ok "this script is the checkout's own: making the verified copy of HEAD with $VERIFIER_FILE"
+  if ! dir=$(env "${venv[@]}" bash "$VERIFIER_FILE" export "$ROOT/run/domovoi-update-install" 2>"$TMPD/export.err"); then
+    stop "the update verifier refused to copy HEAD of $REPO: $(tail_of "$(cat "$TMPD/export.err")" 1)" \
+      "This script runs only from that copy once a verifier is installed: the checkout is the service user's."
+  fi
+  dir=$(printf '%s\n' "$dir" | tail -n 1)
+  [ -f "$dir/scripts/linux/install-update-unit.sh" ] \
+    || stop "the verified copy $dir has no scripts/linux/install-update-unit.sh"
+  say "Running the verified copy instead: bash $dir/scripts/linux/install-update-unit.sh${ORIG_ARGS[*]+ ${ORIG_ARGS[*]}}"
+  rm -rf "$TMPD"
+  TMPD=""
+  REPORTED=1
+  exec bash "$dir/scripts/linux/install-update-unit.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+}
+
+# The verifier the unit runs: this script's sibling, installed root-owned
+# outside the checkout, where only root can write.
+check_verifier() {
+  [ -f "$VERIFIER_SRC" ] && [ ! -L "$VERIFIER_SRC" ] \
+    || stop "there is no update-verifier.sh beside this script ($VERIFIER_SRC)" \
+      "Run the install-update-unit.sh of a checkout that has it (Pull the latest in the dashboard first)."
+  need_root_only "$(dirname "$VERIFIER_FILE")" \
+    "The update unit runs $VERIFIER_FILE as root before every update."
+  VERIFIER_STATE=$(file_state "$VERIFIER_FILE" "$VERIFIER_SRC")
+  case $VERIFIER_STATE in
+    link) stop "$VERIFIER_FILE is a symlink; not writing through it" "Look at it, remove it, and run this again." ;;
+    same) line ok "$VERIFIER_FILE is this checkout's update verifier" ;;
+    new) line ok "the update verifier goes to $VERIFIER_FILE" ;;
+    *) line ok "$VERIFIER_FILE differs from this checkout's update verifier; it is replaced" ;;
+  esac
+}
+
 check_unit() {
   unit_text >"$TMPD/unit"
   UNIT_STATE=$(file_state "$UNIT_FILE" "$TMPD/unit")
@@ -948,6 +1046,27 @@ install_grant() {
   line done "installed $SUDOERS_FILE: $SUDOERS_RULE"
 }
 
+install_verifier() {
+  local how=remove
+  case $VERIFIER_STATE in new|empty|differs) ;; *) return 0 ;; esac
+  if dry; then line would "install $VERIFIER_FILE (0755, root): the verifier the unit runs before every update"; return 0; fi
+  if [ "$VERIFIER_STATE" != new ]; then
+    cp -p "$VERIFIER_FILE" "$TMPD/verifier.prev" || stop "couldn't keep a copy of $VERIFIER_FILE"
+    how=$TMPD/verifier.prev
+  fi
+  if [ ! -d "$(dirname "$VERIFIER_FILE")" ]; then
+    install -d -m 0755 -o root -g root "$(dirname "$VERIFIER_FILE")" || stop "couldn't create $(dirname "$VERIFIER_FILE")"
+  fi
+  # From here until the unit is loaded, a stop puts this back (undo_changes).
+  VERIFIER_UNDO=$how
+  if ! put_file "$VERIFIER_FILE" "$VERIFIER_SRC" 0755; then
+    VERIFIER_UNDO=""
+    stop "couldn't write $VERIFIER_FILE (it is as it was)"
+  fi
+  DONE+=("installed $VERIFIER_FILE")
+  line done "installed $VERIFIER_FILE: the update unit runs it before every update"
+}
+
 # The probe domovoi/self_restart.py runs to decide whether to offer the
 # button, run as the service user. Read-only: it asks, it doesn't start.
 verify_grant() {
@@ -969,7 +1088,7 @@ install_unit() {
     new|differs)
       reload=1
       if dry; then
-        line would "install $UNIT_FILE (ExecStart=/bin/bash $REPO/scripts/linux/apply-update.sh)"
+        line would "install $UNIT_FILE (ExecStartPre: the verifier; ExecStart: the verified copy's apply-update.sh; DOMOVOI_REPO_DIR=$REPO)"
       else
         if [ "$UNIT_STATE" = differs ]; then
           keep_copy "$UNIT_FILE"
@@ -1005,10 +1124,11 @@ install_unit() {
     stop "systemd doesn't load $UNIT_NAME (LoadState: ${state:-unknown})" \
       "journalctl -b | grep $UNIT_NAME may say why."
   fi
-  # The grant and the unit are both in and loaded: nothing is taken back
-  # from here on.
+  # The grant, the verifier and the unit are all in and loaded: nothing is
+  # taken back from here on.
   GRANT_UNDO=""
   UNIT_UNDO=""
+  VERIFIER_UNDO=""
   return 0
 }
 
@@ -1095,6 +1215,7 @@ main() {
       --dry-run) DRY_RUN=1; shift ;;
       --apply) APPLY=1; shift ;;
       --fix-ownership) FIX_OWNERSHIP=1; shift ;;
+      --print-unit) PRINT_UNIT=1; shift ;;
       --repo|--user|--core-url)
         [ $# -ge 2 ] && [ -n "$2" ] || usage_error "$1 needs a value"
         case $1 in
@@ -1111,6 +1232,14 @@ main() {
       *) usage_error "unknown option: $1" ;;
     esac
   done
+  if [ "$PRINT_UNIT" = 1 ]; then
+    REPO=${REPO%/}
+    if ! [[ $REPO =~ ^/[A-Za-z0-9._/@+-]+$ ]] || [[ $REPO/ == *//* || $REPO/ == */./* || $REPO/ == */../* ]]; then
+      usage_error "--print-unit needs --repo with an absolute, plain path"
+    fi
+    unit_text
+    exit 0
+  fi
   # The running SHA has to come from the core on this box, the one that
   # runs this checkout. Not echoed: a URL can carry a password.
   [[ $CORE_URL =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]{1,5})?/?$ ]] \
@@ -1134,6 +1263,7 @@ main() {
   check_defaults_file
   check_systemd
   check_repo
+  run_from_copy
   check_user
   check_venv
   check_docker
@@ -1142,6 +1272,7 @@ main() {
   check_baseline
   check_signing
   check_sudoers
+  check_verifier
   check_unit
 
   say ""
@@ -1149,6 +1280,7 @@ main() {
   record_baseline
   install_grant
   verify_grant
+  install_verifier
   install_unit
   fix_ownership
 

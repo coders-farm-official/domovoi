@@ -103,6 +103,20 @@
 #                follow one of the two release channels and nothing else
 #   finish       result, setup-code presence (never its content), the GPUs
 #
+# Nothing of the checkout runs or is read as root but its commit's own
+# files: right after the checkout step, every run (a re-run too, when that
+# step is skipped), HEAD is fetched into the update unit's root-owned mirror
+# (/var/lib/domovoi-update/mirror.git, every object checked), its signature
+# verified there while /etc/domovoi/allowed_signers exists, and
+# scripts/linux and docs/LINUX_HOST.md written out of it into
+# /run/domovoi-provision/<sha> (plain files, root's; removed when the run
+# ends). The pin manifest, the Ollama pin, gpu-runtime.sh, os-jobs.sh, the
+# units, the journald drop-in and install-update-unit.sh are read from
+# there (delta security review 2026-10-16, S4: on a re-run the working
+# tree is the service user's, and so is every edit in it). The code that
+# makes the copy is the verified-copy block below, the same text as
+# scripts/linux/update-verifier.sh's, the update unit's verifier.
+#
 # Idempotent and resumable. Each finished step leaves a marker in
 # /var/lib/domovoi-provision/steps/<id> holding a hash of that step's inputs
 # (options, pins, the repo files it installs from). A step is skipped when
@@ -169,6 +183,9 @@ set -Eeuo pipefail
 # no grafts, so HEAD's signature check sees the commit it names (rc2 review
 # C3; the checkout's .git is the service user's).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+# And without the hint git prints for that graft file, in every git it
+# starts (the service user's included): one config entry, from the environment.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
 umask 022
 
 PROG=provision
@@ -238,6 +255,7 @@ LAST_ERR=""
 WATCH_PID=""
 LOCK_PID=""
 CLONE_TMP_ACTIVE=""
+COPY_ACTIVE=""
 TMP_DIR=""
 DRY_RUN=0
 WSL=0
@@ -362,6 +380,8 @@ on_exit() {
   # A clone that never reached its place (do_checkout): the next run starts
   # it again from nothing.
   if [ -n "$CLONE_TMP_ACTIVE" ]; then rm -rf -- "$CLONE_TMP_ACTIVE"; fi
+  # The verified copy this run read the checkout from.
+  if [ -n "$COPY_ACTIVE" ]; then rm -rf -- "$COPY_ACTIVE"; fi
   if [ -n "$TMP_DIR" ]; then rm -rf "$TMP_DIR"; fi
   release_lock
   exit "$rc"
@@ -617,8 +637,19 @@ sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
 sha_ok() { [ -f "$1" ] && [ "$(sha256_of "$1")" = "$2" ]; }
 
-# A file's hash for a step's inputs, or "absent".
-file_sig() { if [ -f "$1" ]; then sha256_of "$1"; else echo "absent:$1"; fi; }
+# A file's hash for a step's inputs, or "absent". A file of the checkout is
+# read as the service user, whose file it is (root never follows a link
+# planted there); the verified copy's and root's own as root.
+file_sig() {
+  local h=""
+  case $1 in
+    "$CHECKOUT"/*)
+      if [ "$EUID" = 0 ] || [ -n "$ROOT" ]; then h=$(as_svc sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1) || h=""
+      elif [ -f "$1" ]; then h=$(sha256_of "$1"); fi ;;
+    *) if [ -f "$1" ]; then h=$(sha256_of "$1"); fi ;;
+  esac
+  if [ -n "$h" ]; then echo "$h"; else echo "absent:$1"; fi
+}
 
 systemd_running() { [ "$(cat "$PROC/1/comm" 2>/dev/null)" = systemd ]; }
 
@@ -681,11 +712,12 @@ write_if_changed() {
   return 0
 }
 
-# The last KEY=value in the checkout's domovoi/.env, quotes stripped.
+# The last KEY=value in the checkout's domovoi/.env, quotes stripped. Read
+# as the service user, whose file it is: root never follows a link there.
 dotenv_get() {
   local f=$CHECKOUT/domovoi/.env v
   [ -f "$f" ] || return 0
-  v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n 1 | tr -d '\r')
+  v=$(as_svc sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$f" | tail -n 1 | tr -d '\r')
   v=${v%\"}; v=${v#\"}; v=${v%\'}; v=${v#\'}
   printf '%s' "$v"
 }
@@ -932,11 +964,13 @@ load_manifest() {
 }
 
 # The Ollama release docs/LINUX_HOST.md pins ("Install"), read from the
-# checkout: exactly one OLLAMA_VERSION= and one OLLAMA_SHA256= line.
+# verified copy of $CHECKOUT/docs/LINUX_HOST.md: exactly one
+# OLLAMA_VERSION= and one OLLAMA_SHA256= line.
 OLLAMA_VERSION=""
 OLLAMA_SHA256=""
 load_ollama_pin() {
-  local doc=$CHECKOUT/docs/LINUX_HOST.md v s
+  local doc v s
+  doc=$(src_file docs/LINUX_HOST.md)
   [ -f "$doc" ] || die "no $doc to read the Ollama pin from"
   v=$(tr -d '\r' <"$doc" | sed -n 's/^OLLAMA_VERSION=\([0-9][0-9.]*\)$/\1/p')
   s=$(tr -d '\r' <"$doc" | sed -n 's/^OLLAMA_SHA256=\([0-9a-f]\{64\}\)$/\1/p')
@@ -962,12 +996,12 @@ tier_qa_digest() { printf '%s' "${M[tier_${TIER_EFF}_qa_digest]}"; }
 tier_vision() { printf '%s' "${M[tier_${TIER_EFF}_vision_model]}"; }
 tier_vision_digest() { printf '%s' "${M[tier_${TIER_EFF}_vision_digest]}"; }
 
-# Read the manifest from the checkout (or, in a dry run before the clone,
-# the copy beside this script) and settle the tier.
+# Read the manifest from the verified copy of the checkout (or, in a dry
+# run before the clone, the copy beside this script) and settle the tier.
 manifest_ready() {
   if [ -n "$MANIFEST_FILE" ]; then return 0; fi
-  if [ -f "$CHECKOUT/scripts/linux/provision-manifest.conf" ]; then
-    load_manifest "$CHECKOUT/scripts/linux/provision-manifest.conf"
+  if [ -f "$(src_file scripts/linux/provision-manifest.conf)" ]; then
+    load_manifest "$(src_file scripts/linux/provision-manifest.conf)"
   elif dry && [ -f "$SCRIPT_DIR/provision-manifest.conf" ]; then
     load_manifest "$SCRIPT_DIR/provision-manifest.conf"
   else
@@ -1379,6 +1413,293 @@ do_media() {
   STEP_DONE_MSG="Media folders connected"
 }
 
+# >>> verified-copy block >>>
+# The same text in scripts/linux/provision.sh, character for character
+# (domovoi/tests/test_update_verifier.py holds the two together): provision.sh
+# runs alone inside the Windows installer's distro, with no copy of this file
+# beside it, and needs the same copy before it reads anything of a checkout.
+#
+# The caller sets VX_REPO (the checkout), VX_USER (the service user, who owns
+# it), VX_MIRROR (a bare repository only root can write), VX_SIGNERS (the
+# allowed-signers file; signed updates are enforced while it exists),
+# VX_REVOKED (a revocation file, or empty), VX_ROOT_UIDS (the owners that
+# count as root: 0, and under a test harness its own user) and VX_TOP (where
+# the walk up a path for anyone else's write access stops: /, or the
+# harness's case directory). A vx_ function that fails returns 1 with the
+# reason in VX_ERROR. The fetch is bounded: VX_FETCH_TIMEOUT seconds and
+# VX_FETCH_MAX_KB per file it writes (ulimit -f), so a checkout that offers a
+# huge pack can't fill root's disk or hold the update for its whole 30 min.
+
+# What root runs, installs or hands to Docker: scripts/linux, the doc whose
+# Ollama pin provision.sh reads, and the compose file the update starts the
+# search helper from.
+VX_PATHS=(scripts/linux docs/LINUX_HOST.md domovoi/docker-compose.yml)
+VX_FETCH_TIMEOUT=${VX_FETCH_TIMEOUT:-900}
+VX_FETCH_MAX_KB=${VX_FETCH_MAX_KB:-2097152}
+VX_SKIP=scripts/linux/tests/
+VX_ERROR=""
+VX_SHA=""
+VX_DIR=""
+VX_SIG_STATUS=""
+VX_SIG_SIGNER=""
+VX_SIG_KEY=""
+VX_SIG_DETAIL=""
+VX_SIG_ENFORCED=0
+
+# git as root, in the mirror only, with nothing from the environment or the
+# system's config deciding what it runs (the mirror's own config is root's).
+# No replacement objects and no grafts (rc2 review C3): a refs/replace or an
+# info/grafts entry could make git read another commit or tree than the one
+# a SHA names, and verify or copy that. The fetch never brings refs/replace
+# in, and the mirror has no alternates: its objects are its own. The one
+# config entry the environment gives every git it starts (the service
+# user's upload-pack too) silences the grafts hint GIT_GRAFT_FILE brings.
+# vx_git --timeout SECONDS ...: bounded by timeout(1).
+vx_git() {
+  local -a pre=()
+  if [ "${1-}" = --timeout ]; then pre=(timeout "$2"); shift 2; fi
+  ${pre[@]+"${pre[@]}"} env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS \
+    -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
+    -u GIT_SSH -u GIT_SSH_COMMAND -u GIT_ASKPASS -u GIT_PROXY_COMMAND -u GIT_EXTERNAL_DIFF \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/dev/null}" \
+    GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null GIT_TERMINAL_PROMPT=0 \
+    git -C "$VX_MIRROR" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c advice.graftFileDeprecated=false "$@"
+}
+
+vx_root_uid() {
+  local u
+  for u in $VX_ROOT_UIDS; do [ "$1" = "$u" ] && return 0; done
+  return 1
+}
+
+# vx_root_only PATH: PATH and every directory above it (to VX_TOP) belong to
+# root, and no one else can write them. Root writes there by rename, and a
+# directory anyone else could write would let them swap a file or a link in
+# between root's steps. Above PATH itself a sticky directory (/tmp) is
+# fine: no one else can rename or remove root's entry in it.
+vx_root_only() {
+  local p st mode first=1
+  p=$(readlink -f -- "$1" 2>/dev/null) || p=""
+  if [ -z "$p" ] || [ ! -e "$p" ]; then VX_ERROR="$1 is not there"; return 1; fi
+  while :; do
+    st=$(stat -c '%u %a' -- "$p" 2>/dev/null) || st=""
+    if ! [[ $st =~ ^([0-9]+)\ ([0-7]{3,4})$ ]] || ! vx_root_uid "${BASH_REMATCH[1]}"; then
+      VX_ERROR="$p can be changed by a user other than root (owner and mode: ${st:-unknown})"
+      return 1
+    fi
+    mode=$((8#${BASH_REMATCH[2]}))
+    if (( mode & 8#022 )) && { [ "$first" = 1 ] || ! (( mode & 8#1000 )); }; then
+      VX_ERROR="$p can be changed by a user other than root (owner and mode: $st)"
+      return 1
+    fi
+    first=0
+    if [ "$p" = / ] || [ "$p" = "$VX_TOP" ]; then break; fi
+    p=$(dirname -- "$p")
+  done
+}
+
+# The mirror: a bare repository, created on first use. Its config has
+# transfer.fsckObjects, so every object a fetch brings in is checked (its
+# hash, and that it is well-formed) before it is kept.
+vx_mirror() {
+  if [ -L "$VX_MIRROR" ] || { [ -e "$VX_MIRROR" ] && [ ! -d "$VX_MIRROR" ]; }; then
+    VX_ERROR="$VX_MIRROR is not a directory"; return 1
+  fi
+  if [ ! -d "$VX_MIRROR" ]; then
+    mkdir -m 0700 -- "$VX_MIRROR" || { VX_ERROR="can't create $VX_MIRROR"; return 1; }
+  fi
+  vx_root_only "$VX_MIRROR" || return 1
+  if [ ! -f "$VX_MIRROR/HEAD" ]; then
+    vx_git -c init.defaultBranch=main init -q --bare >/dev/null || { VX_ERROR="git init --bare $VX_MIRROR failed"; return 1; }
+  fi
+  vx_git config transfer.fsckObjects true && vx_git config fetch.fsckObjects true \
+    && vx_git config gc.autoDetach false && vx_git config core.logAllRefUpdates false \
+    || { VX_ERROR="can't configure $VX_MIRROR"; return 1; }
+}
+
+# HEAD of the checkout into the mirror (refs/domovoi/head), and the
+# branches the checkout last fetched (refs/remotes/origin/*), which the
+# branch pin is checked against. git upload-pack, the side that reads the
+# checkout, runs as the service user; root's side only takes in its pack.
+# Sets VX_SHA.
+vx_fetch() {
+  local up out
+  VX_SHA=""
+  if [ "$VX_USER" = root ]; then up="git upload-pack"; else up="runuser -u $VX_USER -- git upload-pack"; fi
+  # A subshell, so the file-size limit stays with the fetch (and the pack
+  # writers it starts); timeout ends it, and what it started, when it hangs.
+  if ! out=$( (ulimit -f "$VX_FETCH_MAX_KB" && vx_git --timeout "$VX_FETCH_TIMEOUT" -c protocol.file.allow=always \
+      fetch --quiet --no-tags --no-recurse-submodules --no-write-fetch-head --no-auto-gc --prune \
+      --upload-pack="$up" "$VX_REPO" \
+      '+HEAD:refs/domovoi/head' '+refs/remotes/origin/*:refs/remotes/origin/*') 2>&1); then
+    VX_ERROR="git fetch of $VX_REPO into $VX_MIRROR failed (or passed its bounds: ${VX_FETCH_TIMEOUT}s, ${VX_FETCH_MAX_KB} KB a file): $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
+    return 1
+  fi
+  vx_git gc --auto --quiet >/dev/null 2>&1 || true
+  VX_SHA=$(vx_git rev-parse -q --verify 'refs/domovoi/head^{commit}' 2>/dev/null) || VX_SHA=""
+  if ! [[ $VX_SHA =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    VX_ERROR="HEAD of $VX_REPO is not a commit"; VX_SHA=""; return 1
+  fi
+}
+
+# Why VX_SIGNERS can't be trusted, printed; nothing when it can.
+vx_signers_problem() {
+  local st
+  if [ -L "$VX_SIGNERS" ]; then printf '%s is a symlink' "$VX_SIGNERS"; return 0; fi
+  if [ ! -f "$VX_SIGNERS" ]; then printf '%s is not a regular file' "$VX_SIGNERS"; return 0; fi
+  st=$(stat -c '%u %a' -- "$VX_SIGNERS" 2>/dev/null) || st=""
+  if ! [[ $st =~ ^([0-9]+)\ ([0-7]{3,4})$ ]] || ! vx_root_uid "${BASH_REMATCH[1]}"; then
+    printf '%s is not owned by root' "$VX_SIGNERS"; return 0
+  fi
+  if (( 8#${BASH_REMATCH[2]} & 8#022 )); then
+    printf '%s can be written by a user other than root (mode %s)' "$VX_SIGNERS" "${BASH_REMATCH[2]}"
+  fi
+}
+
+# VX_SHA's signature, in the mirror, into VX_SIG_*. Not enforced (no
+# signers file): status 0, VX_SIG_ENFORCED=0, nothing checked. Enforced:
+# status 0 only for a signature by a listed key.
+vx_verify() {
+  local problem err mark info
+  local -a cfg=(-c "gpg.ssh.allowedSignersFile=$VX_SIGNERS" -c gpg.ssh.program=ssh-keygen
+                -c gpg.program=gpg -c gpg.openpgp.program=gpg -c gpg.x509.program=gpgsm)
+  VX_SIG_STATUS="" VX_SIG_SIGNER="" VX_SIG_KEY="" VX_SIG_DETAIL="" VX_SIG_ENFORCED=0
+  if [ ! -e "$VX_SIGNERS" ] && [ ! -L "$VX_SIGNERS" ]; then return 0; fi
+  VX_SIG_ENFORCED=1
+  problem=$(vx_signers_problem)
+  if [ -n "$problem" ]; then
+    VX_SIG_STATUS=unverified
+    VX_SIG_DETAIL="the allowed-signers file cannot be trusted: $problem"
+    VX_ERROR=$VX_SIG_DETAIL
+    return 1
+  fi
+  if [ -n "$VX_REVOKED" ]; then cfg+=(-c "gpg.ssh.revocationFile=$VX_REVOKED"); fi
+  if err=$(vx_git "${cfg[@]}" verify-commit "$VX_SHA" 2>&1 >/dev/null); then
+    info=$(vx_git "${cfg[@]}" log -1 --format='%GS%n%GK' "$VX_SHA" 2>/dev/null) || info=""
+    VX_SIG_SIGNER=$(printf '%s\n' "$info" | sed -n 1p)
+    VX_SIG_KEY=$(printf '%s\n' "$info" | sed -n 2p)
+    VX_SIG_STATUS=verified
+    VX_SIG_DETAIL="HEAD is signed by ${VX_SIG_SIGNER:-an allowed key}${VX_SIG_KEY:+ ($VX_SIG_KEY)}, listed in $VX_SIGNERS"
+    return 0
+  fi
+  mark=$(vx_git "${cfg[@]}" log -1 --format='%G?' "$VX_SHA" 2>/dev/null) || mark=""
+  if [ "$mark" = N ]; then
+    VX_SIG_STATUS=unsigned
+    VX_SIG_DETAIL="HEAD is not signed"
+  else
+    VX_SIG_STATUS=unverified
+    VX_SIG_DETAIL="the signature on HEAD is not by a key in $VX_SIGNERS: $(printf '%s\n' "$err" | tail -n 2 | tr '\n' ' ' | sed 's/[[:space:]]*$//' | cut -c1-200)"
+  fi
+  VX_ERROR=$VX_SIG_DETAIL
+  return 1
+}
+
+# vx_export PARENT: VX_SHA's own copy of the files root runs or installs,
+# written out of the mirror into PARENT/VX_SHA (VX_DIR). Plain files only:
+# the commit may hold no symbolic link and no submodule there (root would
+# follow a link wherever it pointed). Root-owned, directories 0755, nothing
+# writable by anyone else.
+vx_export() {
+  local parent=$1 p stage list entry mode path odd
+  local -a want=()
+  VX_DIR=""
+  for p in "${VX_PATHS[@]}"; do
+    if vx_git cat-file -e "$VX_SHA:$p" 2>/dev/null; then want+=("$p"); fi
+  done
+  case " ${want[*]-} " in
+    *" scripts/linux "*) ;;
+    *) VX_ERROR="commit $VX_SHA has no scripts/linux"; return 1 ;;
+  esac
+  vx_root_only "$parent" || return 1
+  stage=$(mktemp -d "$parent/.stage-XXXXXX") || { VX_ERROR="can't write in $parent"; return 1; }
+  list=$stage.list
+  if ! vx_git ls-tree -r -z --full-tree "$VX_SHA" -- "${want[@]}" >"$list"; then
+    rm -rf -- "$stage" "$list"; VX_ERROR="git ls-tree $VX_SHA failed"; return 1
+  fi
+  odd=""
+  while IFS= read -r -d '' entry; do
+    mode=${entry%% *}
+    path=${entry#*$'\t'}
+    case $path in "$VX_SKIP"*) continue ;; esac
+    case $mode in
+      100644|100755) ;;
+      120000) odd="$path is a symbolic link"; break ;;
+      160000) odd="$path is a submodule"; break ;;
+      *) odd="$path has mode $mode"; break ;;
+    esac
+  done <"$list"
+  rm -f -- "$list"
+  if [ -n "$odd" ]; then
+    rm -rf -- "$stage"
+    VX_ERROR="commit $VX_SHA: $odd; the copy root runs from holds plain files only"
+    return 1
+  fi
+  if ! vx_git -c tar.umask=0022 archive --format=tar "$VX_SHA" -- "${want[@]}" ":(exclude)${VX_SKIP%/}" \
+      | tar -x --no-same-owner --no-same-permissions -C "$stage" -f -; then
+    rm -rf -- "$stage"; VX_ERROR="git archive of $VX_SHA into $stage failed"; return 1
+  fi
+  odd=$(find "$stage" -mindepth 1 ! -type f ! -type d -print -quit 2>/dev/null) || odd="?"
+  if [ -n "$odd" ]; then
+    rm -rf -- "$stage"; VX_ERROR="the copy of $VX_SHA holds something other than plain files ($odd)"; return 1
+  fi
+  chmod -R u+rwX,go-w,go+rX "$stage" && chmod 0755 "$stage" || { rm -rf -- "$stage"; VX_ERROR="can't set the modes in $stage"; return 1; }
+  if [ -e "$parent/$VX_SHA" ] || [ -L "$parent/$VX_SHA" ]; then rm -rf -- "${parent:?}/$VX_SHA"; fi
+  mv -T -- "$stage" "$parent/$VX_SHA" || { rm -rf -- "$stage"; VX_ERROR="can't move the copy to $parent/$VX_SHA"; return 1; }
+  VX_DIR=$parent/$VX_SHA
+  vx_root_only "$VX_DIR" || return 1
+}
+# <<< verified-copy block <<<
+
+# ─── The verified copy ───────────────────────────────────────────────────
+#
+# See the header: what the steps after the checkout read of it, from the
+# commit itself. SRC is the copy; src_file names a file in it (in the
+# checkout itself only before there is a copy: a dry run before the clone,
+# or one that isn't root's). A dry run makes the mirror and the copy in its
+# own temp dir, which goes with it: nothing is changed.
+SRC=""
+src_file() { printf '%s/%s' "${SRC:-$CHECKOUT}" "$1"; }
+
+make_verified_copy() {
+  local upd parent
+  [ -d "$CHECKOUT/.git" ] && [ -z "$SRC" ] || return 0
+  if dry && [ -z "$ROOT" ] && [ "$EUID" != 0 ]; then
+    log "a dry run as a user other than root reads the checkout's files as they are"
+    return 0
+  fi
+  VX_REPO=$CHECKOUT
+  VX_USER=$SVC_USER
+  VX_SIGNERS=$SIGNERS_FILE
+  VX_REVOKED=""
+  if [ -n "$ROOT" ]; then VX_ROOT_UIDS="0 $EUID"; VX_TOP=$(dirname "$ROOT"); else VX_ROOT_UIDS=0; VX_TOP=/; fi
+  if dry; then
+    VX_MIRROR=$TMP_DIR/mirror.git
+    parent=$TMP_DIR/copy
+  else
+    upd=$(update_default DOMOVOI_UPDATE_DIR)
+    upd=$ROOT${upd:-/var/lib/domovoi-update}
+    [ -d "$upd" ] || install -d -m 0755 -o root -g root "$upd" || die "can't create $upd"
+    vx_root_only "$upd" || die "$VX_ERROR: root keeps the update unit's verified mirror there"
+    VX_MIRROR=$upd/mirror.git
+    parent=$ROOT/run/domovoi-provision
+  fi
+  vx_mirror || die "$VX_ERROR"
+  vx_fetch || die "$VX_ERROR"
+  if [ -n "$HEAD_SHA" ] && [ "$VX_SHA" != "$HEAD_SHA" ]; then
+    die "HEAD of $CHECKOUT moved from $HEAD_SHA to $VX_SHA during this run; nothing of it was used"
+  fi
+  if ! vx_verify; then
+    die "signed updates are enforced by /etc/domovoi/allowed_signers, but $VX_SIG_DETAIL (commit $VX_SHA); nothing of it was used"
+  fi
+  [ -d "$parent" ] || install -d -m 0755 -o root -g root "$parent" || die "can't create $parent"
+  vx_export "$parent" || die "$VX_ERROR"
+  SRC=$VX_DIR
+  if [ "$DRY_RUN" = 0 ]; then COPY_ACTIVE=$SRC; fi
+  log "the checkout's files are read from $SRC: the verified copy of $VX_SHA$([ "$VX_SIG_ENFORCED" = 1 ] && printf ', %s' "$VX_SIG_DETAIL")"
+}
+
 # ─── checkout ────────────────────────────────────────────────────────────
 
 g() { as_svc git -C "$CHECKOUT" "$@"; }
@@ -1678,8 +1999,8 @@ do_docker() {
 # GPU counts as visible, what it installs (never a driver: on WSL it is
 # Windows', on bare metal the administrator's) and how it restarts Docker.
 # Skipped where none is visible, so a CPU-only box (the Beelink) gets
-# nothing. Run from the checkout, as os-jobs.sh is, with the manifest the
-# checkout pins.
+# nothing. Run from the verified copy, as os-jobs.sh is, with the manifest
+# the commit pins.
 #
 # The internet answer is not passed: like every other step here (Docker,
 # the models, the images), the install downloads what the box needs, under
@@ -1701,9 +2022,9 @@ do_docker() {
 # asked for, so it always tries (--force, in the step's check too): the
 # step runs again on the next provision run while the runtime is missing,
 # whatever the record says.
-gpu_runtime_script() { printf '%s' "$CHECKOUT/scripts/linux/gpu-runtime.sh"; }
-# The helper to ask: the checkout's, or in a dry run before the clone the
-# copy beside this script.
+gpu_runtime_script() { src_file scripts/linux/gpu-runtime.sh; }
+# The helper to ask: the verified copy's, or in a dry run before the clone
+# the one beside this script.
 gpu_runtime_helper() {
   if [ -f "$(gpu_runtime_script)" ]; then gpu_runtime_script
   elif dry && [ -f "$SCRIPT_DIR/gpu-runtime.sh" ]; then printf '%s' "$SCRIPT_DIR/gpu-runtime.sh"
@@ -1769,7 +2090,7 @@ do_gpu_runtime() {
 # No reader that quits early in these pipes: under pipefail the writer's
 # SIGPIPE would fail the whole substitution.
 lock_python() {
-  sed -n '/^# This file is autogenerated by pip-compile with Python [0-9]/{s/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p;q}' "$CHECKOUT/$LOCK_NAME"
+  as_svc sed -n '/^# This file is autogenerated by pip-compile with Python [0-9]/{s/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p;q}' "$CHECKOUT/$LOCK_NAME"
 }
 system_python() { python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null; }
 
@@ -2571,9 +2892,9 @@ do_searxng() {
 # the update unit runs too (scripts/linux/os-jobs.sh says what it masks and
 # when): for never, the updaters, news and crash-report timers are masked;
 # for always and sometimes they run as shipped; on WSL wsl-pro and snapd
-# are disabled and masked whatever the answer. Run from the checkout, as
-# install-update-unit.sh is.
-os_jobs_script() { printf '%s' "$CHECKOUT/scripts/linux/os-jobs.sh"; }
+# are disabled and masked whatever the answer. Run from the verified copy,
+# as install-update-unit.sh is.
+os_jobs_script() { src_file scripts/linux/os-jobs.sh; }
 
 # update_default KEY: the last KEY= value in /etc/default/domovoi-update,
 # quotes and blanks stripped; nothing when the file or the key is missing.
@@ -2621,7 +2942,7 @@ SLEEP_TARGETS=(sleep.target suspend.target hibernate.target hybrid-sleep.target)
 # included) survives a power cycle (incident 2026-10-14). The update unit
 # installs the same file (apply-update.sh, reconcile_journal).
 JOURNALD_DROPIN=$ROOT/etc/systemd/journald.conf.d/50-domovoi.conf
-journald_dropin_src() { printf '%s' "$CHECKOUT/scripts/linux/units/journald-domovoi.conf"; }
+journald_dropin_src() { src_file scripts/linux/units/journald-domovoi.conf; }
 # DOMOVOI_MANAGE_JOURNAL=0 (or false/no/off) in /etc/default/domovoi-update:
 # the administrator decides where the journal lives, here as in updates.
 manage_journal() {
@@ -2639,7 +2960,7 @@ unit_text() {
   co=$(sed_repl "$CHECKOUT")
   home=$(sed_repl "$SVC_HOME")
   sed -e "s#/opt/domovoi#$co#g" -e "s#/home/domovoi#$home#g" -e "s#^User=domovoi\$#User=$SVC_USER#" \
-    "$CHECKOUT/scripts/linux/units/$1"
+    "$(src_file "scripts/linux/units/$1")"
 }
 
 restart_grant() {
@@ -2690,7 +3011,7 @@ do_units() {
   local u d out changed=()
   [ -x "$ROOT/usr/bin/docker" ] || die "/usr/bin/docker is missing; domovoi-db.service names that path"
   for u in "${SHIPPED_UNITS[@]}"; do
-    [ -f "$CHECKOUT/scripts/linux/units/$u" ] || die "the checkout has no scripts/linux/units/$u"
+    [ -f "$(src_file "scripts/linux/units/$u")" ] || die "the checkout has no scripts/linux/units/$u"
     if write_if_changed "$UNIT_DIR/$u" 0644 < <(unit_text "$u"); then changed+=("$u"); log "installed /etc/systemd/system/$u"; fi
   done
   d=$(media_dropin_text)
@@ -2964,13 +3285,16 @@ follows_a_channel() {
   return 1
 }
 inputs_update_unit() {
-  file_sig "$CHECKOUT/scripts/linux/install-update-unit.sh"
+  file_sig "$(src_file scripts/linux/install-update-unit.sh)"
+  file_sig "$(src_file scripts/linux/update-verifier.sh)"
   echo "$CHECKOUT $SVC_USER"
   use_lock_lines
   channel_pin_lines
 }
 check_update_unit() {
   [ -f "$UNIT_DIR/domovoi-update.service" ] && [ -f "$SUDOERS_DIR/domovoi-update" ] \
+    && { [ ! -f "$(src_file scripts/linux/update-verifier.sh)" ] \
+         || grep -q 'verify-update.sh prepare' "$UNIT_DIR/domovoi-update.service"; } \
     && { [ -L "$UPDATE_DEFAULTS" ] || { use_lock_set && { channel_pin_set || ! follows_a_channel; }; }; }
 }
 plan_update_unit() {
@@ -3029,7 +3353,7 @@ do_update_unit() {
       warn "the checkout follows ${up:-no upstream branch}, not a release channel (stable or main): no branch pin written to /etc/default/domovoi-update, so updates follow that branch"
     fi
   fi
-  bash "$CHECKOUT/scripts/linux/install-update-unit.sh" --repo "$CHECKOUT" --user "$SVC_USER" \
+  bash "$(src_file scripts/linux/install-update-unit.sh)" --repo "$CHECKOUT" --user "$SVC_USER" \
     || die "scripts/linux/install-update-unit.sh stopped (its output above says why)"
   STEP_DONE_MSG="Updater installed"
 }
@@ -3151,6 +3475,8 @@ for step in "${STEP_IDS[@]:1}"; do
   case $step in
     user) SVC_HOME=$(svc_home) || true; [ -n "$SVC_HOME" ] || SVC_HOME=/home/$SVC_USER ;;
     checkout)
+      if [ -d "$CHECKOUT/.git" ] && [ -z "$HEAD_SHA" ]; then HEAD_SHA=$(g rev-parse HEAD 2>/dev/null || true); fi
+      make_verified_copy
       if ! manifest_ready; then
         if dry; then log "no checkout yet: the steps after the clone are planned without the pin manifest"
         else die "no pin manifest in the checkout ($CHECKOUT/scripts/linux/provision-manifest.conf)"; fi
