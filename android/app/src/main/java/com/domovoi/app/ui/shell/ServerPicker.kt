@@ -55,7 +55,6 @@ import com.domovoi.app.LocalApp
 import com.domovoi.app.LocalToast
 import com.domovoi.app.data.ServerCredentials
 import com.domovoi.app.net.Discovery
-import com.domovoi.app.net.FoundDomovoi
 import com.domovoi.app.net.ServerAddress
 import com.domovoi.app.net.ServerIdentity
 import com.domovoi.app.ui.components.DomovoiCard
@@ -65,6 +64,7 @@ import com.domovoi.app.ui.components.SectionLabel
 import com.domovoi.app.ui.components.StatusDot
 import com.domovoi.app.ui.components.Tone
 import com.domovoi.app.ui.theme.Domovoi
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 
 /**
@@ -93,10 +93,8 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
     var confirmForgetActive by remember { mutableStateOf(false) }
 
     var onLan by remember { mutableStateOf(Discovery.onLan(context)) }
-    var scanning by remember { mutableStateOf(false) }
-    var scanned by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(0 to 0) }
-    var found by remember { mutableStateOf<List<FoundDomovoi>>(emptyList()) }
+    // The sweep's state, written only on this composition's thread (ServerScan.kt).
+    val scan = remember { ServerScan() }
     var manual by remember { mutableStateOf("") }
     var manualBusy by remember { mutableStateOf(false) }
     var manualError by remember { mutableStateOf<String?>(null) }
@@ -125,16 +123,13 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
 
     fun rescan() {
         onLan = Discovery.onLan(context)
-        if (scanning) return
-        scanning = true
-        scanned = false
-        found = emptyList()
-        scope.launch {
-            found = Discovery.scan(app.api.http) { done, total, _ ->
-                progress = done to total
+        if (scan.scanning) return
+        // Undispatched, so the button greys out on this tap, as it did when
+        // rescan() set `scanning` itself.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            scan.run { report ->
+                Discovery.scan(app.api.http) { done, total, _ -> report(done, total) }
             }
-            scanning = false
-            scanned = true
         }
     }
 
@@ -160,7 +155,7 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
 
     // Auto-scan once when the panel opens on a LAN.
     LaunchedEffect(Unit) {
-        if (onLan && !scanned) rescan()
+        if (onLan && !scan.scanned) rescan()
     }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -179,14 +174,14 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             SectionLabel(
                 when {
-                    scanning -> "scanning ${progress.first}/${progress.second}…"
-                    scanned && found.isEmpty() && known.isEmpty() -> "no domovois found"
+                    scan.scanning -> "scanning ${scan.progress.first}/${scan.progress.second}…"
+                    scan.scanned && scan.found.isEmpty() && known.isEmpty() -> "no domovois found"
                     else -> "domovois"
                 }
             )
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = { rescan() }, enabled = !scanning) {
-                if (scanning) {
+            OutlinedButton(onClick = { rescan() }, enabled = !scan.scanning) {
+                if (scan.scanning) {
                     CircularProgressIndicator(modifier = Modifier.size(13.dp), strokeWidth = 2.dp, color = Domovoi.colors.brand)
                 } else {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(13.dp))
@@ -195,11 +190,11 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
                 Text("rescan")
             }
         }
-        if (scanning) {
+        if (scan.scanning) {
             LinearProgressIndicator(
                 progress = {
-                    if (progress.second == 0) 0f
-                    else progress.first.toFloat() / progress.second
+                    val (done, total) = scan.progress
+                    if (total == 0) 0f else done.toFloat() / total
                 },
                 color = Domovoi.colors.brand,
                 trackColor = Domovoi.colors.border,
@@ -208,13 +203,14 @@ fun ServerPickerPanel(onSelected: () -> Unit) {
         }
 
         // ── Known + found servers ─────────────────────────────────────
+        val found = scan.found
         val foundUrls = found.map { it.url }.toSet()
         val identities = found.associate { it.url to it.identity }
         val rows = known.map { Triple(it.url, it.name, true) } +
             found.filter { f -> known.none { it.url == f.url } }
                 .map { Triple(it.url, it.name, false) }
 
-        if (rows.isEmpty() && scanned && !scanning) {
+        if (rows.isEmpty() && scan.scanned && !scan.scanning) {
             Text(
                 "nothing answered on port ${Discovery.DEFAULT_PORT} — is the web backend running? you can still add an address below",
                 style = MaterialTheme.typography.bodySmall,
