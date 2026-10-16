@@ -50,6 +50,15 @@ def test_the_home_is_a_temp_folder_of_this_process():
     assert home.name.startswith(f"domovoi-test-home-{os.environ.get('PYTEST_XDIST_WORKER') or 'main'}-")
 
 
+def test_git_and_ssh_never_ask_in_a_test_process():
+    """Integration 2026-10-16: the version routes' `git fetch` in this
+    checkout reached an SSH remote, ssh found no known_hosts in the temp
+    home and asked through git-askpass (a window), and every worker hung."""
+    for var, value in home_isolation.NO_PROMPT_ENV.items():
+        assert os.environ[var] == value
+    assert "-o BatchMode=yes" in os.environ["GIT_SSH_COMMAND"]
+
+
 def test_every_settings_folder_under_dot_domovoi_is_in_the_temp_home():
     from domovoi.config import Settings, settings
 

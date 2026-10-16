@@ -20,6 +20,10 @@ harmlessly, for a run that starts below the root):
   ``USERPROFILE`` is missing) are dropped. ``Path.home()``, ``~`` and every
   default built from them land there. Under ``pytest -n`` the workers
   inherit the controller's environment and each makes its own.
+* git and ssh never prompt (``GIT_TERMINAL_PROMPT=0``,
+  ``GCM_INTERACTIVE=never``, ``-o BatchMode=yes`` added to
+  ``GIT_SSH_COMMAND``): the temp home has no ``known_hosts``, so a fetch
+  that reaches a real remote fails instead of asking.
 * An environment variable holding an absolute path inside the real
   ``~/.domovoi`` (``VOICE_MODELS_DIR=C:\\Users\\me\\.domovoi\\…``
   exported in the shell) is dropped, so the default applies instead.
@@ -59,6 +63,8 @@ GUARD_ENV = "DOMOVOI_TEST_HOME_GUARD"
 HOME_VARS = ("HOME", "USERPROFILE")
 #: ntpath.expanduser builds a home from these when USERPROFILE is unset.
 FALLBACK_VARS = ("HOMEDRIVE", "HOMEPATH")
+#: git and ssh never ask anything in a test process (see :func:`isolate`).
+NO_PROMPT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 
 _state: dict = {"home": None, "before": None, "leaks": None}
 
@@ -114,6 +120,16 @@ def isolate() -> Path:
         os.environ[var] = str(home)
     for var in FALLBACK_VARS:
         os.environ.pop(var, None)
+    # git and ssh read their keys and known_hosts from the home too. A test
+    # that reaches a real remote (the version routes run `git fetch` in this
+    # checkout) found no known_hosts in the temp home, and ssh asked "the
+    # authenticity of host ... can't be established" through git-askpass, a
+    # window on the developer's desktop: every worker hung on one
+    # (integration 2026-10-16). Nothing asks now; such a fetch fails at once.
+    os.environ.update(NO_PROMPT_ENV)
+    ssh = os.environ.get("GIT_SSH_COMMAND") or "ssh"
+    if "BatchMode" not in ssh:
+        os.environ["GIT_SSH_COMMAND"] = f"{ssh} -o BatchMode=yes"
     os.environ["DOMOVOI_HOME"] = str(home / ".domovoi")
     os.environ[OWNER_ENV] = str(os.getpid())
     _state["home"] = home
