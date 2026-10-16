@@ -159,9 +159,15 @@ class ChatPhotoPlanTest {
     }
 
     @Test fun aPhotoThisPhoneCantConvertSaysSo() {
+        // Android 9+ decodes HEIC: one that fails is that file's trouble
+        // (the emulator check's cut-short HEIC, 2026-10-16).
         assertEquals(
-            "This photo is in HEIC format, which this phone can't convert. Save it as a JPEG and send it again.",
+            "This HEIC photo couldn't be opened on this phone; it may be damaged. Save it as a JPEG and send it again.",
             photoUnreadableText(PictureKind.HEIC, sdk = 34),
+        )
+        assertEquals(
+            "This AVIF photo couldn't be opened on this phone; it may be damaged. Save it as a JPEG and send it again.",
+            photoUnreadableText(PictureKind.AVIF, sdk = 31),
         )
         assertEquals(
             "This photo is in TIFF format, which this phone can't convert. Save it as a JPEG and send it again.",

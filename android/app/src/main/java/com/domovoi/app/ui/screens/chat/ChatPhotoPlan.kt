@@ -191,6 +191,10 @@ internal fun photoUnreadableText(kind: PictureKind, sdk: Int): String {
                 "The chat takes JPEG, PNG, GIF, WebP and BMP pictures, and converts other phone photos."
         kind.sendsAsIs || kind == PictureKind.BMP ->
             "This ${kind.label} picture couldn't be opened on this phone; it may be damaged."
+        // This Android decodes the kind, so this one file is the trouble.
+        since != null ->
+            "This ${kind.label} photo couldn't be opened on this phone; it may be damaged. " +
+                "Save it as a JPEG and send it again."
         else ->
             "This photo is in ${kind.label} format, which this phone can't convert. " +
                 "Save it as a JPEG and send it again."
