@@ -320,6 +320,86 @@ def test_refused_where_root_pins_another_branch(repos, monkeypatch, tmp_path):
     assert _run(git_version.version_state())["channel_pin"] == ["stable", "main"]
 
 
+def _pin(monkeypatch, tmp_path, value: str) -> None:
+    defaults = tmp_path / "domovoi-update"
+    defaults.write_text(f'DOMOVOI_UPSTREAM_BRANCH="{value}"\n')
+    monkeypatch.setenv("DOMOVOI_UPDATE_DEFAULTS_FILE", str(defaults))
+
+
+def test_with_a_pin_the_check_and_the_pull_name_the_branch_not_at_u(repos, monkeypatch, tmp_path):
+    """Delta security review 2026-10-16: @{u} is the service user's config.
+    With root's pin, the check counts against and the pull merges
+    refs/remotes/origin/<branch> named outright, and a checkout whose
+    upstream is another remote is refused, though @{u} would resolve."""
+    work, server, _ = repos
+    _pin(monkeypatch, tmp_path, "stable main")
+    sha_b = _commit(work, "b")
+    res = _run(git_version.commits_behind())
+    assert (res["behind"], res["upstream_sha"]) == (1, sha_b)
+    # Another remote, with its own "main", set as the upstream by hand.
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", "--bare", str(work), str(other))
+    elsewhere = tmp_path / "elsewhere"
+    _git(tmp_path, "clone", "-q", str(other), str(elsewhere))
+    _commit(elsewhere, "theirs")
+    _git(elsewhere, "push", "-q", "origin", "main")
+    _git(server, "remote", "add", "evil", str(other))
+    _git(server, "fetch", "-q", "evil")
+    _git(server, "branch", "-q", "--set-upstream-to", "evil/main", "main")
+    assert _git(server, "rev-parse", "--abbrev-ref", "@{u}") == "evil/main"
+    res = _run(git_version.commits_behind())
+    assert res["upstream"] is False
+    assert "follows evil/main, but the update unit only follows origin/stable, origin/main" in res["error"]
+    head = _git(server, "rev-parse", "HEAD")
+    pulled = _run(git_version.pull())
+    assert pulled["pulled"] is False and "follows evil/main" in pulled["error"]
+    assert _git(server, "rev-parse", "HEAD") == head
+    # Unpinned, the same checkout follows its @{u}, as before the channels.
+    monkeypatch.setenv("DOMOVOI_UPDATE_DEFAULTS_FILE", str(tmp_path / "none"))
+    assert _run(git_version.commits_behind())["upstream"] is True
+
+
+def test_a_switch_root_would_then_refuse_is_refused(repos, monkeypatch, tmp_path):
+    """Pinned to stable alone, a box on main past the latest release can't
+    move to stable: its code is on no pinned branch, so the update unit
+    would refuse every run after the switch."""
+    work, server, _ = repos
+    _commit(work, "b")
+    _git(server, "pull", "-q")
+    _pin(monkeypatch, tmp_path, "stable")
+    res = _run(git_version.switch_channel("stable"))
+    assert res["ok"] is False and "on none of the branches the update unit allows (stable)" in res["error"]
+    assert _git(server, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    # Both channels pinned: it's on main, so the switch goes ahead.
+    _pin(monkeypatch, tmp_path, "stable main")
+    assert _run(git_version.switch_channel("stable"))["ok"] is True
+
+
+def test_an_unreadable_settings_file_refuses_the_switch(repos, monkeypatch):
+    """REV-20: the core can't see root's pin in a file it can't read, so it
+    doesn't guess that there is none."""
+    _, server, _ = repos
+    monkeypatch.setattr(git_version, "update_defaults_problem", lambda: "unreadable")
+    res = _run(git_version.switch_channel("stable"))
+    assert res["ok"] is False and "can't read" in res["error"] and "chmod 0644" in res["error"]
+    assert _git(server, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert _run(git_version.version_state())["channel_pin_problem"] == "unreadable"
+
+
+def test_a_pull_on_stable_past_the_release_never_goes_back(repos):
+    """main → stable for a box ahead of the release moves nothing (no
+    reset, so the update unit's applied_sha and bad_sha stay right), and a
+    pull there is a no-op until a release includes the code."""
+    work, server, _ = repos
+    _commit(work, "b")
+    _git(server, "pull", "-q")
+    head = _git(server, "rev-parse", "HEAD")
+    assert _run(git_version.switch_channel("stable"))["ok"] is True
+    pulled = _run(git_version.pull())
+    assert _git(server, "rev-parse", "HEAD") == head
+    assert pulled["pulled"] is True and head.startswith(pulled["new_sha"])
+
+
 def test_refused_while_an_update_runs(repos, monkeypatch):
     monkeypatch.setattr(self_restart, "underway", lambda *a, **k: True)
     res = _run(git_version.switch_channel("stable"))

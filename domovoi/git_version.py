@@ -237,6 +237,9 @@ async def version_state() -> dict:
         "channel": track["channel"],
         "channels": list(CHANNELS),
         "channel_pin": channel_pin(),
+        # "unreadable" when the update unit's settings file is there but this
+        # process can't read it (then the pin above can't be known), else None.
+        "channel_pin_problem": update_defaults_problem(),
         "restart_required": bool(
             known and running.removesuffix("-dirty") != checkout.removesuffix("-dirty")
         ),
@@ -422,6 +425,57 @@ def channel_pin() -> list[str] | None:
     return names or None
 
 
+def update_defaults_problem() -> str | None:
+    """"unreadable" when the update unit's env file exists but this process
+    can't read it, else None. Then channel_pin() and allowed_signers_path()
+    can't see what root pins (REV-20): the channel switch refuses rather
+    than offer a branch root would then refuse at every update."""
+    path = os.environ.get("DOMOVOI_UPDATE_DEFAULTS_FILE") or UPDATE_DEFAULTS_FILE
+    try:
+        with open(path, "rb"):
+            return None
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "unreadable"
+
+
+def _upstream_target() -> tuple[str | None, str | None]:
+    """Blocking. ``(rev, refusal)``: what the check counts against and the
+    pull merges. Without root's branch pin, the checkout's upstream
+    (``@{u}``). With it, ``refs/remotes/origin/<branch>`` named outright,
+    for the branch the checkout follows, which must be one the pin allows:
+    ``@{u}`` is the service user's config (delta security review
+    2026-10-16), and root checks the same again before it runs anything."""
+    pin = channel_pin()
+    if pin is None:
+        return "@{u}", None
+    track = tracking()
+    branch = track["channel"]
+    if branch is None or branch not in pin:
+        if track["remote"] and track["merge"]:
+            followed = f"{track['remote']}/{track['merge'].removeprefix('refs/heads/')}"
+        else:
+            followed = "no branch"
+        return None, (
+            f"this checkout follows {followed}, but the update unit only follows "
+            f"{', '.join('origin/' + b for b in pin)} (DOMOVOI_UPSTREAM_BRANCH in "
+            f"{UPDATE_DEFAULTS_FILE}); switch the channel in Settings > Version"
+        )
+    return f"refs/remotes/origin/{branch}", None
+
+
+def _contained_in_pin(head: str, pin: list[str]) -> bool:
+    """Blocking. Whether ``head`` is on one of the pinned branches as last
+    fetched: the rule root applies before every run (apply-update.sh)."""
+    for b in pin:
+        ref = f"refs/remotes/origin/{b}"
+        tip = _full_sha(ref)
+        if tip is not None and (tip == head or _ancestor(head, ref)):
+            return True
+    return False
+
+
 def _ancestor(older: str, newer: str) -> bool:
     return _run("merge-base", "--is-ancestor", older, newer).returncode == 0
 
@@ -439,7 +493,7 @@ def _channel_answer(ok: bool, error: str | None, channel: str | None = None,
     return {"ok": ok, "changed": changed, "channel": channel, "error": error}
 
 
-def _switch_channel(channel: str) -> dict:
+def _switch_channel(channel: str, pin: list[str] | None = None) -> dict:
     """Blocking half of :func:`switch_channel`."""
     fetched = _run(*_FETCH, "origin")
     invalidate_label_cache()
@@ -462,6 +516,15 @@ def _switch_channel(channel: str) -> dict:
             False,
             f"this server runs {head[:12]}, which is not on {channel}'s history, so a pull "
             f"could never fast-forward to {channel}; nothing was changed",
+        )
+    # Root refuses to run code that is on none of the pinned branches: a
+    # switch that would leave the box there is refused here instead.
+    if pin is not None and not _contained_in_pin(head, pin):
+        return _channel_answer(
+            False,
+            f"this server runs {head[:12]}, which is newer than {channel} and on none of the "
+            f"branches the update unit allows ({', '.join(pin)}), so it would refuse every "
+            "update and restart after the switch; nothing was changed",
         )
     local = _full_sha(f"refs/heads/{channel}")
     if local is not None and track["branch"] != channel and not (
@@ -509,6 +572,13 @@ async def switch_channel(channel: str) -> dict:
         return _channel_answer(
             False, "a restart or update is under way; switch once it has finished"
         )
+    if update_defaults_problem():
+        return _channel_answer(
+            False,
+            f"this process can't read {UPDATE_DEFAULTS_FILE}, so it can't tell which "
+            "branches the update unit allows; make that file readable (chmod 0644: it "
+            "holds no secrets) and try again",
+        )
     pin = channel_pin()
     if pin is not None and channel not in pin:
         return _channel_answer(
@@ -518,7 +588,7 @@ async def switch_channel(channel: str) -> dict:
             "administrator on the box can change)",
         )
     try:
-        return await asyncio.to_thread(_switch_channel, channel)
+        return await asyncio.to_thread(_switch_channel, channel, pin)
     except FileNotFoundError:
         return _channel_answer(False, "git not installed")
     except subprocess.TimeoutExpired:
@@ -1020,13 +1090,18 @@ async def commits_behind() -> dict:
                 "upstream_sha": None, "error": egress.TURNED_OFF_REASON}
     fetched = await fetch()
     try:
+        target, refusal = await asyncio.to_thread(_upstream_target)
+        if target is None:
+            release = await asyncio.to_thread(_release_info, None)
+            return {"behind": 0, "ahead": 0, "upstream": False,
+                    "upstream_sha": None, "error": refusal, **release}
         behind = await asyncio.to_thread(
-            _run, "rev-list", "--count", "HEAD..@{u}"
+            _run, "rev-list", "--count", f"HEAD..{target}"
         )
         ahead = await asyncio.to_thread(
-            _run, "rev-list", "--count", "@{u}..HEAD"
+            _run, "rev-list", "--count", f"{target}..HEAD"
         )
-        upstream_sha = await asyncio.to_thread(_full_sha, "@{u}")
+        upstream_sha = await asyncio.to_thread(_full_sha, target)
         release = await asyncio.to_thread(_release_info, upstream_sha)
     except Exception as e:  # noqa: BLE001 — never raise into the endpoint
         return {"behind": 0, "ahead": 0, "upstream": False,
@@ -1118,7 +1193,10 @@ async def pull() -> dict:
         invalidate_label_cache()
         if fetched.returncode != 0:
             return _not_pulled((fetched.stderr or "git fetch failed").strip())
-        target = await asyncio.to_thread(_full_sha, "@{u}")
+        upstream, refusal = await asyncio.to_thread(_upstream_target)
+        if upstream is None:
+            return _not_pulled(refusal)
+        target = await asyncio.to_thread(_full_sha, upstream)
         if target is None:
             return _not_pulled(
                 "no upstream branch is configured for the current branch, "
@@ -1132,6 +1210,13 @@ async def pull() -> dict:
     except Exception as e:  # noqa: BLE001
         return _not_pulled(str(e))
 
+    if update_defaults_problem():
+        log.warning(
+            "can't read %s: the branch pin and the signers path it may set are unknown to "
+            "this process, so the pull follows the checkout's own upstream; the update unit "
+            "still applies them as root (make the file readable: chmod 0644)",
+            UPDATE_DEFAULTS_FILE,
+        )
     if signature["status"] != "verified":
         if signature["enforced"]:
             error = (

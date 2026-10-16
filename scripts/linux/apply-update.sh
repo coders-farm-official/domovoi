@@ -937,6 +937,21 @@ check_upstream() {
       finish refused "the checkout tracks ${up:-no upstream branch}, not $want (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
       return 1
     fi
+    # And the code itself, by root's own git (delta security review
+    # 2026-10-16): the tracking branch is the service user's config, so
+    # HEAD must also be on one of the pinned branches as this box last
+    # fetched them. A box on stable past the latest release (switched from
+    # main) is on origin/main, which provision.sh's pin includes.
+    ok=0
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if git_root merge-base --is-ancestor "$HEAD_SHA" "refs/remotes/origin/$b" 2>/dev/null; then ok=1; fi
+    done
+    if [ "$ok" = 0 ]; then
+      want=$(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')
+      add_step upstream refused "$t0" "HEAD ${HEAD_SHA:0:12} is on none of $want"
+      finish refused "HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($want) as this box last fetched them (DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update), so nothing was changed"
+      return 1
+    fi
   fi
   add_step upstream ok "$t0" "origin ${UPSTREAM_URL:-unpinned}, branch ${UPSTREAM_BRANCH:-unpinned}"
 }

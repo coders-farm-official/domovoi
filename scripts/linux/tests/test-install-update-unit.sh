@@ -158,6 +158,8 @@ if [ "$list" = 1 ]; then
   grep -qxF -- "${SHIM_SUDO_AS:-root} ALL=(root) NOPASSWD: $*" "$SHIM_ROOT/etc/sudoers.d/domovoi-update" 2>/dev/null
   exit $?
 fi
+# svc-cannot-read: the service user cannot read anything (test -r fails).
+if [ -n "$user" ] && [ -f "$SHIM_STATE/svc-cannot-read" ] && [ "${1-}" = test ] && [ "${2-}" = -r ]; then exit 1; fi
 if [ -n "$user" ]; then export SHIM_SUDO_AS=$user; fi
 exec "$@"
 SH
@@ -1295,6 +1297,49 @@ case_upstream_pin_of_both_channels() {
   end_case
 }
 
+# With a branch pin, HEAD must also be on a pinned branch as last fetched
+# (root's git), the way every run checks; and a defaults file the service
+# user can't read is said (REV-20: the core then can't see the pin).
+case_upstream_pin_head_on_no_pinned_branch_stops() {
+  new_case upstream_pin_head_on_no_pinned_branch_stops
+  local bare=$CASE/upstream.git
+  git init -q --bare -b main "$bare"
+  g remote add origin "$bare"
+  g push -q origin main 2>/dev/null
+  g branch -q --set-upstream-to=origin/main main
+  echo local >"$REPO/local.txt"
+  g add local.txt
+  g commit -q -m "a commit of its own"
+  HEAD_LOCAL=$(g rev-parse HEAD)
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPSTREAM_BRANCH="stable main"\n' >"$ROOT/etc/default/domovoi-update"
+  run_install
+  check "exit 1" eq "$RC" 1
+  check "says why" said "HEAD ${HEAD_LOCAL:0:12} is on none of the pinned branches (origin/stable, origin/main) as this box last fetched them"
+  check "nothing installed" nothing_installed
+  end_case
+}
+
+case_defaults_file_the_service_user_cannot_read_is_said() {
+  new_case defaults_file_the_service_user_cannot_read_is_said
+  local bare=$CASE/upstream.git
+  git init -q --bare -b main "$bare"
+  g remote add origin "$bare"
+  g push -q origin main 2>/dev/null
+  g branch -q --set-upstream-to=origin/main main
+  mkdir -p "$ROOT/etc/default"
+  printf 'DOMOVOI_UPSTREAM_BRANCH="stable main"\n' >"$ROOT/etc/default/domovoi-update"
+  : >"$STATE/svc-cannot-read"
+  run_install
+  check "exit 0" eq "$RC" 0
+  check "warned" said "tester can't read $ROOT/etc/default/domovoi-update, so the core can't see the branch pin or the signers path it sets"
+  check "with the fix" said "chmod 0644 $ROOT/etc/default/domovoi-update"
+  rm -f "$STATE/svc-cannot-read"
+  run_install
+  check "readable: no warning" not_said "can't read $ROOT/etc/default/domovoi-update"
+  end_case
+}
+
 CASES=(
   case_fresh_install
   case_idempotent_rerun
@@ -1358,6 +1403,8 @@ CASES=(
   case_upstream_branch_pin_mismatch_stops
   case_upstream_pin_that_matches_is_reported
   case_upstream_pin_of_both_channels
+  case_upstream_pin_head_on_no_pinned_branch_stops
+  case_defaults_file_the_service_user_cannot_read_is_said
 )
 
 # --case / --list / ONLY=<regex> (case-filter.sh) pick what runs; the suite

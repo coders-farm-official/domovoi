@@ -841,7 +841,7 @@ check_signing() {
   want=$(defaults_get DOMOVOI_UPSTREAM_BRANCH)
   if [ -n "$want" ]; then
     local -a branches=()
-    local b match=""
+    local b match="" tracked
     read -r -a branches <<<"${want//,/ }"
     up=$(as_user git -C "$REPO" rev-parse --symbolic-full-name '@{u}' 2>/dev/null) || up=""
     for b in ${branches[@]+"${branches[@]}"}; do
@@ -852,7 +852,25 @@ check_signing() {
         "The update unit would refuse every run. Fix the tracking branch as $SVC_USER (git -C $REPO branch --set-upstream-to origin/${branches[0]:-main})," \
         "or the pin, then run this again."
     fi
-    line ok "upstream pinned: HEAD tracks origin/$match"
+    tracked=$match
+    # HEAD itself on a pinned branch, by root's git, as every run checks.
+    match=""
+    for b in ${branches[@]+"${branches[@]}"}; do
+      if git -c "safe.directory=$REPO" -C "$REPO" merge-base --is-ancestor HEAD "refs/remotes/origin/$b" 2>/dev/null; then match=$b; fi
+    done
+    if [ -z "$match" ]; then
+      stop "HEAD ${HEAD_SHA:0:12} is on none of the pinned branches ($(printf 'origin/%s, ' ${branches[@]+"${branches[@]}"} | sed 's/, $//')) as this box last fetched them" \
+        "The update unit would refuse every run. Pull the latest in the dashboard, or fix the pin, then run this again."
+    fi
+    line ok "upstream pinned: HEAD tracks origin/$tracked"
+  fi
+  # The core reads the branch pin and the signers path from this file too,
+  # as the service user (REV-20): unreadable, it can't tell what root pins.
+  if [ -f "$DEFAULTS_FILE" ] && [ -n "$(defaults_get DOMOVOI_UPSTREAM_BRANCH)$(defaults_get DOMOVOI_ALLOWED_SIGNERS)" ] \
+      && ! as_user test -r "$DEFAULTS_FILE"; then
+    line warning "$SVC_USER can't read $DEFAULTS_FILE, so the core can't see the branch pin or the signers path it sets"
+    more "The dashboard then can't switch the update channel, and a pull can't be checked the way the unit will check it."
+    more "The file holds no secrets: sudo chmod 0644 $DEFAULTS_FILE"
   fi
 }
 

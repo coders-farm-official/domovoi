@@ -117,6 +117,7 @@ SCENARIOS = {
     "household": _scenario(_version(), _check(), NOTHING, setup=_HOUSEHOLD),
     "pinned_to_main": _scenario(_version(channel="main", channel_pin=["main"]), _check(channel="main")),
     "pinned_to_both": _scenario(_version(channel="main", channel_pin=["stable", "main"]), _check(channel="main")),
+    "pin_unknown": _scenario(_version(channel="main", channel_pin_problem="unreadable"), _check(channel="main")),
     "dev_branch": _scenario(_version(channel="wf/x", version="1.0.0 + 2 (4d6b414)")),
     "older_core": _scenario({"sha": "4d6b414", "running_sha": "4d6b414", "checkout_sha": "4d6b414",
                              "restart_required": False, "restart_capable": True, "restart_mode": "restart",
@@ -214,6 +215,13 @@ def test_a_channel_root_does_not_allow_is_not_offered(driven) -> None:
     assert b["channel"].endswith("set on the server")
     both = driven["pinned_to_both"]["before"]
     assert both["select"]["options"] == ["stable: releases only", "main: every change, as it lands"]
+
+
+def test_a_settings_file_the_server_cannot_read_offers_no_switch(driven) -> None:
+    """REV-20: the server can't tell what root pins, so no channel is offered."""
+    b = driven["pin_unknown"]["before"]
+    assert b["select"] is None
+    assert "can’t switch: the server can’t read its update settings" in b["channel"]
 
 
 def test_a_box_on_another_branch_can_move_to_a_channel(driven) -> None:

@@ -3301,6 +3301,39 @@ case_upstream_pin_of_both_channels_takes_either() {
   end_case
 }
 
+# With a branch pin, HEAD itself must be on a pinned branch as last fetched
+# (root's git; the tracking config is the service user's): a local commit
+# no pinned branch holds is refused, plain restart included. A box on
+# stable past the latest release is on origin/main, and goes on.
+case_upstream_pin_refuses_a_head_on_no_pinned_branch() {
+  new_case upstream_pin_refuses_a_head_on_no_pinned_branch
+  mkdir -p "$UPD" && echo "$SHA_A" >"$UPD/applied_sha"
+  local bare; bare=$(add_upstream)
+  # stable is the release, A; main and HEAD are past it (B).
+  g push -q origin main:stable 2>/dev/null
+  printf 'print("b")\n' >"$REPO/domovoi/app.py"
+  local sha_b; sha_b=$(commit_all "B: code")
+  g push -q origin main 2>/dev/null
+  g fetch -q origin
+  g checkout -q -B stable
+  g branch -q --set-upstream-to origin/stable stable
+  UPSTREAM_BRANCH="stable main" run_update
+  check "past the release, on main: ok" eq "$(field status)" '"ok"'
+  # Pinned to stable alone, the same box is on no pinned branch.
+  : >"$STATE/calls.log"
+  UPSTREAM_BRANCH=stable run_update
+  check "stable alone: refused" eq "$(field status)" '"refused"'
+  check "says why" eq "$(field error | grep -c "HEAD ${sha_b:0:12} is on none of the pinned branches (origin/stable)")" 1
+  check "nothing stopped" not_called "systemctl stop"
+  # A commit of its own, never pushed: refused under both channels.
+  printf 'print("c")\n' >"$REPO/domovoi/app.py"
+  commit_all "C: local only" >/dev/null
+  UPSTREAM_BRANCH="stable main" run_update
+  check "local commit: refused" eq "$(field status)" '"refused"'
+  check "names both" eq "$(field error | grep -c 'is on none of the pinned branches (origin/stable, origin/main)')" 1
+  end_case
+}
+
 # ─── Docker's GPU runtime (scripts/linux/gpu-runtime.sh, 2026-10-13) ─────
 #
 # A box installed before the helper existed gets the NVIDIA Container
@@ -3902,6 +3935,7 @@ CASES=(
   case_upstream_branch_pin_mismatch_is_refused
   case_upstream_pin_that_matches_goes_on
   case_upstream_pin_of_both_channels_takes_either
+  case_upstream_pin_refuses_a_head_on_no_pinned_branch
   case_gpu_runtime_installed_while_the_services_are_stopped
   case_gpu_runtime_under_never_downloads_nothing
   case_gpu_runtime_docker_restart_on_a_plain_restart_restarts_the_database

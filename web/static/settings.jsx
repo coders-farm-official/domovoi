@@ -1058,7 +1058,11 @@ const VersionSection = () => {
   const plainRestart = admin && !!core && mode !== 'restart' && mode !== 'busy';
   const plainRunning = restarting === 'plain';
   // The switch is an admin's, and only where there is somewhere to go.
-  const canSwitch = admin && !!core && mode !== 'busy' && channelChoices.some((c) => c !== channel);
+  // Not while the server can't read root's settings file: it can't tell
+  // which channels the update unit would accept (channel_pin_problem).
+  const pinUnknown = !!(core && core.channel_pin_problem);
+  const canSwitch = admin && !!core && mode !== 'busy' && !pinUnknown
+                    && channelChoices.some((c) => c !== channel);
   // On stable, past the latest release (switched from main): nothing to
   // pull until a release includes this code.
   const aheadOfRelease = !!(status && status.upstream && status.channel === 'stable'
@@ -1137,7 +1141,13 @@ const VersionSection = () => {
                 </span>
               )}
               {switching && <span style={{ color: 'var(--fg-muted)' }}>switching…</span>}
-              {admin && !canSwitch && channelPin && (
+              {admin && pinUnknown && (
+                <span style={{ color: 'var(--fg-muted)' }}
+                      title="the server can't read /etc/default/domovoi-update, where its update unit may pin a branch; making it readable (chmod 0644) brings the switch back">
+                  can’t switch: the server can’t read its update settings
+                </span>
+              )}
+              {admin && !canSwitch && !pinUnknown && channelPin && (
                 <span style={{ color: 'var(--fg-muted)' }}
                       title="DOMOVOI_UPSTREAM_BRANCH in /etc/default/domovoi-update, which only an administrator on the server can change">
                   set on the server
