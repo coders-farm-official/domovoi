@@ -187,6 +187,9 @@ set -euo pipefail
 # no grafts. Both live in the service user's .git, and with them an unsigned
 # commit could pass for a signed one under its SHA (rc2 review C3).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+# And without the hint git prints for that graft file, in every git it
+# starts (the service user's included): one config entry, from the environment.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -1779,12 +1782,29 @@ searxng_detach() {
 # by SEARXNG_TIMEOUT: the first start pulls the image, and on a slow or
 # metered line that must not hold the update open, let alone let the
 # unit's TimeoutStartSec kill it into a "failed" result.
+#
+# As the service user, either way (delta review of the root verifier,
+# 2026-10-16): root's own docker CLI would read the project's .env, and
+# whatever else compose opens, from the checkout. That user is in the
+# docker group already, so it loses nothing; the compose file is the
+# verified copy's (searxng_compose_file), the project directory (its .env,
+# ./searxng) the checkout's, read by that user.
 searxng_start() {
-  local policy=$1 compose_file=$2 rc=0
+  local policy=$1 compose_file=$2 rc=0 group="" home=""
   local -a cmd=(docker compose -f "$compose_file" --project-directory "$REPO_DIR/domovoi"
                 up -d --no-deps "$SEARXNG_SERVICE")
+  local -a sd=(systemd-run --no-block --collect --quiet --unit="$SEARXNG_START_UNIT") as=()
+  if [ "$RUN_AS_ROOT" = 1 ] && [ -n "$SERVICE_USER" ] && [ "$SERVICE_USER" != root ]; then
+    group=${RESULT_GROUP:-$(id -gn "$SERVICE_USER" 2>/dev/null || true)}
+    home=$(getent passwd "$SERVICE_USER" 2>/dev/null | cut -d: -f6) || home=""
+    sd+=(--uid="$SERVICE_USER")
+    if [ -n "$group" ]; then sd+=(--gid="$group"); fi
+    if [ -n "$home" ]; then sd+=(--setenv=HOME="$home"); fi
+    sd+=(-p WorkingDirectory="$REPO_DIR")
+    as=(runuser -u "$SERVICE_USER" --)
+  fi
   if searxng_detach; then
-    if systemd-run --no-block --collect --quiet --unit="$SEARXNG_START_UNIT" "${cmd[@]}"; then
+    if "${sd[@]}" "${cmd[@]}"; then
       STEP_DETAIL="starting $SEARXNG_CONTAINER in the background ($SEARXNG_START_UNIT; internet answer: $policy)"
       return 0
     fi
@@ -1795,9 +1815,9 @@ searxng_start() {
     return 1
   fi
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$SEARXNG_TIMEOUT" "${cmd[@]}" || rc=$?
+    timeout "$SEARXNG_TIMEOUT" ${as[@]+"${as[@]}"} "${cmd[@]}" || rc=$?
   else
-    "${cmd[@]}" || rc=$?
+    ${as[@]+"${as[@]}"} "${cmd[@]}" || rc=$?
   fi
   if [ "$rc" -eq 124 ]; then
     echo "the search helper did not start within ${SEARXNG_TIMEOUT}s (DOMOVOI_UPDATE_SEARXNG_TIMEOUT); start it again from Settings > Internet"
@@ -1807,11 +1827,30 @@ searxng_start() {
   STEP_DETAIL="$SEARXNG_CONTAINER up (internet answer: $policy)"
 }
 
+# The compose file the search helper starts from: the verified copy's,
+# put where the service user can read it and where it outlives this run (a
+# detached start may come after RuntimeDirectory= removed the copy):
+# DOMOVOI_UPDATE_DIR/searxng-compose.yml, root's, 0644. Only a copy from a
+# verifier older than the compose file in it, or a run that isn't root's,
+# names the checkout's own (read by the service user, like everything of
+# the checkout).
+searxng_compose_file() {
+  local src=${VERIFIED_DIR:+$VERIFIED_DIR/domovoi/docker-compose.yml} dest=$UPDATE_DIR/searxng-compose.yml tmp
+  if [ -n "$src" ] && [ -f "$src" ] && [ ! -L "$src" ] \
+      && tmp=$(mktemp "$UPDATE_DIR/.searxng-compose.yml.XXXXXX") \
+      && cp "$src" "$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$dest"; then
+    printf '%s' "$dest"
+    return 0
+  fi
+  rm -f "${tmp:-}"
+  printf '%s' "$REPO_DIR/domovoi/docker-compose.yml"
+}
+
 # Start or stop the search helper (SearXNG) to match the internet answer:
 # Yes or Sometimes start it (the first start pulls the pinned image), No
 # stops it if it runs, unanswered leaves it as it is. Run as a soft step.
 reconcile_searxng() {
-  local policy compose_file=$REPO_DIR/domovoi/docker-compose.yml
+  local policy compose_file
   case "$(printf '%s' "$MANAGE_SEARXNG" | tr '[:upper:]' '[:lower:]')" in
     0|false|no|off)
       STEP_DETAIL="skipped: DOMOVOI_MANAGE_SEARXNG=$MANAGE_SEARXNG"
@@ -1823,6 +1862,7 @@ reconcile_searxng() {
   fi
   case "$policy" in
     always|sometimes)
+      compose_file=$(searxng_compose_file)
       searxng_start "$policy" "$compose_file" || return 1 ;;
     never)
       if [ "$(docker inspect -f '{{.State.Running}}' "$SEARXNG_CONTAINER" 2>/dev/null)" = true ]; then
@@ -2212,7 +2252,8 @@ relaunch_verified() {
 }
 
 # The unit as install-update-unit.sh wrote it before the verifier, for this
-# checkout: the one shape that is moved to the new one without asking.
+# checkout: moved to the new one as it is; any other unit without the
+# verifier is moved too, but kept beside it first.
 legacy_unit_text() {
   printf '%s\n' '[Unit]' \
     'Description=Domovoi update (back up, sync, migrate, restart, roll back on failure)' \
@@ -2246,10 +2287,12 @@ root_dir() {
 # (exactly legacy_unit_text) replaced by the one install-update-unit.sh
 # writes now, then daemon-reload; the next run starts with ExecStartPre.
 # Only from a verified copy, as root, under the unit (no unit file: a run
-# by hand, nothing to keep). A unit someone changed by hand is left as it
-# is, with a warn step saying how to move it. Never fatal.
+# by hand, nothing to keep). A unit someone changed by hand is replaced
+# too, after a copy of it is kept as <unit>.bak-<time> (a warn step says
+# where), since otherwise every run of it starts with the checkout's own
+# copy of this script as root. Never fatal.
 reconcile_update_unit() {
-  local t0 src=$SCRIPT_DIR/update-verifier.sh dir have want tmp did=() why=""
+  local t0 src=$SCRIPT_DIR/update-verifier.sh dir have want tmp did=() why="" note="" kept
   [ "$RUN_AS_ROOT" = 1 ] && [ -n "$VERIFIED_DIR" ] || return 0
   [ -f "$UPDATE_UNIT_FILE" ] && [ ! -L "$UPDATE_UNIT_FILE" ] && [ -s "$UPDATE_UNIT_FILE" ] || return 0
   [ -f "$src" ] || return 0
@@ -2270,19 +2313,36 @@ reconcile_update_unit() {
   have=$(cat "$UPDATE_UNIT_FILE" 2>/dev/null) || have=""
   if [[ $have != *"verify-update.sh prepare"* ]]; then
     want=$(bash "$SCRIPT_DIR/install-update-unit.sh" --print-unit --repo "$REPO_DIR" 2>/dev/null) || want=""
-    if [ -z "$why" ] && [ -n "$want" ] && [ "$have" = "$(legacy_unit_text)" ] && [ -f "$VERIFIER_INSTALLED" ]; then
-      if write_atomic "$UPDATE_UNIT_FILE" "$want"$'\n' && systemctl daemon-reload; then
-        did+=("domovoi-update.service runs it before every update (ExecStartPre), and root runs only the verified copy of each commit")
-      else
-        why="${why:+$why; }$UPDATE_UNIT_FILE could not be replaced"
+    if [ -z "$why" ] && [ -n "$want" ] && [ -f "$VERIFIER_INSTALLED" ]; then
+      # Not the unit the installer wrote (changed by hand): replaced all the
+      # same, since every run of it would start with the checkout's own
+      # copy of this script as root, and kept beside it, under a name
+      # systemd ignores, for its changes to be put back as a drop-in.
+      if [ "$have" != "$(legacy_unit_text)" ]; then
+        kept=$UPDATE_UNIT_FILE.bak-$(date -u +%Y%m%dT%H%M%SZ)
+        if cp -p "$UPDATE_UNIT_FILE" "$kept"; then
+          note="it was not the unit install-update-unit.sh wrote, so it is kept as $kept: put any change of yours back in a drop-in (/etc/systemd/system/domovoi-update.service.d/)"
+        else
+          why="${why:+$why; }$UPDATE_UNIT_FILE was changed by hand and no copy of it could be kept, so it was left as it is: root runs this script from the checkout first, at every update, until install-update-unit.sh replaces it"
+        fi
       fi
-    else
-      why="${why:+$why; }$UPDATE_UNIT_FILE is not the unit install-update-unit.sh wrote, so it was left as it is: until it runs the verifier (sudo bash $VERIFIED_DIR/scripts/linux/install-update-unit.sh, which keeps the old one beside it), root runs this script from the checkout first, at every update"
+      if [ -z "$why" ]; then
+        if write_atomic "$UPDATE_UNIT_FILE" "$want"$'\n' && systemctl daemon-reload; then
+          did+=("domovoi-update.service runs it before every update (ExecStartPre), and root runs only the verified copy of each commit")
+        else
+          why="${why:+$why; }$UPDATE_UNIT_FILE could not be replaced"
+        fi
+      fi
+    elif [ -z "$why" ]; then
+      why="$UPDATE_UNIT_FILE could not be moved to the verifier (install-update-unit.sh --print-unit gave nothing)"
     fi
   fi
   if [ -n "$why" ]; then
     add_step update-unit warn "$t0" "$(trunc "$why" 600)"
     log "step update-unit: $why"
+  elif [ -n "$note" ]; then
+    add_step update-unit warn "$t0" "$(trunc "$(IFS=';'; printf '%s' "${did[*]}" | sed 's/;/; /g'); $note" 600)"
+    log "step update-unit: $note"
   elif [ "${#did[@]}" -gt 0 ]; then
     add_step update-unit ok "$t0" "$(IFS=';'; printf '%s' "${did[*]}" | sed 's/;/; /g')"
     log "step update-unit: $(IFS=';'; printf '%s' "${did[*]}")"

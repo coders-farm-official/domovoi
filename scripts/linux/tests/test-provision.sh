@@ -3029,6 +3029,7 @@ case_rerun_takes_nothing_from_the_working_tree() {
   check "so Docker's step is unchanged" eq "$(state_of docker)" skip
   check "the copy is gone after the run" test ! -e "$ROOT/run/domovoi-provision/$head"
   check "the mirror is root's state" test -d "$ROOT/var/lib/domovoi-update/mirror.git"
+  check "files of the checkout it only hashes, hashed as the service user"     grep -q "^runuser -u domovoi -- .* sha256sum -- $CHECKOUT/domovoi/docker-compose.yml" "$STATE/calls.log"
   check "progress format" progress_ok
   end_case
 }

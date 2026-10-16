@@ -54,7 +54,7 @@ def test_the_copy_holds_what_root_runs():
     units and drop-ins, the pin manifest) and the doc whose Ollama pin
     provision.sh reads; never the tests."""
     block = _block(VERIFIER)
-    assert "VX_PATHS=(scripts/linux docs/LINUX_HOST.md)\n" in block
+    assert "VX_PATHS=(scripts/linux docs/LINUX_HOST.md domovoi/docker-compose.yml)\n" in block
     assert "VX_SKIP=scripts/linux/tests/\n" in block
     # Plain files only: a link or a submodule refuses the copy.
     assert "100644|100755) ;;" in block
@@ -84,6 +84,29 @@ def test_root_git_reads_no_replacements_and_no_grafts():
     # And for every git the scripts run, the service user's included (wf/rc2-channels).
     for script in (VERIFIER, APPLY, PROVISION, LINUX / "install-update-unit.sh"):
         assert "\nexport GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null\n" in script.read_text(encoding="utf-8"), script.name
+
+
+def test_root_runs_no_compose_on_the_checkouts_file():
+    """Review of the root verifier (2026-10-16): the search helper starts from
+    the verified copy's compose file, as the service user, in the foreground
+    and in the transient unit alike."""
+    apply = APPLY.read_text(encoding="utf-8")
+    m = re.search(r"^searxng_start\(\) \{\n(.*?)\n\}$", apply, re.M | re.S)
+    assert m, "searxng_start() not found"
+    body = m.group(1)
+    assert 'sd+=(--uid="$SERVICE_USER")' in body and 'as=(runuser -u "$SERVICE_USER" --)' in body
+    assert 'timeout "$SEARXNG_TIMEOUT" ${as[@]+"${as[@]}"} "${cmd[@]}"' in body
+    assert 'compose_file=$(searxng_compose_file)' in apply
+
+
+def test_the_installer_runs_from_the_copy_once_a_verifier_is_installed():
+    text = (LINUX / "install-update-unit.sh").read_text(encoding="utf-8")
+    assert "  check_repo\n  run_from_copy\n  check_user\n" in text
+    assert 'exec bash "$dir/scripts/linux/install-update-unit.sh"' in text
+    # Every command the docs give for it by hand runs a verified copy.
+    doc = (REPO_ROOT / "docs" / "LINUX_HOST.md").read_text(encoding="utf-8")
+    bare = [l for l in doc.splitlines() if re.search(r"sudo bash /opt/domovoi/scripts/linux/install-update-unit\.sh", l)]
+    assert bare == [], bare
 
 
 def test_the_checkout_is_read_by_the_service_user():

@@ -50,6 +50,16 @@
 #   6. With --apply: systemctl start domovoi-update.service, which waits
 #      for the run, then the status from its last-result.json.
 #
+# Run from inside the checkout it installs for (sudo bash
+# /opt/domovoi/scripts/linux/install-update-unit.sh) on a box that has the
+# verifier already, it runs none of that: the checkout is the service
+# user's, and so would be the verifier this put in place. It asks the
+# installed verifier for the verified copy of HEAD (verify-update.sh export)
+# and runs that copy's install-update-unit.sh instead, with the same
+# options (delta review of the root verifier, 2026-10-16). Only the very
+# first install, before there is any verifier, runs from the checkout as
+# it is.
+#
 # A stop anywhere in 3 and 4, expected or not (a failed check, a failed
 # write, Ctrl-C), takes back the grant, the verifier and the unit this run
 # put there, so
@@ -86,6 +96,9 @@ set -euo pipefail
 # no grafts. Both live in the service user's .git, and with them an unsigned
 # commit could pass for a signed one under its SHA (rc2 review C3).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+# And without the hint git prints for that graft file, in every git it
+# starts (the service user's included): one config entry, from the environment.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
 
 PROG=install-update-unit
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -936,6 +949,39 @@ check_sudoers() {
   esac
 }
 
+# Run from inside the checkout, with a verifier installed: go on from the
+# verified copy of HEAD instead (see the header). Nothing is changed before
+# this: the copy is root's own cache (the mirror, a directory under /run).
+run_from_copy() {
+  local here repo dir s
+  local -a venv=()
+  [ -f "$VERIFIER_FILE" ] && [ ! -L "$VERIFIER_FILE" ] || return 0
+  here=$(canon "$SCRIPT_DIR")
+  repo=$(canon "$REPO")
+  case $here/ in "$repo"/*) ;; *) return 0 ;; esac
+  venv=(DOMOVOI_REPO_DIR="$REPO")
+  if [ -n "$SVC_USER" ]; then venv+=(DOMOVOI_USER="$SVC_USER"); fi
+  for s in DOMOVOI_UPDATE_DIR DOMOVOI_ALLOWED_SIGNERS DOMOVOI_REVOKED_SIGNERS DOMOVOI_USER; do
+    if [ -n "$(defaults_get "$s")" ]; then
+      case $s in DOMOVOI_USER) [ -n "$SVC_USER" ] || venv+=("$s=$(defaults_get "$s")") ;; *) venv+=("$s=$ROOT$(defaults_get "$s")") ;; esac
+    fi
+  done
+  if [ -n "$ROOT" ]; then venv+=(DOMOVOI_PROVISION_ROOT="$ROOT" DOMOVOI_PROVISION_TEST_HARNESS=1); fi
+  line ok "this script is the checkout's own: making the verified copy of HEAD with $VERIFIER_FILE"
+  if ! dir=$(env "${venv[@]}" bash "$VERIFIER_FILE" export "$ROOT/run/domovoi-update-install" 2>"$TMPD/export.err"); then
+    stop "the update verifier refused to copy HEAD of $REPO: $(tail_of "$(cat "$TMPD/export.err")" 1)" \
+      "This script runs only from that copy once a verifier is installed: the checkout is the service user's."
+  fi
+  dir=$(printf '%s\n' "$dir" | tail -n 1)
+  [ -f "$dir/scripts/linux/install-update-unit.sh" ] \
+    || stop "the verified copy $dir has no scripts/linux/install-update-unit.sh"
+  say "Running the verified copy instead: bash $dir/scripts/linux/install-update-unit.sh${ORIG_ARGS[*]+ ${ORIG_ARGS[*]}}"
+  rm -rf "$TMPD"
+  TMPD=""
+  REPORTED=1
+  exec bash "$dir/scripts/linux/install-update-unit.sh" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
+}
+
 # The verifier the unit runs: this script's sibling, installed root-owned
 # outside the checkout, where only root can write.
 check_verifier() {
@@ -1217,6 +1263,7 @@ main() {
   check_defaults_file
   check_systemd
   check_repo
+  run_from_copy
   check_user
   check_venv
   check_docker

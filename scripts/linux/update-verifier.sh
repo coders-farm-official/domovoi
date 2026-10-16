@@ -74,6 +74,9 @@ umask 022
 # as apply-update.sh, provision.sh and install-update-unit.sh do. vx_git
 # pins the same again for root's own git.
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+# And without the hint git prints for that graft file, in every git it
+# starts (the service user's included): one config entry, from the environment.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
 
 PROG=update-verifier
 
@@ -120,9 +123,16 @@ die() { log "$*"; exit 1; }
 # count as root: 0, and under a test harness its own user) and VX_TOP (where
 # the walk up a path for anyone else's write access stops: /, or the
 # harness's case directory). A vx_ function that fails returns 1 with the
-# reason in VX_ERROR.
+# reason in VX_ERROR. The fetch is bounded: VX_FETCH_TIMEOUT seconds and
+# VX_FETCH_MAX_KB per file it writes (ulimit -f), so a checkout that offers a
+# huge pack can't fill root's disk or hold the update for its whole 30 min.
 
-VX_PATHS=(scripts/linux docs/LINUX_HOST.md)
+# What root runs, installs or hands to Docker: scripts/linux, the doc whose
+# Ollama pin provision.sh reads, and the compose file the update starts the
+# search helper from.
+VX_PATHS=(scripts/linux docs/LINUX_HOST.md domovoi/docker-compose.yml)
+VX_FETCH_TIMEOUT=${VX_FETCH_TIMEOUT:-900}
+VX_FETCH_MAX_KB=${VX_FETCH_MAX_KB:-2097152}
 VX_SKIP=scripts/linux/tests/
 VX_ERROR=""
 VX_SHA=""
@@ -138,12 +148,18 @@ VX_SIG_ENFORCED=0
 # No replacement objects and no grafts (rc2 review C3): a refs/replace or an
 # info/grafts entry could make git read another commit or tree than the one
 # a SHA names, and verify or copy that. The fetch never brings refs/replace
-# in, and the mirror has no alternates: its objects are its own.
+# in, and the mirror has no alternates: its objects are its own. The one
+# config entry the environment gives every git it starts (the service
+# user's upload-pack too) silences the grafts hint GIT_GRAFT_FILE brings.
+# vx_git --timeout SECONDS ...: bounded by timeout(1).
 vx_git() {
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+  local -a pre=()
+  if [ "${1-}" = --timeout ]; then pre=(timeout "$2"); shift 2; fi
+  ${pre[@]+"${pre[@]}"} env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
     -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS \
-    -u GIT_CONFIG_COUNT -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
+    -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
     -u GIT_SSH -u GIT_SSH_COMMAND -u GIT_ASKPASS -u GIT_PROXY_COMMAND -u GIT_EXTERNAL_DIFF \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/dev/null}" \
     GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null GIT_TERMINAL_PROMPT=0 \
     git -C "$VX_MIRROR" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c advice.graftFileDeprecated=false "$@"
@@ -209,10 +225,13 @@ vx_fetch() {
   local up out
   VX_SHA=""
   if [ "$VX_USER" = root ]; then up="git upload-pack"; else up="runuser -u $VX_USER -- git upload-pack"; fi
-  if ! out=$(vx_git -c protocol.file.allow=always fetch --quiet --no-tags --no-recurse-submodules \
-      --no-write-fetch-head --no-auto-gc --prune --upload-pack="$up" "$VX_REPO" \
-      '+HEAD:refs/domovoi/head' '+refs/remotes/origin/*:refs/remotes/origin/*' 2>&1); then
-    VX_ERROR="git fetch of $VX_REPO into $VX_MIRROR failed: $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
+  # A subshell, so the file-size limit stays with the fetch (and the pack
+  # writers it starts); timeout ends it, and what it started, when it hangs.
+  if ! out=$( (ulimit -f "$VX_FETCH_MAX_KB" && vx_git --timeout "$VX_FETCH_TIMEOUT" -c protocol.file.allow=always \
+      fetch --quiet --no-tags --no-recurse-submodules --no-write-fetch-head --no-auto-gc --prune \
+      --upload-pack="$up" "$VX_REPO" \
+      '+HEAD:refs/domovoi/head' '+refs/remotes/origin/*:refs/remotes/origin/*') 2>&1); then
+    VX_ERROR="git fetch of $VX_REPO into $VX_MIRROR failed (or passed its bounds: ${VX_FETCH_TIMEOUT}s, ${VX_FETCH_MAX_KB} KB a file): $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
     return 1
   fi
   vx_git gc --auto --quiet >/dev/null 2>&1 || true
@@ -430,6 +449,22 @@ settings() {
   VX_MIRROR=$UPDATE_DIR/mirror.git
   VX_SIGNERS=$SIGNERS
   VX_REVOKED=$REVOKED
+  # The fetch's bounds (see the block): DOMOVOI_VERIFY_FETCH_TIMEOUT seconds,
+  # DOMOVOI_VERIFY_FETCH_MAX_KB per file it writes.
+  VX_FETCH_TIMEOUT=${DOMOVOI_VERIFY_FETCH_TIMEOUT:-900}
+  VX_FETCH_MAX_KB=${DOMOVOI_VERIFY_FETCH_MAX_KB:-2097152}
+  [[ $VX_FETCH_TIMEOUT =~ ^[1-9][0-9]*$ ]] || die "DOMOVOI_VERIFY_FETCH_TIMEOUT is not a number of seconds: $VX_FETCH_TIMEOUT"
+  [[ $VX_FETCH_MAX_KB =~ ^[1-9][0-9]*$ ]] || die "DOMOVOI_VERIFY_FETCH_MAX_KB is not a number of KB: $VX_FETCH_MAX_KB"
+}
+
+# use_dir DIR: make DIR (0700, root's) when it is missing, and name it from
+# then on by its resolved path, the one every check and write uses.
+use_dir() {
+  local d=$1
+  [ -d "$d" ] || install -d -m 0700 "$d" || refuse failed verify failed "can't create $d"
+  d=$(cd "$d" && pwd -P) || refuse failed verify failed "can't read $1"
+  RUN_DIR=$d
+  POINTER=$RUN_DIR/verified
 }
 
 # One verifier at a time (the update unit, a by-hand export).
@@ -461,7 +496,6 @@ make_copy() {
   if ! vx_verify; then
     refuse refused signature refused "$VX_SIG_DETAIL; signed updates are enforced by $SIGNERS, so nothing was changed. Pull a commit signed by a listed key, or remove that file to turn enforcement off (docs/LINUX_HOST.md, Signed updates)."
   fi
-  [ -d "$parent" ] || install -d -m 0755 "$parent" || refuse failed verify failed "can't create $parent"
   vx_export "$parent" || refuse failed verify failed "$VX_ERROR"
   [ -f "$VX_DIR/scripts/linux/apply-update.sh" ] \
     || refuse failed verify failed "commit $VX_SHA has no scripts/linux/apply-update.sh: there is no update to run"
@@ -486,6 +520,7 @@ prune_copies() {
 }
 
 cmd_prepare() {
+  use_dir "$RUN_DIR"
   rm -f -- "$POINTER"
   make_copy "$RUN_DIR"
   prune_copies
@@ -495,6 +530,8 @@ cmd_prepare() {
 
 cmd_run() {
   local sha dir
+  RUN_DIR=$(cd "$RUN_DIR" 2>/dev/null && pwd -P) || die "no $RUN_DIR: the prepare step did not run"
+  POINTER=$RUN_DIR/verified
   vx_root_only "$RUN_DIR" || die "$VX_ERROR"
   [ -f "$POINTER" ] && [ ! -L "$POINTER" ] || die "no verified copy to run ($POINTER): the prepare step did not finish"
   sha=$(tr -d '[:space:]' <"$POINTER")
@@ -547,7 +584,9 @@ main() {
       settings
       if [ -n "${2:-}" ]; then
         [[ $2 == /?* ]] || die "export DIR must be an absolute path"
-        RUN_DIR=${2%/}
+        use_dir "${2%/}"
+      else
+        use_dir "$RUN_DIR"
       fi
       make_copy "$RUN_DIR"
       printf '%s\n' "$VX_DIR"

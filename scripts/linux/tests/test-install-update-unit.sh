@@ -1427,7 +1427,92 @@ case_print_unit_needs_no_root() {
   end_case
 }
 
+
+not() { ! "$@"; }
+
+# Review of the root verifier, 2026-10-16, R1: the documented re-run, sudo
+# bash /opt/domovoi/scripts/linux/install-update-unit.sh, installed the
+# checkout's own update-verifier.sh, edited or not, as root's verifier.
+# With a verifier in place, the checkout's installer makes the verified
+# copy of HEAD with it and runs that copy's installer instead.
+case_from_the_checkout_runs_the_verified_copy() {
+  new_case from_the_checkout_runs_the_verified_copy
+  mkdir -p "$REPO/scripts/linux/units"
+  cp "$HERE"/../*.sh "$REPO/scripts/linux/"
+  cp "$HERE"/../units/* "$REPO/scripts/linux/units/"
+  local sha_c; sha_c=$(commit_all "C: the real scripts")
+  # The core runs C (the version the installer records as the baseline).
+  printf '{"running_sha":"%s"}\n' "$sha_c" >"$STATE/version.json"
+  mkdir -p "$(dirname "$VERIFIER")"
+  cp "$VERIFIER_SRC" "$VERIFIER"
+  # The service user edits the verifier beside the installer, no commit.
+  sed -i "2i echo PLANTED-R1 >>$CASE/ran-verifier" "$REPO/scripts/linux/update-verifier.sh"
+  cat >"$CASE/bin/runuser" <<'SH'
+#!/usr/bin/env bash
+echo "runuser $*" >>"$SHIM_STATE/calls.log"
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+SH
+  chmod +x "$CASE/bin/runuser"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$REPO/scripts/linux/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  local copy=$ROOT/run/domovoi-update-install/$sha_c
+  check "exit 0" eq "$RC" 0
+  check "says it makes the copy with the installed verifier" said "this script is the checkout's own: making the verified copy of HEAD with $VERIFIER"
+  check "and runs that copy's installer" said "Running the verified copy instead: bash $copy/scripts/linux/install-update-unit.sh"
+  check "the checkout read by upload-pack as the service user" called "runuser -u tester -- git upload-pack"
+  check "the verifier is still the commit's" cmp -s "$VERIFIER" "$VERIFIER_SRC"
+  check "not the edited one" not grep -q PLANTED-R1 "$VERIFIER"
+  check "which never ran" test ! -e "$CASE/ran-verifier"
+  check "the unit is in place" eq "$(cat "$UNIT")" "$(expected_unit)"
+  check "and the grant" eq "$(cat "$SUDOERS")" "$RULE"
+  # Without a verifier (the very first install) it runs as it is.
+  rm -rf "$ROOT/usr/local/lib/domovoi-update" "$UNIT" "$SUDOERS" "$ROOT/run/domovoi-update-install"
+  g checkout -q -- scripts/linux/update-verifier.sh
+  : >"$STATE/calls.log"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$REPO/scripts/linux/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  check "first install: exit 0" eq "$RC" 0
+  check "first install: from the checkout, no copy" not said "Running the verified copy instead"
+  check "first install: the verifier is the checkout's" cmp -s "$VERIFIER" "$REPO/scripts/linux/update-verifier.sh"
+  end_case
+}
+
+case_from_the_checkout_stops_when_the_verifier_refuses() {
+  new_case from_the_checkout_stops_when_the_verifier_refuses
+  mkdir -p "$REPO/scripts/linux/units"
+  cp "$HERE"/../*.sh "$REPO/scripts/linux/"
+  cp "$HERE"/../units/* "$REPO/scripts/linux/units/"
+  commit_all "C: the real scripts" >/dev/null
+  mkdir -p "$(dirname "$VERIFIER")"
+  cp "$VERIFIER_SRC" "$VERIFIER"
+  # A link in the commit: the copy refuses, and so does the installer.
+  rm "$REPO/scripts/linux/units/journald-domovoi.conf"
+  ln -s /etc/shadow "$REPO/scripts/linux/units/journald-domovoi.conf"
+  commit_all "D: a link" >/dev/null
+  cat >"$CASE/bin/runuser" <<'SH'
+#!/usr/bin/env bash
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+SH
+  chmod +x "$CASE/bin/runuser"
+  RC=0
+  env PATH="$CASE/bin:$PATH" DOMOVOI_INSTALL_ROOT="$ROOT" DOMOVOI_INSTALL_TEST_HARNESS=1 \
+    TMPDIR="$CASE/tmp" bash "$REPO/scripts/linux/install-update-unit.sh" >"$CASE/output.log" 2>&1 || RC=$?
+  check "exit 1" eq "$RC" 1
+  check "says the verifier refused" said "the update verifier refused to copy HEAD of $REPO"
+  check "and why" said "is a symbolic link"
+  check "nothing installed but the verifier there before" eq "$(absent "$UNIT" && absent "$SUDOERS" && echo none)" none
+  end_case
+}
+
 CASES=(
+  case_from_the_checkout_runs_the_verified_copy
+  case_from_the_checkout_stops_when_the_verifier_refuses
   case_verifier_replaced_and_put_back_on_a_stop
   case_verifier_dir_writable_by_others_stops
   case_verifier_symlink_stops

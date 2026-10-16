@@ -2031,7 +2031,7 @@ case_searxng_started_after_a_healthy_restart() {
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
   check "reads the answer the core's way" called "python -m domovoi.egress --print-policy"
-  check "starts the search helper" called "docker compose -f $REPO/domovoi/docker-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "starts the search helper" called "docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
   check "only after health" before "curl http://127.0.0.1:6369/api/health" "docker compose"
   check "a searxng step, ok" step_is searxng ok
   check "applied_sha unchanged" file_is "$UPD/applied_sha" "$SHA_A"
@@ -2162,7 +2162,7 @@ case_searxng_start_detached_under_systemd() {
   SEARXNG_DETACH=1 run_update "$CASE/sdbin"
   check "exit 0" eq "$RC" 0
   check "status ok" eq "$(field status)" '"ok"'
-  check "handed to a transient unit" called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start docker compose -f $REPO/domovoi/docker-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "handed to a transient unit" called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
   check "the update did not run compose itself" eq "$(grep -c '^docker compose' "$STATE/calls.log")" 0
   check "a searxng step, ok" step_is searxng ok
   check "says it starts in the background" eq "$(grep -c 'in the background' "$RESULT")" 1
@@ -4209,8 +4209,11 @@ case_verifier_an_old_unit_hands_over_and_is_moved() {
   end_case
 }
 
-case_verifier_a_unit_changed_by_hand_is_left_with_a_warning() {
-  new_case verifier_a_unit_changed_by_hand_is_left_with_a_warning
+# A unit changed by hand (review of the root verifier, 2026-10-16): left
+# as it was, every run of it would start with the checkout's own script as
+# root. It is replaced too, kept beside it first, and a warn step says where.
+case_verifier_a_unit_changed_by_hand_is_replaced_and_kept() {
+  new_case verifier_a_unit_changed_by_hand_is_replaced_and_kept
   with_scripts
   write_root_shims "$CASE/rootbin"
   local unit=$OSROOT/etc/systemd/system/domovoi-update.service
@@ -4220,10 +4223,87 @@ case_verifier_a_unit_changed_by_hand_is_left_with_a_warning() {
   VERIFIED=0 run_update "$CASE/rootbin"
   check "status ok" eq "$(field status)" '"ok"'
   check "ran from the copy" ran_from_copy "$SHA_A"
-  check "the unit is left as it is" eq "$(cat "$unit")" "$before"
-  check "a warn step" step_is update-unit warn
-  check "says how to move it" grep -qF 'scripts/linux/install-update-unit.sh, which keeps the old one beside it' "$RESULT"
-  check "no reload" not_called "systemctl daemon-reload"
+  check "the unit is the new one" eq "$(cat "$unit")" "$(bash "$HERE/../install-update-unit.sh" --print-unit --repo "$REPO")"
+  check "the old one kept beside it" eq "$(cat "$unit".bak-*)" "$before"
+  check "under a name systemd ignores" eq "$(ls "$(dirname "$unit")" | grep -c '^domovoi-update\.service\.bak-[0-9]\{8\}T[0-9]\{6\}Z$')" 1
+  check "a warn step says where" grep -qF "so it is kept as $unit.bak-" "$RESULT"
+  check "systemd reloaded it" called "systemctl daemon-reload"
+  # The next run is the verifier's from the start: nothing more to move.
+  : >"$STATE/calls.log"
+  run_unit
+  check "next run: ok" eq "$(field status)" '"ok"'
+  check "next run: no update-unit step" eq "$(grep -c '"update-unit"' "$RESULT")" 0
+  check "next run: one kept copy still" eq "$(ls "$(dirname "$unit")" | grep -c '^domovoi-update\.service\.bak-')" 1
+  end_case
+}
+
+# Review of the root verifier, 2026-10-16: root's own docker compose read
+# the checkout's compose file (and .env) when it started the search helper.
+# Now the compose file is the verified copy's, and compose runs as the
+# service user (in the docker group already), the transient unit too.
+case_verifier_searxng_starts_from_the_copy_as_the_service_user() {
+  new_case verifier_searxng_starts_from_the_copy_as_the_service_user
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  mkdir -p "$REPO/domovoi"
+  cp "$HERE/../../../domovoi/docker-compose.yml" "$REPO/domovoi/docker-compose.yml"
+  SHA_A=$(commit_all "A: with the compose file")
+  echo "$SHA_A" >"$UPD/applied_sha"
+  # The service user's edit, not committed: the helper with the host's /.
+  printf '    privileged: true\n    volumes: ["/:/host"]\n' >>"$REPO/domovoi/docker-compose.yml"
+  echo always >"$STATE/internet-policy"
+  run_unit
+  check "status ok" eq "$(field status)" '"ok"'
+  check "the search helper started" step_is searxng ok
+  check "as the service user, from the copy's compose file" \
+    called "runuser -u tester -- docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  check "which is the commit's" cmp -s "$UPD/searxng-compose.yml" "$HERE/../../../domovoi/docker-compose.yml"
+  check "and not the edited one" not grep -q privileged "$UPD/searxng-compose.yml"
+  check "root's docker never ran compose on the checkout's file" not_called "docker compose -f $REPO/domovoi/docker-compose.yml"
+  check "nor compose at all as root" eq "$(grep -c '^docker compose' "$STATE/calls.log")" "$(grep -c '^runuser -u tester -- docker compose' "$STATE/calls.log")"
+  check "the file root keeps is root's and readable" eq "$(stat -c %a "$UPD/searxng-compose.yml")" 644
+  # Detached under systemd: the transient unit runs as the service user too.
+  write_systemd_run "$CASE/rootbin"
+  : >"$STATE/calls.log"
+  SEARXNG_DETACH=1 run_unit
+  check "detached: ok" eq "$(field status)" '"ok"'
+  check "detached: a transient unit as the service user" \
+    called "systemd-run --no-block --collect --quiet --unit=domovoi-searxng-start --uid=tester"
+  check "detached: in the checkout, from the copy's compose file" \
+    called "-p WorkingDirectory=$REPO docker compose -f $UPD/searxng-compose.yml --project-directory $REPO/domovoi up -d --no-deps searxng"
+  end_case
+}
+
+# Bounds on the mirror fetch (review of the root verifier): a pack bigger
+# than DOMOVOI_VERIFY_FETCH_MAX_KB a file, or a fetch that outlasts
+# DOMOVOI_VERIFY_FETCH_TIMEOUT, refuses the run instead of filling root's
+# disk or holding the update for its 30 minutes.
+case_verifier_fetch_is_bounded() {
+  new_case verifier_fetch_is_bounded
+  with_scripts
+  write_root_shims "$CASE/rootbin"
+  DOMOVOI_VERIFY_FETCH_MAX_KB=1 run_unit
+  check "size: exit 1" eq "$RC" 1
+  check "size: failed at verify" step_is verify failed
+  check "size: says it passed its bounds" grep -qF "failed (or passed its bounds: 900s, 1 KB a file)" "$RESULT"
+  check "size: apply-update.sh never ran" not apply_ran
+  # An upload-pack that never answers.
+  mkdir -p "$CASE/slowbin"
+  cat >"$CASE/slowbin/runuser" <<'SH'
+#!/usr/bin/env bash
+echo "runuser $1 $2 -- ${*:4}" >>"$SHIM_STATE/calls.log"
+shift 3
+case " $* " in *" upload-pack "*) exec sleep 60 ;; esac
+exec "$@"
+SH
+  chmod +x "$CASE/slowbin/runuser"
+  rm -rf "$UPD/mirror.git"
+  local t0=$SECONDS
+  DOMOVOI_VERIFY_FETCH_TIMEOUT=2 UNIT=1 VERIFIED=0 run_update "$CASE/slowbin:$CASE/rootbin"
+  check "time: exit 1" eq "$RC" 1
+  check "time: failed at verify" step_is verify failed
+  check "time: within its bound, not the sleep's" test "$((SECONDS - t0))" -lt 30
+  check "time: apply-update.sh never ran" not apply_ran
   end_case
 }
 
@@ -4440,7 +4520,9 @@ CASES=(
   case_verifier_ignores_the_checkouts_replace_refs
   case_verifier_head_moved_after_the_copy_is_refused
   case_verifier_an_old_unit_hands_over_and_is_moved
-  case_verifier_a_unit_changed_by_hand_is_left_with_a_warning
+  case_verifier_a_unit_changed_by_hand_is_replaced_and_kept
+  case_verifier_searxng_starts_from_the_copy_as_the_service_user
+  case_verifier_fetch_is_bounded
   case_verifier_update_and_rollback_through_the_copy
   case_verifier_mirror_checks_every_object
   case_verifier_refuses_a_state_dir_others_can_write

@@ -183,6 +183,9 @@ set -Eeuo pipefail
 # no grafts, so HEAD's signature check sees the commit it names (rc2 review
 # C3; the checkout's .git is the service user's).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+# And without the hint git prints for that graft file, in every git it
+# starts (the service user's included): one config entry, from the environment.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false
 umask 022
 
 PROG=provision
@@ -634,8 +637,19 @@ sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
 sha_ok() { [ -f "$1" ] && [ "$(sha256_of "$1")" = "$2" ]; }
 
-# A file's hash for a step's inputs, or "absent".
-file_sig() { if [ -f "$1" ]; then sha256_of "$1"; else echo "absent:$1"; fi; }
+# A file's hash for a step's inputs, or "absent". A file of the checkout is
+# read as the service user, whose file it is (root never follows a link
+# planted there); the verified copy's and root's own as root.
+file_sig() {
+  local h=""
+  case $1 in
+    "$CHECKOUT"/*)
+      if [ "$EUID" = 0 ] || [ -n "$ROOT" ]; then h=$(as_svc sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1) || h=""
+      elif [ -f "$1" ]; then h=$(sha256_of "$1"); fi ;;
+    *) if [ -f "$1" ]; then h=$(sha256_of "$1"); fi ;;
+  esac
+  if [ -n "$h" ]; then echo "$h"; else echo "absent:$1"; fi
+}
 
 systemd_running() { [ "$(cat "$PROC/1/comm" 2>/dev/null)" = systemd ]; }
 
@@ -1412,9 +1426,16 @@ do_media() {
 # count as root: 0, and under a test harness its own user) and VX_TOP (where
 # the walk up a path for anyone else's write access stops: /, or the
 # harness's case directory). A vx_ function that fails returns 1 with the
-# reason in VX_ERROR.
+# reason in VX_ERROR. The fetch is bounded: VX_FETCH_TIMEOUT seconds and
+# VX_FETCH_MAX_KB per file it writes (ulimit -f), so a checkout that offers a
+# huge pack can't fill root's disk or hold the update for its whole 30 min.
 
-VX_PATHS=(scripts/linux docs/LINUX_HOST.md)
+# What root runs, installs or hands to Docker: scripts/linux, the doc whose
+# Ollama pin provision.sh reads, and the compose file the update starts the
+# search helper from.
+VX_PATHS=(scripts/linux docs/LINUX_HOST.md domovoi/docker-compose.yml)
+VX_FETCH_TIMEOUT=${VX_FETCH_TIMEOUT:-900}
+VX_FETCH_MAX_KB=${VX_FETCH_MAX_KB:-2097152}
 VX_SKIP=scripts/linux/tests/
 VX_ERROR=""
 VX_SHA=""
@@ -1430,12 +1451,18 @@ VX_SIG_ENFORCED=0
 # No replacement objects and no grafts (rc2 review C3): a refs/replace or an
 # info/grafts entry could make git read another commit or tree than the one
 # a SHA names, and verify or copy that. The fetch never brings refs/replace
-# in, and the mirror has no alternates: its objects are its own.
+# in, and the mirror has no alternates: its objects are its own. The one
+# config entry the environment gives every git it starts (the service
+# user's upload-pack too) silences the grafts hint GIT_GRAFT_FILE brings.
+# vx_git --timeout SECONDS ...: bounded by timeout(1).
 vx_git() {
-  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
+  local -a pre=()
+  if [ "${1-}" = --timeout ]; then pre=(timeout "$2"); shift 2; fi
+  ${pre[@]+"${pre[@]}"} env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY \
     -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_NAMESPACE -u GIT_CONFIG -u GIT_CONFIG_PARAMETERS \
-    -u GIT_CONFIG_COUNT -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
+    -u GIT_EXEC_PATH -u GIT_TEMPLATE_DIR -u GIT_REPLACE_REF_BASE \
     -u GIT_SSH -u GIT_SSH_COMMAND -u GIT_ASKPASS -u GIT_PROXY_COMMAND -u GIT_EXTERNAL_DIFF \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=advice.graftFileDeprecated GIT_CONFIG_VALUE_0=false \
     GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="${GIT_CONFIG_GLOBAL:-/dev/null}" \
     GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null GIT_TERMINAL_PROMPT=0 \
     git -C "$VX_MIRROR" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c advice.graftFileDeprecated=false "$@"
@@ -1501,10 +1528,13 @@ vx_fetch() {
   local up out
   VX_SHA=""
   if [ "$VX_USER" = root ]; then up="git upload-pack"; else up="runuser -u $VX_USER -- git upload-pack"; fi
-  if ! out=$(vx_git -c protocol.file.allow=always fetch --quiet --no-tags --no-recurse-submodules \
-      --no-write-fetch-head --no-auto-gc --prune --upload-pack="$up" "$VX_REPO" \
-      '+HEAD:refs/domovoi/head' '+refs/remotes/origin/*:refs/remotes/origin/*' 2>&1); then
-    VX_ERROR="git fetch of $VX_REPO into $VX_MIRROR failed: $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
+  # A subshell, so the file-size limit stays with the fetch (and the pack
+  # writers it starts); timeout ends it, and what it started, when it hangs.
+  if ! out=$( (ulimit -f "$VX_FETCH_MAX_KB" && vx_git --timeout "$VX_FETCH_TIMEOUT" -c protocol.file.allow=always \
+      fetch --quiet --no-tags --no-recurse-submodules --no-write-fetch-head --no-auto-gc --prune \
+      --upload-pack="$up" "$VX_REPO" \
+      '+HEAD:refs/domovoi/head' '+refs/remotes/origin/*:refs/remotes/origin/*') 2>&1); then
+    VX_ERROR="git fetch of $VX_REPO into $VX_MIRROR failed (or passed its bounds: ${VX_FETCH_TIMEOUT}s, ${VX_FETCH_MAX_KB} KB a file): $(printf '%s\n' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
     return 1
   fi
   vx_git gc --auto --quiet >/dev/null 2>&1 || true
@@ -2060,7 +2090,7 @@ do_gpu_runtime() {
 # No reader that quits early in these pipes: under pipefail the writer's
 # SIGPIPE would fail the whole substitution.
 lock_python() {
-  sed -n '/^# This file is autogenerated by pip-compile with Python [0-9]/{s/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p;q}' "$CHECKOUT/$LOCK_NAME"
+  as_svc sed -n '/^# This file is autogenerated by pip-compile with Python [0-9]/{s/^# This file is autogenerated by pip-compile with Python \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p;q}' "$CHECKOUT/$LOCK_NAME"
 }
 system_python() { python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null; }
 
