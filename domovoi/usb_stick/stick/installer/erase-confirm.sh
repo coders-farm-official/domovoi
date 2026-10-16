@@ -20,7 +20,7 @@
 # USB, Thunderbolt or memory-card disk; of the rest, a solid-state one
 # before a spinning one, then the largest.
 #
-# DS_* variables are the tests' (domovoi/tests/test_usb_stick_installer.py,
+# DS_* variables are the tests' (domovoi/tests/test_usb_stick_scripts.py,
 # with stand-ins for debconf and the installer's tools); in the installer
 # they are unset and every path is the installer's own.
 DS_STICK_DIR=${DS_STICK_DIR:-/domovoi-stick}
@@ -88,9 +88,10 @@ fi
 
 # Disks joined by LVM or RAID: the partitioner's clean-up of the chosen
 # disk would reach the others. Refused, naming every one, when the chosen
-# disk is one of them and another of this computer's disks is too.
+# disk is one of them and any other disk is too, plugged in ones included
+# (a volume group can span the chosen disk and a USB disk).
 # shellcheck disable=SC2086
-JOINED=$(ds_joined $(ds_internal "$STICK" $DISKS))
+JOINED=$(ds_joined $(ds_others "$STICK" $DISKS))
 case " $(echo $JOINED) " in
 	*" $BEST "*)
 		if [ "$(echo "$JOINED" | wc -w)" -gt 1 ]; then

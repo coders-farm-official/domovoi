@@ -49,7 +49,7 @@ w poweroff 'echo poweroff >>"$SB/calls"; touch "$SB/poweroff"; [ -e "$SB/returns
 w sleep '[ -e "$SB/poweroff" ] || exit 0; echo sleep >>"$SB/calls"; [ "$(grep -c ^sleep "$SB/calls")" -ge 3 ] && { touch "$SB/hung"; kill -9 $PPID; }; exit 0'
 w debconf-loadtemplate 'exit 0'
 w modprobe 'exit 0'
-w blkid 'exit 0'
+w blkid 'for a; do d=$a; done; [ -f "$SB/blkid-${d##*/}" ] && cat "$SB/blkid-${d##*/}"; exit 0'
 
 # The made-up computer: an internal HDD, the stick on USB, a Thunderbolt NVMe.
 R=$C/k/root
@@ -80,7 +80,7 @@ run() {  # run NAME "ANSWERS" EXPECT [setup]
 		/bin/sh /k/stick/erase-confirm.sh >/dev/null 2>&1 || true) 2>/dev/null
 	got=$(cat "$SB/calls" 2>/dev/null | tr '\n' '|')
 	if echo "$got" | grep -q -- "$3"; then pass=$((pass + 1)); echo "ok   $1"; else fail=$((fail + 1)); echo "FAIL $1: $got"; fi
-	case $1 in erase|lower) ;; *)
+	case $1 in erase|lower|lvm-alone) ;; *)
 		if echo "$got" | grep -q "set partman"; then fail=$((fail + 1)); echo "FAIL $1: partman answered"; fi ;;
 	esac
 }
@@ -92,5 +92,11 @@ run empty "<enter> <enter> <enter>" "shown domovoi-stick/stopped|poweroff"
 run noinet "ERASE" "shown domovoi-stick/no-network|poweroff" 'rm -f "$SB/internet"'
 run returns "x x x" "poweroff|sleep|sleep|sleep" 'touch "$SB/returns"'
 run tampered "ERASE" "shown domovoi-stick/tampered" 'mkdir -p "$SB/debconf"; printf http://x/e.cfg >"$SB/debconf/preseed_url.v"'
+# A volume group from the chosen disk onto the Thunderbolt one; a RAID with it.
+run joined-ext "ERASE" "subst domovoi-stick/joined DISKS .*(/dev/sda).*(/dev/nvme1n1)" \
+	'echo LVM2_member >"$SB/blkid-sda1"; echo LVM2_member >"$SB/blkid-nvme1n1"'
+run joined-raid "ERASE" "subst domovoi-stick/joined DISKS .*(/dev/sda).*(/dev/nvme1n1)" \
+	'echo linux_raid_member >"$SB/blkid-sda"; echo linux_raid_member >"$SB/blkid-nvme1n11"'
+run lvm-alone "ERASE" "set partman-auto/disk=/dev/sda" 'echo LVM2_member >"$SB/blkid-sda1"'
 echo "busybox erase-confirm check: $pass passed, $fail failed ($("$C/bin/busybox" 2>&1 | head -1))"
 [ "$fail" = 0 ]

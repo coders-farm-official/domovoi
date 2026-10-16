@@ -93,14 +93,16 @@ Description: This computer's processor is too old for a Domovoi room
 Template: domovoi-stick/joined
 Type: error
 Description: This computer's disks are joined together
- The disk the room would go on is joined with another disk (LVM or RAID),
- so erasing it would break or reach into the others:
+ The disk the room would go on holds part of an LVM volume or a RAID, and
+ so does another disk here, so erasing it could break or reach into the
+ others:
  .
  ${DISKS}
  .
  The stick erases only one disk, so it stops here. Nothing was changed. To
- use this computer, take the other disks out (or erase them first), then
- start again. It turns off when you press Continue.
+ use this computer, unplug or take out the other disks (or wipe them
+ first: the guide's "When it doesn't work" says how), then start again. It
+ turns off when you press Continue.
 
 Template: domovoi-stick/tampered
 Type: error

@@ -9,7 +9,7 @@
 # loader. Nothing here needs the network; the satellite itself is installed
 # at first boot, by systemd.
 #
-# DS_* variables are the tests' (domovoi/tests/test_usb_stick_installer.py,
+# DS_* variables are the tests' (domovoi/tests/test_usb_stick_scripts.py,
 # with stand-ins for in-target, chroot and install); in the installer they
 # are unset and every path is the installer's own.
 set -e

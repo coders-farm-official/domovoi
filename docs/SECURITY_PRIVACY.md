@@ -2399,11 +2399,18 @@ partitioner asks the person itself. The disk is chosen by
 or USB4 disk (anything behind a port the kernel marks removable or external),
 never a removable, read-only or memory-card disk, never one under 8 GB; a
 solid-state disk before a spinning one, then the largest. An eSATA disk can't
-be told from an internal one (the kernel doesn't say), so the guide says to
-unplug external disks first. Before that page the stick stops, with nothing
+be told from an internal one (the kernel doesn't say), and neither can a
+Thunderbolt drive on computers from before about 2019 whose firmware doesn't
+mark the port external (a known limit: it could be the disk chosen), so the
+guide says to unplug external disks first and the ERASE page names the disk
+by make, size and device. Before that page the stick stops, with nothing
 written, for no usable disk, a processor older than x86-64-v2, a T2 Mac, no
-internet, or disks joined by LVM or RAID with another disk (it would erase
-or break more than the one disk it names; the page names every one). The
+internet, or a chosen disk holding an LVM physical volume or a RAID member
+while any other disk, USB ones included, holds one too (it would erase or
+break more than the one disk it names; the page names every one). blkid
+doesn't say which volume group or array a member belongs to, so two
+unrelated ones are refused as well, with no way past that page (a known
+limit; the guide says how to wipe the other disk first). The
 "this computer is already a room" check mounts the chosen disk's ext4
 partitions read-only without replaying their journals (`ro,noload`). The
 scripts are tested whole against stand-ins for debconf and the installer's

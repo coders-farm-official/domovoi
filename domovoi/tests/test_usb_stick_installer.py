@@ -384,8 +384,9 @@ def test_a_thunderbolt_or_usb4_disk_is_never_picked(tmp_path):
 @requires_bash
 def test_disks_joined_by_lvm_or_raid_are_named(tmp_path):
     setup = HDD + HDD.replace("sda", "sdd").replace("ata1", "ata2") + SSD
-    stub = ('blkid() { for a; do d=$a; done; case ${d##*/} in sda2|sdd) echo LVM2_member ;; '
-            'nvme0n1p1) echo ext4 ;; esac; }\n')
+    stub = ('blkid() { for a; do d=$a; done; case ${d##*/} in sda2) echo LVM2_member ;; '
+            'sdd) echo linux_raid_member ;; nvme0n1p1) echo ext4 ;; esac; }\n')
     assert run_lib(tmp_path / "t", setup, stub + "ds_joined sda sdd nvme0n1").split() == ["sda", "sdd"]
+    assert run_lib(tmp_path / "o", setup, "ds_others sdb /dev/sda /dev/sdb /dev/sde").split() == ["sda", "sde"]
     assert run_lib(tmp_path / "u", setup, stub + "ds_internal sdb sda sdb sdd nvme0n1").split() == [
         "sda", "sdd", "nvme0n1"]

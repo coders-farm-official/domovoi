@@ -96,6 +96,7 @@ NEHALEM = ("fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat ps
 HDD = 'disk sda pci0000:00/0000:00:17.0/ata1/host0 1000 1 0 0 "WDC WD10EZEX" ATA "" sda1 sda2\n'
 STICKDISK = 'disk sdb pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6 32 1 1 0 "Cruzer" SanDisk "" sdb1\n'
 HDD2 = 'disk sdd pci0000:00/0000:00:17.0/ata2/host1 500 1 0 0 "ST500" ATA "" sdd1\n'
+USBDISK = 'disk sde pci0000:00/0000:00:14.0/usb2/2-2/2-2:1.0/host7/target7 2000 1 0 0 "Elements" WD "" sde1\n'
 
 
 def _stubs(bindir: Path) -> None:
@@ -285,6 +286,37 @@ def test_disks_joined_by_lvm_are_refused_naming_every_one(tmp_path):
     assert "(/dev/sda)" in subst and "(/dev/sdd)" in subst
     # LVM on the chosen disk alone is that disk's own business.
     c = Box(tmp_path / "c", tree=HDD + STICKDISK + HDD2, answers=["ERASE"])
+    (c.sb / "blkid-sda2").write_text(newline="\n", data="LVM2_member\n")
+    c.run()
+    assert c.shown() == ["domovoi-stick/erase"] and c.get("partman-auto/disk") == "/dev/sda"
+
+
+@pytest.mark.parametrize("kind", ["linux_raid_member", "isw_raid_member", "ddf_raid_member"])
+def test_disks_joined_by_raid_are_refused_naming_every_one(tmp_path, kind):
+    b = Box(tmp_path, tree=HDD + STICKDISK + HDD2, answers=["ERASE"])
+    (b.sb / "blkid-sda1").write_text(newline="\n", data=kind + "\n")
+    (b.sb / "blkid-sdd").write_text(newline="\n", data=kind + "\n")
+    b.run()
+    assert b.shown() == ["domovoi-stick/joined"] and b.powered_off and not b.erased
+    subst = next(c for c in b.calls if c.startswith("subst domovoi-stick/joined DISKS"))
+    assert "(/dev/sda)" in subst and "(/dev/sdd)" in subst
+
+
+def test_a_volume_group_reaching_onto_a_usb_disk_is_refused_naming_it(tmp_path):
+    """The USB disk is never the one erased, but a volume group spanning it
+    and the chosen disk would be broken (or cleaned up) all the same."""
+    b = Box(tmp_path, tree=HDD + STICKDISK + USBDISK, answers=["ERASE"])
+    (b.sb / "devices").write_text(newline="\n", data="/dev/sda\n/dev/sdb\n/dev/sde\n")
+    (b.sb / "blkid-sda2").write_text(newline="\n", data="LVM2_member\n")
+    (b.sb / "blkid-sde1").write_text(newline="\n", data="LVM2_member\n")
+    b.run()
+    assert b.shown() == ["domovoi-stick/joined"] and b.powered_off and not b.erased
+    subst = next(c for c in b.calls if c.startswith("subst domovoi-stick/joined DISKS"))
+    assert "(/dev/sda)" in subst and "WD Elements, 2000 GB (/dev/sde)" in subst
+    assert "/dev/sdb" not in subst, "the stick is never one of them"
+    # Unplugged, the chosen disk's LVM is its own business again.
+    c = Box(tmp_path / "c", tree=HDD + STICKDISK + USBDISK, answers=["ERASE"])
+    (c.sb / "devices").write_text(newline="\n", data="/dev/sda\n/dev/sdb\n")
     (c.sb / "blkid-sda2").write_text(newline="\n", data="LVM2_member\n")
     c.run()
     assert c.shown() == ["domovoi-stick/erase"] and c.get("partman-auto/disk") == "/dev/sda"
@@ -490,13 +522,18 @@ def test_the_unattended_upgrades_blacklist_keeps_the_boot_loader_and_fwupd_out()
 
 
 def test_unpack_never_writes_outside_its_folder(tmp_path):
+    """The folder exists first, so without the ``data`` filter the ``..``
+    really would land outside (on Windows too): only the filter stops it."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as t:
+        folder = tarfile.TarInfo("domovoi")
+        folder.type, folder.mode = tarfile.DIRTYPE, 0o755
+        t.addfile(folder)
         info = tarfile.TarInfo("domovoi/../../escaped.txt")
         info.size = 1
         t.addfile(info, io.BytesIO(b"x"))
     f = tmp_path / "bad.tar"
     f.write_bytes(buf.getvalue())
-    with pytest.raises(Exception):
+    with pytest.raises(tarfile.OutsideDestinationError):
         repack.unpack(f, tmp_path / "a" / "out")
     assert not (tmp_path / "escaped.txt").exists() and not (tmp_path / "a" / "escaped.txt").exists()

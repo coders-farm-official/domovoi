@@ -119,11 +119,25 @@ ds_pick() {
 	echo "$_best"
 }
 
+# ds_others STICK DISK...: the names of every disk but the stick, plugged
+# in or not (USB, Thunderbolt, eSATA, memory cards: all of them).
+ds_others() {
+	_st=$1
+	shift
+	for _dev in "$@"; do
+		[ "${_dev##*/}" = "$_st" ] || echo "${_dev##*/}"
+	done
+	return 0
+}
+
 # ds_joined DISK...: of these disks, the ones that hold a piece of storage
 # joined across disks (an LVM physical volume, a RAID member), on the disk
 # itself or one of its partitions, as blkid reads it. Erasing one of those
 # would break, or be spread into, the others: the stick refuses (erase-
-# confirm.sh) when the chosen disk is one and another disk is too.
+# confirm.sh) when the chosen disk is one and another disk is too, any
+# disk but the stick (a volume group can reach onto a USB disk). blkid
+# doesn't say which group a member is in, so two unrelated ones are refused
+# too (a known limit: the guide says how to wipe one first).
 ds_joined() {
 	for _d in "$@"; do
 		for _n in "$_d" $(cd "$DS_ROOT/sys/block/$_d" 2>/dev/null && ls -d "$_d"* 2>/dev/null); do

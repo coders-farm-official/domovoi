@@ -824,7 +824,9 @@ The installer works by itself for about a minute, then shows one page:
 It names the disk it will use: never the stick itself, never another USB
 or Thunderbolt drive or a memory card; a solid-state disk before a spinning
 one, then the largest. To be sure, unplug any other external disk first
-(an eSATA one can't be told from an internal one). It also says whether your
+(an eSATA one can't be told from an internal one, nor a Thunderbolt one on
+some computers from before about 2019: see Known limits), and read the
+disk's name on the page before you type. It also says whether your
 Domovoi server answered (a server that is off just now is fine: the room
 keeps trying after it is set up). Anything but ERASE, three times, or **Go
 Back**: "Nothing was changed", and the computer turns off.
@@ -944,7 +946,7 @@ Retire room**).
 | "Plug in a network cable" | No internet: a cable from the router (or a USB network adapter), then start again. |
 | "This computer's processor is too old" | Older than about 2009: it can't be a room. |
 | "There is no disk to put the room on" | No internal disk of 8 GB or more. |
-| "This computer's disks are joined together" | Its disks are one LVM volume or a RAID: the stick erases only one disk. Take the others out (or erase them first). |
+| "This computer's disks are joined together" | Its disk holds part of an LVM volume or a RAID, and so does another disk (a USB one counts). The stick erases only one disk. Unplug or take out the others, or wipe the ones you don't need first (see Known limits), then start again. |
 | "Something on this network tried to set up this computer" | A device on the network handed the installer setup answers (a "DHCP boot file"). Start again with a cable straight to your router. |
 | The screen stays black after the menu | Restart and pick **The same, in text mode**. |
 | "Not ready yet: … Can't reach your Domovoi server" | Is the server on, and the computer on the same network? It keeps trying every minute. |
@@ -952,6 +954,27 @@ Retire room**).
 | "The satellite files on this computer are damaged" | Make a new stick and start again. |
 | The ERASE page again after the install | The stick is still in and the computer starts from USB first: take it out. |
 | Anything else | The room's log in the dashboard's room drawer; on the computer, `/var/log/domovoi-stick-firstboot.log`. |
+
+### Known limits
+
+- **Thunderbolt on older computers.** The stick never picks a disk behind
+  a port the computer marks as external. Thunderbolt computers from before
+  about 2019 often don't mark their ports, so a Thunderbolt drive plugged
+  into one looks like an internal disk and could be the one chosen (a
+  solid-state one even comes first). The ERASE page always names the disk
+  by make, size and device: if it isn't the computer's own disk, type
+  anything else, unplug the drive and start again.
+- **Two unrelated LVM or RAID disks.** The stick can see that a disk holds
+  part of an LVM volume or a RAID, but not which one. If the chosen disk
+  holds one and any other disk does too, it refuses, even when the two have
+  nothing to do with each other, and there is no way past that page. Unplug
+  the other disk if you can. If it's built in and you don't need what's on
+  it, wipe it first from any Linux live stick (Debian's or Ubuntu's): `lsblk
+  -f` lists the disks; for that disk (`/dev/sdX` here), `sudo wipefs -a` on
+  each of its partitions (`/dev/sdX1`, `/dev/sdX2`, …) and then on
+  `/dev/sdX` itself. That erases what's on it. A RAID made in the
+  computer's own firmware (Intel RST and the like) is deleted in that
+  firmware's RAID setup instead. Then start from the stick again.
 
 ### For developers
 

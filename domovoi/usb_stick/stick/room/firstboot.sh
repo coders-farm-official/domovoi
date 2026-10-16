@@ -2,11 +2,9 @@
 # Domovoi room stick: the first boot (domovoi/usb_stick/).
 #
 # Root, from domovoi-stick-firstboot.service, its output on tty1. Installs
-# the satellite exactly the way the Linux one-liner does, headless:
-#
-#   install-pc.sh --mode headless --yes --permissions automatic --power yes
-#
-# from the satellite bundle the household's server put on the stick (its
+# the satellite exactly the way the Linux one-liner does: install-pc.sh,
+# headless, no questions, permissions automatic, power settings on (the
+# call is in the loop below), from the satellite bundle the household's server put on the stick (its
 # SHA-256 is in stick.json, checked here first), with the room code the
 # server baked in. install-pc.sh makes the server prove the fingerprint in
 # that code before it writes anything. "automatic": the server may update
@@ -15,7 +13,7 @@
 # (no network yet, the server is off), this says why on the screen and
 # tries again every minute.
 #
-# FB_* variables are the tests' (domovoi/tests/test_usb_stick_installer.py);
+# FB_* variables are the tests' (domovoi/tests/test_usb_stick_scripts.py);
 # on the room they are unset.
 set -u
 PATH=${FB_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
